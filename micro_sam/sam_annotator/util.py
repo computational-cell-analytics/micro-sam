@@ -37,10 +37,10 @@ def prompt_layer_to_points(prompt_layer, i=None):
     assert len(points) == len(labels)
 
     if i is None:
-        assert points.ndim == 2
+        assert points.shape[1] == 2, f"{points.shape}"
         this_points, this_labels = points, labels
     else:
-        assert points.ndim == 3
+        assert points.shape[1] == 3, f"{points.shape}"
         mask = points[:, 0] == i
         this_points = points[mask][:, 1:]
         this_labels = labels[mask]
