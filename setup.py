@@ -10,8 +10,9 @@ setup(
     packages=["micro_sam"],
     license="MIT",  # TODO add the license and check that it's fine with SegmentAnything
     # TODO add entry points for the napari annotator scripts
-    # entry_points={
-    #     "console_scripts": [
-    #         "view_container = elf.visualisation.view_container:main",
-    #     ]
+    entry_points={
+        "console_scripts": [
+            "micro_sam.precompute_embeddings = micro_sam.util:main",
+        ]
+    }
 )

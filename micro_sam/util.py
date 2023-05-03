@@ -229,3 +229,24 @@ def compute_iou(mask1, mask2):
     eps = 1e-7
     iou = float(overlap) / (float(union) + eps)
     return iou
+
+
+# TODO enable passing options for get_sam
+def main():
+    import argparse
+    from elf.io import open_file
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-i", "--input_path", required=True)
+    parser.add_argument("-o", "--output_path", required=True)
+    parser.add_argument("-k", "--key")
+    args = parser.parse_args()
+
+    predictor = get_sam_model()
+    with open_file(args.input_path) as f:
+        data = f[args.key]
+        precompute_image_embeddings(predictor, data, save_path=args.output_path)
+
+
+if __name__ == "__main__":
+    main()
