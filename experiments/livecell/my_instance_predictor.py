@@ -63,8 +63,10 @@ def sam_predictions_for_livecell(args, check_instances=False):
     """
     Gets instance labels for all the livecell images
     """
-    _, predictor = get_sam_model(
-        my_ckpt_path="C:/Users/anwai/projects/micro-sam/experiments/livecell/checkpoints/sam_vit_h_4b8939.pth")
+    root_ckpt_dir = "/home/nimanwai/SegmentAnythingModel/"  # Anwai - Emmy
+    # root_ckpt_dir = "C:/Users/anwai/projects/micro-sam/experiments/livecell/"  # Anwai - Local
+
+    _, predictor = get_sam_model(my_ckpt_path=root_ckpt_dir + "checkpoints/sam_vit_h_4b8939.pth")
 
     root_gt_dir = args.input[0] + "annotations/livecell_test_images/"
     root_img_dir = args.input[0] + "images/livecell_test_images/"
