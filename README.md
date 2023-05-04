@@ -2,10 +2,10 @@
 
 ## Installation and Requirements
 
-Install pytorch, SegmentAnything and elf in your conda env.
+Install [PyTorch](https://pytorch.org/get-started/locally/), [SegmentAnything](https://github.com/facebookresearch/segment-anything#installation) and elf in your conda env.
 Then install the `micro_sam` library via
 ```
-pip instal -e .
+pip install -e .
 ```
 
 ## Structure
