@@ -6,6 +6,9 @@ import requests
 import torch
 import zarr
 
+import vigra
+from skimage.measure import regionprops
+
 from segment_anything import sam_model_registry, SamPredictor
 from tqdm import tqdm
 
@@ -30,20 +33,23 @@ def _download(url, path):
             copyfileobj(r_raw, f)
 
 
-def _get_checkpoint(model_type):
-    checkpoint_url = MODEL_URLS[model_type]
-    checkpoint_name = checkpoint_url.split("/")[-1]
-    checkpoint_path = os.path.join(CHECKPOINT_FOLDER, checkpoint_name)
+def _get_checkpoint(model_type, my_ckpt_path=None):
+    if my_ckpt_path is None:
+        checkpoint_url = MODEL_URLS[model_type]
+        checkpoint_name = checkpoint_url.split("/")[-1]
+        checkpoint_path = os.path.join(CHECKPOINT_FOLDER, checkpoint_name)
 
-    # download the checkpoint if necessary
-    if not os.path.exists(checkpoint_path):
-        os.makedirs(CHECKPOINT_FOLDER, exist_ok=True)
-        _download(checkpoint_url, checkpoint_path)
+        # download the checkpoint if necessary
+        if not os.path.exists(checkpoint_path):
+            os.makedirs(CHECKPOINT_FOLDER, exist_ok=True)
+            _download(checkpoint_url, checkpoint_path)
+    else:
+        checkpoint_path = my_ckpt_path
 
     return checkpoint_path
 
 
-def get_sam_model(device=None, model_type="vit_h"):
+def get_sam_model(device=None, model_type="vit_h", my_ckpt_path=None):
     """Get the SegmentAnything Predictor.
 
     This function will download the required model checkpoint or load it from file if it
@@ -55,12 +61,12 @@ def get_sam_model(device=None, model_type="vit_h"):
             (default: None)
         model_type [str] - the SegmentAnything model to use. (default: vit_h)
     """
-    checkpoint = _get_checkpoint(model_type)
+    checkpoint = _get_checkpoint(model_type, my_ckpt_path)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     sam = sam_model_registry[model_type](checkpoint=checkpoint)
     sam.to(device=device)
     predictor = SamPredictor(sam)
-    return predictor
+    return sam, predictor
 
 
 def _compute_2d(input_, predictor):
@@ -229,6 +235,25 @@ def compute_iou(mask1, mask2):
     eps = 1e-7
     iou = float(overlap) / (float(union) + eps)
     return iou
+
+
+def get_cell_center_coordinates(gt, mode="p"):
+    """
+    Returns the center coordinates of the foreground instances in the ground-truth
+    """
+    assert mode in ["p", "v"], "Choose either 'p' for regionprops or 'v' for vigra"
+
+    if mode == "p":
+        properties = regionprops(gt)
+        center_coordinates = [prop.centroid for prop in properties]
+        bbox_coordinates = [prop.bbox for prop in properties]
+
+    elif mode == "v":  # TODO: doesn't seem to work currently, will need further testing
+        raise NotImplementedError
+        center_coordinates = vigra.filters.eccentricityCenters(gt.astype('float32'))
+        bbox_coordinates = None  # TODO
+
+    return center_coordinates, bbox_coordinates
 
 
 # TODO enable passing options for get_sam
