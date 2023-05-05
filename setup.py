@@ -1,4 +1,7 @@
+import runpy
 from distutils.core import setup
+
+__version__ = runpy.run_path("micro_sam/__version__.py")["__version__"]
 
 setup(
     name="micro_sam",
