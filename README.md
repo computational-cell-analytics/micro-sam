@@ -15,17 +15,31 @@ TODO
 
 ## Installation
 
-You need to install [PyTorch](https://pytorch.org/get-started/locally/), [SegmentAnything](https://github.com/facebookresearch/segment-anything#installation), [napari](https://napari.org/stable/) and [elf](https://github.com/constantinpape/elf).
+We require these dependencies:
+- [PyTorch](https://pytorch.org/get-started/locally/)
+- [SegmentAnything](https://github.com/facebookresearch/segment-anything#installation)
+- [napari](https://napari.org/stable/)
+- [elf](https://github.com/constantinpape/elf)
+
 We recommend to use conda and provide two conda environment files with all necessary requirements:
 - `environment_gpu.yaml`: sets up an environment with GPU support.
 - `environment_cpu.yaml`: sets up an environment with CPU support.
 
-You can create the corresponding environment via 
+To install via conda first clone this repository:
+```
+git clone https://github.com/computational-cell-analytics/micro-sam
+```
+and
+```
+cd micro_sam
+```
+
+Then create either the GPU or CPU environment via
 
 ```
 conda env create -f <ENV_FILE>.yaml
 ```
-You can then activate the environment via
+Then activate the environment via
 ```
 conda activate sam
 ```
