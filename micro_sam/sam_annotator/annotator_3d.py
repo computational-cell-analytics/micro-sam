@@ -181,7 +181,7 @@ def commit_widget(v: Viewer):
 def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_result=None):
     # for access to the predictor and the image embeddings in the widgets
     global PREDICTOR, IMAGE_EMBEDDINGS, NEXT_ID
-    PREDICTOR = util.get_sam_model()
+    _, PREDICTOR = util.get_sam_model()
     IMAGE_EMBEDDINGS = util.precompute_image_embeddings(PREDICTOR, raw, save_path=embedding_path)
 
     #

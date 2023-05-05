@@ -219,12 +219,16 @@ def set_precomputed(predictor, image_embeddings, i=None):
         raise ValueError("The data is 2D so an index is not needed.")
 
     if i is None:
-        predictor.features = torch.from_numpy(features).to(device)
+        predictor.features = torch.from_numpy(features).to(device) \
+            if not torch.is_tensor(features) else features.to(device)
     else:
-        predictor.features = torch.from_numpy(features[i]).to(device)
+        predictor.features = torch.from_numpy(features[i]).to(device) \
+            if not torch.is_tensor(features) else features[i].to(device)
     predictor.original_size = image_embeddings["original_size"]
     predictor.input_size = image_embeddings["input_size"]
     predictor.is_image_set = True
+
+    return predictor
 
 
 def compute_iou(mask1, mask2):
@@ -267,7 +271,7 @@ def main():
     parser.add_argument("-k", "--key")
     args = parser.parse_args()
 
-    predictor = get_sam_model()
+    _, predictor = get_sam_model()
     with open_file(args.input_path) as f:
         data = f[args.key]
         precompute_image_embeddings(predictor, data, save_path=args.output_path)
