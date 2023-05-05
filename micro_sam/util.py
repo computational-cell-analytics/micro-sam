@@ -33,8 +33,8 @@ def _download(url, path):
             copyfileobj(r_raw, f)
 
 
-def _get_checkpoint(model_type, my_ckpt_path=None):
-    if my_ckpt_path is None:
+def _get_checkpoint(model_type, checkpoint_path=None):
+    if checkpoint_path is None:
         checkpoint_url = MODEL_URLS[model_type]
         checkpoint_name = checkpoint_url.split("/")[-1]
         checkpoint_path = os.path.join(CHECKPOINT_FOLDER, checkpoint_name)
@@ -43,13 +43,13 @@ def _get_checkpoint(model_type, my_ckpt_path=None):
         if not os.path.exists(checkpoint_path):
             os.makedirs(CHECKPOINT_FOLDER, exist_ok=True)
             _download(checkpoint_url, checkpoint_path)
-    else:
-        checkpoint_path = my_ckpt_path
+    elif not os.path.exists(checkpoint_path):
+        raise ValueError(f"The checkpoint path {checkpoint_path} that was passed does not exist.")
 
     return checkpoint_path
 
 
-def get_sam_model(device=None, model_type="vit_h", my_ckpt_path=None):
+def get_sam_model(device=None, model_type="vit_h", checkpoint_path=None, return_sam=False):
     """Get the SegmentAnything Predictor.
 
     This function will download the required model checkpoint or load it from file if it
@@ -60,13 +60,18 @@ def get_sam_model(device=None, model_type="vit_h", my_ckpt_path=None):
         device [str, torch.device] - the device for the model. If none is given will use GPU if available.
             (default: None)
         model_type [str] - the SegmentAnything model to use. (default: vit_h)
+        checkpoint_path [str] - the path to the corresponding checkpoint if it is already present
+            and not in the default model folder. (default: None)
+        return_sam [bool] - return the sam model object as well as the predictor (default: False)
     """
-    checkpoint = _get_checkpoint(model_type, my_ckpt_path)
+    checkpoint = _get_checkpoint(model_type, checkpoint_path)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     sam = sam_model_registry[model_type](checkpoint=checkpoint)
     sam.to(device=device)
     predictor = SamPredictor(sam)
-    return sam, predictor
+    if return_sam:
+        return predictor, sam
+    return predictor
 
 
 def _compute_2d(input_, predictor):
