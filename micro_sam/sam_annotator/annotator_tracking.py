@@ -5,11 +5,58 @@ from magicgui import magicgui
 from napari import Viewer
 
 from .. import util
-from ..segment_from_prompts import segment_from_points
+from ..segment_from_prompts import segment_from_mask, segment_from_points
 from ..visualization import compute_pca
-from .util import create_prompt_menu, prompt_layer_to_points
+from .util import create_prompt_menu, prompt_layer_to_points, segment_slices_with_prompts
 
 COLOR_CYCLE = ["#00FF00", "#FF0000"]
+
+
+#
+# util functionality
+#
+
+
+# TODO motion model!!!
+# TODO handle divison annotations + division classifier
+def _track_from_prompts(seg, predictor, slices, image_embeddings, stop_upper, threshold, method):
+    assert method in ("mask", "bounding_box")
+    if method == "mask":
+        use_mask, use_box = True, True
+    else:
+        use_mask, use_box = False, True
+
+    t0 = int(slices.min())
+    t = t0 + 1
+    while True:
+        if t in slices:
+            seg_prev = None
+            seg_t = seg[t]
+        else:
+            seg_prev = seg[t - 1]
+            seg_t = segment_from_mask(predictor, seg_prev, image_embeddings=image_embeddings, i=t,
+                                      use_mask=use_mask, use_box=use_box)
+
+        if (threshold is not None) and (seg_prev is not None):
+            iou = util.compute_iou(seg_prev, seg_t)
+            if iou < threshold:
+                msg = f"Segmentation stopped at frame {t} due to IOU {iou} < {threshold}."
+                print(msg)
+                break
+
+        seg[t] = seg_t
+        t += 1
+
+        # TODO here we need to also stop once divisions are implemented
+        # stop tracking if we have stop upper set (i.e. single negative point was set to indicate stop track)
+        if t == slices[-1] and stop_upper:
+            break
+
+        # stop if we are at the last slce
+        if t == seg.shape[0] - 1:
+            break
+
+    return seg
 
 
 #
@@ -31,8 +78,18 @@ def segment_frame_wigdet(v: Viewer):
 
 
 @magicgui(call_button="Track Object [V]", method={"choices": ["bounding_box", "mask"]})
-def track_objet_widget(v: Viewer, iou_threshold: float = 0.8, method: str = "bounding_box"):
-    pass
+def track_objet_widget(v: Viewer, iou_threshold: float = 0.8, method: str = "mask"):
+    # step 1: segment all slices with prompts
+    shape = v.layers["raw"].data.shape
+    seg, slices, _, stop_upper = segment_slices_with_prompts(
+        PREDICTOR, v.layers["prompts"], IMAGE_EMBEDDINGS, shape
+    )
+
+    # step 2: track the object starting from the lowest annotated slice
+    seg = _track_from_prompts(seg, PREDICTOR, slices, IMAGE_EMBEDDINGS, stop_upper, iou_threshold, method)
+
+    v.layers["current_track"].data = seg
+    v.layers["current_track"].refresh()
 
 
 def annotator_tracking(raw, embedding_path=None, show_embeddings=False):

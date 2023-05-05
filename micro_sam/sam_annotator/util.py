@@ -4,6 +4,8 @@ from magicgui import magicgui
 from magicgui.widgets import ComboBox, Container
 from napari import Viewer
 
+from ..segment_from_prompts import segment_from_points
+
 
 @magicgui(call_button="Commit [C]")
 def commit_segmentation_widget(v: Viewer):
@@ -72,3 +74,31 @@ def prompt_layer_to_points(prompt_layer, i=None):
         return None
 
     return this_points, this_labels
+
+
+def segment_slices_with_prompts(predictor, prompt_layer, image_embeddings, shape):
+    seg = np.zeros(shape, dtype="uint32")
+
+    slices = np.unique(prompt_layer.data[:, 0]).astype("int")
+    stop_lower, stop_upper = False, False
+
+    for i in slices:
+        prompts_i = prompt_layer_to_points(prompt_layer, i)
+
+        # TODO also take into account division properties once we have this implemented in tracking
+        # do we end the segmentation at the outer slices?
+        if prompts_i is None:
+            if i == slices[0]:
+                stop_lower = True
+            elif i == slices[-1]:
+                stop_upper = True
+            else:
+                raise RuntimeError("Stop slices can only be at the start or end")
+            seg[i] = 0
+            continue
+
+        points, labels = prompts_i
+        seg_i = segment_from_points(predictor, points, labels, image_embeddings=image_embeddings, i=i)
+        seg[i] = seg_i
+
+    return seg, slices, stop_lower, stop_upper

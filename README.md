@@ -7,6 +7,7 @@ We implement napari applications for:
 - interactive tracking of 2d image data
 
 **Early beta version**
+
 This is an early beta version. Any feedback is welcome, but please be aware that the functionality is evolving fast and not fully tested.
 
 ## Functionality overview

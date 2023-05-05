@@ -7,7 +7,7 @@ from napari import Viewer
 from .. import util
 from ..segment_from_prompts import segment_from_mask, segment_from_points
 from ..visualization import compute_pca
-from .util import commit_segmentation_widget, create_prompt_menu, prompt_layer_to_points
+from .util import commit_segmentation_widget, create_prompt_menu, prompt_layer_to_points, segment_slices_with_prompts
 
 COLOR_CYCLE = ["#00FF00", "#FF0000"]
 
@@ -16,33 +16,6 @@ COLOR_CYCLE = ["#00FF00", "#FF0000"]
 # utility functionality
 # (some of this should be refactored to util.py)
 #
-
-
-def _segment_slices_with_prompts(predictor, prompt_layer, image_embeddings, shape):
-    seg = np.zeros(shape, dtype="uint32")
-
-    slices = np.unique(prompt_layer.data[:, 0]).astype("int")
-    stop_lower, stop_upper = False, False
-
-    for z in slices:
-        prompts_z = prompt_layer_to_points(prompt_layer, z)
-
-        # do we end the segmentation at the outer slices?
-        if prompts_z is None:
-            if z == slices[0]:
-                stop_lower = True
-            elif z == slices[-1]:
-                stop_upper = True
-            else:
-                raise RuntimeError("Stop slices can only be at the start or end")
-            seg[z] = 0
-            continue
-
-        points, labels = prompts_z
-        seg_z = segment_from_points(predictor, points, labels, image_embeddings=image_embeddings, i=z)
-        seg[z] = seg_z
-
-    return seg, slices, stop_lower, stop_upper
 
 
 # TODO refactor
@@ -74,9 +47,9 @@ def _segment_volume(
             seg[z] = seg_z
             z += increment
             if stopping_criterion(z, z_stop):
-                break
                 if verbose:
                     print(f"Segment {z_start} to {z_stop}: stop at slice {z}")
+                break
 
     z0, z1 = int(segmented_slices.min()), int(segmented_slices.max())
 
@@ -145,7 +118,7 @@ def segment_slice_wigdet(v: Viewer):
 def segment_volume_widget(v: Viewer, iou_threshold: float = 0.8, method: str = "mask"):
     # step 1: segment all slices with prompts
     shape = v.layers["raw"].data.shape
-    seg, slices, stop_lower, stop_upper = _segment_slices_with_prompts(
+    seg, slices, stop_lower, stop_upper = segment_slices_with_prompts(
         PREDICTOR, v.layers["prompts"], IMAGE_EMBEDDINGS, shape
     )
 
