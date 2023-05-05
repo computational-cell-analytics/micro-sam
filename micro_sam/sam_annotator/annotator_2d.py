@@ -1,4 +1,3 @@
-# TODO make napari imports optional so we can use micro_sam as pure library
 import napari
 import numpy as np
 
@@ -8,7 +7,7 @@ from napari import Viewer
 from .. import util
 from ..visualization import compute_pca
 from ..segment_from_prompts import segment_from_points
-from .util import create_prompt_menu, prompt_layer_to_points
+from .util import commit_segmentation_widget, create_prompt_menu, prompt_layer_to_points
 
 COLOR_CYCLE = ["#00FF00", "#FF0000"]
 
@@ -21,10 +20,9 @@ def segment_wigdet(v: Viewer):
     v.layers["current_object"].refresh()
 
 
-def annotator_2d(raw, embedding_path=None, show_embeddings=False):
+def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_result=None):
     # for access to the predictor and the image embeddings in the widgets
-    global PREDICTOR, NEXT_ID
-    NEXT_ID = 1
+    global PREDICTOR
 
     PREDICTOR = util.get_sam_model()
     image_embeddings = util.precompute_image_embeddings(PREDICTOR, raw, save_path=embedding_path)
@@ -37,7 +35,10 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False):
     v = Viewer()
 
     v.add_image(raw)
-    v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="committed_objects")
+    if segmentation_result is None:
+        v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="committed_objects")
+    else:
+        v.add_labels(segmentation_result, name="committed_objects")
     v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="current_object")
 
     # show the PCA of the image embeddings
@@ -71,10 +72,8 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False):
     v.window.add_dock_widget(prompt_widget)
 
     v.window.add_dock_widget(segment_wigdet)
+    v.window.add_dock_widget(commit_segmentation_widget)
 
-    #
-    # start the viewer
-    #
     #
     # key bindings
     #
@@ -83,9 +82,9 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False):
     def _segmet(v):
         segment_wigdet(v)
 
-    # @v.bind_key("c")
-    # def _commit(v):
-    #     commit_widget(v)
+    @v.bind_key("c")
+    def _commit(v):
+        commit_segmentation_widget(v)
 
     @v.bind_key("t")
     def toggle_label(event=None):
@@ -102,6 +101,10 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False):
     def clear_prompts(v):
         prompts.data = []
         prompts.refresh()
+
+    #
+    # start the viewer
+    #
 
     # clear the initial points needed for workaround
     clear_prompts(v)

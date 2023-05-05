@@ -7,7 +7,7 @@ from napari import Viewer
 from .. import util
 from ..segment_from_prompts import segment_from_mask, segment_from_points
 from ..visualization import compute_pca
-from .util import create_prompt_menu, prompt_layer_to_points
+from .util import commit_segmentation_widget, create_prompt_menu, prompt_layer_to_points
 
 COLOR_CYCLE = ["#00FF00", "#FF0000"]
 
@@ -160,27 +160,9 @@ def segment_volume_widget(v: Viewer, iou_threshold: float = 0.8, method: str = "
     v.layers["current_object"].refresh()
 
 
-@magicgui(call_button="Commit [C]")
-def commit_widget(v: Viewer):
-    global NEXT_ID
-    seg = v.layers["current_object"].data
-
-    v.layers["committed_objects"].data[seg == 1] = NEXT_ID
-    v.layers["committed_objects"].refresh()
-
-    shape = v.layers["raw"].data.shape
-    v.layers["current_object"].data = np.zeros(shape, dtype="uint32")
-    v.layers["current_object"].refresh()
-
-    v.layers["prompts"].data = []
-    v.layers["prompts"].refresh()
-    NEXT_ID += 1
-
-
-# TODO enable passing also an initial segmentation
 def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_result=None):
     # for access to the predictor and the image embeddings in the widgets
-    global PREDICTOR, IMAGE_EMBEDDINGS, NEXT_ID
+    global PREDICTOR, IMAGE_EMBEDDINGS
     PREDICTOR = util.get_sam_model()
     IMAGE_EMBEDDINGS = util.precompute_image_embeddings(PREDICTOR, raw, save_path=embedding_path)
 
@@ -193,11 +175,9 @@ def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_r
     v.add_image(raw)
     if segmentation_result is None:
         v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="committed_objects")
-        NEXT_ID = 1
     else:
         assert segmentation_result.shape == raw.shape
         v.add_labels(data=segmentation_result, name="committed_objects")
-        NEXT_ID = int(segmentation_result.max()) + 1
     v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="current_object")
 
     # show the PCA of the image embeddings
@@ -234,7 +214,7 @@ def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_r
     # v.bind_key("s", segment_slice_wigdet)  FIXME this causes an issue with all shortcuts
 
     v.window.add_dock_widget(segment_volume_widget)
-    v.window.add_dock_widget(commit_widget)
+    v.window.add_dock_widget(commit_segmentation_widget)
 
     #
     # key bindings
@@ -250,7 +230,7 @@ def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_r
 
     @v.bind_key("c")
     def _commit(v):
-        commit_widget(v)
+        commit_segmentation_widget(v)
 
     @v.bind_key("t")
     def toggle_label(event=None):
