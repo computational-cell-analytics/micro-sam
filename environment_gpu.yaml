@@ -1,0 +1,15 @@
+channels:
+    - pytorch
+    - nvidia
+    - conda-forge
+name:
+    sam
+dependencies:
+    - napari
+    - python-elf
+    - pytorch
+    - pytorch-cuda>=11.7  # you may need to update the cuda version to match your system
+    - torchvision
+    - tqdm
+    - pip:
+        - git+https://github.com/facebookresearch/segment-anything.git

@@ -1,0 +1,14 @@
+channels:
+    - pytorch
+    - conda-forge
+name:
+    sam
+dependencies:
+    - cpuonly
+    - napari
+    - python-elf
+    - pytorch
+    - torchvision
+    - tqdm
+    - pip:
+        - git+https://github.com/facebookresearch/segment-anything.git
