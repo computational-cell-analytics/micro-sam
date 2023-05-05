@@ -1,0 +1,38 @@
+name: test
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: ${{ matrix.os }} ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.10"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Setup miniconda
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          activate-environment: sam
+          mamba-version: "*"
+          auto-update-conda: true
+          environment-file: environment_cpu.yaml
+          python-version: ${{ matrix.python-version }}
+          auto-activate-base: false
+        env:
+          ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+
+      - name: Install package
+        shell: bash -l {0}
+        run: pip install --no-deps -e .
+
+      - name: Run tests
+        shell: bash -l {0}
+        run: python -m unittest discover -s test -v
