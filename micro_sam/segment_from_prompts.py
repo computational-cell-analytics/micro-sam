@@ -12,11 +12,20 @@ def _compute_box(mask, original_size=None):
         coords[1].min(), coords[0].min(),
         coords[1].max() + 1, coords[0].max() + 1,
     ])
-    # FIXME how do we deal with aspect ratios???
+    # TODO how do we deal with aspect ratios???
     if original_size is not None:
         trafo = ResizeLongestSide(max(original_size))
         box = trafo.apply_boxes(box[None], (256, 256)).squeeze()
     return box
+
+
+def _process_box(box, original_size=None):
+    box_processed = box[[1, 0, 3, 2]]
+    # TODO how do we deal with aspect ratios???
+    if original_size is not None:
+        trafo = ResizeLongestSide(max(original_size))
+        box_processed = trafo.apply_boxes(box[None], (256, 256)).squeeze()
+    return box_processed
 
 
 def _compute_logits(mask, eps=1e-3):
@@ -73,6 +82,20 @@ def segment_from_mask(
     box = _compute_box(mask, original_size=original_size) if use_box else None
     logits = _compute_logits(mask) if use_mask else None
     mask, scores, logits = predictor.predict(mask_input=logits, box=box, multimask_output=multimask_output)
+    if return_all:
+        return mask, scores, logits
+    else:
+        return mask
+
+
+def segment_from_box(
+    predictor, box,
+    image_embeddings=None, i=None, original_size=None,
+    multimask_output=False, return_all=False,
+):
+    if image_embeddings is not None:
+        util.set_precomputed(predictor, image_embeddings, i)
+    mask, scores, logits = predictor.predict(box=_process_box(box, original_size), multimask_output=multimask_output)
     if return_all:
         return mask, scores, logits
     else:

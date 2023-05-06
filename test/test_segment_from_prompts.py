@@ -51,6 +51,16 @@ class TestSegmentFromPrompts(unittest.TestCase):
         predicted = segment_from_mask(predictor, mask, use_mask=True, use_box=False)
         self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
+    def test_segment_from_box(self):
+        from micro_sam.segment_from_prompts import segment_from_box
+
+        mask, image = self._get_input()
+        predictor = self._get_model(image)
+
+        box = np.array([106, 106, 150, 150])
+        predicted = segment_from_box(predictor, box)
+        self.assertGreater(util.compute_iou(mask, predicted), 0.9)
+
 
 if __name__ == "__main__":
     unittest.main()
