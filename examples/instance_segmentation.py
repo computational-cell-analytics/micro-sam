@@ -2,7 +2,7 @@ import micro_sam.util as util
 import napari
 
 from elf.io import open_file
-from micro_sam.embedding_instance_segmentation import automatic_instance_segmentation
+from micro_sam.segment_instances import segment_from_embeddings
 from micro_sam.visualization import compute_pca
 
 
@@ -15,9 +15,7 @@ def mito_segmentation():
     image_embeddings = util.precompute_image_embeddings(predictor, raw, "./embeddings/embeddings-mito2d.zarr")
     embedding_pca = compute_pca(image_embeddings["features"])
 
-    seg, initial_seg = automatic_instance_segmentation(
-        predictor, image_embeddings, return_initial_seg=True
-    )
+    seg, initial_seg = segment_from_embeddings(predictor, image_embeddings, return_initial_seg=True)
 
     v = napari.Viewer()
     v.add_image(raw)

@@ -13,7 +13,7 @@ from .segment_from_prompts import segment_from_mask
 # can we get intermediate, larger embeddings from SAM?
 # or can we run the encoder in a sliding window and somehow stitch the embeddings?
 # (worst case: stitch the initial segmentations)
-def automatic_instance_segmentation(
+def segment_from_embeddings(
     predictor, image_embeddings, size_threshold=10, i=None,
     offsets=[[-1, 0], [0, -1], [-3, 0], [0, -3]], distance_type="l2", bias=0.0,
     verbose=True, return_initial_seg=False,
