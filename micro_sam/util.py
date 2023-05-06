@@ -10,7 +10,11 @@ import vigra
 from skimage.measure import regionprops
 
 from segment_anything import sam_model_registry, SamPredictor
-from tqdm import tqdm
+
+try:
+    from napari.utils import progress as tqdm
+except ImportError:
+    from tqdm import tqdm
 
 MODEL_URLS = {
     "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",

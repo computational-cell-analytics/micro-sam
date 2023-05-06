@@ -3,6 +3,7 @@ import numpy as np
 
 from magicgui import magicgui
 from napari import Viewer
+from napari.utils import progress
 
 from .. import util
 from ..segment_from_prompts import segment_from_mask, segment_from_points
@@ -19,12 +20,16 @@ COLOR_CYCLE = ["#00FF00", "#FF0000"]
 
 # TODO motion model!!!
 # TODO handle divison annotations + division classifier
-def _track_from_prompts(seg, predictor, slices, image_embeddings, stop_upper, threshold, method):
+def _track_from_prompts(seg, predictor, slices, image_embeddings, stop_upper, threshold, method, progress_bar=None):
     assert method in ("mask", "bounding_box")
     if method == "mask":
         use_mask, use_box = True, True
     else:
         use_mask, use_box = False, True
+
+    def _update_progress():
+        if progress_bar is not None:
+            progress_bar.update(1)
 
     t0 = int(slices.min())
     t = t0 + 1
@@ -36,6 +41,7 @@ def _track_from_prompts(seg, predictor, slices, image_embeddings, stop_upper, th
             seg_prev = seg[t - 1]
             seg_t = segment_from_mask(predictor, seg_prev, image_embeddings=image_embeddings, i=t,
                                       use_mask=use_mask, use_box=use_box)
+            _update_progress()
 
         if (threshold is not None) and (seg_prev is not None):
             iou = util.compute_iou(seg_prev, seg_t)
@@ -79,14 +85,18 @@ def segment_frame_wigdet(v: Viewer):
 
 @magicgui(call_button="Track Object [V]", method={"choices": ["bounding_box", "mask"]})
 def track_objet_widget(v: Viewer, iou_threshold: float = 0.8, method: str = "mask"):
-    # step 1: segment all slices with prompts
     shape = v.layers["raw"].data.shape
-    seg, slices, _, stop_upper = segment_slices_with_prompts(
-        PREDICTOR, v.layers["prompts"], IMAGE_EMBEDDINGS, shape
-    )
 
-    # step 2: track the object starting from the lowest annotated slice
-    seg = _track_from_prompts(seg, PREDICTOR, slices, IMAGE_EMBEDDINGS, stop_upper, iou_threshold, method)
+    with progress(total=shape[0]) as progress_bar:
+        # step 1: segment all slices with prompts
+        seg, slices, _, stop_upper = segment_slices_with_prompts(
+            PREDICTOR, v.layers["prompts"], IMAGE_EMBEDDINGS, shape, progress_bar=progress_bar
+        )
+
+        # step 2: track the object starting from the lowest annotated slice
+        seg = _track_from_prompts(
+            seg, PREDICTOR, slices, IMAGE_EMBEDDINGS, stop_upper, iou_threshold, method, progress_bar=progress_bar
+        )
 
     v.layers["current_track"].data = seg
     v.layers["current_track"].refresh()

@@ -3,6 +3,7 @@ import numpy as np
 
 from magicgui import magicgui
 from napari import Viewer
+from napari.utils import progress
 
 from .. import util
 from ..segment_from_prompts import segment_from_mask, segment_from_points
@@ -21,13 +22,18 @@ COLOR_CYCLE = ["#00FF00", "#FF0000"]
 # TODO refactor
 def _segment_volume(
     seg, predictor, image_embeddings, segmented_slices,
-    stop_lower, stop_upper, iou_threshold, method
+    stop_lower, stop_upper, iou_threshold, method,
+    progress_bar=None,
 ):
     assert method in ("mask", "bounding_box")
     if method == "mask":
         use_mask, use_box = True, True
     else:
         use_mask, use_box = False, True
+
+    def _update_progress():
+        if progress_bar is not None:
+            progress_bar.update(1)
 
     # TODO refactor to utils so that it can be used by other plugins
     def segment_range(z_start, z_stop, increment, stopping_criterion, threshold=None, verbose=False):
@@ -50,6 +56,7 @@ def _segment_volume(
                 if verbose:
                     print(f"Segment {z_start} to {z_stop}: stop at slice {z}")
                 break
+            _update_progress()
 
     z0, z1 = int(segmented_slices.min()), int(segmented_slices.max())
 
@@ -75,6 +82,7 @@ def _segment_volume(
                 seg_prompt = np.logical_or(seg[z_start] == 1, seg[z_stop] == 1)
                 seg[z] = segment_from_mask(predictor, seg_prompt, image_embeddings=image_embeddings, i=z,
                                            use_mask=use_mask, use_box=use_box)
+                _update_progress()
 
             else:  # there is a range of more than 2 slices in between -> segment ranges
                 # segment from bottom
@@ -89,6 +97,7 @@ def _segment_volume(
                     seg_prompt = np.logical_or(seg[z_mid - 1] == 1, seg[z_mid + 1] == 1)
                     seg[z_mid] = segment_from_mask(predictor, seg_prompt, image_embeddings=image_embeddings, i=z_mid,
                                                    use_mask=use_mask, use_box=use_box)
+                    _update_progress()
 
     return seg
 
@@ -118,16 +127,20 @@ def segment_slice_wigdet(v: Viewer):
 def segment_volume_widget(v: Viewer, iou_threshold: float = 0.8, method: str = "mask"):
     # step 1: segment all slices with prompts
     shape = v.layers["raw"].data.shape
-    seg, slices, stop_lower, stop_upper = segment_slices_with_prompts(
-        PREDICTOR, v.layers["prompts"], IMAGE_EMBEDDINGS, shape
-    )
 
-    # step 2: segment the rest of the volume based on smart prompting
-    seg = _segment_volume(
-        seg, PREDICTOR, IMAGE_EMBEDDINGS, slices,
-        stop_lower, stop_upper,
-        iou_threshold=iou_threshold, method=method,
-    )
+    with progress(total=shape[0]) as progress_bar:
+
+        seg, slices, stop_lower, stop_upper = segment_slices_with_prompts(
+            PREDICTOR, v.layers["prompts"], IMAGE_EMBEDDINGS, shape, progress_bar=progress_bar,
+        )
+
+        # step 2: segment the rest of the volume based on smart prompting
+        seg = _segment_volume(
+            seg, PREDICTOR, IMAGE_EMBEDDINGS, slices,
+            stop_lower, stop_upper,
+            iou_threshold=iou_threshold, method=method,
+            progress_bar=progress_bar,
+        )
 
     v.layers["current_object"].data = seg
     v.layers["current_object"].refresh()
