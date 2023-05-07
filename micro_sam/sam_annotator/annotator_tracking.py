@@ -4,6 +4,8 @@ import numpy as np
 from magicgui import magicgui
 from napari import Viewer
 from napari.utils import progress
+from scipy.ndimage import shift
+from vigra.filters import eccentricityCenters
 
 from .. import util
 from ..segment_from_prompts import segment_from_mask, segment_from_points
@@ -18,9 +20,37 @@ COLOR_CYCLE = ["#00FF00", "#FF0000"]
 #
 
 
-# TODO motion model!!!
+def _compute_movement(seg, t0, t1):
+
+    def compute_center(t):
+        center = np.array(eccentricityCenters(seg[t].astype("uint32")))
+        assert center.shape == (2, 2)
+        return center[1]
+
+    center0 = compute_center(t0)
+    center1 = compute_center(t1)
+
+    move = center1 - center0
+    return move.astype("float64")
+
+
+def _update_motion_model(motion_model, move, motion_smoothing):
+    alpha = motion_smoothing
+    motion_model = alpha * motion_model + (1 - alpha) * move
+    return motion_model
+
+
+def _shift_object(mask, motion_model):
+    mask_shifted = np.zeros_like(mask)
+    shift(mask, motion_model, output=mask_shifted, order=0, prefilter=False)
+    return mask_shifted
+
+
 # TODO handle divison annotations + division classifier
-def _track_from_prompts(seg, predictor, slices, image_embeddings, stop_upper, threshold, method, progress_bar=None):
+def _track_from_prompts(
+    seg, predictor, slices, image_embeddings, stop_upper, threshold, method,
+    progress_bar=None, motion_smoothing=0.5,
+):
     assert method in ("mask", "bounding_box")
     if method == "mask":
         use_mask, use_box = True, True
@@ -31,6 +61,27 @@ def _track_from_prompts(seg, predictor, slices, image_embeddings, stop_upper, th
         if progress_bar is not None:
             progress_bar.update(1)
 
+    # shift the segmentation based on the motion model and update the motion model
+    def _update_motion(seg, t, t0, motion_model):
+        seg_prev = seg[t - 1]
+
+        if t == t0 + 1:  # this is the second frame, we don't have a motion model yet
+            pass
+        elif t == t0 + 2:  # this the third frame, we initialize the motion model
+            current_move = _compute_movement(seg, t - 1, t - 2)
+            motion_model = current_move
+        else:  # we already have a motion model and update it
+            current_move = _compute_movement(seg, t - 1, t - 2)
+            motion_model = _update_motion_model(motion_model, current_move, motion_smoothing)
+
+        if motion_model is not None:  # shift the segmentation according to the motion model
+            seg_prev = _shift_object(seg_prev, motion_model)
+
+        return seg_prev, motion_model
+
+    motion_model = None
+    verbose = False
+
     t0 = int(slices.min())
     t = t0 + 1
     while True:
@@ -38,10 +89,12 @@ def _track_from_prompts(seg, predictor, slices, image_embeddings, stop_upper, th
             seg_prev = None
             seg_t = seg[t]
         else:
-            seg_prev = seg[t - 1]
+            seg_prev, motion_model = _update_motion(seg, t, t0, motion_model)
             seg_t = segment_from_mask(predictor, seg_prev, image_embeddings=image_embeddings, i=t,
                                       use_mask=use_mask, use_box=use_box)
             _update_progress()
+            if verbose:
+                print(f"Tracking object in frame {t} with movement {motion_model}")
 
         if (threshold is not None) and (seg_prev is not None):
             iou = util.compute_iou(seg_prev, seg_t)
@@ -84,7 +137,7 @@ def segment_frame_wigdet(v: Viewer):
 
 
 @magicgui(call_button="Track Object [V]", method={"choices": ["bounding_box", "mask"]})
-def track_objet_widget(v: Viewer, iou_threshold: float = 0.8, method: str = "mask"):
+def track_objet_widget(v: Viewer, iou_threshold: float = 0.5, method: str = "mask", motion_smoothing: float = 0.5):
     shape = v.layers["raw"].data.shape
 
     with progress(total=shape[0]) as progress_bar:
@@ -95,7 +148,8 @@ def track_objet_widget(v: Viewer, iou_threshold: float = 0.8, method: str = "mas
 
         # step 2: track the object starting from the lowest annotated slice
         seg = _track_from_prompts(
-            seg, PREDICTOR, slices, IMAGE_EMBEDDINGS, stop_upper, iou_threshold, method, progress_bar=progress_bar
+            seg, PREDICTOR, slices, IMAGE_EMBEDDINGS, stop_upper, threshold=iou_threshold,
+            method=method, progress_bar=progress_bar, motion_smoothing=motion_smoothing,
         )
 
     v.layers["current_track"].data = seg
