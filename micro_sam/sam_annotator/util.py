@@ -7,20 +7,23 @@ from napari import Viewer
 from ..segment_from_prompts import segment_from_points
 
 
-@magicgui(call_button="Commit [C]")
-def commit_segmentation_widget(v: Viewer):
-    seg = v.layers["current_object"].data
+@magicgui(call_button="Commit [C]", layer={"choices": ["current_object", "auto_segmentation"]})
+def commit_segmentation_widget(v: Viewer, layer: str = "current_object"):
+    seg = v.layers[layer].data
 
-    next_id = int(v.layers["committed_objects"].data.max() + 1)
-    v.layers["committed_objects"].data[seg == 1] = next_id
+    id_offset = int(v.layers["committed_objects"].data.max())
+    mask = seg != 0
+
+    v.layers["committed_objects"].data[mask] = (seg[mask] + id_offset)
     v.layers["committed_objects"].refresh()
 
     shape = v.layers["raw"].data.shape
-    v.layers["current_object"].data = np.zeros(shape, dtype="uint32")
-    v.layers["current_object"].refresh()
+    v.layers[layer].data = np.zeros(shape, dtype="uint32")
+    v.layers[layer].refresh()
 
-    v.layers["prompts"].data = []
-    v.layers["prompts"].refresh()
+    if layer == "current_object":
+        v.layers["prompts"].data = []
+        v.layers["prompts"].refresh()
 
 
 def create_prompt_menu(points_layer, labels):
