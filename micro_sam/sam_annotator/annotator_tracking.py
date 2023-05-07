@@ -5,7 +5,9 @@ from magicgui import magicgui
 from napari import Viewer
 from napari.utils import progress
 from scipy.ndimage import shift
-from vigra.filters import eccentricityCenters
+
+# this is more precise for comuting the centers, but slow!
+# from vigra.filters import eccentricityCenters
 
 from .. import util
 from ..segment_from_prompts import segment_from_mask, segment_from_points
@@ -23,9 +25,16 @@ COLOR_CYCLE = ["#00FF00", "#FF0000"]
 def _compute_movement(seg, t0, t1):
 
     def compute_center(t):
-        center = np.array(eccentricityCenters(seg[t].astype("uint32")))
-        assert center.shape == (2, 2)
-        return center[1]
+
+        # computation with vigra eccentricity centers (too slow)
+        # center = np.array(eccentricityCenters(seg[t].astype("uint32")))
+        # assert center.shape == (2, 2)
+        # return center[1]
+
+        # computation with center of mass
+        center = np.where(seg[t] == 1)
+        center = np.array(np.mean(center[0]), np.mean(center[1]))
+        return center
 
     center0 = compute_center(t0)
     center1 = compute_center(t1)
