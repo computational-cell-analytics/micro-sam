@@ -54,7 +54,7 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
 def prompt_layer_to_points(prompt_layer, i=None):
     """Extract point prompts for SAM from point layer.
 
-    Argumtents:
+    Arguments:
         prompt_layer: the point layer
         i [int] - index for the data (required for 3d data)
     """
@@ -82,6 +82,30 @@ def prompt_layer_to_points(prompt_layer, i=None):
     return this_points, this_labels
 
 
+def prompt_layer_to_state(prompt_layer, i):
+    """Get the state of the track from the prompt layer.
+    Only relevant for annotator_tracking.
+
+    Arguments:
+        prompt_layer: the point layer
+        i [int] - index for the data (required for 3d data)
+    """
+    state = prompt_layer.properties["state"]
+
+    points = prompt_layer.data
+    assert points.shape[1] == 3, f"{points.shape}"
+    mask = points[:, 0] == i
+    this_points = points[mask][:, 1:]
+    this_state = state[mask]
+    assert len(this_points) == len(this_state)
+
+    # we set the state to 'division' if at least one point in this frame has a division label
+    if any(st == "division" for st in this_state):
+        return "division"
+    else:
+        return "track"
+
+
 def segment_slices_with_prompts(predictor, prompt_layer, image_embeddings, shape, progress_bar=None):
     seg = np.zeros(shape, dtype="uint32")
 
@@ -95,7 +119,6 @@ def segment_slices_with_prompts(predictor, prompt_layer, image_embeddings, shape
     for i in slices:
         prompts_i = prompt_layer_to_points(prompt_layer, i)
 
-        # TODO also take into account division properties once we have this implemented in tracking
         # do we end the segmentation at the outer slices?
         if prompts_i is None:
 

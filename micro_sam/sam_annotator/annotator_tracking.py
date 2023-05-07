@@ -11,7 +11,9 @@ from scipy.ndimage import shift
 
 from .. import util
 from ..segment_from_prompts import segment_from_mask, segment_from_points
-from .util import create_prompt_menu, prompt_layer_to_points, segment_slices_with_prompts, LABEL_COLOR_CYCLE
+from .util import (
+    create_prompt_menu, prompt_layer_to_points, prompt_layer_to_state, segment_slices_with_prompts, LABEL_COLOR_CYCLE
+)
 from ..visualization import project_embeddings_for_visualization
 
 # Magenta and Cyan
@@ -58,7 +60,8 @@ def _shift_object(mask, motion_model):
 
 # TODO handle divison annotations + division classifier
 def _track_from_prompts(
-    seg, predictor, slices, image_embeddings, stop_upper, threshold, projection,
+    prompt_layer, seg, predictor, slices, image_embeddings,
+    stop_upper, threshold, projection,
     progress_bar=None, motion_smoothing=0.5,
 ):
     assert projection in ("mask", "bounding_box")
@@ -95,16 +98,28 @@ def _track_from_prompts(
     t0 = int(slices.min())
     t = t0 + 1
     while True:
-        if t in slices:
+
+        if t in slices:  # this is a slice with prompts
             seg_prev = None
             seg_t = seg[t]
-        else:
+            track_state = prompt_layer_to_state(prompt_layer, t)
+            # TODO what do we do with the motion model here?
+
+        else:  # this is a slice without prompts
             seg_prev, motion_model = _update_motion(seg, t, t0, motion_model)
-            seg_t = segment_from_mask(predictor, seg_prev, image_embeddings=image_embeddings, i=t,
-                                      use_mask=use_mask, use_box=use_box)
-            _update_progress()
             if verbose:
                 print(f"Tracking object in frame {t} with movement {motion_model}")
+            seg_t = segment_from_mask(predictor, seg_prev, image_embeddings=image_embeddings, i=t,
+                                      use_mask=use_mask, use_box=use_box)
+            track_state = "track"
+
+            # are we beyond the last slice with prompt?
+            # if no: we continue tracking because we know we need to connect to a future frame
+            # if yes: we only continue tracking if overlaps are above the threshold
+            if t < slices[-1]:
+                seg_prev = None
+
+            _update_progress()
 
         if (threshold is not None) and (seg_prev is not None):
             iou = util.compute_iou(seg_prev, seg_t)
@@ -116,13 +131,16 @@ def _track_from_prompts(
         seg[t] = seg_t
         t += 1
 
-        # TODO here we need to also stop once divisions are implemented
         # stop tracking if we have stop upper set (i.e. single negative point was set to indicate stop track)
         if t == slices[-1] and stop_upper:
             break
 
         # stop if we are at the last slce
         if t == seg.shape[0] - 1:
+            break
+
+        # stop if we have a division
+        if track_state == "division":
             break
 
     return seg
@@ -167,7 +185,7 @@ def track_objet_widget(
 
         # step 2: track the object starting from the lowest annotated slice
         seg = _track_from_prompts(
-            seg, PREDICTOR, slices, IMAGE_EMBEDDINGS, stop_upper, threshold=iou_threshold,
+            v.layers["prompts"], seg, PREDICTOR, slices, IMAGE_EMBEDDINGS, stop_upper, threshold=iou_threshold,
             projection=projection_, progress_bar=progress_bar, motion_smoothing=motion_smoothing,
         )
 
