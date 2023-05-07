@@ -7,7 +7,7 @@ from napari.utils import progress
 
 from .. import util
 from ..segment_from_prompts import segment_from_mask, segment_from_points
-from ..visualization import compute_pca
+from ..visualization import project_embeddings_for_visualization
 from .util import commit_segmentation_widget, create_prompt_menu, prompt_layer_to_points, segment_slices_with_prompts
 
 COLOR_CYCLE = ["#00FF00", "#FF0000"]
@@ -22,11 +22,11 @@ COLOR_CYCLE = ["#00FF00", "#FF0000"]
 # TODO refactor
 def _segment_volume(
     seg, predictor, image_embeddings, segmented_slices,
-    stop_lower, stop_upper, iou_threshold, method,
+    stop_lower, stop_upper, iou_threshold, projection,
     progress_bar=None,
 ):
-    assert method in ("mask", "bounding_box")
-    if method == "mask":
+    assert projection in ("mask", "bounding_box")
+    if projection == "mask":
         use_mask, use_box = True, True
     else:
         use_mask, use_box = False, True
@@ -123,10 +123,17 @@ def segment_slice_wigdet(v: Viewer):
     v.layers["current_object"].refresh()
 
 
-@magicgui(call_button="Segment Volume [V]", method={"choices": ["bounding_box", "mask"]})
-def segment_volume_widget(v: Viewer, iou_threshold: float = 0.8, method: str = "mask"):
+@magicgui(call_button="Segment Volume [V]", projection={"choices": ["default", "bounding_box", "mask"]})
+def segment_volume_widget(v: Viewer, iou_threshold: float = 0.8, projection: str = "default"):
     # step 1: segment all slices with prompts
     shape = v.layers["raw"].data.shape
+
+    # choose mask projection for square images and bounding box projection otherwise
+    # (because mask projection does not work properly for non-square images yet)
+    if projection == "default":
+        projection_ = "mask" if shape[1] == shape[2] else "bounding_box"
+    else:
+        projection_ = projection
 
     with progress(total=shape[0]) as progress_bar:
 
@@ -138,7 +145,7 @@ def segment_volume_widget(v: Viewer, iou_threshold: float = 0.8, method: str = "
         seg = _segment_volume(
             seg, PREDICTOR, IMAGE_EMBEDDINGS, slices,
             stop_lower, stop_upper,
-            iou_threshold=iou_threshold, method=method,
+            iou_threshold=iou_threshold, projection=projection_,
             progress_bar=progress_bar,
         )
 
@@ -148,9 +155,12 @@ def segment_volume_widget(v: Viewer, iou_threshold: float = 0.8, method: str = "
 
 def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_result=None):
     # for access to the predictor and the image embeddings in the widgets
-    global PREDICTOR, IMAGE_EMBEDDINGS
+    global PREDICTOR, IMAGE_EMBEDDINGS, DEFAULT_PROJECTION
     PREDICTOR = util.get_sam_model()
     IMAGE_EMBEDDINGS = util.precompute_image_embeddings(PREDICTOR, raw, save_path=embedding_path)
+
+    # the mask projection currently only works for square images
+    DEFAULT_PROJECTION = "mask" if raw.shape[1] == raw.shape[2] else "bounding_box"
 
     #
     # initialize the viewer and add layers
@@ -168,9 +178,8 @@ def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_r
 
     # show the PCA of the image embeddings
     if show_embeddings:
-        embedding_vis = compute_pca(IMAGE_EMBEDDINGS["features"])
-        # FIXME determine the scale from data
-        v.add_image(embedding_vis, name="embeddings", scale=(1, 8, 8))
+        embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS["features"], raw.shape)
+        v.add_image(embedding_vis, name="embeddings", scale=scale)
 
     labels = ["positive", "negative"]
     prompts = v.add_points(
@@ -197,7 +206,6 @@ def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_r
     v.window.add_dock_widget(prompt_widget)
 
     v.window.add_dock_widget(segment_slice_wigdet)
-    # v.bind_key("s", segment_slice_wigdet)  FIXME this causes an issue with all shortcuts
 
     v.window.add_dock_widget(segment_volume_widget)
     v.window.add_dock_widget(commit_segmentation_widget)

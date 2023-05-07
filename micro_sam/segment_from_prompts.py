@@ -37,13 +37,43 @@ def _compute_logits(mask, eps=1e-3):
     logits[mask == 1] = 1 - eps
     logits[mask == 0] = eps
     logits = inv_sigmoid(logits)
+    assert logits.ndim == 2
 
     # resize to the expected shape of SAM (256x256) if needed
-    if logits.shape == (256, 256):  # shapes match already
-        logits = logits[None]
-    else:  # shapes don't match, need to resize
+    if logits.shape != (256, 256):  # shapes match already
         trafo = ResizeLongestSide(256)
-        logits = trafo.apply_image(logits[..., None])[None]
+        logits = trafo.apply_image(logits[..., None])
+
+        # this transformation resizes the longest side to 256
+        # if the input is not square we need to pad the other side to 256
+        if logits.shape != (256, 256):
+            raise NotImplementedError("Not implemented for non-square images")
+
+            # I don't know yet how to correctly resize the logits for non-square images.
+            # I have tried:
+            # - padding the shorter size to 256
+            # - just resizing to 256
+            # but both approaches fail (the mask is not predicted correctly, probably because it is misanligned)
+
+            # assert sum(sh == 256 for sh in logits.shape) == 1
+            # pad_dim = 1 if logits.shape[0] == 256 else 0
+            # pad_width = (0, 256 - logits.shape[pad_dim])
+            # pad_width = (pad_width, (0, 0)) if pad_dim == 0 else ((0, 0), pad_width)
+            # pad_value = logits.min()
+            # logits = np.pad(logits, pad_width, mode="constant", constant_values=pad_value)
+
+            # from skimage.transform import resize
+            # logits = resize(logits, (256, 256))
+
+            # import napari
+            # v = napari.Viewer()
+            # v.add_image(logits)
+            # scale = tuple(float(sh) / lsh for sh, lsh in zip(mask.shape, logits.shape))
+            # v.add_image(logits, scale=scale, name="logits_rescaled")
+            # v.add_labels(mask + 1)
+            # napari.run()
+
+    logits = logits[None]
 
     assert logits.shape == (1, 256, 256), f"{logits.shape}"
     return logits

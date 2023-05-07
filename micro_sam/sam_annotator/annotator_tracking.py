@@ -7,7 +7,7 @@ from napari.utils import progress
 
 from .. import util
 from ..segment_from_prompts import segment_from_mask, segment_from_points
-from ..visualization import compute_pca
+from ..visualization import project_embeddings_for_visualization
 from .util import create_prompt_menu, prompt_layer_to_points, segment_slices_with_prompts
 
 COLOR_CYCLE = ["#00FF00", "#FF0000"]
@@ -18,11 +18,10 @@ COLOR_CYCLE = ["#00FF00", "#FF0000"]
 #
 
 
-# TODO motion model!!!
 # TODO handle divison annotations + division classifier
-def _track_from_prompts(seg, predictor, slices, image_embeddings, stop_upper, threshold, method, progress_bar=None):
-    assert method in ("mask", "bounding_box")
-    if method == "mask":
+def _track_from_prompts(seg, predictor, slices, image_embeddings, stop_upper, threshold, projection, progress_bar=None):
+    assert projection in ("mask", "bounding_box")
+    if projection == "mask":
         use_mask, use_box = True, True
     else:
         use_mask, use_box = False, True
@@ -83,9 +82,16 @@ def segment_frame_wigdet(v: Viewer):
     v.layers["current_track"].refresh()
 
 
-@magicgui(call_button="Track Object [V]", method={"choices": ["bounding_box", "mask"]})
-def track_objet_widget(v: Viewer, iou_threshold: float = 0.8, method: str = "mask"):
+@magicgui(call_button="Track Object [V]", projection={"choices": ["default", "bounding_box", "mask"]})
+def track_objet_widget(v: Viewer, iou_threshold: float = 0.8, projection: str = "default"):
     shape = v.layers["raw"].data.shape
+
+    # choose mask projection for square images and bounding box projection otherwise
+    # (because mask projection does not work properly for non-square images yet)
+    if projection == "default":
+        projection_ = "mask" if shape[1] == shape[2] else "bounding_box"
+    else:
+        projection_ = projection
 
     with progress(total=shape[0]) as progress_bar:
         # step 1: segment all slices with prompts
@@ -95,7 +101,7 @@ def track_objet_widget(v: Viewer, iou_threshold: float = 0.8, method: str = "mas
 
         # step 2: track the object starting from the lowest annotated slice
         seg = _track_from_prompts(
-            seg, PREDICTOR, slices, IMAGE_EMBEDDINGS, stop_upper, iou_threshold, method, progress_bar=progress_bar
+            seg, PREDICTOR, slices, IMAGE_EMBEDDINGS, stop_upper, iou_threshold, projection_, progress_bar=progress_bar
         )
 
     v.layers["current_track"].data = seg
@@ -121,9 +127,8 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False):
 
     # show the PCA of the image embeddings
     if show_embeddings:
-        embedding_vis = compute_pca(IMAGE_EMBEDDINGS["features"])
-        # FIXME don't hard-code the scale
-        v.add_image(embedding_vis, name="embeddings", scale=(1, 8, 8))
+        embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS["features"], raw.shape)
+        v.add_image(embedding_vis, name="embeddings", scale=scale)
 
     #
     # add the widgets

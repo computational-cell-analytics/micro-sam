@@ -16,7 +16,7 @@ def main():
             timeseries.append(f["phase-contrast"][:])
     timeseries = np.stack(timeseries)
 
-    annotator_tracking(timeseries, embedding_path="./embeddings/embeddings-tracking.zarr")
+    annotator_tracking(timeseries, embedding_path="./embeddings/embeddings-tracking.zarr", show_embeddings=False)
 
 
 if __name__ == "__main__":
