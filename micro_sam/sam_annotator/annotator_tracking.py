@@ -12,9 +12,10 @@ from scipy.ndimage import shift
 from .. import util
 from ..segment_from_prompts import segment_from_mask, segment_from_points
 from ..visualization import compute_pca
-from .util import create_prompt_menu, prompt_layer_to_points, segment_slices_with_prompts
+from .util import create_prompt_menu, prompt_layer_to_points, segment_slices_with_prompts, LABEL_COLOR_CYCLE
 
-COLOR_CYCLE = ["#00FF00", "#FF0000"]
+# Magenta and Cyan
+STATE_COLOR_CYCLE = ["#FF00FF", "#00FFFF"]
 
 
 #
@@ -191,21 +192,23 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False):
     #
     # add the widgets
     #
-    # TODO add the division labels
     labels = ["positive", "negative"]
+    state_labels = ["division", "track"]
     prompts = v.add_points(
         data=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],  # FIXME workaround
         name="prompts",
-        properties={"label": labels},
+        properties={"label": labels, "state": state_labels},
         edge_color="label",
-        edge_color_cycle=COLOR_CYCLE,
+        edge_color_cycle=LABEL_COLOR_CYCLE,
         symbol="o",
-        face_color="transparent",
-        edge_width=0.5,  # FIXME workaround
+        face_color="state",
+        face_color_cycle=STATE_COLOR_CYCLE,
+        edge_width=0.4,
         size=12,
         ndim=3,
     )
     prompts.edge_color_mode = "cycle"
+    prompts.face_color_mode = "cycle"
 
     #
     # add the widgets
@@ -215,6 +218,9 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False):
 
     prompt_widget = create_prompt_menu(prompts, labels)
     v.window.add_dock_widget(prompt_widget)
+
+    state_widget = create_prompt_menu(prompts, state_labels, menu_name="state", label_name="state")
+    v.window.add_dock_widget(state_widget)
 
     v.window.add_dock_widget(segment_frame_wigdet)
     v.window.add_dock_widget(track_objet_widget)

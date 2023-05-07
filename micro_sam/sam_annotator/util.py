@@ -6,6 +6,9 @@ from napari import Viewer
 
 from ..segment_from_prompts import segment_from_points
 
+# Green and Red
+LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
+
 
 @magicgui(call_button="Commit [C]")
 def commit_segmentation_widget(v: Viewer):
@@ -23,12 +26,12 @@ def commit_segmentation_widget(v: Viewer):
     v.layers["prompts"].refresh()
 
 
-def create_prompt_menu(points_layer, labels):
-    label_menu = ComboBox(label="prompts", choices=labels)
+def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="label"):
+    label_menu = ComboBox(label=menu_name, choices=labels)
     label_widget = Container(widgets=[label_menu])
 
     def update_label_menu(event):
-        new_label = str(points_layer.current_properties["label"][0])
+        new_label = str(points_layer.current_properties[label_name][0])
         if new_label != label_menu.value:
             label_menu.value = new_label
 
@@ -36,7 +39,7 @@ def create_prompt_menu(points_layer, labels):
 
     def label_changed(new_label):
         current_properties = points_layer.current_properties
-        current_properties["label"] = np.array([new_label])
+        current_properties[label_name] = np.array([new_label])
         points_layer.current_properties = current_properties
         points_layer.refresh_colors()
 

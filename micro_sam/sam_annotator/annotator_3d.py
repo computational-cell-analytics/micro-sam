@@ -8,9 +8,8 @@ from napari.utils import progress
 from .. import util
 from ..segment_from_prompts import segment_from_mask, segment_from_points
 from ..visualization import compute_pca
-from .util import commit_segmentation_widget, create_prompt_menu, prompt_layer_to_points, segment_slices_with_prompts
-
-COLOR_CYCLE = ["#00FF00", "#FF0000"]
+from .util import (commit_segmentation_widget, create_prompt_menu,
+                   prompt_layer_to_points, segment_slices_with_prompts, LABEL_COLOR_CYCLE)
 
 
 #
@@ -178,7 +177,7 @@ def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_r
         name="prompts",
         properties={"label": labels},
         edge_color="label",
-        edge_color_cycle=COLOR_CYCLE,
+        edge_color_cycle=LABEL_COLOR_CYCLE,
         symbol="o",
         face_color="transparent",
         edge_width=0.5,
