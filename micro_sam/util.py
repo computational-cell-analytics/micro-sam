@@ -219,11 +219,11 @@ def set_precomputed(predictor, image_embeddings, i=None):
         raise ValueError("The data is 2D so an index is not needed.")
 
     if i is None:
-        predictor.features = torch.from_numpy(features).to(device) \
-            if not torch.is_tensor(features) else features.to(device)
+        predictor.features = features.to(device) if torch.is_tensor(features) else \
+            torch.from_numpy(features).to(device)
     else:
-        predictor.features = torch.from_numpy(features[i]).to(device) \
-            if not torch.is_tensor(features) else features[i].to(device)
+        predictor.features = features[i].to(device) if torch.is_tensor(features) else \
+            torch.from_numpy(features[i]).to(device)
     predictor.original_size = image_embeddings["original_size"]
     predictor.input_size = image_embeddings["input_size"]
     predictor.is_image_set = True
