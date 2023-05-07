@@ -7,7 +7,7 @@ from napari.utils import progress
 
 from .. import util
 from ..segment_from_prompts import segment_from_mask, segment_from_points
-from ..visualization import compute_pca
+from ..visualization import project_embeddings_for_visualization
 from .util import commit_segmentation_widget, create_prompt_menu, prompt_layer_to_points, segment_slices_with_prompts
 
 COLOR_CYCLE = ["#00FF00", "#FF0000"]
@@ -168,9 +168,8 @@ def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_r
 
     # show the PCA of the image embeddings
     if show_embeddings:
-        embedding_vis = compute_pca(IMAGE_EMBEDDINGS["features"])
-        # FIXME determine the scale from data
-        v.add_image(embedding_vis, name="embeddings", scale=(1, 8, 8))
+        embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS["features"], raw.shape)
+        v.add_image(embedding_vis, name="embeddings", scale=scale)
 
     labels = ["positive", "negative"]
     prompts = v.add_points(

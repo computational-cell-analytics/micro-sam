@@ -5,7 +5,7 @@ from magicgui import magicgui
 from napari import Viewer
 
 from .. import util
-from ..visualization import compute_pca
+from ..visualization import project_embeddings_for_visualization
 from ..segment_from_prompts import segment_from_points
 from .util import commit_segmentation_widget, create_prompt_menu, prompt_layer_to_points
 
@@ -43,9 +43,8 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_r
 
     # show the PCA of the image embeddings
     if show_embeddings:
-        embedding_vis = compute_pca(image_embeddings["features"])
-        # FIXME we need to set the scale from data
-        v.add_image(embedding_vis, name="embeddings", scale=(8, 8))
+        embedding_vis, scale = project_embeddings_for_visualization(image_embeddings["features"], raw.shape)
+        v.add_image(embedding_vis, name="embeddings", scale=scale)
 
     labels = ["positive", "negative"]
     prompts = v.add_points(

@@ -7,7 +7,7 @@ from napari.utils import progress
 
 from .. import util
 from ..segment_from_prompts import segment_from_mask, segment_from_points
-from ..visualization import compute_pca
+from ..visualization import project_embeddings_for_visualization
 from .util import create_prompt_menu, prompt_layer_to_points, segment_slices_with_prompts
 
 COLOR_CYCLE = ["#00FF00", "#FF0000"]
@@ -121,9 +121,8 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False):
 
     # show the PCA of the image embeddings
     if show_embeddings:
-        embedding_vis = compute_pca(IMAGE_EMBEDDINGS["features"])
-        # FIXME don't hard-code the scale
-        v.add_image(embedding_vis, name="embeddings", scale=(1, 8, 8))
+        embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS["features"], raw.shape)
+        v.add_image(embedding_vis, name="embeddings", scale=scale)
 
     #
     # add the widgets

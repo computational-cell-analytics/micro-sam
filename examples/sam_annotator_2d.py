@@ -7,7 +7,7 @@ def main():
         "/home/pape/Work/data/incu_cyte/livecell/images/livecell_test_images/A172_Phase_C7_1_01d04h00m_4.tif"
     )
     embedding_path = "./embeddings/embeddings-livecell_cropped.zarr"
-    annotator_2d(im, embedding_path)
+    annotator_2d(im, embedding_path, show_embeddings=False)
 
 
 if __name__ == "__main__":
