@@ -39,7 +39,7 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False):
     # for access to the predictor and the image embeddings in the widgets
     global PREDICTOR, IMAGE_EMBEDDINGS, NEXT_ID
     NEXT_ID = 1
-    _, PREDICTOR = util.get_sam_model()
+    PREDICTOR = util.get_sam_model()
     IMAGE_EMBEDDINGS = util.precompute_image_embeddings(PREDICTOR, raw, save_path=embedding_path)
 
     #

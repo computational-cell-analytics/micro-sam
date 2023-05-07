@@ -26,7 +26,7 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False):
     global PREDICTOR, NEXT_ID
     NEXT_ID = 1
 
-    _, PREDICTOR = util.get_sam_model()
+    PREDICTOR = util.get_sam_model()
     image_embeddings = util.precompute_image_embeddings(PREDICTOR, raw, save_path=embedding_path)
     util.set_precomputed(PREDICTOR, image_embeddings)
 

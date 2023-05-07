@@ -271,7 +271,7 @@ def main():
     parser.add_argument("-k", "--key")
     args = parser.parse_args()
 
-    _, predictor = get_sam_model()
+    predictor = get_sam_model()
     with open_file(args.input_path) as f:
         data = f[args.key]
         precompute_image_embeddings(predictor, data, save_path=args.output_path)
