@@ -4,12 +4,18 @@ from shutil import copyfileobj
 import numpy as np
 import requests
 import torch
+import vigra
 import zarr
 
-import vigra
+from elf.io import open_file
 from skimage.measure import regionprops
 
 from segment_anything import sam_model_registry, SamPredictor
+
+try:
+    import imageio.v2 as imageio
+except ImportError:
+    import imageio
 
 try:
     from napari.utils import progress as tqdm
@@ -269,10 +275,20 @@ def get_cell_center_coordinates(gt, mode="p"):
     return center_coordinates, bbox_coordinates
 
 
+def load_image_data(path, ndim, key=None, lazy_loading=False):
+    if key is None:
+        image_data = imageio.imread(path) if ndim == 2 else imageio.volread(path)
+    else:
+        with open_file(path, mode="r") as f:
+            image_data = f[key]
+            if not lazy_loading:
+                image_data = image_data[:]
+    return image_data
+
+
 # TODO enable passing options for get_sam
 def main():
     import argparse
-    from elf.io import open_file
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-i", "--input_path", required=True)
@@ -281,7 +297,7 @@ def main():
     args = parser.parse_args()
 
     predictor = get_sam_model()
-    with open_file(args.input_path) as f:
+    with open_file(args.input_path, mode="r") as f:
         data = f[args.key]
         precompute_image_embeddings(predictor, data, save_path=args.output_path)
 

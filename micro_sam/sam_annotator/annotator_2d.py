@@ -120,3 +120,59 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_r
     # clear the initial points needed for workaround
     clear_prompts(v)
     napari.run()
+
+
+def main():
+    import argparse
+    import warnings
+
+    parser = argparse.ArgumentParser(
+        description="Run interactive segmentation for an image."
+    )
+    parser.add_argument(
+        "-i", "--input", required=True,
+        help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
+        "or elf.io.open_file (e.g. hdf5, zarr, mrc) For the latter you also need to pass the 'key' parameter."
+    )
+    parser.add_argument(
+        "-k", "--key",
+        help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
+        "for a image series it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
+    )
+    parser.add_argument(
+        "-e", "--embedding_path",
+        help="The filepath for saving/loading the pre-computed image embeddings. "
+        "NOTE: It is recommended to pass this argument and store the embeddings, "
+        "otherwise they will be recomputed every time (which can take a long time)."
+    )
+    parser.add_argument(
+        "-s", "--segmentation",
+        help="Optional filepath to a precomputed segmentation. If passed this will be used to initialize the "
+        "'committed_objects' layer. This can be useful if you want to correct an existing segmentation or if you "
+        "have saved intermediate results from the annotator and want to continue with your annotations. "
+        "Supports the same file formats as 'input'."
+    )
+    parser.add_argument(
+        "-sk", "--segmentation_key",
+        help="The key for opening the segmentation data. Same rules as for 'key' apply."
+    )
+    parser.add_argument(
+        "--show_embeddings", action="store_true",
+        help="Visualize the embeddings computed by SegmentAnything. This can be helpful for debugging."
+    )
+
+    args = parser.parse_args()
+    raw = util.load_image_data(args.input, ndim=2, key=args.key)
+
+    if args.segmentation is None:
+        segmentation = None
+    else:
+        segmentation = util.load_image_data(args.segmentation, args.segmentation_key)
+
+    if args.embedding_path is None:
+        warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
+
+    annotator_2d(
+        raw, embedding_path=args.embedding_path,
+        show_embeddings=args.show_embeddings, segmentation_result=segmentation
+    )
