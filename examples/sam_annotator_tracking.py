@@ -1,41 +1,18 @@
-from glob import glob
-
-import h5py
-import numpy as np
+from elf.io import open_file
 from micro_sam.sam_annotator import annotator_tracking
 
 
-# FOR DEBUGGING / DEVELOPMENT
-def _check_tracking(timeseries, embedding_path):
-    import micro_sam.util as util
-    from micro_sam.sam_annotator.annotator_tracking import _track_from_prompts
-
-    predictor = util.get_sam_model()
-    image_embeddings = util.precompute_image_embeddings(predictor, timeseries, embedding_path)
-
-    # seg = np.zeros(timeseries.shape, dtype="uint32")
-    seg = np.load("./seg.npy")
-    assert seg.shape == timeseries.shape
-    slices = np.array([0])
-    stop_upper = False
-
-    _track_from_prompts(seg, predictor, slices, image_embeddings, stop_upper, threshold=0.5, method="bounding_box")
+# TODO describe how to get the data from CTC
+def track_ctc_data():
+    path = "./data/DIC-C2DH-HeLa/train/01"
+    with open_file(path, mode="r") as f:
+        timeseries = f["*.tif"][:50]
+    annotator_tracking(timeseries, embedding_path="./embeddings/embeddings-ctc.zarr")
 
 
 def main():
-    pattern = "/home/pape/Work/data/incu_cyte/carmello/videos/MiaPaCa_flat_B3-3_registered/image-*"
-    paths = glob(pattern)
-    paths.sort()
-
-    timeseries = []
-    for p in paths[:45]:
-        with h5py.File(p) as f:
-            timeseries.append(f["phase-contrast"][:])
-    timeseries = np.stack(timeseries)
-
-    embedding_path = "./embeddings/embeddings-tracking.zarr"
-    # _check_tracking(timeseries, embedding_path)
-    annotator_tracking(timeseries, embedding_path=embedding_path)
+    # run interactive tracking for data from the cell tracking challenge
+    track_ctc_data()
 
 
 if __name__ == "__main__":

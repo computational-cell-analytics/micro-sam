@@ -11,8 +11,8 @@ from scipy.ndimage import shift
 
 from .. import util
 from ..segment_from_prompts import segment_from_mask, segment_from_points
-from ..visualization import compute_pca
 from .util import create_prompt_menu, prompt_layer_to_points, segment_slices_with_prompts, LABEL_COLOR_CYCLE
+from ..visualization import project_embeddings_for_visualization
 
 # Magenta and Cyan
 STATE_COLOR_CYCLE = ["#FF00FF", "#00FFFF"]
@@ -58,11 +58,11 @@ def _shift_object(mask, motion_model):
 
 # TODO handle divison annotations + division classifier
 def _track_from_prompts(
-    seg, predictor, slices, image_embeddings, stop_upper, threshold, method,
+    seg, predictor, slices, image_embeddings, stop_upper, threshold, projection,
     progress_bar=None, motion_smoothing=0.5,
 ):
-    assert method in ("mask", "bounding_box")
-    if method == "mask":
+    assert projection in ("mask", "bounding_box")
+    if projection == "mask":
         use_mask, use_box = True, True
     else:
         use_mask, use_box = False, True
@@ -146,9 +146,18 @@ def segment_frame_wigdet(v: Viewer):
     v.layers["current_track"].refresh()
 
 
-@magicgui(call_button="Track Object [V]", method={"choices": ["bounding_box", "mask"]})
-def track_objet_widget(v: Viewer, iou_threshold: float = 0.5, method: str = "mask", motion_smoothing: float = 0.5):
+@magicgui(call_button="Track Object [V]", projection={"choices": ["default", "bounding_box", "mask"]})
+def track_objet_widget(
+    v: Viewer, iou_threshold: float = 0.5, projection: str = "default", motion_smoothing: float = 0.5
+):
     shape = v.layers["raw"].data.shape
+
+    # choose mask projection for square images and bounding box projection otherwise
+    # (because mask projection does not work properly for non-square images yet)
+    if projection == "default":
+        projection_ = "mask" if shape[1] == shape[2] else "bounding_box"
+    else:
+        projection_ = projection
 
     with progress(total=shape[0]) as progress_bar:
         # step 1: segment all slices with prompts
@@ -159,7 +168,7 @@ def track_objet_widget(v: Viewer, iou_threshold: float = 0.5, method: str = "mas
         # step 2: track the object starting from the lowest annotated slice
         seg = _track_from_prompts(
             seg, PREDICTOR, slices, IMAGE_EMBEDDINGS, stop_upper, threshold=iou_threshold,
-            method=method, progress_bar=progress_bar, motion_smoothing=motion_smoothing,
+            projection=projection_, progress_bar=progress_bar, motion_smoothing=motion_smoothing,
         )
 
     v.layers["current_track"].data = seg
@@ -185,9 +194,8 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False):
 
     # show the PCA of the image embeddings
     if show_embeddings:
-        embedding_vis = compute_pca(IMAGE_EMBEDDINGS["features"])
-        # FIXME don't hard-code the scale
-        v.add_image(embedding_vis, name="embeddings", scale=(1, 8, 8))
+        embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS["features"], raw.shape)
+        v.add_image(embedding_vis, name="embeddings", scale=scale)
 
     #
     # add the widgets
@@ -263,3 +271,60 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False):
     # clear the initial points needed for workaround
     clear_prompts(v)
     napari.run()
+
+
+def main():
+    import argparse
+    import warnings
+
+    parser = argparse.ArgumentParser(
+        description="Run interactive segmentation for an image volume."
+    )
+    parser.add_argument(
+        "-i", "--input", required=True,
+        help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
+        "or elf.io.open_file (e.g. hdf5, zarr, mrc) For the latter you also need to pass the 'key' parameter."
+    )
+    parser.add_argument(
+        "-k", "--key",
+        help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
+        "for a image series it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
+    )
+    parser.add_argument(
+        "-e", "--embedding_path",
+        help="The filepath for saving/loading the pre-computed image embeddings. "
+        "NOTE: It is recommended to pass this argument and store the embeddings, "
+        "otherwise they will be recomputed every time (which can take a long time)."
+    )
+    # Not implemented for the tracking annotator yet.
+    # And we should change the name for it.
+    # parser.add_argument(
+    #     "-s", "--segmentation",
+    #     help="Optional filepath to a precomputed segmentation. If passed this will be used to initialize the "
+    #     "'committed_objects' layer. This can be useful if you want to correct an existing segmentation or if you "
+    #     "have saved intermediate results from the annotator and want to continue with your annotations. "
+    #     "Supports the same file formats as 'input'."
+    # )
+    # parser.add_argument(
+    #     "-sk", "--segmentation_key",
+    #     help="The key for opening the segmentation data. Same rules as for 'key' apply."
+    # )
+    parser.add_argument(
+        "--show_embeddings", action="store_true",
+        help="Visualize the embeddings computed by SegmentAnything. This can be helpful for debugging."
+    )
+
+    args = parser.parse_args()
+    raw = util.load_image_data(args.input, ndim=3, key=args.key)
+
+    # if args.segmentation is None:
+    #     segmentation = None
+    # else:
+    #     segmentation = util.load_image_data(args.segmentation, args.segmentation_key)
+
+    if args.embedding_path is None:
+        warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
+
+    annotator_tracking(
+        raw, embedding_path=args.embedding_path, show_embeddings=args.show_embeddings
+    )

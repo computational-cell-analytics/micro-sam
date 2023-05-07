@@ -33,31 +33,33 @@ class TestSegmentFromPrompts(unittest.TestCase):
         predicted = segment_from_points(predictor, points, labels)
         self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
-    def _test_segment_from_mask(self, shape=(256, 256)):
+    def _test_segment_from_mask(self, shape=(256, 256), use_mask=True):
         from micro_sam.segment_from_prompts import segment_from_mask
 
         mask, image = self._get_input(shape)
         predictor = self._get_model(image)
 
         # with mask and bounding box (default setting)
-        predicted = segment_from_mask(predictor, mask)
-        self.assertGreater(util.compute_iou(mask, predicted), 0.9)
+        if use_mask:
+            predicted = segment_from_mask(predictor, mask)
+            self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
         # with bounding box
         predicted = segment_from_mask(predictor, mask, use_mask=False, use_box=True)
         self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
         # with mask
-        predicted = segment_from_mask(predictor, mask, use_mask=True, use_box=False)
-        self.assertGreater(util.compute_iou(mask, predicted), 0.9)
+        if use_mask:
+            predicted = segment_from_mask(predictor, mask, use_mask=True, use_box=False)
+            self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
     def test_segment_from_mask(self):
         self._test_segment_from_mask()
 
-    # FIXME this fails due to shape mismatch in the masks
-    @unittest.expectedFailure
+    # segmenting from mask prompts is not working for non-square inputs yet
+    # that's why it's deactivated here
     def test_segment_from_mask_non_square(self):
-        self._test_segment_from_mask((256, 384))
+        self._test_segment_from_mask((256, 384), use_mask=False)
 
     def test_segment_from_box(self):
         from micro_sam.segment_from_prompts import segment_from_box
