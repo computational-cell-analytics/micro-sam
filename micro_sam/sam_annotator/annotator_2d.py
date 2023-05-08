@@ -35,7 +35,7 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_r
     global PREDICTOR, IMAGE_EMBEDDINGS
 
     PREDICTOR = util.get_sam_model()
-    IMAGE_EMBEDDINGS = util.precompute_image_embeddings(PREDICTOR, raw, save_path=embedding_path)
+    IMAGE_EMBEDDINGS = util.precompute_image_embeddings(PREDICTOR, raw, save_path=embedding_path, ndim=2)
     util.set_precomputed(PREDICTOR, IMAGE_EMBEDDINGS)
 
     #
@@ -45,16 +45,23 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_r
     v = Viewer()
 
     v.add_image(raw)
-    v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="auto_segmentation")
+    if raw.ndim == 2:
+        shape = raw.shape
+    elif raw.ndim == 3 and raw.shape[-1] == 3:
+        shape = raw.shape[:2]
+    else:
+        raise ValueError(f"Invalid input image of shape {raw.shape}. Expect either 2D grayscale or 3D RGB image.")
+
+    v.add_labels(data=np.zeros(shape, dtype="uint32"), name="auto_segmentation")
     if segmentation_result is None:
-        v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="committed_objects")
+        v.add_labels(data=np.zeros(shape, dtype="uint32"), name="committed_objects")
     else:
         v.add_labels(segmentation_result, name="committed_objects")
-    v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="current_object")
+    v.add_labels(data=np.zeros(shape, dtype="uint32"), name="current_object")
 
     # show the PCA of the image embeddings
     if show_embeddings:
-        embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS["features"], raw.shape)
+        embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS["features"], shape)
         v.add_image(embedding_vis, name="embeddings", scale=scale)
 
     labels = ["positive", "negative"]

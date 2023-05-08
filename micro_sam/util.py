@@ -84,8 +84,18 @@ def get_sam_model(device=None, model_type="vit_h", checkpoint_path=None, return_
     return predictor
 
 
+def _to_image(input_):
+    if input_.ndim == 2:
+        image = np.concatenate([input_[..., None]] * 3, axis=-1)
+    elif input_.ndim == 3 and input_.shape[-1] == 3:
+        image = input_
+    else:
+        raise ValueError(f"Invalid input image of shape {input_.shape}. Expect either 2D grayscale or 3D RGB image.")
+    return image
+
+
 def _compute_2d(input_, predictor):
-    image = np.concatenate([input_[..., None]] * 3, axis=-1)
+    image = _to_image(input_)
     predictor.set_image(image)
     features = predictor.get_image_embedding()
     original_size = predictor.original_size
@@ -103,7 +113,7 @@ def _precompute_2d(input_, predictor, save_path):
         features = f["features"][:]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
     else:
-        image = np.concatenate([input_[..., None]] * 3, axis=-1)
+        image = _to_image(input_)
         predictor.set_image(image)
         features = predictor.get_image_embedding()
         original_size, input_size = predictor.original_size, predictor.input_size
@@ -186,7 +196,7 @@ def _precompute_3d(input_, predictor, save_path, lazy_loading):
     return image_embeddings
 
 
-def precompute_image_embeddings(predictor, input_, save_path=None, lazy_loading=False):
+def precompute_image_embeddings(predictor, input_, save_path=None, lazy_loading=False, ndim=None):
     """Compute the image embeddings (output of the encoder) for the input.
 
     If save_path is given the embeddings will be loaded/saved in a zarr container.
@@ -198,13 +208,15 @@ def precompute_image_embeddings(predictor, input_, save_path=None, lazy_loading=
         lazy_loading [bool] - whether to load all embeddings into memory or return an
             object to load them on demand when required. This only has an effect if 'save_path'
             is given and if the input is 3D. (default: False)
+        ndim [int] - the dimensionality of the data. If not given will be deduced from the input data. (default: None)
     """
 
-    if input_.ndim == 2:
+    ndim = input_.ndim if ndim is None else ndim
+    if ndim == 2:
         image_embeddings = _compute_2d(input_, predictor) if save_path is None else\
             _precompute_2d(input_, predictor, save_path)
 
-    elif input_.ndim == 3:
+    elif ndim == 3:
         image_embeddings = _compute_3d(input_, predictor) if save_path is None else\
             _precompute_3d(input_, predictor, save_path, lazy_loading)
 
