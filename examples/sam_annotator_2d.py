@@ -13,10 +13,11 @@ def livecell_annotator():
 
 def main():
     # 2d annotator for livecell data
-    # livecell_annotator()
+    livecell_annotator()
 
+    # TODO
     # 2d annotator for cell tracking challenge hela data
-    hela_2d_annotator()
+    # hela_2d_annotator()
 
 
 if __name__ == "__main__":

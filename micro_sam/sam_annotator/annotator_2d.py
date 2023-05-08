@@ -8,9 +8,9 @@ from .. import util
 from ..visualization import project_embeddings_for_visualization
 from ..segment_instances import segment_from_embeddings
 from ..segment_from_prompts import segment_from_points
-from .util import commit_segmentation_widget, create_prompt_menu, prompt_layer_to_points
-
-COLOR_CYCLE = ["#00FF00", "#FF0000"]
+from .util import (
+    commit_segmentation_widget, create_prompt_menu, prompt_layer_to_points, toggle_label, LABEL_COLOR_CYCLE
+)
 
 
 @magicgui(call_button="Segment Object [S]")
@@ -35,7 +35,7 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_r
     global PREDICTOR, IMAGE_EMBEDDINGS
 
     PREDICTOR = util.get_sam_model()
-    IMAGE_EMBEDDINGS = util.precompute_image_embeddings(PREDICTOR, raw, save_path=embedding_path)
+    IMAGE_EMBEDDINGS = util.precompute_image_embeddings(PREDICTOR, raw, save_path=embedding_path, ndim=2)
     util.set_precomputed(PREDICTOR, IMAGE_EMBEDDINGS)
 
     #
@@ -45,16 +45,23 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_r
     v = Viewer()
 
     v.add_image(raw)
-    v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="auto_segmentation")
+    if raw.ndim == 2:
+        shape = raw.shape
+    elif raw.ndim == 3 and raw.shape[-1] == 3:
+        shape = raw.shape[:2]
+    else:
+        raise ValueError(f"Invalid input image of shape {raw.shape}. Expect either 2D grayscale or 3D RGB image.")
+
+    v.add_labels(data=np.zeros(shape, dtype="uint32"), name="auto_segmentation")
     if segmentation_result is None:
-        v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="committed_objects")
+        v.add_labels(data=np.zeros(shape, dtype="uint32"), name="committed_objects")
     else:
         v.add_labels(segmentation_result, name="committed_objects")
-    v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="current_object")
+    v.add_labels(data=np.zeros(shape, dtype="uint32"), name="current_object")
 
     # show the PCA of the image embeddings
     if show_embeddings:
-        embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS["features"], raw.shape)
+        embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS["features"], shape)
         v.add_image(embedding_vis, name="embeddings", scale=scale)
 
     labels = ["positive", "negative"]
@@ -63,7 +70,7 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_r
         name="prompts",
         properties={"label": labels},
         edge_color="label",
-        edge_color_cycle=COLOR_CYCLE,
+        edge_color_cycle=LABEL_COLOR_CYCLE,
         symbol="o",
         face_color="transparent",
         edge_width=0.5,
@@ -98,15 +105,8 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_r
         commit_segmentation_widget(v)
 
     @v.bind_key("t")
-    def toggle_label(event=None):
-        # get the currently selected label
-        current_properties = prompts.current_properties
-        current_label = current_properties["label"][0]
-        new_label = "negative" if current_label == "positive" else "positive"
-        current_properties["label"] = np.array([new_label])
-        prompts.current_properties = current_properties
-        prompts.refresh()
-        prompts.refresh_colors()
+    def _toggle_label(event=None):
+        toggle_label(prompts)
 
     @v.bind_key("Shift-C")
     def clear_prompts(v):

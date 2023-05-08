@@ -8,9 +8,11 @@ from napari.utils import progress
 from .. import util
 from ..segment_from_prompts import segment_from_mask, segment_from_points
 from ..visualization import project_embeddings_for_visualization
-from .util import commit_segmentation_widget, create_prompt_menu, prompt_layer_to_points, segment_slices_with_prompts
-
-COLOR_CYCLE = ["#00FF00", "#FF0000"]
+from .util import (
+    commit_segmentation_widget, create_prompt_menu,
+    prompt_layer_to_points, segment_slices_with_prompts,
+    toggle_label, LABEL_COLOR_CYCLE
+)
 
 
 #
@@ -74,8 +76,15 @@ def _segment_volume(
         for z_start, z_stop in zip(segmented_slices[:-1], segmented_slices[1:]):
             slice_diff = z_stop - z_start
             z_mid = int((z_start + z_stop) // 2)
+
             if slice_diff == 1:  # the slices are adjacent -> we don't need to do anything
                 pass
+
+            elif z_start == z0 and stop_lower:  # the lower slice is stop: we just segment from upper
+                segment_range(z_stop, z_start, -1, np.less_equal, verbose=verbose)
+
+            elif z_stop == z1 and stop_upper:  # the upper slice is stop: we just segment from lower
+                segment_range(z_start, z_stop, 1, np.greater_equal, verbose=verbose)
 
             elif slice_diff == 2:  # there is only one slice in between -> use combined mask
                 z = z_start + 1
@@ -187,7 +196,7 @@ def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_r
         name="prompts",
         properties={"label": labels},
         edge_color="label",
-        edge_color_cycle=COLOR_CYCLE,
+        edge_color_cycle=LABEL_COLOR_CYCLE,
         symbol="o",
         face_color="transparent",
         edge_width=0.5,
@@ -227,15 +236,8 @@ def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_r
         commit_segmentation_widget(v)
 
     @v.bind_key("t")
-    def toggle_label(event=None):
-        # get the currently selected label
-        current_properties = prompts.current_properties
-        current_label = current_properties["label"][0]
-        new_label = "negative" if current_label == "positive" else "positive"
-        current_properties["label"] = np.array([new_label])
-        prompts.current_properties = current_properties
-        prompts.refresh()
-        prompts.refresh_colors()
+    def _toggle_label(event=None):
+        toggle_label(prompts)
 
     @v.bind_key("Shift-C")
     def clear_prompts(v):

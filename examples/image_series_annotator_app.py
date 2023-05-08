@@ -11,7 +11,7 @@ import numpy as np
 
 from magicgui import magicgui
 from micro_sam.segment_from_prompts import segment_from_points
-from micro_sam.sam_annotator.util import create_prompt_menu, prompt_layer_to_points
+from micro_sam.sam_annotator.util import create_prompt_menu, prompt_layer_to_points, toggle_label
 from napari import Viewer
 
 
@@ -64,15 +64,8 @@ def image_series_annotator(image_paths, embedding_save_path, output_folder):
 
     # toggle the points between positive / negative
     @v.bind_key("t")
-    def toggle_label(event=None):
-        # get the currently selected label
-        current_properties = prompts.current_properties
-        current_label = current_properties["label"][0]
-        new_label = "negative" if current_label == "positive" else "positive"
-        current_properties["label"] = np.array([new_label])
-        prompts.current_properties = current_properties
-        prompts.refresh()
-        prompts.refresh_colors()
+    def _toggle_label(event=None):
+        toggle_label(prompts)
 
     # bind the segmentation to a key 's'
     @v.bind_key("s")

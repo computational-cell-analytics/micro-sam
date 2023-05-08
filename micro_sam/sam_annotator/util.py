@@ -6,6 +6,9 @@ from napari import Viewer
 
 from ..segment_from_prompts import segment_from_points
 
+# Green and Red
+LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
+
 
 @magicgui(call_button="Commit [C]", layer={"choices": ["current_object", "auto_segmentation"]})
 def commit_segmentation_widget(v: Viewer, layer: str = "current_object"):
@@ -26,12 +29,12 @@ def commit_segmentation_widget(v: Viewer, layer: str = "current_object"):
         v.layers["prompts"].refresh()
 
 
-def create_prompt_menu(points_layer, labels):
-    label_menu = ComboBox(label="prompts", choices=labels)
+def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="label"):
+    label_menu = ComboBox(label=menu_name, choices=labels)
     label_widget = Container(widgets=[label_menu])
 
     def update_label_menu(event):
-        new_label = str(points_layer.current_properties["label"][0])
+        new_label = str(points_layer.current_properties[label_name][0])
         if new_label != label_menu.value:
             label_menu.value = new_label
 
@@ -39,7 +42,7 @@ def create_prompt_menu(points_layer, labels):
 
     def label_changed(new_label):
         current_properties = points_layer.current_properties
-        current_properties["label"] = np.array([new_label])
+        current_properties[label_name] = np.array([new_label])
         points_layer.current_properties = current_properties
         points_layer.refresh_colors()
 
@@ -51,7 +54,7 @@ def create_prompt_menu(points_layer, labels):
 def prompt_layer_to_points(prompt_layer, i=None):
     """Extract point prompts for SAM from point layer.
 
-    Argumtents:
+    Arguments:
         prompt_layer: the point layer
         i [int] - index for the data (required for 3d data)
     """
@@ -79,6 +82,30 @@ def prompt_layer_to_points(prompt_layer, i=None):
     return this_points, this_labels
 
 
+def prompt_layer_to_state(prompt_layer, i):
+    """Get the state of the track from the prompt layer.
+    Only relevant for annotator_tracking.
+
+    Arguments:
+        prompt_layer: the point layer
+        i [int] - index for the data (required for 3d data)
+    """
+    state = prompt_layer.properties["state"]
+
+    points = prompt_layer.data
+    assert points.shape[1] == 3, f"{points.shape}"
+    mask = points[:, 0] == i
+    this_points = points[mask][:, 1:]
+    this_state = state[mask]
+    assert len(this_points) == len(this_state)
+
+    # we set the state to 'division' if at least one point in this frame has a division label
+    if any(st == "division" for st in this_state):
+        return "division"
+    else:
+        return "track"
+
+
 def segment_slices_with_prompts(predictor, prompt_layer, image_embeddings, shape, progress_bar=None):
     seg = np.zeros(shape, dtype="uint32")
 
@@ -92,7 +119,6 @@ def segment_slices_with_prompts(predictor, prompt_layer, image_embeddings, shape
     for i in slices:
         prompts_i = prompt_layer_to_points(prompt_layer, i)
 
-        # TODO also take into account division properties once we have this implemented in tracking
         # do we end the segmentation at the outer slices?
         if prompts_i is None:
 
@@ -113,3 +139,14 @@ def segment_slices_with_prompts(predictor, prompt_layer, image_embeddings, shape
         _update_progress()
 
     return seg, slices, stop_lower, stop_upper
+
+
+def toggle_label(prompts):
+    # get the currently selected label
+    current_properties = prompts.current_properties
+    current_label = current_properties["label"][0]
+    new_label = "negative" if current_label == "positive" else "positive"
+    current_properties["label"] = np.array([new_label])
+    prompts.current_properties = current_properties
+    prompts.refresh()
+    prompts.refresh_colors()

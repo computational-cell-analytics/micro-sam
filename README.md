@@ -56,8 +56,8 @@ pip install -e .
 ## Usage
 
 After the installation the three applications for interactive annotations can be started from the command line or within a python script:
-- **2d annotation**: via the command `micro_sam.annotator_2d` or with the function `micro_sam.sam_annotator.annotator_2d` from python. Run `micro_sam.annotator_2d -h` or check out [examples/sam_annotator_2d](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_2d.py) for details. 
-- **3d annotation**: via the command `micro_sam.annotator_3d` or with the function `micro_sam.sam_annotator.annotator_3d` from python. Run `micro_sam.annotator_3d -h` or check out [examples/sam_annotator_3d](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_3d.py) for details. 
+- **2d segmentation**: via the command `micro_sam.annotator_2d` or with the function `micro_sam.sam_annotator.annotator_2d` from python. Run `micro_sam.annotator_2d -h` or check out [examples/sam_annotator_2d](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_2d.py) for details. 
+- **3d segmentation**: via the command `micro_sam.annotator_3d` or with the function `micro_sam.sam_annotator.annotator_3d` from python. Run `micro_sam.annotator_3d -h` or check out [examples/sam_annotator_3d](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_3d.py) for details. 
 - **tracking**: via the command `micro_sam.annotator_tracking` or with the function `micro_sam.sam_annotator.annotator_tracking` from python. Run `micro_sam.annotator_tracking -h` or check out [examples/sam_annotator_tracking](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_tracking.py) for details. 
 
 TODO
@@ -94,4 +94,4 @@ micro_sam <- library with utility functionality for using SAM for microscopy dat
 
 If you are using this repository in your research please cite
 - [SegmentAnything](https://arxiv.org/abs/2304.02643)
-- and our repository on [zenodo](TODO) (we are working on a full publication)
+- and our repository on [zenodo](TODO) (we are working on a publication)
