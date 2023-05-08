@@ -139,3 +139,14 @@ def segment_slices_with_prompts(predictor, prompt_layer, image_embeddings, shape
         _update_progress()
 
     return seg, slices, stop_lower, stop_upper
+
+
+def toggle_label(prompts):
+    # get the currently selected label
+    current_properties = prompts.current_properties
+    current_label = current_properties["label"][0]
+    new_label = "negative" if current_label == "positive" else "positive"
+    current_properties["label"] = np.array([new_label])
+    prompts.current_properties = current_properties
+    prompts.refresh()
+    prompts.refresh_colors()

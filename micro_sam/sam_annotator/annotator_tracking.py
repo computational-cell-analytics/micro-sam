@@ -12,7 +12,8 @@ from scipy.ndimage import shift
 from .. import util
 from ..segment_from_prompts import segment_from_mask, segment_from_points
 from .util import (
-    create_prompt_menu, prompt_layer_to_points, prompt_layer_to_state, segment_slices_with_prompts, LABEL_COLOR_CYCLE
+    create_prompt_menu, prompt_layer_to_points, prompt_layer_to_state,
+    segment_slices_with_prompts, toggle_label, LABEL_COLOR_CYCLE
 )
 from ..visualization import project_embeddings_for_visualization
 
@@ -58,7 +59,7 @@ def _shift_object(mask, motion_model):
     return mask_shifted
 
 
-# TODO handle divison annotations + division classifier
+# TODO division classifier
 def _track_from_prompts(
     prompt_layer, seg, predictor, slices, image_embeddings,
     stop_upper, threshold, projection,
@@ -223,7 +224,11 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False):
     prompts = v.add_points(
         data=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],  # FIXME workaround
         name="prompts",
-        properties={"label": labels, "state": state_labels},
+        properties={
+            "label": labels,
+            "state": state_labels,
+            # "track_id": [1, 1],
+        },
         edge_color="label",
         edge_color_cycle=LABEL_COLOR_CYCLE,
         symbol="o",
@@ -264,15 +269,8 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False):
         track_objet_widget(v)
 
     @v.bind_key("t")
-    def toggle_label(event=None):
-        # get the currently selected label
-        current_properties = prompts.current_properties
-        current_label = current_properties["label"][0]
-        new_label = "negative" if current_label == "positive" else "positive"
-        current_properties["label"] = np.array([new_label])
-        prompts.current_properties = current_properties
-        prompts.refresh()
-        prompts.refresh_colors()
+    def _toggle_label(event=None):
+        toggle_label(prompts)
 
     @v.bind_key("Shift-C")
     def clear_prompts(v):
