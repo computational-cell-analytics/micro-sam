@@ -76,8 +76,15 @@ def _segment_volume(
         for z_start, z_stop in zip(segmented_slices[:-1], segmented_slices[1:]):
             slice_diff = z_stop - z_start
             z_mid = int((z_start + z_stop) // 2)
+
             if slice_diff == 1:  # the slices are adjacent -> we don't need to do anything
                 pass
+
+            elif z_start == z0 and stop_lower:  # the lower slice is stop: we just segment from upper
+                segment_range(z_stop, z_start, -1, np.less_equal, verbose=verbose)
+
+            elif z_stop == z1 and stop_upper:  # the upper slice is stop: we just segment from lower
+                segment_range(z_start, z_stop, 1, np.greater_equal, verbose=verbose)
 
             elif slice_diff == 2:  # there is only one slice in between -> use combined mask
                 z = z_start + 1
