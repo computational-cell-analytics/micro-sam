@@ -274,15 +274,14 @@ def get_cell_center_coordinates(gt, mode="p"):
     """
     assert mode in ["p", "v"], "Choose either 'p' for regionprops or 'v' for vigra"
 
-    if mode == "p":
-        properties = regionprops(gt)
-        center_coordinates = [prop.centroid for prop in properties]
-        bbox_coordinates = [prop.bbox for prop in properties]
+    properties = regionprops(gt)
 
-    elif mode == "v":  # TODO: doesn't seem to work currently, will need further testing
-        raise NotImplementedError
+    if mode == "p":
+        center_coordinates = [prop.centroid for prop in properties]
+    elif mode == "v":
         center_coordinates = vigra.filters.eccentricityCenters(gt.astype('float32'))
-        bbox_coordinates = None  # TODO
+
+    bbox_coordinates = [prop.bbox for prop in properties]
 
     return center_coordinates, bbox_coordinates
 
