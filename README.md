@@ -19,9 +19,10 @@ We implement applications for fast interactive 2d and 3d segmentation as well as
 - Middle: interactive 3d segmentation
 - Right: interactive tracking
 
-(TODO add gifs for 2d and tracking annotations)
+(TODO add gif for 2d)
 
-![3d-annotator](https://github.com/computational-cell-analytics/micro-sam/assets/4263537/ca4d6bcc-8674-455b-95c6-0eb516d2bc76)
+<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/ca4d6bcc-8674-455b-95c6-0eb516d2bc76" width="384">
+<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/a4a048de-fd3d-4718-b386-2160ac94bbf0" width="384">
 
 ## Installation
 
