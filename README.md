@@ -1,6 +1,8 @@
 # SegmentAnything for Microscopy
 
 Tools for segmentation and tracking in microscopy build on top of [SegmentAnything](https://segment-anything.com/).
+Segment and track objects in microscopy images interactively with a few clicks!
+
 We implement napari applications for:
 - interactive 2d segmentation
 - interactive 3d segmentation
@@ -19,10 +21,9 @@ We implement applications for fast interactive 2d and 3d segmentation as well as
 - Middle: interactive 3d segmentation
 - Right: interactive tracking
 
-(TODO add gif for 2d)
-
-<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/ca4d6bcc-8674-455b-95c6-0eb516d2bc76" width="384">
-<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/a4a048de-fd3d-4718-b386-2160ac94bbf0" width="384">
+<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/158459e1-e321-4810-b6b3-4428f436f01b" width="256">
+<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/ca4d6bcc-8674-455b-95c6-0eb516d2bc76" width="256">
+<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/a4a048de-fd3d-4718-b386-2160ac94bbf0" width="256">
 
 ## Installation
 
