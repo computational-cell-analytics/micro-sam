@@ -14,9 +14,14 @@ Once the functionality has matured we plan to release the interactive annotation
 
 ## Functionality overview
 
-TODO
-- quick explanation and gifs
+We implement applications for fast interactive 2d and 3d segmentation as well as tracking.
+- Left: interactive 2d segmentation
+- Middle: interactive 3d segmentation
+- Right: interactive tracking
 
+(TODO add gifs for 2d and tracking annotations)
+
+![3d-annotator](https://github.com/computational-cell-analytics/micro-sam/assets/4263537/ca4d6bcc-8674-455b-95c6-0eb516d2bc76)
 
 ## Installation
 
