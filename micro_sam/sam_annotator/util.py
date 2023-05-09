@@ -51,7 +51,7 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
     return label_widget
 
 
-def prompt_layer_to_points(prompt_layer, i=None):
+def prompt_layer_to_points(prompt_layer, i=None, track_id=None):
     """Extract point prompts for SAM from point layer.
 
     Arguments:
@@ -71,6 +71,13 @@ def prompt_layer_to_points(prompt_layer, i=None):
         mask = points[:, 0] == i
         this_points = points[mask][:, 1:]
         this_labels = labels[mask]
+    assert len(this_points) == len(this_labels)
+
+    if track_id is not None:
+        assert i is not None
+        track_ids = np.array(list(map(int, prompt_layer.properties["track_id"])))[mask]
+        track_id_mask = track_ids == track_id
+        this_labels, this_points = this_labels[track_id_mask], this_points[track_id_mask]
     assert len(this_points) == len(this_labels)
 
     this_labels = np.array([1 if label == "positive" else 0 for label in this_labels])
@@ -106,10 +113,16 @@ def prompt_layer_to_state(prompt_layer, i):
         return "track"
 
 
-def segment_slices_with_prompts(predictor, prompt_layer, image_embeddings, shape, progress_bar=None):
+def segment_slices_with_prompts(predictor, prompt_layer, image_embeddings, shape, progress_bar=None, track_id=None):
     seg = np.zeros(shape, dtype="uint32")
 
-    slices = np.unique(prompt_layer.data[:, 0]).astype("int")
+    z_values = prompt_layer.data[:, 0]
+    if track_id is not None:
+        track_ids = np.array(list(map(int, prompt_layer.properties["track_id"])))
+        assert len(track_ids) == len(z_values)
+        z_values = z_values[track_ids == track_id]
+
+    slices = np.unique(z_values).astype("int")
     stop_lower, stop_upper = False, False
 
     def _update_progress():
@@ -117,7 +130,7 @@ def segment_slices_with_prompts(predictor, prompt_layer, image_embeddings, shape
             progress_bar.update(1)
 
     for i in slices:
-        prompts_i = prompt_layer_to_points(prompt_layer, i)
+        prompts_i = prompt_layer_to_points(prompt_layer, i, track_id)
 
         # do we end the segmentation at the outer slices?
         if prompts_i is None:

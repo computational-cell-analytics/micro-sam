@@ -2,6 +2,7 @@ import napari
 import numpy as np
 
 from magicgui import magicgui
+from magicgui.widgets import ComboBox, Container
 from napari import Viewer
 from napari.utils import progress
 from scipy.ndimage import shift
@@ -47,12 +48,6 @@ def _compute_movement(seg, t0, t1):
     return move.astype("float64")
 
 
-def _update_motion_model(motion_model, move, motion_smoothing):
-    alpha = motion_smoothing
-    motion_model = alpha * motion_model + (1 - alpha) * move
-    return motion_model
-
-
 def _shift_object(mask, motion_model):
     mask_shifted = np.zeros_like(mask)
     shift(mask, motion_model, output=mask_shifted, order=0, prefilter=False)
@@ -76,23 +71,20 @@ def _track_from_prompts(
             progress_bar.update(1)
 
     # shift the segmentation based on the motion model and update the motion model
-    def _update_motion(seg, t, t0, motion_model):
-        seg_prev = seg[t - 1]
-
-        if t == t0 + 1:  # this is the second frame, we don't have a motion model yet
+    def _update_motion_model(seg, t, t0, motion_model):
+        if t in (t0, t0 + 1):  # this is the first or second frame, we don't have a motion yet
             pass
         elif t == t0 + 2:  # this the third frame, we initialize the motion model
             current_move = _compute_movement(seg, t - 1, t - 2)
             motion_model = current_move
         else:  # we already have a motion model and update it
             current_move = _compute_movement(seg, t - 1, t - 2)
-            motion_model = _update_motion_model(motion_model, current_move, motion_smoothing)
+            alpha = motion_smoothing
+            motion_model = alpha * motion_model + (1 - alpha) * current_move
 
-        if motion_model is not None:  # shift the segmentation according to the motion model
-            seg_prev = _shift_object(seg_prev, motion_model)
+        return motion_model
 
-        return seg_prev, motion_model
-
+    has_division = False
     motion_model = None
     verbose = False
 
@@ -100,16 +92,25 @@ def _track_from_prompts(
     t = t0 + 1
     while True:
 
-        if t in slices:  # this is a slice with prompts
+        # update the motion model
+        motion_model = _update_motion_model(seg, t, t0, motion_model)
+
+        # use the segmentation from prompts if we are in a slice with prompts
+        if t in slices:
             seg_prev = None
             seg_t = seg[t]
             track_state = prompt_layer_to_state(prompt_layer, t)
-            # TODO what do we do with the motion model here?
 
-        else:  # this is a slice without prompts
-            seg_prev, motion_model = _update_motion(seg, t, t0, motion_model)
+        # otherwise project the mask (under the motion model) and segment the next slice from the mask
+        else:
             if verbose:
                 print(f"Tracking object in frame {t} with movement {motion_model}")
+
+            seg_prev = seg[t - 1]
+            # shift the segmentation according to the motion model
+            if motion_model is not None:
+                seg_prev = _shift_object(seg_prev, motion_model)
+
             seg_t = segment_from_mask(predictor, seg_prev, image_embeddings=image_embeddings, i=t,
                                       use_mask=use_mask, use_box=use_box)
             track_state = "track"
@@ -142,9 +143,31 @@ def _track_from_prompts(
 
         # stop if we have a division
         if track_state == "division":
+            has_division = True
             break
 
-    return seg
+    return seg, has_division
+
+
+def _update_lineage():
+    global LINEAGE, TRACKING_WIDGET
+    mother = CURRENT_TRACK_ID
+    assert mother in LINEAGE
+    assert len(LINEAGE[mother]) == 0
+
+    daughter1, daughter2 = CURRENT_TRACK_ID + 1, CURRENT_TRACK_ID + 2
+    LINEAGE[mother] = [daughter1, daughter2]
+    LINEAGE[daughter1] = []
+    LINEAGE[daughter2] = []
+
+    # update the choices in the track_id menu
+    track_ids = list(map(str, LINEAGE.keys()))
+    TRACKING_WIDGET[1].choices = track_ids
+
+    # not sure if this does the right thing.
+    # for now the user has to take care of this manually
+    # # reset the state to track
+    # TRACKING_WIDGET[0].set_choice("track")
 
 
 #
@@ -157,11 +180,16 @@ def segment_frame_wigdet(v: Viewer):
     position = v.cursor.position
     t = int(position[0])
 
-    this_prompts = prompt_layer_to_points(v.layers["prompts"], t)
+    this_prompts = prompt_layer_to_points(v.layers["prompts"], t, track_id=CURRENT_TRACK_ID)
     points, labels = this_prompts
     seg = segment_from_points(PREDICTOR, points, labels, image_embeddings=IMAGE_EMBEDDINGS, i=t)
 
-    v.layers["current_track"].data[t] = seg.squeeze()
+    # clear the old segmentation for this track_id
+    old_mask = v.layers["current_track"].data[t] == CURRENT_TRACK_ID
+    v.layers["current_track"].data[t][old_mask] = 0
+    # set the new segmentation
+    new_mask = seg.squeeze() == 1
+    v.layers["current_track"].data[t][new_mask] = CURRENT_TRACK_ID
     v.layers["current_track"].refresh()
 
 
@@ -181,25 +209,106 @@ def track_objet_widget(
     with progress(total=shape[0]) as progress_bar:
         # step 1: segment all slices with prompts
         seg, slices, _, stop_upper = segment_slices_with_prompts(
-            PREDICTOR, v.layers["prompts"], IMAGE_EMBEDDINGS, shape, progress_bar=progress_bar
+            PREDICTOR, v.layers["prompts"], IMAGE_EMBEDDINGS, shape,
+            progress_bar=progress_bar, track_id=CURRENT_TRACK_ID
         )
 
         # step 2: track the object starting from the lowest annotated slice
-        seg = _track_from_prompts(
+        seg, has_division = _track_from_prompts(
             v.layers["prompts"], seg, PREDICTOR, slices, IMAGE_EMBEDDINGS, stop_upper, threshold=iou_threshold,
             projection=projection_, progress_bar=progress_bar, motion_smoothing=motion_smoothing,
         )
 
-    v.layers["current_track"].data = seg
+    # if a division has occurred and it's the first time it occurred for this track
+    # we need to create the two daughter tracks and update the lineage
+    if has_division and (len(LINEAGE[CURRENT_TRACK_ID]) == 0):
+        _update_lineage()
+
+    # clear the old track mask
+    v.layers["current_track"].data[v.layers["current_track"].data == CURRENT_TRACK_ID] = 0
+    # set the new track mask
+    v.layers["current_track"].data[seg == 1] = CURRENT_TRACK_ID
     v.layers["current_track"].refresh()
 
 
+def create_tracking_menu(points_layer, states, track_ids):
+    state_menu = ComboBox(label="track_state", choices=states)
+    track_id_menu = ComboBox(label="track_id", choices=list(map(str, track_ids)))
+    tracking_widget = Container(widgets=[state_menu, track_id_menu])
+
+    def update_state(event):
+        new_state = str(points_layer.current_properties["state"][0])
+        if new_state != state_menu.value:
+            state_menu.value = new_state
+
+    def update_track_id(event):
+        global CURRENT_TRACK_ID
+        new_id = str(points_layer.current_properties["track_id"][0])
+        if new_id != track_id_menu.value:
+            state_menu.value = new_id
+            CURRENT_TRACK_ID = int(new_id)
+
+    points_layer.events.current_properties.connect(update_state)
+    points_layer.events.current_properties.connect(update_track_id)
+
+    def state_changed(new_state):
+        current_properties = points_layer.current_properties
+        current_properties["state"] = np.array([new_state])
+        points_layer.current_properties = current_properties
+        points_layer.refresh_colors()
+
+    def track_id_changed(new_track_id):
+        global CURRENT_TRACK_ID
+        current_properties = points_layer.current_properties
+        current_properties["track_id"] = np.array([new_track_id])
+        points_layer.current_properties = current_properties
+        CURRENT_TRACK_ID = int(new_track_id)
+
+    state_menu.changed.connect(state_changed)
+    track_id_menu.changed.connect(track_id_changed)
+
+    state_menu.set_choice("track")
+    return tracking_widget
+
+
+@magicgui(call_button="Commit [C]", layer={"choices": ["current_track"]})
+def commit_tracking_widget(v: Viewer, layer: str = "current_track"):
+    global CURRENT_TRACK_ID, LINEAGE, TRACKING_WIDGET
+
+    seg = v.layers[layer].data
+
+    id_offset = int(v.layers["committed_tracks"].data.max())
+    mask = seg != 0
+
+    v.layers["committed_tracks"].data[mask] = (seg[mask] + id_offset)
+    v.layers["committed_tracks"].refresh()
+
+    # reset the lineage and track id
+    CURRENT_TRACK_ID = 1
+    LINEAGE = {1: []}
+
+    # reset the choices in the track_id menu
+    track_ids = list(map(str, LINEAGE.keys()))
+    TRACKING_WIDGET[1].choices = track_ids
+
+    shape = v.layers["raw"].data.shape
+    v.layers[layer].data = np.zeros(shape, dtype="uint32")
+    v.layers[layer].refresh()
+
+    v.layers["prompts"].data = []
+    v.layers["prompts"].refresh()
+
+
 def annotator_tracking(raw, embedding_path=None, show_embeddings=False):
-    # for access to the predictor and the image embeddings in the widgets
-    global PREDICTOR, IMAGE_EMBEDDINGS, NEXT_ID
-    NEXT_ID = 1
+    # global state
+    global PREDICTOR, IMAGE_EMBEDDINGS, CURRENT_TRACK_ID, LINEAGE
+    global TRACKING_WIDGET
+
     PREDICTOR = util.get_sam_model()
     IMAGE_EMBEDDINGS = util.precompute_image_embeddings(PREDICTOR, raw, save_path=embedding_path)
+
+    CURRENT_TRACK_ID = 1
+    LINEAGE = {1: []}
 
     #
     # initialize the viewer and add layers
@@ -227,7 +336,7 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False):
         properties={
             "label": labels,
             "state": state_labels,
-            # "track_id": [1, 1],
+            "track_id": ["1", "1"],  # NOTE we use string to avoid pandas warnings...
         },
         edge_color="label",
         edge_color_cycle=LABEL_COLOR_CYCLE,
@@ -250,11 +359,12 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False):
     prompt_widget = create_prompt_menu(prompts, labels)
     v.window.add_dock_widget(prompt_widget)
 
-    state_widget = create_prompt_menu(prompts, state_labels, menu_name="state", label_name="state")
-    v.window.add_dock_widget(state_widget)
+    TRACKING_WIDGET = create_tracking_menu(prompts, state_labels, list(LINEAGE.keys()))
+    v.window.add_dock_widget(TRACKING_WIDGET)
 
     v.window.add_dock_widget(segment_frame_wigdet)
     v.window.add_dock_widget(track_objet_widget)
+    v.window.add_dock_widget(commit_tracking_widget)
 
     #
     # key bindings
@@ -271,6 +381,10 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False):
     @v.bind_key("t")
     def _toggle_label(event=None):
         toggle_label(prompts)
+
+    @v.bind_key("c")
+    def _commit(v):
+        commit_tracking_widget(v)
 
     @v.bind_key("Shift-C")
     def clear_prompts(v):
