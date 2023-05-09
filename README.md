@@ -73,7 +73,16 @@ TODO annotated screenshot + link to tutorial video.
 
 ### 3D Segmentation
 
-TODO annotated screenshot + link to tutorial video.
+<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/3c35ba63-1b67-48df-9b11-94919bdc7c79" width="1024">
+
+GUI-Elements 3d annotation:
+1. TODO
+2. TODO
+3. TODO
+4. TODO
+5. TODO
+
+TODO link to tutorial video.
 
 ### Tracking
 
