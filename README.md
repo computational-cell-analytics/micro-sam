@@ -83,7 +83,7 @@ GUI-Elements 3d annotation:
 4. TODO
 5. TODO
 
-TODO link to tutorial video.
+Check out [this video](https://youtu.be/5Jo_CtIefTM) for an overview of the interactive 3d segmentation functionality.
 
 ### Tracking
 
