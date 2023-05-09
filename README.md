@@ -87,7 +87,17 @@ TODO link to tutorial video.
 
 ### Tracking
 
-TODO annotated screenshot + link to tutorial video.
+<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/1fdffe3c-ff10-4d06-a1ba-9974a673b846" width="1024">
+
+GUI-Elements tracking:
+1. TODO
+2. TODO
+3. TODO
+4. TODO
+5. TODO
+6. TODO
+
+TODO link to video tutorial
 
 ### Tips & Tricks
 
