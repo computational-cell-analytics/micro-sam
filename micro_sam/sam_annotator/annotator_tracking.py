@@ -221,7 +221,7 @@ def track_objet_widget(
 
     # if a division has occurred and it's the first time it occurred for this track
     # we need to create the two daughter tracks and update the lineage
-    if has_division and len(LINEAGE[CURRENT_TRACK_ID]) == 0:
+    if has_division and (len(LINEAGE[CURRENT_TRACK_ID]) == 0):
         _update_lineage()
 
     # clear the old track mask
@@ -269,6 +269,34 @@ def create_tracking_menu(points_layer, states, track_ids):
 
     state_menu.set_choice("track")
     return tracking_widget
+
+
+@magicgui(call_button="Commit [C]", layer={"choices": ["current_track"]})
+def commit_tracking_widget(v: Viewer, layer: str = "current_track"):
+    global CURRENT_TRACK_ID, LINEAGE, TRACKING_WIDGET
+
+    seg = v.layers[layer].data
+
+    id_offset = int(v.layers["committed_tracks"].data.max())
+    mask = seg != 0
+
+    v.layers["committed_tracks"].data[mask] = (seg[mask] + id_offset)
+    v.layers["committed_tracks"].refresh()
+
+    # reset the lineage and track id
+    CURRENT_TRACK_ID = 1
+    LINEAGE = {1: []}
+
+    # reset the choices in the track_id menu
+    track_ids = list(map(str, LINEAGE.keys()))
+    TRACKING_WIDGET[1].choices = track_ids
+
+    shape = v.layers["raw"].data.shape
+    v.layers[layer].data = np.zeros(shape, dtype="uint32")
+    v.layers[layer].refresh()
+
+    v.layers["prompts"].data = []
+    v.layers["prompts"].refresh()
 
 
 def annotator_tracking(raw, embedding_path=None, show_embeddings=False):
@@ -336,6 +364,7 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False):
 
     v.window.add_dock_widget(segment_frame_wigdet)
     v.window.add_dock_widget(track_objet_widget)
+    v.window.add_dock_widget(commit_tracking_widget)
 
     #
     # key bindings
@@ -352,6 +381,10 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False):
     @v.bind_key("t")
     def _toggle_label(event=None):
         toggle_label(prompts)
+
+    @v.bind_key("c")
+    def _commit(v):
+        commit_tracking_widget(v)
 
     @v.bind_key("Shift-C")
     def clear_prompts(v):
