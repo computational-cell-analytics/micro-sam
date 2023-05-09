@@ -60,9 +60,19 @@ After the installation the three applications for interactive annotations can be
 - **3d segmentation**: via the command `micro_sam.annotator_3d` or with the function `micro_sam.sam_annotator.annotator_3d` from python. Run `micro_sam.annotator_3d -h` or check out [examples/sam_annotator_3d](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_3d.py) for details. 
 - **tracking**: via the command `micro_sam.annotator_tracking` or with the function `micro_sam.sam_annotator.annotator_tracking` from python. Run `micro_sam.annotator_tracking -h` or check out [examples/sam_annotator_tracking](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_tracking.py) for details. 
 
-TODO
-- show image with annotated user interface (for 3d?!)
-- link to videos that explain the functionality for the 3 plugins
+All three applications are built with napari. If you are not familiar with napari yet, start [here](https://napari.org/stable/tutorials/fundamentals/quick_start.html).
+
+### 2D Segmentation
+
+TODO annotated screenshot + link to tutorial video.
+
+### 3D Segmentation
+
+TODO annotated screenshot + link to tutorial video.
+
+### Tracking
+
+TODO annotated screenshot + link to tutorial video.
 
 ### Tips & Tricks
 
@@ -75,6 +85,7 @@ TODO
 
 TODO
 - automatic instance segmentation limitations
+
 
 ## Using the micro_sam library
 
