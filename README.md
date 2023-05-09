@@ -71,11 +71,20 @@ All three applications are built with napari. If you are not familiar with napar
 
 ### 2D Segmentation
 
-TODO annotated screenshot + link to tutorial video.
+<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/90055f2f-f6f3-4224-ab3c-57e545c278bc" width="768">
+
+GUI-Elements 3d annotation:
+1. TODO
+2. TODO
+3. TODO
+4. TODO
+5. TODO
+
+TODO link to tutorial video.
 
 ### 3D Segmentation
 
-<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/3c35ba63-1b67-48df-9b11-94919bdc7c79" width="1024">
+<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/3c35ba63-1b67-48df-9b11-94919bdc7c79" width="768">
 
 GUI-Elements 3d annotation:
 1. TODO
@@ -88,7 +97,7 @@ Check out [this video](https://youtu.be/5Jo_CtIefTM) for an overview of the inte
 
 ### Tracking
 
-<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/1fdffe3c-ff10-4d06-a1ba-9974a673b846" width="1024">
+<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/1fdffe3c-ff10-4d06-a1ba-9974a673b846" width="768">
 
 GUI-Elements tracking:
 1. TODO
