@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7919746.svg)](https://doi.org/10.5281/zenodo.7919746)
+
 # SegmentAnything for Microscopy
 
 Tools for segmentation and tracking in microscopy build on top of [SegmentAnything](https://segment-anything.com/).
@@ -155,4 +157,4 @@ micro_sam <- library with utility functionality for using SAM for microscopy dat
 
 If you are using this repository in your research please cite
 - [SegmentAnything](https://arxiv.org/abs/2304.02643)
-- and our repository on [zenodo](TODO) (we are working on a publication)
+- and our repository on [zenodo](https://doi.org/10.5281/zenodo.7919746) (we are working on a publication)
