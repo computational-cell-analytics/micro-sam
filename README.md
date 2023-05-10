@@ -62,50 +62,66 @@ pip install -e .
 
 ## Usage
 
-After the installation the three applications for interactive annotations can be started from the command line or within a python script:
-- **2d segmentation**: via the command `micro_sam.annotator_2d` or with the function `micro_sam.sam_annotator.annotator_2d` from python. Run `micro_sam.annotator_2d -h` or check out [examples/sam_annotator_2d](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_2d.py) for details. 
-- **3d segmentation**: via the command `micro_sam.annotator_3d` or with the function `micro_sam.sam_annotator.annotator_3d` from python. Run `micro_sam.annotator_3d -h` or check out [examples/sam_annotator_3d](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_3d.py) for details. 
-- **tracking**: via the command `micro_sam.annotator_tracking` or with the function `micro_sam.sam_annotator.annotator_tracking` from python. Run `micro_sam.annotator_tracking -h` or check out [examples/sam_annotator_tracking](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_tracking.py) for details. 
-
-All three applications are built with napari. If you are not familiar with napari yet, start [here](https://napari.org/stable/tutorials/fundamentals/quick_start.html).
+After installing the `micro_sam` python application the three interactive annotation tools can be started from the command line or from a python script (see details below).
+They are built with napari to implement the viewer and user interaction. If you are not familiar with napari yet, [start here](https://napari.org/stable/tutorials/fundamentals/quick_start.html).
+To use the apps the functionality of [napari point layers](https://napari.org/stable/howtos/layers/points.html) and [napari labels layers](https://napari.org/stable/howtos/layers/labels.html) is of particular importance.
 
 ### 2D Segmentation
 
+The application for 2d segmentation can be started in two ways:
+- Via the command line with the command `micro_sam.annotator_2d`. Run `micro_sam.annotator_2d -h` for details.
+- From a python script with the function `micro_sam.sam_annotator.annotator_2d`. Check out [examples/sam_annotator_2d](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_2d.py) for details. 
+
+Below you can see the interface of the application for a cell segmentation example:
+
 <img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/90055f2f-f6f3-4224-ab3c-57e545c278bc" width="768">
 
-GUI-Elements 3d annotation:
-1. TODO
-2. TODO
-3. TODO
-4. TODO
-5. TODO
+The most important parts of the user interface are:
+1. The napari layers that contain the image, segmentations and prompts:
+    - `prompts`: point layer that is used to provide prompts to SegmentAnything. Positive prompts (green points) for marking the object you want to segment, negative prompts (red points) for marking the outside of the object.
+    - `current_object`: label layer that contains the object you're currently segmenting.
+    - `committed_objects`: label layer with the objects that have already been segmented.
+    - `auto_segmentation`: label layer results from using SegmentAnything for automatic instance segmentation.
+    - `raw`: image layer that shows the image data.
+2. The prompt menu for changing the currently selected point from positive to negative and vice versa. This can also be done by pressing `t`.
+3. The menu for automatic segmentation. Pressing `Segment All Objects` will run automatic segmentation (this can take few minutes if you are using a CPU). The results will be displayed in the `auto_segmentation` layer. 
+4. The menu for interactive segmentation. Pressing `Segment Object` (or `s`) will run segmentation for the current prompts. The result is displayed in `current_object`
+5. The menu for commiting the segmentation. When pressing `Commit` (or `c`) the result from the selected layer (either `current_object` or `auto_segmentation`) will be transferred from the respective layer to `committed_objects`.
 
-TODO link to tutorial video.
+Check out [this video](https://youtu.be/DfWE_XRcqN8) for an overview of the interactive 2d segmentation functionality.
 
 ### 3D Segmentation
 
+The application for 3d segmentation can be started as follows:
+- Via the command line with the command `micro_sam.annotator_3d`. Run `micro_sam.annotator_3d -h` for details.
+- From a python script with the function `micro_sam.sam_annotator.annotator_3d`. Check out [examples/sam_annotator_3d](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_3d.py) for details.
+
 <img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/3c35ba63-1b67-48df-9b11-94919bdc7c79" width="768">
 
-GUI-Elements 3d annotation:
-1. TODO
-2. TODO
-3. TODO
-4. TODO
-5. TODO
+The most important parts of the user interface are listed below. Most of these elements are the same as for [the 2d segmentation app](https://github.com/computational-cell-analytics/micro-sam#2d-segmentation).
+1. The napari layers that contain the image, segmentation and prompts. Same as for [the 2d segmentation app](https://github.com/computational-cell-analytics/micro-sam#2d-segmentation) but without the `auto_segmentation` layer.
+2. The prompt menu.
+3. The menu for interactive segmentation.
+4. The 3d segmentation menu. Pressing `Segment Volume` (or `v`) will extend the segmentation for the current object across the volume.
+5. The menu for committing the segmentation.
 
 Check out [this video](https://youtu.be/5Jo_CtIefTM) for an overview of the interactive 3d segmentation functionality.
 
 ### Tracking
 
+The application for interactive tracking (of 2d data) can be started as follows:
+- Via the command line with the command `micro_sam.annotator_tracking`. Run `micro_sam.annotator_tracking -h` for details.
+- From a python script with the function `micro_sam.sam_annotator.annotator_tracking`. Check out [examples/sam_annotator_tracking](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_tracking.py) for details. 
+
 <img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/1fdffe3c-ff10-4d06-a1ba-9974a673b846" width="768">
 
-GUI-Elements tracking:
-1. TODO
-2. TODO
-3. TODO
-4. TODO
-5. TODO
-6. TODO
+The most important parts of the user interface are listed below. Most of these elements are the same as for [the 2d segmentation app](https://github.com/computational-cell-analytics/micro-sam#2d-segmentation).
+1. The napari layers thaat contain the image, segmentation and prompts. Same as for [the 2d segmentation app](https://github.com/computational-cell-analytics/micro-sam#2d-segmentation) but without the `auto_segmentation` layer, `current_tracks` and `committed_tracks` are the equivalent of `current_object` and `committed_objects`.
+2. The prompt menu.
+3. The menu with tracking settings: `track_state` is used to indicate that the object you are tracking is dividing in the current frame. `track_id` is used to select which of the tracks after divsion you are following.
+4. The menu for interactive segmentation.
+5. The tracking menu. Press `Track Object` (or `v`) to track the current object across time.
+6. The menu for committing the current tracking result.
 
 TODO link to video tutorial
 
