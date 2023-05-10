@@ -299,7 +299,7 @@ def commit_tracking_widget(v: Viewer, layer: str = "current_track"):
     v.layers["prompts"].refresh()
 
 
-def annotator_tracking(raw, embedding_path=None, show_embeddings=False):
+def annotator_tracking(raw, embedding_path=None, show_embeddings=False, tracking_result=None):
     # global state
     global PREDICTOR, IMAGE_EMBEDDINGS, CURRENT_TRACK_ID, LINEAGE
     global TRACKING_WIDGET
@@ -317,7 +317,11 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False):
     v = Viewer()
 
     v.add_image(raw)
-    v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="committed_tracks")
+    if tracking_result is None:
+        v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="committed_tracks")
+    else:
+        assert tracking_result.shape == raw.shape
+        v.add_labels(data=tracking_result, name="committed_tracks")
     v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="current_track")
 
     # show the PCA of the image embeddings
@@ -426,19 +430,17 @@ def main():
         "NOTE: It is recommended to pass this argument and store the embeddings, "
         "otherwise they will be recomputed every time (which can take a long time)."
     )
-    # Not implemented for the tracking annotator yet.
-    # And we should change the name for it.
-    # parser.add_argument(
-    #     "-s", "--segmentation",
-    #     help="Optional filepath to a precomputed segmentation. If passed this will be used to initialize the "
-    #     "'committed_objects' layer. This can be useful if you want to correct an existing segmentation or if you "
-    #     "have saved intermediate results from the annotator and want to continue with your annotations. "
-    #     "Supports the same file formats as 'input'."
-    # )
-    # parser.add_argument(
-    #     "-sk", "--segmentation_key",
-    #     help="The key for opening the segmentation data. Same rules as for 'key' apply."
-    # )
+    parser.add_argument(
+        "-t", "--tracking_result",
+        help="Optional filepath to a precomputed tracking result. If passed this will be used to initialize the "
+        "'committed_tracks' layer. This can be useful if you want to correct an existing tracking result or if you "
+        "have saved intermediate results from the annotator and want to continue. "
+        "Supports the same file formats as 'input'."
+    )
+    parser.add_argument(
+        "-tk", "--tracking_key",
+        help="The key for opening the tracking result. Same rules as for 'key' apply."
+    )
     parser.add_argument(
         "--show_embeddings", action="store_true",
         help="Visualize the embeddings computed by SegmentAnything. This can be helpful for debugging."
@@ -447,14 +449,14 @@ def main():
     args = parser.parse_args()
     raw = util.load_image_data(args.input, ndim=3, key=args.key)
 
-    # if args.segmentation is None:
-    #     segmentation = None
-    # else:
-    #     segmentation = util.load_image_data(args.segmentation, args.segmentation_key)
+    if args.tracking_result is None:
+        tracking_result = None
+    else:
+        tracking_result = util.load_image_data(args.tracking_result, args.tracking_key)
 
     if args.embedding_path is None:
         warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
 
     annotator_tracking(
-        raw, embedding_path=args.embedding_path, show_embeddings=args.show_embeddings
+        raw, embedding_path=args.embedding_path, show_embeddings=args.show_embeddings, tracking_result=tracking_result
     )

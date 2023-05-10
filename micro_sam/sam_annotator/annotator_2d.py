@@ -152,7 +152,7 @@ def main():
         "otherwise they will be recomputed every time (which can take a long time)."
     )
     parser.add_argument(
-        "-s", "--segmentation",
+        "-s", "--segmentation_result",
         help="Optional filepath to a precomputed segmentation. If passed this will be used to initialize the "
         "'committed_objects' layer. This can be useful if you want to correct an existing segmentation or if you "
         "have saved intermediate results from the annotator and want to continue with your annotations. "
@@ -170,15 +170,15 @@ def main():
     args = parser.parse_args()
     raw = util.load_image_data(args.input, ndim=2, key=args.key)
 
-    if args.segmentation is None:
-        segmentation = None
+    if args.segmentation_result is None:
+        segmentation_result = None
     else:
-        segmentation = util.load_image_data(args.segmentation, args.segmentation_key)
+        segmentation_result = util.load_image_data(args.segmentation_result, args.segmentation_key)
 
     if args.embedding_path is None:
         warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
 
     annotator_2d(
         raw, embedding_path=args.embedding_path,
-        show_embeddings=args.show_embeddings, segmentation_result=segmentation
+        show_embeddings=args.show_embeddings, segmentation_result=segmentation_result
     )
