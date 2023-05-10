@@ -2,7 +2,9 @@ import numpy as np
 import vigra
 
 from elf.segmentation import embeddings as embed
+from segment_anything import SamAutomaticMaskGenerator
 from skimage.transform import resize
+
 try:
     from napari.utils import progress as tqdm
 except ImportError:
@@ -17,8 +19,18 @@ from .segment_from_prompts import segment_from_mask
 #
 
 
-# TODO implement automatic instance segmentation based on the functionalities from segment anything:
-# https://github.com/facebookresearch/segment-anything/blob/main/segment_anything/automatic_mask_generator.py
+def segment_instances_sam(sam, image, **kwargs):
+    segmentor = SamAutomaticMaskGenerator(sam, **kwargs)
+
+    image_ = util._to_image(image)
+    masks = segmentor.generate(image_)
+    masks = sorted(masks, key=(lambda x: x["area"]), reverse=True)
+
+    segmentation = np.zeros(image.shape[:2], dtype="uint32")
+    for seg_id, mask in enumerate(masks, 1):
+        segmentation[mask["segmentation"]] = seg_id
+
+    return segmentation
 
 
 #
@@ -58,7 +70,7 @@ def _refine_initial_segmentation(predictor, initial_seg, image_embeddings, i, ve
 # - Can we get intermediate, larger embeddings from SAM?
 # - Can we run the encoder in a sliding window and somehow stitch the embeddings?
 # - Or: run the encoder in a sliding window and stitch the initial segmentation result.
-def segment_from_embeddings(
+def segment_instances_from_embeddings(
     predictor, image_embeddings, size_threshold=10, i=None,
     offsets=[[-1, 0], [0, -1], [-3, 0], [0, -3]], distance_type="l2", bias=0.0,
     verbose=True, return_initial_seg=False,

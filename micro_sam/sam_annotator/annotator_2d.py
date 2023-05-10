@@ -5,8 +5,8 @@ from magicgui import magicgui
 from napari import Viewer
 
 from .. import util
+from .. import segment_instances
 from ..visualization import project_embeddings_for_visualization
-from ..segment_instances import segment_from_embeddings
 from ..segment_from_prompts import segment_from_points
 from .util import (
     commit_segmentation_widget, create_prompt_menu, prompt_layer_to_points, toggle_label, LABEL_COLOR_CYCLE
@@ -21,20 +21,26 @@ def segment_wigdet(v: Viewer):
     v.layers["current_object"].refresh()
 
 
-# TODO enable choosing setting the segmentation method and setting other params
-@magicgui(call_button="Segment All Objects")
-def autosegment_widget(v: Viewer):
-    # choose if we segment with/without tiling based on the image shape
-    seg = segment_from_embeddings(PREDICTOR, IMAGE_EMBEDDINGS)
+# TODO expose more parameters
+@magicgui(call_button="Segment All Objects", method={"choices": ["default", "sam", "embeddings"]})
+def autosegment_widget(v: Viewer, method: str = "default"):
+    if method in ("default", "sam"):
+        print("Run automatic segmentation with SAM. This can take a few minutes ...")
+        image = v.layers["raw"].data
+        seg = segment_instances.segment_instances_sam(SAM, image)
+    elif method == "embeddings":
+        seg = segment_instances.segment_instances_from_embeddings(PREDICTOR, IMAGE_EMBEDDINGS)
+    else:
+        raise ValueError
     v.layers["auto_segmentation"].data = seg
     v.layers["auto_segmentation"].refresh()
 
 
 def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_result=None):
     # for access to the predictor and the image embeddings in the widgets
-    global PREDICTOR, IMAGE_EMBEDDINGS
+    global PREDICTOR, IMAGE_EMBEDDINGS, SAM
 
-    PREDICTOR = util.get_sam_model()
+    PREDICTOR, SAM = util.get_sam_model(return_sam=True)
     IMAGE_EMBEDDINGS = util.precompute_image_embeddings(PREDICTOR, raw, save_path=embedding_path, ndim=2)
     util.set_precomputed(PREDICTOR, IMAGE_EMBEDDINGS)
 
