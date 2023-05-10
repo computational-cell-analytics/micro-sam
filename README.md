@@ -127,29 +127,28 @@ TODO link to video tutorial
 
 ### Tips & Tricks
 
-TODO
-- speeding things up: precomputing the embeddings with a gpu, making input images smaller
-- correcting existing segmentaitons via `segmentation_results`
-- saving and loading intermediate results via segmentation results
+- By default, the applications pre-compute the image embeddings produced by SegmentAnything and store them on disc. If you are using a CPU this step can take a while for 3d data or timeseries (you will see a progress bar with a time estimate). If you have access to a GPU without graphical interface (e.g. via a local computer cluster or a cloud provider), you can also pre-compute the embeddings there and then copy them to your laptop / local machine to speed this up. You can use the command `micro_sam.precompute_embeddings` for this (it is installed with the rest of the applications). You can specify the location of the precomputed embeddings via the `embedding_path` argument.
+- Most other processing steps are very fast even on a CPU, so interactive annotation is possible. An exception is the automatic segmentation step (2d segmentation), which takes several minutes without a GPU (depending on the image size). For large volumes and timeseries segmenting an object in 3d / tracking across time can take a couple settings with a CPU (it is very fast with a GPU).
+- You can save and load the results from the `committed_objects` / `committed_tracks` layer to correct segmentations you obtained from another tool (e.g. CellPose) or to save intermediate annotation results. The results can be saved via `File->Save Selected Layer(s) ...` in the napari menu. They can be loaded again by specifying the corresponding location via the `segme` (2d and 3d segmentation) `xxx` (tracking) argument.
 
-### Limitations
+### Known limitations
 
-TODO
-- automatic instance segmentation limitations
+- SegmentAnything does not work well for very small or fine-graind objects (e.g. filaments).
+- For the automatic segmentation functionality we currently rely on the automatic mask generation provided by SegmentAnything. It is slow and often misses objects in microscopy images. For now we only offer this functionality in the 2d segmentation app; we are working on improving it and extending it to 3d segmentation and tracking.
 
+### Using the micro_sam library
 
-## Using the micro_sam library
-
-TODO
-- link to the example image series application
+After installation the `micro_sam` python library is available, which provides several utility functions for using SegmentAnything with napari. Check out [examples/image_series_annotator.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/image_series_annotator_app.py) for an example application for segmenting objects in an image series built with it.
 
 
+<!---
 ## Contributing
 
 ```
 micro_sam <- library with utility functionality for using SAM for microscopy data
     /sam_annotator <- the napari plugins for annotation
 ```
+-->
 
 
 ## Citation
