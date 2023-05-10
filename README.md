@@ -35,7 +35,7 @@ We require these dependencies:
 - [napari](https://napari.org/stable/)
 - [elf](https://github.com/constantinpape/elf)
 
-We recommend to use conda and provide two conda environment files with all necessary requirements:
+We recommend to use conda and provide two environment files with all necessary requirements:
 - `environment_gpu.yaml`: sets up an environment with GPU support.
 - `environment_cpu.yaml`: sets up an environment with CPU support.
 
@@ -61,6 +61,18 @@ And install our napari applications and the `micro_sam` library via
 ```
 pip install -e .
 ```
+
+**Troubleshooting:**
+
+- On some systems `conda` is extremely slow and cannot resolve the environment in the step `conda env create ...`. You can use `mamba` instead, which is a faster re-implementation of `conda`. It can resolve the environment in less than a minute on any system we tried. Check out [yhis link](https://mamba.readthedocs.io/en/latest/installation.html) for how to install `mamba`. Once you have installed it, run `mamba env create -f <ENV_FILE>.yaml` to create the env.
+- Installation on MAC with a M1 or M2 processor:
+    - The pytorch installation from `environment_cpu.yaml` does not work with a MAC that has an M1 or M2 processor. Instead you need to:
+        - Create a clean environment: `conda create -c conda-forge python pip -n sam`
+        - Activate it va `conda activate sam`
+        - Follow the instructions for how to install pytorch for MAC via conda from [pytorch.org](https://pytorch.org/).
+        - Install additional dependencies: `conda install -c conda-forge napari python-elf tqdm`
+        - Install SegmentAnything: `pip install git+https://github.com/facebookresearch/segment-anything.git`
+        - Install `micro_sam` by running `pip install -e .` in this folder.
 
 ## Usage
 
@@ -142,7 +154,6 @@ TODO link to video tutorial
 
 After installation the `micro_sam` python library is available, which provides several utility functions for using SegmentAnything with napari. Check out [examples/image_series_annotator.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/image_series_annotator_app.py) for an example application for segmenting objects in an image series built with it.
 
-
 <!---
 ## Contributing
 
@@ -150,6 +161,7 @@ After installation the `micro_sam` python library is available, which provides s
 micro_sam <- library with utility functionality for using SAM for microscopy data
     /sam_annotator <- the napari plugins for annotation
 ```
+TODO: related projects
 -->
 
 
