@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7919746.svg)](https://doi.org/10.5281/zenodo.7919746)
+
 # SegmentAnything for Microscopy
 
 Tools for segmentation and tracking in microscopy build on top of [SegmentAnything](https://segment-anything.com/).
@@ -21,9 +23,9 @@ We implement applications for fast interactive 2d and 3d segmentation as well as
 - Middle: interactive 3d segmentation
 - Right: interactive tracking
 
-<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/158459e1-e321-4810-b6b3-4428f436f01b" width="256">
-<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/ca4d6bcc-8674-455b-95c6-0eb516d2bc76" width="256">
-<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/a4a048de-fd3d-4718-b386-2160ac94bbf0" width="256">
+<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/d5ee2080-ab08-4716-b4c4-c169b4ed29f5" width="256">
+<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/dfca3d9b-dba5-440b-b0f9-72a0683ac410" width="256">
+<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/aefbf99f-e73a-4125-bb49-2e6592367a64" width="256">
 
 ## Installation
 
@@ -74,7 +76,7 @@ The application for 2d segmentation can be started in two ways:
 
 Below you can see the interface of the application for a cell segmentation example:
 
-<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/90055f2f-f6f3-4224-ab3c-57e545c278bc" width="768">
+<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/041585a6-0b72-4e4b-8df3-42135f4334c5" width="768">
 
 The most important parts of the user interface are:
 1. The napari layers that contain the image, segmentations and prompts:
@@ -96,7 +98,7 @@ The application for 3d segmentation can be started as follows:
 - Via the command line with the command `micro_sam.annotator_3d`. Run `micro_sam.annotator_3d -h` for details.
 - From a python script with the function `micro_sam.sam_annotator.annotator_3d`. Check out [examples/sam_annotator_3d](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_3d.py) for details.
 
-<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/3c35ba63-1b67-48df-9b11-94919bdc7c79" width="768">
+<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/0a6fb19e-7db5-4188-9371-3c238671f881" width="768">
 
 The most important parts of the user interface are listed below. Most of these elements are the same as for [the 2d segmentation app](https://github.com/computational-cell-analytics/micro-sam#2d-segmentation).
 1. The napari layers that contain the image, segmentation and prompts. Same as for [the 2d segmentation app](https://github.com/computational-cell-analytics/micro-sam#2d-segmentation) but without the `auto_segmentation` layer.
@@ -113,7 +115,7 @@ The application for interactive tracking (of 2d data) can be started as follows:
 - Via the command line with the command `micro_sam.annotator_tracking`. Run `micro_sam.annotator_tracking -h` for details.
 - From a python script with the function `micro_sam.sam_annotator.annotator_tracking`. Check out [examples/sam_annotator_tracking](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_tracking.py) for details. 
 
-<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/1fdffe3c-ff10-4d06-a1ba-9974a673b846" width="768">
+<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/dfb80f17-a370-4cbc-aaeb-29de93444090" width="768">
 
 The most important parts of the user interface are listed below. Most of these elements are the same as for [the 2d segmentation app](https://github.com/computational-cell-analytics/micro-sam#2d-segmentation).
 1. The napari layers thaat contain the image, segmentation and prompts. Same as for [the 2d segmentation app](https://github.com/computational-cell-analytics/micro-sam#2d-segmentation) but without the `auto_segmentation` layer, `current_tracks` and `committed_tracks` are the equivalent of `current_object` and `committed_objects`.
@@ -155,4 +157,4 @@ micro_sam <- library with utility functionality for using SAM for microscopy dat
 
 If you are using this repository in your research please cite
 - [SegmentAnything](https://arxiv.org/abs/2304.02643)
-- and our repository on [zenodo](TODO) (we are working on a publication)
+- and our repository on [zenodo](https://doi.org/10.5281/zenodo.7919746) (we are working on a publication)
