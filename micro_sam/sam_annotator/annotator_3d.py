@@ -162,10 +162,10 @@ def segment_volume_widget(v: Viewer, iou_threshold: float = 0.8, projection: str
     v.layers["current_object"].refresh()
 
 
-def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_result=None):
+def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_result=None, model_type="vit_h"):
     # for access to the predictor and the image embeddings in the widgets
     global PREDICTOR, IMAGE_EMBEDDINGS, DEFAULT_PROJECTION
-    PREDICTOR = util.get_sam_model()
+    PREDICTOR = util.get_sam_model(model_type=model_type)
     IMAGE_EMBEDDINGS = util.precompute_image_embeddings(PREDICTOR, raw, save_path=embedding_path)
 
     # the mask projection currently only works for square images
@@ -291,6 +291,9 @@ def main():
         "--show_embeddings", action="store_true",
         help="Visualize the embeddings computed by SegmentAnything. This can be helpful for debugging."
     )
+    parser.add_argument(
+        "--model_type", default="vit_h", help="The segment anything model that will be used, one of vit_h,l,b."
+    )
 
     args = parser.parse_args()
     raw = util.load_image_data(args.input, ndim=3, key=args.key)
@@ -305,5 +308,6 @@ def main():
 
     annotator_3d(
         raw, embedding_path=args.embedding_path,
-        show_embeddings=args.show_embeddings, segmentation_result=segmentation_result
+        show_embeddings=args.show_embeddings, segmentation_result=segmentation_result,
+        model_type=args.model_type,
     )

@@ -36,11 +36,11 @@ def autosegment_widget(v: Viewer, method: str = "default"):
     v.layers["auto_segmentation"].refresh()
 
 
-def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_result=None):
+def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_result=None, model_type="vit_h"):
     # for access to the predictor and the image embeddings in the widgets
     global PREDICTOR, IMAGE_EMBEDDINGS, SAM
 
-    PREDICTOR, SAM = util.get_sam_model(return_sam=True)
+    PREDICTOR, SAM = util.get_sam_model(model_type=model_type, return_sam=True)
     IMAGE_EMBEDDINGS = util.precompute_image_embeddings(PREDICTOR, raw, save_path=embedding_path, ndim=2)
     util.set_precomputed(PREDICTOR, IMAGE_EMBEDDINGS)
 
@@ -166,6 +166,9 @@ def main():
         "--show_embeddings", action="store_true",
         help="Visualize the embeddings computed by SegmentAnything. This can be helpful for debugging."
     )
+    parser.add_argument(
+        "--model_type", default="vit_h", help="The segment anything model that will be used, one of vit_h,l,b."
+    )
 
     args = parser.parse_args()
     raw = util.load_image_data(args.input, ndim=2, key=args.key)
@@ -180,5 +183,6 @@ def main():
 
     annotator_2d(
         raw, embedding_path=args.embedding_path,
-        show_embeddings=args.show_embeddings, segmentation_result=segmentation_result
+        show_embeddings=args.show_embeddings, segmentation_result=segmentation_result,
+        model_type=args.model_type,
     )

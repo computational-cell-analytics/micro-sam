@@ -299,12 +299,12 @@ def commit_tracking_widget(v: Viewer, layer: str = "current_track"):
     v.layers["prompts"].refresh()
 
 
-def annotator_tracking(raw, embedding_path=None, show_embeddings=False, tracking_result=None):
+def annotator_tracking(raw, embedding_path=None, show_embeddings=False, tracking_result=None, model_type="vit_h"):
     # global state
     global PREDICTOR, IMAGE_EMBEDDINGS, CURRENT_TRACK_ID, LINEAGE
     global TRACKING_WIDGET
 
-    PREDICTOR = util.get_sam_model()
+    PREDICTOR = util.get_sam_model(model_type=model_type)
     IMAGE_EMBEDDINGS = util.precompute_image_embeddings(PREDICTOR, raw, save_path=embedding_path)
 
     CURRENT_TRACK_ID = 1
@@ -445,6 +445,9 @@ def main():
         "--show_embeddings", action="store_true",
         help="Visualize the embeddings computed by SegmentAnything. This can be helpful for debugging."
     )
+    parser.add_argument(
+        "--model_type", default="vit_h", help="The segment anything model that will be used, one of vit_h,l,b."
+    )
 
     args = parser.parse_args()
     raw = util.load_image_data(args.input, ndim=3, key=args.key)
@@ -458,5 +461,6 @@ def main():
         warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
 
     annotator_tracking(
-        raw, embedding_path=args.embedding_path, show_embeddings=args.show_embeddings, tracking_result=tracking_result
+        raw, embedding_path=args.embedding_path, show_embeddings=args.show_embeddings,
+        tracking_result=tracking_result, model_type=args.model_type,
     )
