@@ -15,6 +15,8 @@ We implement napari applications for:
 This is an early beta version. Any feedback is welcome, but please be aware that the functionality is under active development and that several features are not finalized or thoroughly tested yet.
 Once the functionality has matured we plan to release the interactive annotation applications as [napari plugins](https://napari.org/stable/plugins/index.html).
 
+If you run into any problems or have questions please open an issue or reach out via [image.sc](https://forum.image.sc/) using the tag `micro-sam` and tagging @constantinpape.
+
 
 ## Functionality overview
 
