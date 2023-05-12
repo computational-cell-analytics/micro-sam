@@ -1,3 +1,4 @@
+import hashlib
 import os
 from shutil import copyfileobj
 
@@ -28,9 +29,14 @@ MODEL_URLS = {
     "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth"
 }
 CHECKPOINT_FOLDER = os.environ.get("SAM_MODELS", os.path.expanduser("~/.sam_models"))
+CHECKSUMS = {
+    "vit_h": "a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e",
+    "vit_l": "3adcc4315b642a4d2101128f611684e8734c41232a17c648ed1693702a49a622",
+    "vit_b": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912"
+}
 
 
-def _download(url, path):
+def _download(url, path, model_type):
     with requests.get(url, stream=True, verify=True) as r:
         if r.status_code != 200:
             r.raise_for_status()
@@ -42,6 +48,20 @@ def _download(url, path):
         with tqdm.wrapattr(r.raw, "read", total=file_size, desc=desc) as r_raw, open(path, "wb") as f:
             copyfileobj(r_raw, f)
 
+    # validate the checksum
+    expected_checksum = CHECKSUMS[model_type]
+    if expected_checksum is None:
+        return
+    with open(path, "rb") as f:
+        file_ = f.read()
+        checksum = hashlib.sha256(file_).hexdigest()
+    if checksum != expected_checksum:
+        raise RuntimeError(
+            "The checksum of the download does not match the expected checksum."
+            f"Expected: {expected_checksum}, got: {checksum}"
+        )
+    print("Download successful and checksums agree.")
+
 
 def _get_checkpoint(model_type, checkpoint_path=None):
     if checkpoint_path is None:
@@ -52,7 +72,7 @@ def _get_checkpoint(model_type, checkpoint_path=None):
         # download the checkpoint if necessary
         if not os.path.exists(checkpoint_path):
             os.makedirs(CHECKPOINT_FOLDER, exist_ok=True)
-            _download(checkpoint_url, checkpoint_path)
+            _download(checkpoint_url, checkpoint_path, model_type)
     elif not os.path.exists(checkpoint_path):
         raise ValueError(f"The checkpoint path {checkpoint_path} that was passed does not exist.")
 
