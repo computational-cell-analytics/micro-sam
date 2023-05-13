@@ -52,8 +52,10 @@ class PointPromptGenerator:
         dilated_object = binary_dilation(object_mask, iterations=self.dilation_strength)
         background_mask = np.zeros(gt.shape)
         background_mask[bbox_coordinates[0]:bbox_coordinates[2], bbox_coordinates[1]:bbox_coordinates[3]] = 1
-        background_mask = abs(background_mask - dilated_object)
         background_mask = binary_dilation(background_mask, iterations=self.dilation_strength)
+        background_mask = abs(
+            background_mask.astype(np.float32) - dilated_object.astype(np.float32)
+        )  # casting booleans to do subtraction
 
         n_negative_remaining = self.n_negative_points
         if n_negative_remaining > 0:
