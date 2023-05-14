@@ -4,8 +4,6 @@ import numpy as np
 from skimage.data import binary_blobs
 from skimage.measure import label
 
-COLOR_CYCLE = ["#00FF00", "#FF0000"]
-
 
 class TestPromptGenerators(unittest.TestCase):
 
@@ -48,7 +46,7 @@ class TestPromptGenerators(unittest.TestCase):
                     #     name="prompts",
                     #     properties={"label": point_labels},
                     #     edge_color="label",
-                    #     edge_color_cycle=COLOR_CYCLE,
+                    #     edge_color_cycle=["#00FF00", "#FF0000"],
                     #     symbol="o",
                     #     face_color="transparent",
                     #     edge_width=0.5,
