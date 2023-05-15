@@ -68,6 +68,23 @@ class TestPromptGenerators(unittest.TestCase):
 
                 self.assertTrue(agree.all())
 
+    def test_box_prompt_generator(self):
+        from micro_sam.prompt_generators import PointAndBoxPromptGenerator
+        from micro_sam.util import get_cell_center_coordinates
+
+        labels = self._get_test_data()
+        label_ids = np.unique(labels)[1:]
+
+        centers, boxes = get_cell_center_coordinates(labels)
+        generator = PointAndBoxPromptGenerator(0, 0, dilation_strength=0, get_point_prompts=False, get_box_prompts=True)
+
+        for label_id in label_ids:
+            center, box_ = centers.get(label_id), boxes.get(label_id)
+            _, _, box, _ = generator(labels, label_id, center, box_)
+            coords = np.where(labels == label_id)
+            expected_box = [coo.min() for coo in coords] + [coo.max() + 1 for coo in coords]
+            self.assertEqual(expected_box, list(box[0]))
+
 
 if __name__ == "__main__":
     unittest.main()
