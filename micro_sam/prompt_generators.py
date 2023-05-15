@@ -4,12 +4,15 @@ from scipy.ndimage import binary_dilation
 
 class PointAndBoxPromptGenerator:
     def __init__(self, n_positive_points, n_negative_points, dilation_strength,
-                 get_point_prompts=False, get_box_prompts=False):
+                 get_point_prompts=True, get_box_prompts=False):
         self.n_positive_points = n_positive_points
         self.n_negative_points = n_negative_points
         self.dilation_strength = dilation_strength
         self.get_box_prompts = get_box_prompts
         self.get_point_prompts = get_point_prompts
+
+        if self.get_point_prompts is False and self.get_box_prompts is False:
+            raise ValueError("You need to request for box/point prompts or both")
 
     def __call__(self, gt, gt_id, center_coordinates, bbox_coordinates):
         """
@@ -80,7 +83,7 @@ class PointAndBoxPromptGenerator:
                 coord_list.append(negative_coordinates)
                 label_list.append(0)
 
-        # returns object-level masks per instance for cross-verification (fix it later)
+        # returns object-level masks per instance for cross-verification (TODO: fix it later)
         if self.get_point_prompts is True and self.get_box_prompts is True:  # we want points and box
             return coord_list, label_list, bbox_list, object_mask
 
@@ -89,6 +92,3 @@ class PointAndBoxPromptGenerator:
 
         elif self.get_point_prompts is False and self.get_box_prompts is True:  # we want only boxes
             return None, None, bbox_list, object_mask
-        else:
-            assert self.get_point_prompts is False and self.get_box_prompts is False, \
-                "You need to request for box/point prompts or both"
