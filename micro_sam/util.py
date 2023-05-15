@@ -297,13 +297,14 @@ def get_cell_center_coordinates(gt, mode="v"):
     properties = regionprops(gt)
 
     if mode == "p":
-        center_coordinates = [prop.centroid for prop in properties]
+        center_coordinates = {prop.label: prop.centroid for prop in properties}
     elif mode == "v":
         center_coordinates = vigra.filters.eccentricityCenters(gt.astype('float32'))
-        center_coordinates.pop(0)
+        center_coordinates = {i: coord for i, coord in enumerate(center_coordinates) if i > 0}
 
-    bbox_coordinates = [prop.bbox for prop in properties]
+    bbox_coordinates = {prop.label: prop.bbox for prop in properties}
 
+    assert len(bbox_coordinates) == len(center_coordinates)
     return center_coordinates, bbox_coordinates
 
 
