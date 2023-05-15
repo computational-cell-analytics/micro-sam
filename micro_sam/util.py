@@ -288,7 +288,7 @@ def compute_iou(mask1, mask2):
     return iou
 
 
-def get_cell_center_coordinates(gt, mode="p"):
+def get_cell_center_coordinates(gt, mode="v"):
     """
     Returns the center coordinates of the foreground instances in the ground-truth
     """
@@ -300,6 +300,7 @@ def get_cell_center_coordinates(gt, mode="p"):
         center_coordinates = [prop.centroid for prop in properties]
     elif mode == "v":
         center_coordinates = vigra.filters.eccentricityCenters(gt.astype('float32'))
+        center_coordinates.pop(0)
 
     bbox_coordinates = [prop.bbox for prop in properties]
 

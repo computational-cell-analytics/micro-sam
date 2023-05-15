@@ -19,10 +19,7 @@ class TestPromptGenerators(unittest.TestCase):
         labels = self._get_test_data()
         label_ids = np.unique(labels)
 
-        mode = "v"  # this gets center points using vigra - regionprops throws error for asymmetrical blobs
-        centers, boxes = get_cell_center_coordinates(labels, mode=mode)
-        if mode == "v":
-            centers.pop(0)   # to avoid the background element
+        centers, boxes = get_cell_center_coordinates(labels)
 
         test_point_pairs = [(1, 0), (1, 1), (2, 4), (3, 9)]
         for (n_pos, n_neg) in test_point_pairs:
