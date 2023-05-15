@@ -32,7 +32,7 @@ class PointAndBoxPromptGenerator:
         if self.get_box_prompts:
             bbox_list = [bbox_coordinates]
 
-        object_mask = gt == gt_id + 1  # alloting a label id to obtain the coordinates of desired seeds
+        object_mask = gt == gt_id
 
         # getting the additional positive points by randomly sampling points from this mask
         n_positive_remaining = self.n_positive_points - 1
