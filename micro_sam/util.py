@@ -105,6 +105,13 @@ def get_sam_model(device=None, model_type="vit_h", checkpoint_path=None, return_
 
 
 def _to_image(input_):
+    # we require the input to be uint8
+    if input_.dtype != np.dtype("uint8"):
+        # first normalize the input to [0, 1]
+        input_ = input_.astype("float32") - input_.min()
+        input_ = input_ / input_.max()
+        # then bring to [0, 255] and cast to uint8
+        input_ = (input_ * 255).astype("uint8")
     if input_.ndim == 2:
         image = np.concatenate([input_[..., None]] * 3, axis=-1)
     elif input_.ndim == 3 and input_.shape[-1] == 3:
