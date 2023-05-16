@@ -43,7 +43,7 @@ class PointAndBoxPromptGenerator:
             # ([x1, x2, ...], [y1, y2, ...])
             n_coordinates = len(object_coordinates[0])
 
-            if n_coordinates > n_positive_remaining:  # for some cases, there aren't any forground object_coordinates
+            if n_coordinates > n_positive_remaining:  # for some cases, there aren't many forground object_coordinates
                 # randomly sampling n_positive_remaining_points from these coordinates
                 positive_indices = np.random.choice(n_coordinates, replace=False, size=n_positive_remaining)
                 for positive_index in positive_indices:
@@ -53,7 +53,7 @@ class PointAndBoxPromptGenerator:
                     coord_list.append(positive_coordinates)
                     label_list.append(1)
             else:
-                print(f"{n_coordinates} fg spotted..")
+                print(f"{n_coordinates} foreground pixel spotted..")
 
         # getting the negative points
         # for this we do the opposite and we set the mask to the bounding box - the object mask
@@ -74,14 +74,17 @@ class PointAndBoxPromptGenerator:
             # ([x1, x2, ...], [y1, y2, ...])
             n_coordinates = len(background_coordinates[0])
 
-            # randomly sample n_positive_remaining_points from these coordinates
-            negative_indices = np.random.choice(n_coordinates, replace=False, size=n_negative_remaining)
-            for negative_index in negative_indices:
-                negative_coordinates = int(background_coordinates[0][negative_index]), \
-                    int(background_coordinates[1][negative_index])
+            if n_coordinates > n_negative_remaining:  # for some cases, there aren't many background object_coordinates
+                # randomly sample n_positive_remaining_points from these coordinates
+                negative_indices = np.random.choice(n_coordinates, replace=False, size=n_negative_remaining)
+                for negative_index in negative_indices:
+                    negative_coordinates = int(background_coordinates[0][negative_index]), \
+                        int(background_coordinates[1][negative_index])
 
-                coord_list.append(negative_coordinates)
-                label_list.append(0)
+                    coord_list.append(negative_coordinates)
+                    label_list.append(0)
+            else:
+                print(f"{n_coordinates} background pixel spotted..")
 
         # returns object-level masks per instance for cross-verification (TODO: fix it later)
         if self.get_point_prompts is True and self.get_box_prompts is True:  # we want points and box
