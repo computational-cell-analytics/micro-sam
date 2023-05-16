@@ -43,17 +43,16 @@ class PointAndBoxPromptGenerator:
             # ([x1, x2, ...], [y1, y2, ...])
             n_coordinates = len(object_coordinates[0])
 
-            if n_coordinates > n_positive_remaining:  # for some cases, there aren't any forground object_coordinates
-                # randomly sampling n_positive_remaining_points from these coordinates
-                positive_indices = np.random.choice(n_coordinates, replace=False, size=n_positive_remaining)
-                for positive_index in positive_indices:
-                    positive_coordinates = int(object_coordinates[0][positive_index]), \
-                        int(object_coordinates[1][positive_index])
+            # randomly sampling n_positive_remaining_points from these coordinates
+            positive_indices = np.random.choice(n_coordinates, replace=False,
+                                                size=min(n_positive_remaining, n_coordinates)  # handles the cases with insufficient fg pixels
+                                                )
+            for positive_index in positive_indices:
+                positive_coordinates = int(object_coordinates[0][positive_index]), \
+                    int(object_coordinates[1][positive_index])
 
-                    coord_list.append(positive_coordinates)
-                    label_list.append(1)
-            else:
-                print(f"{n_coordinates} fg spotted..")
+                coord_list.append(positive_coordinates)
+                label_list.append(1)
 
         # getting the negative points
         # for this we do the opposite and we set the mask to the bounding box - the object mask
@@ -75,7 +74,9 @@ class PointAndBoxPromptGenerator:
             n_coordinates = len(background_coordinates[0])
 
             # randomly sample n_positive_remaining_points from these coordinates
-            negative_indices = np.random.choice(n_coordinates, replace=False, size=n_negative_remaining)
+            negative_indices = np.random.choice(n_coordinates, replace=False,
+                                                size=min(n_negative_remaining, n_coordinates)  # handles the cases with insufficient bg pixels
+                                                )
             for negative_index in negative_indices:
                 negative_coordinates = int(background_coordinates[0][negative_index]), \
                     int(background_coordinates[1][negative_index])
