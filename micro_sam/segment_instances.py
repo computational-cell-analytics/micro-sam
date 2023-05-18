@@ -19,7 +19,7 @@ from .segment_from_prompts import segment_from_mask
 #
 
 
-def segment_instances_sam(sam, image, **kwargs):
+def segment_instances_sam(sam, image, with_background=False, **kwargs):
     segmentor = SamAutomaticMaskGenerator(sam, **kwargs)
 
     image_ = util._to_image(image)
@@ -29,6 +29,12 @@ def segment_instances_sam(sam, image, **kwargs):
     segmentation = np.zeros(image.shape[:2], dtype="uint32")
     for seg_id, mask in enumerate(masks, 1):
         segmentation[mask["segmentation"]] = seg_id
+
+    seg_ids, sizes = np.unique(segmentation, return_counts=True)
+    if with_background and 0 not in seg_ids:
+        bg_id = seg_ids[np.argmax(seg_ids)]
+        segmentation[segmentation == bg_id] = 0
+        vigra.analysis.relabelConsecutive(segmentation, out=segmentation)
 
     return segmentation
 
