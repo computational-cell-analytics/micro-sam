@@ -27,6 +27,9 @@ def commit_segmentation_widget(v: Viewer, layer: str = "current_object"):
     if layer == "current_object":
         v.layers["prompts"].data = []
         v.layers["prompts"].refresh()
+        if "box_prompts" in v.layers:
+            v.layers["box_prompts"].data = []
+            v.layers["box_prompts"].refresh()
 
 
 def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="label"):

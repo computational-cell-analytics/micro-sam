@@ -7,7 +7,7 @@ from napari import Viewer
 from .. import util
 from .. import segment_instances
 from ..visualization import project_embeddings_for_visualization
-from ..segment_from_prompts import segment_from_points
+from ..segment_from_prompts import segment_from_box, segment_from_box_and_points, segment_from_points
 from .util import (
     commit_segmentation_widget, create_prompt_menu, prompt_layer_to_points, toggle_label, LABEL_COLOR_CYCLE
 )
@@ -15,9 +15,62 @@ from .util import (
 
 @magicgui(call_button="Segment Object [S]")
 def segment_wigdet(v: Viewer):
+    # get the current point prompts
     points, labels = prompt_layer_to_points(v.layers["prompts"])
-    seg = segment_from_points(PREDICTOR, points, labels)
-    v.layers["current_object"].data = seg.squeeze()
+    assert len(points) == len(labels)
+    have_points = len(points) > 0
+
+    # get the current box prompts
+    box_layer = v.layers["box_prompts"]
+    have_boxes = box_layer.nshapes > 0
+
+    # segment only with points
+    if have_points and not have_boxes:
+        seg = segment_from_points(PREDICTOR, points, labels).squeeze()
+
+    # segment only with boxes
+    elif not have_points and have_boxes:
+        shape = v.layers["current_object"].data.shape
+        seg = np.zeros(shape, dtype="uint32")
+
+        seg_id = 1
+        for prompt_id in range(box_layer.nshapes):
+            shape_type = box_layer.shape_type[prompt_id]
+
+            # for now we only support segmentation from rectangles.
+            # supporting other shapes would be possible by casting the shape to a mask
+            # and then segmenting from mask and bounding box.
+            # but for this we need to fix issue with resizing the mask for non-square shapes.
+            if shape_type != "rectangle":
+                print(f"You have provided a {shape_type} shape.")
+                print("We currently only support rectangle shapes for prompts and this prompt will be skipped.")
+                continue
+
+            box = box_layer.data[prompt_id]
+            prompt_box = np.array([box[:, 0].min(), box[:, 1].min(), box[:, 0].max(), box[:, 1].max()])
+            mask = segment_from_box(PREDICTOR, prompt_box).squeeze()
+            seg[mask] = seg_id
+            seg_id += 1
+
+    # segment with points and box (currently only one box supported)
+    elif have_points and have_boxes:
+        if box_layer.nshapes > 1:
+            print("You have provided point prompts and more than one box prompt.")
+            print("This setting is currently not supported.")
+            print("When providing both points and prompts you can only segment one object at a time.")
+            return
+
+        box = box_layer.data[0]
+        prompt_box = np.array([box[:, 0].min(), box[:, 1].min(), box[:, 0].max(), box[:, 1].max()])
+        seg = segment_from_box_and_points(PREDICTOR, prompt_box, points, labels).squeeze()
+
+    # no prompts were given, skip segmentation
+    else:
+        print("You haven't given any prompts.")
+        print("Please provide point and/or box prompts.")
+        return
+
+    v.layers["current_object"].data = seg
     v.layers["current_object"].refresh()
 
 
@@ -85,6 +138,10 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_r
     )
     prompts.edge_color_mode = "cycle"
 
+    box_prompts = v.add_shapes(
+        face_color="transparent", edge_color="green", edge_width=4, name="box_prompts"
+    )
+
     #
     # add the widgets
     #
@@ -118,6 +175,8 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_r
     def clear_prompts(v):
         prompts.data = []
         prompts.refresh()
+        box_prompts.data = []
+        box_prompts.refresh()
 
     #
     # start the viewer
