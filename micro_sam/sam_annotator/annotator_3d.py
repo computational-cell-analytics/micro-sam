@@ -95,7 +95,9 @@ def _segment_volume(
 
             else:  # there is a range of more than 2 slices in between -> segment ranges
                 # segment from bottom
-                segment_range(z_start, z_mid, 1, np.greater_equal, verbose=verbose)
+                segment_range(
+                    z_start, z_mid, 1, np.greater_equal if slice_diff % 2 == 0 else np.greater, verbose=verbose
+                )
                 # segment from top
                 segment_range(z_stop, z_mid, -1, np.less_equal, verbose=verbose)
                 # if the difference between start and stop is even,
