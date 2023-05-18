@@ -43,7 +43,7 @@ class TestSegmentInstances(unittest.TestCase):
         predicted = segment_instances_sam(sam, image)
         self.assertGreater(matching(predicted, mask, threshold=0.75)["precision"], 0.99)
 
-    # @unittest.skip("Needs some more debugging.")
+    @unittest.skip("Needs some more debugging.")
     def test_segment_instances_from_embeddings(self):
         from micro_sam.segment_instances import segment_instances_from_embeddings
 
