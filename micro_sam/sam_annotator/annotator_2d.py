@@ -23,11 +23,11 @@ def segment_wigdet(v: Viewer):
 
 # TODO expose more parameters
 @magicgui(call_button="Segment All Objects", method={"choices": ["default", "sam", "embeddings"]})
-def autosegment_widget(v: Viewer, method: str = "default"):
+def autosegment_widget(v: Viewer, method: str = "default", with_background: bool = True):
     if method in ("default", "sam"):
         print("Run automatic segmentation with SAM. This can take a few minutes ...")
         image = v.layers["raw"].data
-        seg = segment_instances.segment_instances_sam(SAM, image)
+        seg = segment_instances.segment_instances_sam(SAM, image, with_background=with_background)
     elif method == "embeddings":
         seg = segment_instances.segment_instances_from_embeddings(PREDICTOR, IMAGE_EMBEDDINGS)
     else:

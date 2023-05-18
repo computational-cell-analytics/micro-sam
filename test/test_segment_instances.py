@@ -10,7 +10,7 @@ from skimage.draw import disk
 class TestSegmentInstances(unittest.TestCase):
 
     # create an input image with three objects
-    def _get_input(self, shape=(128, 128)):
+    def _get_input(self, shape=(96, 96)):
         mask = np.zeros(shape, dtype="uint8")
 
         def write_object(center, radius):
@@ -18,13 +18,13 @@ class TestSegmentInstances(unittest.TestCase):
             mask[circle] = 1
 
         center = tuple(sh // 4 for sh in shape)
-        write_object(center, radius=10)
+        write_object(center, radius=8)
 
         center = tuple(sh // 2 for sh in shape)
         write_object(center, radius=9)
 
         center = tuple(3 * sh // 4 for sh in shape)
-        write_object(center, radius=11)
+        write_object(center, radius=7)
 
         image = mask * 255
         return mask, image
