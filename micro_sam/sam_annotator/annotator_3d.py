@@ -6,12 +6,12 @@ from napari import Viewer
 from napari.utils import progress
 
 from .. import util
-from ..segment_from_prompts import segment_from_mask, segment_from_points
+from ..segment_from_prompts import segment_from_mask
 from ..visualization import project_embeddings_for_visualization
 from .util import (
-    commit_segmentation_widget, create_prompt_menu,
-    prompt_layer_to_points, segment_slices_with_prompts,
-    toggle_label, LABEL_COLOR_CYCLE
+    clear_all_prompts, commit_segmentation_widget, create_prompt_menu,
+    prompt_layer_to_boxes, prompt_layer_to_points, prompt_segmentation,
+    segment_slices_with_prompts, toggle_label, LABEL_COLOR_CYCLE
 )
 
 
@@ -121,14 +121,26 @@ def segment_slice_wigdet(v: Viewer):
     position = v.cursor.position
     z = int(position[0])
 
-    this_prompts = prompt_layer_to_points(v.layers["prompts"], z)
-    if this_prompts is None:
+    point_prompts = prompt_layer_to_points(v.layers["prompts"], z)
+    # this is a stop prompt, we do nothing
+    if not point_prompts:
         return
 
-    points, labels = this_prompts
-    seg = segment_from_points(PREDICTOR, points, labels, image_embeddings=IMAGE_EMBEDDINGS, i=z)
+    boxes = prompt_layer_to_boxes(v.layers["box_prompts"], z)
+    points, labels = point_prompts
 
-    v.layers["current_object"].data[z] = seg.squeeze()
+    shape = v.layers["current_object"].data.shape[1:]
+    seg = prompt_segmentation(
+        PREDICTOR, points, labels, boxes, shape, multiple_box_prompts=False,
+        image_embeddings=IMAGE_EMBEDDINGS, i=z
+    )
+
+    # no prompts were given or prompts were invalid, skip segmentation
+    if seg is None:
+        print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
+        return
+
+    v.layers["current_object"].data[z] = seg
     v.layers["current_object"].refresh()
 
 
@@ -147,7 +159,7 @@ def segment_volume_widget(v: Viewer, iou_threshold: float = 0.8, projection: str
     with progress(total=shape[0]) as progress_bar:
 
         seg, slices, stop_lower, stop_upper = segment_slices_with_prompts(
-            PREDICTOR, v.layers["prompts"], IMAGE_EMBEDDINGS, shape, progress_bar=progress_bar,
+            PREDICTOR, v.layers["prompts"], v.layers["box_prompts"], IMAGE_EMBEDDINGS, shape, progress_bar=progress_bar,
         )
 
         # step 2: segment the rest of the volume based on smart prompting
@@ -205,6 +217,10 @@ def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_r
     )
     prompts.edge_color_mode = "cycle"
 
+    v.add_shapes(
+        face_color="transparent", edge_color="green", edge_width=4, name="box_prompts", ndim=3
+    )
+
     #
     # add the widgets
     #
@@ -241,8 +257,7 @@ def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_r
 
     @v.bind_key("Shift-C")
     def clear_prompts(v):
-        prompts.data = []
-        prompts.refresh()
+        clear_all_prompts(v)
 
     #
     # start the viewer

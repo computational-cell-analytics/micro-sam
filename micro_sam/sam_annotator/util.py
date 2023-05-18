@@ -4,10 +4,18 @@ from magicgui import magicgui
 from magicgui.widgets import ComboBox, Container
 from napari import Viewer
 
-from ..segment_from_prompts import segment_from_points
+from ..segment_from_prompts import segment_from_box, segment_from_box_and_points, segment_from_points
 
 # Green and Red
 LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
+
+
+def clear_all_prompts(v):
+    v.layers["prompts"].data = []
+    v.layers["prompts"].refresh()
+    if "box_prompts" in v.layers:
+        v.layers["box_prompts"].data = []
+        v.layers["box_prompts"].refresh()
 
 
 @magicgui(call_button="Commit [C]", layer={"choices": ["current_object", "auto_segmentation"]})
@@ -25,11 +33,7 @@ def commit_segmentation_widget(v: Viewer, layer: str = "current_object"):
     v.layers[layer].refresh()
 
     if layer == "current_object":
-        v.layers["prompts"].data = []
-        v.layers["prompts"].refresh()
-        if "box_prompts" in v.layers:
-            v.layers["box_prompts"].data = []
-            v.layers["box_prompts"].refresh()
+        clear_all_prompts(v)
 
 
 def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="label"):
@@ -59,7 +63,8 @@ def prompt_layer_to_points(prompt_layer, i=None, track_id=None):
 
     Arguments:
         prompt_layer: the point layer
-        i [int] - index for the data (required for 3d data)
+        i [int] - index for the data (required for 3d or timeseries data)
+        track_id [int] - id of the current track (required for tracking data)
     """
 
     points = prompt_layer.data
@@ -92,6 +97,50 @@ def prompt_layer_to_points(prompt_layer, i=None, track_id=None):
     return this_points, this_labels
 
 
+def prompt_layer_to_boxes(prompt_layer, i=None, track_id=None):
+    """Extract box prompts for SAM from shape layer.
+
+    Arguments:
+        prompt_layer: the point layer
+        i [int] - index for the data (required for 3d or timeseries data)
+        track_id [int] - id of the current track (required for tracking data)
+    """
+    shape_data = prompt_layer.data
+    shape_types = prompt_layer.shape_type
+    assert len(shape_data) == len(shape_types)
+
+    if i is None:
+        # select all boxes that are rectangles
+        boxes = [data for data, stype in zip(shape_data, shape_types) if stype == "rectangle"]
+    else:
+        # we are currently only supporting rectangle shapes.
+        # other shapes could be supported by providing them as rough mask
+        # (and also providing the corresponding bounding box)
+        # but for this we need to figure out the mask prompts for non-square shapes
+        non_rectangle = [stype != "rectangle" for stype in shape_types]
+        if any(non_rectangle):
+            print(f"You have provided {sum(non_rectangle)} shapes that are not rectangles.")
+            print("We currently do not support these as prompts and they will be ignored.")
+        boxes = [
+            data[:, 1:] for data, stype in zip(shape_data, shape_types)
+            if (stype == "rectangle" and (data[:, 0] == i).all())
+        ]
+
+    # TODO support for track_id
+    # if track_id is not None:
+    #     assert i is not None
+    #     track_ids = np.array(list(map(int, prompt_layer.properties["track_id"])))[mask]
+    #     track_id_mask = track_ids == track_id
+    #     this_labels, this_points = this_labels[track_id_mask], this_points[track_id_mask]
+    # assert len(this_points) == len(this_labels)
+
+    # map to correct box format
+    boxes = [
+        np.array([box[:, 0].min(), box[:, 1].min(), box[:, 0].max(), box[:, 1].max()]) for box in boxes
+    ]
+    return boxes
+
+
 def prompt_layer_to_state(prompt_layer, i):
     """Get the state of the track from the prompt layer.
     Only relevant for annotator_tracking.
@@ -116,16 +165,25 @@ def prompt_layer_to_state(prompt_layer, i):
         return "track"
 
 
-def segment_slices_with_prompts(predictor, prompt_layer, image_embeddings, shape, progress_bar=None, track_id=None):
+def segment_slices_with_prompts(
+    predictor, point_prompts, box_prompts, image_embeddings, shape, progress_bar=None, track_id=None
+):
+    """
+    """
+    assert len(shape) == 3
+    image_shape = shape[1:]
     seg = np.zeros(shape, dtype="uint32")
 
-    z_values = prompt_layer.data[:, 0]
+    z_values = point_prompts.data[:, 0]
+    z_values_boxes = np.concatenate([box[:, 0] for box in box_prompts.data])
+
+    # TODO add track id properties to boxes as well, filter z_values_boxes accordingly
     if track_id is not None:
-        track_ids = np.array(list(map(int, prompt_layer.properties["track_id"])))
+        track_ids = np.array(list(map(int, point_prompts.properties["track_id"])))
         assert len(track_ids) == len(z_values)
         z_values = z_values[track_ids == track_id]
 
-    slices = np.unique(z_values).astype("int")
+    slices = np.unique(np.concatenate([z_values, z_values_boxes])).astype("int")
     stop_lower, stop_upper = False, False
 
     def _update_progress():
@@ -133,10 +191,10 @@ def segment_slices_with_prompts(predictor, prompt_layer, image_embeddings, shape
             progress_bar.update(1)
 
     for i in slices:
-        prompts_i = prompt_layer_to_points(prompt_layer, i, track_id)
+        points_i = prompt_layer_to_points(point_prompts, i, track_id)
 
         # do we end the segmentation at the outer slices?
-        if prompts_i is None:
+        if points_i is None:
 
             if i == slices[0]:
                 stop_lower = True
@@ -149,12 +207,69 @@ def segment_slices_with_prompts(predictor, prompt_layer, image_embeddings, shape
             _update_progress()
             continue
 
-        points, labels = prompts_i
-        seg_i = segment_from_points(predictor, points, labels, image_embeddings=image_embeddings, i=i)
+        boxes = prompt_layer_to_boxes(box_prompts, i, track_id)
+        points, labels = points_i
+
+        seg_i = prompt_segmentation(
+            predictor, points, labels, boxes, image_shape, multiple_box_prompts=False,
+            image_embeddings=image_embeddings, i=i
+        )
+        if seg_i is None:
+            print(f"The prompts at slice or frame {i} are invalid and the segmentation was skipped.")
+            print("This will lead to a wrong segmentation across slices or frames.")
+            print(f"Please correct the prompts in {i} and rerun the segmentation.")
+            continue
+
         seg[i] = seg_i
         _update_progress()
 
     return seg, slices, stop_lower, stop_upper
+
+
+def prompt_segmentation(
+    predictor, points, labels, boxes, shape, multiple_box_prompts, image_embeddings=None, i=None
+):
+    """
+    """
+    assert len(points) == len(labels)
+    have_points = len(points) > 0
+    have_boxes = len(boxes) > 0
+
+    # no prompts were given, return None
+    if not have_points and not have_boxes:
+        return
+
+    # box and ppint prompts were given
+    elif have_points and have_boxes:
+        if len(boxes) > 1:
+            print("You have provided point prompts and more than one box prompt.")
+            print("This setting is currently not supported.")
+            print("When providing both points and prompts you can only segment one object at a time.")
+            return
+        seg = segment_from_box_and_points(
+            predictor, boxes[0], points, labels, image_embeddings=image_embeddings, i=i
+        ).squeeze()
+
+    # only point prompts were given
+    elif have_points and not have_boxes:
+        seg = segment_from_points(predictor, points, labels, image_embeddings=image_embeddings, i=i).squeeze()
+
+    # only box prompts were given
+    elif not have_points and have_boxes:
+        seg = np.zeros(shape, dtype="uint32")
+
+        if len(boxes) > 1 and not multiple_box_prompts:
+            print("You have provided more than one box annotation. This is not yet supported in the 3d annotator.")
+            print("You can only segment one object at a time in 3d.")
+            return
+
+        seg_id = 1
+        for box in boxes:
+            mask = segment_from_box(predictor, box, image_embeddings=image_embeddings, i=i).squeeze()
+            seg[mask] = seg_id
+            seg_id += 1
+
+    return seg
 
 
 def toggle_label(prompts):
