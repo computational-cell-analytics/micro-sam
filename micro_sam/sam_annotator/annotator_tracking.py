@@ -218,12 +218,9 @@ def track_objet_widget(
 ):
     shape = v.layers["raw"].data.shape
 
-    # choose mask projection for square images and bounding box projection otherwise
-    # (because mask projection does not work properly for non-square images yet)
-    if projection == "default":
-        projection_ = "mask" if shape[1] == shape[2] else "bounding_box"
-    else:
-        projection_ = projection
+    # we use the bounding box projection method as default which generally seems to work better for larger changes
+    # between frames (which is pretty tyipical for tracking compared to 3d segmentation)
+    projection_ = "bounding_box" if projection == "default" else projection
 
     with progress(total=shape[0]) as progress_bar:
         # step 1: segment all slices with prompts
