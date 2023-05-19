@@ -11,15 +11,17 @@ from scipy.ndimage import shift
 # from vigra.filters import eccentricityCenters
 
 from .. import util
-from ..segment_from_prompts import segment_from_mask, segment_from_points
+from ..segment_from_prompts import segment_from_mask
 from .util import (
-    create_prompt_menu, prompt_layer_to_points, prompt_layer_to_state,
+    create_prompt_menu, clear_all_prompts,
+    prompt_layer_to_boxes, prompt_layer_to_points,
+    prompt_layer_to_state, prompt_segmentation,
     segment_slices_with_prompts, toggle_label, LABEL_COLOR_CYCLE
 )
 from ..visualization import project_embeddings_for_visualization
 
-# Magenta and Cyan
-STATE_COLOR_CYCLE = ["#FF00FF", "#00FFFF"]
+# Cyan (track) and Magenta (division)
+STATE_COLOR_CYCLE = ["#00FFFF", "#FF00FF", ]
 
 
 #
@@ -56,7 +58,7 @@ def _shift_object(mask, motion_model):
 
 # TODO division classifier
 def _track_from_prompts(
-    prompt_layer, seg, predictor, slices, image_embeddings,
+    point_prompts, box_prompts, seg, predictor, slices, image_embeddings,
     stop_upper, threshold, projection,
     progress_bar=None, motion_smoothing=0.5,
 ):
@@ -99,7 +101,9 @@ def _track_from_prompts(
         if t in slices:
             seg_prev = None
             seg_t = seg[t]
-            track_state = prompt_layer_to_state(prompt_layer, t)
+            # currently using the box layer doesn't work for keeping track of the track state
+            # track_state = prompt_layers_to_state(point_prompts, box_prompts, t)
+            track_state = prompt_layer_to_state(point_prompts, t)
 
         # otherwise project the mask (under the motion model) and segment the next slice from the mask
         else:
@@ -180,9 +184,24 @@ def segment_frame_wigdet(v: Viewer):
     position = v.cursor.position
     t = int(position[0])
 
-    this_prompts = prompt_layer_to_points(v.layers["prompts"], t, track_id=CURRENT_TRACK_ID)
-    points, labels = this_prompts
-    seg = segment_from_points(PREDICTOR, points, labels, image_embeddings=IMAGE_EMBEDDINGS, i=t)
+    point_prompts = prompt_layer_to_points(v.layers["prompts"], t, track_id=CURRENT_TRACK_ID)
+    # this is a stop prompt, we do nothing
+    if not point_prompts:
+        return
+
+    boxes = prompt_layer_to_boxes(v.layers["box_prompts"], t, track_id=CURRENT_TRACK_ID)
+    points, labels = point_prompts
+
+    shape = v.layers["current_track"].data.shape[1:]
+    seg = prompt_segmentation(
+        PREDICTOR, points, labels, boxes, shape, multiple_box_prompts=False,
+        image_embeddings=IMAGE_EMBEDDINGS, i=t
+    )
+
+    # no prompts were given or prompts were invalid, skip segmentation
+    if seg is None:
+        print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
+        return
 
     # clear the old segmentation for this track_id
     old_mask = v.layers["current_track"].data[t] == CURRENT_TRACK_ID
@@ -209,14 +228,16 @@ def track_objet_widget(
     with progress(total=shape[0]) as progress_bar:
         # step 1: segment all slices with prompts
         seg, slices, _, stop_upper = segment_slices_with_prompts(
-            PREDICTOR, v.layers["prompts"], IMAGE_EMBEDDINGS, shape,
+            PREDICTOR, v.layers["prompts"], v.layers["box_prompts"], IMAGE_EMBEDDINGS, shape,
             progress_bar=progress_bar, track_id=CURRENT_TRACK_ID
         )
 
         # step 2: track the object starting from the lowest annotated slice
         seg, has_division = _track_from_prompts(
-            v.layers["prompts"], seg, PREDICTOR, slices, IMAGE_EMBEDDINGS, stop_upper, threshold=iou_threshold,
-            projection=projection_, progress_bar=progress_bar, motion_smoothing=motion_smoothing,
+            v.layers["prompts"], v.layers["box_prompts"], seg,
+            PREDICTOR, slices, IMAGE_EMBEDDINGS, stop_upper,
+            threshold=iou_threshold, projection=projection_,
+            progress_bar=progress_bar, motion_smoothing=motion_smoothing,
         )
 
     # if a division has occurred and it's the first time it occurred for this track
@@ -231,7 +252,7 @@ def track_objet_widget(
     v.layers["current_track"].refresh()
 
 
-def create_tracking_menu(points_layer, states, track_ids):
+def create_tracking_menu(points_layer, box_layer, states, track_ids):
     state_menu = ComboBox(label="track_state", choices=states)
     track_id_menu = ComboBox(label="track_id", choices=list(map(str, track_ids)))
     tracking_widget = Container(widgets=[state_menu, track_id_menu])
@@ -245,11 +266,25 @@ def create_tracking_menu(points_layer, states, track_ids):
         global CURRENT_TRACK_ID
         new_id = str(points_layer.current_properties["track_id"][0])
         if new_id != track_id_menu.value:
-            state_menu.value = new_id
+            track_id_menu.value = new_id
+            CURRENT_TRACK_ID = int(new_id)
+
+    # def update_state_boxes(event):
+    #     new_state = str(box_layer.current_properties["state"][0])
+    #     if new_state != state_menu.value:
+    #         state_menu.value = new_state
+
+    def update_track_id_boxes(event):
+        global CURRENT_TRACK_ID
+        new_id = str(box_layer.current_properties["track_id"][0])
+        if new_id != track_id_menu.value:
+            track_id_menu.value = new_id
             CURRENT_TRACK_ID = int(new_id)
 
     points_layer.events.current_properties.connect(update_state)
     points_layer.events.current_properties.connect(update_track_id)
+    # box_layer.events.current_properties.connect(update_state_boxes)
+    box_layer.events.current_properties.connect(update_track_id_boxes)
 
     def state_changed(new_state):
         current_properties = points_layer.current_properties
@@ -264,8 +299,23 @@ def create_tracking_menu(points_layer, states, track_ids):
         points_layer.current_properties = current_properties
         CURRENT_TRACK_ID = int(new_track_id)
 
+    # def state_changed_boxes(new_state):
+    #     current_properties = box_layer.current_properties
+    #     current_properties["state"] = np.array([new_state])
+    #     box_layer.current_properties = current_properties
+    #     box_layer.refresh_colors()
+
+    def track_id_changed_boxes(new_track_id):
+        global CURRENT_TRACK_ID
+        current_properties = box_layer.current_properties
+        current_properties["track_id"] = np.array([new_track_id])
+        box_layer.current_properties = current_properties
+        CURRENT_TRACK_ID = int(new_track_id)
+
     state_menu.changed.connect(state_changed)
     track_id_menu.changed.connect(track_id_changed)
+    # state_menu.changed.connect(state_changed_boxes)
+    track_id_menu.changed.connect(track_id_changed_boxes)
 
     state_menu.set_choice("track")
     return tracking_widget
@@ -295,8 +345,7 @@ def commit_tracking_widget(v: Viewer, layer: str = "current_track"):
     v.layers[layer].data = np.zeros(shape, dtype="uint32")
     v.layers[layer].refresh()
 
-    v.layers["prompts"].data = []
-    v.layers["prompts"].refresh()
+    clear_all_prompts(v)
 
 
 def annotator_tracking(raw, embedding_path=None, show_embeddings=False, tracking_result=None, model_type="vit_h"):
@@ -333,7 +382,7 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False, tracking
     # add the widgets
     #
     labels = ["positive", "negative"]
-    state_labels = ["division", "track"]
+    state_labels = ["track", "division"]
     prompts = v.add_points(
         data=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],  # FIXME workaround
         name="prompts",
@@ -354,6 +403,24 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False, tracking
     prompts.edge_color_mode = "cycle"
     prompts.face_color_mode = "cycle"
 
+    # using the box layer to set divisions currently doesn't work
+    # (and setting new track ids also doesn't work, but keeping track of them in the properties is working)
+    box_prompts = v.add_shapes(
+        data=[
+            np.array([[0, 0, 0], [0, 0, 10], [0, 10, 0], [0, 10, 10]]),
+            np.array([[0, 0, 0], [0, 0, 11], [0, 11, 0], [0, 11, 11]]),
+        ],  # FIXME workaround
+        shape_type="rectangle",  # FIXME workaround
+        edge_width=4, ndim=3,
+        face_color="transparent",
+        name="box_prompts",
+        edge_color="green",
+        properties={"track_id": ["1", "1"]},
+        # properties={"track_id": ["1", "1"], "state": state_labels},
+        # edge_color_cycle=STATE_COLOR_CYCLE,
+    )
+    # box_prompts.edge_color_mode = "cycle"
+
     #
     # add the widgets
     #
@@ -363,7 +430,7 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False, tracking
     prompt_widget = create_prompt_menu(prompts, labels)
     v.window.add_dock_widget(prompt_widget)
 
-    TRACKING_WIDGET = create_tracking_menu(prompts, state_labels, list(LINEAGE.keys()))
+    TRACKING_WIDGET = create_tracking_menu(prompts, box_prompts, state_labels, list(LINEAGE.keys()))
     v.window.add_dock_widget(TRACKING_WIDGET)
 
     v.window.add_dock_widget(segment_frame_wigdet)
@@ -392,8 +459,7 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False, tracking
 
     @v.bind_key("Shift-C")
     def clear_prompts(v):
-        prompts.data = []
-        prompts.refresh()
+        clear_all_prompts(v)
 
     #
     # start the viewer

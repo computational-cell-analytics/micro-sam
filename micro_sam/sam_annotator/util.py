@@ -121,18 +121,19 @@ def prompt_layer_to_boxes(prompt_layer, i=None, track_id=None):
         if any(non_rectangle):
             print(f"You have provided {sum(non_rectangle)} shapes that are not rectangles.")
             print("We currently do not support these as prompts and they will be ignored.")
-        boxes = [
-            data[:, 1:] for data, stype in zip(shape_data, shape_types)
-            if (stype == "rectangle" and (data[:, 0] == i).all())
-        ]
 
-    # TODO support for track_id
-    # if track_id is not None:
-    #     assert i is not None
-    #     track_ids = np.array(list(map(int, prompt_layer.properties["track_id"])))[mask]
-    #     track_id_mask = track_ids == track_id
-    #     this_labels, this_points = this_labels[track_id_mask], this_points[track_id_mask]
-    # assert len(this_points) == len(this_labels)
+        if track_id is None:
+            boxes = [
+                data[:, 1:] for data, stype in zip(shape_data, shape_types)
+                if (stype == "rectangle" and (data[:, 0] == i).all())
+            ]
+        else:
+            track_ids = np.array(list(map(int, prompt_layer.properties["track_id"])))
+            assert len(track_ids) == len(shape_data)
+            boxes = [
+                data[:, 1:] for data, stype, this_track_id in zip(shape_data, shape_types, track_ids)
+                if (stype == "rectangle" and (data[:, 0] == i).all() and this_track_id == track_id)
+            ]
 
     # map to correct box format
     boxes = [
@@ -147,7 +148,7 @@ def prompt_layer_to_state(prompt_layer, i):
 
     Arguments:
         prompt_layer: the point layer
-        i [int] - index for the data (required for 3d data)
+        i [int] - frame of the data
     """
     state = prompt_layer.properties["state"]
 
@@ -157,6 +158,39 @@ def prompt_layer_to_state(prompt_layer, i):
     this_points = points[mask][:, 1:]
     this_state = state[mask]
     assert len(this_points) == len(this_state)
+
+    # we set the state to 'division' if at least one point in this frame has a division label
+    if any(st == "division" for st in this_state):
+        return "division"
+    else:
+        return "track"
+
+
+def prompt_layers_to_state(point_layer, box_layer, i):
+    """Get the state of the track from the point and box prompt layer.
+    Only relevant for annotator_tracking.
+
+    Arguments:
+        point_layer: the point layer
+        box_layer: the box layer
+        i [int] - frame of the data
+    """
+    state = point_layer.properties["state"]
+
+    points = point_layer.data
+    assert points.shape[1] == 3, f"{points.shape}"
+    mask = points[:, 0] == i
+    if mask.sum() > 0:
+        this_state = state[mask].tolist()
+    else:
+        this_state = []
+
+    box_states = box_layer.properties["state"]
+    this_box_states = [
+        state for box, state in zip(box_layer.data, box_states)
+        if (box[:, 0] == i).all()
+    ]
+    this_state.extend(this_box_states)
 
     # we set the state to 'division' if at least one point in this frame has a division label
     if any(st == "division" for st in this_state):
@@ -175,13 +209,17 @@ def segment_slices_with_prompts(
     seg = np.zeros(shape, dtype="uint32")
 
     z_values = point_prompts.data[:, 0]
-    z_values_boxes = np.concatenate([box[:, 0] for box in box_prompts.data])
+    z_values_boxes = np.concatenate([box[:1, 0] for box in box_prompts.data]) if box_prompts.data else\
+        np.zeros(0, dtype="int")
 
-    # TODO add track id properties to boxes as well, filter z_values_boxes accordingly
     if track_id is not None:
-        track_ids = np.array(list(map(int, point_prompts.properties["track_id"])))
-        assert len(track_ids) == len(z_values)
-        z_values = z_values[track_ids == track_id]
+        track_ids_points = np.array(list(map(int, point_prompts.properties["track_id"])))
+        assert len(track_ids_points) == len(z_values)
+        z_values = z_values[track_ids_points == track_id]
+
+        track_ids_boxes = np.array(list(map(int, box_prompts.properties["track_id"])))
+        assert len(track_ids_boxes) == len(z_values_boxes), f"{len(track_ids_boxes)}, {len(z_values_boxes)}"
+        z_values_boxes = z_values_boxes[track_ids_boxes == track_id]
 
     slices = np.unique(np.concatenate([z_values, z_values_boxes])).astype("int")
     stop_lower, stop_upper = False, False
