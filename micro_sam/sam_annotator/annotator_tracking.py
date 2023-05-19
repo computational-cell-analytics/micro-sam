@@ -142,7 +142,7 @@ def _track_from_prompts(
             break
 
         # stop if we are at the last slce
-        if t == seg.shape[0] - 1:
+        if t == seg.shape[0]:
             break
 
         # stop if we have a division
