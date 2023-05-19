@@ -130,3 +130,22 @@ def segment_from_box(
         return mask, scores, logits
     else:
         return mask
+
+
+def segment_from_box_and_points(
+    predictor, box, points, labels,
+    image_embeddings=None, i=None, original_size=None,
+    multimask_output=False, return_all=False,
+):
+    if image_embeddings is not None:
+        util.set_precomputed(predictor, image_embeddings, i)
+    mask, scores, logits = predictor.predict(
+        point_coords=points[:, ::-1],  # SAM has reversed XY conventions
+        point_labels=labels,
+        box=_process_box(box, original_size),
+        multimask_output=multimask_output
+    )
+    if return_all:
+        return mask, scores, logits
+    else:
+        return mask

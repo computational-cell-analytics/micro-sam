@@ -7,17 +7,27 @@ from napari import Viewer
 from .. import util
 from .. import segment_instances
 from ..visualization import project_embeddings_for_visualization
-from ..segment_from_prompts import segment_from_points
 from .util import (
-    commit_segmentation_widget, create_prompt_menu, prompt_layer_to_points, toggle_label, LABEL_COLOR_CYCLE
+    clear_all_prompts, commit_segmentation_widget, create_prompt_menu,
+    prompt_layer_to_boxes, prompt_layer_to_points, prompt_segmentation, toggle_label, LABEL_COLOR_CYCLE
 )
 
 
 @magicgui(call_button="Segment Object [S]")
 def segment_wigdet(v: Viewer):
+    # get the current box and point prompts
+    boxes = prompt_layer_to_boxes(v.layers["box_prompts"])
     points, labels = prompt_layer_to_points(v.layers["prompts"])
-    seg = segment_from_points(PREDICTOR, points, labels)
-    v.layers["current_object"].data = seg.squeeze()
+
+    shape = v.layers["current_object"].data.shape
+    seg = prompt_segmentation(PREDICTOR, points, labels, boxes, shape, multiple_box_prompts=True)
+
+    # no prompts were given or prompts were invalid, skip segmentation
+    if seg is None:
+        print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
+        return
+
+    v.layers["current_object"].data = seg
     v.layers["current_object"].refresh()
 
 
@@ -85,6 +95,10 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_r
     )
     prompts.edge_color_mode = "cycle"
 
+    v.add_shapes(
+        face_color="transparent", edge_color="green", edge_width=4, name="box_prompts"
+    )
+
     #
     # add the widgets
     #
@@ -116,8 +130,7 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_r
 
     @v.bind_key("Shift-C")
     def clear_prompts(v):
-        prompts.data = []
-        prompts.refresh()
+        clear_all_prompts(v)
 
     #
     # start the viewer
