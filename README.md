@@ -17,6 +17,11 @@ Once the functionality has matured we plan to release the interactive annotation
 
 If you run into any problems or have questions please open an issue or reach out via [image.sc](https://forum.image.sc/) using the tag `micro-sam` and tagging @constantinpape.
 
+**New in version 0.02**
+
+- We have added support for bounding box prompts (see the gif below), which provide better segmentation results than points in many cases.
+- Interactive tracking now uses a better heuristic to propagate masks across time, leading to better automatic tracking results.
+- And have fixed several small bugs.
 
 ## Functionality overview
 
@@ -80,7 +85,9 @@ pip install -e .
 
 After installing the `micro_sam` python application the three interactive annotation tools can be started from the command line or from a python script (see details below).
 They are built with napari to implement the viewer and user interaction. If you are not familiar with napari yet, [start here](https://napari.org/stable/tutorials/fundamentals/quick_start.html).
-To use the apps the functionality of [napari point layers](https://napari.org/stable/howtos/layers/points.html) and [napari labels layers](https://napari.org/stable/howtos/layers/labels.html) is of particular importance.
+To use the apps the functionality of [napari point layers](https://napari.org/stable/howtos/layers/points.html), [napari shape layers](https://napari.org/stable/howtos/layers/shapes.html) and [napari labels layers](https://napari.org/stable/howtos/layers/labels.html) is of particular importance.
+
+**Note:** the screenshots and tutorials do not show how to use bounding boxes for prompts yet. You can use the `box_prompts` layer for them in all three tools, and they can be used as a replacement or in combination with the point prompts.
 
 ### 2D Segmentation
 
@@ -139,7 +146,7 @@ The most important parts of the user interface are listed below. Most of these e
 5. The tracking menu. Press `Track Object` (or `v`) to track the current object across time.
 6. The menu for committing the current tracking result.
 
-TODO link to video tutorial
+Check out [this video](https://youtu.be/PBPW0rDOn9w) for an overview of the interactive tracking functionality.
 
 ### Tips & Tricks
 
@@ -152,6 +159,7 @@ TODO link to video tutorial
 
 - SegmentAnything does not work well for very small or fine-graind objects (e.g. filaments).
 - For the automatic segmentation functionality we currently rely on the automatic mask generation provided by SegmentAnything. It is slow and often misses objects in microscopy images. For now we only offer this functionality in the 2d segmentation app; we are working on improving it and extending it to 3d segmentation and tracking.
+- Prompt bounding boxes do not provide the full functionality for tracking yet (they cannot be used for divisions or for starting new tracks). See also https://github.com/computational-cell-analytics/micro-sam/issues/23.
 
 ### Using the micro_sam library
 
@@ -173,3 +181,13 @@ TODO: related projects
 If you are using this repository in your research please cite
 - [SegmentAnything](https://arxiv.org/abs/2304.02643)
 - and our repository on [zenodo](https://doi.org/10.5281/zenodo.7919746) (we are working on a publication)
+
+
+## Related Projects
+
+There are two other napari plugins build around segment anything:
+- https://github.com/MIC-DKFZ/napari-sam (2d and 3d support)
+- https://github.com/JoOkuma/napari-segment-anything (only 2d support)
+
+Compared to these we support more applications (2d, 3d and tracking), and aim to further extend and specialize SegmentAnything for microscopy data.
+[WebKnossos](https://webknossos.org/) also offers integration of SegmentAnything for interactive segmentation.
