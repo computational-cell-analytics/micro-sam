@@ -23,6 +23,9 @@ If you run into any problems or have questions please open an issue or reach out
 - Interactive tracking now uses a better heuristic to propagate masks across time, leading to better automatic tracking results.
 - And have fixed several small bugs.
 
+![box-prompts](https://github.com/computational-cell-analytics/micro-sam/assets/4263537/d04cb158-9f5b-4460-98cd-023c4f19cccd)
+
+
 ## Functionality overview
 
 We implement applications for fast interactive 2d and 3d segmentation as well as tracking.
