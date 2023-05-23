@@ -1,14 +1,17 @@
-import micro_sam.util as util
 import napari
-
 from elf.io import open_file
 from micro_sam.segment_instances import segment_instances_from_embeddings, segment_instances_sam
+from micro_sam.util import get_sam_model, precompute_image_embeddings
 from micro_sam.visualization import compute_pca
 
+INPUT_PATH = "../examples/data/Lucchi++/Test_In"
+EMBEDDINGS_PATH = "../examples/embeddings/embeddings-mito2d.zarr"
+TIMESERIES_PATH = "../examples/data/DIC-C2DH-HeLa/train/01"
+EMBEDDINGS_TRACKING_PATH = "../examples/embeddings/embeddings-ctc.zarr"
 
-def mito_segmentation():
-    input_path = "../examples/data/Lucchi++/Test_In"
-    with open_file(input_path) as f:
+def mito_segmentation() -> None:
+    """Performs mito segmentation on the input image."""
+    with open_file(INPUT_PATH) as f:
         raw = f["*.png"][-1, :768, :768]
 
     predictor, sam = util.get_sam_model(return_sam=True)
@@ -16,7 +19,7 @@ def mito_segmentation():
     print("Run SAM prediction ...")
     seg_sam = segment_instances_sam(sam, raw)
 
-    image_embeddings = util.precompute_image_embeddings(predictor, raw, "../examples/embeddings/embeddings-mito2d.zarr")
+    image_embeddings = util.precompute_image_embeddings(predictor, raw, EMBEDDINGS_PATH)
     embedding_pca = compute_pca(image_embeddings["features"])
 
     print("Run prediction from embeddings ...")
@@ -33,9 +36,9 @@ def mito_segmentation():
     napari.run()
 
 
-def cell_segmentation():
-    path = "../examples/data/DIC-C2DH-HeLa/train/01"
-    with open_file(path, mode="r") as f:
+def cell_segmentation() -> None:
+    """Performs cell segmentation on the input timeseries."""
+    with open_file(TIMESERIES_PATH, mode="r") as f:
         timeseries = f["*.tif"][:50]
 
     frame = 11
@@ -44,8 +47,8 @@ def cell_segmentation():
 
     print("Run prediction from embeddings ...")
     image_embeddings = util.precompute_image_embeddings(
-        predictor, timeseries, "../examples/embeddings/embeddings-ctc.zarr"
-    )
+        predictor, timeseries, EMBEDDINGS_TRACKING_PATH)
+    
     embedding_pca = compute_pca(image_embeddings["features"][frame])
 
     seg, initial_seg = segment_instances_from_embeddings(
