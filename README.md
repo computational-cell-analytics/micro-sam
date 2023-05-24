@@ -74,7 +74,7 @@ pip install -e .
 
 **Troubleshooting:**
 
-- On some systems `conda` is extremely slow and cannot resolve the environment in the step `conda env create ...`. You can use `mamba` instead, which is a faster re-implementation of `conda`. It can resolve the environment in less than a minute on any system we tried. Check out [yhis link](https://mamba.readthedocs.io/en/latest/installation.html) for how to install `mamba`. Once you have installed it, run `mamba env create -f <ENV_FILE>.yaml` to create the env.
+- On some systems `conda` is extremely slow and cannot resolve the environment in the step `conda env create ...`. You can use `mamba` instead, which is a faster re-implementation of `conda`. It can resolve the environment in less than a minute on any system we tried. Check out [this link](https://mamba.readthedocs.io/en/latest/installation.html) for how to install `mamba`. Once you have installed it, run `mamba env create -f <ENV_FILE>.yaml` to create the env.
 - Installation on MAC with a M1 or M2 processor:
     - The pytorch installation from `environment_cpu.yaml` does not work with a MAC that has an M1 or M2 processor. Instead you need to:
         - Create a clean environment: `conda create -c conda-forge python pip -n sam`
@@ -161,7 +161,7 @@ Check out [this video](https://youtu.be/PBPW0rDOn9w) for an overview of the inte
 ### Known limitations
 
 - SegmentAnything does not work well for very small or fine-graind objects (e.g. filaments).
-- For the automatic segmentation functionality we currently rely on the automatic mask generation provided by SegmentAnything. It is slow and often misses objects in microscopy images. For now we only offer this functionality in the 2d segmentation app; we are working on improving it and extending it to 3d segmentation and tracking.
+- For the automatic segmentation functionality we currently rely on the automatic mask generation provided by SegmentAnything. It is slow and often misses objects in microscopy images. For now, we only offer this functionality in the 2d segmentation app; we are working on improving it and extending it to 3d segmentation and tracking.
 - Prompt bounding boxes do not provide the full functionality for tracking yet (they cannot be used for divisions or for starting new tracks). See also https://github.com/computational-cell-analytics/micro-sam/issues/23.
 
 ### Using the micro_sam library
