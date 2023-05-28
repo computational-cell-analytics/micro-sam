@@ -22,6 +22,21 @@ class PointAndBoxPromptGenerator:
             center_coordinates: Coordinates for the centroid seed of the cell
             bbox_coordinates: Bounding box coordinates around the cell
         """
+        print(self.n_positive_points, self.n_negative_points)
+        # pass an integer to allow deterministic prompting or list to randomise it
+        if isinstance(self.n_positive_points, int):
+            _n_positive_points = self.n_positive_points
+        else:
+            _n_positive_points = np.random.randint(self.n_positive_points[0], self.n_positive_points[1] + 1)
+
+        if isinstance(self.n_negative_points, int):
+            _n_negative_points = self.n_negative_points
+        else:
+            _n_negative_points = np.random.randint(self.n_negative_points[0], self.n_negative_points[1] + 1)
+
+        print(_n_positive_points, _n_negative_points)
+        breakpoint()
+
         coord_list = []
         label_list = []
 
@@ -31,11 +46,13 @@ class PointAndBoxPromptGenerator:
 
         if self.get_box_prompts:
             bbox_list = [bbox_coordinates]
+        else:
+            bbox_list = None
 
         object_mask = gt == gt_id
 
         # getting the additional positive points by randomly sampling points from this mask
-        n_positive_remaining = self.n_positive_points - 1
+        n_positive_remaining = _n_positive_points - 1
         if n_positive_remaining > 0:
             # all coordinates of our current object
             object_coordinates = np.where(object_mask)
@@ -65,7 +82,7 @@ class PointAndBoxPromptGenerator:
             background_mask.astype(np.float32) - dilated_object.astype(np.float32)
         )  # casting booleans to do subtraction
 
-        n_negative_remaining = self.n_negative_points
+        n_negative_remaining = _n_negative_points
         if n_negative_remaining > 0:
             # all coordinates of our current object
             background_coordinates = np.where(background_mask)
