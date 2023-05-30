@@ -21,6 +21,7 @@ def clear_all_prompts(v):
 @magicgui(call_button="Commit [C]", layer={"choices": ["current_object", "auto_segmentation"]})
 def commit_segmentation_widget(v: Viewer, layer: str = "current_object"):
     seg = v.layers[layer].data
+    shape = seg.shape
 
     id_offset = int(v.layers["committed_objects"].data.max())
     mask = seg != 0
@@ -28,7 +29,6 @@ def commit_segmentation_widget(v: Viewer, layer: str = "current_object"):
     v.layers["committed_objects"].data[mask] = (seg[mask] + id_offset)
     v.layers["committed_objects"].refresh()
 
-    shape = v.layers["raw"].data.shape
     v.layers[layer].data = np.zeros(shape, dtype="uint32")
     v.layers[layer].refresh()
 
