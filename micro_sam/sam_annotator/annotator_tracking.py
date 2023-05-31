@@ -368,6 +368,7 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False, tracking
     else:
         assert tracking_result.shape == raw.shape
         v.add_labels(data=tracking_result, name="committed_tracks")
+    v.layers["committed_tracks"].new_colormap()  # randomize colors so it is easy to see when object committed
     v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="current_track")
 
     # show the PCA of the image embeddings

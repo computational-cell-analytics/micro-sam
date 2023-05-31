@@ -197,6 +197,7 @@ def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_r
     else:
         assert segmentation_result.shape == raw.shape
         v.add_labels(data=segmentation_result, name="committed_objects")
+    v.layers["committed_objects"].new_colormap()  # randomize colors so it is easy to see when object committed
     v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="current_object")
 
     # show the PCA of the image embeddings

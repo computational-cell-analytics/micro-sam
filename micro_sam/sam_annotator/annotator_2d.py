@@ -73,6 +73,7 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_r
         v.add_labels(data=np.zeros(shape, dtype="uint32"), name="committed_objects")
     else:
         v.add_labels(segmentation_result, name="committed_objects")
+    v.layers["committed_objects"].new_colormap()  # randomize colors so it is easy to see when object committed
     v.add_labels(data=np.zeros(shape, dtype="uint32"), name="current_object")
 
     # show the PCA of the image embeddings
