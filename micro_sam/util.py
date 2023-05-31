@@ -9,6 +9,7 @@ import vigra
 import zarr
 
 from elf.io import open_file
+from nifty.tools import blocking
 from skimage.measure import regionprops
 
 from segment_anything import sam_model_registry, SamPredictor
@@ -121,6 +122,33 @@ def _to_image(input_):
     return image
 
 
+def _precompute_tiled_2d(predictor, input_, tile_shape, halo, f, verbose=True):
+    tiling = blocking([0, 0], input_.shape, tile_shape)
+    n_tiles = tiling.numberOfBlocks
+
+    features = f.create_group("features")
+    features.attrs["tile_shape"] = tile_shape
+    features.attrs["halo"] = halo
+
+    for tile_id in tqdm(range(n_tiles), total=n_tiles, desc="Predict image embeddings for tiles", disable=not verbose):
+        tile = tiling.getBlockWithHalo(tile_id, list(halo))
+        outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end))
+
+        tile_input = _to_image(input_[outer_tile])
+        predictor.set_image(tile_input)
+        tile_features = predictor.get_image_embedding()
+        original_size = predictor.original_size
+        input_size = predictor.input_size
+
+        ds = features.create_dataset(
+            str(tile_id), data=tile_features.cpu().numpy(), compression="gzip", chunks=tile_features.shape
+        )
+        ds.attrs["original_size"] = original_size
+        ds.attrs["input_size"] = input_size
+
+    return features
+
+
 def _compute_2d(input_, predictor):
     image = _to_image(input_)
     predictor.set_image(image)
@@ -133,12 +161,15 @@ def _compute_2d(input_, predictor):
     return image_embeddings
 
 
-def _precompute_2d(input_, predictor, save_path):
+def _precompute_2d(input_, predictor, save_path, tile_shape, halo):
     f = zarr.open(save_path, "a")
 
     if "input_size" in f.attrs:
-        features = f["features"][:]
+        features = f["features"][:] if tile_shape is None else f["features"]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
+    elif tile_shape is not None:
+        features = _precompute_tiled_2d(predictor, input_, tile_shape, halo, f)
+        original_size, input_size = None, None
     else:
         image = _to_image(input_)
         predictor.set_image(image)
@@ -182,7 +213,7 @@ def _compute_3d(input_, predictor):
     return image_embeddings
 
 
-def _precompute_3d(input_, predictor, save_path, lazy_loading):
+def _precompute_3d(input_, predictor, save_path, lazy_loading, tile_shape=None, halo=None):
     f = zarr.open(save_path, "a")
 
     if "input_size" in f.attrs:
@@ -223,7 +254,9 @@ def _precompute_3d(input_, predictor, save_path, lazy_loading):
     return image_embeddings
 
 
-def precompute_image_embeddings(predictor, input_, save_path=None, lazy_loading=False, ndim=None):
+def precompute_image_embeddings(
+    predictor, input_, save_path=None, lazy_loading=False, ndim=None, tile_shape=None, halo=None
+):
     """Compute the image embeddings (output of the encoder) for the input.
 
     If save_path is given the embeddings will be loaded/saved in a zarr container.
@@ -236,16 +269,21 @@ def precompute_image_embeddings(predictor, input_, save_path=None, lazy_loading=
             object to load them on demand when required. This only has an effect if 'save_path'
             is given and if the input is 3D. (default: False)
         ndim [int] - the dimensionality of the data. If not given will be deduced from the input data. (default: None)
+        tile_shape [tuple] - shape of tiles for tiled prediction.
+            By default prediction is run without tiling. (default: None)
+        halo [tuple] - additional overlap of the tiles for tiled prediction. (default: None)
     """
-
     ndim = input_.ndim if ndim is None else ndim
+    if tile_shape is None:
+        assert save_path is None, "Tiled prediction is only supported when the embeddings are saved to file."
+
     if ndim == 2:
         image_embeddings = _compute_2d(input_, predictor) if save_path is None else\
-            _precompute_2d(input_, predictor, save_path)
+            _precompute_2d(input_, predictor, save_path, tile_shape, halo)
 
     elif ndim == 3:
         image_embeddings = _compute_3d(input_, predictor) if save_path is None else\
-            _precompute_3d(input_, predictor, save_path, lazy_loading)
+            _precompute_3d(input_, predictor, save_path, lazy_loading, tile_shape, halo)
 
     else:
         raise ValueError(f"Invalid dimesionality {input_.ndim}, expect 2 or 3 dim data.")
