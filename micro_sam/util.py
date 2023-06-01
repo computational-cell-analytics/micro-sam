@@ -278,7 +278,7 @@ def precompute_image_embeddings(
         halo [tuple] - additional overlap of the tiles for tiled prediction. (default: None)
     """
     ndim = input_.ndim if ndim is None else ndim
-    if tile_shape is None:
+    if tile_shape is not None:
         assert save_path is None, "Tiled prediction is only supported when the embeddings are saved to file."
 
     if ndim == 2:
