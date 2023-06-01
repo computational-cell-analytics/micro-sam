@@ -38,7 +38,7 @@ def segment_wigdet(v: Viewer):
     v.layers["current_object"].refresh()
 
 
-# TODO this needs to be adapted if we ran tiled prediction
+# FIXME this needs to be updated for tiled prediction
 # TODO expose more parameters
 @magicgui(call_button="Segment All Objects", method={"choices": ["default", "sam", "embeddings"]})
 def autosegment_widget(v: Viewer, method: str = "default", with_background: bool = True):
@@ -201,6 +201,12 @@ def main():
     parser.add_argument(
         "--model_type", default="vit_h", help="The segment anything model that will be used, one of vit_h,l,b."
     )
+    parser.add_argument(
+        "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
+    )
+    parser.add_argument(
+        "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
+    )
 
     args = parser.parse_args()
     raw = util.load_image_data(args.input, ndim=2, key=args.key)
@@ -216,5 +222,5 @@ def main():
     annotator_2d(
         raw, embedding_path=args.embedding_path,
         show_embeddings=args.show_embeddings, segmentation_result=segmentation_result,
-        model_type=args.model_type,
+        model_type=args.model_type, tile_shape=args.tile_shape, halo=args.halo,
     )
