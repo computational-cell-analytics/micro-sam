@@ -138,6 +138,7 @@ def _precompute_tiled_2d(predictor, input_, tile_shape, halo, f, verbose=True):
         tile = tiling.getBlockWithHalo(tile_id, list(halo))
         outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end))
 
+        predictor.reset_image()
         tile_input = _to_image(input_[outer_tile])
         predictor.set_image(tile_input)
         tile_features = predictor.get_image_embedding()
@@ -147,6 +148,54 @@ def _precompute_tiled_2d(predictor, input_, tile_shape, halo, f, verbose=True):
         ds = features.create_dataset(
             str(tile_id), data=tile_features.cpu().numpy(), compression="gzip", chunks=tile_features.shape
         )
+        ds.attrs["original_size"] = original_size
+        ds.attrs["input_size"] = input_size
+
+    return features
+
+
+def _precompute_tiled_3d(predictor, input_, tile_shape, halo, f, verbose=True):
+    assert input_.ndim == 3
+
+    shape = input_.shape[1:]
+    tiling = blocking([0, 0], shape, tile_shape)
+    n_tiles = tiling.numberOfBlocks
+
+    f.attrs["input_size"] = None
+    f.attrs["original_size"] = None
+
+    features = f.require_group("features")
+    features.attrs["shape"] = shape
+    features.attrs["tile_shape"] = tile_shape
+    features.attrs["halo"] = halo
+
+    n_slices = input_.shape[0]
+    pbar = tqdm(total=n_tiles * n_slices, desc="Predict image embeddings for tiles and slices", disable=not verbose)
+
+    for tile_id in range(n_tiles):
+        tile = tiling.getBlockWithHalo(tile_id, list(halo))
+        outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end))
+
+        ds = None
+        for z in range(n_slices):
+            predictor.reset_image()
+            tile_input = _to_image(input_[z][outer_tile])
+            predictor.set_image(tile_input)
+            tile_features = predictor.get_image_embedding()
+
+            if ds is None:
+                shape = (input_.shape[0],) + tile_features.shape
+                chunks = (1,) + tile_features.shape
+                ds = features.create_dataset(
+                    str(tile_id), shape=shape, dtype="float32", compression="gzip", chunks=chunks
+                )
+
+            ds[z] = tile_features.cpu().numpy()
+            pbar.update(1)
+
+        original_size = predictor.original_size
+        input_size = predictor.input_size
+
         ds.attrs["original_size"] = original_size
         ds.attrs["input_size"] = input_size
 
@@ -171,9 +220,11 @@ def _precompute_2d(input_, predictor, save_path, tile_shape, halo):
     if "input_size" in f.attrs:
         features = f["features"][:] if tile_shape is None else f["features"]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
+
     elif tile_shape is not None:
         features = _precompute_tiled_2d(predictor, input_, tile_shape, halo, f)
         original_size, input_size = None, None
+
     else:
         image = _to_image(input_)
         predictor.set_image(image)
@@ -223,6 +274,10 @@ def _precompute_3d(input_, predictor, save_path, lazy_loading, tile_shape=None, 
     if "input_size" in f.attrs:
         features = f["features"]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
+
+    elif tile_shape is not None:
+        features = _precompute_tiled_3d(predictor, input_, tile_shape, halo, f)
+        original_size, input_size = None, None
 
     else:
         features = f["features"] if "features" in f else None
@@ -279,7 +334,7 @@ def precompute_image_embeddings(
     """
     ndim = input_.ndim if ndim is None else ndim
     if tile_shape is not None:
-        assert save_path is None, "Tiled prediction is only supported when the embeddings are saved to file."
+        assert save_path is not None, "Tiled prediction is only supported when the embeddings are saved to file."
 
     if ndim == 2:
         image_embeddings = _compute_2d(input_, predictor) if save_path is None else\
