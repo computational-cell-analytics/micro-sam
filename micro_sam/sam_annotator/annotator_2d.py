@@ -1,3 +1,5 @@
+import warnings
+
 import napari
 import numpy as np
 
@@ -20,7 +22,12 @@ def segment_wigdet(v: Viewer):
     points, labels = prompt_layer_to_points(v.layers["prompts"])
 
     shape = v.layers["current_object"].data.shape
-    seg = prompt_segmentation(PREDICTOR, points, labels, boxes, shape, multiple_box_prompts=True)
+    if IMAGE_EMBEDDINGS["original_size"] is None:  # tiled prediction
+        seg = prompt_segmentation(
+            PREDICTOR, points, labels, boxes, shape, image_embeddings=IMAGE_EMBEDDINGS, multiple_box_prompts=True
+        )
+    else:  # normal prediction and we have set the precomputed embeddings already
+        seg = prompt_segmentation(PREDICTOR, points, labels, boxes, shape, multiple_box_prompts=True)
 
     # no prompts were given or prompts were invalid, skip segmentation
     if seg is None:
@@ -31,6 +38,7 @@ def segment_wigdet(v: Viewer):
     v.layers["current_object"].refresh()
 
 
+# TODO this needs to be adapted if we ran tiled prediction
 # TODO expose more parameters
 @magicgui(call_button="Segment All Objects", method={"choices": ["default", "sam", "embeddings"]})
 def autosegment_widget(v: Viewer, method: str = "default", with_background: bool = True):
@@ -46,13 +54,21 @@ def autosegment_widget(v: Viewer, method: str = "default", with_background: bool
     v.layers["auto_segmentation"].refresh()
 
 
-def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_result=None, model_type="vit_h"):
+def annotator_2d(
+    raw, embedding_path=None, show_embeddings=False, segmentation_result=None,
+    model_type="vit_h", tile_shape=None, halo=None,
+):
     # for access to the predictor and the image embeddings in the widgets
     global PREDICTOR, IMAGE_EMBEDDINGS, SAM
 
     PREDICTOR, SAM = util.get_sam_model(model_type=model_type, return_sam=True)
-    IMAGE_EMBEDDINGS = util.precompute_image_embeddings(PREDICTOR, raw, save_path=embedding_path, ndim=2)
-    util.set_precomputed(PREDICTOR, IMAGE_EMBEDDINGS)
+    IMAGE_EMBEDDINGS = util.precompute_image_embeddings(
+        PREDICTOR, raw, save_path=embedding_path, ndim=2, tile_shape=tile_shape, halo=halo
+    )
+    # we set the pre-computed image embeddings if we don't use tiling
+    # (if we use tiling we cannot directly set it because the tile will be chosen dynamically)
+    if tile_shape is None:
+        util.set_precomputed(PREDICTOR, IMAGE_EMBEDDINGS)
 
     #
     # initialize the viewer and add layers
@@ -77,9 +93,11 @@ def annotator_2d(raw, embedding_path=None, show_embeddings=False, segmentation_r
     v.add_labels(data=np.zeros(shape, dtype="uint32"), name="current_object")
 
     # show the PCA of the image embeddings
-    if show_embeddings:
+    if show_embeddings and tile_shape is None:
         embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS["features"], shape)
         v.add_image(embedding_vis, name="embeddings", scale=scale)
+    elif show_embeddings:
+        warnings.warn("Embeddings cannot be shown for tiled prediction.")
 
     labels = ["positive", "negative"]
     prompts = v.add_points(

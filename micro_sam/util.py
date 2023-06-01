@@ -126,7 +126,11 @@ def _precompute_tiled_2d(predictor, input_, tile_shape, halo, f, verbose=True):
     tiling = blocking([0, 0], input_.shape, tile_shape)
     n_tiles = tiling.numberOfBlocks
 
-    features = f.create_group("features")
+    f.attrs["input_size"] = None
+    f.attrs["original_size"] = None
+
+    features = f.require_group("features")
+    features.attrs["shape"] = input_.shape
     features.attrs["tile_shape"] = tile_shape
     features.attrs["halo"] = halo
 
@@ -312,7 +316,7 @@ def set_precomputed(predictor, image_embeddings, i=None):
 
     if i is None:
         predictor.features = features.to(device) if torch.is_tensor(features) else \
-            torch.from_numpy(features).to(device)
+            torch.from_numpy(features[:]).to(device)
     else:
         predictor.features = features[i].to(device) if torch.is_tensor(features) else \
             torch.from_numpy(features[i]).to(device)
