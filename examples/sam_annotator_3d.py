@@ -21,8 +21,8 @@ def fetch_example_data(save_directory):
         os.makedirs(save_directory)
         print("Created new folder for example data downloads.")
     print("Example data directory is:", save_directory.resolve())
-    lucchi_filenames =[os.path.join("Lucchi++/Test_In/", f"mask{str(i).zfill(4)}.png") for i in range(165)]
-    unpack = pooch.Unzip(members=lucchi_filenames)
+    unpack_filenames =[os.path.join("Lucchi++", "Test_In", f"mask{str(i).zfill(4)}.png") for i in range(165)]
+    unpack = pooch.Unzip(members=unpack_filenames)
     fnames = pooch.retrieve(
         url="http://www.casser.io/files/lucchi_pp.zip",
         known_hash="770ce9e98fc6f29c1b1a250c637e6c5125f2b5f1260e5a7687b55a79e2e8844d",
