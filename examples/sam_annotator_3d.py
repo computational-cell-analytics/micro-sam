@@ -27,7 +27,7 @@ def fetch_example_data(save_directory):
         url="http://www.casser.io/files/lucchi_pp.zip",
         known_hash="770ce9e98fc6f29c1b1a250c637e6c5125f2b5f1260e5a7687b55a79e2e8844d",
         fname="lucchi_pp.zip",
-        path="data",
+        path=save_directory,
         progressbar=True,
         processor=unpack,
     )
