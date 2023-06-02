@@ -217,15 +217,16 @@ def _compute_2d(input_, predictor):
 def _precompute_2d(input_, predictor, save_path, tile_shape, halo):
     f = zarr.open(save_path, "a")
 
-    if "input_size" in f.attrs:
+    use_tiled_prediction = tile_shape is not None
+    if "input_size" in f.attrs:  # the embeddings have already been precomputed
         features = f["features"][:] if tile_shape is None else f["features"]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
 
-    elif tile_shape is not None:
+    elif use_tiled_prediction:  # the embeddings have not been computed yet and we use tiled prediction
         features = _precompute_tiled_2d(predictor, input_, tile_shape, halo, f)
         original_size, input_size = None, None
 
-    else:
+    else:  # the embeddings have not been computed yet and we use normal prediction
         image = _to_image(input_)
         predictor.set_image(image)
         features = predictor.get_image_embedding()
@@ -271,15 +272,16 @@ def _compute_3d(input_, predictor):
 def _precompute_3d(input_, predictor, save_path, lazy_loading, tile_shape=None, halo=None):
     f = zarr.open(save_path, "a")
 
-    if "input_size" in f.attrs:
+    use_tiled_prediction = tile_shape is not None
+    if "input_size" in f.attrs:  # the embeddings have already been precomputed
         features = f["features"]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
 
-    elif tile_shape is not None:
+    elif use_tiled_prediction:  # the embeddings have not been computed yet and we use tiled prediction
         features = _precompute_tiled_3d(predictor, input_, tile_shape, halo, f)
         original_size, input_size = None, None
 
-    else:
+    else:  # the embeddings have not been computed yet and we use normal prediction
         features = f["features"] if "features" in f else None
         original_size, input_size = None, None
 
@@ -304,7 +306,9 @@ def _precompute_3d(input_, predictor, save_path, lazy_loading, tile_shape=None, 
         f.attrs["input_size"] = input_size
         f.attrs["original_size"] = original_size
 
-    if not lazy_loading:
+    # we load the data into memory if lazy loading was not specified
+    # and if we do not use tiled prediction (we cannot load the full tiled data structure into memory)
+    if not lazy_loading and not use_tiled_prediction:
         features = features[:]
 
     image_embeddings = {
