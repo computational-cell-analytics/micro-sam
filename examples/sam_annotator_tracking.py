@@ -9,7 +9,7 @@ from micro_sam.sam_annotator import annotator_tracking
 def track_ctc_data():
     example_data_directory = "./data"
     with open_file(fetch_example_data(example_data_directory), mode="r") as f:
-        timeseries = f["*.tif"][:50]
+        timeseries = f["*.tif"]
     annotator_tracking(timeseries, embedding_path="./embeddings/embeddings-ctc.zarr")
 
 
