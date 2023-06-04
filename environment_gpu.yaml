@@ -6,6 +6,7 @@ name:
     sam
 dependencies:
     - napari
+    - pooch
     - python-elf
     - pytorch
     - pytorch-cuda>=11.7  # you may need to update the cuda version to match your system
