@@ -123,14 +123,14 @@ def _to_image(input_):
 
 
 def _precompute_tiled_2d(predictor, input_, tile_shape, halo, f, verbose=True):
-    tiling = blocking([0, 0], input_.shape, tile_shape)
+    tiling = blocking([0, 0], input_.shape[:2], tile_shape)
     n_tiles = tiling.numberOfBlocks
 
     f.attrs["input_size"] = None
     f.attrs["original_size"] = None
 
     features = f.require_group("features")
-    features.attrs["shape"] = input_.shape
+    features.attrs["shape"] = input_.shape[:2]
     features.attrs["tile_shape"] = tile_shape
     features.attrs["halo"] = halo
 

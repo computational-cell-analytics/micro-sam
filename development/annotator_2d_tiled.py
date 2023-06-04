@@ -10,7 +10,7 @@ def annotator_with_tiling():
 
     # TODO make sure that it also works with RGB data
     # im = im[..., -1]
-    im = im[:4096, :4096, -1]
+    im = im[:4096, :4096, :]
     print(im.shape)
 
     # import napari
