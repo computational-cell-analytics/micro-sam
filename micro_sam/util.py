@@ -9,6 +9,7 @@ import vigra
 import zarr
 
 from elf.io import open_file
+from nifty.tools import blocking
 from skimage.measure import regionprops
 
 from segment_anything import sam_model_registry, SamPredictor
@@ -121,6 +122,86 @@ def _to_image(input_):
     return image
 
 
+def _precompute_tiled_2d(predictor, input_, tile_shape, halo, f, verbose=True):
+    tiling = blocking([0, 0], input_.shape[:2], tile_shape)
+    n_tiles = tiling.numberOfBlocks
+
+    f.attrs["input_size"] = None
+    f.attrs["original_size"] = None
+
+    features = f.require_group("features")
+    features.attrs["shape"] = input_.shape[:2]
+    features.attrs["tile_shape"] = tile_shape
+    features.attrs["halo"] = halo
+
+    for tile_id in tqdm(range(n_tiles), total=n_tiles, desc="Predict image embeddings for tiles", disable=not verbose):
+        tile = tiling.getBlockWithHalo(tile_id, list(halo))
+        outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end))
+
+        predictor.reset_image()
+        tile_input = _to_image(input_[outer_tile])
+        predictor.set_image(tile_input)
+        tile_features = predictor.get_image_embedding()
+        original_size = predictor.original_size
+        input_size = predictor.input_size
+
+        ds = features.create_dataset(
+            str(tile_id), data=tile_features.cpu().numpy(), compression="gzip", chunks=tile_features.shape
+        )
+        ds.attrs["original_size"] = original_size
+        ds.attrs["input_size"] = input_size
+
+    return features
+
+
+def _precompute_tiled_3d(predictor, input_, tile_shape, halo, f, verbose=True):
+    assert input_.ndim == 3
+
+    shape = input_.shape[1:]
+    tiling = blocking([0, 0], shape, tile_shape)
+    n_tiles = tiling.numberOfBlocks
+
+    f.attrs["input_size"] = None
+    f.attrs["original_size"] = None
+
+    features = f.require_group("features")
+    features.attrs["shape"] = shape
+    features.attrs["tile_shape"] = tile_shape
+    features.attrs["halo"] = halo
+
+    n_slices = input_.shape[0]
+    pbar = tqdm(total=n_tiles * n_slices, desc="Predict image embeddings for tiles and slices", disable=not verbose)
+
+    for tile_id in range(n_tiles):
+        tile = tiling.getBlockWithHalo(tile_id, list(halo))
+        outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end))
+
+        ds = None
+        for z in range(n_slices):
+            predictor.reset_image()
+            tile_input = _to_image(input_[z][outer_tile])
+            predictor.set_image(tile_input)
+            tile_features = predictor.get_image_embedding()
+
+            if ds is None:
+                shape = (input_.shape[0],) + tile_features.shape
+                chunks = (1,) + tile_features.shape
+                ds = features.create_dataset(
+                    str(tile_id), shape=shape, dtype="float32", compression="gzip", chunks=chunks
+                )
+
+            ds[z] = tile_features.cpu().numpy()
+            pbar.update(1)
+
+        original_size = predictor.original_size
+        input_size = predictor.input_size
+
+        ds.attrs["original_size"] = original_size
+        ds.attrs["input_size"] = input_size
+
+    return features
+
+
 def _compute_2d(input_, predictor):
     image = _to_image(input_)
     predictor.set_image(image)
@@ -133,13 +214,19 @@ def _compute_2d(input_, predictor):
     return image_embeddings
 
 
-def _precompute_2d(input_, predictor, save_path):
+def _precompute_2d(input_, predictor, save_path, tile_shape, halo):
     f = zarr.open(save_path, "a")
 
-    if "input_size" in f.attrs:
-        features = f["features"][:]
+    use_tiled_prediction = tile_shape is not None
+    if "input_size" in f.attrs:  # the embeddings have already been precomputed
+        features = f["features"][:] if tile_shape is None else f["features"]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
-    else:
+
+    elif use_tiled_prediction:  # the embeddings have not been computed yet and we use tiled prediction
+        features = _precompute_tiled_2d(predictor, input_, tile_shape, halo, f)
+        original_size, input_size = None, None
+
+    else:  # the embeddings have not been computed yet and we use normal prediction
         image = _to_image(input_)
         predictor.set_image(image)
         features = predictor.get_image_embedding()
@@ -182,14 +269,19 @@ def _compute_3d(input_, predictor):
     return image_embeddings
 
 
-def _precompute_3d(input_, predictor, save_path, lazy_loading):
+def _precompute_3d(input_, predictor, save_path, lazy_loading, tile_shape=None, halo=None):
     f = zarr.open(save_path, "a")
 
-    if "input_size" in f.attrs:
+    use_tiled_prediction = tile_shape is not None
+    if "input_size" in f.attrs:  # the embeddings have already been precomputed
         features = f["features"]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
 
-    else:
+    elif use_tiled_prediction:  # the embeddings have not been computed yet and we use tiled prediction
+        features = _precompute_tiled_3d(predictor, input_, tile_shape, halo, f)
+        original_size, input_size = None, None
+
+    else:  # the embeddings have not been computed yet and we use normal prediction
         features = f["features"] if "features" in f else None
         original_size, input_size = None, None
 
@@ -214,7 +306,9 @@ def _precompute_3d(input_, predictor, save_path, lazy_loading):
         f.attrs["input_size"] = input_size
         f.attrs["original_size"] = original_size
 
-    if not lazy_loading:
+    # we load the data into memory if lazy loading was not specified
+    # and if we do not use tiled prediction (we cannot load the full tiled data structure into memory)
+    if not lazy_loading and not use_tiled_prediction:
         features = features[:]
 
     image_embeddings = {
@@ -223,7 +317,9 @@ def _precompute_3d(input_, predictor, save_path, lazy_loading):
     return image_embeddings
 
 
-def precompute_image_embeddings(predictor, input_, save_path=None, lazy_loading=False, ndim=None):
+def precompute_image_embeddings(
+    predictor, input_, save_path=None, lazy_loading=False, ndim=None, tile_shape=None, halo=None
+):
     """Compute the image embeddings (output of the encoder) for the input.
 
     If save_path is given the embeddings will be loaded/saved in a zarr container.
@@ -236,16 +332,21 @@ def precompute_image_embeddings(predictor, input_, save_path=None, lazy_loading=
             object to load them on demand when required. This only has an effect if 'save_path'
             is given and if the input is 3D. (default: False)
         ndim [int] - the dimensionality of the data. If not given will be deduced from the input data. (default: None)
+        tile_shape [tuple] - shape of tiles for tiled prediction.
+            By default prediction is run without tiling. (default: None)
+        halo [tuple] - additional overlap of the tiles for tiled prediction. (default: None)
     """
-
     ndim = input_.ndim if ndim is None else ndim
+    if tile_shape is not None:
+        assert save_path is not None, "Tiled prediction is only supported when the embeddings are saved to file."
+
     if ndim == 2:
         image_embeddings = _compute_2d(input_, predictor) if save_path is None else\
-            _precompute_2d(input_, predictor, save_path)
+            _precompute_2d(input_, predictor, save_path, tile_shape, halo)
 
     elif ndim == 3:
         image_embeddings = _compute_3d(input_, predictor) if save_path is None else\
-            _precompute_3d(input_, predictor, save_path, lazy_loading)
+            _precompute_3d(input_, predictor, save_path, lazy_loading, tile_shape, halo)
 
     else:
         raise ValueError(f"Invalid dimesionality {input_.ndim}, expect 2 or 3 dim data.")
@@ -274,7 +375,7 @@ def set_precomputed(predictor, image_embeddings, i=None):
 
     if i is None:
         predictor.features = features.to(device) if torch.is_tensor(features) else \
-            torch.from_numpy(features).to(device)
+            torch.from_numpy(features[:]).to(device)
     else:
         predictor.features = features[i].to(device) if torch.is_tensor(features) else \
             torch.from_numpy(features[i]).to(device)
