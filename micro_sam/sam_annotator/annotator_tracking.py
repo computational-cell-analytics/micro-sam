@@ -345,13 +345,18 @@ def commit_tracking_widget(v: Viewer, layer: str = "current_track"):
     clear_all_prompts(v)
 
 
-def annotator_tracking(raw, embedding_path=None, show_embeddings=False, tracking_result=None, model_type="vit_h"):
+def annotator_tracking(
+    raw, embedding_path=None, show_embeddings=False, tracking_result=None, model_type="vit_h",
+    tile_shape=None, halo=None,
+):
     # global state
     global PREDICTOR, IMAGE_EMBEDDINGS, CURRENT_TRACK_ID, LINEAGE
     global TRACKING_WIDGET
 
     PREDICTOR = util.get_sam_model(model_type=model_type)
-    IMAGE_EMBEDDINGS = util.precompute_image_embeddings(PREDICTOR, raw, save_path=embedding_path)
+    IMAGE_EMBEDDINGS = util.precompute_image_embeddings(
+        PREDICTOR, raw, save_path=embedding_path, tile_shape=tile_shape, halo=halo
+    )
 
     CURRENT_TRACK_ID = 1
     LINEAGE = {1: []}
@@ -368,6 +373,7 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False, tracking
     else:
         assert tracking_result.shape == raw.shape
         v.add_labels(data=tracking_result, name="committed_tracks")
+    v.layers["committed_tracks"].new_colormap()  # randomize colors so it is easy to see when object committed
     v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="current_track")
 
     # show the PCA of the image embeddings
@@ -422,7 +428,7 @@ def annotator_tracking(raw, embedding_path=None, show_embeddings=False, tracking
     # add the widgets
     #
 
-    # TODO add (optional) auto-segmentation functionality
+    # TODO add (optional) auto-segmentation and tracking functionality
 
     prompt_widget = create_prompt_menu(prompts, labels)
     v.window.add_dock_widget(prompt_widget)
@@ -511,6 +517,12 @@ def main():
     parser.add_argument(
         "--model_type", default="vit_h", help="The segment anything model that will be used, one of vit_h,l,b."
     )
+    parser.add_argument(
+        "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
+    )
+    parser.add_argument(
+        "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
+    )
 
     args = parser.parse_args()
     raw = util.load_image_data(args.input, ndim=3, key=args.key)
@@ -526,4 +538,5 @@ def main():
     annotator_tracking(
         raw, embedding_path=args.embedding_path, show_embeddings=args.show_embeddings,
         tracking_result=tracking_result, model_type=args.model_type,
+        tile_shape=args.tile_shape, halo=args.halo,
     )

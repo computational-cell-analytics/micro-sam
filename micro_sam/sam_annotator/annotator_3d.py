@@ -176,11 +176,16 @@ def segment_volume_widget(v: Viewer, iou_threshold: float = 0.8, projection: str
     v.layers["current_object"].refresh()
 
 
-def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_result=None, model_type="vit_h"):
+def annotator_3d(
+    raw, embedding_path=None, show_embeddings=False, segmentation_result=None,
+    model_type="vit_h", tile_shape=None, halo=None,
+):
     # for access to the predictor and the image embeddings in the widgets
     global PREDICTOR, IMAGE_EMBEDDINGS, DEFAULT_PROJECTION
     PREDICTOR = util.get_sam_model(model_type=model_type)
-    IMAGE_EMBEDDINGS = util.precompute_image_embeddings(PREDICTOR, raw, save_path=embedding_path)
+    IMAGE_EMBEDDINGS = util.precompute_image_embeddings(
+        PREDICTOR, raw, save_path=embedding_path, tile_shape=tile_shape, halo=halo
+    )
 
     # the mask projection currently only works for square images
     DEFAULT_PROJECTION = "mask" if raw.shape[1] == raw.shape[2] else "bounding_box"
@@ -197,6 +202,7 @@ def annotator_3d(raw, embedding_path=None, show_embeddings=False, segmentation_r
     else:
         assert segmentation_result.shape == raw.shape
         v.add_labels(data=segmentation_result, name="committed_objects")
+    v.layers["committed_objects"].new_colormap()  # randomize colors so it is easy to see when object committed
     v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="current_object")
 
     # show the PCA of the image embeddings
@@ -311,6 +317,12 @@ def main():
     parser.add_argument(
         "--model_type", default="vit_h", help="The segment anything model that will be used, one of vit_h,l,b."
     )
+    parser.add_argument(
+        "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
+    )
+    parser.add_argument(
+        "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
+    )
 
     args = parser.parse_args()
     raw = util.load_image_data(args.input, ndim=3, key=args.key)
@@ -326,5 +338,5 @@ def main():
     annotator_3d(
         raw, embedding_path=args.embedding_path,
         show_embeddings=args.show_embeddings, segmentation_result=segmentation_result,
-        model_type=args.model_type,
+        model_type=args.model_type, tile_shape=args.tile_shape, halo=args.halo,
     )

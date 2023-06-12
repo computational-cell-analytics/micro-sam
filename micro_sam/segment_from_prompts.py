@@ -1,4 +1,7 @@
+import warnings
+
 import numpy as np
+from nifty.tools import blocking
 
 from segment_anything.utils.transforms import ResizeLongestSide
 from . import util
@@ -79,13 +82,93 @@ def _compute_logits(mask, eps=1e-3):
     return logits
 
 
+# Select the correct tile based on average of points
+# and bring the points to the coordinate system of the tile.
+# Discard points that are not in the tile and warn if this happens.
+def _points_to_tile(points, labels, shape, tile_shape, halo):
+    tiling = blocking([0, 0], shape, tile_shape)
+    center = np.mean(points, axis=0).round().astype("int").tolist()
+    tile_id = tiling.coordinatesToBlockId(center)
+
+    tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
+    offset = tile.begin
+    this_tile_shape = tile.shape
+
+    points_in_tile = points - np.array(offset)
+    labels_in_tile = labels
+
+    valid_point_mask = (points_in_tile >= 0).all(axis=1)
+    valid_point_mask = np.logical_and(
+        valid_point_mask,
+        np.logical_and(
+            points_in_tile[:, 0] < this_tile_shape[0], points_in_tile[:, 1] < this_tile_shape[1]
+        )
+    )
+    if not valid_point_mask.all():
+        points_in_tile = points_in_tile[valid_point_mask]
+        labels_in_tile = labels_in_tile[valid_point_mask]
+        warnings.warn(
+            f"{(~valid_point_mask).sum()} points were not in the tile and are dropped"
+        )
+
+    return tile_id, tile, points_in_tile, labels_in_tile
+
+
+def _box_to_tile(box, shape, tile_shape, halo):
+    tiling = blocking([0, 0], shape, tile_shape)
+    center = np.array([(box[0] + box[2]) / 2, (box[1] + box[3]) / 2]).round().astype("int").tolist()
+    tile_id = tiling.coordinatesToBlockId(center)
+
+    tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
+    offset = tile.begin
+    this_tile_shape = tile.shape
+
+    box_in_tile = np.array(
+        [
+            max(box[0] - offset[0], 0), max(box[1] - offset[1], 0),
+            min(box[2] - offset[0], this_tile_shape[0]), min(box[3] - offset[1], this_tile_shape[1])
+        ]
+    )
+
+    return tile_id, tile, box_in_tile
+
+
+def _mask_to_tile(mask, shape, tile_shape, halo):
+    tiling = blocking([0, 0], shape, tile_shape)
+
+    coords = np.where(mask)
+    center = np.array([np.mean(coords[0]), np.mean(coords[1])]).round().astype("int").tolist()
+    tile_id = tiling.coordinatesToBlockId(center)
+
+    tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
+    bb = tuple(slice(beg, end) for beg, end in zip(tile.begin, tile.end))
+
+    mask_in_tile = mask[bb]
+    return tile_id, tile, mask_in_tile
+
+
 def segment_from_points(
     predictor, points, labels,
     image_embeddings=None,
     i=None, multimask_output=False, return_all=False,
 ):
-    # set the precomputed state
-    if image_embeddings is not None:
+    tile = None
+
+    # set the precomputed state for tiled prediction
+    if image_embeddings is not None and image_embeddings["input_size"] is None:
+        features = image_embeddings["features"]
+        shape, tile_shape, halo = features.attrs["shape"], features.attrs["tile_shape"], features.attrs["halo"]
+        tile_id, tile, points, labels = _points_to_tile(points, labels, shape, tile_shape, halo)
+        features = features[tile_id]
+        tile_image_embeddings = {
+            "features": features,
+            "input_size": features.attrs["input_size"],
+            "original_size": features.attrs["original_size"]
+        }
+        util.set_precomputed(predictor, tile_image_embeddings, i)
+
+    # set the precomputed state for normal prediction
+    elif image_embeddings is not None:
         util.set_precomputed(predictor, image_embeddings, i)
 
     # predict the mask
@@ -94,6 +177,15 @@ def segment_from_points(
         point_labels=labels,
         multimask_output=multimask_output,
     )
+
+    # expand the mask to the full shape for tiled segmentation
+    if tile is not None:
+        assert not return_all and not multimask_output
+        full_mask = np.zeros((1,) + tuple(shape), dtype=mask.dtype)
+        bb = tuple(slice(beg, end) for beg, end in zip(tile.begin, tile.end))
+        full_mask[0][bb] = mask[0]
+        return full_mask
+
     if return_all:
         return mask, scores, logits
     else:
@@ -107,11 +199,37 @@ def segment_from_mask(
     use_mask=True, use_box=True,
     original_size=None, multimask_output=False, return_all=False,
 ):
-    if image_embeddings is not None:
+    tile = None
+
+    # set the precomputed state for tiled prediction
+    if image_embeddings is not None and image_embeddings["input_size"] is None:
+        features = image_embeddings["features"]
+        shape, tile_shape, halo = features.attrs["shape"], features.attrs["tile_shape"], features.attrs["halo"]
+        tile_id, tile, mask = _mask_to_tile(mask, shape, tile_shape, halo)
+        features = features[tile_id]
+        tile_image_embeddings = {
+            "features": features,
+            "input_size": features.attrs["input_size"],
+            "original_size": features.attrs["original_size"]
+        }
+        util.set_precomputed(predictor, tile_image_embeddings, i)
+
+    # set the precomputed state for normal prediction
+    elif image_embeddings is not None:
         util.set_precomputed(predictor, image_embeddings, i)
+
     box = _compute_box(mask, original_size=original_size) if use_box else None
     logits = _compute_logits(mask) if use_mask else None
     mask, scores, logits = predictor.predict(mask_input=logits, box=box, multimask_output=multimask_output)
+
+    # expand the mask to the full shape for tiled segmentation
+    if tile is not None:
+        assert not return_all and not multimask_output
+        full_mask = np.zeros((1,) + tuple(shape), dtype=mask.dtype)
+        bb = tuple(slice(beg, end) for beg, end in zip(tile.begin, tile.end))
+        full_mask[0][bb] = mask[0]
+        return full_mask
+
     if return_all:
         return mask, scores, logits
     else:
@@ -123,9 +241,35 @@ def segment_from_box(
     image_embeddings=None, i=None, original_size=None,
     multimask_output=False, return_all=False,
 ):
-    if image_embeddings is not None:
+    tile = None
+
+    # set the precomputed state for tiled prediction
+    if image_embeddings is not None and image_embeddings["input_size"] is None:
+        features = image_embeddings["features"]
+        shape, tile_shape, halo = features.attrs["shape"], features.attrs["tile_shape"], features.attrs["halo"]
+        tile_id, tile, box = _box_to_tile(box, shape, tile_shape, halo)
+        features = features[tile_id]
+        tile_image_embeddings = {
+            "features": features,
+            "input_size": features.attrs["input_size"],
+            "original_size": features.attrs["original_size"]
+        }
+        util.set_precomputed(predictor, tile_image_embeddings, i)
+
+    # set the precomputed state for normal prediction
+    elif image_embeddings is not None:
         util.set_precomputed(predictor, image_embeddings, i)
+
     mask, scores, logits = predictor.predict(box=_process_box(box, original_size), multimask_output=multimask_output)
+
+    # expand the mask to the full shape for tiled segmentation
+    if tile is not None:
+        assert not return_all and not multimask_output
+        full_mask = np.zeros((1,) + tuple(shape), dtype=mask.dtype)
+        bb = tuple(slice(beg, end) for beg, end in zip(tile.begin, tile.end))
+        full_mask[0][bb] = mask[0]
+        return full_mask
+
     if return_all:
         return mask, scores, logits
     else:
@@ -137,14 +281,44 @@ def segment_from_box_and_points(
     image_embeddings=None, i=None, original_size=None,
     multimask_output=False, return_all=False,
 ):
-    if image_embeddings is not None:
+    tile = None
+
+    # set the precomputed state for tiled prediction
+    if image_embeddings is not None and image_embeddings["input_size"] is None:
+        features = image_embeddings["features"]
+        shape, tile_shape, halo = features.attrs["shape"], features.attrs["tile_shape"], features.attrs["halo"]
+
+        tile_id, tile, points, labels = _points_to_tile(points, labels, shape, tile_shape, halo)
+        tile_id_box, tile, box = _box_to_tile(box, shape, tile_shape, halo)
+        if tile_id_box != tile_id:
+            raise RuntimeError(f"Inconsistent tile ids for box and point annotations: {tile_id_box} != {tile_id}.")
+
+        features = features[tile_id]
+        tile_image_embeddings = {
+            "features": features,
+            "input_size": features.attrs["input_size"],
+            "original_size": features.attrs["original_size"]
+        }
+        util.set_precomputed(predictor, tile_image_embeddings, i)
+
+    elif image_embeddings is not None:
         util.set_precomputed(predictor, image_embeddings, i)
+
     mask, scores, logits = predictor.predict(
         point_coords=points[:, ::-1],  # SAM has reversed XY conventions
         point_labels=labels,
         box=_process_box(box, original_size),
         multimask_output=multimask_output
     )
+
+    # expand the mask to the full shape for tiled segmentation
+    if tile is not None:
+        assert not return_all and not multimask_output
+        full_mask = np.zeros((1,) + tuple(shape), dtype=mask.dtype)
+        bb = tuple(slice(beg, end) for beg, end in zip(tile.begin, tile.end))
+        full_mask[0][bb] = mask[0]
+        return full_mask
+
     if return_all:
         return mask, scores, logits
     else:
