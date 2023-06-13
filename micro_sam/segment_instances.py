@@ -41,18 +41,18 @@ def _amg_to_seg(masks, shape, with_background):
     for seg_id, mask in enumerate(masks, 1):
         segmentation[mask["segmentation"]] = seg_id
 
-    seg_ids, sizes = np.unique(segmentation, return_counts=True)
-    if with_background and 0 not in seg_ids:
-        bg_id = seg_ids[np.argmax(seg_ids)]
-        segmentation[segmentation == bg_id] = 0
-        vigra.analysis.relabelConsecutive(segmentation, out=segmentation)
+    if with_background:
+        seg_ids, sizes = np.unique(segmentation, return_counts=True)
+        bg_id = seg_ids[np.argmax(sizes)]
+        if bg_id != 0:
+            segmentation[segmentation == bg_id] = 0
+            vigra.analysis.relabelConsecutive(segmentation, out=segmentation)
 
     return segmentation
 
 
 def segment_instances_sam(sam, image, with_background=False, **kwargs):
     segmentor = SamAutomaticMaskGenerator(sam, **kwargs)
-
     image_ = util._to_image(image)
     masks = segmentor.generate(image_)
     segmentation = _amg_to_seg(masks, image.shape, with_background)
