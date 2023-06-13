@@ -3,6 +3,8 @@ import torch
 import vigra
 
 from elf.segmentation import embeddings as embed
+from elf.segmentation.stitching import stitch_segmentation
+
 from segment_anything import SamAutomaticMaskGenerator
 from segment_anything.utils.amg import (
     MaskData,
@@ -198,44 +200,41 @@ def segment_instances_from_embeddings(
         return seg
 
 
-# TODO update to new tiling logic
-# def segment_instances_from_embeddings_with_tiling(
-#     predictor, image, image_embeddings, tile_shape=(256, 256), tile_overlap=(32, 32),
-#     size_threshold=10, i=None,
-#     offsets=[[-1, 0], [0, -1], [-3, 0], [0, -3]], distance_type="l2", bias=0.0,
-#     verbose=True, return_initial_seg=False,
-# ):
-#     assert stitch_segmentation is not None
-#
-#     def segment_tile(input_, block_id=None):
-#
-#         im = util._to_image(input_)
-#         print("shape of input:", input_.shape)
-#         predictor.set_image(im)
-#         embeddings = predictor.get_image_embedding().squeeze().cpu().numpy()
-#         assert embeddings.shape == (256, 64, 64), f"{embeddings.shape}"
-#
-#         seg = embed.segment_embeddings_mws(
-#             embeddings, distance_type=distance_type, offsets=offsets, bias=bias
-#         ).astype("uint32")
-#         assert seg.shape == (64, 64), f"{seg.shape}"
-#
-#         seg_ids, seg_sizes = np.unique(seg, return_counts=True)
-#         bg_ids = seg_ids[seg_sizes < size_threshold]
-#         seg[np.isin(seg, bg_ids)] = 0
-#
-#         seg = resize(seg, im.shape[:2], order=0, anti_aliasing=False, preserve_range=True).astype(seg.dtype)
-#
-#         # debugging
-#         import napari
-#         from micro_sam.visualization import compute_pca
-#         embedding_pca = compute_pca(embeddings[None])
-#         v = napari.view_image(input_)
-#         v.add_labels(seg)
-#         v.add_image(embedding_pca, scale=tuple(float(sh) / esh for sh, esh in zip(seg.shape, embedding_pca.shape)))
-#         napari.run()
-#
-#         return seg
-#
-#     initial_seg = stitch_segmentation(image, segment_tile, tile_shape, tile_overlap, shape=image.shape[:2])
-#     return initial_seg
+class FakeInput:
+    def __init__(self, shape):
+        self.shape = shape
+
+    def __getitem__(self, index):
+        block_shape = tuple(ind.stop - ind.start for ind in index)
+        return np.zeros(block_shape, dtype="float32")
+
+
+def segment_instances_from_embeddings_with_tiling(
+    predictor, image_embeddings, i=None, verbose=True, with_background=True, **kwargs
+ ):
+    """
+    """
+    features = image_embeddings["features"]
+    shape, tile_shape, halo = features.attrs["shape"], features.attrs["tile_shape"], features.attrs["halo"]
+
+    def segment_tile(_, tile_id):
+        tile_features = features[tile_id]
+        tile_image_embeddings = {
+            "features": tile_features,
+            "input_size": tile_features.attrs["input_size"],
+            "original_size": tile_features.attrs["original_size"]
+        }
+        seg = segment_instances_from_embeddings(
+            predictor, image_embeddings=tile_image_embeddings, i=i,
+            with_background=with_background, verbose=True, **kwargs,
+        )
+        return seg
+
+    # fake input data
+    input_ = FakeInput(shape)
+
+    # run stitching based segmentation
+    segmentation = stitch_segmentation(
+        input_, segment_tile, tile_shape, halo, with_background=with_background, verbose=verbose
+    )
+    return segmentation
