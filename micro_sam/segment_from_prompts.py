@@ -9,11 +9,12 @@ from . import util
 
 # compute the bounding box. SAM expects the following input:
 # box (np.ndarray or None): A length 4 array given a box prompt to the model, in XYXY format.
-def _compute_box(mask, original_size=None):
+def _compute_box(mask, original_size=None, box_extension=0):
     coords = np.where(mask == 1)
     box = np.array([
-        coords[1].min(), coords[0].min(),
-        coords[1].max() + 1, coords[0].max() + 1,
+        max(coords[1].min() - box_extension, 0), max(coords[0].min() - box_extension, 0),
+        min(coords[1].max() + 1 + box_extension, mask.shape[1]),
+        min(coords[0].max() + 1 + box_extension, mask.shape[0]),
     ])
     # TODO how do we deal with aspect ratios???
     if original_size is not None:
@@ -197,7 +198,9 @@ def segment_from_mask(
     predictor, mask,
     image_embeddings=None, i=None,
     use_mask=True, use_box=True,
-    original_size=None, multimask_output=False, return_all=False,
+    original_size=None, multimask_output=False,
+    return_all=False, return_logits=False,
+    box_extension=0,
 ):
     tile = None
 
@@ -218,9 +221,11 @@ def segment_from_mask(
     elif image_embeddings is not None:
         util.set_precomputed(predictor, image_embeddings, i)
 
-    box = _compute_box(mask, original_size=original_size) if use_box else None
+    box = _compute_box(mask, original_size=original_size, box_extension=box_extension) if use_box else None
     logits = _compute_logits(mask) if use_mask else None
-    mask, scores, logits = predictor.predict(mask_input=logits, box=box, multimask_output=multimask_output)
+    mask, scores, logits = predictor.predict(
+        mask_input=logits, box=box, multimask_output=multimask_output, return_logits=return_logits
+    )
 
     # expand the mask to the full shape for tiled segmentation
     if tile is not None:
