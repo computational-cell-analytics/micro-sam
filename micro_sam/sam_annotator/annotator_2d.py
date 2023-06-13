@@ -38,18 +38,20 @@ def segment_wigdet(v: Viewer):
     v.layers["current_object"].refresh()
 
 
-# FIXME this needs to be updated for tiled prediction
-# TODO expose more parameters
-@magicgui(call_button="Segment All Objects", method={"choices": ["default", "sam", "embeddings"]})
-def autosegment_widget(v: Viewer, method: str = "default", with_background: bool = True):
-    if method in ("default", "sam"):
-        print("Run automatic segmentation with SAM. This can take a few minutes ...")
-        image = v.layers["raw"].data
-        seg = segment_instances.segment_instances_sam(SAM, image, with_background=with_background)
-    elif method == "embeddings":
-        seg = segment_instances.segment_instances_from_embeddings(PREDICTOR, IMAGE_EMBEDDINGS)
+# TODO expose more parameters:
+# - min initial size
+# - advanced params???
+@magicgui(call_button="Automatic Segmentation")
+def autosegment_widget(v: Viewer, with_background: bool = True):
+    is_tiled = IMAGE_EMBEDDINGS["input_size"] is None
+    if is_tiled:
+        seg = segment_instances.segment_instances_from_embeddings_with_tiling(
+            PREDICTOR, IMAGE_EMBEDDINGS, with_background=with_background
+        )
     else:
-        raise ValueError
+        seg = segment_instances.segment_instances_from_embeddings(
+            PREDICTOR, IMAGE_EMBEDDINGS, with_background=with_background
+        )
     v.layers["auto_segmentation"].data = seg
     v.layers["auto_segmentation"].refresh()
 
