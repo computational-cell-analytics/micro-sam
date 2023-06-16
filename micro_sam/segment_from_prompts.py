@@ -2,12 +2,15 @@ import warnings
 
 import numpy as np
 from nifty.tools import blocking
+from skimage.feature import peak_local_max
+from skimage.filters import gaussian
+from scipy.ndimage import distance_transform_edt
 
 from segment_anything.utils.transforms import ResizeLongestSide
 from . import util
 
 
-# compute the bounding box. SAM expects the following input:
+# compute the bounding box from a mask. SAM expects the following input:
 # box (np.ndarray or None): A length 4 array given a box prompt to the model, in XYXY format.
 def _compute_box(mask, original_size=None, box_extension=0):
     coords = np.where(mask == 1)
@@ -21,6 +24,43 @@ def _compute_box(mask, original_size=None, box_extension=0):
         trafo = ResizeLongestSide(max(original_size))
         box = trafo.apply_boxes(box[None], (256, 256)).squeeze()
     return box
+
+
+# sample points from a mask. SAM expects the following point inputs:
+def _compute_points(mask, original_size):
+    box = _compute_box(mask, box_extension=5)
+
+    # get slice and offset in python coordinate convention
+    bb = (slice(box[1], box[3]), slice(box[0], box[2]))
+    offset = np.array([box[1], box[0]])
+
+    # crop the mask and compute distances
+    cropped_mask = mask[bb]
+    inner_distances = gaussian(distance_transform_edt(cropped_mask == 1))
+    outer_distances = gaussian(distance_transform_edt(cropped_mask == 0))
+
+    # sample positives and negatives from the distance maxima
+    inner_maxima = peak_local_max(inner_distances, exclude_border=False)
+    outer_maxima = peak_local_max(outer_distances, exclude_border=False)
+
+    # derive the positive (=inner maxima) and negative (=outer maxima) points
+    point_coords = np.concatenate([inner_maxima, outer_maxima]).astype("float64")
+    point_coords += offset
+
+    if original_size is not None:
+        scale_factor = np.array([
+            float(mask.shape[0]) / original_size[0], float(mask.shape[1]) / original_size[1]
+        ])[None]
+        point_coords *= scale_factor
+
+    # get the point labels
+    point_labels = np.concatenate(
+        [
+            np.ones(len(inner_maxima), dtype="uint8"),
+            np.zeros(len(outer_maxima), dtype="uint8"),
+        ]
+    )
+    return point_coords, point_labels
 
 
 def _process_box(box, original_size=None):
@@ -197,7 +237,7 @@ def segment_from_points(
 def segment_from_mask(
     predictor, mask,
     image_embeddings=None, i=None,
-    use_mask=True, use_box=True,
+    use_mask=True, use_box=True, use_points=False,
     original_size=None, multimask_output=False,
     return_all=False, return_logits=False,
     box_extension=0,
@@ -221,10 +261,13 @@ def segment_from_mask(
     elif image_embeddings is not None:
         util.set_precomputed(predictor, image_embeddings, i)
 
+    point_coords, point_labels = _compute_points(mask, original_size=original_size)
     box = _compute_box(mask, original_size=original_size, box_extension=box_extension) if use_box else None
     logits = _compute_logits(mask) if use_mask else None
     mask, scores, logits = predictor.predict(
-        mask_input=logits, box=box, multimask_output=multimask_output, return_logits=return_logits
+        point_coords=point_coords[:, ::-1], point_labels=point_labels,
+        mask_input=logits, box=box,
+        multimask_output=multimask_output, return_logits=return_logits
     )
 
     # expand the mask to the full shape for tiled segmentation

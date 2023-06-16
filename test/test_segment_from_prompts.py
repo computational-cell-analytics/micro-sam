@@ -58,9 +58,21 @@ class TestSegmentFromPrompts(unittest.TestCase):
         predicted = segment_from_mask(predictor, mask, use_mask=False, use_box=True)
         self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
+        # with points
+        predicted = segment_from_mask(predictor, mask, use_mask=False, use_box=False, use_points=True)
+        self.assertGreater(util.compute_iou(mask, predicted), 0.7)  # need to be more lenient for only points
+
+        # with points and boxes
+        predicted = segment_from_mask(predictor, mask, use_mask=False, use_box=True, use_points=True)
+        self.assertGreater(util.compute_iou(mask, predicted), 0.9)
+
         # with mask
         if use_mask:
             predicted = segment_from_mask(predictor, mask, use_mask=True, use_box=False)
+            self.assertGreater(util.compute_iou(mask, predicted), 0.9)
+
+            # with points, boxes and mask
+            predicted = segment_from_mask(predictor, mask, use_mask=True, use_box=True, use_points=True)
             self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
     def test_segment_from_mask(self):
