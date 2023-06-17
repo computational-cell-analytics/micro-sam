@@ -8,10 +8,7 @@ def annotator_with_tiling():
         "/home/pape/Work/data/neurips-cell-seg/TrainUnlabeled_WholeSlide/whole_slide_00002.tiff"
     )
 
-    # TODO make sure that it also works with RGB data
-    # im = im[..., -1]
     im = im[:4096, :4096, :]
-    print(im.shape)
 
     # import napari
     # v = napari.Viewer()
