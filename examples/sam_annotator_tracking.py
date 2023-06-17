@@ -8,7 +8,7 @@ from micro_sam.sam_annotator import annotator_tracking
 
 def track_ctc_data():
     example_data_directory = "./data"
-    with open_file(fetch_example_data(example_data_directory), mode="r") as f:
+    with open_file(str(fetch_example_data(example_data_directory)), mode="r") as f:
         timeseries = f["*.tif"]
     annotator_tracking(timeseries, embedding_path="./embeddings/embeddings-ctc.zarr")
 
@@ -27,7 +27,7 @@ def fetch_example_data(save_directory):
         os.makedirs(save_directory)
         print("Created new folder for example data downloads.")
     print("Example data directory is:", save_directory.resolve())
-    unpack_filenames =[os.path.join("DIC-C2DH-HeLa", "01", f"t{str(i).zfill(3)}.tif") for i in range(84)]
+    unpack_filenames = [os.path.join("DIC-C2DH-HeLa", "01", f"t{str(i).zfill(3)}.tif") for i in range(84)]
     unpack = pooch.Unzip(members=unpack_filenames)
     fnames = pooch.retrieve(
         url="http://data.celltrackingchallenge.net/training-datasets/DIC-C2DH-HeLa.zip",  # 37 MB
