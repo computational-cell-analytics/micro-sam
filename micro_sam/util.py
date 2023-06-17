@@ -292,7 +292,7 @@ def _precompute_3d(input_, predictor, save_path, lazy_loading, tile_shape=None, 
                     continue
 
             predictor.reset_image()
-            image = np.concatenate([z_slice[..., None]] * 3, axis=-1)
+            image = _to_image(z_slice)
             predictor.set_image(image)
             embedding = predictor.get_image_embedding()
 

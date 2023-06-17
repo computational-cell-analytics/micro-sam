@@ -8,7 +8,7 @@ from micro_sam.sam_annotator import annotator_3d
 
 def main():
     example_data_directory = "./data"
-    with open_file(fetch_example_data(example_data_directory)) as f:
+    with open_file(str(fetch_example_data(example_data_directory))) as f:
         raw = f["*.png"][:]
     embedding_path = "./embeddings/embeddings-lucchi.zarr"
     annotator_3d(raw, embedding_path, show_embeddings=False)
@@ -21,7 +21,7 @@ def fetch_example_data(save_directory):
         os.makedirs(save_directory)
         print("Created new folder for example data downloads.")
     print("Example data directory is:", save_directory.resolve())
-    unpack_filenames =[os.path.join("Lucchi++", "Test_In", f"mask{str(i).zfill(4)}.png") for i in range(165)]
+    unpack_filenames = [os.path.join("Lucchi++", "Test_In", f"mask{str(i).zfill(4)}.png") for i in range(165)]
     unpack = pooch.Unzip(members=unpack_filenames)
     fnames = pooch.retrieve(
         url="http://www.casser.io/files/lucchi_pp.zip",
