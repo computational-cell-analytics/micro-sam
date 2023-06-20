@@ -56,6 +56,7 @@ def _shift_object(mask, motion_model):
     return mask_shifted
 
 
+# TODO box extension
 # TODO division classifier
 def _track_from_prompts(
     point_prompts, box_prompts, seg, predictor, slices, image_embeddings,

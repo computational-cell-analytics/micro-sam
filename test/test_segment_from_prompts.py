@@ -39,49 +39,62 @@ class TestSegmentFromPrompts(unittest.TestCase):
         predicted = segment_from_points(self.predictor, points, labels)
         self.assertGreater(util.compute_iou(self.mask, predicted), 0.9)
 
-    def _test_segment_from_mask(self, shape=(256, 256), use_mask=True):
+    def _test_segment_from_mask(self, shape=(256, 256)):
         from micro_sam.segment_from_prompts import segment_from_mask
 
+        # we need to recompute the embedding if we have the non-square image
+        # and we also need to set a lower expected iou when using only a mask prompt
+        # (for some reason this does not work as well for non-square images)
         if shape == (256, 256):
             mask, image = self.mask, self.image
             predictor = self.predictor
+            expected_iou_mask = 0.9
         else:
             mask, image = self._get_input(shape)
             predictor = self._get_model(image)
+            expected_iou_mask = 0.8
 
-        # with mask and bounding box (default setting)
-        if use_mask:
-            predicted = segment_from_mask(predictor, mask)
-            self.assertGreater(util.compute_iou(mask, predicted), 0.9)
+        #
+        # single prompts
+        #
 
-        # with bounding box
-        predicted = segment_from_mask(predictor, mask, use_mask=False, use_box=True)
+        # only with bounding box
+        predicted = segment_from_mask(predictor, mask, use_box=True, use_mask=False, use_points=False)
         self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
-        # with points
-        predicted = segment_from_mask(predictor, mask, use_mask=False, use_box=False, use_points=True)
+        # only with mask
+        predicted = segment_from_mask(predictor, mask, use_box=False, use_mask=True, use_points=False)
+        self.assertGreater(util.compute_iou(mask, predicted), expected_iou_mask)
+
+        # only with points
+        predicted = segment_from_mask(predictor, mask, use_box=False, use_mask=False, use_points=True)
         self.assertGreater(util.compute_iou(mask, predicted), 0.7)  # need to be more lenient for only points
 
-        # with points and boxes
-        predicted = segment_from_mask(predictor, mask, use_mask=False, use_box=True, use_points=True)
+        #
+        # combinations of two and prompts
+        #
+
+        # with box and mask (default setting)
+        predicted = segment_from_mask(predictor, mask, use_box=True, use_mask=True, use_points=False)
         self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
-        # with mask
-        if use_mask:
-            predicted = segment_from_mask(predictor, mask, use_mask=True, use_box=False)
-            self.assertGreater(util.compute_iou(mask, predicted), 0.9)
+        # with box and points
+        predicted = segment_from_mask(predictor, mask, use_box=True, use_mask=False, use_points=True)
+        self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
-            # with points, boxes and mask
-            predicted = segment_from_mask(predictor, mask, use_mask=True, use_box=True, use_points=True)
-            self.assertGreater(util.compute_iou(mask, predicted), 0.9)
+        # with mask and points
+        predicted = segment_from_mask(predictor, mask, use_box=False, use_mask=True, use_points=True)
+        self.assertGreater(util.compute_iou(mask, predicted), 0.9)
+
+        # with box, mask and points
+        predicted = segment_from_mask(predictor, mask, use_mask=True, use_box=True, use_points=True)
+        self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
     def test_segment_from_mask(self):
         self._test_segment_from_mask()
 
-    # segmenting from mask prompts is not working for non-square inputs yet
-    # that's why it's deactivated here
     def test_segment_from_mask_non_square(self):
-        self._test_segment_from_mask((256, 384), use_mask=False)
+        self._test_segment_from_mask((256, 384))
 
     def test_segment_from_box(self):
         from micro_sam.segment_from_prompts import segment_from_box
