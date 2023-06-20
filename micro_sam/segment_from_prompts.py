@@ -24,7 +24,6 @@ def _compute_box_from_mask(mask, original_size=None, box_extension=0):
         min(coords[1].max() + 1 + box_extension, mask.shape[1]),
         min(coords[0].max() + 1 + box_extension, mask.shape[0]),
     ])
-    # TODO how do we deal with aspect ratios???
     if original_size is not None:
         trafo = ResizeLongestSide(max(original_size))
         box = trafo.apply_boxes(box[None], (256, 256)).squeeze()
@@ -77,44 +76,32 @@ def _compute_logits_from_mask(mask, eps=1e-3):
     logits[mask == 1] = 1 - eps
     logits[mask == 0] = eps
     logits = inv_sigmoid(logits)
-    assert logits.ndim == 2
 
-    # resize to the expected shape of SAM (256x256) if needed
-    if logits.shape != (256, 256):  # shapes match already
-        trafo = ResizeLongestSide(256)
+    # resize to the expected mask shape of SAM (256x256)
+    assert logits.ndim == 2
+    expected_shape = (256, 256)
+
+    if logits.shape == expected_shape:  # shape matches, do nothing
+        pass
+
+    elif logits.shape[0] == logits.shape[1]:  # shape is square
+        trafo = ResizeLongestSide(expected_shape[0])
         logits = trafo.apply_image(logits[..., None])
 
-        # this transformation resizes the longest side to 256
-        # if the input is not square we need to pad the other side to 256
-        if logits.shape != (256, 256):
-            raise NotImplementedError("Not implemented for non-square images")
+    else:  # shape is not square
+        # resize the longest side to expected shape
+        trafo = ResizeLongestSide(expected_shape[0])
+        logits = trafo.apply_image(logits[..., None])
 
-            # I don't know yet how to correctly resize the logits for non-square images.
-            # I have tried:
-            # - padding the shorter size to 256
-            # - just resizing to 256
-            # but both approaches fail (the mask is not predicted correctly, probably because it is misanligned)
-
-            # assert sum(sh == 256 for sh in logits.shape) == 1
-            # pad_dim = 1 if logits.shape[0] == 256 else 0
-            # pad_width = (0, 256 - logits.shape[pad_dim])
-            # pad_width = (pad_width, (0, 0)) if pad_dim == 0 else ((0, 0), pad_width)
-            # pad_value = logits.min()
-            # logits = np.pad(logits, pad_width, mode="constant", constant_values=pad_value)
-
-            # from skimage.transform import resize
-            # logits = resize(logits, (256, 256))
-
-            # import napari
-            # v = napari.Viewer()
-            # v.add_image(logits)
-            # scale = tuple(float(sh) / lsh for sh, lsh in zip(mask.shape, logits.shape))
-            # v.add_image(logits, scale=scale, name="logits_rescaled")
-            # v.add_labels(mask + 1)
-            # napari.run()
+        # pad the other side
+        h, w = logits.shape
+        padh = expected_shape[0] - h
+        padw = expected_shape[1] - w
+        # IMPORTANT: need to pad with zero, otherwise SAM doesn't understand the padding
+        pad_width = ((0, padh), (0, padw))
+        logits = np.pad(logits, pad_width, mode="constant", constant_values=0)
 
     logits = logits[None]
-
     assert logits.shape == (1, 256, 256), f"{logits.shape}"
     return logits
 
@@ -126,7 +113,6 @@ def _compute_logits_from_mask(mask, eps=1e-3):
 
 def _process_box(box, original_size=None):
     box_processed = box[[1, 0, 3, 2]]
-    # TODO how do we deal with aspect ratios???
     if original_size is not None:
         trafo = ResizeLongestSide(max(original_size))
         box_processed = trafo.apply_boxes(box[None], (256, 256)).squeeze()
@@ -269,7 +255,7 @@ def segment_from_points(
 def segment_from_mask(
     predictor, mask,
     image_embeddings=None, i=None,
-    use_mask=True, use_box=True, use_points=False,
+    use_box=True, use_mask=True, use_points=False,
     original_size=None, multimask_output=False,
     return_all=False, return_logits=False,
     box_extension=0,
