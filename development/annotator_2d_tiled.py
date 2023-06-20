@@ -16,7 +16,7 @@ def annotator_with_tiling():
     # napari.run()
 
     embedding_path = "./embeddings/embeddings-tiled.zarr"
-    annotator_2d(im, embedding_path, tile_shape=(512, 512), halo=(64, 64))
+    annotator_2d(im, embedding_path, tile_shape=(1024, 1024), halo=(256, 256))
 
 
 def debug():

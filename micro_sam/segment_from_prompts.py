@@ -65,7 +65,7 @@ def _compute_points_from_mask(mask, original_size):
             np.zeros(len(outer_maxima), dtype="uint8"),
         ]
     )
-    return point_coords, point_labels
+    return point_coords[:, ::-1], point_labels
 
 
 def _compute_logits_from_mask(mask, eps=1e-3):
@@ -278,11 +278,14 @@ def segment_from_mask(
         predictor, image_embeddings, i, mask, _mask_to_tile
     )
 
-    point_coords, point_labels = _compute_points_from_mask(mask, original_size=original_size)
+    if use_points:
+        point_coords, point_labels = _compute_points_from_mask(mask, original_size=original_size)
+    else:
+        point_coords, point_labels = None, None
     box = _compute_box_from_mask(mask, original_size=original_size, box_extension=box_extension) if use_box else None
     logits = _compute_logits_from_mask(mask) if use_mask else None
     mask, scores, logits = predictor.predict(
-        point_coords=point_coords[:, ::-1], point_labels=point_labels,
+        point_coords=point_coords, point_labels=point_labels,
         mask_input=logits, box=box,
         multimask_output=multimask_output, return_logits=return_logits
     )
