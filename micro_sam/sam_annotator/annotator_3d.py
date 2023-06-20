@@ -21,6 +21,7 @@ from .util import (
 #
 
 
+# TODO box extension
 # TODO refactor
 def _segment_volume(
     seg, predictor, image_embeddings, segmented_slices,
@@ -29,12 +30,11 @@ def _segment_volume(
 ):
     assert projection in ("mask", "bounding_box", "points")
     if projection == "mask":
-        use_mask, use_box, use_points = True, True, False
+        use_box, use_mask, use_points = True, True, False
     elif projection == "points":
-        use_box, use_points = True, True
-        use_mask = seg.shape[0] == seg.shape[1]
+        use_box, use_mask, use_points = True, True, True
     else:
-        use_mask, use_box, use_points = False, True, False
+        use_box, use_mask, use_points = True, False, False
 
     def _update_progress():
         if progress_bar is not None:
@@ -154,10 +154,13 @@ def segment_volume_widget(v: Viewer, iou_threshold: float = 0.8, projection: str
     # step 1: segment all slices with prompts
     shape = v.layers["raw"].data.shape
 
-    # choose mask projection for square images and bounding box projection otherwise
-    # (because mask projection does not work properly for non-square images yet)
+    # we have the following projection modes:
+    # bounding_box: uses only the bounding box as prompt
+    # mask: uses the bounding box and the mask
+    # points: uses the bounding box, mask and points derived from the mask
+    # by default we choose mask, which qualitatively seems to work the best
     if projection == "default":
-        projection_ = "mask" if shape[1] == shape[2] else "bounding_box"
+        projection_ = "mask"
     else:
         projection_ = projection
 
@@ -184,14 +187,11 @@ def annotator_3d(
     model_type="vit_h", tile_shape=None, halo=None,
 ):
     # for access to the predictor and the image embeddings in the widgets
-    global PREDICTOR, IMAGE_EMBEDDINGS, DEFAULT_PROJECTION
+    global PREDICTOR, IMAGE_EMBEDDINGS
     PREDICTOR = util.get_sam_model(model_type=model_type)
     IMAGE_EMBEDDINGS = util.precompute_image_embeddings(
         PREDICTOR, raw, save_path=embedding_path, tile_shape=tile_shape, halo=halo
     )
-
-    # the mask projection currently only works for square images
-    DEFAULT_PROJECTION = "mask" if raw.shape[1] == raw.shape[2] else "bounding_box"
 
     #
     # initialize the viewer and add layers

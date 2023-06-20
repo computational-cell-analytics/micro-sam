@@ -15,6 +15,7 @@ from . import util
 #
 
 
+# TODO support box extension by a fraction (and then extend by that percentage of box len)
 # compute the bounding box from a mask. SAM expects the following input:
 # box (np.ndarray or None): A length 4 array given a box prompt to the model, in XYXY format.
 def _compute_box_from_mask(mask, original_size=None, box_extension=0):
