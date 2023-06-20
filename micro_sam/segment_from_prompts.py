@@ -33,7 +33,7 @@ def _compute_box_from_mask(mask, original_size=None, box_extension=0):
 
 # sample points from a mask. SAM expects the following point inputs:
 def _compute_points_from_mask(mask, original_size):
-    box = _compute_box_from_mask(mask, box_extension=5)
+    box = _compute_box_from_mask(mask, box_extension=7)
 
     # get slice and offset in python coordinate convention
     bb = (slice(box[1], box[3]), slice(box[0], box[2]))
@@ -45,8 +45,8 @@ def _compute_points_from_mask(mask, original_size):
     outer_distances = gaussian(distance_transform_edt(cropped_mask == 0))
 
     # sample positives and negatives from the distance maxima
-    inner_maxima = peak_local_max(inner_distances, exclude_border=False)
-    outer_maxima = peak_local_max(outer_distances, exclude_border=False)
+    inner_maxima = peak_local_max(inner_distances, exclude_border=False, min_distance=3)
+    outer_maxima = peak_local_max(outer_distances, exclude_border=False, min_distance=5)
 
     # derive the positive (=inner maxima) and negative (=outer maxima) points
     point_coords = np.concatenate([inner_maxima, outer_maxima]).astype("float64")
@@ -54,7 +54,7 @@ def _compute_points_from_mask(mask, original_size):
 
     if original_size is not None:
         scale_factor = np.array([
-            float(mask.shape[0]) / original_size[0], float(mask.shape[1]) / original_size[1]
+            original_size[0] / float(mask.shape[0]), original_size[1] / float(mask.shape[1])
         ])[None]
         point_coords *= scale_factor
 
@@ -65,7 +65,7 @@ def _compute_points_from_mask(mask, original_size):
             np.zeros(len(outer_maxima), dtype="uint8"),
         ]
     )
-    return point_coords, point_labels
+    return point_coords[:, ::-1], point_labels
 
 
 def _compute_logits_from_mask(mask, eps=1e-3):
@@ -278,11 +278,15 @@ def segment_from_mask(
         predictor, image_embeddings, i, mask, _mask_to_tile
     )
 
-    point_coords, point_labels = _compute_points_from_mask(mask, original_size=original_size)
+    if use_points:
+        point_coords, point_labels = _compute_points_from_mask(mask, original_size=original_size)
+    else:
+        point_coords, point_labels = None, None
     box = _compute_box_from_mask(mask, original_size=original_size, box_extension=box_extension) if use_box else None
     logits = _compute_logits_from_mask(mask) if use_mask else None
+
     mask, scores, logits = predictor.predict(
-        point_coords=point_coords[:, ::-1], point_labels=point_labels,
+        point_coords=point_coords, point_labels=point_labels,
         mask_input=logits, box=box,
         multimask_output=multimask_output, return_logits=return_logits
     )
