@@ -16,6 +16,7 @@ from magicgui import magicgui
 from micro_sam.segment_from_prompts import segment_from_points
 from micro_sam.sam_annotator.util import create_prompt_menu, prompt_layer_to_points, toggle_label
 from napari import Viewer
+from qtpy.QtWidgets import QPushButton
 
 
 @magicgui(call_button="Segment Object [S]")
@@ -42,6 +43,10 @@ def decrease_brush_size(v):
         current_size = v.layers["segmented_object"].brush_size
         if current_size > 1:
             v.layers["segmented_object"].brush_size -= 1
+
+
+def activate_segmented_object():
+    v.layers.selection.active = v.layers["segmented_object"]
 
 
 def image_series_annotator(embedding_save_path, output_folder):
@@ -86,7 +91,7 @@ def image_series_annotator(embedding_save_path, output_folder):
     )
     prompts.data = []
     prompts.edge_color_mode = "cycle"
-    prompt_widget = create_prompt_menu(prompts, labels)
+    prompt_widget = create_prompt_menu(prompts, labels, viewer=v)
     v.window.add_dock_widget(prompt_widget)
 
     # toggle the points between positive / negative

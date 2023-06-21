@@ -1,7 +1,7 @@
 import numpy as np
 
 from magicgui import magicgui
-from magicgui.widgets import ComboBox, Container
+from magicgui.widgets import ComboBox, Container, PushButton
 from napari import Viewer
 
 from ..segment_from_prompts import segment_from_box, segment_from_box_and_points, segment_from_points
@@ -36,9 +36,11 @@ def commit_segmentation_widget(v: Viewer, layer: str = "current_object"):
         clear_all_prompts(v)
 
 
-def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="label"):
+def create_prompt_menu(points_layer, labels, viewer, menu_name="prompt", label_name="label"):
+    drawing = PushButton(label="Manual correction")
+    drawing.root_native_widget.setCheckable(True)
     label_menu = ComboBox(label=menu_name, choices=labels)
-    label_widget = Container(widgets=[label_menu])
+    label_widget = Container(widgets=[label_menu, drawing])
 
     def update_label_menu(event):
         new_label = str(points_layer.current_properties[label_name][0])
@@ -53,7 +55,20 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
         points_layer.current_properties = current_properties
         points_layer.refresh_colors()
 
+    def activate_drawing(e):
+        """
+        Clicking the button activates drawing mode
+        """
+        if drawing.root_native_widget.isChecked():
+            viewer.layers.selection.active = viewer.layers["segmented_object"]
+            viewer.layers["segmented_object"].mode = "paint"
+            drawing.text = "Stop Drawing"
+        else:
+            viewer.layers.selection.active = viewer.layers["prompts"]
+            drawing.text = "Manual correction"
+
     label_menu.changed.connect(label_changed)
+    drawing.changed.connect(activate_drawing)
 
     return label_widget
 
