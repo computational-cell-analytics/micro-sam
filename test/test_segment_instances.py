@@ -55,7 +55,7 @@ class TestSegmentInstances(unittest.TestCase):
         util.set_precomputed(predictor, image_embeddings)
 
         predicted = segment_instances_from_embeddings(
-            predictor, image_embeddings, min_initial_size=0, with_background=True
+            predictor, image_embeddings, min_initial_size=0, with_background=True, box_extension=5,
         )
 
         self.assertGreater(matching(predicted, mask, threshold=0.75)["precision"], 0.99)
