@@ -2,9 +2,12 @@
 # Iterate over a series of images in a folder and provide annotations with SAM.
 
 import os
+import argparse
+
 from glob import glob
 
-import imageio
+from skimage.io import imread, imsave
+from skimage.color import rgb2gray
 import micro_sam.util as util
 import napari
 import numpy as np
@@ -23,25 +26,49 @@ def segment_wigdet(v: Viewer):
     v.layers["segmented_object"].refresh()
 
 
-def image_series_annotator(image_paths, embedding_save_path, output_folder):
-    global PREDICTOR
+def increase_brush_size(v):
+    """
+    Change brush size in layer segmented object to correct the segmentation result manually
+    """
+    if v.layers.selection.active == v.layers["segmented_object"]:
+        v.layers["segmented_object"].brush_size += 1
+
+
+def decrease_brush_size(v):
+    """
+    Change brush size in layer segmented object to correct the segmentation result manually
+    """
+    if v.layers.selection.active == v.layers["segmented_object"]:
+        current_size = v.layers["segmented_object"].brush_size
+        if current_size > 1:
+            v.layers["segmented_object"].brush_size -= 1
+
+
+def image_series_annotator(embedding_save_path, output_folder):
+    global PREDICTOR, v, image_paths
 
     os.makedirs(output_folder, exist_ok=True)
 
     # get the sam predictor and precompute the image embeddings
     PREDICTOR = util.get_sam_model()
-    images = np.stack([imageio.imread(p) for p in image_paths])
-    image_embeddings = util.precompute_image_embeddings(PREDICTOR, images, save_path=embedding_save_path)
-    util.set_precomputed(PREDICTOR, image_embeddings, i=0)
+    image = imread(image_paths[0])
+
+    if len(image.shape) == 3:
+        image_embeddings = util.precompute_image_embeddings(PREDICTOR, rgb2gray(image))
+    else:
+        image_embeddings = util.precompute_image_embeddings(PREDICTOR, image)
+    util.set_precomputed(PREDICTOR, image_embeddings)
 
     v = napari.Viewer()
 
     # add the first image
     next_image_id = 0
-    v.add_image(images[0], name="image")
+    v.add_image(image, name="image")
 
     # add a layer for the segmented object
-    v.add_labels(data=np.zeros(images.shape[1:], dtype="uint32"), name="segmented_object")
+    v.add_labels(data=np.zeros(image.shape[:2], dtype="uint32"), name="segmented_object")
+    # default brush size
+    v.layers["segmented_object"].brush_size = 100
 
     # create the point layer for the sam prompts and add the widget for toggling the points
     labels = ["positive", "negative"]
@@ -69,28 +96,45 @@ def image_series_annotator(image_paths, embedding_save_path, output_folder):
 
     # bind the segmentation to a key 's'
     @v.bind_key("s")
-    def _segmet(v):
+    def _segment(v):
         segment_wigdet(v)
 
     #
     # the functionality for saving segmentations and going to the next image
     #
 
+    # bind increase brush size to up arrow key
+    @v.bind_key("Up")
+    def _increase_brush_size(v):
+        increase_brush_size(v)
+
+    @v.bind_key("Down")
+    def _decrease_brush_size(v):
+        decrease_brush_size(v)
+
     def _save_segmentation(seg, output_folder, image_path):
         fname = os.path.basename(image_path)
         save_path = os.path.join(output_folder, os.path.splitext(fname)[0] + ".tif")
-        imageio.imwrite(save_path, seg)
+        imsave(save_path, seg)
 
     def _next(v):
         nonlocal next_image_id
-        v.layers["image"].data = images[next_image_id]
-        util.set_precomputed(PREDICTOR, image_embeddings, i=next_image_id)
+        global image_path
+        if next_image_id == 0:
+            next_image_id += 1
+        v.layers["image"].data = imread(image_paths[next_image_id])
 
-        v.layers["segmented_object"].data = np.zeros(images[0].shape, dtype="uint32")
+        if len(v.layers["image"].data.shape) == 3:
+            image_embeddings = util.precompute_image_embeddings(PREDICTOR, rgb2gray(v.layers["image"].data))
+        else:
+            image_embeddings = util.precompute_image_embeddings(PREDICTOR, v.layers["image"].data)
+        util.set_precomputed(PREDICTOR, image_embeddings)
+
+        v.layers["segmented_object"].data = np.zeros(v.layers["image"].data.shape[:2], dtype="uint32")
         v.layers["prompts"].data = []
 
         next_image_id += 1
-        if next_image_id >= images.shape[0]:
+        if next_image_id >= len(image_paths):
             print("Last image!")
 
     @v.bind_key("n")
@@ -108,9 +152,19 @@ def image_series_annotator(image_paths, embedding_save_path, output_folder):
 
 # this uses data from the cell tracking challenge as example data
 # see 'sam_annotator_tracking' for examples
+
+parser = argparse.ArgumentParser(description='Segmentation of cells images')
+parser.add_argument('-p', '--path', metavar='N', type=str, help='Path to the folder containing the images to process')
+parser.add_argument('-e', '--extension', type=str, help='Extension of images (default is tif)', default="tif")
+
+args = parser.parse_args()
+
+
 def main():
-    image_paths = sorted(glob("./data/DIC-C2DH-HeLa/train/01/*.tif"))[:50]
-    image_series_annotator(image_paths, "./embeddings/embeddings-ctc.zarr", "segmented-series")
+    global image_paths
+    image_paths = sorted(glob(os.path.join(args.path, "*." + args.extension)))
+    output = os.path.join(os.path.split(image_paths[0])[0], "masks")
+    image_series_annotator("./embeddings/embeddings-ctc.zarr", output)
 
 
 if __name__ == "__main__":
