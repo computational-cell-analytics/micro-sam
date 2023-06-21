@@ -67,7 +67,7 @@ class TestSegmentFromPrompts(unittest.TestCase):
         self.assertGreater(util.compute_iou(mask, predicted), expected_iou_mask)
 
         # only with points
-        predicted = segment_from_mask(predictor, mask, use_box=False, use_mask=False, use_points=True)
+        predicted = segment_from_mask(predictor, mask, use_box=False, use_mask=False, use_points=True, box_extension=4)
         self.assertGreater(util.compute_iou(mask, predicted), 0.7)  # need to be more lenient for only points
 
         #

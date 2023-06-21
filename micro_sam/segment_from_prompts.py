@@ -15,15 +15,25 @@ from . import util
 #
 
 
-# TODO support box extension by a fraction (and then extend by that percentage of box len)
 # compute the bounding box from a mask. SAM expects the following input:
 # box (np.ndarray or None): A length 4 array given a box prompt to the model, in XYXY format.
 def _compute_box_from_mask(mask, original_size=None, box_extension=0):
     coords = np.where(mask == 1)
+    min_y, min_x = coords[0].min(), coords[1].min()
+    max_y, max_x = coords[0].max(), coords[1].max()
+
+    if box_extension == 0:  # no extension
+        extension_y, extension_x = 0, 0
+    elif box_extension >= 1:  # extension by a fixed factor
+        extension_y, extension_x = box_extension, box_extension
+    else:  # extension by fraction of the box len
+        len_y, len_x = max_y + 1 - min_y, max_x + 1 - min_x
+        extension_y = int(np.round(box_extension * len_y))
+        extension_x = int(np.round(box_extension * len_x))
+
     box = np.array([
-        max(coords[1].min() - box_extension, 0), max(coords[0].min() - box_extension, 0),
-        min(coords[1].max() + 1 + box_extension, mask.shape[1]),
-        min(coords[0].max() + 1 + box_extension, mask.shape[0]),
+        max(min_x - extension_x, 0), max(min_y - extension_y, 0),
+        min(max_x + 1 + extension_x, mask.shape[1]), min(max_y + 1 + extension_y, mask.shape[0]),
     ])
     if original_size is not None:
         trafo = ResizeLongestSide(max(original_size))
@@ -32,8 +42,8 @@ def _compute_box_from_mask(mask, original_size=None, box_extension=0):
 
 
 # sample points from a mask. SAM expects the following point inputs:
-def _compute_points_from_mask(mask, original_size):
-    box = _compute_box_from_mask(mask, box_extension=7)
+def _compute_points_from_mask(mask, original_size, box_extension):
+    box = _compute_box_from_mask(mask, box_extension=box_extension)
 
     # get slice and offset in python coordinate convention
     bb = (slice(box[1], box[3]), slice(box[0], box[2]))
@@ -266,7 +276,9 @@ def segment_from_mask(
     )
 
     if use_points:
-        point_coords, point_labels = _compute_points_from_mask(mask, original_size=original_size)
+        point_coords, point_labels = _compute_points_from_mask(
+            mask, original_size=original_size, box_extension=box_extension
+        )
     else:
         point_coords, point_labels = None, None
     box = _compute_box_from_mask(mask, original_size=original_size, box_extension=box_extension) if use_box else None

@@ -21,12 +21,11 @@ from .util import (
 #
 
 
-# TODO box extension
 # TODO refactor
 def _segment_volume(
     seg, predictor, image_embeddings, segmented_slices,
     stop_lower, stop_upper, iou_threshold, projection,
-    progress_bar=None,
+    progress_bar=None, box_extension=0,
 ):
     assert projection in ("mask", "bounding_box", "points")
     if projection == "mask":
@@ -48,7 +47,8 @@ def _segment_volume(
                 print(f"Segment {z_start} to {z_stop}: segmenting slice {z}")
             seg_prev = seg[z - increment]
             seg_z = segment_from_mask(predictor, seg_prev, image_embeddings=image_embeddings, i=z,
-                                      use_mask=use_mask, use_box=use_box, use_points=use_points)
+                                      use_mask=use_mask, use_box=use_box, use_points=use_points,
+                                      box_extension=box_extension)
             if threshold is not None:
                 iou = util.compute_iou(seg_prev, seg_z)
                 if iou < threshold:
@@ -93,7 +93,8 @@ def _segment_volume(
                 z = z_start + 1
                 seg_prompt = np.logical_or(seg[z_start] == 1, seg[z_stop] == 1)
                 seg[z] = segment_from_mask(predictor, seg_prompt, image_embeddings=image_embeddings, i=z,
-                                           use_mask=use_mask, use_box=use_box, use_points=use_points)
+                                           use_mask=use_mask, use_box=use_box, use_points=use_points,
+                                           box_extension=box_extension)
                 _update_progress()
 
             else:  # there is a range of more than 2 slices in between -> segment ranges
@@ -110,7 +111,8 @@ def _segment_volume(
                 if slice_diff % 2 == 0:
                     seg_prompt = np.logical_or(seg[z_mid - 1] == 1, seg[z_mid + 1] == 1)
                     seg[z_mid] = segment_from_mask(predictor, seg_prompt, image_embeddings=image_embeddings, i=z_mid,
-                                                   use_mask=use_mask, use_box=use_box, use_points=use_points)
+                                                   use_mask=use_mask, use_box=use_box, use_points=use_points,
+                                                   box_extension=box_extension)
                     _update_progress()
 
     return seg
@@ -150,7 +152,9 @@ def segment_slice_wigdet(v: Viewer):
 
 
 @magicgui(call_button="Segment Volume [V]", projection={"choices": ["default", "bounding_box", "mask", "points"]})
-def segment_volume_widget(v: Viewer, iou_threshold: float = 0.8, projection: str = "default"):
+def segment_volume_widget(
+    v: Viewer, iou_threshold: float = 0.8, projection: str = "default", box_extension: float = 0.1
+):
     # step 1: segment all slices with prompts
     shape = v.layers["raw"].data.shape
 
@@ -175,7 +179,7 @@ def segment_volume_widget(v: Viewer, iou_threshold: float = 0.8, projection: str
             seg, PREDICTOR, IMAGE_EMBEDDINGS, slices,
             stop_lower, stop_upper,
             iou_threshold=iou_threshold, projection=projection_,
-            progress_bar=progress_bar,
+            progress_bar=progress_bar, box_extension=box_extension,
         )
 
     v.layers["current_object"].data = seg

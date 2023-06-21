@@ -73,13 +73,14 @@ def _refine_mask(
     predictor, mask, original_size,
     pred_iou_thresh, stability_score_offset,
     stability_score_thresh, seg_id, verbose,
+    box_extension,
 ):
     # Predict masks and store them as mask data
     masks, iou_preds, _ = segment_from_mask(
         predictor, mask, original_size=original_size,
         multimask_output=True, return_logits=True, return_all=True,
         use_box=True, use_mask=True, use_points=False,
-        box_extension=4
+        box_extension=box_extension,
     )
     data = MaskData(
         masks=torch.from_numpy(masks),
@@ -127,7 +128,8 @@ def _refine_initial_segmentation(
     predictor, initial_seg, original_size,
     box_nms_thresh, with_background,
     pred_iou_thresh, stability_score_offset,
-    stability_score_thresh, verbose
+    stability_score_thresh, verbose,
+    box_extension,
 ):
     masks = MaskData()
 
@@ -142,6 +144,7 @@ def _refine_initial_segmentation(
             predictor, mask, original_size,
             pred_iou_thresh, stability_score_offset,
             stability_score_thresh, seg_id, verbose,
+            box_extension=box_extension
         )
         n_filtered_total += n_filtered
         n_filtered_stability_total += n_filtered_stability
@@ -185,7 +188,7 @@ def segment_instances_from_embeddings(
     stability_score_thresh=0.95, stability_score_offset=1.0,
     # general settings
     min_initial_size=10, min_size=0, with_background=False,
-    verbose=1, return_initial_segmentation=False,
+    verbose=1, return_initial_segmentation=False, box_extension=0.1,
 ):
     """
     """
@@ -215,6 +218,7 @@ def segment_instances_from_embeddings(
         box_nms_thresh=box_nms_thresh, with_background=with_background,
         pred_iou_thresh=pred_iou_thresh, stability_score_offset=stability_score_offset,
         stability_score_thresh=stability_score_thresh, verbose=verbose,
+        box_extension=box_extension,
     )
 
     if min_size > 0:

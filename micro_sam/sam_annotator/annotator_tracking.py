@@ -56,12 +56,11 @@ def _shift_object(mask, motion_model):
     return mask_shifted
 
 
-# TODO box extension
 # TODO division classifier
 def _track_from_prompts(
     point_prompts, box_prompts, seg, predictor, slices, image_embeddings,
     stop_upper, threshold, projection,
-    progress_bar=None, motion_smoothing=0.5,
+    progress_bar=None, motion_smoothing=0.5, box_extension=0,
 ):
     assert projection in ("mask", "bounding_box")
     if projection == "mask":
@@ -117,7 +116,7 @@ def _track_from_prompts(
                 seg_prev = _shift_object(seg_prev, motion_model)
 
             seg_t = segment_from_mask(predictor, seg_prev, image_embeddings=image_embeddings, i=t,
-                                      use_mask=use_mask, use_box=use_box)
+                                      use_mask=use_mask, use_box=use_box, box_extension=box_extension)
             track_state = "track"
 
             # are we beyond the last slice with prompt?
@@ -215,7 +214,8 @@ def segment_frame_wigdet(v: Viewer):
 
 @magicgui(call_button="Track Object [V]", projection={"choices": ["default", "bounding_box", "mask"]})
 def track_objet_widget(
-    v: Viewer, iou_threshold: float = 0.5, projection: str = "default", motion_smoothing: float = 0.5
+    v: Viewer, iou_threshold: float = 0.5, projection: str = "default",
+    motion_smoothing: float = 0.5, box_extension: float = 0.1,
 ):
     shape = v.layers["raw"].data.shape
 
@@ -236,6 +236,7 @@ def track_objet_widget(
             PREDICTOR, slices, IMAGE_EMBEDDINGS, stop_upper,
             threshold=iou_threshold, projection=projection_,
             progress_bar=progress_bar, motion_smoothing=motion_smoothing,
+            box_extension=box_extension,
         )
 
     # if a division has occurred and it's the first time it occurred for this track
