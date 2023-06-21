@@ -37,7 +37,7 @@ def fetch_example_data(save_directory):
         progressbar=True,
         processor=unpack,
     )
-    cell_tracking_directory = save_directory.joinpath("DIC-C2DH-HeLa", "01")
+    cell_tracking_directory = save_directory.joinpath("DIC-C2DH-HeLa", "train", "01")
     return cell_tracking_directory
 
 
