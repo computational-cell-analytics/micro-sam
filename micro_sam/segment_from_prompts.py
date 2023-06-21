@@ -19,8 +19,8 @@ from . import util
 # box (np.ndarray or None): A length 4 array given a box prompt to the model, in XYXY format.
 def _compute_box_from_mask(mask, original_size=None, box_extension=0):
     coords = np.where(mask == 1)
-    min_y, min_x = coords[0].min(), coords[0].min()
-    max_y, max_x = coords[1].max(), coords[1].max()
+    min_y, min_x = coords[0].min(), coords[1].min()
+    max_y, max_x = coords[0].max(), coords[1].max()
 
     if box_extension == 0:  # no extension
         extension_y, extension_x = 0, 0
