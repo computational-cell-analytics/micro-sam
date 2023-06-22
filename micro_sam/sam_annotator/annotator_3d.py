@@ -188,7 +188,7 @@ def segment_volume_widget(
 
 def annotator_3d(
     raw, embedding_path=None, show_embeddings=False, segmentation_result=None,
-    model_type="vit_h", tile_shape=None, halo=None,
+    model_type="vit_h", tile_shape=None, halo=None, return_viewer=False
 ):
     # for access to the predictor and the image embeddings in the widgets
     global PREDICTOR, IMAGE_EMBEDDINGS
@@ -280,6 +280,9 @@ def annotator_3d(
 
     # clear the initial points needed for workaround
     clear_prompts(v)
+
+    if return_viewer:
+        return v
     napari.run()
 
 
