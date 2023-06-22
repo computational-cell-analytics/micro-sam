@@ -349,7 +349,7 @@ def commit_tracking_widget(v: Viewer, layer: str = "current_track"):
 
 def annotator_tracking(
     raw, embedding_path=None, show_embeddings=False, tracking_result=None, model_type="vit_h",
-    tile_shape=None, halo=None,
+    tile_shape=None, halo=None, return_viewer=False,
 ):
     # global state
     global PREDICTOR, IMAGE_EMBEDDINGS, CURRENT_TRACK_ID, LINEAGE
@@ -475,6 +475,9 @@ def annotator_tracking(
 
     # clear the initial points needed for workaround
     clear_prompts(v)
+
+    if return_viewer:
+        return v
     napari.run()
 
 
