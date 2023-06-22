@@ -60,35 +60,25 @@ def autosegment_widget(
     v.layers["auto_segmentation"].refresh()
 
 
-def annotator_2d(
-    raw, embedding_path=None, show_embeddings=False, segmentation_result=None,
-    model_type="vit_h", tile_shape=None, halo=None, return_viewer=False,
-):
-    # for access to the predictor and the image embeddings in the widgets
-    global PREDICTOR, IMAGE_EMBEDDINGS, SAM
-
-    PREDICTOR, SAM = util.get_sam_model(model_type=model_type, return_sam=True)
-    IMAGE_EMBEDDINGS = util.precompute_image_embeddings(
-        PREDICTOR, raw, save_path=embedding_path, ndim=2, tile_shape=tile_shape, halo=halo
-    )
-    # we set the pre-computed image embeddings if we don't use tiling
-    # (if we use tiling we cannot directly set it because the tile will be chosen dynamically)
-    if tile_shape is None:
-        util.set_precomputed(PREDICTOR, IMAGE_EMBEDDINGS)
-
-    #
-    # initialize the viewer and add layers
-    #
-
-    v = Viewer()
-
-    v.add_image(raw)
+def _get_shape(raw):
     if raw.ndim == 2:
         shape = raw.shape
     elif raw.ndim == 3 and raw.shape[-1] == 3:
         shape = raw.shape[:2]
     else:
         raise ValueError(f"Invalid input image of shape {raw.shape}. Expect either 2D grayscale or 3D RGB image.")
+    return shape
+
+
+def _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings):
+    v = Viewer()
+
+    #
+    # initialize the viewer and add layers
+    #
+
+    v.add_image(raw)
+    shape = _get_shape(raw)
 
     v.add_labels(data=np.zeros(shape, dtype="uint32"), name="auto_segmentation")
     if segmentation_result is None:
@@ -157,15 +147,59 @@ def annotator_2d(
     def clear_prompts(v):
         clear_all_prompts(v)
 
+    return v
+
+
+def _update_viewer(v, raw, show_embeddings, segmentation_result):
+    if show_embeddings or segmentation_result is not None:
+        raise NotImplementedError
+
+    # update the image layer
+    v.layers["raw"].data = raw
+    shape = _get_shape(raw)
+
+    # update the segmentation layers
+    v.layers["auto_segmentation"].data = np.zeros(shape, dtype="uint32")
+    v.layers["committed_objects"].data = np.zeros(shape, dtype="uint32")
+    v.layers["current_object"].data = np.zeros(shape, dtype="uint32")
+
+
+def annotator_2d(
+    raw, embedding_path=None, show_embeddings=False, segmentation_result=None,
+    model_type="vit_h", tile_shape=None, halo=None, return_viewer=False, v=None,
+    predictor=None,
+):
+    # for access to the predictor and the image embeddings in the widgets
+    global PREDICTOR, IMAGE_EMBEDDINGS
+
+    if predictor is None:
+        PREDICTOR = util.get_sam_model(model_type=model_type)
+    else:
+        PREDICTOR = predictor
+    IMAGE_EMBEDDINGS = util.precompute_image_embeddings(
+        PREDICTOR, raw, save_path=embedding_path, ndim=2, tile_shape=tile_shape, halo=halo
+    )
+
+    # we set the pre-computed image embeddings if we don't use tiling
+    # (if we use tiling we cannot directly set it because the tile will be chosen dynamically)
+    if tile_shape is None:
+        util.set_precomputed(PREDICTOR, IMAGE_EMBEDDINGS)
+
+    # viewer is freshly initialized
+    if v is None:
+        v = _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings)
+    # we use an existing viewer and just update all the layers
+    else:
+        _update_viewer(v, raw, show_embeddings, segmentation_result)
+
     #
     # start the viewer
     #
-
-    # clear the initial points needed for workaround
-    clear_prompts(v)
+    clear_all_prompts(v)
 
     if return_viewer:
         return v
+
     napari.run()
 
 

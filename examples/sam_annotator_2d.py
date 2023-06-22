@@ -1,4 +1,4 @@
-import imageio
+import imageio.v3 as imageio
 from micro_sam.sam_annotator import annotator_2d
 
 
