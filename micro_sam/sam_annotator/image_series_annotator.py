@@ -87,12 +87,51 @@ def image_series_annotator(image_files, output_folder, embedding_path=None, **kw
     napari.run()
 
 
-def image_folder_annotator(root_folder, output_folder, pattern="*", embedding_path=None, **kwargs):
-    image_files = sorted(glob(os.path.join(root_folder, pattern)))
+def image_folder_annotator(input_folder, output_folder, pattern="*", embedding_path=None, **kwargs):
+    image_files = sorted(glob(os.path.join(input_folder, pattern)))
     image_series_annotator(image_files, output_folder, embedding_path, **kwargs)
 
 
-# TODO implement the CLI
 def main():
     import argparse
-    image_folder_annotator()
+
+    parser = argparse.ArgumentParser(description="Annotate a series of images from a folder.")
+    parser.add_argument(
+        "-i", "--input_folder", required=True,
+        help="The folder containing the image data. The data can be stored in any common format (tif, jpg, png, ...)."
+    )
+    parser.add_argument(
+        "-o", "--output_folder", required=True,
+        help="The folder where the segmentation results will be stored."
+    )
+    parser.add_argument(
+        "-p", "--pattern", default="*",
+        help="The pattern to select the images to annotator from the input folder. E.g. *.tif to annotate all tifs."
+        "By default all files in the folder will be loaded and annotated."
+    )
+    parser.add_argument(
+        "-e", "--embedding_path",
+        help="The filepath for saving/loading the pre-computed image embeddings. "
+        "NOTE: It is recommended to pass this argument and store the embeddings, "
+        "otherwise they will be recomputed every time (which can take a long time)."
+    )
+    parser.add_argument(
+        "--model_type", default="vit_h", help="The segment anything model that will be used, one of vit_h,l,b."
+    )
+    parser.add_argument(
+        "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
+    )
+    parser.add_argument(
+        "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
+    )
+
+    args = parser.parse_args()
+
+    if args.embedding_path is None:
+        warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
+
+    image_folder_annotator(
+        args.input_folder, args.output_folder, args.pattern,
+        embedding_path=args.embedding_path, model_type=args.model_type,
+        tile_shape=args.tile_shape, halo=args.halo,
+    )
