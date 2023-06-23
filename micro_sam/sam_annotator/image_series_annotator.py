@@ -5,13 +5,25 @@ import imageio.v3 as imageio
 import napari
 
 from magicgui import magicgui
+from napari.utils import progress as tqdm
 from .annotator_2d import annotator_2d
 from .. import util
 
 
-# TODO implement this
-def precompute_embeddings_for_image_series(predictor, image_files):
-    pass
+def precompute_embeddings_for_image_series(predictor, image_files, embedding_root, tile_shape, halo):
+    os.makedirs(embedding_root, exist_ok=True)
+    embedding_paths = []
+    for image_file in tqdm(image_files, desc="Precompute embeddings"):
+        fname = os.path.basename(image_file)
+        fname = os.path.splitext(fname)[0] + ".zarr"
+        embedding_path = os.path.join(embedding_root, fname)
+        image = imageio.imread(image_file)
+        util.precompute_image_embeddings(
+            predictor, image, save_path=embedding_path, ndim=2,
+            tile_shape=tile_shape, halo=halo
+        )
+        embedding_paths.append(embedding_path)
+    return embedding_paths
 
 
 def image_series_annotator(image_files, output_folder, embedding_path=None, **kwargs):
@@ -28,7 +40,9 @@ def image_series_annotator(image_files, output_folder, embedding_path=None, **kw
     if embedding_path is None:
         embedding_paths = None
     else:
-        embedding_paths = precompute_embeddings_for_image_series(predictor, image_files)
+        embedding_paths = precompute_embeddings_for_image_series(
+            predictor, image_files, embedding_path, kwargs.get("tile_shape", None), kwargs.get("halo", None)
+        )
 
     def _save_segmentation(image_path, segmentation):
         fname = os.path.basename(image_path)
@@ -54,6 +68,11 @@ def image_series_annotator(image_files, output_folder, embedding_path=None, **kw
 
         # load the next image
         next_image_id += 1
+        if next_image_id == len(image_files):
+            print("You have annotated the last image.")
+            v.close()
+            return
+
         print("Loading next image from:", image_files[next_image_id])
         image = imageio.imread(image_files[next_image_id])
         image_embedding_path = None if embedding_paths is None else embedding_paths[next_image_id]
