@@ -11,7 +11,8 @@ from .. import segment_instances
 from ..visualization import project_embeddings_for_visualization
 from .util import (
     clear_all_prompts, commit_segmentation_widget, create_prompt_menu,
-    prompt_layer_to_boxes, prompt_layer_to_points, prompt_segmentation, toggle_label, LABEL_COLOR_CYCLE
+    prompt_layer_to_boxes, prompt_layer_to_points, prompt_segmentation, toggle_label, LABEL_COLOR_CYCLE,
+    _initialize_parser,
 )
 
 
@@ -60,35 +61,25 @@ def autosegment_widget(
     v.layers["auto_segmentation"].refresh()
 
 
-def annotator_2d(
-    raw, embedding_path=None, show_embeddings=False, segmentation_result=None,
-    model_type="vit_h", tile_shape=None, halo=None, return_viewer=False,
-):
-    # for access to the predictor and the image embeddings in the widgets
-    global PREDICTOR, IMAGE_EMBEDDINGS, SAM
-
-    PREDICTOR, SAM = util.get_sam_model(model_type=model_type, return_sam=True)
-    IMAGE_EMBEDDINGS = util.precompute_image_embeddings(
-        PREDICTOR, raw, save_path=embedding_path, ndim=2, tile_shape=tile_shape, halo=halo
-    )
-    # we set the pre-computed image embeddings if we don't use tiling
-    # (if we use tiling we cannot directly set it because the tile will be chosen dynamically)
-    if tile_shape is None:
-        util.set_precomputed(PREDICTOR, IMAGE_EMBEDDINGS)
-
-    #
-    # initialize the viewer and add layers
-    #
-
-    v = Viewer()
-
-    v.add_image(raw)
+def _get_shape(raw):
     if raw.ndim == 2:
         shape = raw.shape
     elif raw.ndim == 3 and raw.shape[-1] == 3:
         shape = raw.shape[:2]
     else:
         raise ValueError(f"Invalid input image of shape {raw.shape}. Expect either 2D grayscale or 3D RGB image.")
+    return shape
+
+
+def _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings):
+    v = Viewer()
+
+    #
+    # initialize the viewer and add layers
+    #
+
+    v.add_image(raw)
+    shape = _get_shape(raw)
 
     v.add_labels(data=np.zeros(shape, dtype="uint32"), name="auto_segmentation")
     if segmentation_result is None:
@@ -157,66 +148,66 @@ def annotator_2d(
     def clear_prompts(v):
         clear_all_prompts(v)
 
+    return v
+
+
+def _update_viewer(v, raw, show_embeddings, segmentation_result):
+    if show_embeddings or segmentation_result is not None:
+        raise NotImplementedError
+
+    # update the image layer
+    v.layers["raw"].data = raw
+    shape = _get_shape(raw)
+
+    # update the segmentation layers
+    v.layers["auto_segmentation"].data = np.zeros(shape, dtype="uint32")
+    v.layers["committed_objects"].data = np.zeros(shape, dtype="uint32")
+    v.layers["current_object"].data = np.zeros(shape, dtype="uint32")
+
+
+def annotator_2d(
+    raw, embedding_path=None, show_embeddings=False, segmentation_result=None,
+    model_type="vit_h", tile_shape=None, halo=None, return_viewer=False, v=None,
+    predictor=None,
+):
+    # for access to the predictor and the image embeddings in the widgets
+    global PREDICTOR, IMAGE_EMBEDDINGS
+
+    if predictor is None:
+        PREDICTOR = util.get_sam_model(model_type=model_type)
+    else:
+        PREDICTOR = predictor
+    IMAGE_EMBEDDINGS = util.precompute_image_embeddings(
+        PREDICTOR, raw, save_path=embedding_path, ndim=2, tile_shape=tile_shape, halo=halo
+    )
+
+    # we set the pre-computed image embeddings if we don't use tiling
+    # (if we use tiling we cannot directly set it because the tile will be chosen dynamically)
+    if tile_shape is None:
+        util.set_precomputed(PREDICTOR, IMAGE_EMBEDDINGS)
+
+    # viewer is freshly initialized
+    if v is None:
+        v = _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings)
+    # we use an existing viewer and just update all the layers
+    else:
+        _update_viewer(v, raw, show_embeddings, segmentation_result)
+
     #
     # start the viewer
     #
-
-    # clear the initial points needed for workaround
-    clear_prompts(v)
+    clear_all_prompts(v)
 
     if return_viewer:
         return v
+
     napari.run()
 
 
 def main():
-    import argparse
     import warnings
 
-    parser = argparse.ArgumentParser(
-        description="Run interactive segmentation for an image."
-    )
-    parser.add_argument(
-        "-i", "--input", required=True,
-        help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
-        "or elf.io.open_file (e.g. hdf5, zarr, mrc) For the latter you also need to pass the 'key' parameter."
-    )
-    parser.add_argument(
-        "-k", "--key",
-        help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
-        "for a image series it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
-    )
-    parser.add_argument(
-        "-e", "--embedding_path",
-        help="The filepath for saving/loading the pre-computed image embeddings. "
-        "NOTE: It is recommended to pass this argument and store the embeddings, "
-        "otherwise they will be recomputed every time (which can take a long time)."
-    )
-    parser.add_argument(
-        "-s", "--segmentation_result",
-        help="Optional filepath to a precomputed segmentation. If passed this will be used to initialize the "
-        "'committed_objects' layer. This can be useful if you want to correct an existing segmentation or if you "
-        "have saved intermediate results from the annotator and want to continue with your annotations. "
-        "Supports the same file formats as 'input'."
-    )
-    parser.add_argument(
-        "-sk", "--segmentation_key",
-        help="The key for opening the segmentation data. Same rules as for 'key' apply."
-    )
-    parser.add_argument(
-        "--show_embeddings", action="store_true",
-        help="Visualize the embeddings computed by SegmentAnything. This can be helpful for debugging."
-    )
-    parser.add_argument(
-        "--model_type", default="vit_h", help="The segment anything model that will be used, one of vit_h,l,b."
-    )
-    parser.add_argument(
-        "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
-    )
-    parser.add_argument(
-        "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
-    )
-
+    parser = _initialize_parser(description="Run interactive segmentation for an image.")
     args = parser.parse_args()
     raw = util.load_image_data(args.input, ndim=2, key=args.key)
 

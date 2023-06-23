@@ -16,6 +16,7 @@ setup(
             "micro_sam.annotator_2d = micro_sam.sam_annotator.annotator_2d:main",
             "micro_sam.annotator_3d = micro_sam.sam_annotator.annotator_3d:main",
             "micro_sam.annotator_tracking = micro_sam.sam_annotator.annotator_tracking:main",
+            "micro_sam.image_series_annotator = micro_sam.sam_annotator.image_series_annotator:main",
             "micro_sam.precompute_embeddings = micro_sam.util:main",
         ]
     }

@@ -11,7 +11,8 @@ from ..visualization import project_embeddings_for_visualization
 from .util import (
     clear_all_prompts, commit_segmentation_widget, create_prompt_menu,
     prompt_layer_to_boxes, prompt_layer_to_points, prompt_segmentation,
-    segment_slices_with_prompts, toggle_label, LABEL_COLOR_CYCLE
+    segment_slices_with_prompts, toggle_label, LABEL_COLOR_CYCLE,
+    _initialize_parser
 )
 
 
@@ -287,53 +288,9 @@ def annotator_3d(
 
 
 def main():
-    import argparse
     import warnings
 
-    parser = argparse.ArgumentParser(
-        description="Run interactive segmentation for an image volume."
-    )
-    parser.add_argument(
-        "-i", "--input", required=True,
-        help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
-        "or elf.io.open_file (e.g. hdf5, zarr, mrc) For the latter you also need to pass the 'key' parameter."
-    )
-    parser.add_argument(
-        "-k", "--key",
-        help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
-        "for a image series it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
-    )
-    parser.add_argument(
-        "-e", "--embedding_path",
-        help="The filepath for saving/loading the pre-computed image embeddings. "
-        "NOTE: It is recommended to pass this argument and store the embeddings, "
-        "otherwise they will be recomputed every time (which can take a long time)."
-    )
-    parser.add_argument(
-        "-s", "--segmentation_result",
-        help="Optional filepath to a precomputed segmentation. If passed this will be used to initialize the "
-        "'committed_objects' layer. This can be useful if you want to correct an existing segmentation or if you "
-        "have saved intermediate results from the annotator and want to continue with your annotations. "
-        "Supports the same file formats as 'input'."
-    )
-    parser.add_argument(
-        "-sk", "--segmentation_key",
-        help="The key for opening the segmentation data. Same rules as for 'key' apply."
-    )
-    parser.add_argument(
-        "--show_embeddings", action="store_true",
-        help="Visualize the embeddings computed by SegmentAnything. This can be helpful for debugging."
-    )
-    parser.add_argument(
-        "--model_type", default="vit_h", help="The segment anything model that will be used, one of vit_h,l,b."
-    )
-    parser.add_argument(
-        "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
-    )
-    parser.add_argument(
-        "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
-    )
-
+    parser = _initialize_parser(description="Run interactive segmentation for an image volume.")
     args = parser.parse_args()
     raw = util.load_image_data(args.input, ndim=3, key=args.key)
 

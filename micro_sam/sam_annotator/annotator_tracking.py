@@ -16,7 +16,8 @@ from .util import (
     create_prompt_menu, clear_all_prompts,
     prompt_layer_to_boxes, prompt_layer_to_points,
     prompt_layer_to_state, prompt_segmentation,
-    segment_slices_with_prompts, toggle_label, LABEL_COLOR_CYCLE
+    segment_slices_with_prompts, toggle_label, LABEL_COLOR_CYCLE,
+    _initialize_parser
 )
 from ..visualization import project_embeddings_for_visualization
 
@@ -482,27 +483,11 @@ def annotator_tracking(
 
 
 def main():
-    import argparse
     import warnings
 
-    parser = argparse.ArgumentParser(
-        description="Run interactive segmentation for an image volume."
-    )
-    parser.add_argument(
-        "-i", "--input", required=True,
-        help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
-        "or elf.io.open_file (e.g. hdf5, zarr, mrc) For the latter you also need to pass the 'key' parameter."
-    )
-    parser.add_argument(
-        "-k", "--key",
-        help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
-        "for a image series it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
-    )
-    parser.add_argument(
-        "-e", "--embedding_path",
-        help="The filepath for saving/loading the pre-computed image embeddings. "
-        "NOTE: It is recommended to pass this argument and store the embeddings, "
-        "otherwise they will be recomputed every time (which can take a long time)."
+    parser = _initialize_parser(
+        description="Run interactive segmentation for an image volume.",
+        with_segmentation_result=False,
     )
     parser.add_argument(
         "-t", "--tracking_result",
@@ -514,19 +499,6 @@ def main():
     parser.add_argument(
         "-tk", "--tracking_key",
         help="The key for opening the tracking result. Same rules as for 'key' apply."
-    )
-    parser.add_argument(
-        "--show_embeddings", action="store_true",
-        help="Visualize the embeddings computed by SegmentAnything. This can be helpful for debugging."
-    )
-    parser.add_argument(
-        "--model_type", default="vit_h", help="The segment anything model that will be used, one of vit_h,l,b."
-    )
-    parser.add_argument(
-        "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
-    )
-    parser.add_argument(
-        "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
     )
 
     args = parser.parse_args()
