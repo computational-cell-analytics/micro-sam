@@ -2,6 +2,10 @@ import numpy as np
 from elf.segmentation.embeddings import embedding_pca
 
 
+#
+# PCA visualization for the image embeddings
+#
+
 def compute_pca(embeddings):
     """Compute the pca projection of the embeddings to visualize them as RGB image.
     """

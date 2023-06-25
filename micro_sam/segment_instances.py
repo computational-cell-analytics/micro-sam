@@ -75,13 +75,13 @@ def _refine_mask(
     predictor, mask, original_size,
     pred_iou_thresh, stability_score_offset,
     stability_score_thresh, seg_id, verbose,
-    box_extension,
+    box_extension, use_box, use_mask, use_points,
 ):
     # Predict masks and store them as mask data
     masks, iou_preds, _ = segment_from_mask(
         predictor, mask, original_size=original_size,
         multimask_output=True, return_logits=True, return_all=True,
-        use_box=True, use_mask=True, use_points=False,
+        use_box=use_box, use_mask=use_mask, use_points=use_points,
         box_extension=box_extension,
     )
     data = MaskData(
@@ -92,6 +92,7 @@ def _refine_mask(
     del masks
 
     n_masks = len(data["masks"])
+    iou_preds = data["iou_preds"].numpy()
     # Filter by predicted IoU
     if pred_iou_thresh > 0.0:
         keep_mask = data["iou_preds"] > pred_iou_thresh
@@ -106,6 +107,7 @@ def _refine_mask(
     data["stability_score"] = calculate_stability_score(
         data["masks"], predictor.model.mask_threshold, stability_score_offset
     )
+    stability_scores = data["stability_score"].numpy()
     if stability_score_thresh > 0.0:
         keep_mask = data["stability_score"] >= stability_score_thresh
         data.filter(keep_mask)
@@ -123,7 +125,12 @@ def _refine_mask(
     data["rles"] = mask_to_rle_pytorch(data["masks"])
     del data["masks"]
 
-    return data, n_masks - n_masks_filtered, n_masks_filtered - n_masks_filtered_stability
+    return (
+        data,
+        n_masks - n_masks_filtered,
+        n_masks_filtered - n_masks_filtered_stability,
+        iou_preds, stability_scores
+    )
 
 
 def _refine_initial_segmentation(
@@ -132,24 +139,31 @@ def _refine_initial_segmentation(
     pred_iou_thresh, stability_score_offset,
     stability_score_thresh, verbose,
     box_extension, return_mask_data,
+    use_box, use_mask, use_points,
 ):
     masks = MaskData()
 
     seg_ids = np.unique(initial_seg)
     n_filtered_total, n_filtered_stability_total = 0, 0
+    iou_preds, stability_scores = [], []
     for seg_id in tqdm(seg_ids, disable=not bool(verbose), desc="Refine masks for automatic instance segmentation"):
 
         # refine the segmentations via sam for this prediction
         mask = (initial_seg == seg_id)
         assert mask.shape == (256, 256)
-        mask_data, n_filtered, n_filtered_stability = _refine_mask(
+        (mask_data, n_filtered, n_filtered_stability,
+         this_iou_pred, this_stability_score) = _refine_mask(
             predictor, mask, original_size,
             pred_iou_thresh, stability_score_offset,
             stability_score_thresh, seg_id, verbose,
-            box_extension=box_extension
+            box_extension=box_extension,
+            use_box=use_box, use_mask=use_mask, use_points=use_points,
         )
         n_filtered_total += n_filtered
         n_filtered_stability_total += n_filtered_stability
+
+        iou_preds.append(this_iou_pred)
+        stability_scores.append(this_stability_score)
 
         # append to the mask data
         masks.cat(mask_data)
@@ -165,16 +179,30 @@ def _refine_initial_segmentation(
     masks.filter(keep_by_nms)
     n_masks_filtered = len(masks["boxes"])
 
+    iou_preds = np.concatenate(iou_preds)
+    stability_scores = np.concatenate(stability_scores)
+    stability_scores = stability_scores[~np.isnan(stability_scores)]
     if verbose > 1:
+        print("IoU Predictions:", np.mean(iou_preds), "+-", np.std(iou_preds))
         print(n_filtered_total, "masks were filtered out due to the IOU threshold", pred_iou_thresh)
+        print("Stability scores:", np.mean(stability_scores), "+-", np.std(stability_scores))
         print(
             n_filtered_stability_total, "masks were filtered out due to the stability threshold", stability_score_thresh
         )
         print(n_masks - n_masks_filtered, "masks were filtered out by nms with threshold", box_nms_thresh)
 
-    # get the mask output (binary masks and area
-    masks = [{"segmentation": rle_to_mask(rle), "area": len(rle), "seg_id": seg_id}
-             for rle, seg_id in zip(masks["rles"], masks["seg_id"])]
+    # get the mask outputs (area, scores and run length encoding)
+    masks = [
+        {
+            "area": len(rle["counts"]),
+            "iou_pred": iou_pred,
+            "segmentation": rle_to_mask(rle),
+            "seg_id": seg_id,
+            "stability_score": stability_score,
+        } for rle, seg_id, iou_pred, stability_score in zip(
+            masks["rles"], masks["seg_id"], masks["iou_preds"], masks["stability_score"]
+        )
+    ]
 
     if return_mask_data:
         return masks
@@ -201,6 +229,7 @@ def segment_instances_from_embeddings(
     # sam settings
     box_nms_thresh=0.7, pred_iou_thresh=0.88,
     stability_score_thresh=0.95, stability_score_offset=1.0,
+    use_box=True, use_mask=True, use_points=False,
     # general settings
     min_initial_size=5, min_size=0, with_background=False,
     verbose=1, return_initial_segmentation=False, box_extension=0.1,
@@ -235,6 +264,7 @@ def segment_instances_from_embeddings(
         pred_iou_thresh=pred_iou_thresh, stability_score_offset=stability_score_offset,
         stability_score_thresh=stability_score_thresh, verbose=verbose,
         box_extension=box_extension, return_mask_data=return_mask_data,
+        use_box=use_box, use_mask=use_mask, use_points=use_points,
     )
 
     if min_size > 0:
@@ -244,7 +274,7 @@ def segment_instances_from_embeddings(
         vigra.analysis.relabelConsecutive(segmentation, out=segmentation)
 
     if return_initial_segmentation:
-        initial_segmentation = _resize_segmentation(initial_segmentation, segmentation.shape)
+        initial_segmentation = _resize_segmentation(initial_segmentation, original_size)
         return segmentation, initial_segmentation
     else:
         return segmentation
