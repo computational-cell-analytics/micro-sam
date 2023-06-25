@@ -35,7 +35,7 @@ DEFAULT_OFFSETS = [[-1, 0], [0, -1], [-3, 0], [0, -3], [-9, 0], [0, -9]]
 #
 
 
-def _amg_to_seg(masks, shape, with_background):
+def _mask_data_to_segmentation(masks, shape, with_background):
     """Convert the output of the automatic mask generation to an instance segmentation."""
 
     masks = sorted(masks, key=(lambda x: x["area"]), reverse=True)
@@ -54,11 +54,13 @@ def _amg_to_seg(masks, shape, with_background):
     return segmentation
 
 
-def segment_instances_sam(sam, image, with_background=False, **kwargs):
+def segment_instances_sam(sam, image, with_background=False, return_mask_data=False, **kwargs):
     segmentor = SamAutomaticMaskGenerator(sam, **kwargs)
     image_ = util._to_image(image)
     masks = segmentor.generate(image_)
-    segmentation = _amg_to_seg(masks, image.shape, with_background)
+    if return_mask_data:
+        return masks
+    segmentation = _mask_data_to_segmentation(masks, image.shape, with_background)
     return segmentation
 
 
@@ -129,7 +131,7 @@ def _refine_initial_segmentation(
     box_nms_thresh, with_background,
     pred_iou_thresh, stability_score_offset,
     stability_score_thresh, verbose,
-    box_extension,
+    box_extension, return_mask_data,
 ):
     masks = MaskData()
 
@@ -174,8 +176,21 @@ def _refine_initial_segmentation(
     masks = [{"segmentation": rle_to_mask(rle), "area": len(rle), "seg_id": seg_id}
              for rle, seg_id in zip(masks["rles"], masks["seg_id"])]
 
+    if return_mask_data:
+        return masks
     # convert to instance segmentation
-    segmentation = _amg_to_seg(masks, original_size, with_background)
+    segmentation = _mask_data_to_segmentation(masks, original_size, with_background)
+    return segmentation
+
+
+def _resize_segmentation(segmentation, shape):
+    longest_size = max(shape)
+    longest_shape = (longest_size, longest_size)
+    segmentation = resize(
+        segmentation, longest_shape, order=0, preserve_range=True, anti_aliasing=False
+    ).astype(segmentation.dtype)
+    crop = tuple(slice(0, sh) for sh in shape)
+    segmentation = segmentation[crop]
     return segmentation
 
 
@@ -187,8 +202,9 @@ def segment_instances_from_embeddings(
     box_nms_thresh=0.7, pred_iou_thresh=0.88,
     stability_score_thresh=0.95, stability_score_offset=1.0,
     # general settings
-    min_initial_size=10, min_size=0, with_background=False,
+    min_initial_size=5, min_size=0, with_background=False,
     verbose=1, return_initial_segmentation=False, box_extension=0.1,
+    return_mask_data=False,
 ):
     """
     """
@@ -218,7 +234,7 @@ def segment_instances_from_embeddings(
         box_nms_thresh=box_nms_thresh, with_background=with_background,
         pred_iou_thresh=pred_iou_thresh, stability_score_offset=stability_score_offset,
         stability_score_thresh=stability_score_thresh, verbose=verbose,
-        box_extension=box_extension,
+        box_extension=box_extension, return_mask_data=return_mask_data,
     )
 
     if min_size > 0:
@@ -228,9 +244,7 @@ def segment_instances_from_embeddings(
         vigra.analysis.relabelConsecutive(segmentation, out=segmentation)
 
     if return_initial_segmentation:
-        initial_segmentation = resize(
-            initial_segmentation, segmentation.shape, order=0, preserve_range=True, anti_aliasing=False
-        ).astype(segmentation.dtype)
+        initial_segmentation = _resize_segmentation(initial_segmentation, segmentation.shape)
         return segmentation, initial_segmentation
     else:
         return segmentation
