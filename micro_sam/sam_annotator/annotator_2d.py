@@ -39,23 +39,34 @@ def segment_wigdet(v: Viewer):
     v.layers["current_object"].refresh()
 
 
-# TODO expose more parameters:
-# - min initial size
-# - advanced params???
 @magicgui(call_button="Automatic Segmentation")
 def autosegment_widget(
-    v: Viewer, with_background: bool = True, box_extension: float = 0.1, pred_iou_thresh: float = 0.88
+    v: Viewer,
+    with_background: bool = True,
+    pred_iou_thresh: float = 0.88,
+    stability_score_thresh: float = 0.95,
+    min_initial_size: int = 10,
+    use_box: bool = True,
+    use_mask: bool = True,
+    use_points: bool = False,
+    box_extension: float = 0.1,
 ):
     is_tiled = IMAGE_EMBEDDINGS["input_size"] is None
     if is_tiled:
         seg = segment_instances.segment_instances_from_embeddings_with_tiling(
             PREDICTOR, IMAGE_EMBEDDINGS, with_background=with_background,
             box_extension=box_extension, pred_iou_thresh=pred_iou_thresh,
+            stability_score_thresh=stability_score_thresh,
+            min_initial_size=min_initial_size,
+            use_box=use_box, use_points=use_points, use_mask=use_mask,
         )
     else:
         seg = segment_instances.segment_instances_from_embeddings(
             PREDICTOR, IMAGE_EMBEDDINGS, with_background=with_background,
             box_extension=box_extension, pred_iou_thresh=pred_iou_thresh,
+            stability_score_thresh=stability_score_thresh,
+            min_initial_size=min_initial_size,
+            use_box=use_box, use_points=use_points, use_mask=use_mask,
         )
     v.layers["auto_segmentation"].data = seg
     v.layers["auto_segmentation"].refresh()
