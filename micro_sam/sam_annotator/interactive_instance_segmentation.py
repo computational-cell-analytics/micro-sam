@@ -51,10 +51,6 @@ def interactive_instance_segmentation(
 ):
     """Visualizing and debugging automatic instance segmentation.
     """
-    # TODO add support for tiling
-    if tile_shape is not None:
-        raise NotImplementedError
-
     global PREDICTOR, IMAGE_EMBEDDINGS
 
     PREDICTOR = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint)
