@@ -10,7 +10,7 @@ def track_ctc_data():
     example_data_directory = "./data"
     with open_file(str(fetch_example_data(example_data_directory)), mode="r") as f:
         timeseries = f["*.tif"]
-    annotator_tracking(timeseries, embedding_path="./embeddings/embeddings-ctc.zarr")
+    annotator_tracking(timeseries, embedding_path="./embeddings/embeddings-ctc.zarr", show_embeddings=False)
 
 
 def fetch_example_data(save_directory):

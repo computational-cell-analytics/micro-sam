@@ -39,23 +39,34 @@ def segment_wigdet(v: Viewer):
     v.layers["current_object"].refresh()
 
 
-# TODO expose more parameters:
-# - min initial size
-# - advanced params???
 @magicgui(call_button="Automatic Segmentation")
 def autosegment_widget(
-    v: Viewer, with_background: bool = True, box_extension: float = 0.1, pred_iou_thresh: float = 0.88
+    v: Viewer,
+    with_background: bool = True,
+    pred_iou_thresh: float = 0.88,
+    stability_score_thresh: float = 0.95,
+    min_initial_size: int = 10,
+    use_box: bool = True,
+    use_mask: bool = True,
+    use_points: bool = False,
+    box_extension: float = 0.1,
 ):
     is_tiled = IMAGE_EMBEDDINGS["input_size"] is None
     if is_tiled:
         seg = segment_instances.segment_instances_from_embeddings_with_tiling(
             PREDICTOR, IMAGE_EMBEDDINGS, with_background=with_background,
             box_extension=box_extension, pred_iou_thresh=pred_iou_thresh,
+            stability_score_thresh=stability_score_thresh,
+            min_initial_size=min_initial_size,
+            use_box=use_box, use_points=use_points, use_mask=use_mask,
         )
     else:
         seg = segment_instances.segment_instances_from_embeddings(
             PREDICTOR, IMAGE_EMBEDDINGS, with_background=with_background,
             box_extension=box_extension, pred_iou_thresh=pred_iou_thresh,
+            stability_score_thresh=stability_score_thresh,
+            min_initial_size=min_initial_size,
+            use_box=use_box, use_points=use_points, use_mask=use_mask,
         )
     v.layers["auto_segmentation"].data = seg
     v.layers["auto_segmentation"].refresh()
@@ -90,11 +101,9 @@ def _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings):
     v.add_labels(data=np.zeros(shape, dtype="uint32"), name="current_object")
 
     # show the PCA of the image embeddings
-    if show_embeddings and tile_shape is None:
-        embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS["features"], shape)
+    if show_embeddings:
+        embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS)
         v.add_image(embedding_vis, name="embeddings", scale=scale)
-    elif show_embeddings:
-        warnings.warn("Embeddings cannot be shown for tiled prediction.")
 
     labels = ["positive", "negative"]
     prompts = v.add_points(
@@ -205,8 +214,6 @@ def annotator_2d(
 
 
 def main():
-    import warnings
-
     parser = _initialize_parser(description="Run interactive segmentation for an image.")
     args = parser.parse_args()
     raw = util.load_image_data(args.input, ndim=2, key=args.key)
