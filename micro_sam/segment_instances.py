@@ -290,12 +290,15 @@ class FakeInput:
 
 
 def segment_instances_from_embeddings_with_tiling(
-    predictor, image_embeddings, i=None, verbose=True, with_background=True, **kwargs
+    predictor, image_embeddings, i=None, verbose=True, with_background=True,
+    return_initial_segmentation=False, **kwargs,
  ):
     """
     """
     features = image_embeddings["features"]
     shape, tile_shape, halo = features.attrs["shape"], features.attrs["tile_shape"], features.attrs["halo"]
+
+    initial_segmentations = {}
 
     def segment_tile(_, tile_id):
         tile_features = features[tile_id]
@@ -304,10 +307,18 @@ def segment_instances_from_embeddings_with_tiling(
             "input_size": tile_features.attrs["input_size"],
             "original_size": tile_features.attrs["original_size"]
         }
-        seg = segment_instances_from_embeddings(
-            predictor, image_embeddings=tile_image_embeddings, i=i,
-            with_background=with_background, verbose=True, **kwargs,
-        )
+        if return_initial_segmentation:
+            seg, initial_seg = segment_instances_from_embeddings(
+                predictor, image_embeddings=tile_image_embeddings, i=i,
+                with_background=with_background, verbose=verbose,
+                return_initial_segmentation=True, **kwargs,
+            )
+            initial_segmentations[tile_id] = initial_seg
+        else:
+            seg = segment_instances_from_embeddings(
+                predictor, image_embeddings=tile_image_embeddings, i=i,
+                with_background=with_background, verbose=verbose, **kwargs,
+            )
         return seg
 
     # fake input data
@@ -317,6 +328,15 @@ def segment_instances_from_embeddings_with_tiling(
     segmentation = stitch_segmentation(
         input_, segment_tile, tile_shape, halo, with_background=with_background, verbose=verbose
     )
+
+    if return_initial_segmentation:
+        initial_segmentation = stitch_segmentation(
+            input_, lambda _, tile_id: initial_segmentations[tile_id],
+            tile_shape, halo,
+            with_background=with_background, verbose=verbose
+        )
+        return segmentation, initial_segmentation
+
     return segmentation
 
 
@@ -383,7 +403,7 @@ def segment_instances_from_embeddings_3d(predictor, image_embeddings, verbose=1,
     for z in tqdm(
         range(0, n_slices), total=n_slices, desc="Run instance segmentation in 3d", disable=not bool(verbose)
     ):
-        # TODO set to non verbose once the fix is in new napari version
+        # TODO set to non-verbose once new napari release is out
         seg = segmentation_function(predictor, image_embeddings, i=z, verbose=True, **kwargs)
         if z > 0:
             prev_seg = segmentation[z - 1]
