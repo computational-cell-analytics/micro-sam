@@ -90,11 +90,9 @@ def _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings):
     v.add_labels(data=np.zeros(shape, dtype="uint32"), name="current_object")
 
     # show the PCA of the image embeddings
-    if show_embeddings and tile_shape is None:
-        embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS["features"], shape)
+    if show_embeddings:
+        embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS)
         v.add_image(embedding_vis, name="embeddings", scale=scale)
-    elif show_embeddings:
-        warnings.warn("Embeddings cannot be shown for tiled prediction.")
 
     labels = ["positive", "negative"]
     prompts = v.add_points(
@@ -205,8 +203,6 @@ def annotator_2d(
 
 
 def main():
-    import warnings
-
     parser = _initialize_parser(description="Run interactive segmentation for an image.")
     args = parser.parse_args()
     raw = util.load_image_data(args.input, ndim=2, key=args.key)

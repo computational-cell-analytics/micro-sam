@@ -215,7 +215,7 @@ def annotator_3d(
 
     # show the PCA of the image embeddings
     if show_embeddings:
-        embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS["features"], raw.shape)
+        embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS)
         v.add_image(embedding_vis, name="embeddings", scale=scale)
 
     labels = ["positive", "negative"]

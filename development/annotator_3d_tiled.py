@@ -6,7 +6,7 @@ def annotator_with_tiling():
     with z5py.File("/home/pape/Work/data/cremi/sampleA.n5", "r") as f:
         raw = f["volumes/raw/s0"][:25]
     embedding_path = "./embeddings/embeddings-tiled_3d.zarr"
-    annotator_3d(raw, embedding_path, tile_shape=(512, 512), halo=(64, 64))
+    annotator_3d(raw, embedding_path, tile_shape=(512, 512), halo=(64, 64), show_embeddings=False)
 
 
 def segment_tiled():
@@ -25,8 +25,8 @@ def segment_tiled():
 
 
 def main():
-    # annotator_with_tiling()
-    segment_tiled()
+    annotator_with_tiling()
+    # segment_tiled()
 
 
 main()

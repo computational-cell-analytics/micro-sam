@@ -67,9 +67,7 @@ def interactive_instance_segmentation(
     v = napari.Viewer()
 
     v.add_image(raw)
-
-    # TODO adapt to tiled prediction
-    embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS["features"], shape)
+    embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS)
     v.add_image(embedding_vis, name="embeddings", scale=scale, visible=False)
     v.add_labels(data=np.zeros(shape, dtype="uint32"), name="initial_segmentation")
     v.add_labels(data=np.zeros(shape, dtype="uint32"), name="auto_segmentation")
