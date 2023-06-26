@@ -4,6 +4,7 @@ from napari import Viewer
 from magicgui import magicgui
 
 from .annotator_2d import _get_shape
+from .util import _initialize_parser
 from ..import util
 from ..import segment_instances
 from ..visualization import project_embeddings_for_visualization
@@ -71,3 +72,20 @@ def interactive_instance_segmentation(
     v.window.add_dock_widget(autosegment_widget)
 
     napari.run()
+
+
+def main():
+    parser = _initialize_parser(
+        description="Run the automatic instance segmentation in interactive mode"
+        "to determine the optimal segmentation parameters.",
+        with_segmentation_result=False, with_show_embeddings=False,
+    )
+    parser.add_argument(
+        "-c", "--checkpoint", default=None,
+        help="Path to alternative checkpoint instead of the standard model."
+    )
+    args = parser.parse_args()
+    raw = util.load_image_data(args.input, ndim=2, key=args.key)
+    interactive_instance_segmentation(
+        raw, args.embedding_path, args.model_type, args.tile_shape, args.halo, args.checkpoint
+    )

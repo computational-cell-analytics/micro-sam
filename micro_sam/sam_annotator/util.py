@@ -323,7 +323,7 @@ def toggle_label(prompts):
     prompts.refresh_colors()
 
 
-def _initialize_parser(description, with_segmentation_result=True):
+def _initialize_parser(description, with_segmentation_result=True, with_show_embeddings=True):
     parser = argparse.ArgumentParser(description=description)
 
     parser.add_argument(
@@ -336,6 +336,7 @@ def _initialize_parser(description, with_segmentation_result=True):
         help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
         "for a image series it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
     )
+
     parser.add_argument(
         "-e", "--embedding_path",
         help="The filepath for saving/loading the pre-computed image embeddings. "
@@ -356,10 +357,11 @@ def _initialize_parser(description, with_segmentation_result=True):
             help="The key for opening the segmentation data. Same rules as for 'key' apply."
         )
 
-    parser.add_argument(
-        "--show_embeddings", action="store_true",
-        help="Visualize the embeddings computed by SegmentAnything. This can be helpful for debugging."
-    )
+    if with_show_embeddings:
+        parser.add_argument(
+            "--show_embeddings", action="store_true",
+            help="Visualize the embeddings computed by SegmentAnything. This can be helpful for debugging."
+        )
     parser.add_argument(
         "--model_type", default="vit_h", help="The segment anything model that will be used, one of vit_h,l,b."
     )
