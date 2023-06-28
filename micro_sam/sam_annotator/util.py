@@ -110,6 +110,8 @@ def prompt_layer_to_boxes(prompt_layer, i=None, track_id=None):
     shape_data = prompt_layer.data
     shape_types = prompt_layer.shape_type
     assert len(shape_data) == len(shape_types)
+    if len(shape_data) == 0:
+        return []
 
     if i is None:
         # select all boxes that are rectangles
@@ -131,7 +133,7 @@ def prompt_layer_to_boxes(prompt_layer, i=None, track_id=None):
             ]
         else:
             track_ids = np.array(list(map(int, prompt_layer.properties["track_id"])))
-            assert len(track_ids) == len(shape_data)
+            assert len(track_ids) == len(shape_data), f"{len(track_ids)}, {len(shape_data)}"
             boxes = [
                 data[:, 1:] for data, stype, this_track_id in zip(shape_data, shape_types, track_ids)
                 if (stype == "rectangle" and (data[:, 0] == i).all() and this_track_id == track_id)
