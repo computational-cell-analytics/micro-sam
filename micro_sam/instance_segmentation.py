@@ -129,7 +129,7 @@ class _AMGBase(ABC):
 
         return mask_data
 
-    def _postprocess_masks(self, mask_data, min_mask_region_area, box_nms_thresh, crop_nms_thresh):
+    def _postprocess_masks(self, mask_data, min_mask_region_area, box_nms_thresh, crop_nms_thresh, output_mode):
         # Filter small disconnected regions and holes in masks
         if min_mask_region_area > 0:
             mask_data = self._postprocess_small_regions(
@@ -139,9 +139,9 @@ class _AMGBase(ABC):
             )
 
         # Encode masks
-        if self.output_mode == "coco_rle":
+        if output_mode == "coco_rle":
             mask_data["segmentations"] = [amg_utils.coco_encode_rle(rle) for rle in mask_data["rles"]]
-        elif self.output_mode == "binary_mask":
+        elif output_mode == "binary_mask":
             mask_data["segmentations"] = [amg_utils.rle_to_mask(rle) for rle in mask_data["rles"]]
         else:
             mask_data["segmentations"] = mask_data["rles"]
@@ -175,13 +175,23 @@ class AutomaticMaskGenerator(_AMGBase):
         crop_n_points_downscale_factor: int = 1,
         point_grids: Optional[List[np.ndarray]] = None,
     ):
+        if points_per_side is not None:
+            self.point_grids = amg_utils.build_all_layer_point_grids(
+                points_per_side,
+                crop_n_layers,
+                crop_n_points_downscale_factor,
+            )
+        elif point_grids is not None:
+            self.point_grids = point_grids
+        else:
+            raise ValueError("Can't have both points_per_side and point_grid be None or not None.")
+
         self.predictor = SamPredictor(model)
         self.points_per_side = points_per_side
         self.points_per_batch = points_per_batch
         self.crop_n_layers = crop_n_layers
         self.crop_overlap_ratio = crop_overlap_ratio
         self.crop_n_points_downscale_factor = crop_n_points_downscale_factor
-        self.point_grids = point_grids
 
         # the mask data that is computed by 'initialize'
         self._is_initialized = False
@@ -227,7 +237,7 @@ class AutomaticMaskGenerator(_AMGBase):
 
         return data
 
-    def _process_crop(self, image, crop_box, crop_layer_idx):
+    def _process_crop(self, image, crop_box, crop_layer_idx, verbose):
         # crop the image and calculate embeddings
         x0, y0, x1, y1 = crop_box
         cropped_im = image[y0:y1, x0:x1, :]
@@ -240,25 +250,32 @@ class AutomaticMaskGenerator(_AMGBase):
 
         # generate masks for this crop in batches
         data = amg_utils.MaskData()
-        for (points,) in amg_utils.batch_iterator(self.points_per_batch, points_for_image):
+        n_batches = len(points_for_image) // self.points_per_batch +\
+            int(len(points_for_image) % self.points_per_batch != 0)
+        for (points,) in tqdm(
+            amg_utils.batch_iterator(self.points_per_batch, points_for_image),
+            disable=not verbose, total=n_batches,
+            desc="Predict masks for point grid prompts",
+        ):
             batch_data = self._process_batch(points, cropped_im_size)
             data.cat(batch_data)
             del batch_data
-        self.predictor.reset_image()
 
+        self.predictor.reset_image()
         return data
 
     @torch.no_grad()
-    def initialize(self, image: np.ndarray):
+    def initialize(self, image: np.ndarray, verbose=False):
         """
         """
-        orig_size = image.shape[2:]
+        image = util._to_image(image)
+        orig_size = image.shape[:2]
         crop_boxes, layer_idxs = amg_utils.generate_crop_boxes(
             orig_size, self.crop_n_layers, self.crop_overlap_ratio
         )
         crop_list = []
         for crop_box, layer_idx in zip(crop_boxes, layer_idxs):
-            crop_data = self._process_crop(image, crop_box, layer_idx)
+            crop_data = self._process_crop(image, crop_box, layer_idx, verbose=verbose)
             crop_list.append(crop_data)
 
         self._is_initialized = True
@@ -302,8 +319,8 @@ class AutomaticMaskGenerator(_AMGBase):
             )
             data.filter(keep_by_nms)
 
-        data = data.to_numpy()
-        masks = self._postprocess_masks(data, min_mask_region_area, box_nms_thresh, crop_nms_thresh)
+        data.to_numpy()
+        masks = self._postprocess_masks(data, min_mask_region_area, box_nms_thresh, crop_nms_thresh, output_mode)
         return masks
 
 
@@ -333,7 +350,7 @@ class EmbeddingBasedMaskGenerator(_AMGBase):
 #
 
 
-def _mask_data_to_segmentation(masks, shape, with_background):
+def mask_data_to_segmentation(masks, shape, with_background):
     """Convert the output of the automatic mask generation to an instance segmentation."""
 
     masks = sorted(masks, key=(lambda x: x["area"]), reverse=True)
@@ -349,16 +366,6 @@ def _mask_data_to_segmentation(masks, shape, with_background):
             segmentation[segmentation == bg_id] = 0
         vigra.analysis.relabelConsecutive(segmentation, out=segmentation)
 
-    return segmentation
-
-
-def segment_instances_sam(sam, image, with_background=False, return_mask_data=False, **kwargs):
-    segmentor = SamAutomaticMaskGenerator(sam, **kwargs)
-    image_ = util._to_image(image)
-    masks = segmentor.generate(image_)
-    if return_mask_data:
-        return masks
-    segmentation = _mask_data_to_segmentation(masks, image.shape, with_background)
     return segmentation
 
 
@@ -505,7 +512,7 @@ def _refine_initial_segmentation(
     if return_mask_data:
         return masks
     # convert to instance segmentation
-    segmentation = _mask_data_to_segmentation(masks, original_size, with_background)
+    segmentation = mask_data_to_segmentation(masks, original_size, with_background)
     return segmentation
 
 

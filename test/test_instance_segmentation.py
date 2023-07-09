@@ -35,14 +35,24 @@ class TestInstanceSegmentation(unittest.TestCase):
         predictor, sam = util.get_sam_model(model_type="vit_b", return_sam=True)
         return predictor, sam
 
-    @unittest.skip("This test takes very long.")
-    def test_instance_segmentation_sam(self):
-        from micro_sam.instance_segmentation import instance_segmentation_sam
+    # @unittest.skip("This test takes very long.")
+    def test_automatic_mask_generator(self):
+        from micro_sam.instance_segmentation import AutomaticMaskGenerator, mask_data_to_segmentation
 
         mask, image = self._get_input()
         _, sam = self._get_model()
 
-        predicted = instance_segmentation_sam(sam, image)
+        amg = AutomaticMaskGenerator(sam, points_per_side=12, points_per_batch=16)
+        amg.initialize(image, verbose=True)
+        predicted = amg.generate()
+        predicted = mask_data_to_segmentation(predicted, image.shape, with_background=True)
+
+        import napari
+        v = napari.Viewer()
+        v.add_image(image)
+        v.add_labels(predicted)
+        napari.run()
+
         self.assertGreater(matching(predicted, mask, threshold=0.75)["precision"], 0.99)
 
     def test_instance_segmentation_from_embeddings(self):
