@@ -8,7 +8,7 @@ from skimage.draw import disk
 from skimage.measure import label
 
 
-class TestSegmentInstances(unittest.TestCase):
+class TestInstanceSegmentation(unittest.TestCase):
 
     # create an input image with three objects
     def _get_input(self, shape=(512, 512)):
@@ -36,17 +36,17 @@ class TestSegmentInstances(unittest.TestCase):
         return predictor, sam
 
     @unittest.skip("This test takes very long.")
-    def test_segment_instances_sam(self):
-        from micro_sam.segment_instances import segment_instances_sam
+    def test_instance_segmentation_sam(self):
+        from micro_sam.instance_segmentation import instance_segmentation_sam
 
         mask, image = self._get_input()
         _, sam = self._get_model()
 
-        predicted = segment_instances_sam(sam, image)
+        predicted = instance_segmentation_sam(sam, image)
         self.assertGreater(matching(predicted, mask, threshold=0.75)["precision"], 0.99)
 
-    def test_segment_instances_from_embeddings(self):
-        from micro_sam.segment_instances import segment_instances_from_embeddings
+    def test_instance_segmentation_from_embeddings(self):
+        from micro_sam.instance_segmentation import instance_segmentation_from_embeddings
 
         mask, image = self._get_input()
         predictor, _ = self._get_model()
@@ -54,7 +54,7 @@ class TestSegmentInstances(unittest.TestCase):
         image_embeddings = util.precompute_image_embeddings(predictor, image)
         util.set_precomputed(predictor, image_embeddings)
 
-        predicted = segment_instances_from_embeddings(
+        predicted = instance_segmentation_from_embeddings(
             predictor, image_embeddings, min_initial_size=0, with_background=True, box_extension=5,
         )
 

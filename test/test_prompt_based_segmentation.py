@@ -6,7 +6,7 @@ import numpy as np
 from skimage.draw import disk
 
 
-class TestSegmentFromPrompts(unittest.TestCase):
+class TestPromptBasedSegmentation(unittest.TestCase):
     @staticmethod
     def _get_input(shape=(256, 256)):
         mask = np.zeros(shape, dtype="uint8")
@@ -31,7 +31,7 @@ class TestSegmentFromPrompts(unittest.TestCase):
         cls.predictor = cls._get_model(cls.image)
 
     def test_segment_from_points(self):
-        from micro_sam.segment_from_prompts import segment_from_points
+        from micro_sam.prompt_based_segmentation import segment_from_points
 
         points = np.array([[128, 128], [64, 64], [192, 192], [64, 192], [192, 64]])
         labels = np.array([1, 0, 0, 0, 0])
@@ -40,7 +40,7 @@ class TestSegmentFromPrompts(unittest.TestCase):
         self.assertGreater(util.compute_iou(self.mask, predicted), 0.9)
 
     def _test_segment_from_mask(self, shape=(256, 256)):
-        from micro_sam.segment_from_prompts import segment_from_mask
+        from micro_sam.prompt_based_segmentation import segment_from_mask
 
         # we need to recompute the embedding if we have the non-square image
         # and we also need to set a lower expected iou when using only a mask prompt
@@ -97,14 +97,14 @@ class TestSegmentFromPrompts(unittest.TestCase):
         self._test_segment_from_mask((256, 384))
 
     def test_segment_from_box(self):
-        from micro_sam.segment_from_prompts import segment_from_box
+        from micro_sam.prompt_based_segmentation import segment_from_box
 
         box = np.array([106, 106, 150, 150])
         predicted = segment_from_box(self.predictor, box)
         self.assertGreater(util.compute_iou(self.mask, predicted), 0.9)
 
     def test_segment_from_box_and_points(self):
-        from micro_sam.segment_from_prompts import segment_from_box_and_points
+        from micro_sam.prompt_based_segmentation import segment_from_box_and_points
 
         box = np.array([106, 106, 150, 150])
         points = np.array([[128, 128], [64, 64], [192, 192], [64, 192], [192, 64]])
