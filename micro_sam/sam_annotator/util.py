@@ -6,7 +6,7 @@ from magicgui import magicgui
 from magicgui.widgets import ComboBox, Container
 from napari import Viewer
 
-from ..segment_from_prompts import segment_from_box, segment_from_box_and_points, segment_from_points
+from ..prompt_based_segmentation import segment_from_box, segment_from_box_and_points, segment_from_points
 
 # Green and Red
 LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]

@@ -6,7 +6,7 @@ from napari import Viewer
 from napari.utils import progress
 
 from .. import util
-from ..segment_from_prompts import segment_from_mask
+from ..prompt_based_segmentation import segment_from_mask
 from ..visualization import project_embeddings_for_visualization
 from .util import (
     clear_all_prompts, commit_segmentation_widget, create_prompt_menu,

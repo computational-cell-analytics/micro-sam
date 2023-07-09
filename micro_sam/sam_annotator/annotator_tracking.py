@@ -11,7 +11,7 @@ from scipy.ndimage import shift
 # from vigra.filters import eccentricityCenters
 
 from .. import util
-from ..segment_from_prompts import segment_from_mask
+from ..prompt_based_segmentation import segment_from_mask
 from .util import (
     create_prompt_menu, clear_all_prompts,
     prompt_layer_to_boxes, prompt_layer_to_points,

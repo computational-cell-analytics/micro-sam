@@ -6,7 +6,7 @@ from magicgui import magicgui
 from .annotator_2d import _get_shape
 from .util import _initialize_parser
 from ..import util
-from ..import segment_instances
+from ..import instance_segmentation
 from ..visualization import project_embeddings_for_visualization
 
 
@@ -24,7 +24,7 @@ def autosegment_widget(
 ):
     is_tiled = IMAGE_EMBEDDINGS["input_size"] is None
     if is_tiled:
-        seg, initial_seg = segment_instances.segment_instances_from_embeddings_with_tiling(
+        seg, initial_seg = instance_segmentation.segment_instances_from_embeddings_with_tiling(
             PREDICTOR, IMAGE_EMBEDDINGS, with_background=with_background,
             box_extension=box_extension, pred_iou_thresh=pred_iou_thresh,
             stability_score_thresh=stability_score_thresh,
@@ -32,7 +32,7 @@ def autosegment_widget(
             use_box=use_box, use_mask=use_mask, use_points=use_points,
         )
     else:
-        seg, initial_seg = segment_instances.segment_instances_from_embeddings(
+        seg, initial_seg = instance_segmentation.segment_instances_from_embeddings(
             PREDICTOR, IMAGE_EMBEDDINGS, with_background=with_background,
             box_extension=box_extension, pred_iou_thresh=pred_iou_thresh,
             stability_score_thresh=stability_score_thresh,
