@@ -7,7 +7,7 @@ from magicgui import magicgui
 from napari import Viewer
 
 from .. import util
-from .. import segment_instances
+from .. import instance_segmentation
 from ..visualization import project_embeddings_for_visualization
 from .util import (
     clear_all_prompts, commit_segmentation_widget, create_prompt_menu,
@@ -53,7 +53,7 @@ def autosegment_widget(
 ):
     is_tiled = IMAGE_EMBEDDINGS["input_size"] is None
     if is_tiled:
-        seg = segment_instances.segment_instances_from_embeddings_with_tiling(
+        seg = instance_segmentation.segment_instances_from_embeddings_with_tiling(
             PREDICTOR, IMAGE_EMBEDDINGS, with_background=with_background,
             box_extension=box_extension, pred_iou_thresh=pred_iou_thresh,
             stability_score_thresh=stability_score_thresh,
@@ -61,7 +61,7 @@ def autosegment_widget(
             use_box=use_box, use_points=use_points, use_mask=use_mask,
         )
     else:
-        seg = segment_instances.segment_instances_from_embeddings(
+        seg = instance_segmentation.segment_instances_from_embeddings(
             PREDICTOR, IMAGE_EMBEDDINGS, with_background=with_background,
             box_extension=box_extension, pred_iou_thresh=pred_iou_thresh,
             stability_score_thresh=stability_score_thresh,
