@@ -14,7 +14,7 @@ class PointAndBoxPromptGenerator:
         if self.get_point_prompts is False and self.get_box_prompts is False:
             raise ValueError("You need to request for box/point prompts or both")
 
-    def __call__(self, gt, gt_id, center_coordinates, bbox_coordinates):
+    def __call__(self, gt, gt_id, bbox_coordinates, center_coordinates=None):
         """
         Parameters:
             gt: True Labels
@@ -25,17 +25,23 @@ class PointAndBoxPromptGenerator:
         coord_list = []
         label_list = []
 
-        # getting the center coordinate as the first positive point
-        coord_list.append(tuple(map(int, center_coordinates)))  # to get int coords instead of float
-        label_list.append(1)
+        if center_coordinates is not None:
+            # getting the center coordinate as the first positive point (OPTIONAL)
+            coord_list.append(tuple(map(int, center_coordinates)))  # to get int coords instead of float
+            label_list.append(1)
+
+            # getting the additional positive points by randomly sampling points from this mask except the center coordinate
+            n_positive_remaining = self.n_positive_points - 1
+
+        else:
+            # need to sample "self.n_positive_points" number of points
+            n_positive_remaining = self.n_positive_points
 
         if self.get_box_prompts:
             bbox_list = [bbox_coordinates]
 
         object_mask = gt == gt_id
 
-        # getting the additional positive points by randomly sampling points from this mask
-        n_positive_remaining = self.n_positive_points - 1
         if n_positive_remaining > 0:
             # all coordinates of our current object
             object_coordinates = np.where(object_mask)
