@@ -9,9 +9,9 @@ from skimage.measure import label
 
 
 class TestInstanceSegmentation(unittest.TestCase):
-
     # create an input image with three objects
-    def _get_input(self, shape=(512, 512)):
+    @staticmethod
+    def _get_input(shape=(256, 256)):
         mask = np.zeros(shape, dtype="uint8")
 
         def write_object(center, radius):
@@ -31,30 +31,40 @@ class TestInstanceSegmentation(unittest.TestCase):
         mask = label(mask)
         return mask, image
 
-    def _get_model(self):
-        return util.get_sam_model(model_type="vit_b", return_sam=False)
+    @staticmethod
+    def _get_model(image):
+        predictor = util.get_sam_model(model_type="vit_b")
+        image_embeddings = util.precompute_image_embeddings(predictor, image)
+        return predictor, image_embeddings
+
+    # we compute the default mask and predictor once for the class
+    # so that we don't have to precompute it every time
+    @classmethod
+    def setUpClass(cls):
+        cls.mask, cls.image = cls._get_input()
+        cls.predictor, cls.image_embeddings = cls._get_model(cls.image)
 
     def test_automatic_mask_generator(self):
         from micro_sam.instance_segmentation import AutomaticMaskGenerator, mask_data_to_segmentation
 
-        mask, image = self._get_input(shape=(256, 256))
-        predictor = self._get_model()
+        mask, image = self.mask, self.image
+        predictor, image_embeddings = self.predictor, self.image_embeddings
 
         amg = AutomaticMaskGenerator(predictor, points_per_side=10, points_per_batch=16)
-        amg.initialize(image, verbose=False)
+        amg.initialize(image, image_embeddings=image_embeddings, verbose=False)
         predicted = amg.generate()
         predicted = mask_data_to_segmentation(predicted, image.shape, with_background=True)
 
         self.assertGreater(matching(predicted, mask, threshold=0.75)["precision"], 0.99)
 
-    def test_embedding_based_mask_generator(self):
+    def test_embedding_mask_generator(self):
         from micro_sam.instance_segmentation import EmbeddingMaskGenerator, mask_data_to_segmentation
 
-        mask, image = self._get_input()
-        predictor = self._get_model()
+        mask, image = self.mask, self.image
+        predictor, image_embeddings = self.predictor, self.image_embeddings
 
         amg = EmbeddingMaskGenerator(predictor)
-        amg.initialize(image, verbose=False)
+        amg.initialize(image, image_embeddings=image_embeddings, verbose=False)
         predicted = amg.generate(pred_iou_thresh=0.96)
         predicted = mask_data_to_segmentation(predicted, image.shape, with_background=True)
 

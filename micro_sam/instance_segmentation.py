@@ -288,12 +288,14 @@ class AutomaticMaskGenerator(_AMGBase):
 
         return data
 
-    def _process_crop(self, image, crop_box, crop_layer_idx, verbose):
+    def _process_crop(self, image, crop_box, crop_layer_idx, verbose, precomputed_embeddings):
         # crop the image and calculate embeddings
         x0, y0, x1, y1 = crop_box
         cropped_im = image[y0:y1, x0:x1, :]
         cropped_im_size = cropped_im.shape[:2]
-        self.predictor.set_image(cropped_im)
+
+        if not precomputed_embeddings:
+            self.predictor.set_image(cropped_im)
 
         # get the points for this crop
         points_scale = np.array(cropped_im_size)[None, ::-1]
@@ -312,23 +314,39 @@ class AutomaticMaskGenerator(_AMGBase):
             data.cat(batch_data)
             del batch_data
 
-        self.predictor.reset_image()
+        if not precomputed_embeddings:
+            self.predictor.reset_image()
+
         return data
 
-    # TODO enable initializeing with embeddings
-    # (which can be done for only a single crop box)
     @torch.no_grad()
-    def initialize(self, image: np.ndarray, verbose=False):
+    def initialize(self, image: np.ndarray, image_embeddings=None, i=None, embedding_path=None, verbose=False):
         """
         """
-        image = util._to_image(image)
         original_size = image.shape[:2]
         crop_boxes, layer_idxs = amg_utils.generate_crop_boxes(
             original_size, self.crop_n_layers, self.crop_overlap_ratio
         )
+
+        # we can set fixed image embeddings if we only have a single crop box
+        # (which is the default setting)
+        # otherwise we have to recompute the embeddings for each crop and can't precompute
+        if len(crop_boxes) == 1:
+            if image_embeddings is None:
+                image_embeddings = util.precompute_image_embeddings(self.predictor, image, save_path=embedding_path)
+            util.set_precomputed(self.predictor, image_embeddings, i=i)
+            precomputed_embeddings = True
+        else:
+            precomputed_embeddings = False
+
+        # we need to cast to the image representation that is compatible with SAM
+        image = util._to_image(image)
+
         crop_list = []
         for crop_box, layer_idx in zip(crop_boxes, layer_idxs):
-            crop_data = self._process_crop(image, crop_box, layer_idx, verbose=verbose)
+            crop_data = self._process_crop(
+                image, crop_box, layer_idx, verbose=verbose, precomputed_embeddings=precomputed_embeddings
+            )
             crop_list.append(crop_data)
 
         self._is_initialized = True
