@@ -32,36 +32,36 @@ class TestInstanceSegmentation(unittest.TestCase):
         return mask, image
 
     def _get_model(self):
-        predictor, sam = util.get_sam_model(model_type="vit_b", return_sam=True)
-        return predictor, sam
+        return util.get_sam_model(model_type="vit_b", return_sam=False)
 
     def test_automatic_mask_generator(self):
         from micro_sam.instance_segmentation import AutomaticMaskGenerator, mask_data_to_segmentation
 
         mask, image = self._get_input(shape=(256, 256))
-        _, sam = self._get_model()
+        predictor = self._get_model()
 
-        amg = AutomaticMaskGenerator(sam, points_per_side=10, points_per_batch=16)
+        amg = AutomaticMaskGenerator(predictor, points_per_side=10, points_per_batch=16)
         amg.initialize(image, verbose=False)
         predicted = amg.generate()
         predicted = mask_data_to_segmentation(predicted, image.shape, with_background=True)
 
         self.assertGreater(matching(predicted, mask, threshold=0.75)["precision"], 0.99)
 
-    def test_instance_segmentation_from_embeddings(self):
-        from micro_sam.instance_segmentation import instance_segmentation_from_embeddings
+    def test_embedding_based_mask_generator(self):
+        from micro_sam.instance_segmentation import EmbeddingBasedMaskGenerator, mask_data_to_segmentation
 
         mask, image = self._get_input()
-        predictor, _ = self._get_model()
+        predictor = self._get_model()
 
-        image_embeddings = util.precompute_image_embeddings(predictor, image)
-        util.set_precomputed(predictor, image_embeddings)
-
-        predicted = instance_segmentation_from_embeddings(
-            predictor, image_embeddings, min_initial_size=0, with_background=True, box_extension=5,
-        )
+        amg = EmbeddingBasedMaskGenerator(predictor)
+        amg.initialize(image, verbose=False)
+        predicted = amg.generate(pred_iou_thresh=0.96)
+        predicted = mask_data_to_segmentation(predicted, image.shape, with_background=True)
 
         self.assertGreater(matching(predicted, mask, threshold=0.75)["precision"], 0.99)
+
+        initial_seg = amg.get_initial_segmentation()
+        self.assertEqual(initial_seg.shape, image.shape)
 
 
 if __name__ == "__main__":

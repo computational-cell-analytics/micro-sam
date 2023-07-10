@@ -12,7 +12,6 @@ from elf.segmentation.stitching import stitch_segmentation
 from nifty.tools import takeDict
 from scipy.optimize import linear_sum_assignment
 
-from segment_anything.modeling import Sam
 from segment_anything.predictor import SamPredictor
 
 from skimage.transform import resize
@@ -26,12 +25,33 @@ except ImportError:
 from . import util
 from .prompt_based_segmentation import segment_from_mask
 
-DEFAULT_OFFSETS = [[-1, 0], [0, -1], [-3, 0], [0, -3], [-9, 0], [0, -9]]
-
 
 class _AMGBase(ABC):
     """
     """
+    def __init__(self):
+        # the data that has to be computed by the 'initialize' method
+        # of the child classes
+        self._is_initialized = False
+        self._crop_list = None
+        self._crop_boxes = None
+        self._orig_size = None
+
+    @property
+    def is_initialized(self):
+        return self._is_initialized
+
+    @property
+    def crop_list(self):
+        return self._crop_list
+
+    @property
+    def crop_boxes(self):
+        return self._crop_boxes
+
+    @property
+    def orig_size(self):
+        return self._orig_size
 
     def _postprocess_batch(
         self,
@@ -81,10 +101,15 @@ class _AMGBase(ABC):
         )
         data.filter(keep_by_nms)
 
-        # Return to the original image frame
+        # return to the original image frame
         data["boxes"] = amg_utils.uncrop_boxes_xyxy(data["boxes"], crop_box)
-        data["points"] = amg_utils.uncrop_points(data["points"], crop_box)
         data["crop_boxes"] = torch.tensor([crop_box for _ in range(len(data["rles"]))])
+        # the data from embedding based segmentation doesn't have the points
+        # so we skip if the corresponding key can't be found
+        try:
+            data["points"] = amg_utils.uncrop_points(data["points"], crop_box)
+        except KeyError:
+            pass
 
         return data
 
@@ -93,7 +118,7 @@ class _AMGBase(ABC):
         if len(mask_data["rles"]) == 0:
             return mask_data
 
-        # Filter small disconnected regions and holes
+        # filter small disconnected regions and holes
         new_masks = []
         scores = []
         for rle in mask_data["rles"]:
@@ -105,11 +130,11 @@ class _AMGBase(ABC):
             unchanged = unchanged and not changed
 
             new_masks.append(torch.as_tensor(mask).unsqueeze(0))
-            # Give score=0 to changed masks and score=1 to unchanged masks
+            # give score=0 to changed masks and score=1 to unchanged masks
             # so NMS will prefer ones that didn't need postprocessing
             scores.append(float(unchanged))
 
-        # Recalculate boxes and remove any new duplicates
+        # recalculate boxes and remove any new duplicates
         masks = torch.cat(new_masks, dim=0)
         boxes = amg_utils.batched_mask_to_box(masks)
         keep_by_nms = batched_nms(
@@ -119,7 +144,7 @@ class _AMGBase(ABC):
             iou_threshold=nms_thresh,
         )
 
-        # Only recalculate RLEs for masks that have changed
+        # only recalculate RLEs for masks that have changed
         for i_mask in keep_by_nms:
             if scores[i_mask] == 0.0:
                 mask_torch = masks[i_mask].unsqueeze(0)
@@ -130,7 +155,7 @@ class _AMGBase(ABC):
         return mask_data
 
     def _postprocess_masks(self, mask_data, min_mask_region_area, box_nms_thresh, crop_nms_thresh, output_mode):
-        # Filter small disconnected regions and holes in masks
+        # filter small disconnected regions and holes in masks
         if min_mask_region_area > 0:
             mask_data = self._postprocess_small_regions(
                 mask_data,
@@ -138,7 +163,7 @@ class _AMGBase(ABC):
                 max(box_nms_thresh, crop_nms_thresh),
             )
 
-        # Encode masks
+        # encode masks
         if output_mode == "coco_rle":
             mask_data["segmentations"] = [amg_utils.coco_encode_rle(rle) for rle in mask_data["rles"]]
         elif output_mode == "binary_mask":
@@ -146,7 +171,7 @@ class _AMGBase(ABC):
         else:
             mask_data["segmentations"] = mask_data["rles"]
 
-        # Write mask records
+        # write mask records
         curr_anns = []
         for idx in range(len(mask_data["segmentations"])):
             ann = {
@@ -154,10 +179,15 @@ class _AMGBase(ABC):
                 "area": amg_utils.area_from_rle(mask_data["rles"][idx]),
                 "bbox": amg_utils.box_xyxy_to_xywh(mask_data["boxes"][idx]).tolist(),
                 "predicted_iou": mask_data["iou_preds"][idx].item(),
-                "point_coords": [mask_data["points"][idx].tolist()],
                 "stability_score": mask_data["stability_score"][idx].item(),
                 "crop_box": amg_utils.box_xyxy_to_xywh(mask_data["crop_boxes"][idx]).tolist(),
             }
+            # the data from embedding based segmentation doesn't have the points
+            # so we skip if the corresponding key can't be found
+            try:
+                ann["point_coords"] = [mask_data["points"][idx].tolist()]
+            except KeyError:
+                pass
             curr_anns.append(ann)
 
         return curr_anns
@@ -167,7 +197,8 @@ class AutomaticMaskGenerator(_AMGBase):
     """
     """
     def __init__(
-        self, model: Sam,
+        self,
+        predictor: SamPredictor,
         points_per_side: Optional[int] = 32,
         points_per_batch: int = 64,
         crop_n_layers: int = 0,
@@ -175,6 +206,8 @@ class AutomaticMaskGenerator(_AMGBase):
         crop_n_points_downscale_factor: int = 1,
         point_grids: Optional[List[np.ndarray]] = None,
     ):
+        super().__init__()
+
         if points_per_side is not None:
             self.point_grids = amg_utils.build_all_layer_point_grids(
                 points_per_side,
@@ -186,34 +219,12 @@ class AutomaticMaskGenerator(_AMGBase):
         else:
             raise ValueError("Can't have both points_per_side and point_grid be None or not None.")
 
-        self.predictor = SamPredictor(model)
+        self.predictor = predictor
         self.points_per_side = points_per_side
         self.points_per_batch = points_per_batch
         self.crop_n_layers = crop_n_layers
         self.crop_overlap_ratio = crop_overlap_ratio
         self.crop_n_points_downscale_factor = crop_n_points_downscale_factor
-
-        # the mask data that is computed by 'initialize'
-        self._is_initialized = False
-        self._crop_list = None
-        self._crop_boxes = None
-        self._orig_size = None
-
-    @property
-    def is_initialized(self):
-        return self._is_initialized
-
-    @property
-    def crop_list(self):
-        return self._crop_list
-
-    @property
-    def crop_boxes(self):
-        return self._crop_boxes
-
-    @property
-    def orig_size(self):
-        return self._orig_size
 
     def _process_batch(self, points, im_size):
         # run model on this batch
@@ -264,6 +275,8 @@ class AutomaticMaskGenerator(_AMGBase):
         self.predictor.reset_image()
         return data
 
+    # TODO enable initializeing with embeddings
+    # (which can be done for only a single crop box)
     @torch.no_grad()
     def initialize(self, image: np.ndarray, verbose=False):
         """
@@ -327,12 +340,112 @@ class AutomaticMaskGenerator(_AMGBase):
 class EmbeddingBasedMaskGenerator(_AMGBase):
     """
     """
-    def __init__(self):
-        pass
+    default_offsets = [[-1, 0], [0, -1], [-3, 0], [0, -3], [-9, 0], [0, -9]]
+
+    def __init__(
+        self,
+        predictor: SamPredictor,
+        offsets=None,
+        min_initial_size=0,
+        distance_type="l2",
+        bias=0.0,
+        use_box=True,
+        use_mask=True,
+        use_points=False,
+        box_extension=0.05,
+    ):
+        super().__init__()
+
+        self.predictor = predictor
+        self.offsets = self.default_offsets if offsets is None else offsets
+        self.min_initial_size = min_initial_size
+        self.distance_type = distance_type
+        self.bias = bias
+        self.use_box = use_box
+        self.use_mask = use_mask
+        self.use_points = use_points
+        self.box_extension = box_extension
+
+        # additional data that is computed by 'initialize'
+        self._initial_segmentation = None
+
+    @property
+    def initial_segmentation(self):
+        return self._initial_segmentation
+
+    def _compute_initial_segmentation(self):
+        # compute the MWS segmentation and all the mask data
+        embeddings = self.predictor.get_image_embedding().squeeze().cpu().numpy()
+        assert embeddings.shape == (256, 64, 64), f"{embeddings.shape}"
+
+        initial_segmentation = embed.segment_embeddings_mws(
+            embeddings, distance_type=self.distance_type, offsets=self.offsets, bias=self.bias,
+        ).astype("uint32")
+        assert initial_segmentation.shape == (64, 64), f"{initial_segmentation.shape}"
+
+        # filter out small initial objects
+        if self.min_initial_size > 0:
+            seg_ids, sizes = np.unique(initial_segmentation, return_counts=True)
+            initial_segmentation[np.isin(initial_segmentation, seg_ids[sizes < self.min_initial_size])] = 0
+
+        # resize to 256 x 256, which is the mask input expected by SAM
+        initial_segmentation = resize(
+            initial_segmentation, (256, 256), order=0, preserve_range=True, anti_aliasing=False
+        ).astype(initial_segmentation.dtype)
+
+        return initial_segmentation
+
+    def _compute_mask_data(self, initial_segmentation, original_size, verbose):
+        seg_ids = np.unique(initial_segmentation)
+        if seg_ids[0] == 0:
+            seg_ids = seg_ids[1:]
+
+        mask_data = amg_utils.MaskData()
+        # TODO batch this to be more efficient on GPUs
+        for seg_id in tqdm(seg_ids, disable=not verbose, desc="Compute masks from initial segmentation"):
+            mask = initial_segmentation == seg_id
+            masks, iou_preds, _ = segment_from_mask(
+                self.predictor, mask, original_size=original_size,
+                multimask_output=True, return_logits=True, return_all=True,
+                use_box=self.use_box, use_mask=self.use_mask, use_points=self.use_points,
+                box_extension=self.box_extension,
+            )
+            data = amg_utils.MaskData(
+                masks=torch.from_numpy(masks),
+                iou_preds=torch.from_numpy(iou_preds),
+                seg_id=torch.from_numpy(np.full(len(masks), seg_id, dtype="int64")),
+            )
+            del masks
+            mask_data.cat(data)
+
+        return mask_data
 
     @torch.no_grad()
-    def initialize(self, image: np.ndarray):
-        pass
+    def initialize(self, image: np.ndarray, image_embeddings=None, i=None, embedding_path=None, verbose=False):
+        """
+        """
+        orig_size = image.shape[:2]
+
+        if image_embeddings is None:
+            image_embeddings = util.precompute_image_embeddings(self.predictor, image, save_path=embedding_path)
+        util.set_precomputed(self.predictor, image_embeddings, i=i)
+
+        # compute the initial segmentation via embedding based MWS and then refine the masks
+        # with the segment anything model
+        initial_segmentation = self._compute_initial_segmentation()
+        mask_data = self._compute_mask_data(initial_segmentation, orig_size, verbose)
+        # to be compatible with the file format of the super class we have to wrap the mask data in a list
+        crop_list = [mask_data]
+
+        # set the initialized data
+        self._is_initialized = True
+        self._initial_segmentation = initial_segmentation
+        self._crop_list = crop_list
+        # the crop box is always the full image
+        self._crop_boxes = [
+            [0, 0, orig_size[1], orig_size[0]]
+        ]
+        self._orig_size = orig_size
 
     @torch.no_grad()
     def generate(
@@ -341,8 +454,36 @@ class EmbeddingBasedMaskGenerator(_AMGBase):
         stability_score_thresh: float = 0.95,
         stability_score_offset: float = 1.0,
         box_nms_thresh: float = 0.7,
+        min_mask_region_area: int = 0,
+        output_mode: str = "binary_mask",
     ):
-        pass
+        if not self.is_initialized:
+            raise RuntimeError("AutomaticMaskGenerator has not been initialized. Call initialize first.")
+
+        data = self._postprocess_batch(
+            data=self.crop_list[0], crop_box=self.crop_boxes[0], orig_size=self.orig_size,
+            pred_iou_thresh=pred_iou_thresh,
+            stability_score_thresh=stability_score_thresh,
+            stability_score_offset=stability_score_offset,
+            box_nms_thresh=box_nms_thresh
+        )
+
+        data.to_numpy()
+        masks = self._postprocess_masks(data, min_mask_region_area, box_nms_thresh, box_nms_thresh, output_mode)
+        return masks
+
+    def get_initial_segmentation(self):
+        if not self.is_initialized:
+            raise RuntimeError("AutomaticMaskGenerator has not been initialized. Call initialize first.")
+
+        longest_size = max(self.orig_size)
+        longest_shape = (longest_size, longest_size)
+        segmentation = resize(
+            self.initial_segmentation, longest_shape, order=0, preserve_range=True, anti_aliasing=False
+        ).astype(self.initial_segmentation.dtype)
+        crop = tuple(slice(0, sh) for sh in self.orig_size)
+        segmentation = segmentation[crop]
+        return segmentation
 
 
 #
@@ -530,7 +671,7 @@ def _resize_segmentation(segmentation, shape):
 def segment_instances_from_embeddings(
     predictor, image_embeddings, i=None,
     # mws settings
-    offsets=DEFAULT_OFFSETS, distance_type="l2", bias=0.0,
+    offsets=[], distance_type="l2", bias=0.0,
     # sam settings
     box_nms_thresh=0.7, pred_iou_thresh=0.88,
     stability_score_thresh=0.95, stability_score_offset=1.0,
@@ -556,11 +697,6 @@ def segment_instances_from_embeddings(
     if min_initial_size > 0:
         seg_ids, sizes = np.unique(initial_segmentation, return_counts=True)
         initial_segmentation[np.isin(initial_segmentation, seg_ids[sizes < min_initial_size])] = 0
-
-    # resize to 256 x 256, which is the mask input expected by SAM
-    initial_segmentation = resize(
-        initial_segmentation, (256, 256), order=0, preserve_range=True, anti_aliasing=False
-    ).astype(initial_segmentation.dtype)
 
     original_size = image_embeddings["original_size"]
     segmentation = _refine_initial_segmentation(
