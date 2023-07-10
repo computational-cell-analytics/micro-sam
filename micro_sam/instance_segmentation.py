@@ -320,7 +320,7 @@ class AutomaticMaskGenerator(_AMGBase):
         return data
 
     @torch.no_grad()
-    def initialize(self, image: np.ndarray, image_embeddings=None, i=None, embedding_path=None, verbose=False):
+    def initialize(self, image: np.ndarray, image_embeddings=None, i=None, verbose=False):
         """
         """
         original_size = image.shape[:2]
@@ -333,7 +333,7 @@ class AutomaticMaskGenerator(_AMGBase):
         # otherwise we have to recompute the embeddings for each crop and can't precompute
         if len(crop_boxes) == 1:
             if image_embeddings is None:
-                image_embeddings = util.precompute_image_embeddings(self.predictor, image, save_path=embedding_path)
+                image_embeddings = util.precompute_image_embeddings(self.predictor, image)
             util.set_precomputed(self.predictor, image_embeddings, i=i)
             precomputed_embeddings = True
         else:
@@ -475,13 +475,13 @@ class EmbeddingMaskGenerator(_AMGBase):
         return mask_data
 
     @torch.no_grad()
-    def initialize(self, image: np.ndarray, image_embeddings=None, i=None, embedding_path=None, verbose=False):
+    def initialize(self, image: np.ndarray, image_embeddings=None, i=None, verbose=False):
         """
         """
         original_size = image.shape[:2]
 
         if image_embeddings is None:
-            image_embeddings = util.precompute_image_embeddings(self.predictor, image, save_path=embedding_path)
+            image_embeddings = util.precompute_image_embeddings(self.predictor, image,)
         util.set_precomputed(self.predictor, image_embeddings, i=i)
 
         # compute the initial segmentation via embedding based MWS and then refine the masks
@@ -600,16 +600,13 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
         halo: List[int],
         image_embeddings=None,
         i=None,
-        embedding_path=None,
         verbose=False,
     ):
         """
         """
         original_size = image.shape[:2]
         if image_embeddings is None:
-            image_embeddings = util.precompute_image_embeddings(
-                self.predictor, image, save_path=embedding_path, tile_shape=tile_shape, halo=halo,
-            )
+            image_embeddings = util.precompute_image_embeddings(self.predictor, image, tile_shape=tile_shape, halo=halo)
 
         tiling = blocking([0, 0], original_size, tile_shape)
         n_tiles = tiling.numberOfBlocks
