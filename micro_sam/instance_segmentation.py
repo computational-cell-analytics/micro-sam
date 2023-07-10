@@ -486,11 +486,6 @@ class EmbeddingBasedMaskGenerator(_AMGBase):
         return segmentation
 
 
-#
-# Original SegmentAnything instance segmentation functionality
-#
-
-
 def mask_data_to_segmentation(masks, shape, with_background):
     """Convert the output of the automatic mask generation to an instance segmentation."""
 
@@ -511,214 +506,8 @@ def mask_data_to_segmentation(masks, shape, with_background):
 
 
 #
-# Instance segmentation from embeddings
+# Old functionality
 #
-
-
-# adapted from:
-# https://github.com/facebookresearch/segment-anything/blob/main/segment_anything/automatic_mask_generator.py#L266
-def _refine_mask(
-    predictor, mask, original_size,
-    pred_iou_thresh, stability_score_offset,
-    stability_score_thresh, seg_id, verbose,
-    box_extension, use_box, use_mask, use_points,
-):
-    # Predict masks and store them as mask data
-    masks, iou_preds, _ = segment_from_mask(
-        predictor, mask, original_size=original_size,
-        multimask_output=True, return_logits=True, return_all=True,
-        use_box=use_box, use_mask=use_mask, use_points=use_points,
-        box_extension=box_extension,
-    )
-    data = amg_utils.MaskData(
-        masks=torch.from_numpy(masks),
-        iou_preds=torch.from_numpy(iou_preds),
-        seg_id=torch.from_numpy(np.full(len(masks), seg_id, dtype="int64")),
-    )
-    del masks
-
-    n_masks = len(data["masks"])
-    iou_preds = data["iou_preds"].numpy()
-    # Filter by predicted IoU
-    if pred_iou_thresh > 0.0:
-        keep_mask = data["iou_preds"] > pred_iou_thresh
-        data.filter(keep_mask)
-
-        n_masks_filtered = len(data["masks"])
-        if verbose > 2:
-            print("Masks after IoU filter:", n_masks_filtered, "/", n_masks)
-            print("IoU Threshold is:", pred_iou_thresh)
-
-    # Calculate stability score
-    data["stability_score"] = amg_utils.calculate_stability_score(
-        data["masks"], predictor.model.mask_threshold, stability_score_offset
-    )
-    stability_scores = data["stability_score"].numpy()
-    if stability_score_thresh > 0.0:
-        keep_mask = data["stability_score"] >= stability_score_thresh
-        data.filter(keep_mask)
-
-        n_masks_filtered_stability = len(data["masks"])
-        if verbose > 2:
-            print("Masks after stability filter:", n_masks_filtered_stability, "/", n_masks_filtered)
-            print("Stability Threshold is:", stability_score_thresh)
-
-    # Threshold masks and calculate boxes
-    data["masks"] = data["masks"] > predictor.model.mask_threshold
-    data["boxes"] = amg_utils.batched_mask_to_box(data["masks"])
-
-    # Compress to RLE
-    data["rles"] = amg_utils.mask_to_rle_pytorch(data["masks"])
-    del data["masks"]
-
-    return (
-        data,
-        n_masks - n_masks_filtered,
-        n_masks_filtered - n_masks_filtered_stability,
-        iou_preds, stability_scores
-    )
-
-
-def _refine_initial_segmentation(
-    predictor, initial_seg, original_size,
-    box_nms_thresh, with_background,
-    pred_iou_thresh, stability_score_offset,
-    stability_score_thresh, verbose,
-    box_extension, return_mask_data,
-    use_box, use_mask, use_points,
-):
-    masks = amg_utils.MaskData()
-
-    seg_ids = np.unique(initial_seg)
-    n_filtered_total, n_filtered_stability_total = 0, 0
-    iou_preds, stability_scores = [], []
-    for seg_id in tqdm(seg_ids, disable=not bool(verbose), desc="Refine masks for automatic instance segmentation"):
-
-        # refine the segmentations via sam for this prediction
-        mask = (initial_seg == seg_id)
-        assert mask.shape == (256, 256)
-        (mask_data, n_filtered, n_filtered_stability,
-         this_iou_pred, this_stability_score) = _refine_mask(
-            predictor, mask, original_size,
-            pred_iou_thresh, stability_score_offset,
-            stability_score_thresh, seg_id, verbose,
-            box_extension=box_extension,
-            use_box=use_box, use_mask=use_mask, use_points=use_points,
-        )
-        n_filtered_total += n_filtered
-        n_filtered_stability_total += n_filtered_stability
-
-        iou_preds.append(this_iou_pred)
-        stability_scores.append(this_stability_score)
-
-        # append to the mask data
-        masks.cat(mask_data)
-
-    # apply non-max-suppression to only keep the likely objects
-    n_masks = len(masks["boxes"])
-    keep_by_nms = batched_nms(
-        masks["boxes"].float(),
-        masks["iou_preds"],
-        torch.zeros_like(masks["boxes"][:, 0]),  # categories
-        iou_threshold=box_nms_thresh,
-    )
-    masks.filter(keep_by_nms)
-    n_masks_filtered = len(masks["boxes"])
-
-    iou_preds = np.concatenate(iou_preds)
-    stability_scores = np.concatenate(stability_scores)
-    stability_scores = stability_scores[~np.isnan(stability_scores)]
-    if verbose > 1:
-        print("IoU Predictions:", np.mean(iou_preds), "+-", np.std(iou_preds))
-        print(n_filtered_total, "masks were filtered out due to the IOU threshold", pred_iou_thresh)
-        print("Stability scores:", np.mean(stability_scores), "+-", np.std(stability_scores))
-        print(
-            n_filtered_stability_total, "masks were filtered out due to the stability threshold", stability_score_thresh
-        )
-        print(n_masks - n_masks_filtered, "masks were filtered out by nms with threshold", box_nms_thresh)
-
-    # get the mask outputs (area, scores and run length encoding)
-    masks = [
-        {
-            "area": len(rle["counts"]),
-            "iou_pred": iou_pred,
-            "segmentation": amg_utils.rle_to_mask(rle),
-            "seg_id": seg_id,
-            "stability_score": stability_score,
-        } for rle, seg_id, iou_pred, stability_score in zip(
-            masks["rles"], masks["seg_id"], masks["iou_preds"], masks["stability_score"]
-        )
-    ]
-
-    if return_mask_data:
-        return masks
-    # convert to instance segmentation
-    segmentation = mask_data_to_segmentation(masks, original_size, with_background)
-    return segmentation
-
-
-def _resize_segmentation(segmentation, shape):
-    longest_size = max(shape)
-    longest_shape = (longest_size, longest_size)
-    segmentation = resize(
-        segmentation, longest_shape, order=0, preserve_range=True, anti_aliasing=False
-    ).astype(segmentation.dtype)
-    crop = tuple(slice(0, sh) for sh in shape)
-    segmentation = segmentation[crop]
-    return segmentation
-
-
-def segment_instances_from_embeddings(
-    predictor, image_embeddings, i=None,
-    # mws settings
-    offsets=[], distance_type="l2", bias=0.0,
-    # sam settings
-    box_nms_thresh=0.7, pred_iou_thresh=0.88,
-    stability_score_thresh=0.95, stability_score_offset=1.0,
-    use_box=True, use_mask=True, use_points=False,
-    # general settings
-    min_initial_size=5, min_size=0, with_background=False,
-    verbose=1, return_initial_segmentation=False, box_extension=0.1,
-    return_mask_data=False,
-):
-    """
-    """
-    util.set_precomputed(predictor, image_embeddings, i)
-
-    embeddings = predictor.get_image_embedding().squeeze().cpu().numpy()
-    assert embeddings.shape == (256, 64, 64), f"{embeddings.shape}"
-
-    initial_segmentation = embed.segment_embeddings_mws(
-        embeddings, distance_type=distance_type, offsets=offsets, bias=bias,
-    ).astype("uint32")
-    assert initial_segmentation.shape == (64, 64), f"{initial_segmentation.shape}"
-
-    # filter out small initial objects
-    if min_initial_size > 0:
-        seg_ids, sizes = np.unique(initial_segmentation, return_counts=True)
-        initial_segmentation[np.isin(initial_segmentation, seg_ids[sizes < min_initial_size])] = 0
-
-    original_size = image_embeddings["original_size"]
-    segmentation = _refine_initial_segmentation(
-        predictor, initial_segmentation, original_size,
-        box_nms_thresh=box_nms_thresh, with_background=with_background,
-        pred_iou_thresh=pred_iou_thresh, stability_score_offset=stability_score_offset,
-        stability_score_thresh=stability_score_thresh, verbose=verbose,
-        box_extension=box_extension, return_mask_data=return_mask_data,
-        use_box=use_box, use_mask=use_mask, use_points=use_points,
-    )
-
-    if min_size > 0:
-        segmentation_ids, counts = np.unique(segmentation, return_counts=True)
-        filter_ids = segmentation_ids[counts < min_size]
-        segmentation[np.isin(segmentation, filter_ids)] = 0
-        vigra.analysis.relabelConsecutive(segmentation, out=segmentation)
-
-    if return_initial_segmentation:
-        initial_segmentation = _resize_segmentation(initial_segmentation, original_size)
-        return segmentation, initial_segmentation
-    else:
-        return segmentation
 
 
 class FakeInput:
@@ -730,6 +519,38 @@ class FakeInput:
         return np.zeros(block_shape, dtype="float32")
 
 
+# TODO remove this once it's no longer needed by the functions below
+# (because they have been converted to classes as well)
+def segment_instances_from_embeddings(
+    predictor, image_embeddings, i=None,
+    # mws settings
+    offsets=None, distance_type="l2", bias=0.0,
+    # sam settings
+    box_nms_thresh=0.7, pred_iou_thresh=0.88,
+    stability_score_thresh=0.95, stability_score_offset=1.0,
+    use_box=True, use_mask=True, use_points=False,
+    # general settings
+    min_initial_size=5, min_size=0, with_background=False,
+    verbose=True, return_initial_segmentation=False, box_extension=0.1,
+):
+    amg = EmbeddingBasedMaskGenerator(
+        predictor, offsets, min_initial_size, distance_type, bias,
+        use_box, use_mask, use_points, box_extension
+    )
+    shape = image_embeddings["original_size"]
+    input_ = FakeInput(shape)
+    amg.initialize(input_, image_embeddings, i, verbose=verbose)
+    mask_data = amg.generate(
+        pred_iou_thresh, stability_score_thresh, stability_score_offset, box_nms_thresh, min_size
+    )
+    segmentation = mask_data_to_segmentation(mask_data, shape, with_background)
+    if return_initial_segmentation:
+        initial_segmentation = amg.get_initial_segmentation()
+        return segmentation, initial_segmentation
+    return segmentation
+
+
+# TODO refactor in a class with `initialize` and `generate` logic
 def segment_instances_from_embeddings_with_tiling(
     predictor, image_embeddings, i=None, verbose=True, with_background=True,
     return_initial_segmentation=False, **kwargs,
@@ -781,6 +602,7 @@ def segment_instances_from_embeddings_with_tiling(
     return segmentation
 
 
+# TODO refactor in a class with `initialize` and `generate` logic
 # this is still experimental and not yet ready to be integrated within the annotator_3d
 # (will need to see how well it works with retrained models)
 def segment_instances_from_embeddings_3d(predictor, image_embeddings, verbose=1, iou_threshold=0.50, **kwargs):
