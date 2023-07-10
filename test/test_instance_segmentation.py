@@ -48,12 +48,12 @@ class TestInstanceSegmentation(unittest.TestCase):
         self.assertGreater(matching(predicted, mask, threshold=0.75)["precision"], 0.99)
 
     def test_embedding_based_mask_generator(self):
-        from micro_sam.instance_segmentation import EmbeddingBasedMaskGenerator, mask_data_to_segmentation
+        from micro_sam.instance_segmentation import EmbeddingMaskGenerator, mask_data_to_segmentation
 
         mask, image = self._get_input()
         predictor = self._get_model()
 
-        amg = EmbeddingBasedMaskGenerator(predictor)
+        amg = EmbeddingMaskGenerator(predictor)
         amg.initialize(image, verbose=False)
         predicted = amg.generate(pred_iou_thresh=0.96)
         predicted = mask_data_to_segmentation(predicted, image.shape, with_background=True)

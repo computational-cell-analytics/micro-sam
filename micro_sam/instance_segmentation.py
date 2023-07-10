@@ -1,4 +1,6 @@
+import multiprocessing as mp
 from abc import ABC
+from concurrent import futures
 from typing import List, Optional
 
 import numpy as np
@@ -9,7 +11,7 @@ import vigra
 from elf.evaluation.matching import label_overlap, intersection_over_union
 from elf.segmentation import embeddings as embed
 from elf.segmentation.stitching import stitch_segmentation
-from nifty.tools import takeDict
+from nifty.tools import blocking, takeDict
 from scipy.optimize import linear_sum_assignment
 
 from segment_anything.predictor import SamPredictor
@@ -26,6 +28,44 @@ from . import util
 from .prompt_based_segmentation import segment_from_mask
 
 
+#
+# Utility Functionality
+#
+
+
+class FakeInput:
+    def __init__(self, shape):
+        self.shape = shape
+
+    def __getitem__(self, index):
+        block_shape = tuple(ind.stop - ind.start for ind in index)
+        return np.zeros(block_shape, dtype="float32")
+
+
+def mask_data_to_segmentation(masks, shape, with_background):
+    """Convert the output of the automatic mask generation to an instance segmentation."""
+
+    masks = sorted(masks, key=(lambda x: x["area"]), reverse=True)
+    segmentation = np.zeros(shape[:2], dtype="uint32")
+
+    for seg_id, mask in enumerate(masks, 1):
+        segmentation[mask["segmentation"]] = seg_id
+
+    if with_background:
+        seg_ids, sizes = np.unique(segmentation, return_counts=True)
+        bg_id = seg_ids[np.argmax(sizes)]
+        if bg_id != 0:
+            segmentation[segmentation == bg_id] = 0
+        vigra.analysis.relabelConsecutive(segmentation, out=segmentation)
+
+    return segmentation
+
+
+#
+# Classes for automatic instance segmentation
+#
+
+
 class _AMGBase(ABC):
     """
     """
@@ -35,7 +75,7 @@ class _AMGBase(ABC):
         self._is_initialized = False
         self._crop_list = None
         self._crop_boxes = None
-        self._orig_size = None
+        self._original_size = None
 
     @property
     def is_initialized(self):
@@ -50,20 +90,20 @@ class _AMGBase(ABC):
         return self._crop_boxes
 
     @property
-    def orig_size(self):
-        return self._orig_size
+    def original_size(self):
+        return self._original_size
 
     def _postprocess_batch(
         self,
         data,
         crop_box,
-        orig_size,
+        original_size,
         pred_iou_thresh,
         stability_score_thresh,
         stability_score_offset,
         box_nms_thresh,
     ):
-        orig_h, orig_w = orig_size
+        orig_h, orig_w = original_size
 
         # filter by predicted IoU
         if pred_iou_thresh > 0.0:
@@ -282,9 +322,9 @@ class AutomaticMaskGenerator(_AMGBase):
         """
         """
         image = util._to_image(image)
-        orig_size = image.shape[:2]
+        original_size = image.shape[:2]
         crop_boxes, layer_idxs = amg_utils.generate_crop_boxes(
-            orig_size, self.crop_n_layers, self.crop_overlap_ratio
+            original_size, self.crop_n_layers, self.crop_overlap_ratio
         )
         crop_list = []
         for crop_box, layer_idx in zip(crop_boxes, layer_idxs):
@@ -294,7 +334,7 @@ class AutomaticMaskGenerator(_AMGBase):
         self._is_initialized = True
         self._crop_list = crop_list
         self._crop_boxes = crop_boxes
-        self._orig_size = orig_size
+        self._original_size = original_size
 
     @torch.no_grad()
     def generate(
@@ -312,7 +352,7 @@ class AutomaticMaskGenerator(_AMGBase):
         data = amg_utils.MaskData()
         for data_, crop_box in zip(self.crop_list, self.crop_boxes):
             crop_data = self._postprocess_batch(
-                data=data_, crop_box=crop_box, orig_size=self.orig_size,
+                data=data_, crop_box=crop_box, original_size=self.original_size,
                 pred_iou_thresh=pred_iou_thresh,
                 stability_score_thresh=stability_score_thresh,
                 stability_score_offset=stability_score_offset,
@@ -337,7 +377,7 @@ class AutomaticMaskGenerator(_AMGBase):
         return masks
 
 
-class EmbeddingBasedMaskGenerator(_AMGBase):
+class EmbeddingMaskGenerator(_AMGBase):
     """
     """
     default_offsets = [[-1, 0], [0, -1], [-3, 0], [0, -3], [-9, 0], [0, -9]]
@@ -369,12 +409,8 @@ class EmbeddingBasedMaskGenerator(_AMGBase):
         # additional data that is computed by 'initialize'
         self._initial_segmentation = None
 
-    @property
-    def initial_segmentation(self):
-        return self._initial_segmentation
-
     def _compute_initial_segmentation(self):
-        # compute the MWS segmentation and all the mask data
+
         embeddings = self.predictor.get_image_embedding().squeeze().cpu().numpy()
         assert embeddings.shape == (256, 64, 64), f"{embeddings.shape}"
 
@@ -424,7 +460,7 @@ class EmbeddingBasedMaskGenerator(_AMGBase):
     def initialize(self, image: np.ndarray, image_embeddings=None, i=None, embedding_path=None, verbose=False):
         """
         """
-        orig_size = image.shape[:2]
+        original_size = image.shape[:2]
 
         if image_embeddings is None:
             image_embeddings = util.precompute_image_embeddings(self.predictor, image, save_path=embedding_path)
@@ -433,7 +469,7 @@ class EmbeddingBasedMaskGenerator(_AMGBase):
         # compute the initial segmentation via embedding based MWS and then refine the masks
         # with the segment anything model
         initial_segmentation = self._compute_initial_segmentation()
-        mask_data = self._compute_mask_data(initial_segmentation, orig_size, verbose)
+        mask_data = self._compute_mask_data(initial_segmentation, original_size, verbose)
         # to be compatible with the file format of the super class we have to wrap the mask data in a list
         crop_list = [mask_data]
 
@@ -443,9 +479,9 @@ class EmbeddingBasedMaskGenerator(_AMGBase):
         self._crop_list = crop_list
         # the crop box is always the full image
         self._crop_boxes = [
-            [0, 0, orig_size[1], orig_size[0]]
+            [0, 0, original_size[1], original_size[0]]
         ]
-        self._orig_size = orig_size
+        self._original_size = original_size
 
     @torch.no_grad()
     def generate(
@@ -461,7 +497,7 @@ class EmbeddingBasedMaskGenerator(_AMGBase):
             raise RuntimeError("AutomaticMaskGenerator has not been initialized. Call initialize first.")
 
         data = self._postprocess_batch(
-            data=self.crop_list[0], crop_box=self.crop_boxes[0], orig_size=self.orig_size,
+            data=self.crop_list[0], crop_box=self.crop_boxes[0], original_size=self.original_size,
             pred_iou_thresh=pred_iou_thresh,
             stability_score_thresh=stability_score_thresh,
             stability_score_offset=stability_score_offset,
@@ -472,55 +508,186 @@ class EmbeddingBasedMaskGenerator(_AMGBase):
         masks = self._postprocess_masks(data, min_mask_region_area, box_nms_thresh, box_nms_thresh, output_mode)
         return masks
 
+    def _resize_segmentation(self, segmentation, shape):
+        longest_size = max(shape)
+        longest_shape = (longest_size, longest_size)
+        segmentation_ = resize(
+            segmentation, longest_shape, order=0, preserve_range=True, anti_aliasing=False
+        ).astype(segmentation.dtype)
+        crop = tuple(slice(0, sh) for sh in shape)
+        segmentation_ = segmentation_[crop]
+        return segmentation_
+
+    def get_initial_segmentation(self):
+        if not self.is_initialized:
+            raise RuntimeError("AutomaticMaskGenerator has not been initialized. Call initialize first.")
+        return self._resize_segmentation(self._initial_segmentation, self.original_size)
+
+
+class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
+    """
+    """
+    def __init__(self, n_threads=mp.cpu_count(), with_background=True, **kwargs):
+        super().__init__(**kwargs)
+        self.n_threads = n_threads
+        self.with_background = with_background
+        self._tile_shape = None
+        self._halo = None
+        self._stitched_initial_segmentation = None
+
+    def _compute_initial_segmentations(self, image_embeddings, i, n_tiles, verbose):
+        features = image_embeddings["features"]
+
+        def segment_tile(tile_id):
+            tile_features = features[tile_id]
+            tile_image_embeddings = {
+                "features": tile_features,
+                "input_size": tile_features.attrs["input_size"],
+                "original_size": tile_features.attrs["original_size"]
+            }
+            util.set_precomputed(self.predictor, tile_image_embeddings, i)
+            return self._compute_initial_segmentation()
+
+        with futures.ThreadPoolExecutor(self.n_threads) as tp:
+            initial_segmentations = list(tqdm(
+                tp.map(segment_tile, range(n_tiles)), disable=not verbose, total=n_tiles,
+                desc="Tile-based initial segmentation"
+            ))
+
+        return initial_segmentations
+
+    def _compute_mask_data_tiled(self, image_embeddings, i, initial_segmentations, n_tiles, verbose):
+        features = image_embeddings["features"]
+
+        mask_data = []
+        for tile_id in tqdm(range(n_tiles), disable=not verbose, total=n_tiles, desc="Tile-based mask computation"):
+            tile_features = features[tile_id]
+            this_tile_shape = tile_features.attrs["original_size"]
+            tile_image_embeddings = {
+                "features": tile_features,
+                "input_size": tile_features.attrs["input_size"],
+                "original_size": this_tile_shape
+            }
+            util.set_precomputed(self.predictor, tile_image_embeddings, i)
+            tile_data = self._compute_mask_data(initial_segmentations[tile_id], this_tile_shape, verbose=False)
+            mask_data.append(tile_data)
+
+        return mask_data
+
+    @torch.no_grad()
+    def initialize(
+        self,
+        image: np.ndarray,
+        tile_shape: List[int],
+        halo: List[int],
+        image_embeddings=None,
+        i=None,
+        embedding_path=None,
+        verbose=False,
+    ):
+        """
+        """
+        original_size = image.shape[:2]
+        if image_embeddings is None:
+            image_embeddings = util.precompute_image_embeddings(
+                self.predictor, image, save_path=embedding_path, tile_shape=tile_shape, halo=halo,
+            )
+
+        tiling = blocking([0, 0], original_size, tile_shape)
+        n_tiles = tiling.numberOfBlocks
+        initial_segmentations = self._compute_initial_segmentations(image_embeddings, i, n_tiles, verbose)
+        mask_data = self._compute_mask_data_tiled(image_embeddings, i, initial_segmentations, n_tiles, verbose)
+
+        # set the initialized data
+        self._is_initialized = True
+        self._tile_shape = tile_shape
+        self._halo = halo
+        self._initial_segmentation = initial_segmentations
+        self._crop_list = mask_data
+        self._original_size = original_size
+
+        # the crop box is always the full local tile
+        tiles = [tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock for tile_id in range(n_tiles)]
+        self._crop_boxes = [
+            [0, 0, tile.end[1] - tile.begin[1], tile.end[0] - tile.begin[0]] for tile in tiles
+        ]
+
+    @torch.no_grad()
+    def generate(
+        self,
+        pred_iou_thresh: float = 0.88,
+        stability_score_thresh: float = 0.95,
+        stability_score_offset: float = 1.0,
+        box_nms_thresh: float = 0.7,
+        min_mask_region_area: int = 0,
+        verbose: bool = False
+    ):
+        """
+        """
+        if not self.is_initialized:
+            raise RuntimeError("AutomaticMaskGenerator has not been initialized. Call initialize first.")
+        tiling = blocking([0, 0], self.original_size, self._tile_shape)
+
+        def segment_tile(_, tile_id):
+            tile = tiling.getBlockWithHalo(tile_id, list(self._halo)).outerBlock
+            mask_data = self._crop_list[tile_id]
+            crop_box = self.crop_boxes[tile_id]
+            this_tile_shape = tuple(end - beg for beg, end in zip(tile.begin, tile.end))
+            mask_data = self._postprocess_batch(
+                data=mask_data, crop_box=crop_box, original_size=this_tile_shape,
+                pred_iou_thresh=pred_iou_thresh,
+                stability_score_thresh=stability_score_thresh,
+                stability_score_offset=stability_score_offset,
+                box_nms_thresh=box_nms_thresh,
+            )
+            mask_data.to_numpy()
+            mask_data = self._postprocess_masks(
+                mask_data, 0, box_nms_thresh, box_nms_thresh, output_mode="binary_mask"
+            )
+            mask_data = mask_data_to_segmentation(mask_data, this_tile_shape, with_background=self.with_background)
+            return mask_data
+
+        input_ = FakeInput(self.original_size)
+        segmentation = stitch_segmentation(
+            input_, segment_tile, self._tile_shape, self._halo, with_background=self.with_background, verbose=verbose
+        )
+
+        if min_mask_region_area > 0:
+            seg_ids, sizes = np.unique(segmentation, return_counts=True)
+            segmentation[np.isin(segmentation, seg_ids[sizes < min_mask_region_area])] = 0
+
+        return segmentation
+
     def get_initial_segmentation(self):
         if not self.is_initialized:
             raise RuntimeError("AutomaticMaskGenerator has not been initialized. Call initialize first.")
 
-        longest_size = max(self.orig_size)
-        longest_shape = (longest_size, longest_size)
-        segmentation = resize(
-            self.initial_segmentation, longest_shape, order=0, preserve_range=True, anti_aliasing=False
-        ).astype(self.initial_segmentation.dtype)
-        crop = tuple(slice(0, sh) for sh in self.orig_size)
-        segmentation = segmentation[crop]
-        return segmentation
+        if self._stitched_initial_segmentation is not None:
+            return self._stitched_initial_segmentation
 
+        tiling = blocking([0, 0], self.original_size, self._tile_shape)
 
-def mask_data_to_segmentation(masks, shape, with_background):
-    """Convert the output of the automatic mask generation to an instance segmentation."""
+        def segment_tile(_, tile_id):
+            tile = tiling.getBlockWithHalo(tile_id, list(self._halo)).outerBlock
+            this_tile_shape = tuple(end - beg for beg, end in zip(tile.begin, tile.end))
+            return self._resize_segmentation(self._initial_segmentation[tile_id], this_tile_shape)
 
-    masks = sorted(masks, key=(lambda x: x["area"]), reverse=True)
-    segmentation = np.zeros(shape[:2], dtype="uint32")
+        input_ = FakeInput(self.original_size)
+        initial_segmentation = stitch_segmentation(
+            input_, segment_tile,
+            self._tile_shape, self._halo,
+            with_background=self.with_background, verbose=False
+        )
 
-    for seg_id, mask in enumerate(masks, 1):
-        segmentation[mask["segmentation"]] = seg_id
-
-    if with_background:
-        seg_ids, sizes = np.unique(segmentation, return_counts=True)
-        bg_id = seg_ids[np.argmax(sizes)]
-        if bg_id != 0:
-            segmentation[segmentation == bg_id] = 0
-        vigra.analysis.relabelConsecutive(segmentation, out=segmentation)
-
-    return segmentation
+        self._stitched_initial_segmentation = initial_segmentation
+        return initial_segmentation
 
 
 #
-# Old functionality
+# Functional interfaces to run instance segmentation
 #
 
 
-class FakeInput:
-    def __init__(self, shape):
-        self.shape = shape
-
-    def __getitem__(self, index):
-        block_shape = tuple(ind.stop - ind.start for ind in index)
-        return np.zeros(block_shape, dtype="float32")
-
-
-# TODO remove this once it's no longer needed by the functions below
-# (because they have been converted to classes as well)
 def segment_instances_from_embeddings(
     predictor, image_embeddings, i=None,
     # mws settings
@@ -533,7 +700,7 @@ def segment_instances_from_embeddings(
     min_initial_size=5, min_size=0, with_background=False,
     verbose=True, return_initial_segmentation=False, box_extension=0.1,
 ):
-    amg = EmbeddingBasedMaskGenerator(
+    amg = EmbeddingMaskGenerator(
         predictor, offsets, min_initial_size, distance_type, bias,
         use_box, use_mask, use_points, box_extension
     )
@@ -550,7 +717,6 @@ def segment_instances_from_embeddings(
     return segmentation
 
 
-# TODO refactor in a class with `initialize` and `generate` logic
 def segment_instances_from_embeddings_with_tiling(
     predictor, image_embeddings, i=None, verbose=True, with_background=True,
     return_initial_segmentation=False, **kwargs,
@@ -600,6 +766,11 @@ def segment_instances_from_embeddings_with_tiling(
         return segmentation, initial_segmentation
 
     return segmentation
+
+
+#
+# Experimental functionality
+#
 
 
 # TODO refactor in a class with `initialize` and `generate` logic
@@ -666,8 +837,7 @@ def segment_instances_from_embeddings_3d(predictor, image_embeddings, verbose=1,
     for z in tqdm(
         range(0, n_slices), total=n_slices, desc="Run instance segmentation in 3d", disable=not bool(verbose)
     ):
-        # TODO set to non-verbose once new napari release is out
-        seg = segmentation_function(predictor, image_embeddings, i=z, verbose=True, **kwargs)
+        seg = segmentation_function(predictor, image_embeddings, i=z, verbose=False, **kwargs)
         if z > 0:
             prev_seg = segmentation[z - 1]
             seg = match_segments(seg, prev_seg)
