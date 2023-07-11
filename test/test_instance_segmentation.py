@@ -1,4 +1,6 @@
+import os
 import unittest
+from shutil import rmtree
 
 import micro_sam.util as util
 import numpy as np
@@ -9,6 +11,8 @@ from skimage.measure import label
 
 
 class TestInstanceSegmentation(unittest.TestCase):
+    embedding_path = "./tmp_embeddings.zarr"
+
     # create an input image with three objects
     @staticmethod
     def _get_input(shape=(256, 256)):
@@ -32,9 +36,12 @@ class TestInstanceSegmentation(unittest.TestCase):
         return mask, image
 
     @staticmethod
-    def _get_model(image):
+    def _get_model(image, tile_shape=None, halo=None, save_path=None):
         predictor = util.get_sam_model(model_type="vit_b")
-        image_embeddings = util.precompute_image_embeddings(predictor, image)
+
+        image_embeddings = util.precompute_image_embeddings(
+            predictor, image, tile_shape=tile_shape, halo=halo, save_path=save_path
+        )
         return predictor, image_embeddings
 
     # we compute the default mask and predictor once for the class
@@ -43,6 +50,11 @@ class TestInstanceSegmentation(unittest.TestCase):
     def setUpClass(cls):
         cls.mask, cls.image = cls._get_input()
         cls.predictor, cls.image_embeddings = cls._get_model(cls.image)
+
+    # remove temp embeddings if any
+    def tearDown(self):
+        if os.path.exists(self.embedding_path):
+            rmtree(self.embedding_path)
 
     def test_automatic_mask_generator(self):
         from micro_sam.instance_segmentation import AutomaticMaskGenerator, mask_data_to_segmentation
@@ -71,6 +83,21 @@ class TestInstanceSegmentation(unittest.TestCase):
         self.assertGreater(matching(predicted, mask, threshold=0.75)["precision"], 0.99)
 
         initial_seg = amg.get_initial_segmentation()
+        self.assertEqual(initial_seg.shape, image.shape)
+
+    def test_tiled_embedding_mask_generator(self):
+        from micro_sam.instance_segmentation import TiledEmbeddingMaskGenerator
+
+        tile_shape, halo = (576, 576), (64, 64)
+        mask, image = self._get_input(shape=(1024, 1024))
+        predictor, image_embeddings = self._get_model(image, tile_shape, halo, self.embedding_path)
+
+        amg = TiledEmbeddingMaskGenerator(predictor)
+        amg.initialize(image, image_embeddings=image_embeddings, tile_shape=tile_shape, halo=halo)
+        predicted = amg.generate(pred_iou_thresh=0.96)
+        initial_seg = amg.get_initial_segmentation()
+
+        self.assertGreater(matching(predicted, mask, threshold=0.75)["precision"], 0.99)
         self.assertEqual(initial_seg.shape, image.shape)
 
 

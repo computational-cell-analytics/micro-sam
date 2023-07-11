@@ -320,7 +320,13 @@ class AutomaticMaskGenerator(_AMGBase):
         return data
 
     @torch.no_grad()
-    def initialize(self, image: np.ndarray, image_embeddings=None, i=None, verbose=False):
+    def initialize(
+        self,
+        image: np.ndarray,
+        image_embeddings=None,
+        i: Optional[int] = None,
+        verbose: bool = False
+    ):
         """
         """
         original_size = image.shape[:2]
@@ -403,14 +409,14 @@ class EmbeddingMaskGenerator(_AMGBase):
     def __init__(
         self,
         predictor: SamPredictor,
-        offsets=None,
-        min_initial_size=0,
-        distance_type="l2",
-        bias=0.0,
-        use_box=True,
-        use_mask=True,
-        use_points=False,
-        box_extension=0.05,
+        offsets: Optional[List[List[int]]] = None,
+        min_initial_size: int = 0,
+        distance_type: str = "l2",
+        bias: float = 0.0,
+        use_box: bool = True,
+        use_mask: bool = True,
+        use_points: bool = False,
+        box_extension: float = 0.05,
     ):
         super().__init__()
 
@@ -475,7 +481,13 @@ class EmbeddingMaskGenerator(_AMGBase):
         return mask_data
 
     @torch.no_grad()
-    def initialize(self, image: np.ndarray, image_embeddings=None, i=None, verbose=False):
+    def initialize(
+        self,
+        image: np.ndarray,
+        image_embeddings=None,
+        i: Optional[int] = None,
+        verbose: bool = False
+    ):
         """
         """
         original_size = image.shape[:2]
@@ -545,10 +557,17 @@ class EmbeddingMaskGenerator(_AMGBase):
 class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
     """
     """
-    def __init__(self, n_threads=mp.cpu_count(), with_background=True, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(
+        self,
+        predictor: SamPredictor,
+        n_threads: int = mp.cpu_count(),
+        with_background: bool = True,
+        **kwargs
+    ):
+        super().__init__(predictor=predictor, **kwargs)
         self.n_threads = n_threads
         self.with_background = with_background
+        # additional data for 'initialize'
         self._tile_shape = None
         self._halo = None
         self._stitched_initial_segmentation = None
@@ -599,14 +618,17 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
         tile_shape: List[int],
         halo: List[int],
         image_embeddings=None,
-        i=None,
-        verbose=False,
+        i: Optional[int] = None,
+        verbose: bool = False,
+        embedding_save_path: Optional[str] = None,
     ):
         """
         """
         original_size = image.shape[:2]
         if image_embeddings is None:
-            image_embeddings = util.precompute_image_embeddings(self.predictor, image, tile_shape=tile_shape, halo=halo)
+            image_embeddings = util.precompute_image_embeddings(
+                self.predictor, image, tile_shape=tile_shape, halo=halo, save_path=embedding_save_path
+            )
 
         tiling = blocking([0, 0], original_size, tile_shape)
         n_tiles = tiling.numberOfBlocks
