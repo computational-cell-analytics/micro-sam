@@ -221,9 +221,10 @@ def segment_slices_with_prompts(
         assert len(track_ids_points) == len(z_values)
         z_values = z_values[track_ids_points == track_id]
 
-        track_ids_boxes = np.array(list(map(int, box_prompts.properties["track_id"])))
-        assert len(track_ids_boxes) == len(z_values_boxes), f"{len(track_ids_boxes)}, {len(z_values_boxes)}"
-        z_values_boxes = z_values_boxes[track_ids_boxes == track_id]
+        if len(z_values_boxes) > 0:
+            track_ids_boxes = np.array(list(map(int, box_prompts.properties["track_id"])))
+            assert len(track_ids_boxes) == len(z_values_boxes), f"{len(track_ids_boxes)}, {len(z_values_boxes)}"
+            z_values_boxes = z_values_boxes[track_ids_boxes == track_id]
 
     slices = np.unique(np.concatenate([z_values, z_values_boxes])).astype("int")
     stop_lower, stop_upper = False, False
