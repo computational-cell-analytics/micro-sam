@@ -102,7 +102,7 @@ class TestInstanceSegmentation(unittest.TestCase):
         predictor, image_embeddings = self._get_model(image, tile_shape, halo, self.embedding_path)
 
         amg = TiledEmbeddingMaskGenerator(predictor)
-        amg.initialize(image, image_embeddings=image_embeddings, tile_shape=tile_shape, halo=halo)
+        amg.initialize(image, image_embeddings=image_embeddings)
         predicted = amg.generate(pred_iou_thresh=0.96)
         initial_seg = amg.get_initial_segmentation()
 

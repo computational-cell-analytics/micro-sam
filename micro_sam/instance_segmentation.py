@@ -1,4 +1,5 @@
 import multiprocessing as mp
+import warnings
 from abc import ABC
 from concurrent import futures
 from copy import deepcopy
@@ -619,20 +620,43 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
     def initialize(
         self,
         image: np.ndarray,
-        tile_shape: List[int],
-        halo: List[int],
         image_embeddings=None,
         i: Optional[int] = None,
+        tile_shape: Optional[List[int]] = None,
+        halo: Optional[List[int]] = None,
         verbose: bool = False,
         embedding_save_path: Optional[str] = None,
     ):
         """
         """
         original_size = image.shape[:2]
-        if image_embeddings is None:
+
+        have_tiling_params = (tile_shape is not None) and (halo is not None)
+        if image_embeddings is None and have_tiling_params:
+            if embedding_save_path is None:
+                raise ValueError(
+                    "You have passed neither pre-computed embeddings nor a path for saving embeddings."
+                    "Embeddings with tiling can only be computed if a save path is given."
+                )
             image_embeddings = util.precompute_image_embeddings(
                 self.predictor, image, tile_shape=tile_shape, halo=halo, save_path=embedding_save_path
             )
+        elif image_embeddings is None and not have_tiling_params:
+            raise ValueError("You passed neither pre-computed embeddings nor tiling parameters (tile_shape and halo)")
+        else:
+            feats = image_embeddings["features"]
+            tile_shape_, halo_ = feats.attrs["tile_shape"], feats.attrs["halo"]
+            if have_tiling_params and (
+                (list(tile_shape) != list(tile_shape_)) or
+                (list(halo) != list(halo_))
+            ):
+                warnings.warn(
+                    "You have passed both pre-computed embeddings and tiling parameters (tile_shape and halo) and"
+                    "the values of the tiling parameters from the embeddings disagree with the ones that were passed."
+                    "The tiling parameters you have passed wil be ignored."
+                )
+            tile_shape = tile_shape_
+            halo = halo_
 
         tiling = blocking([0, 0], original_size, tile_shape)
         n_tiles = tiling.numberOfBlocks
