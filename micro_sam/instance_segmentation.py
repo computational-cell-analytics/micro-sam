@@ -1,6 +1,7 @@
 import multiprocessing as mp
 from abc import ABC
 from concurrent import futures
+from copy import deepcopy
 from typing import List, Optional
 
 import numpy as np
@@ -373,10 +374,12 @@ class AutomaticMaskGenerator(_AMGBase):
     ):
         if not self.is_initialized:
             raise RuntimeError("AutomaticMaskGenerator has not been initialized. Call initialize first.")
+
         data = amg_utils.MaskData()
         for data_, crop_box in zip(self.crop_list, self.crop_boxes):
             crop_data = self._postprocess_batch(
-                data=data_, crop_box=crop_box, original_size=self.original_size,
+                data=deepcopy(data_),
+                crop_box=crop_box, original_size=self.original_size,
                 pred_iou_thresh=pred_iou_thresh,
                 stability_score_thresh=stability_score_thresh,
                 stability_score_offset=stability_score_offset,
@@ -527,7 +530,8 @@ class EmbeddingMaskGenerator(_AMGBase):
             raise RuntimeError("AutomaticMaskGenerator has not been initialized. Call initialize first.")
 
         data = self._postprocess_batch(
-            data=self.crop_list[0], crop_box=self.crop_boxes[0], original_size=self.original_size,
+            data=deepcopy(self.crop_list[0]), crop_box=self.crop_boxes[0],
+            original_size=self.original_size,
             pred_iou_thresh=pred_iou_thresh,
             stability_score_thresh=stability_score_thresh,
             stability_score_offset=stability_score_offset,
@@ -541,12 +545,12 @@ class EmbeddingMaskGenerator(_AMGBase):
     def _resize_segmentation(self, segmentation, shape):
         longest_size = max(shape)
         longest_shape = (longest_size, longest_size)
-        segmentation_ = resize(
+        resized_segmentation = resize(
             segmentation, longest_shape, order=0, preserve_range=True, anti_aliasing=False
         ).astype(segmentation.dtype)
         crop = tuple(slice(0, sh) for sh in shape)
-        segmentation_ = segmentation_[crop]
-        return segmentation_
+        resized_segmentation = resized_segmentation[crop]
+        return resized_segmentation
 
     def get_initial_segmentation(self):
         if not self.is_initialized:
@@ -667,7 +671,7 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
 
         def segment_tile(_, tile_id):
             tile = tiling.getBlockWithHalo(tile_id, list(self._halo)).outerBlock
-            mask_data = self._crop_list[tile_id]
+            mask_data = deepcopy(self._crop_list[tile_id])
             crop_box = self.crop_boxes[tile_id]
             this_tile_shape = tuple(end - beg for beg, end in zip(tile.begin, tile.end))
             mask_data = self._postprocess_batch(
