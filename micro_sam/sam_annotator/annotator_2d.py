@@ -7,7 +7,7 @@ from magicgui import magicgui
 from napari import Viewer
 
 from .. import util
-from .. import segment_instances
+from .. import instance_segmentation
 from ..visualization import project_embeddings_for_visualization
 from .util import (
     clear_all_prompts, commit_segmentation_widget, create_prompt_menu,
@@ -39,6 +39,29 @@ def segment_wigdet(v: Viewer):
     v.layers["current_object"].refresh()
 
 
+def _get_amg(is_tiled, with_background, min_initial_size, use_box, use_mask, use_points, box_extension):
+    if is_tiled:
+        amg = instance_segmentation.TiledEmbeddingMaskGenerator(
+            PREDICTOR, with_background=with_background, min_initial_size=min_initial_size,
+            use_box=use_box, use_mask=use_mask, use_points=use_points, box_extension=box_extension,
+        )
+    else:
+        amg = instance_segmentation.EmbeddingMaskGenerator(
+            PREDICTOR, min_initial_size=min_initial_size,
+            use_box=use_box, use_mask=use_mask, use_points=use_points, box_extension=box_extension,
+        )
+    return amg
+
+
+def _changed_param(amg, **params):
+    if amg is None:
+        return None
+    for name, val in params.items():
+        if hasattr(amg, name) and getattr(amg, name) != val:
+            return name
+    return None
+
+
 @magicgui(call_button="Automatic Segmentation")
 def autosegment_widget(
     v: Viewer,
@@ -51,23 +74,27 @@ def autosegment_widget(
     use_points: bool = False,
     box_extension: float = 0.1,
 ):
+    global AMG
     is_tiled = IMAGE_EMBEDDINGS["input_size"] is None
-    if is_tiled:
-        seg = segment_instances.segment_instances_from_embeddings_with_tiling(
-            PREDICTOR, IMAGE_EMBEDDINGS, with_background=with_background,
-            box_extension=box_extension, pred_iou_thresh=pred_iou_thresh,
-            stability_score_thresh=stability_score_thresh,
-            min_initial_size=min_initial_size,
-            use_box=use_box, use_points=use_points, use_mask=use_mask,
-        )
-    else:
-        seg = segment_instances.segment_instances_from_embeddings(
-            PREDICTOR, IMAGE_EMBEDDINGS, with_background=with_background,
-            box_extension=box_extension, pred_iou_thresh=pred_iou_thresh,
-            stability_score_thresh=stability_score_thresh,
-            min_initial_size=min_initial_size,
-            use_box=use_box, use_points=use_points, use_mask=use_mask,
-        )
+    param_changed = _changed_param(
+        AMG, with_background=with_background, min_initial_size=min_initial_size,
+        use_box=use_box, use_mask=use_mask, use_points=use_points,
+        box_extension=box_extension,
+    )
+    if AMG is None or param_changed:
+        if param_changed:
+            print(f"The parameter {param_changed} was changed, so the full instance segmentation has to be recomputed.")
+        AMG = _get_amg(is_tiled, with_background, min_initial_size, use_box, use_mask, use_points, box_extension)
+
+    if not AMG.is_initialized:
+        AMG.initialize(v.layers["raw"].data, image_embeddings=IMAGE_EMBEDDINGS, verbose=True)
+
+    seg = AMG.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
+    if not is_tiled:
+        shape = v.layers["raw"].data.shape[:2]
+        seg = instance_segmentation.mask_data_to_segmentation(seg, shape, with_background)
+    assert isinstance(seg, np.ndarray)
+
     v.layers["auto_segmentation"].data = seg
     v.layers["auto_segmentation"].refresh()
 
@@ -180,7 +207,8 @@ def annotator_2d(
     predictor=None,
 ):
     # for access to the predictor and the image embeddings in the widgets
-    global PREDICTOR, IMAGE_EMBEDDINGS
+    global PREDICTOR, IMAGE_EMBEDDINGS, AMG
+    AMG = None
 
     if predictor is None:
         PREDICTOR = util.get_sam_model(model_type=model_type)
