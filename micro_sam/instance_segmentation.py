@@ -72,8 +72,7 @@ class _AMGBase(ABC):
     """
     """
     def __init__(self):
-        # the data that has to be computed by the 'initialize' method
-        # of the child classes
+        # the state that has to be computed by the 'initialize' method of the child classes
         self._is_initialized = False
         self._crop_list = None
         self._crop_boxes = None
@@ -233,6 +232,17 @@ class _AMGBase(ABC):
             curr_anns.append(ann)
 
         return curr_anns
+
+    def get_state(self):
+        if not self.is_initialized:
+            raise RuntimeError("The state has not been computed yet. Call initialize first.")
+        return {"crop_list": self.crop_list, "crop_boxes": self.crop_boxes, "original_size": self.original_size}
+
+    def set_state(self, state):
+        self._crop_list = state["crop_list"]
+        self._crop_boxes = state["crop_boxes"]
+        self._original_size = state["original_size"]
+        self._is_initialized = True
 
 
 class AutomaticMaskGenerator(_AMGBase):
@@ -434,7 +444,7 @@ class EmbeddingMaskGenerator(_AMGBase):
         self.use_points = use_points
         self.box_extension = box_extension
 
-        # additional data that is computed by 'initialize'
+        # additional state that is set 'initialize'
         self._initial_segmentation = None
 
     def _compute_initial_segmentation(self):
@@ -558,6 +568,15 @@ class EmbeddingMaskGenerator(_AMGBase):
             raise RuntimeError("AutomaticMaskGenerator has not been initialized. Call initialize first.")
         return self._resize_segmentation(self._initial_segmentation, self.original_size)
 
+    def get_state(self):
+        state = super().get_state()
+        state["initial_segmentation"] = self._initial_segmentation
+        return state
+
+    def set_state(self, state):
+        self._initial_segmentation = state["initial_segmentation"]
+        super().set_state(state)
+
 
 class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
     """
@@ -572,9 +591,13 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
         super().__init__(predictor=predictor, **kwargs)
         self.n_threads = n_threads
         self.with_background = with_background
-        # additional data for 'initialize'
+
+        # additional state for 'initialize'
         self._tile_shape = None
         self._halo = None
+
+        # state for saving the stitched initial segmentation
+        # (this is quite complex, so we save it to only compute once)
         self._stitched_initial_segmentation = None
 
     def _compute_initial_segmentations(self, image_embeddings, i, n_tiles, verbose):
@@ -746,6 +769,17 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
 
         self._stitched_initial_segmentation = initial_segmentation
         return initial_segmentation
+
+    def get_state(self):
+        state = super().get_state()
+        state["tile_shape"] = self._tile_shape
+        state["halo"] = self._halo
+        return state
+
+    def set_state(self, state):
+        self._tile_shape = state["tile_shape"]
+        self._halo = state["halo"]
+        super().set_state(state)
 
 
 #

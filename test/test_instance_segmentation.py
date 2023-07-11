@@ -69,9 +69,18 @@ class TestInstanceSegmentation(unittest.TestCase):
         predicted = mask_data_to_segmentation(predicted, image.shape, with_background=True)
         self.assertGreater(matching(predicted, mask, threshold=0.75)["precision"], 0.99)
 
+        # check that regenerating the segmentation works
         predicted2 = amg.generate()
         predicted2 = mask_data_to_segmentation(predicted2, image.shape, with_background=True)
         self.assertTrue(np.array_equal(predicted, predicted2))
+
+        # check that serializing and reserializing the state works
+        state = amg.get_state()
+        amg = AutomaticMaskGenerator(predictor, points_per_side=10, points_per_batch=16)
+        amg.set_state(state)
+        predicted3 = amg.generate()
+        predicted3 = mask_data_to_segmentation(predicted3, image.shape, with_background=True)
+        self.assertTrue(np.array_equal(predicted, predicted3))
 
     def test_embedding_mask_generator(self):
         from micro_sam.instance_segmentation import EmbeddingMaskGenerator, mask_data_to_segmentation
@@ -89,10 +98,18 @@ class TestInstanceSegmentation(unittest.TestCase):
         initial_seg = amg.get_initial_segmentation()
         self.assertEqual(initial_seg.shape, image.shape)
 
+        # check that regenerating the segmentation works
         predicted2 = amg.generate(pred_iou_thresh=0.96)
         predicted2 = mask_data_to_segmentation(predicted2, image.shape, with_background=True)
-
         self.assertTrue(np.array_equal(predicted, predicted2))
+
+        # check that serializing and reserializing the state works
+        state = amg.get_state()
+        amg = EmbeddingMaskGenerator(predictor)
+        amg.set_state(state)
+        predicted3 = amg.generate(pred_iou_thresh=0.96)
+        predicted3 = mask_data_to_segmentation(predicted3, image.shape, with_background=True)
+        self.assertTrue(np.array_equal(predicted, predicted3))
 
     def test_tiled_embedding_mask_generator(self):
         from micro_sam.instance_segmentation import TiledEmbeddingMaskGenerator
@@ -111,6 +128,13 @@ class TestInstanceSegmentation(unittest.TestCase):
 
         predicted2 = amg.generate(pred_iou_thresh=0.96)
         self.assertTrue(np.array_equal(predicted, predicted2))
+
+        # check that serializing and reserializing the state works
+        state = amg.get_state()
+        amg = TiledEmbeddingMaskGenerator(predictor)
+        amg.set_state(state)
+        predicted3 = amg.generate(pred_iou_thresh=0.96)
+        self.assertTrue(np.array_equal(predicted, predicted3))
 
 
 if __name__ == "__main__":
