@@ -222,7 +222,7 @@ def track_objet_widget(
 
     # we use the bounding box projection method as default which generally seems to work better for larger changes
     # between frames (which is pretty tyipical for tracking compared to 3d segmentation)
-    projection_ = "bounding_box" if projection == "default" else projection
+    projection_ = "mask" if projection == "default" else projection
 
     with progress(total=shape[0]) as progress_bar:
         # step 1: segment all slices with prompts
