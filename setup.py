@@ -5,7 +5,7 @@ __version__ = runpy.run_path("micro_sam/__version__.py")["__version__"]
 
 setup(
     name="micro_sam",
-    version="0.0.1",
+    version=__version__,
     description="SegmentAnything For Microscopy",
     author="Anwai Archit, Constantin Pape",
     url="https://user.informatik.uni-goettingen.de/~pape41/",
