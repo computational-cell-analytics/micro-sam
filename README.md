@@ -77,12 +77,13 @@ pip install -e .
 - On some systems `conda` is extremely slow and cannot resolve the environment in the step `conda env create ...`. You can use `mamba` instead, which is a faster re-implementation of `conda`. It can resolve the environment in less than a minute on any system we tried. Check out [this link](https://mamba.readthedocs.io/en/latest/installation.html) for how to install `mamba`. Once you have installed it, run `mamba env create -f <ENV_FILE>.yaml` to create the env.
 - Installation on MAC with a M1 or M2 processor:
     - The pytorch installation from `environment_cpu.yaml` does not work with a MAC that has an M1 or M2 processor. Instead you need to:
-        - Create a clean environment: `conda create -c conda-forge python pip -n sam`
-        - Activate it va `conda activate sam`
+        - Create a new environment: `mamba create -c conda-forge python pip -n sam`
+        - Activate it va `mamba activate sam`
         - Follow the instructions for how to install pytorch for MAC via conda from [pytorch.org](https://pytorch.org/).
-        - Install additional dependencies: `conda install -c conda-forge napari python-elf tqdm`
+        - Install additional dependencies: `mamba install -c conda-forge napari python-elf tqdm`
         - Install SegmentAnything: `pip install git+https://github.com/facebookresearch/segment-anything.git`
         - Install `micro_sam` by running `pip install -e .` in this folder.
+    - **Note:** we have seen many issues with the pytorch installation on MAC. If a wrong pytorch version is installed for you (which will cause pytorch errors once you run the application) please try again with a clean `mambaforge` installation. Please install the `OS X, arm64` version from [here](https://github.com/conda-forge/miniforge#mambaforge).
 
 ## Usage
 
