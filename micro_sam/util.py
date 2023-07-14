@@ -1,6 +1,7 @@
 import hashlib
 import os
-from shutil import copyfileobj
+import warnings
+from shutil import copyfileobj, rmtree
 
 import numpy as np
 import requests
@@ -8,6 +9,7 @@ import torch
 import vigra
 import zarr
 
+from PyQt5 import QtCore, QtWidgets
 from elf.io import open_file
 from nifty.tools import blocking
 from skimage.measure import regionprops
@@ -314,6 +316,51 @@ def _precompute_3d(input_, predictor, save_path, lazy_loading, tile_shape=None, 
     }
     return image_embeddings
 
+def show_wrong_file_warning(file_path):
+    """If the data signature does not match to the signature, user will can choose from the following options in this dialog:
+       - Ignore: continue with input file (return file_path).
+       - Overwrite: delete file_path and recompute the embeddings at same location.
+       - Select a different file
+       - Select a new file
+       
+    Arguments:
+        file_path (string or os.path): path of the problematic file
+
+    Returns:
+        string or os.path: path to a file (new or old) depending on user decision
+    """
+    msgbox = QtWidgets.QMessageBox()
+    msgbox.setWindowFlags(QtCore.Qt.CustomizeWindowHint | QtCore.Qt.WindowTitleHint)
+    msgbox.setWindowTitle("Warning")
+    msgbox.setText('The input data does not match the embeddings file.')
+    ignore_btn = msgbox.addButton("Ignore" , QtWidgets.QMessageBox.RejectRole)
+    overwrite_btn = msgbox.addButton("Overwrite file" , QtWidgets.QMessageBox.DestructiveRole)
+    select_btn = msgbox.addButton("Select different file" ,QtWidgets.QMessageBox.AcceptRole)
+    create_btn = msgbox.addButton("Create new file" ,QtWidgets.QMessageBox.AcceptRole)
+    msgbox.setDefaultButton(create_btn)
+
+    msgbox.exec()
+    msgbox.clickedButton()
+    if msgbox.clickedButton() == ignore_btn:
+        return file_path
+    elif msgbox.clickedButton() == overwrite_btn:
+        rmtree(file_path)
+        return file_path 
+    elif msgbox.clickedButton() == create_btn:
+        # unfortunately there exists no dialog to create a directory so we have to use "create new file" dialog with some adjustments.
+        dialog = QtWidgets.QFileDialog(None)
+        dialog.setFileMode(QtWidgets.QFileDialog.AnyFile)
+        dialog.setOption(QtWidgets.QFileDialog.ShowDirsOnly)
+        dialog.setNameFilter("Archives (*.zarr)")
+        new_path = ""
+        while os.path.splitext(new_path)[1] != ".zarr":
+            dialog.exec()
+            new_path = dialog.selectedFiles()[0]
+        os.makedirs(new_path)
+        return(new_path)
+    elif msgbox.clickedButton() == select_btn:
+        return QtWidgets.QFileDialog.getExistingDirectory(None, "Open a folder", os.path.split(file_path)[0], QtWidgets.QFileDialog.ShowDirsOnly)
+
 
 def precompute_image_embeddings(
     predictor, input_, save_path=None, lazy_loading=False, ndim=None, tile_shape=None, halo=None
@@ -337,6 +384,20 @@ def precompute_image_embeddings(
     ndim = input_.ndim if ndim is None else ndim
     if tile_shape is not None:
         assert save_path is not None, "Tiled prediction is only supported when the embeddings are saved to file."
+        
+    if save_path is not None:
+        data_signature = hashlib.sha1(input_.tobytes()).hexdigest()
+        
+        f = zarr.open(save_path, "a")
+        if "input_size" in f.attrs:
+            if "data_signature" not in f.attrs or f.attrs["data_signature"] != data_signature:
+                warnings.warn("Embeddings file is invalid. Please recompute embeddings to new file.")
+                save_path = show_wrong_file_warning(save_path)
+                f = zarr.open(save_path, "a")
+                if "data_signature" not in f.attrs:
+                   f.attrs["data_signature"] = data_signature 
+        else:
+            f.attrs["data_signature"] = data_signature
 
     if ndim == 2:
         image_embeddings = _compute_2d(input_, predictor) if save_path is None else\
