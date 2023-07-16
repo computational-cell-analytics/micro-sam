@@ -479,7 +479,7 @@ def get_centers_and_bounding_boxes(
 
 def load_image_data(
     path: str,
-    ndim: int,
+    ndim: Optional[int] = None,
     key: Optional[str] = None,
     lazy_loading: bool = False
 ) -> np.ndarray:

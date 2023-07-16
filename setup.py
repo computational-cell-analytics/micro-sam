@@ -13,6 +13,7 @@ setup(
     license="MIT",
     entry_points={
         "console_scripts": [
+            "micro_sam.annotator = micro_sam.sam_annotator.annotator:main",
             "micro_sam.annotator_2d = micro_sam.sam_annotator.annotator_2d:main",
             "micro_sam.annotator_3d = micro_sam.sam_annotator.annotator_3d:main",
             "micro_sam.annotator_tracking = micro_sam.sam_annotator.annotator_tracking:main",
