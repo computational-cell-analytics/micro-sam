@@ -9,6 +9,7 @@ from napari import Viewer
 from .. import util
 from .. import instance_segmentation
 from ..visualization import project_embeddings_for_visualization
+from .gui_utils import show_wrong_file_warning
 from .util import (
     clear_all_prompts, commit_segmentation_widget, create_prompt_menu,
     prompt_layer_to_boxes, prompt_layer_to_points, prompt_segmentation, toggle_label, LABEL_COLOR_CYCLE,
@@ -215,7 +216,8 @@ def annotator_2d(
     else:
         PREDICTOR = predictor
     IMAGE_EMBEDDINGS = util.precompute_image_embeddings(
-        PREDICTOR, raw, save_path=embedding_path, ndim=2, tile_shape=tile_shape, halo=halo
+        PREDICTOR, raw, save_path=embedding_path, ndim=2, tile_shape=tile_shape, halo=halo,
+        wrong_file_callback=show_wrong_file_warning
     )
 
     # we set the pre-computed image embeddings if we don't use tiling

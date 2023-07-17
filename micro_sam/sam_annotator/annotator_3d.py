@@ -8,6 +8,7 @@ from napari.utils import progress
 from .. import util
 from ..prompt_based_segmentation import segment_from_mask
 from ..visualization import project_embeddings_for_visualization
+from .gui_utils import show_wrong_file_warning
 from .util import (
     clear_all_prompts, commit_segmentation_widget, create_prompt_menu,
     prompt_layer_to_boxes, prompt_layer_to_points, prompt_segmentation,
@@ -195,7 +196,8 @@ def annotator_3d(
     global PREDICTOR, IMAGE_EMBEDDINGS
     PREDICTOR = util.get_sam_model(model_type=model_type)
     IMAGE_EMBEDDINGS = util.precompute_image_embeddings(
-        PREDICTOR, raw, save_path=embedding_path, tile_shape=tile_shape, halo=halo
+        PREDICTOR, raw, save_path=embedding_path, tile_shape=tile_shape, halo=halo,
+        wrong_file_callback=show_wrong_file_warning,
     )
 
     #
