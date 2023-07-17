@@ -354,7 +354,7 @@ def precompute_image_embeddings(
 
             # data signature does not match or is not in the file
             if "data_signature" not in f.attrs or f.attrs["data_signature"] != data_signature:
-                warnings.warn("Embeddings file is invalid. Please recompute embeddings to new file.")
+                warnings.warn("Embeddings file is invalid. Please recompute embeddings in a new file.")
                 if wrong_file_callback is not None:
                     save_path = wrong_file_callback(save_path)
                 f = zarr.open(save_path, "a")
