@@ -10,7 +10,7 @@ def track_ctc_data():
     example_data = fetch_tracking_example_data("./data")
     # load the example data (load the sequence of tif files as timeseries)
     with open_file(example_data, mode="r") as f:
-        timeseries = f["*.tif"][:]
+        timeseries = f["*.tif"]
     # start the annotator with cached embeddings
     annotator_tracking(timeseries, embedding_path="./embeddings/embeddings-ctc.zarr", show_embeddings=False)
 
