@@ -4,6 +4,28 @@ from pathlib import Path
 import pooch
 
 
+def fetch_image_series_example_data(save_directory):
+    """Download the sample images for the image series annotator.
+    """
+    save_directory = Path(save_directory)
+    os.makedirs(save_directory, exist_ok=True)
+    print("Example data directory is:", save_directory.resolve())
+    fname = "image-series.zip"
+    unpack_filenames = [os.path.join("series", f"im{i}.tif") for i in range(3)]
+    unpack = pooch.Unzip(members=unpack_filenames)
+    pooch.retrieve(
+        url="https://owncloud.gwdg.de/index.php/s/M1zGnfkulWoAhUG/download",
+        known_hash="92346ca9770bcaf55248efee590718d54c7135b6ebca15d669f3b77b6afc8706",
+        fname=fname,
+        path=save_directory,
+        progressbar=True,
+        processor=unpack,
+    )
+    data_folder = os.path.join(save_directory, f"{fname}.unzip", "series")
+    assert os.path.exists(data_folder)
+    return data_folder
+
+
 def fetch_wholeslide_example_data(save_directory):
     """Download the sample data for the 2d annotator.
 
@@ -74,15 +96,16 @@ def fetch_3d_example_data(save_directory):
     print("Example data directory is:", save_directory.resolve())
     unpack_filenames = [os.path.join("Lucchi++", "Test_In", f"mask{str(i).zfill(4)}.png") for i in range(165)]
     unpack = pooch.Unzip(members=unpack_filenames)
+    fname = "lucchi_pp.zip"
     pooch.retrieve(
         url="http://www.casser.io/files/lucchi_pp.zip",
         known_hash="770ce9e98fc6f29c1b1a250c637e6c5125f2b5f1260e5a7687b55a79e2e8844d",
-        fname="lucchi_pp.zip",
+        fname=fname,
         path=save_directory,
         progressbar=True,
         processor=unpack,
     )
-    lucchi_dir = save_directory.joinpath("lucchi_pp.zip.unzip", "Lucchi++", "Test_In")
+    lucchi_dir = save_directory.joinpath(f"{fname}.unzip", "Lucchi++", "Test_In")
     return str(lucchi_dir)
 
 
@@ -101,13 +124,15 @@ def fetch_tracking_example_data(save_directory):
     print("Example data directory is:", save_directory.resolve())
     unpack_filenames = [os.path.join("DIC-C2DH-HeLa", "01", f"t{str(i).zfill(3)}.tif") for i in range(84)]
     unpack = pooch.Unzip(members=unpack_filenames)
+    fname = "DIC-C2DH-HeLa.zip"
     pooch.retrieve(
         url="http://data.celltrackingchallenge.net/training-datasets/DIC-C2DH-HeLa.zip",  # 37 MB
         known_hash="fac24746fa0ad5ddf6f27044c785edef36bfa39f7917da4ad79730a7748787af",
-        fname="DIC-C2DH-HeLa.zip",
+        fname=fname,
         path=save_directory,
         progressbar=True,
         processor=unpack,
     )
-    cell_tracking_directory = save_directory.joinpath("DIC-C2DH-HeLa", "train", "01")
-    return str(cell_tracking_directory)
+    cell_tracking_dir = save_directory.joinpath(f"{fname}.unzip", "DIC-C2DH-HeLa", "01")
+    assert os.path.exists(cell_tracking_dir)
+    return str(cell_tracking_dir)
