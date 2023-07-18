@@ -316,6 +316,11 @@ def _precompute_3d(input_, predictor, save_path, lazy_loading, tile_shape=None, 
     return image_embeddings
 
 
+def compute_data_signature(input_):
+    data_signature = hashlib.sha1(np.asarray(input_).tobytes()).hexdigest()
+    return data_signature
+
+
 def precompute_image_embeddings(
     predictor, input_,
     save_path=None, lazy_loading=False,
@@ -347,7 +352,7 @@ def precompute_image_embeddings(
         assert save_path is not None, "Tiled prediction is only supported when the embeddings are saved to file."
 
     if save_path is not None:
-        data_signature = hashlib.sha1(input_.tobytes()).hexdigest()
+        data_signature = compute_data_signature(input_)
 
         f = zarr.open(save_path, "a")
         if "input_size" in f.attrs:  # we have computed the embeddings already

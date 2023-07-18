@@ -1,23 +1,38 @@
 import imageio.v3 as imageio
 from micro_sam.sam_annotator import annotator_2d
+from micro_sam.sample_data import fetch_hela_2d_example_data, fetch_livecell_example_data, fetch_wholeslide_example_data
 
 
-# TODO describe how to get the data and don't use hard-coded path
 def livecell_annotator():
-    im = imageio.imread(
-        "/home/pape/Work/data/incu_cyte/livecell/images/livecell_test_images/A172_Phase_C7_1_01d04h00m_4.tif"
-    )
-    embedding_path = "./embeddings/embeddings-livecell_cropped.zarr"
-    annotator_2d(im, embedding_path, show_embeddings=False)
+    """Run the 2d annotator for an example image from the LiveCELL dataset.
+
+    See https://doi.org/10.1038/s41592-021-01249-6 for details on the data.
+    """
+    example_data = fetch_livecell_example_data("./data")
+    image = imageio.imread(example_data)
+    embedding_path = "./embeddings/embeddings-livecell.zarr"
+    annotator_2d(image, embedding_path, show_embeddings=False)
 
 
-# This runs interactive 2d annotation for data from the cell tracking challenge:
-# It uses the training data for the HeLA dataset. You can download the data from
-# http://data.celltrackingchallenge.net/training-datasets/DIC-C2DH-HeLa.zip
 def hela_2d_annotator():
-    im = imageio.imread("./data/DIC-C2DH-HeLa/train/01/t011.tif")
+    """Run the 2d annotator for an example image form the cell tracking challenge HeLa 2d dataset.
+    """
+    example_data = fetch_hela_2d_example_data("./data")
+    image = imageio.imread(example_data)
     embedding_path = "./embeddings/embeddings-hela2d.zarr"
-    annotator_2d(im, embedding_path, show_embeddings=False)
+    annotator_2d(image, embedding_path, show_embeddings=False)
+
+
+def wholeslide_annotator():
+    """Run the 2d annotator with tiling for an example whole-slide image from the
+    NeuRIPS cell segmentation challenge.
+
+    See https://neurips22-cellseg.grand-challenge.org/ for details on the data.
+    """
+    example_data = fetch_wholeslide_example_data("./data")
+    image = imageio.imread(example_data)
+    embedding_path = "./embeddings/whole-slide-embeddings.zarr"
+    annotator_2d(image, embedding_path, tile_shape=(1024, 1024), halo=(256, 256))
 
 
 def main():
@@ -26,6 +41,9 @@ def main():
 
     # 2d annotator for cell tracking challenge hela data
     hela_2d_annotator()
+
+    # 2d annotator for a whole slide image
+    # wholeslide_annotator()
 
 
 if __name__ == "__main__":
