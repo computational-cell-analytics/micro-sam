@@ -2,6 +2,7 @@ import hashlib
 import os
 import warnings
 from shutil import copyfileobj
+from typing import Any
 
 import numpy as np
 import requests
@@ -36,6 +37,10 @@ CHECKSUMS = {
     "vit_l": "3adcc4315b642a4d2101128f611684e8734c41232a17c648ed1693702a49a622",
     "vit_b": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912"
 }
+
+
+# TODO define the proper type for image embeddings
+ImageEmbeddings = Any
 
 
 def _download(url, path, model_type):
