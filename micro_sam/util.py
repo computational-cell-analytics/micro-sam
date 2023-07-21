@@ -1,8 +1,9 @@
 import hashlib
 import os
 import warnings
+from collections.abc import Mapping
 from shutil import copyfileobj
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import requests
@@ -86,20 +87,26 @@ def _get_checkpoint(model_type, checkpoint_path=None):
     return checkpoint_path
 
 
-def get_sam_model(device=None, model_type="vit_h", checkpoint_path=None, return_sam=False):
+def get_sam_model(
+    device: Optional[str] = None,
+    model_type: str = "vit_h",
+    checkpoint_path: Optional[str] = None,
+    return_sam: bool = False
+) -> SamPredictor:
     """Get the SegmentAnything Predictor.
 
     This function will download the required model checkpoint or load it from file if it
-    was already downloaded. By default the models are downloaded to ~/.sam_models.
+    was already downloaded. By default the models are downloaded to '~/.sam_models'.
     This location can be changed by setting the environment variable SAM_MODELS.
 
-    Arguments:
-        device [str, torch.device] - the device for the model. If none is given will use GPU if available.
-            (default: None)
-        model_type [str] - the SegmentAnything model to use. (default: vit_h)
-        checkpoint_path [str] - the path to the corresponding checkpoint if it is already present
-            and not in the default model folder. (default: None)
-        return_sam [bool] - return the sam model object as well as the predictor (default: False)
+    Args:
+        device: The device for the model. If none is given will use GPU if available.
+        model_type: The SegmentAnything model to use.
+        checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
+        return_sam: Return the sam model object as well as the predictor.
+
+    Returns:
+        The segment anything predictor.
     """
     checkpoint = _get_checkpoint(model_type, checkpoint_path)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -321,43 +328,46 @@ def _precompute_3d(input_, predictor, save_path, lazy_loading, tile_shape=None, 
     return image_embeddings
 
 
-def compute_data_signature(input_):
+def _compute_data_signature(input_):
     data_signature = hashlib.sha1(np.asarray(input_).tobytes()).hexdigest()
     return data_signature
 
 
 def precompute_image_embeddings(
-    predictor, input_,
-    save_path=None, lazy_loading=False,
-    ndim=None, tile_shape=None, halo=None,
-    wrong_file_callback=None,
-):
+    predictor: SamPredictor,
+    input_: np.ndarray,
+    save_path: Optional[str] = None,
+    lazy_loading: bool = False,
+    ndim: Optional[int] = None,
+    tile_shape: Optional[tuple[int]] = None,
+    halo: Optional[tuple[int]] = None,
+    wrong_file_callback: Optional[callable] = None,
+) -> ImageEmbeddings:
     """Compute the image embeddings (output of the encoder) for the input.
 
-    If save_path is given the embeddings will be loaded/saved in a zarr container.
+    If 'save_path' is given the embeddings will be loaded/saved in a zarr container.
 
-    Arguments:
-        predictor - the SegmentAnything predictor
-        input_ [np.ndarray] - the input. Can be 2D or 3D.
-        save_path [str] - path to save the embeddings in a zarr container (default: None)
-        lazy_loading [bool] - whether to load all embeddings into memory or return an
-            object to load them on demand when required. This only has an effect if 'save_path'
-            is given and if the input is 3D. (default: False)
-        ndim [int] - the dimensionality of the data. If not given will be deduced from the input data. (default: None)
-        tile_shape [tuple] - shape of tiles for tiled prediction.
-            By default prediction is run without tiling. (default: None)
-        halo [tuple] - additional overlap of the tiles for tiled prediction. (default: None)
-        wrong_file_callback [callable] - function to call when an embedding file with wrong file signature
+    Args:
+        predictor: The SegmentAnything predictor
+        input_: The input data. Can be 2 or 3 dimensional, corresponding to an image, volume or timeseries.
+        save_path: Path to save the embeddings in a zarr container.
+        lazy_loading: Whether to load all embeddings into memory or return an
+            object to load them on demand when required. This only has an effect if 'save_path' is given
+            and if the input is 3 dimensional.
+        ndim: The dimensionality of the data. If not given will be deduced from the input data.
+        tile_shape: Shape of tiles for tiled prediction. By default prediction is run without tiling.
+        halo: Overlap of the tiles for tiled prediction.
+        wrong_file_callback [callable]: Function to call when an embedding file with wrong file signature
             is passed. If none is given a wrong file signature will cause a warning.
-            If passed, the callback should have the signature 'def callback(save_path): return str',
-            where the return value is the (potentially updated) embedding save path (default: None)
+            The callback ,ust have the signature 'def callback(save_path: str) -> str',
+            where the return value is the (potentially updated) embedding save path.
     """
     ndim = input_.ndim if ndim is None else ndim
     if tile_shape is not None:
         assert save_path is not None, "Tiled prediction is only supported when the embeddings are saved to file."
 
     if save_path is not None:
-        data_signature = compute_data_signature(input_)
+        data_signature = _compute_data_signature(input_)
 
         f = zarr.open(save_path, "a")
         if "input_size" in f.attrs:  # we have computed the embeddings already
@@ -388,15 +398,18 @@ def precompute_image_embeddings(
     return image_embeddings
 
 
-def set_precomputed(predictor, image_embeddings, i=None):
-    """Set the precomputed image embeddings.
+def set_precomputed(
+    predictor: SamPredictor,
+    image_embeddings: ImageEmbeddings,
+    i: Optional[int] = None
+):
+    """Set the precomputed image embeddings for a predictor.
 
     Arguments:
-        predictor - the SegmentAnything predictor
-        image_embeddings [dict] - the precomputed image embeddings.
-            This object is returned by 'precomputed_image_embeddings'.
-        i [int] - the index for the image embeddings for 3D data.
-            Only needs to be passed for 3d data. (default: None)
+        predictor: The SegmentAnything predictor.
+        image_embeddings: The precomputed image embeddings computed by `precompute_image_embeddings`.
+        i: Index for the image data. Required if `image` has three spatial dimensions
+            or a time dimension and two spatial dimensions.
     """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     features = image_embeddings["features"]
@@ -420,8 +433,15 @@ def set_precomputed(predictor, image_embeddings, i=None):
     return predictor
 
 
-def compute_iou(mask1, mask2):
+def compute_iou(mask1: np.ndarray, mask2: np.ndarray) -> float:
     """Compute the intersection over union of two masks.
+
+    Args:
+        mask1: The first mask.
+        mask2: The second mask.
+
+    Returns:
+        The intersection over union of the two masks.
     """
     overlap = np.logical_and(mask1 == 1, mask2 == 1).sum()
     union = np.logical_or(mask1 == 1, mask2 == 1).sum()
@@ -437,8 +457,10 @@ def get_bounding_boxes_and_centers(
     """Returns the center coordinates of the foreground instances in the ground-truth.
 
     Args:
-        segmentation:
-        mode:
+        segmentation: The segmentation.
+        mode: Determines the functionality used for computing the centers.
+        If 'v', the object's eccentricity centers computed by vigra are used.
+        If 'p' the object's centroids computed by skimage are used.
 
     Returns:
         A dictionary that maps object ids to the corresponding centroid.
@@ -460,7 +482,23 @@ def get_bounding_boxes_and_centers(
     return center_coordinates, bbox_coordinates
 
 
-def load_image_data(path, ndim, key=None, lazy_loading=False):
+def load_image_data(
+    path: str,
+    ndim: int,
+    key: Optional[str] = None,
+    lazy_loading: bool = False
+) -> np.ndarray:
+    """Helper function to load image data from file.
+
+    Args:
+        path: The filepath to the image data.
+        ndim: The data dimensionality.
+        key: The internal filepath for complex data formats like hdf5.
+        lazy_loading: Whether to lazyly load data. Only supported for n5 and zarr data.
+
+    Returns:
+        The image data.
+    """
     if key is None:
         image_data = imageio.imread(path) if ndim == 2 else imageio.volread(path)
     else:
