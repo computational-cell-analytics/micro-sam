@@ -1,10 +1,10 @@
 import hashlib
 import os
 import warnings
-from collections.abc import Mapping
 from shutil import copyfileobj
-from typing import Any, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
+import imageio.v3 as imageio
 import numpy as np
 import requests
 import torch
@@ -16,11 +16,6 @@ from nifty.tools import blocking
 from skimage.measure import regionprops
 
 from segment_anything import sam_model_registry, SamPredictor
-
-try:
-    import imageio.v2 as imageio
-except ImportError:
-    import imageio
 
 try:
     from napari.utils import progress as tqdm
@@ -339,9 +334,9 @@ def precompute_image_embeddings(
     save_path: Optional[str] = None,
     lazy_loading: bool = False,
     ndim: Optional[int] = None,
-    tile_shape: Optional[tuple[int]] = None,
-    halo: Optional[tuple[int]] = None,
-    wrong_file_callback: Optional[callable] = None,
+    tile_shape: Optional[Tuple[int]] = None,
+    halo: Optional[Tuple[int]] = None,
+    wrong_file_callback: Optional[Callable] = None,
 ) -> ImageEmbeddings:
     """Compute the image embeddings (output of the encoder) for the input.
 
@@ -453,7 +448,7 @@ def compute_iou(mask1: np.ndarray, mask2: np.ndarray) -> float:
 def get_centers_and_bounding_boxes(
     segmentation: np.ndarray,
     mode: str = "v"
-) -> tuple[Mapping[int, np.ndarray], Mapping[int, tuple]]:
+) -> Tuple[Dict[int, np.ndarray], Dict[int, tuple]]:
     """Returns the center coordinates of the foreground instances in the ground-truth.
 
     Args:
@@ -500,7 +495,7 @@ def load_image_data(
         The image data.
     """
     if key is None:
-        image_data = imageio.imread(path) if ndim == 2 else imageio.volread(path)
+        image_data = imageio.imread(path)
     else:
         with open_file(path, mode="r") as f:
             image_data = f[key]

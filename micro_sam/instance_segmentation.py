@@ -1,10 +1,9 @@
 import multiprocessing as mp
 import warnings
 from abc import ABC
-from collections.abc import Mapping
 from concurrent import futures
 from copy import deepcopy
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -46,7 +45,7 @@ class _FakeInput:
 
 
 def mask_data_to_segmentation(
-    masks: List[Mapping[str, Any]],
+    masks: List[Dict[str, Any]],
     shape: tuple[int, ...],
     with_background: bool,
 ) -> np.ndarray:
@@ -256,7 +255,7 @@ class _AMGBase(ABC):
 
         return curr_anns
 
-    def get_state(self) -> Mapping[str, Any]:
+    def get_state(self) -> Dict[str, Any]:
         """Get the initialized state of the mask generator.
 
         Returns:
@@ -266,7 +265,7 @@ class _AMGBase(ABC):
             raise RuntimeError("The state has not been computed yet. Call initialize first.")
         return {"crop_list": self.crop_list, "crop_boxes": self.crop_boxes, "original_size": self.original_size}
 
-    def set_state(self, state: Mapping[str, Any]) -> None:
+    def set_state(self, state: Dict[str, Any]) -> None:
         """Set the state of the mask generator.
 
         Args:
@@ -447,7 +446,7 @@ class AutomaticMaskGenerator(_AMGBase):
         crop_nms_thresh: float = 0.7,
         min_mask_region_area: int = 0,
         output_mode: str = "binary_mask",
-    ) -> List[Mapping[str, Any]]:
+    ) -> List[Dict[str, Any]]:
         """Generate instance segmentation for the currently initialized image.
 
         Args:
@@ -486,7 +485,7 @@ class AutomaticMaskGenerator(_AMGBase):
                 data["boxes"].float(),
                 scores,
                 torch.zeros_like(data["boxes"][:, 0]),  # categories
-                iou_threshold=self.crop_nms_thresh,
+                iou_threshold=crop_nms_thresh,
             )
             data.filter(keep_by_nms)
 
@@ -648,7 +647,7 @@ class EmbeddingMaskGenerator(_AMGBase):
         box_nms_thresh: float = 0.7,
         min_mask_region_area: int = 0,
         output_mode: str = "binary_mask",
-    ) -> List[Mapping[str, Any]]:
+    ) -> List[Dict[str, Any]]:
         """Generate instance segmentation for the currently initialized image.
 
         Args:
@@ -699,7 +698,7 @@ class EmbeddingMaskGenerator(_AMGBase):
             raise RuntimeError("AutomaticMaskGenerator has not been initialized. Call initialize first.")
         return self._resize_segmentation(self._initial_segmentation, self.original_size)
 
-    def get_state(self) -> Mapping[str, Any]:
+    def get_state(self) -> Dict[str, Any]:
         """Get the initialized state of the mask generator.
 
         Returns:
@@ -709,7 +708,7 @@ class EmbeddingMaskGenerator(_AMGBase):
         state["initial_segmentation"] = self._initial_segmentation
         return state
 
-    def set_state(self, state: Mapping[str, Any]) -> None:
+    def set_state(self, state: Dict[str, Any]) -> None:
         """Set the state of the mask generator.
 
         Args:
@@ -918,7 +917,7 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
 
         return segmentation
 
-    def get_initial_segmentation(self) -> None:
+    def get_initial_segmentation(self) -> np.ndarray:
         """Get the initial instance segmentation.
 
         Returns:
@@ -947,7 +946,7 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
         self._stitched_initial_segmentation = initial_segmentation
         return initial_segmentation
 
-    def get_state(self) -> Mapping[str, Any]:
+    def get_state(self) -> Dict[str, Any]:
         """Get the initialized state of the mask generator.
 
         Returns:
@@ -958,7 +957,7 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
         state["halo"] = self._halo
         return state
 
-    def set_state(self, state: Mapping[str, Any]) -> None:
+    def set_state(self, state: Dict[str, Any]) -> None:
         """Set the state of the mask generator.
 
         Args:
