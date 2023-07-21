@@ -1,15 +1,24 @@
 import numpy as np
+
 from elf.segmentation.embeddings import embedding_pca
 from nifty.tools import blocking
 from skimage.transform import resize
+
+from .util import ImageEmbeddings
 
 
 #
 # PCA visualization for the image embeddings
 #
 
-def compute_pca(embeddings):
+def compute_pca(embeddings: np.ndarray) -> np.ndarray:
     """Compute the pca projection of the embeddings to visualize them as RGB image.
+
+    Args:
+        embeddings: The embeddings. For example predicted by the SAM image encoder.
+
+    Returns:
+        PCA of the embeddings, mapped to the pixels.
     """
     if embeddings.ndim == 4:
         pca = embedding_pca(embeddings.squeeze()).transpose((1, 2, 0))
@@ -131,7 +140,18 @@ def _project_tiled_embeddings(image_embeddings):
     return embedding_vis, scale
 
 
-def project_embeddings_for_visualization(image_embeddings):
+def project_embeddings_for_visualization(
+    image_embeddings: ImageEmbeddings
+) -> tuple[np.ndarray, tuple[float, ...]]:
+    """Project image embeddings to pixel-wise PCA.
+
+    Args:
+        image_embeddings: The image embeddings.
+
+    Returns:
+        The PCA of the embeddings.
+        The scale factor for resizing to the original image size.
+    """
     is_tiled = image_embeddings["input_size"] is None
     if is_tiled:
         embedding_vis, scale = _project_tiled_embeddings(image_embeddings)

@@ -41,12 +41,12 @@ class TestPromptGenerators(unittest.TestCase):
 
     def test_point_prompt_generator(self):
         from micro_sam.prompt_generators import PointAndBoxPromptGenerator
-        from micro_sam.util import get_cell_center_coordinates
+        from micro_sam.util import get_centers_and_bounding_boxes
 
         labels = self._get_test_data()
         label_ids = np.unique(labels)[1:]
 
-        centers, boxes = get_cell_center_coordinates(labels)
+        centers, boxes = get_centers_and_bounding_boxes(labels)
 
         test_point_pairs = [(1, 0), (1, 1), (4, 3), (2, 4), (3, 9), (13, 27)]
         for (n_pos, n_neg) in test_point_pairs:
@@ -70,12 +70,12 @@ class TestPromptGenerators(unittest.TestCase):
 
     def test_box_prompt_generator(self):
         from micro_sam.prompt_generators import PointAndBoxPromptGenerator
-        from micro_sam.util import get_cell_center_coordinates
+        from micro_sam.util import get_centers_and_bounding_boxes
 
         labels = self._get_test_data()
         label_ids = np.unique(labels)[1:]
 
-        centers, boxes = get_cell_center_coordinates(labels)
+        centers, boxes = get_centers_and_bounding_boxes(labels)
         generator = PointAndBoxPromptGenerator(0, 0, dilation_strength=0, get_point_prompts=False, get_box_prompts=True)
 
         for label_id in label_ids:
