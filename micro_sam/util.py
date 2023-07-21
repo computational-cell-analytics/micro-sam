@@ -430,18 +430,28 @@ def compute_iou(mask1, mask2):
     return iou
 
 
-def get_cell_center_coordinates(gt, mode="v"):
-    """
-    Returns the center coordinates of the foreground instances in the ground-truth
+def get_bounding_boxes_and_centers(
+    segmentation: np.ndarray,
+    mode: str = "v"
+) -> tuple[Mapping[int, np.ndarray], Mapping[int, tuple]]:
+    """Returns the center coordinates of the foreground instances in the ground-truth.
+
+    Args:
+        segmentation:
+        mode:
+
+    Returns:
+        A dictionary that maps object ids to the corresponding centroid.
+        A dictionary that maps object_ids to the corresponding bounding box.
     """
     assert mode in ["p", "v"], "Choose either 'p' for regionprops or 'v' for vigra"
 
-    properties = regionprops(gt)
+    properties = regionprops(segmentation)
 
     if mode == "p":
         center_coordinates = {prop.label: prop.centroid for prop in properties}
     elif mode == "v":
-        center_coordinates = vigra.filters.eccentricityCenters(gt.astype('float32'))
+        center_coordinates = vigra.filters.eccentricityCenters(segmentation.astype('float32'))
         center_coordinates = {i: coord for i, coord in enumerate(center_coordinates) if i > 0}
 
     bbox_coordinates = {prop.label: prop.bbox for prop in properties}

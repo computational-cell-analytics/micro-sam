@@ -1,6 +1,7 @@
 import multiprocessing as mp
 import warnings
-from abc import ABC, Mapping
+from abc import ABC
+from collections.abc import Mapping
 from concurrent import futures
 from copy import deepcopy
 from typing import Any, List, Optional
@@ -1055,8 +1056,6 @@ def _segment_instances_from_embeddings_with_tiling(
 # this is still experimental and not yet ready to be integrated within the annotator_3d
 # (will need to see how well it works with retrained models)
 def _segment_instances_from_embeddings_3d(predictor, image_embeddings, verbose=1, iou_threshold=0.50, **kwargs):
-    """
-    """
     if image_embeddings["original_size"] is None:  # tiled embeddings
         is_tiled = True
         image_shape = tuple(image_embeddings["features"].attrs["shape"])
