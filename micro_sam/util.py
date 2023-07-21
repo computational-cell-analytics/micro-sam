@@ -261,7 +261,7 @@ def _compute_3d(input_, predictor):
     for z_slice in tqdm(input_, desc="Precompute Image Embeddings"):
         predictor.reset_image()
 
-        image = _to_image(input_)
+        image = _to_image(z_slice)
         predictor.set_image(image)
         embedding = predictor.get_image_embedding()
         features.append(embedding[None])
