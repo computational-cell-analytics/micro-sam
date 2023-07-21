@@ -37,7 +37,7 @@ class PointAndBoxPromptGenerator:
         dilation_strength: int,
         get_point_prompts: bool = True,
         get_box_prompts: bool = False
-    ):
+    ) -> None:
         self.n_positive_points = n_positive_points
         self.n_negative_points = n_negative_points
         self.dilation_strength = dilation_strength
