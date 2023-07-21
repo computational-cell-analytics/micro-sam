@@ -11,13 +11,13 @@ class PointAndBoxPromptGenerator:
     You can use this class to derive prompts from an instance segmentation, either for
     evaluation purposes or for training Segment Anything on custom data.
     In order to use this generator you need to precompute the bounding boxes and center
-    coordiantes of the instance segmentation, using e.g. `util.get_bounding_boxes_and_centers`.
+    coordiantes of the instance segmentation, using e.g. `util.get_centers_and_bounding_boxes`.
     Here's an example for how to use this class:
     ```python
     # Initialize generator for 1 positive and 4 negative point prompts.
     prompt_generator = PointAndBoxPromptGenerator(1, 4, dilation_strength=8)
     # Precompute the bounding boxes for the given segmentation
-    bounding_boxes, _ = util.get_bounding_boxes_and_centes(segmentation)
+    bounding_boxes, _ = util.get_centers_and_bounding_boxes(segmentation)
     # generate point prompts for the object with id 1 in 'segmentation'
     seg_id = 1
     points, point_labels, _, _ = prompt_generator(segmentation, seg_id, bounding_boxes)

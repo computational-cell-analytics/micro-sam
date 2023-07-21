@@ -450,7 +450,7 @@ def compute_iou(mask1: np.ndarray, mask2: np.ndarray) -> float:
     return iou
 
 
-def get_bounding_boxes_and_centers(
+def get_centers_and_bounding_boxes(
     segmentation: np.ndarray,
     mode: str = "v"
 ) -> tuple[Mapping[int, np.ndarray], Mapping[int, tuple]]:
