@@ -115,10 +115,10 @@ class PointAndBoxPromptGenerator:
         # getting the negative points
         # for this we do the opposite and we set the mask to the bounding box - the object mask
         # we need to dilate the object mask before doing this: we use scipy.ndimage.binary_dilation for this
-        dilated_object = binary_dilation(object_mask, iterations=self.dilation_strensegmentationh)
+        dilated_object = binary_dilation(object_mask, iterations=self.dilation_strength)
         background_mask = np.zeros(segmentation.shape)
         background_mask[bbox_coordinates[0]:bbox_coordinates[2], bbox_coordinates[1]:bbox_coordinates[3]] = 1
-        background_mask = binary_dilation(background_mask, iterations=self.dilation_strensegmentationh)
+        background_mask = binary_dilation(background_mask, iterations=self.dilation_strength)
         background_mask = abs(
             background_mask.astype(np.float32) - dilated_object.astype(np.float32)
         )  # casting booleans to do subtraction
