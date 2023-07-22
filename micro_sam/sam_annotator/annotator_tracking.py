@@ -1,3 +1,6 @@
+import warnings
+from typing import Optional, Tuple
+
 import napari
 import numpy as np
 
@@ -350,9 +353,15 @@ def commit_tracking_widget(v: Viewer, layer: str = "current_track"):
 
 
 def annotator_tracking(
-    raw, embedding_path=None, show_embeddings=False, tracking_result=None, model_type="vit_h",
-    tile_shape=None, halo=None, return_viewer=False,
-):
+    raw: np.ndarray,
+    embedding_path: Optional[str] = None,
+    show_embeddings: bool = False,
+    tracking_result: Optional[str] = None,
+    model_type: str = "vit_h",
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
+    return_viewer: bool = False,
+) -> None:
     # global state
     global PREDICTOR, IMAGE_EMBEDDINGS, CURRENT_TRACK_ID, LINEAGE
     global TRACKING_WIDGET
@@ -485,8 +494,6 @@ def annotator_tracking(
 
 
 def main():
-    import warnings
-
     parser = _initialize_parser(
         description="Run interactive segmentation for an image volume.",
         with_segmentation_result=False,

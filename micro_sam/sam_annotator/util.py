@@ -12,7 +12,9 @@ from ..prompt_based_segmentation import segment_from_box, segment_from_box_and_p
 LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
 
 
-def clear_all_prompts(v):
+# TODO: also clear the current segmentation or tracking
+# TODO: also add menu for it in the annotator
+def clear_all_prompts(v: Viewer) -> None:
     v.layers["prompts"].data = []
     v.layers["prompts"].refresh()
     if "box_prompts" in v.layers:
@@ -21,7 +23,7 @@ def clear_all_prompts(v):
 
 
 @magicgui(call_button="Commit [C]", layer={"choices": ["current_object", "auto_segmentation"]})
-def commit_segmentation_widget(v: Viewer, layer: str = "current_object"):
+def commit_segmentation_widget(v: Viewer, layer: str = "current_object") -> None:
     seg = v.layers[layer].data
     shape = seg.shape
 
@@ -63,7 +65,7 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
 def prompt_layer_to_points(prompt_layer, i=None, track_id=None):
     """Extract point prompts for SAM from point layer.
 
-    Arguments:
+    Args:
         prompt_layer: the point layer
         i [int] - index for the data (required for 3d or timeseries data)
         track_id [int] - id of the current track (required for tracking data)
@@ -102,7 +104,7 @@ def prompt_layer_to_points(prompt_layer, i=None, track_id=None):
 def prompt_layer_to_boxes(prompt_layer, i=None, track_id=None):
     """Extract box prompts for SAM from shape layer.
 
-    Arguments:
+    Args:
         prompt_layer: the point layer
         i [int] - index for the data (required for 3d or timeseries data)
         track_id [int] - id of the current track (required for tracking data)
@@ -146,13 +148,13 @@ def prompt_layer_to_boxes(prompt_layer, i=None, track_id=None):
     return boxes
 
 
-def prompt_layer_to_state(prompt_layer, i):
+def prompt_layer_to_state(prompt_layer, i: int):
     """Get the state of the track from the prompt layer.
     Only relevant for annotator_tracking.
 
-    Arguments:
-        prompt_layer: the point layer
-        i [int] - frame of the data
+    Args:
+        prompt_layer: The point layer.
+        i: Frame of the data.
     """
     state = prompt_layer.properties["state"]
 
@@ -174,7 +176,7 @@ def prompt_layers_to_state(point_layer, box_layer, i):
     """Get the state of the track from the point and box prompt layer.
     Only relevant for annotator_tracking.
 
-    Arguments:
+    Args:
         point_layer: the point layer
         box_layer: the box layer
         i [int] - frame of the data

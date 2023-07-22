@@ -1,22 +1,24 @@
 import os
 from shutil import rmtree
+from typing import Union
 
 from PyQt5 import QtCore, QtWidgets
 
 
-def show_wrong_file_warning(file_path):
-    """If the data signature does not match to the signature,
-    the user can choose from the following options in this dialog:
+def show_wrong_file_warning(file_path: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
+    """Show dialog if the data signature does not match the signature stored in the file.
+
+    The user can choose from the following options in this dialog:
        - Ignore: continue with input file (return file_path).
        - Overwrite: delete file_path and recompute the embeddings at same location.
        - Select a different file
        - Select a new file
 
-    Arguments:
-        file_path (string or os.path): path of the problematic file
+    Args:
+        file_path: Path of the problematic file.
 
     Returns:
-        string or os.path: path to a file (new or old) depending on user decision
+        Path to a file (new or old) depending on user decision
     """
     msgbox = QtWidgets.QMessageBox()
     msgbox.setWindowFlags(QtCore.Qt.CustomizeWindowHint | QtCore.Qt.WindowTitleHint)

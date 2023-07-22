@@ -1,6 +1,7 @@
 import os
-from glob import glob
 import warnings
+from glob import glob
+from typing import List, Optional
 
 import imageio.v3 as imageio
 import napari
@@ -11,7 +12,7 @@ from .annotator_2d import annotator_2d
 from .. import util
 
 
-def precompute_embeddings_for_image_series(predictor, image_files, embedding_root, tile_shape, halo):
+def _precompute_embeddings_for_image_series(predictor, image_files, embedding_root, tile_shape, halo):
     os.makedirs(embedding_root, exist_ok=True)
     embedding_paths = []
     for image_file in tqdm(image_files, desc="Precompute embeddings"):
@@ -27,7 +28,14 @@ def precompute_embeddings_for_image_series(predictor, image_files, embedding_roo
     return embedding_paths
 
 
-def image_series_annotator(image_files, output_folder, embedding_path=None, **kwargs):
+def image_series_annotator(
+    image_files: List[str],
+    output_folder: str,
+    embedding_path: Optional[str] = None,
+    **kwargs
+) -> None:
+    """
+    """
     # make sure we don't set incompatible kwargs
     assert kwargs.get("show_embeddings", False) is False
     assert kwargs.get("segmentation_results", None) is None
@@ -41,7 +49,7 @@ def image_series_annotator(image_files, output_folder, embedding_path=None, **kw
     if embedding_path is None:
         embedding_paths = None
     else:
-        embedding_paths = precompute_embeddings_for_image_series(
+        embedding_paths = _precompute_embeddings_for_image_series(
             predictor, image_files, embedding_path, kwargs.get("tile_shape", None), kwargs.get("halo", None)
         )
 
@@ -88,7 +96,15 @@ def image_series_annotator(image_files, output_folder, embedding_path=None, **kw
     napari.run()
 
 
-def image_folder_annotator(input_folder, output_folder, pattern="*", embedding_path=None, **kwargs):
+def image_folder_annotator(
+    input_folder: str,
+    output_folder: str,
+    pattern: str = "*",
+    embedding_path: Optional[str] = None,
+    **kwargs
+) -> None:
+    """
+    """
     image_files = sorted(glob(os.path.join(input_folder, pattern)))
     image_series_annotator(image_files, output_folder, embedding_path, **kwargs)
 
