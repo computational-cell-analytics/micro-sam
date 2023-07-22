@@ -479,7 +479,6 @@ def get_centers_and_bounding_boxes(
 
 def load_image_data(
     path: str,
-    ndim: Optional[int] = None,
     key: Optional[str] = None,
     lazy_loading: bool = False
 ) -> np.ndarray:
@@ -487,7 +486,6 @@ def load_image_data(
 
     Args:
         path: The filepath to the image data.
-        ndim: The data dimensionality.
         key: The internal filepath for complex data formats like hdf5.
         lazy_loading: Whether to lazyly load data. Only supported for n5 and zarr data.
 
