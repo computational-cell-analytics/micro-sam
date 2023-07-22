@@ -504,12 +504,12 @@ def main():
     )
 
     args = parser.parse_args()
-    raw = util.load_image_data(args.input, ndim=3, key=args.key)
+    raw = util.load_image_data(args.input, key=args.key)
 
     if args.tracking_result is None:
         tracking_result = None
     else:
-        tracking_result = util.load_image_data(args.tracking_result, args.tracking_key)
+        tracking_result = util.load_image_data(args.tracking_result, key=args.tracking_key)
 
     if args.embedding_path is None:
         warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")

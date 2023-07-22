@@ -246,12 +246,12 @@ def annotator_2d(
 def main():
     parser = _initialize_parser(description="Run interactive segmentation for an image.")
     args = parser.parse_args()
-    raw = util.load_image_data(args.input, ndim=2, key=args.key)
+    raw = util.load_image_data(args.input, key=args.key)
 
     if args.segmentation_result is None:
         segmentation_result = None
     else:
-        segmentation_result = util.load_image_data(args.segmentation_result, args.segmentation_key)
+        segmentation_result = util.load_image_data(args.segmentation_result, key=args.segmentation_key)
 
     if args.embedding_path is None:
         warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
