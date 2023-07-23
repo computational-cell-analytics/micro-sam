@@ -4,8 +4,7 @@ name: build_documentation
 on:
   push:
     branches:
-      # - main
-      - pdoc
+      - main
     # TODO only build on releases once this works
     # Alternative: only build for tags.
     # tags:
