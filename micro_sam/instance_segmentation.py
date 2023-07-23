@@ -3,7 +3,7 @@ import warnings
 from abc import ABC
 from concurrent import futures
 from copy import deepcopy
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -135,14 +135,14 @@ class _AMGBase(ABC):
 
         # calculate stability score
         data["stability_score"] = amg_utils.calculate_stability_score(
-            data["masks"], self.predictor.model.mask_threshold, stability_score_offset
+            data["masks"], self._predictor.model.mask_threshold, stability_score_offset
         )
         if stability_score_thresh > 0.0:
             keep_mask = data["stability_score"] >= stability_score_thresh
             data.filter(keep_mask)
 
         # threshold masks and calculate boxes
-        data["masks"] = data["masks"] > self.predictor.model.mask_threshold
+        data["masks"] = data["masks"] > self._predictor.model.mask_threshold
         data["boxes"] = amg_utils.batched_mask_to_box(data["masks"])
 
         # filter boxes that touch crop boundaries
@@ -327,19 +327,19 @@ class AutomaticMaskGenerator(_AMGBase):
         else:
             raise ValueError("Can't have both points_per_side and point_grid be None or not None.")
 
-        self.predictor = predictor
-        self.points_per_side = points_per_side
-        self.points_per_batch = points_per_batch
-        self.crop_n_layers = crop_n_layers
-        self.crop_overlap_ratio = crop_overlap_ratio
-        self.crop_n_points_downscale_factor = crop_n_points_downscale_factor
+        self._predictor = predictor
+        self._points_per_side = points_per_side
+        self._points_per_batch = points_per_batch
+        self._crop_n_layers = crop_n_layers
+        self._crop_overlap_ratio = crop_overlap_ratio
+        self._crop_n_points_downscale_factor = crop_n_points_downscale_factor
 
     def _process_batch(self, points, im_size):
         # run model on this batch
-        transformed_points = self.predictor.transform.apply_coords(points, im_size)
-        in_points = torch.as_tensor(transformed_points, device=self.predictor.device)
+        transformed_points = self._predictor.transform.apply_coords(points, im_size)
+        in_points = torch.as_tensor(transformed_points, device=self._predictor.device)
         in_labels = torch.ones(in_points.shape[0], dtype=torch.int, device=in_points.device)
-        masks, iou_preds, _ = self.predictor.predict_torch(
+        masks, iou_preds, _ = self._predictor.predict_torch(
             in_points[:, None, :],
             in_labels[:, None],
             multimask_output=True,
@@ -363,7 +363,7 @@ class AutomaticMaskGenerator(_AMGBase):
         cropped_im_size = cropped_im.shape[:2]
 
         if not precomputed_embeddings:
-            self.predictor.set_image(cropped_im)
+            self._predictor.set_image(cropped_im)
 
         # get the points for this crop
         points_scale = np.array(cropped_im_size)[None, ::-1]
@@ -371,10 +371,10 @@ class AutomaticMaskGenerator(_AMGBase):
 
         # generate masks for this crop in batches
         data = amg_utils.MaskData()
-        n_batches = len(points_for_image) // self.points_per_batch +\
-            int(len(points_for_image) % self.points_per_batch != 0)
+        n_batches = len(points_for_image) // self._points_per_batch +\
+            int(len(points_for_image) % self._points_per_batch != 0)
         for (points,) in tqdm(
-            amg_utils.batch_iterator(self.points_per_batch, points_for_image),
+            amg_utils.batch_iterator(self._points_per_batch, points_for_image),
             disable=not verbose, total=n_batches,
             desc="Predict masks for point grid prompts",
         ):
@@ -383,7 +383,7 @@ class AutomaticMaskGenerator(_AMGBase):
             del batch_data
 
         if not precomputed_embeddings:
-            self.predictor.reset_image()
+            self._predictor.reset_image()
 
         return data
 
@@ -407,7 +407,7 @@ class AutomaticMaskGenerator(_AMGBase):
         """
         original_size = image.shape[:2]
         crop_boxes, layer_idxs = amg_utils.generate_crop_boxes(
-            original_size, self.crop_n_layers, self.crop_overlap_ratio
+            original_size, self._crop_n_layers, self._crop_overlap_ratio
         )
 
         # we can set fixed image embeddings if we only have a single crop box
@@ -415,8 +415,8 @@ class AutomaticMaskGenerator(_AMGBase):
         # otherwise we have to recompute the embeddings for each crop and can't precompute
         if len(crop_boxes) == 1:
             if image_embeddings is None:
-                image_embeddings = util.precompute_image_embeddings(self.predictor, image)
-            util.set_precomputed(self.predictor, image_embeddings, i=i)
+                image_embeddings = util.precompute_image_embeddings(self._predictor, image)
+            util.set_precomputed(self._predictor, image_embeddings, i=i)
             precomputed_embeddings = True
         else:
             precomputed_embeddings = False
@@ -537,33 +537,33 @@ class EmbeddingMaskGenerator(_AMGBase):
     ):
         super().__init__()
 
-        self.predictor = predictor
-        self.offsets = self.default_offsets if offsets is None else offsets
-        self.min_initial_size = min_initial_size
-        self.distance_type = distance_type
-        self.bias = bias
-        self.use_box = use_box
-        self.use_mask = use_mask
-        self.use_points = use_points
-        self.box_extension = box_extension
+        self._predictor = predictor
+        self._offsets = self.default_offsets if offsets is None else offsets
+        self._min_initial_size = min_initial_size
+        self._distance_type = distance_type
+        self._bias = bias
+        self._use_box = use_box
+        self._use_mask = use_mask
+        self._use_points = use_points
+        self._box_extension = box_extension
 
         # additional state that is set 'initialize'
         self._initial_segmentation = None
 
     def _compute_initial_segmentation(self):
 
-        embeddings = self.predictor.get_image_embedding().squeeze().cpu().numpy()
+        embeddings = self._predictor.get_image_embedding().squeeze().cpu().numpy()
         assert embeddings.shape == (256, 64, 64), f"{embeddings.shape}"
 
         initial_segmentation = embed.segment_embeddings_mws(
-            embeddings, distance_type=self.distance_type, offsets=self.offsets, bias=self.bias,
+            embeddings, distance_type=self._distance_type, offsets=self._offsets, bias=self._bias,
         ).astype("uint32")
         assert initial_segmentation.shape == (64, 64), f"{initial_segmentation.shape}"
 
         # filter out small initial objects
-        if self.min_initial_size > 0:
+        if self._min_initial_size > 0:
             seg_ids, sizes = np.unique(initial_segmentation, return_counts=True)
-            initial_segmentation[np.isin(initial_segmentation, seg_ids[sizes < self.min_initial_size])] = 0
+            initial_segmentation[np.isin(initial_segmentation, seg_ids[sizes < self._min_initial_size])] = 0
 
         # resize to 256 x 256, which is the mask input expected by SAM
         initial_segmentation = resize(
@@ -582,10 +582,10 @@ class EmbeddingMaskGenerator(_AMGBase):
         for seg_id in tqdm(seg_ids, disable=not verbose, desc="Compute masks from initial segmentation"):
             mask = initial_segmentation == seg_id
             masks, iou_preds, _ = segment_from_mask(
-                self.predictor, mask, original_size=original_size,
+                self._predictor, mask, original_size=original_size,
                 multimask_output=True, return_logits=True, return_all=True,
-                use_box=self.use_box, use_mask=self.use_mask, use_points=self.use_points,
-                box_extension=self.box_extension,
+                use_box=self._use_box, use_mask=self._use_mask, use_points=self._use_points,
+                box_extension=self._box_extension,
             )
             data = amg_utils.MaskData(
                 masks=torch.from_numpy(masks),
@@ -618,8 +618,8 @@ class EmbeddingMaskGenerator(_AMGBase):
         original_size = image.shape[:2]
 
         if image_embeddings is None:
-            image_embeddings = util.precompute_image_embeddings(self.predictor, image,)
-        util.set_precomputed(self.predictor, image_embeddings, i=i)
+            image_embeddings = util.precompute_image_embeddings(self._predictor, image,)
+        util.set_precomputed(self._predictor, image_embeddings, i=i)
 
         # compute the initial segmentation via embedding based MWS and then refine the masks
         # with the segment anything model
@@ -737,8 +737,8 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
         **kwargs
     ):
         super().__init__(predictor=predictor, **kwargs)
-        self.n_threads = n_threads
-        self.with_background = with_background
+        self._n_threads = n_threads
+        self._with_background = with_background
 
         # additional state for 'initialize'
         self._tile_shape = None
@@ -758,10 +758,10 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
                 "input_size": tile_features.attrs["input_size"],
                 "original_size": tile_features.attrs["original_size"]
             }
-            util.set_precomputed(self.predictor, tile_image_embeddings, i)
+            util.set_precomputed(self._predictor, tile_image_embeddings, i)
             return self._compute_initial_segmentation()
 
-        with futures.ThreadPoolExecutor(self.n_threads) as tp:
+        with futures.ThreadPoolExecutor(self._n_threads) as tp:
             initial_segmentations = list(tqdm(
                 tp.map(segment_tile, range(n_tiles)), disable=not verbose, total=n_tiles,
                 desc="Tile-based initial segmentation"
@@ -781,7 +781,7 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
                 "input_size": tile_features.attrs["input_size"],
                 "original_size": this_tile_shape
             }
-            util.set_precomputed(self.predictor, tile_image_embeddings, i)
+            util.set_precomputed(self._predictor, tile_image_embeddings, i)
             tile_data = self._compute_mask_data(initial_segmentations[tile_id], this_tile_shape, verbose=False)
             mask_data.append(tile_data)
 
@@ -793,11 +793,11 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
         image: np.ndarray,
         image_embeddings: Optional[util.ImageEmbeddings] = None,
         i: Optional[int] = None,
-        tile_shape: Optional[List[int]] = None,
-        halo: Optional[List[int]] = None,
+        tile_shape: Optional[Tuple[int, int]] = None,
+        halo: Optional[Tuple[int, int]] = None,
         verbose: bool = False,
         embedding_save_path: Optional[str] = None,
-    ):
+    ) -> None:
         """Initialize image embeddings and masks for an image.
 
         Args:
@@ -821,7 +821,7 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
                     "Embeddings with tiling can only be computed if a save path is given."
                 )
             image_embeddings = util.precompute_image_embeddings(
-                self.predictor, image, tile_shape=tile_shape, halo=halo, save_path=embedding_save_path
+                self._predictor, image, tile_shape=tile_shape, halo=halo, save_path=embedding_save_path
             )
         elif image_embeddings is None and not have_tiling_params:
             raise ValueError("You passed neither pre-computed embeddings nor tiling parameters (tile_shape and halo)")
@@ -868,7 +868,7 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
         box_nms_thresh: float = 0.7,
         min_mask_region_area: int = 0,
         verbose: bool = False
-    ):
+    ) -> np.ndarray:
         """Generate instance segmentation for the currently initialized image.
 
         Args:
@@ -903,12 +903,12 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
             mask_data = self._postprocess_masks(
                 mask_data, 0, box_nms_thresh, box_nms_thresh, output_mode="binary_mask"
             )
-            mask_data = mask_data_to_segmentation(mask_data, this_tile_shape, with_background=self.with_background)
+            mask_data = mask_data_to_segmentation(mask_data, this_tile_shape, with_background=self._with_background)
             return mask_data
 
         input_ = _FakeInput(self.original_size)
         segmentation = stitch_segmentation(
-            input_, segment_tile, self._tile_shape, self._halo, with_background=self.with_background, verbose=verbose
+            input_, segment_tile, self._tile_shape, self._halo, with_background=self._with_background, verbose=verbose
         )
 
         if min_mask_region_area > 0:
@@ -940,7 +940,7 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
         initial_segmentation = stitch_segmentation(
             input_, segment_tile,
             self._tile_shape, self._halo,
-            with_background=self.with_background, verbose=False
+            with_background=self._with_background, verbose=False
         )
 
         self._stitched_initial_segmentation = initial_segmentation

@@ -1,10 +1,12 @@
 import warnings
+from typing import Optional, Tuple
 
 import napari
 import numpy as np
 
 from magicgui import magicgui
 from napari import Viewer
+from segment_anything import SamPredictor
 
 from .. import util
 from .. import instance_segmentation
@@ -203,10 +205,19 @@ def _update_viewer(v, raw, show_embeddings, segmentation_result):
 
 
 def annotator_2d(
-    raw, embedding_path=None, show_embeddings=False, segmentation_result=None,
-    model_type="vit_h", tile_shape=None, halo=None, return_viewer=False, v=None,
-    predictor=None,
-):
+    raw: np.ndarray,
+    embedding_path: Optional[str] = None,
+    show_embeddings: bool = False,
+    segmentation_result: Optional[np.ndarray] = None,
+    model_type: str = "vit_h",
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
+    return_viewer: bool = False,
+    v: Optional[Viewer] = None,
+    predictor: Optional[SamPredictor] = None,
+) -> Optional[Viewer]:
+    """
+    """
     # for access to the predictor and the image embeddings in the widgets
     global PREDICTOR, IMAGE_EMBEDDINGS, AMG
     AMG = None

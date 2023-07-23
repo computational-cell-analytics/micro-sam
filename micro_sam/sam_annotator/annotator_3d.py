@@ -1,3 +1,6 @@
+import warnings
+from typing import Optional, Tuple
+
 import napari
 import numpy as np
 
@@ -189,9 +192,15 @@ def segment_volume_widget(
 
 
 def annotator_3d(
-    raw, embedding_path=None, show_embeddings=False, segmentation_result=None,
-    model_type="vit_h", tile_shape=None, halo=None, return_viewer=False
-):
+    raw: np.ndarray,
+    embedding_path: Optional[str] = None,
+    show_embeddings: bool = False,
+    segmentation_result: Optional[np.ndarray] = None,
+    model_type: str = "vit_h",
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
+    return_viewer: bool = False,
+) -> None:
     # for access to the predictor and the image embeddings in the widgets
     global PREDICTOR, IMAGE_EMBEDDINGS
     PREDICTOR = util.get_sam_model(model_type=model_type)
@@ -290,8 +299,6 @@ def annotator_3d(
 
 
 def main():
-    import warnings
-
     parser = _initialize_parser(description="Run interactive segmentation for an image volume.")
     args = parser.parse_args()
     raw = util.load_image_data(args.input, key=args.key)
