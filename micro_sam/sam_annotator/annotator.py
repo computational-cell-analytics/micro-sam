@@ -2,12 +2,14 @@ import os
 import magicgui
 import numpy as np
 from magicgui.widgets import Container, Label, LineEdit, SpinBox, ComboBox
+from magicgui.application import use_app
 from PyQt5.QtWidgets import QFileDialog, QMessageBox
 
 from ..util import load_image_data
 from .annotator_2d import annotator_2d
 from .annotator_3d import annotator_3d
 from .image_series_annotator import image_folder_annotator
+from .annotator_tracking import annotator_tracking
 
 config_dict = {}
 main_widget = None
@@ -109,7 +111,7 @@ def on_2d():
                 args["halo"] = halo
             args["model_type"] = cb_model.value
             sub_widget.close()
-            annotator_2d(show_embeddings=False, **args)
+            config_dict["workflow"] = "2d"
         except Exception as e:
             show_error(str(e))
 
@@ -224,7 +226,7 @@ def on_3d():
                 args["halo"] = halo
             args["model_type"] = cb_model.value
             sub_widget.close()
-            annotator_3d(show_embeddings=False, **args)
+            config_dict["workflow"] = "3d"
         except Exception as e:
             show_error(str(e))
 
@@ -313,7 +315,7 @@ def on_series():
                 args["halo"] = halo
             args["model_type"] = cb_model.value
             sub_widget.close()
-            image_folder_annotator(**args)
+            config_dict["workflow"] = "series"
         except Exception as e:
             show_error(str(e))
 
@@ -428,7 +430,7 @@ def on_tracking():
                 args["halo"] = halo
             args["model_type"] = cb_model.value
             sub_widget.close()
-            annotator_3d(show_embeddings=False, **args)
+            config_dict["workflow"] = "tracking"
         except Exception as e:
             show_error(str(e))
 
@@ -440,12 +442,29 @@ def on_tracking():
 
 
 def annotator():
-    global main_widget
+    global main_widget, config_dict
+    config_dict["workflow"] = ""
     sub_container1 = Container(widgets=[on_2d, on_series], labels=False)
     sub_container2 = Container(widgets=[on_3d, on_tracking], labels=False)
     sub_container3 = Container(widgets=[sub_container1, sub_container2], layout="horizontal", labels=False)
     main_widget = Container(widgets=[Label(value="Segment Anything for Microscopy"), sub_container3], labels=False)
     main_widget.show(run=True)
+
+    if config_dict["workflow"] == "2d":
+        use_app().quit()
+        annotator_2d(show_embeddings=False, **config_dict["args"])
+    elif config_dict["workflow"] == "3d":
+        use_app().quit()
+        annotator_3d(show_embeddings=False, **config_dict["args"])
+    elif config_dict["workflow"] == "series":
+        use_app().quit()
+        image_folder_annotator(**config_dict["args"])
+    elif config_dict["workflow"] == "tracking":
+        use_app().quit()
+        annotator_tracking(show_embeddings=False, **config_dict["args"])
+    else:
+        show_error("No workflow selected.")
+        use_app().quit()
 
 
 def main():
