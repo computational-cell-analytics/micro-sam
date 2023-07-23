@@ -6,6 +6,7 @@ name:
 dependencies:
     - cpuonly
     - napari
+    - pdoc
     - pooch
     - python-elf
     - pytorch
