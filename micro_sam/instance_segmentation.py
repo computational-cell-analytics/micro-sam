@@ -3,7 +3,7 @@ import warnings
 from abc import ABC
 from concurrent import futures
 from copy import deepcopy
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -793,11 +793,11 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
         image: np.ndarray,
         image_embeddings: Optional[util.ImageEmbeddings] = None,
         i: Optional[int] = None,
-        tile_shape: Optional[List[int]] = None,
-        halo: Optional[List[int]] = None,
+        tile_shape: Optional[Tuple[int, int]] = None,
+        halo: Optional[Tuple[int, int]] = None,
         verbose: bool = False,
         embedding_save_path: Optional[str] = None,
-    ):
+    ) -> None:
         """Initialize image embeddings and masks for an image.
 
         Args:
@@ -868,7 +868,7 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
         box_nms_thresh: float = 0.7,
         min_mask_region_area: int = 0,
         verbose: bool = False
-    ):
+    ) -> np.ndarray:
         """Generate instance segmentation for the currently initialized image.
 
         Args:

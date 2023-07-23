@@ -36,7 +36,7 @@ CHECKSUMS = {
 
 
 # TODO define the proper type for image embeddings
-ImageEmbeddings = Any
+ImageEmbeddings = Dict[str, Any]
 
 
 def _download(url, path, model_type):
@@ -334,8 +334,8 @@ def precompute_image_embeddings(
     save_path: Optional[str] = None,
     lazy_loading: bool = False,
     ndim: Optional[int] = None,
-    tile_shape: Optional[Tuple[int]] = None,
-    halo: Optional[Tuple[int]] = None,
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
     wrong_file_callback: Optional[Callable] = None,
 ) -> ImageEmbeddings:
     """Compute the image embeddings (output of the encoder) for the input.
