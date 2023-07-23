@@ -1,14 +1,10 @@
 name: build_documentation
 
-# build the documentation whenever there are new commits on main
+# build the documentation for a new commit 
 on:
-  push:
-    branches:
-      - main
-    # TODO only build on releases once this works
-    # Alternative: only build for tags.
-    # tags:
-    #   - '*'
+  release:
+    types: created
+
 
 # security: restrict permissions for CI jobs.
 permissions:
