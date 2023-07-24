@@ -1,4 +1,3 @@
-import os
 import unittest
 from shutil import rmtree
 
@@ -12,6 +11,8 @@ from skimage.measure import label
 
 class TestInstanceSegmentation(unittest.TestCase):
     embedding_path = "./tmp_embeddings.zarr"
+    tile_shape = (576, 576)
+    halo = (64, 64)
 
     # create an input image with three objects
     @staticmethod
@@ -36,12 +37,9 @@ class TestInstanceSegmentation(unittest.TestCase):
         return mask, image
 
     @staticmethod
-    def _get_model(image, tile_shape=None, halo=None, save_path=None):
+    def _get_model(image):
         predictor = util.get_sam_model(model_type="vit_b")
-
-        image_embeddings = util.precompute_image_embeddings(
-            predictor, image, tile_shape=tile_shape, halo=halo, save_path=save_path
-        )
+        image_embeddings = util.precompute_image_embeddings(predictor, image)
         return predictor, image_embeddings
 
     # we compute the default mask and predictor once for the class
@@ -50,11 +48,18 @@ class TestInstanceSegmentation(unittest.TestCase):
     def setUpClass(cls):
         cls.mask, cls.image = cls._get_input()
         cls.predictor, cls.image_embeddings = cls._get_model(cls.image)
+        cls.large_mask, cls.large_image = cls._get_input(shape=(1024, 1024))
+        cls.tiled_embeddings = util.precompute_image_embeddings(
+            cls.predictor, cls.large_image, save_path=cls.embedding_path, tile_shape=cls.tile_shape, halo=cls.halo
+        )
 
     # remove temp embeddings if any
-    def tearDown(self):
-        if os.path.exists(self.embedding_path):
-            rmtree(self.embedding_path)
+    @classmethod
+    def tearDownClass(cls):
+        try:
+            rmtree(cls.embedding_path)
+        except OSError:
+            pass
 
     def test_automatic_mask_generator(self):
         from micro_sam.instance_segmentation import AutomaticMaskGenerator, mask_data_to_segmentation
@@ -114,9 +119,8 @@ class TestInstanceSegmentation(unittest.TestCase):
     def test_tiled_embedding_mask_generator(self):
         from micro_sam.instance_segmentation import TiledEmbeddingMaskGenerator
 
-        tile_shape, halo = (576, 576), (64, 64)
-        mask, image = self._get_input(shape=(1024, 1024))
-        predictor, image_embeddings = self._get_model(image, tile_shape, halo, self.embedding_path)
+        mask, image = self.large_mask, self.large_image
+        predictor, image_embeddings = self.predictor, self.tiled_embeddings
 
         amg = TiledEmbeddingMaskGenerator(predictor)
         amg.initialize(image, image_embeddings=image_embeddings)
@@ -134,6 +138,30 @@ class TestInstanceSegmentation(unittest.TestCase):
         amg = TiledEmbeddingMaskGenerator(predictor)
         amg.set_state(state)
         predicted3 = amg.generate(pred_iou_thresh=0.96)
+        self.assertTrue(np.array_equal(predicted, predicted3))
+
+    def test_tiled_automatic_mask_generator(self):
+        from micro_sam.instance_segmentation import TiledAutomaticMaskGenerator, mask_data_to_segmentation
+
+        mask, image = self.large_mask, self.large_image
+        predictor, image_embeddings = self.predictor, self.tiled_embeddings
+
+        amg = TiledAutomaticMaskGenerator(predictor)
+        amg.initialize(image, image_embeddings=image_embeddings)
+        predicted = amg.generate(pred_iou_thresh=0.96)
+        predicted = mask_data_to_segmentation(predicted, image.shape, with_background=True)
+        self.assertGreater(matching(predicted, mask, threshold=0.75)["precision"], 0.99)
+
+        predicted2 = amg.generate(pred_iou_thresh=0.96)
+        predicted = mask_data_to_segmentation(predicted2, image.shape, with_background=True)
+        self.assertTrue(np.array_equal(predicted, predicted2))
+
+        # check that serializing and reserializing the state works
+        state = amg.get_state()
+        amg = TiledAutomaticMaskGenerator(predictor)
+        amg.set_state(state)
+        predicted3 = amg.generate(pred_iou_thresh=0.96)
+        predicted = mask_data_to_segmentation(predicted3, image.shape, with_background=True)
         self.assertTrue(np.array_equal(predicted, predicted3))
 
 
