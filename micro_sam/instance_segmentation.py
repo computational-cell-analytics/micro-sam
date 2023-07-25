@@ -82,8 +82,8 @@ def mask_data_to_segmentation(
 #
 
 
-class _AMGBase(ABC):
-    """
+class AMGBase(ABC):
+    """Base class for the automatic mask generators.
     """
     def __init__(self):
         # the state that has to be computed by the 'initialize' method of the child classes
@@ -277,7 +277,7 @@ class _AMGBase(ABC):
         self._is_initialized = True
 
 
-class AutomaticMaskGenerator(_AMGBase):
+class AutomaticMaskGenerator(AMGBase):
     """Generates an instance segmentation without prompts, using a point grid.
 
     This class implements the same logic as
@@ -358,8 +358,11 @@ class AutomaticMaskGenerator(_AMGBase):
 
     def _process_crop(self, image, crop_box, crop_layer_idx, verbose, precomputed_embeddings):
         # crop the image and calculate embeddings
-        x0, y0, x1, y1 = crop_box
-        cropped_im = image[y0:y1, x0:x1, :]
+        if crop_box is None:
+            cropped_im = image
+        else:
+            x0, y0, x1, y1 = crop_box
+            cropped_im = image[y0:y1, x0:x1, :]
         cropped_im_size = cropped_im.shape[:2]
 
         if not precomputed_embeddings:
@@ -477,7 +480,7 @@ class AutomaticMaskGenerator(_AMGBase):
             )
             data.cat(crop_data)
 
-        if len(self.crop_boxes) > 1:
+        if len(self.crop_boxes) > 1 and len(data["crop_boxes"]) > 0:
             # Prefer masks from smaller crops
             scores = 1 / box_area(data["crop_boxes"])
             scores = scores.to(data["boxes"].device)
@@ -494,7 +497,7 @@ class AutomaticMaskGenerator(_AMGBase):
         return masks
 
 
-class EmbeddingMaskGenerator(_AMGBase):
+class EmbeddingMaskGenerator(AMGBase):
     """Generates an instance segmentation without prompts, using an initial segmentations derived from image embeddings.
 
     Uses an intial segmentation derived from the image embeddings via the Mutex Watershed,
@@ -718,6 +721,133 @@ class EmbeddingMaskGenerator(_AMGBase):
         super().set_state(state)
 
 
+def _compute_tiled_embeddings(predictor, image, image_embeddings, embedding_save_path, tile_shape, halo):
+    have_tiling_params = (tile_shape is not None) and (halo is not None)
+    if image_embeddings is None and have_tiling_params:
+        if embedding_save_path is None:
+            raise ValueError(
+                "You have passed neither pre-computed embeddings nor a path for saving embeddings."
+                "Embeddings with tiling can only be computed if a save path is given."
+            )
+        image_embeddings = util.precompute_image_embeddings(
+            predictor, image, tile_shape=tile_shape, halo=halo, save_path=embedding_save_path
+        )
+    elif image_embeddings is None and not have_tiling_params:
+        raise ValueError("You passed neither pre-computed embeddings nor tiling parameters (tile_shape and halo)")
+    else:
+        feats = image_embeddings["features"]
+        tile_shape_, halo_ = feats.attrs["tile_shape"], feats.attrs["halo"]
+        if have_tiling_params and (
+            (list(tile_shape) != list(tile_shape_)) or
+            (list(halo) != list(halo_))
+        ):
+            warnings.warn(
+                "You have passed both pre-computed embeddings and tiling parameters (tile_shape and halo) and"
+                "the values of the tiling parameters from the embeddings disagree with the ones that were passed."
+                "The tiling parameters you have passed wil be ignored."
+            )
+        tile_shape = tile_shape_
+        halo = halo_
+
+    return image_embeddings, tile_shape, halo
+
+
+class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
+    """Generates an instance segmentation without prompts, using a point grid.
+
+    Implements the same functionality as `AutomaticMaskGenerator` but for tiled embeddings.
+
+    Args:
+        predictor: The segment anything predictor.
+        points_per_side: The number of points to be sampled along one side of the image.
+            If None, `point_grids` must provide explicit point sampling.
+        points_per_batch: The number of points run simultaneously by the model.
+            Higher numbers may be faster but use more GPU memory.
+        point_grids: A lisst over explicit grids of points used for sampling masks.
+            Normalized to [0, 1] with respect to the image coordinate system.
+    """
+
+    # We only expose the arguments that make sense for the tiled mask generator.
+    # Anything related to crops doesn't make sense, because we re-use that functionality
+    # for tiling, so these parameters wouldn't have any effect.
+    def __init__(
+        self,
+        predictor: SamPredictor,
+        points_per_side: Optional[int] = 32,
+        points_per_batch: int = 64,
+        point_grids: Optional[List[np.ndarray]] = None,
+    ) -> None:
+        super().__init__(
+            predictor=predictor,
+            points_per_side=points_per_side,
+            points_per_batch=points_per_batch,
+            point_grids=point_grids,
+        )
+
+    @torch.no_grad()
+    def initialize(
+        self,
+        image: np.ndarray,
+        image_embeddings: Optional[util.ImageEmbeddings] = None,
+        i: Optional[int] = None,
+        tile_shape: Optional[Tuple[int, int]] = None,
+        halo: Optional[Tuple[int, int]] = None,
+        verbose: bool = False,
+        embedding_save_path: Optional[str] = None,
+    ) -> None:
+        """Initialize image embeddings and masks for an image.
+
+        Args:
+            image: The input image, volume or timeseries.
+            image_embeddings: Optional precomputed image embeddings.
+                See `util.precompute_image_embeddings` for details.
+            i: Index for the image data. Required if `image` has three spatial dimensions
+                or a time dimension and two spatial dimensions.
+            tile_shape: The tile shape for embedding prediction.
+            halo: The overlap of between tiles.
+            verbose: Whether to print computation progress.
+            embedding_save_path: Where to save the image embeddings.
+        """
+        original_size = image.shape[:2]
+        image_embeddings, tile_shape, halo = _compute_tiled_embeddings(
+            self._predictor, image, image_embeddings, embedding_save_path, tile_shape, halo
+        )
+
+        tiling = blocking([0, 0], original_size, tile_shape)
+        n_tiles = tiling.numberOfBlocks
+
+        mask_data = []
+        for tile_id in tqdm(range(n_tiles), total=n_tiles, desc="Compute masks for tile", disable=not verbose):
+            # get the bounding box for this tile and crop the image data
+            tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
+            tile_bb = tuple(slice(beg, end) for beg, end in zip(tile.begin, tile.end))
+            tile_data = image[tile_bb]
+
+            # set the pre-computed embeddings for this tile
+            features = image_embeddings["features"][tile_id]
+            tile_embeddings = {
+                "features": features,
+                "input_size": features.attrs["input_size"],
+                "original_size": features.attrs["original_size"],
+            }
+            util.set_precomputed(self._predictor, tile_embeddings, i)
+
+            # compute the mask data for this tile and append it
+            this_mask_data = self._process_crop(
+                tile_data, crop_box=None, crop_layer_idx=0, verbose=verbose, precomputed_embeddings=True
+            )
+            mask_data.append(this_mask_data)
+
+        # set the initialized data
+        self._is_initialized = True
+        self._crop_list = mask_data
+        self._original_size = original_size
+
+        # the crop box is always the full local tile
+        tiles = [tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock for tile_id in range(n_tiles)]
+        self._crop_boxes = [[tile.begin[1], tile.begin[0], tile.end[1], tile.end[0]] for tile in tiles]
+
+
 class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
     """Generates an instance segmentation without prompts, using an initial segmentations derived from image embeddings.
 
@@ -812,33 +942,9 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
             embedding_save_path: Where to save the image embeddings.
         """
         original_size = image.shape[:2]
-
-        have_tiling_params = (tile_shape is not None) and (halo is not None)
-        if image_embeddings is None and have_tiling_params:
-            if embedding_save_path is None:
-                raise ValueError(
-                    "You have passed neither pre-computed embeddings nor a path for saving embeddings."
-                    "Embeddings with tiling can only be computed if a save path is given."
-                )
-            image_embeddings = util.precompute_image_embeddings(
-                self._predictor, image, tile_shape=tile_shape, halo=halo, save_path=embedding_save_path
-            )
-        elif image_embeddings is None and not have_tiling_params:
-            raise ValueError("You passed neither pre-computed embeddings nor tiling parameters (tile_shape and halo)")
-        else:
-            feats = image_embeddings["features"]
-            tile_shape_, halo_ = feats.attrs["tile_shape"], feats.attrs["halo"]
-            if have_tiling_params and (
-                (list(tile_shape) != list(tile_shape_)) or
-                (list(halo) != list(halo_))
-            ):
-                warnings.warn(
-                    "You have passed both pre-computed embeddings and tiling parameters (tile_shape and halo) and"
-                    "the values of the tiling parameters from the embeddings disagree with the ones that were passed."
-                    "The tiling parameters you have passed wil be ignored."
-                )
-            tile_shape = tile_shape_
-            halo = halo_
+        image_embeddings, tile_shape, halo = _compute_tiled_embeddings(
+            self._predictor, image, image_embeddings, embedding_save_path, tile_shape, halo
+        )
 
         tiling = blocking([0, 0], original_size, tile_shape)
         n_tiles = tiling.numberOfBlocks

@@ -7,7 +7,7 @@ name:
 dependencies:
     - napari
     - pooch
-    - python-elf
+    - python-elf >=0.4.8
     - pytorch
     - pytorch-cuda>=11.7  # you may need to update the cuda version to match your system
     - torchvision
