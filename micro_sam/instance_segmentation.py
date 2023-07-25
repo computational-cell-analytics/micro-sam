@@ -753,18 +753,36 @@ def _compute_tiled_embeddings(predictor, image, image_embeddings, embedding_save
 
 
 class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
-    """
-    """
-    # def __init__(
-    #     self,
-    #     predictor: SamPredictor,
-    #     **kwargs
-    # ):
-    #     super().__init__(predictor=predictor, **kwargs)
+    """Generates an instance segmentation without prompts, using a point grid.
 
-    #     # additional state for 'initialize'
-    #     self._tile_shape = None
-    #     self._halo = None
+    Implements the same functionality as `AutomaticMaskGenerator` but for tiled embeddings.
+
+    Args:
+        predictor: The segment anything predictor.
+        points_per_side: The number of points to be sampled along one side of the image.
+            If None, `point_grids` must provide explicit point sampling.
+        points_per_batch: The number of points run simultaneously by the model.
+            Higher numbers may be faster but use more GPU memory.
+        point_grids: A lisst over explicit grids of points used for sampling masks.
+            Normalized to [0, 1] with respect to the image coordinate system.
+    """
+
+    # We only expose the arguments that make sense for the tiled mask generator.
+    # Anything related to crops doesn't make sense, because we re-use that functionality
+    # for tiling, so these parameters wouldn't have any effect.
+    def __init__(
+        self,
+        predictor: SamPredictor,
+        points_per_side: Optional[int] = 32,
+        points_per_batch: int = 64,
+        point_grids: Optional[List[np.ndarray]] = None,
+    ) -> None:
+        super().__init__(
+            predictor=predictor,
+            points_per_side=points_per_side,
+            points_per_batch=points_per_batch,
+            point_grids=point_grids,
+        )
 
     @torch.no_grad()
     def initialize(
@@ -777,7 +795,18 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         verbose: bool = False,
         embedding_save_path: Optional[str] = None,
     ) -> None:
-        """
+        """Initialize image embeddings and masks for an image.
+
+        Args:
+            image: The input image, volume or timeseries.
+            image_embeddings: Optional precomputed image embeddings.
+                See `util.precompute_image_embeddings` for details.
+            i: Index for the image data. Required if `image` has three spatial dimensions
+                or a time dimension and two spatial dimensions.
+            tile_shape: The tile shape for embedding prediction.
+            halo: The overlap of between tiles.
+            verbose: Whether to print computation progress.
+            embedding_save_path: Where to save the image embeddings.
         """
         original_size = image.shape[:2]
         image_embeddings, tile_shape, halo = _compute_tiled_embeddings(
