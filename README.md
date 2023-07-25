@@ -10,18 +10,13 @@ We implement napari applications for:
 - interactive 3d segmentation
 - interactive tracking of 2d image data
 
-**Early beta version**
+**Beta version**
 
-This is an early beta version. Any feedback is welcome, but please be aware that the functionality is under active development and that several features are not finalized or thoroughly tested yet.
-Once the functionality has matured we plan to release the interactive annotation applications as [napari plugins](https://napari.org/stable/plugins/index.html).
+This is an advanced beta version. While many features are still under development, we aim to keep the user interface and python library stable.
+Any feedback is welcome, but please be aware that the functionality is under active development and that some features may not be thoroughly tested yet.
+We will soon provide a stand-alone application for running the `micro_sam` annotation tools, and plan to also release it as [napari plugin](https://napari.org/stable/plugins/index.html) in the future.
 
 If you run into any problems or have questions please open an issue or reach out via [image.sc](https://forum.image.sc/) using the tag `micro-sam` and tagging @constantinpape.
-
-**New in version 0.02**
-
-- We have added support for bounding box prompts (see the gif below), which provide better segmentation results than points in many cases.
-- Interactive tracking now uses a better heuristic to propagate masks across time, leading to better automatic tracking results.
-- And have fixed several small bugs.
 
 ![box-prompts](https://github.com/computational-cell-analytics/micro-sam/assets/4263537/d04cb158-9f5b-4460-98cd-023c4f19cccd)
 
@@ -195,3 +190,24 @@ There are two other napari plugins build around segment anything:
 
 Compared to these we support more applications (2d, 3d and tracking), and aim to further extend and specialize SegmentAnything for microscopy data.
 [WebKnossos](https://webknossos.org/) also offers integration of SegmentAnything for interactive segmentation.
+
+
+## Release Overview
+
+**New in version 0.1.0**
+
+- We support tiling in all annotators to enable processing large images.
+- Implement new automatic instance segmentation functionality:
+    - That is faster.
+    - Enables interactive update of parameters.
+    - And also works for large images by making use of tiled embeddings.
+- Implement the `image_series_annotator` for processing many images in a row.
+- Use the data hash in pre-computed embeddings to warn if the input data changes.
+- Create a simple GUI to select which annotator to start.
+- And made many other small improvements and fixed bugs.
+
+**New in version 0.0.2**
+
+- We have added support for bounding box prompts, which provide better segmentation results than points in many cases.
+- Interactive tracking now uses a better heuristic to propagate masks across time, leading to better automatic tracking results.
+- And have fixed several small bugs.
