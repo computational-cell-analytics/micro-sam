@@ -480,7 +480,7 @@ class AutomaticMaskGenerator(AMGBase):
             )
             data.cat(crop_data)
 
-        if len(self.crop_boxes) > 1:
+        if len(self.crop_boxes) > 1 and len(data["crop_boxes"]) > 0:
             # Prefer masks from smaller crops
             scores = 1 / box_area(data["crop_boxes"])
             scores = scores.to(data["boxes"].device)
@@ -788,7 +788,7 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         n_tiles = tiling.numberOfBlocks
 
         mask_data = []
-        for tile_id in range(n_tiles):
+        for tile_id in tqdm(range(n_tiles), total=n_tiles, desc="Compute masks for tile", disable=not verbose):
             # get the bounding box for this tile and crop the image data
             tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
             tile_bb = tuple(slice(beg, end) for beg, end in zip(tile.begin, tile.end))
@@ -816,9 +816,7 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
 
         # the crop box is always the full local tile
         tiles = [tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock for tile_id in range(n_tiles)]
-        self._crop_boxes = [
-            [0, 0, tile.end[1] - tile.begin[1], tile.end[0] - tile.begin[0]] for tile in tiles
-        ]
+        self._crop_boxes = [[tile.begin[1], tile.begin[0], tile.end[1], tile.end[0]] for tile in tiles]
 
 
 class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
