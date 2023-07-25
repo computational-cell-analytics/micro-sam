@@ -1,7 +1,7 @@
 """
 .. include:: ../doc/start_page.md
 .. include:: ../doc/annotation_tools.md
-.. include:: ../doc/installaiton.md
+.. include:: ../doc/installation.md
 """
 
 __all__ = [
