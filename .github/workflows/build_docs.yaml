@@ -1,6 +1,6 @@
 name: build_documentation
 
-# build the documentation for a new commit 
+# build the documentation for a new commit
 on:
   release:
     types: created

@@ -22,13 +22,13 @@ try:
 except ImportError:
     from tqdm import tqdm
 
-MODEL_URLS = {
+_MODEL_URLS = {
     "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
     "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
     "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth"
 }
-CHECKPOINT_FOLDER = os.environ.get("SAM_MODELS", os.path.expanduser("~/.sam_models"))
-CHECKSUMS = {
+_CHECKPOINT_FOLDER = os.environ.get("SAM_MODELS", os.path.expanduser("~/.sam_models"))
+_CHECKSUMS = {
     "vit_h": "a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e",
     "vit_l": "3adcc4315b642a4d2101128f611684e8734c41232a17c648ed1693702a49a622",
     "vit_b": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912"
@@ -52,7 +52,7 @@ def _download(url, path, model_type):
             copyfileobj(r_raw, f)
 
     # validate the checksum
-    expected_checksum = CHECKSUMS[model_type]
+    expected_checksum = _CHECKSUMS[model_type]
     if expected_checksum is None:
         return
     with open(path, "rb") as f:
@@ -68,13 +68,13 @@ def _download(url, path, model_type):
 
 def _get_checkpoint(model_type, checkpoint_path=None):
     if checkpoint_path is None:
-        checkpoint_url = MODEL_URLS[model_type]
+        checkpoint_url = _MODEL_URLS[model_type]
         checkpoint_name = checkpoint_url.split("/")[-1]
-        checkpoint_path = os.path.join(CHECKPOINT_FOLDER, checkpoint_name)
+        checkpoint_path = os.path.join(_CHECKPOINT_FOLDER, checkpoint_name)
 
         # download the checkpoint if necessary
         if not os.path.exists(checkpoint_path):
-            os.makedirs(CHECKPOINT_FOLDER, exist_ok=True)
+            os.makedirs(_CHECKPOINT_FOLDER, exist_ok=True)
             _download(checkpoint_url, checkpoint_path, model_type)
     elif not os.path.exists(checkpoint_path):
         raise ValueError(f"The checkpoint path {checkpoint_path} that was passed does not exist.")
@@ -502,17 +502,19 @@ def load_image_data(
     return image_data
 
 
-# TODO enable passing options for get_sam
 def main():
+    """@private"""
     import argparse
 
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Compute the embeddings for an image.")
     parser.add_argument("-i", "--input_path", required=True)
     parser.add_argument("-o", "--output_path", required=True)
+    parser.add_argument("-m", "--model_type", default="vit_h")
+    parser.add_argument("-c", "--checkpoint_path", default=None)
     parser.add_argument("-k", "--key")
     args = parser.parse_args()
 
-    predictor = get_sam_model()
+    predictor = get_sam_model(model_type=args.model_type, checkpoint_path=args.checkpoint_path)
     with open_file(args.input_path, mode="r") as f:
         data = f[args.key]
         precompute_image_embeddings(predictor, data, save_path=args.output_path)
