@@ -71,7 +71,7 @@ class TestInstanceSegmentation(unittest.TestCase):
 
         predicted = amg.generate()
         predicted = mask_data_to_segmentation(predicted, image.shape, with_background=True)
-        self.assertGreater(matching(predicted, mask, threshold=0.75)["accuracy"], 0.99)
+        self.assertGreater(matching(predicted, mask, threshold=0.75)["segmentation_accuracy"], 0.99)
 
         # check that regenerating the segmentation works
         predicted2 = amg.generate()
@@ -97,7 +97,7 @@ class TestInstanceSegmentation(unittest.TestCase):
         predicted = amg.generate(pred_iou_thresh=0.96)
         predicted = mask_data_to_segmentation(predicted, image.shape, with_background=True)
 
-        self.assertGreater(matching(predicted, mask, threshold=0.75)["accuracy"], 0.99)
+        self.assertGreater(matching(predicted, mask, threshold=0.75)["segmentation_accuracy"], 0.99)
 
         initial_seg = amg.get_initial_segmentation()
         self.assertEqual(initial_seg.shape, image.shape)
@@ -126,7 +126,7 @@ class TestInstanceSegmentation(unittest.TestCase):
         predicted = amg.generate(pred_iou_thresh=0.96)
         initial_seg = amg.get_initial_segmentation()
 
-        self.assertGreater(matching(predicted, mask, threshold=0.75)["accuracy"], 0.99)
+        self.assertGreater(matching(predicted, mask, threshold=0.75)["segmentation_accuracy"], 0.99)
         self.assertEqual(initial_seg.shape, image.shape)
 
         predicted2 = amg.generate(pred_iou_thresh=0.96)
@@ -151,7 +151,7 @@ class TestInstanceSegmentation(unittest.TestCase):
         amg.initialize(image, image_embeddings=image_embeddings, verbose=False)
         predicted = amg.generate(pred_iou_thresh=pred_iou_thresh)
         predicted = mask_data_to_segmentation(predicted, image.shape, with_background=True)
-        self.assertGreater(matching(predicted, mask, threshold=0.75)["accuracy"], 0.99)
+        self.assertGreater(matching(predicted, mask, threshold=0.75)["segmentation_accuracy"], 0.99)
 
         predicted2 = amg.generate(pred_iou_thresh=pred_iou_thresh)
         predicted2 = mask_data_to_segmentation(predicted2, image.shape, with_background=True)

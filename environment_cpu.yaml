@@ -7,7 +7,7 @@ dependencies:
     - cpuonly
     - napari
     - pooch
-    - python-elf
+    - python-elf >=0.4.8
     - pytorch
     - torchvision
     - tqdm
