@@ -11,27 +11,23 @@ from segment_anything import SamPredictor
 from .. import util
 from .. import instance_segmentation
 from ..visualization import project_embeddings_for_visualization
+from . import util as vutil
 from .gui_utils import show_wrong_file_warning
-from .util import (
-    clear_all_prompts, commit_segmentation_widget, create_prompt_menu,
-    prompt_layer_to_boxes, prompt_layer_to_points, prompt_segmentation, toggle_label, LABEL_COLOR_CYCLE,
-    _initialize_parser,
-)
 
 
 @magicgui(call_button="Segment Object [S]")
 def segment_wigdet(v: Viewer):
     # get the current box and point prompts
-    boxes = prompt_layer_to_boxes(v.layers["box_prompts"])
-    points, labels = prompt_layer_to_points(v.layers["prompts"])
+    boxes = vutil.prompt_layer_to_boxes(v.layers["box_prompts"])
+    points, labels = vutil.prompt_layer_to_points(v.layers["prompts"])
 
     shape = v.layers["current_object"].data.shape
     if IMAGE_EMBEDDINGS["original_size"] is None:  # tiled prediction
-        seg = prompt_segmentation(
+        seg = vutil.prompt_segmentation(
             PREDICTOR, points, labels, boxes, shape, image_embeddings=IMAGE_EMBEDDINGS, multiple_box_prompts=True
         )
     else:  # normal prediction and we have set the precomputed embeddings already
-        seg = prompt_segmentation(PREDICTOR, points, labels, boxes, shape, multiple_box_prompts=True)
+        seg = vutil.prompt_segmentation(PREDICTOR, points, labels, boxes, shape, multiple_box_prompts=True)
 
     # no prompts were given or prompts were invalid, skip segmentation
     if seg is None:
@@ -141,7 +137,7 @@ def _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings):
         name="prompts",
         properties={"label": labels},
         edge_color="label",
-        edge_color_cycle=LABEL_COLOR_CYCLE,
+        edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
         symbol="o",
         face_color="transparent",
         edge_width=0.5,
@@ -158,14 +154,15 @@ def _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings):
     # add the widgets
     #
 
-    prompt_widget = create_prompt_menu(prompts, labels)
+    prompt_widget = vutil.create_prompt_menu(prompts, labels)
     v.window.add_dock_widget(prompt_widget)
 
     # (optional) auto-segmentation functionality
     v.window.add_dock_widget(autosegment_widget)
 
     v.window.add_dock_widget(segment_wigdet)
-    v.window.add_dock_widget(commit_segmentation_widget)
+    v.window.add_dock_widget(vutil.commit_segmentation_widget)
+    v.window.add_dock_widget(vutil.clear_widget)
 
     #
     # key bindings
@@ -177,15 +174,15 @@ def _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings):
 
     @v.bind_key("c")
     def _commit(v):
-        commit_segmentation_widget(v)
+        vutil.commit_segmentation_widget(v)
 
     @v.bind_key("t")
     def _toggle_label(event=None):
-        toggle_label(prompts)
+        vutil.toggle_label(prompts)
 
     @v.bind_key("Shift-C")
     def clear_prompts(v):
-        clear_all_prompts(v)
+        vutil.clear_annotations(v)
 
     return v
 
@@ -246,7 +243,7 @@ def annotator_2d(
     #
     # start the viewer
     #
-    clear_all_prompts(v)
+    vutil.clear_annotations(v, clear_segmentations=False)
 
     if return_viewer:
         return v
@@ -255,7 +252,7 @@ def annotator_2d(
 
 
 def main():
-    parser = _initialize_parser(description="Run interactive segmentation for an image.")
+    parser = vutil._initialize_parser(description="Run interactive segmentation for an image.")
     args = parser.parse_args()
     raw = util.load_image_data(args.input, key=args.key)
 

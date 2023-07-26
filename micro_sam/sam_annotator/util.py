@@ -12,14 +12,25 @@ from ..prompt_based_segmentation import segment_from_box, segment_from_box_and_p
 LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
 
 
-# TODO: also clear the current segmentation or tracking
-# TODO: also add menu for it in the annotator
-def clear_all_prompts(v: Viewer) -> None:
+def clear_annotations(v: Viewer, clear_segmentations=True) -> None:
     v.layers["prompts"].data = []
     v.layers["prompts"].refresh()
     if "box_prompts" in v.layers:
         v.layers["box_prompts"].data = []
         v.layers["box_prompts"].refresh()
+    if not clear_segmentations:
+        return
+    if "current_object" in v.layers:
+        v.layers["current_object"].data = np.zeros(v.layers["current_object"].data.shape, dtype="uint32")
+        v.layers["current_object"].refresh()
+    if "current_track" in v.layers:
+        v.layers["current_track"].data = np.zeros(v.layers["current_track"].data.shape, dtype="uint32")
+        v.layers["current_track"].refresh()
+
+
+@magicgui(call_button="Clear Annotations [Shfit + C]")
+def clear_widget(v: Viewer) -> None:
+    clear_annotations(v)
 
 
 @magicgui(call_button="Commit [C]", layer={"choices": ["current_object", "auto_segmentation"]})
@@ -37,7 +48,7 @@ def commit_segmentation_widget(v: Viewer, layer: str = "current_object") -> None
     v.layers[layer].refresh()
 
     if layer == "current_object":
-        clear_all_prompts(v)
+        clear_annotations(v)
 
 
 def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="label"):
