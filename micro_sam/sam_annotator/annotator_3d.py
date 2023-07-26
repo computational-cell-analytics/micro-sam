@@ -7,6 +7,7 @@ import numpy as np
 from magicgui import magicgui
 from napari import Viewer
 from napari.utils import progress
+from segment_anything import SamPredictor
 
 from .. import util
 from ..prompt_based_segmentation import segment_from_mask
@@ -195,10 +196,15 @@ def annotator_3d(
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
+    predictor: Optional[SamPredictor] = None,
 ) -> None:
     # for access to the predictor and the image embeddings in the widgets
     global PREDICTOR, IMAGE_EMBEDDINGS
-    PREDICTOR = util.get_sam_model(model_type=model_type)
+
+    if predictor is None:
+        PREDICTOR = util.get_sam_model(model_type=model_type)
+    else:
+        PREDICTOR = predictor
     IMAGE_EMBEDDINGS = util.precompute_image_embeddings(
         PREDICTOR, raw, save_path=embedding_path, tile_shape=tile_shape, halo=halo,
         wrong_file_callback=show_wrong_file_warning,
