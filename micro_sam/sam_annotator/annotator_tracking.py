@@ -15,15 +15,9 @@ from scipy.ndimage import shift
 
 from .. import util
 from ..prompt_based_segmentation import segment_from_mask
-from .gui_utils import show_wrong_file_warning
-from .util import (
-    create_prompt_menu, clear_all_prompts,
-    prompt_layer_to_boxes, prompt_layer_to_points,
-    prompt_layer_to_state, prompt_segmentation,
-    segment_slices_with_prompts, toggle_label, LABEL_COLOR_CYCLE,
-    _initialize_parser
-)
 from ..visualization import project_embeddings_for_visualization
+from . import util as vutil
+from .gui_utils import show_wrong_file_warning
 
 # Cyan (track) and Magenta (division)
 STATE_COLOR_CYCLE = ["#00FFFF", "#FF00FF", ]
@@ -108,7 +102,7 @@ def _track_from_prompts(
             seg_t = seg[t]
             # currently using the box layer doesn't work for keeping track of the track state
             # track_state = prompt_layers_to_state(point_prompts, box_prompts, t)
-            track_state = prompt_layer_to_state(point_prompts, t)
+            track_state = vutil.prompt_layer_to_state(point_prompts, t)
 
         # otherwise project the mask (under the motion model) and segment the next slice from the mask
         else:
@@ -189,16 +183,16 @@ def segment_frame_wigdet(v: Viewer):
     position = v.cursor.position
     t = int(position[0])
 
-    point_prompts = prompt_layer_to_points(v.layers["prompts"], t, track_id=CURRENT_TRACK_ID)
+    point_prompts = vutil.prompt_layer_to_points(v.layers["prompts"], t, track_id=CURRENT_TRACK_ID)
     # this is a stop prompt, we do nothing
     if not point_prompts:
         return
 
-    boxes = prompt_layer_to_boxes(v.layers["box_prompts"], t, track_id=CURRENT_TRACK_ID)
+    boxes = vutil.prompt_layer_to_boxes(v.layers["box_prompts"], t, track_id=CURRENT_TRACK_ID)
     points, labels = point_prompts
 
     shape = v.layers["current_track"].data.shape[1:]
-    seg = prompt_segmentation(
+    seg = vutil.prompt_segmentation(
         PREDICTOR, points, labels, boxes, shape, multiple_box_prompts=False,
         image_embeddings=IMAGE_EMBEDDINGS, i=t
     )
@@ -230,7 +224,7 @@ def track_objet_widget(
 
     with progress(total=shape[0]) as progress_bar:
         # step 1: segment all slices with prompts
-        seg, slices, _, stop_upper = segment_slices_with_prompts(
+        seg, slices, _, stop_upper = vutil.segment_slices_with_prompts(
             PREDICTOR, v.layers["prompts"], v.layers["box_prompts"], IMAGE_EMBEDDINGS, shape,
             progress_bar=progress_bar, track_id=CURRENT_TRACK_ID
         )
@@ -349,7 +343,7 @@ def commit_tracking_widget(v: Viewer, layer: str = "current_track"):
     v.layers[layer].data = np.zeros(shape, dtype="uint32")
     v.layers[layer].refresh()
 
-    clear_all_prompts(v)
+    vutil.clear_annotations(v, clear_segmentations=False)
 
 
 def annotator_tracking(
@@ -409,7 +403,7 @@ def annotator_tracking(
             "track_id": ["1", "1"],  # NOTE we use string to avoid pandas warnings...
         },
         edge_color="label",
-        edge_color_cycle=LABEL_COLOR_CYCLE,
+        edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
         symbol="o",
         face_color="state",
         face_color_cycle=STATE_COLOR_CYCLE,
@@ -444,7 +438,7 @@ def annotator_tracking(
 
     # TODO add (optional) auto-segmentation and tracking functionality
 
-    prompt_widget = create_prompt_menu(prompts, labels)
+    prompt_widget = vutil.create_prompt_menu(prompts, labels)
     v.window.add_dock_widget(prompt_widget)
 
     TRACKING_WIDGET = create_tracking_menu(prompts, box_prompts, state_labels, list(LINEAGE.keys()))
@@ -453,6 +447,7 @@ def annotator_tracking(
     v.window.add_dock_widget(segment_frame_wigdet)
     v.window.add_dock_widget(track_objet_widget)
     v.window.add_dock_widget(commit_tracking_widget)
+    v.window.add_dock_widget(vutil.clear_widget)
 
     #
     # key bindings
@@ -468,7 +463,7 @@ def annotator_tracking(
 
     @v.bind_key("t")
     def _toggle_label(event=None):
-        toggle_label(prompts)
+        vutil.toggle_label(prompts)
 
     @v.bind_key("c")
     def _commit(v):
@@ -476,7 +471,7 @@ def annotator_tracking(
 
     @v.bind_key("Shift-C")
     def clear_prompts(v):
-        clear_all_prompts(v)
+        vutil.clear_annotations(v)
 
     #
     # start the viewer
@@ -486,7 +481,7 @@ def annotator_tracking(
     v.dims.current_step = (0,) + tuple(sh // 2 for sh in raw.shape[1:])
 
     # clear the initial points needed for workaround
-    clear_prompts(v)
+    vutil.clear_annotations(v, clear_segmentations=False)
 
     if return_viewer:
         return v
@@ -494,7 +489,7 @@ def annotator_tracking(
 
 
 def main():
-    parser = _initialize_parser(
+    parser = vutil._initialize_parser(
         description="Run interactive segmentation for an image volume.",
         with_segmentation_result=False,
     )

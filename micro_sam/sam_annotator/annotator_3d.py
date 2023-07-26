@@ -11,13 +11,8 @@ from napari.utils import progress
 from .. import util
 from ..prompt_based_segmentation import segment_from_mask
 from ..visualization import project_embeddings_for_visualization
+from . import util as vutil
 from .gui_utils import show_wrong_file_warning
-from .util import (
-    clear_all_prompts, commit_segmentation_widget, create_prompt_menu,
-    prompt_layer_to_boxes, prompt_layer_to_points, prompt_segmentation,
-    segment_slices_with_prompts, toggle_label, LABEL_COLOR_CYCLE,
-    _initialize_parser
-)
 
 
 #
@@ -133,16 +128,16 @@ def segment_slice_wigdet(v: Viewer):
     position = v.cursor.position
     z = int(position[0])
 
-    point_prompts = prompt_layer_to_points(v.layers["prompts"], z)
+    point_prompts = vutil.prompt_layer_to_points(v.layers["prompts"], z)
     # this is a stop prompt, we do nothing
     if not point_prompts:
         return
 
-    boxes = prompt_layer_to_boxes(v.layers["box_prompts"], z)
+    boxes = vutil.prompt_layer_to_boxes(v.layers["box_prompts"], z)
     points, labels = point_prompts
 
     shape = v.layers["current_object"].data.shape[1:]
-    seg = prompt_segmentation(
+    seg = vutil.prompt_segmentation(
         PREDICTOR, points, labels, boxes, shape, multiple_box_prompts=False,
         image_embeddings=IMAGE_EMBEDDINGS, i=z
     )
@@ -175,7 +170,7 @@ def segment_volume_widget(
 
     with progress(total=shape[0]) as progress_bar:
 
-        seg, slices, stop_lower, stop_upper = segment_slices_with_prompts(
+        seg, slices, stop_lower, stop_upper = vutil.segment_slices_with_prompts(
             PREDICTOR, v.layers["prompts"], v.layers["box_prompts"], IMAGE_EMBEDDINGS, shape, progress_bar=progress_bar,
         )
 
@@ -235,7 +230,7 @@ def annotator_3d(
         name="prompts",
         properties={"label": labels},
         edge_color="label",
-        edge_color_cycle=LABEL_COLOR_CYCLE,
+        edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
         symbol="o",
         face_color="transparent",
         edge_width=0.5,
@@ -254,13 +249,14 @@ def annotator_3d(
 
     # TODO add (optional) auto-segmentation functionality
 
-    prompt_widget = create_prompt_menu(prompts, labels)
+    prompt_widget = vutil.create_prompt_menu(prompts, labels)
     v.window.add_dock_widget(prompt_widget)
 
     v.window.add_dock_widget(segment_slice_wigdet)
 
     v.window.add_dock_widget(segment_volume_widget)
-    v.window.add_dock_widget(commit_segmentation_widget)
+    v.window.add_dock_widget(vutil.commit_segmentation_widget)
+    v.window.add_dock_widget(vutil.clear_widget)
 
     #
     # key bindings
@@ -276,22 +272,22 @@ def annotator_3d(
 
     @v.bind_key("c")
     def _commit(v):
-        commit_segmentation_widget(v)
+        vutil.commit_segmentation_widget(v)
 
     @v.bind_key("t")
     def _toggle_label(event=None):
-        toggle_label(prompts)
+        vutil.toggle_label(prompts)
 
     @v.bind_key("Shift-C")
     def clear_prompts(v):
-        clear_all_prompts(v)
+        vutil.clear_annotations(v)
 
     #
     # start the viewer
     #
 
     # clear the initial points needed for workaround
-    clear_prompts(v)
+    vutil.clear_annotations(v, clear_segmentations=False)
 
     if return_viewer:
         return v
@@ -299,7 +295,7 @@ def annotator_3d(
 
 
 def main():
-    parser = _initialize_parser(description="Run interactive segmentation for an image volume.")
+    parser = vutil._initialize_parser(description="Run interactive segmentation for an image volume.")
     args = parser.parse_args()
     raw = util.load_image_data(args.input, key=args.key)
 
