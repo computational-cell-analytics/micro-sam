@@ -38,16 +38,14 @@ def segment_wigdet(v: Viewer):
     v.layers["current_object"].refresh()
 
 
-def _get_amg(is_tiled, with_background, min_initial_size, use_box, use_mask, use_points, box_extension):
+def _get_amg(is_tiled, with_background, min_initial_size, box_extension=0.05):
     if is_tiled:
         amg = instance_segmentation.TiledEmbeddingMaskGenerator(
-            PREDICTOR, with_background=with_background, min_initial_size=min_initial_size,
-            use_box=use_box, use_mask=use_mask, use_points=use_points, box_extension=box_extension,
+            PREDICTOR, with_background=with_background, min_initial_size=min_initial_size, box_extension=box_extension,
         )
     else:
         amg = instance_segmentation.EmbeddingMaskGenerator(
-            PREDICTOR, min_initial_size=min_initial_size,
-            use_box=use_box, use_mask=use_mask, use_points=use_points, box_extension=box_extension,
+            PREDICTOR, min_initial_size=min_initial_size, box_extension=box_extension,
         )
     return amg
 
@@ -56,7 +54,7 @@ def _changed_param(amg, **params):
     if amg is None:
         return None
     for name, val in params.items():
-        if hasattr(amg, name) and getattr(amg, name) != val:
+        if hasattr(amg, f"_{name}") and getattr(amg, f"_{name}") != val:
             return name
     return None
 
@@ -68,22 +66,17 @@ def autosegment_widget(
     pred_iou_thresh: float = 0.88,
     stability_score_thresh: float = 0.95,
     min_initial_size: int = 10,
-    use_box: bool = True,
-    use_mask: bool = True,
-    use_points: bool = False,
-    box_extension: float = 0.1,
+    box_extension: float = 0.05,
 ):
     global AMG
     is_tiled = IMAGE_EMBEDDINGS["input_size"] is None
     param_changed = _changed_param(
-        AMG, with_background=with_background, min_initial_size=min_initial_size,
-        use_box=use_box, use_mask=use_mask, use_points=use_points,
-        box_extension=box_extension,
+        AMG, with_background=with_background, min_initial_size=min_initial_size, box_extension=box_extension
     )
     if AMG is None or param_changed:
         if param_changed:
             print(f"The parameter {param_changed} was changed, so the full instance segmentation has to be recomputed.")
-        AMG = _get_amg(is_tiled, with_background, min_initial_size, use_box, use_mask, use_points, box_extension)
+        AMG = _get_amg(is_tiled, with_background, min_initial_size, box_extension)
 
     if not AMG.is_initialized:
         AMG.initialize(v.layers["raw"].data, image_embeddings=IMAGE_EMBEDDINGS, verbose=True)
