@@ -97,7 +97,14 @@ Check out [this video](https://youtu.be/PBPW0rDOn9w) for an overview of the inte
 
 ### Tips & Tricks
 
-- You can use tiling for large images. (TODO: expand on this).
+- Segment Anything was trained with a fixed image size of 1024 x 1024 pixels. Inputs that do not match this size will be internally resized to match it. Hence, applying Segment Anything to a much larger image will often lead to inferior results, because it will be downsampled by a large factor and the objects in the image become too small.
+To address this image we implement tiling: cutting up the input image into tiles of a fixed size (with a fixed overlap) and running Segment Anything for the individual tiles.
+You can activate tiling by passing the parameters `tile_shape`, which determines the size of the inner tile and `halo`, which determines the size of the additional overlap.
+    - If you're using the `micro_sam` GUI you can specify the values for the `halo` and `tile_shape` via the `Tile X`, `Tile Y`, `Halo X` and `Halo Y`.
+    - If you're using a python script you can pass them as tuples, e.g. `tile_shape=(1024, 1024), halo=(128, 128)`.
+    - If you're using the command line functions you can pass them via the options `--tile_shape 1024 1024 --halo 128 128`
+    - Note that prediction with tiling only works when the embeddings are cached to file, so you must specify an `embedding_path` (`-e` in the CLI).
+    - You should choose the `halo` such that it is larger than half of the maximal radius of the objects your segmenting.
 - The applications pre-compute the image embeddings produced by SegmentAnything and (optionally) store them on disc. If you are using a CPU this step can take a while for 3d data or timeseries (you will see a progress bar with a time estimate). If you have access to a GPU without graphical interface (e.g. via a local computer cluster or a cloud provider), you can also pre-compute the embeddings there and then copy them to your laptop / local machine to speed this up. You can use the command `micro_sam.precompute_embeddings` for this (it is installed with the rest of the applications). You can specify the location of the precomputed embeddings via the `embedding_path` argument.
 - Most other processing steps are very fast even on a CPU, so interactive annotation is possible. An exception is the automatic segmentation step (2d segmentation), which takes several minutes without a GPU (depending on the image size). For large volumes and timeseries segmenting an object in 3d / tracking across time can take a couple settings with a CPU (it is very fast with a GPU).
 - You can also try using a smaller version of the SegmentAnything model to speed up the computations. For this you can pass the `model_type` argument and either set it to `vit_l` or `vit_b` (default is `vit_h`). However, this may lead to worse results.
