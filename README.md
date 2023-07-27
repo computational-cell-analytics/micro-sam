@@ -1,5 +1,6 @@
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7919746.svg)](https://doi.org/10.5281/zenodo.7919746)
+[![DOC](https://pdoc.dev/logo.svg)](https://computational-cell-analytics.github.io/micro-sam/)
 [![Conda](https://anaconda.org/conda-forge/micro_sam/badges/version.svg)](https://anaconda.org/conda-forge/micro_sam)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7919746.svg)](https://doi.org/10.5281/zenodo.7919746)
 
 # SegmentAnything for Microscopy
 
@@ -21,11 +22,19 @@ This is an advanced beta version. While many features are still under developmen
 Any feedback is welcome, but please be aware that the functionality is under active development and that some features may not be thoroughly tested yet.
 We will soon provide a stand-alone application for running the `micro_sam` annotation tools, and plan to also release it as [napari plugin](https://napari.org/stable/plugins/index.html) in the future.
 
-If you run into any problems or have questions please open an issue or reach out via [image.sc](https://forum.image.sc/) using the tag `micro-sam` and tagging @constantinpape.
+If you run into any problems or have questions please open an issue on Github or reach out via [image.sc](https://forum.image.sc/) using the tag `micro-sam` and tagging @constantinpape.
+
 
 ## Installation and Usage
 
-TODO / links to doc
+You can install `micro_sam` via conda:
+```
+conda install -c conda-forge micro_sam
+```
+You can then start the `micro_sam` tools by running `$ micro_sam.annotator` in the command line.
+
+Please check out [the documentation](https://computational-cell-analytics.github.io/micro-sam/) for more details on the installation and usage of `micro_sam`.
+
 
 ## Citation
 
@@ -40,7 +49,7 @@ There are two other napari plugins build around segment anything:
 - https://github.com/MIC-DKFZ/napari-sam (2d and 3d support)
 - https://github.com/JoOkuma/napari-segment-anything (only 2d support)
 
-Compared to these we support more applications (2d, 3d and tracking), and aim to further extend and specialize SegmentAnything for microscopy data.
+Compared to these we support more applications (2d, 3d and tracking), and provide finetuned models for microscopy data.
 [WebKnossos](https://webknossos.org/) also offers integration of SegmentAnything for interactive segmentation.
 
 

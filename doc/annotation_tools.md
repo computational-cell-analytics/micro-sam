@@ -22,7 +22,7 @@ The `micro_sam` applications are mainly based on [the point layer](https://napar
 The 2d annotator can be started by
 - clicking `2d annotator` in the `micro_sam` GUI.
 - running `$ micro_sam.annotator_2d` in the command line. Run `micro_sam.annotator_2d -h` for details.
-- calling `micro_sam.sam_annotator.annotator_2d` in a python script. Check out [examples/sam_annotator_2d.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_2d.py) for details. 
+- calling `micro_sam.sam_annotator.annotator_2d` in a python script. Check out [examples/annotator_2d.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py) for details. 
 
 The user interface of the 2d annotator looks like this:
 
@@ -46,14 +46,14 @@ Note that point prompts and box prompts can be combined. When you're using point
 
 Check out [this video](https://youtu.be/DfWE_XRcqN8) for an example of how to use the interactive 2d annotator.
 
-We also provide the `image series annotator`, which can be used for running the 2d annotator for several images in a folder. You can start by clicking `Image series annotator` in the GUI, running `micro_sam.image_series_annotator` in the command line or from a [python script](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_image_series_annotator.py).
+We also provide the `image series annotator`, which can be used for running the 2d annotator for several images in a folder. You can start by clicking `Image series annotator` in the GUI, running `micro_sam.image_series_annotator` in the command line or from a [python script](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/image_series_annotator.py).
 
 ## Annotator 3D
 
 The 3d annotator can be started by
 - clicking `3d annotator` in the `micro_sam` GUI.
 - running `$ micro_sam.annotator_3d` in the command line. Run `micro_sam.annotator_3d -h` for details.
-- calling `micro_sam.sam_annotator.annotator_3d` in a python script. Check out [examples/sam_annotator_3d.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_3d.py) for details.
+- calling `micro_sam.sam_annotator.annotator_3d` in a python script. Check out [examples/annotator_3d.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_3d.py) for details.
 
 The user interface of the 3d annotator looks like this:
 
@@ -76,7 +76,7 @@ Check out [this video](https://youtu.be/5Jo_CtIefTM) for an overview of the inte
 The tracking annotator can be started by
 - clicking `Tracking annotator` in the `micro_sam` GUI.
 - running `$ micro_sam.annotator_tracking` in the command line. Run `micro_sam.annotator_tracking -h` for details.
-- calling `micro_sam.sam_annotator.annotator_tracking` in a python script. Check out [examples/sam_annotator_tracking.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_tracking.py) for details. 
+- calling `micro_sam.sam_annotator.annotator_tracking` in a python script. Check out [examples/annotator_tracking.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_tracking.py) for details. 
 
 The user interface of the tracking annotator looks like this:
 
@@ -97,7 +97,14 @@ Check out [this video](https://youtu.be/PBPW0rDOn9w) for an overview of the inte
 
 ### Tips & Tricks
 
-- You can use tiling for large images. (TODO: expand on this).
+- Segment Anything was trained with a fixed image size of 1024 x 1024 pixels. Inputs that do not match this size will be internally resized to match it. Hence, applying Segment Anything to a much larger image will often lead to inferior results, because it will be downsampled by a large factor and the objects in the image become too small.
+To address this image we implement tiling: cutting up the input image into tiles of a fixed size (with a fixed overlap) and running Segment Anything for the individual tiles.
+You can activate tiling by passing the parameters `tile_shape`, which determines the size of the inner tile and `halo`, which determines the size of the additional overlap.
+    - If you're using the `micro_sam` GUI you can specify the values for the `halo` and `tile_shape` via the `Tile X`, `Tile Y`, `Halo X` and `Halo Y`.
+    - If you're using a python script you can pass them as tuples, e.g. `tile_shape=(1024, 1024), halo=(128, 128)`.
+    - If you're using the command line functions you can pass them via the options `--tile_shape 1024 1024 --halo 128 128`
+    - Note that prediction with tiling only works when the embeddings are cached to file, so you must specify an `embedding_path` (`-e` in the CLI).
+    - You should choose the `halo` such that it is larger than half of the maximal radius of the objects your segmenting.
 - The applications pre-compute the image embeddings produced by SegmentAnything and (optionally) store them on disc. If you are using a CPU this step can take a while for 3d data or timeseries (you will see a progress bar with a time estimate). If you have access to a GPU without graphical interface (e.g. via a local computer cluster or a cloud provider), you can also pre-compute the embeddings there and then copy them to your laptop / local machine to speed this up. You can use the command `micro_sam.precompute_embeddings` for this (it is installed with the rest of the applications). You can specify the location of the precomputed embeddings via the `embedding_path` argument.
 - Most other processing steps are very fast even on a CPU, so interactive annotation is possible. An exception is the automatic segmentation step (2d segmentation), which takes several minutes without a GPU (depending on the image size). For large volumes and timeseries segmenting an object in 3d / tracking across time can take a couple settings with a CPU (it is very fast with a GPU).
 - You can also try using a smaller version of the SegmentAnything model to speed up the computations. For this you can pass the `model_type` argument and either set it to `vit_l` or `vit_b` (default is `vit_h`). However, this may lead to worse results.

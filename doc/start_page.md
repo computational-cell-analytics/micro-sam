@@ -17,6 +17,8 @@ On our roadmap for more functionality are:
 - Integration of the finetuned models with [bioimage.io](https://bioimage.io/#/)
 - Implementing a napari plugin for `micro_sam`.
 
+If you run into any problems or have questions please open an issue on Github or reach out via [image.sc](https://forum.image.sc/) using the tag `micro-sam` and tagging @constantinpape.
+
 <!----
 Better instance segmentation, Few-shot adapation (using LORA, QLORA, etc.)
 ---->
