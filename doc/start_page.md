@@ -10,8 +10,42 @@ Our goal is to build fast and interactive annotation tools for microscopy data, 
 
 ![box-prompts](https://github.com/computational-cell-analytics/micro-sam/assets/4263537/d04cb158-9f5b-4460-98cd-023c4f19cccd)
 
-Beta version, Roadmap etc.
+`micro_sam` is under active development, but our goal is to keep the changes to the user interface and the interface of the python library as small as possible.
+On our roadmap for more functionality are:
+- Providing an installer for running `micro_sam` as a standalone application.
+- Releasing more and better finetuned models as well as the code for fine-tuning.
+- Integration of the finetuned models with [bioimage.io](https://bioimage.io/#/)
+- Implementing a napari plugin for `micro_sam`.
+
+<!----
+Better instance segmentation, Few-shot adapation (using LORA, QLORA, etc.)
+---->
 
 ## Quickstart
 
+You can install `micro_sam` via conda:
+```
+$ conda install -c conda-forge micro_sam
+```
+For more installation options check out [Installation](#installation)
+
+After installing `micro_sam` you can run the annotation tool via `$ micro_sam.annotator`, which opens a menu for selecting the annotation tool and its inputs.
+See [Annotation Tools](#annotation-tools) for an overview and explanation of the annotation functionality.
+
+The `micro_sam` python library can be used via
+```python
+import micro_sam
+```
+It is explained in more detail [here](#how-to-use-the-python-library).
+
+Our support for finetuned models is still experimental. We will soon release better finetuned models and host them on zenodo.
+For now, check out [the example script for the 2d annotator](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_2d.py#L62) to see how the finetuned models can be used within `micro_sam`.
+
+
 ## Citation
+
+If you are using `micro_sam` in your research please cite
+- [SegmentAnything](https://arxiv.org/abs/2304.02643)
+- and our repository on [zenodo](https://doi.org/10.5281/zenodo.7919746)
+
+We will release a preprint soon that describes this work and can be cited instead of zenodo.
