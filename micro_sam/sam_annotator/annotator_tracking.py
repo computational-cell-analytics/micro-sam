@@ -9,6 +9,7 @@ from magicgui.widgets import ComboBox, Container
 from napari import Viewer
 from napari.utils import progress
 from scipy.ndimage import shift
+from segment_anything import SamPredictor
 
 # this is more precise for comuting the centers, but slow!
 # from vigra.filters import eccentricityCenters
@@ -355,12 +356,16 @@ def annotator_tracking(
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
+    predictor: Optional[SamPredictor] = None,
 ) -> None:
     # global state
     global PREDICTOR, IMAGE_EMBEDDINGS, CURRENT_TRACK_ID, LINEAGE
     global TRACKING_WIDGET
 
-    PREDICTOR = util.get_sam_model(model_type=model_type)
+    if predictor is None:
+        PREDICTOR = util.get_sam_model(model_type=model_type)
+    else:
+        PREDICTOR = predictor
     IMAGE_EMBEDDINGS = util.precompute_image_embeddings(
         PREDICTOR, raw, save_path=embedding_path, tile_shape=tile_shape, halo=halo,
         wrong_file_callback=show_wrong_file_warning,

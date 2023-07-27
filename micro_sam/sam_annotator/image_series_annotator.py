@@ -8,6 +8,8 @@ import napari
 
 from magicgui import magicgui
 from napari.utils import progress as tqdm
+from segment_anything import SamPredictor
+
 from .annotator_2d import annotator_2d
 from .. import util
 
@@ -32,6 +34,7 @@ def image_series_annotator(
     image_files: List[str],
     output_folder: str,
     embedding_path: Optional[str] = None,
+    predictor: Optional[SamPredictor] = None,
     **kwargs
 ) -> None:
     """
@@ -45,7 +48,8 @@ def image_series_annotator(
     os.makedirs(output_folder, exist_ok=True)
     next_image_id = 0
 
-    predictor = util.get_sam_model(model_type=kwargs.get("model_type", "vit_h"))
+    if predictor is None:
+        predictor = util.get_sam_model(model_type=kwargs.get("model_type", "vit_h"))
     if embedding_path is None:
         embedding_paths = None
     else:
@@ -101,12 +105,13 @@ def image_folder_annotator(
     output_folder: str,
     pattern: str = "*",
     embedding_path: Optional[str] = None,
+    predictor: Optional[SamPredictor] = None,
     **kwargs
 ) -> None:
     """
     """
     image_files = sorted(glob(os.path.join(input_folder, pattern)))
-    image_series_annotator(image_files, output_folder, embedding_path, **kwargs)
+    image_series_annotator(image_files, output_folder, embedding_path, predictor, **kwargs)
 
 
 def main():
