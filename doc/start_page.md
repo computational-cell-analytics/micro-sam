@@ -38,7 +38,7 @@ The `micro_sam` python library can be used via
 ```python
 import micro_sam
 ```
-It is explained in more details [here](#how-to-use-the-python-library).
+It is explained in more detail [here](#how-to-use-the-python-library).
 
 Our support for finetuned models is still experimental. We will soon release better finetuned models and host them on zenodo.
 For now, check out [the example script for the 2d annotator](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_2d.py#L62) to see how the finetuned models can be used within `micro_sam`.

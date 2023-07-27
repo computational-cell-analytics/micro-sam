@@ -95,22 +95,22 @@ Note that the tracking annotator only supports 2d image data, volumetric data is
 
 Check out [this video](https://youtu.be/PBPW0rDOn9w) for an overview of the interactive tracking functionality.
 
-### Tips & Tricks
+## Tips & Tricks
 
 - Segment Anything was trained with a fixed image size of 1024 x 1024 pixels. Inputs that do not match this size will be internally resized to match it. Hence, applying Segment Anything to a much larger image will often lead to inferior results, because it will be downsampled by a large factor and the objects in the image become too small.
 To address this image we implement tiling: cutting up the input image into tiles of a fixed size (with a fixed overlap) and running Segment Anything for the individual tiles.
 You can activate tiling by passing the parameters `tile_shape`, which determines the size of the inner tile and `halo`, which determines the size of the additional overlap.
     - If you're using the `micro_sam` GUI you can specify the values for the `halo` and `tile_shape` via the `Tile X`, `Tile Y`, `Halo X` and `Halo Y`.
-    - If you're using a python script you can pass them as tuples, e.g. `tile_shape=(1024, 1024), halo=(128, 128)`.
+    - If you're using a python script you can pass them as tuples, e.g. `tile_shape=(1024, 1024), halo=(128, 128)`. See also [the wholeslide_annotator example](https://github.com/computational-cell-analytics/micro-sam/blob/0921581e2964139194d235a87cb002d3f3667f45/examples/annotator_2d.py#L40).
     - If you're using the command line functions you can pass them via the options `--tile_shape 1024 1024 --halo 128 128`
     - Note that prediction with tiling only works when the embeddings are cached to file, so you must specify an `embedding_path` (`-e` in the CLI).
     - You should choose the `halo` such that it is larger than half of the maximal radius of the objects your segmenting.
 - The applications pre-compute the image embeddings produced by SegmentAnything and (optionally) store them on disc. If you are using a CPU this step can take a while for 3d data or timeseries (you will see a progress bar with a time estimate). If you have access to a GPU without graphical interface (e.g. via a local computer cluster or a cloud provider), you can also pre-compute the embeddings there and then copy them to your laptop / local machine to speed this up. You can use the command `micro_sam.precompute_embeddings` for this (it is installed with the rest of the applications). You can specify the location of the precomputed embeddings via the `embedding_path` argument.
 - Most other processing steps are very fast even on a CPU, so interactive annotation is possible. An exception is the automatic segmentation step (2d segmentation), which takes several minutes without a GPU (depending on the image size). For large volumes and timeseries segmenting an object in 3d / tracking across time can take a couple settings with a CPU (it is very fast with a GPU).
-- You can also try using a smaller version of the SegmentAnything model to speed up the computations. For this you can pass the `model_type` argument and either set it to `vit_b` or `vit_l` as well (default is `vit_h`). However, this may lead to worse results.
+- You can also try using a smaller version of the SegmentAnything model to speed up the computations. For this you can pass the `model_type` argument and either set it to `vit_b` or to `vit_l` (default is `vit_h`). However, this may lead to worse results.
 - You can save and load the results from the `committed_objects` / `committed_tracks` layer to correct segmentations you obtained from another tool (e.g. CellPose) or to save intermediate annotation results. The results can be saved via `File -> Save Selected Layer(s) ...` in the napari menu (see the tutorial videos for details). They can be loaded again by specifying the corresponding location via the `segmentation_result` (2d and 3d segmentation) or `tracking_result` (tracking) argument.
 
-### Known limitations
+## Known limitations
 
 - Segment Anything does not work well for very small or fine-grained objects (e.g. filaments).
 - For the automatic segmentation functionality we currently rely on the automatic mask generation provided by SegmentAnything. It is slow and often misses objects in microscopy images. For now, we only offer this functionality in the 2d segmentation app; we are working on improving it and extending it to 3d segmentation and tracking.
