@@ -1,7 +1,8 @@
 """
 .. include:: ../doc/start_page.md
+.. include:: ../doc/installation.md
 .. include:: ../doc/annotation_tools.md
-.. include:: ../doc/installaiton.md
+.. include:: ../doc/python_library.md
 """
 
 __all__ = [
