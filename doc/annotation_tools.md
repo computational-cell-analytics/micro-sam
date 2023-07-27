@@ -22,7 +22,7 @@ The `micro_sam` applications are mainly based on [the point layer](https://napar
 The 2d annotator can be started by
 - clicking `2d annotator` in the `micro_sam` GUI.
 - running `$ micro_sam.annotator_2d` in the command line. Run `micro_sam.annotator_2d -h` for details.
-- calling `micro_sam.sam_annotator.annotator_2d` in a python script. Check out [examples/sam_annotator_2d.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_2d.py) for details. 
+- calling `micro_sam.sam_annotator.annotator_2d` in a python script. Check out [examples/annotator_2d.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py) for details. 
 
 The user interface of the 2d annotator looks like this:
 
@@ -46,14 +46,14 @@ Note that point prompts and box prompts can be combined. When you're using point
 
 Check out [this video](https://youtu.be/DfWE_XRcqN8) for an example of how to use the interactive 2d annotator.
 
-We also provide the `image series annotator`, which can be used for running the 2d annotator for several images in a folder. You can start by clicking `Image series annotator` in the GUI, running `micro_sam.image_series_annotator` in the command line or from a [python script](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_image_series_annotator.py).
+We also provide the `image series annotator`, which can be used for running the 2d annotator for several images in a folder. You can start by clicking `Image series annotator` in the GUI, running `micro_sam.image_series_annotator` in the command line or from a [python script](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/image_series_annotator.py).
 
 ## Annotator 3D
 
 The 3d annotator can be started by
 - clicking `3d annotator` in the `micro_sam` GUI.
 - running `$ micro_sam.annotator_3d` in the command line. Run `micro_sam.annotator_3d -h` for details.
-- calling `micro_sam.sam_annotator.annotator_3d` in a python script. Check out [examples/sam_annotator_3d.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_3d.py) for details.
+- calling `micro_sam.sam_annotator.annotator_3d` in a python script. Check out [examples/annotator_3d.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_3d.py) for details.
 
 The user interface of the 3d annotator looks like this:
 
@@ -76,7 +76,7 @@ Check out [this video](https://youtu.be/5Jo_CtIefTM) for an overview of the inte
 The tracking annotator can be started by
 - clicking `Tracking annotator` in the `micro_sam` GUI.
 - running `$ micro_sam.annotator_tracking` in the command line. Run `micro_sam.annotator_tracking -h` for details.
-- calling `micro_sam.sam_annotator.annotator_tracking` in a python script. Check out [examples/sam_annotator_tracking.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_tracking.py) for details. 
+- calling `micro_sam.sam_annotator.annotator_tracking` in a python script. Check out [examples/annotator_tracking.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_tracking.py) for details. 
 
 The user interface of the tracking annotator looks like this:
 

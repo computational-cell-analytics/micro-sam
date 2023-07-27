@@ -6,7 +6,7 @@ from micro_sam import instance_segmentation, util
 
 def cell_segmentation():
     """Run the instance segmentation functionality from micro_sam for segmentation of
-    HeLA cells. You need to run examples/sam_annotator_2d.py:hela_2d_annotator once before
+    HeLA cells. You need to run examples/annotator_2d.py:hela_2d_annotator once before
     running this script so that all required data is downloaded and pre-computed.
     """
     image_path = "../data/hela-2d-image.png"
@@ -66,7 +66,7 @@ def cell_segmentation():
 
 def segmentation_with_tiling():
     """Run the instance segmentation functionality from micro_sam for segmentation of
-    cells in a large image. You need to run examples/sam_annotator_2d.py:wholeslide_annotator once before
+    cells in a large image. You need to run examples/annotator_2d.py:wholeslide_annotator once before
     running this script so that all required data is downloaded and pre-computed.
     """
     image_path = "../data/whole-slide-example-image.tif"
