@@ -65,10 +65,10 @@ def main():
     # livecell_annotator(use_finetuned_model)
 
     # 2d annotator for cell tracking challenge hela data
-    # hela_2d_annotator(use_finetuned_model)
+    hela_2d_annotator(use_finetuned_model)
 
     # 2d annotator for a whole slide image
-    wholeslide_annotator(use_finetuned_model)
+    # wholeslide_annotator(use_finetuned_model)
 
 
 if __name__ == "__main__":
