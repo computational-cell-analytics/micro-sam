@@ -38,6 +38,8 @@
     <li><a href="#annotator-2d">Annotator 2D</a></li>
     <li><a href="#annotator-3d">Annotator 3D</a></li>
     <li><a href="#annotator-tracking">Annotator Tracking</a></li>
+    <li><a href="#tips-tricks">Tips &amp; Tricks</a></li>
+    <li><a href="#known-limitations">Known limitations</a></li>
   </ul></li>
   <li><a href="#how-to-use-the-python-library">How to use the Python Library</a>
   <ul>
@@ -77,7 +79,7 @@ Its core components are:</p>
 
 <ul>
 <li>The <code><a href="">micro_sam</a></code> annotator tools for interactive data annotation with <a href="https://napari.org/stable/">napari</a>.</li>
-<li>The <code><a href="">micro_sam</a></code> library to apply Segment Anything to 2 and 3d data or fine-tune it on your data.</li>
+<li>The <code><a href="">micro_sam</a></code> library to apply Segment Anything to 2d and 3d data or fine-tune it on your data.</li>
 <li>The <code><a href="">micro_sam</a></code> models that are fine-tuned on publicly available microscopy data.</li>
 </ul>
 
@@ -181,21 +183,21 @@ For now, check out <a href="https://github.com/computational-cell-analytics/micr
 <li>Create the GPU or CPU environment:</li>
 </ol>
 
-<pre><code>conda env create -f &lt;ENV_FILE&gt;.yaml
+<pre><code>$ conda env create -f &lt;ENV_FILE&gt;.yaml
 </code></pre>
 
 <ol start="4">
 <li>Activate the environment:</li>
 </ol>
 
-<pre><code>conda activate sam
+<pre><code>$ conda activate sam
 </code></pre>
 
 <ol start="5">
 <li>Install <code><a href="">micro_sam</a></code>:</li>
 </ol>
 
-<pre><code>pip install -e .
+<pre><code>$ pip install -e .
 </code></pre>
 
 <p><strong>Troubleshooting:</strong></p>
@@ -324,7 +326,7 @@ The <code><a href="">micro_sam</a></code> applications are mainly based on <a hr
 <ol>
 <li>The napari layers that contain the image, segmentation and prompts. Same as for <a href="#annotator-2d">the 2d segmentation app</a> but without the <code>auto_segmentation</code> layer, <code>current_tracks</code> and <code>committed_tracks</code> are the equivalent of <code>current_object</code> and <code>committed_objects</code>.</li>
 <li>The prompt menu.</li>
-<li>The menu with tracking settings: <code>track_state</code> is used to indicate that the object you are tracking is dividing in the current frame. <code>track_id</code> is used to select which of the tracks after divsion you are following.</li>
+<li>The menu with tracking settings: <code>track_state</code> is used to indicate that the object you are tracking is dividing in the current frame. <code>track_id</code> is used to select which of the tracks after division you are following.</li>
 <li>The menu for interactive segmentation.</li>
 <li>The tracking menu. Press <code>Track Object</code> (or <code>v</code>) to track the current object across time.</li>
 <li>The menu for committing the current tracking result.</li>
@@ -335,7 +337,7 @@ The <code><a href="">micro_sam</a></code> applications are mainly based on <a hr
 
 <p>Check out <a href="https://youtu.be/PBPW0rDOn9w">this video</a> for an overview of the interactive tracking functionality.</p>
 
-<h3 id="tips-tricks">Tips &amp; Tricks</h3>
+<h2 id="tips-tricks">Tips &amp; Tricks</h2>
 
 <ul>
 <li>Segment Anything was trained with a fixed image size of 1024 x 1024 pixels. Inputs that do not match this size will be internally resized to match it. Hence, applying Segment Anything to a much larger image will often lead to inferior results, because it will be downsampled by a large factor and the objects in the image become too small.
@@ -343,21 +345,21 @@ To address this image we implement tiling: cutting up the input image into tiles
 You can activate tiling by passing the parameters <code>tile_shape</code>, which determines the size of the inner tile and <code>halo</code>, which determines the size of the additional overlap.
 <ul>
 <li>If you're using the <code><a href="">micro_sam</a></code> GUI you can specify the values for the <code>halo</code> and <code>tile_shape</code> via the <code>Tile X</code>, <code>Tile Y</code>, <code>Halo X</code> and <code>Halo Y</code>.</li>
-<li>If you're using a python script you can pass them as tuples, e.g. <code>tile_shape=(1024, 1024), halo=(128, 128)</code>.</li>
+<li>If you're using a python script you can pass them as tuples, e.g. <code>tile_shape=(1024, 1024), halo=(128, 128)</code>. See also <a href="https://github.com/computational-cell-analytics/micro-sam/blob/0921581e2964139194d235a87cb002d3f3667f45/examples/annotator_2d.py#L40">the wholeslide_annotator example</a>.</li>
 <li>If you're using the command line functions you can pass them via the options <code>--tile_shape 1024 1024 --halo 128 128</code></li>
 <li>Note that prediction with tiling only works when the embeddings are cached to file, so you must specify an <code>embedding_path</code> (<code>-e</code> in the CLI).</li>
 <li>You should choose the <code>halo</code> such that it is larger than half of the maximal radius of the objects your segmenting.</li>
 </ul></li>
 <li>The applications pre-compute the image embeddings produced by SegmentAnything and (optionally) store them on disc. If you are using a CPU this step can take a while for 3d data or timeseries (you will see a progress bar with a time estimate). If you have access to a GPU without graphical interface (e.g. via a local computer cluster or a cloud provider), you can also pre-compute the embeddings there and then copy them to your laptop / local machine to speed this up. You can use the command <code>micro_sam.precompute_embeddings</code> for this (it is installed with the rest of the applications). You can specify the location of the precomputed embeddings via the <code>embedding_path</code> argument.</li>
 <li>Most other processing steps are very fast even on a CPU, so interactive annotation is possible. An exception is the automatic segmentation step (2d segmentation), which takes several minutes without a GPU (depending on the image size). For large volumes and timeseries segmenting an object in 3d / tracking across time can take a couple settings with a CPU (it is very fast with a GPU).</li>
-<li>You can also try using a smaller version of the SegmentAnything model to speed up the computations. For this you can pass the <code>model_type</code> argument and either set it to <code>vit_l</code> or <code>vit_b</code> (default is <code>vit_h</code>). However, this may lead to worse results.</li>
-<li>You can save and load the results from the <code>committed_objects</code> / <code>committed_tracks</code> layer to correct segmentations you obtained from another tool (e.g. CellPose) or to save intermediate annotation results. The results can be saved via <code>File-&gt;Save Selected Layer(s) ...</code> in the napari menu (see the tutorial videos for details). They can be loaded again by specifying the corresponding location via the <code>segmentation_result</code> (2d and 3d segmentation) or <code>tracking_result</code> (tracking) argument.</li>
+<li>You can also try using a smaller version of the SegmentAnything model to speed up the computations. For this you can pass the <code>model_type</code> argument and either set it to <code>vit_b</code> or to <code>vit_l</code> (default is <code>vit_h</code>). However, this may lead to worse results.</li>
+<li>You can save and load the results from the <code>committed_objects</code> / <code>committed_tracks</code> layer to correct segmentations you obtained from another tool (e.g. CellPose) or to save intermediate annotation results. The results can be saved via <code>File -&gt; Save Selected Layer(s) ...</code> in the napari menu (see the tutorial videos for details). They can be loaded again by specifying the corresponding location via the <code>segmentation_result</code> (2d and 3d segmentation) or <code>tracking_result</code> (tracking) argument.</li>
 </ul>
 
-<h3 id="known-limitations">Known limitations</h3>
+<h2 id="known-limitations">Known limitations</h2>
 
 <ul>
-<li>Segment Anything does not work well for very small or fine-graind objects (e.g. filaments).</li>
+<li>Segment Anything does not work well for very small or fine-grained objects (e.g. filaments).</li>
 <li>For the automatic segmentation functionality we currently rely on the automatic mask generation provided by SegmentAnything. It is slow and often misses objects in microscopy images. For now, we only offer this functionality in the 2d segmentation app; we are working on improving it and extending it to 3d segmentation and tracking.</li>
 <li>Prompt bounding boxes do not provide the full functionality for tracking yet (they cannot be used for divisions or for starting new tracks). See also <a href="https://github.com/computational-cell-analytics/micro-sam/issues/23">this github issue</a>.</li>
 </ul>
