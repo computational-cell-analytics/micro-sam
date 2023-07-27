@@ -57,7 +57,7 @@ Compared to these we support more applications (2d, 3d and tracking), and provid
 
 **New in version 0.1.1**
 
-- Fine-tuned segmenta anything models for microscopy (experimental)
+- Fine-tuned segment anything models for microscopy (experimental)
 - Simplified instance segmentation menu
 - Menu for clearing annotations
 

@@ -3,7 +3,7 @@
 Segment Anything for Microscopy implements automatic and interactive annotation for microscopy data. It is built on top of [Segment Anything](https://segment-anything.com/) by Meta AI and specializes it for microscopy and other bio-imaging data.
 Its core components are:
 - The `micro_sam` annotator tools for interactive data annotation with [napari](https://napari.org/stable/).
-- The `micro_sam` library to apply Segment Anything to 2 and 3d data or fine-tune it on your data.
+- The `micro_sam` library to apply Segment Anything to 2d and 3d data or fine-tune it on your data.
 - The `micro_sam` models that are fine-tuned on publicly available microscopy data.
 
 Our goal is to build fast and interactive annotation tools for microscopy data, like interactive cell segmentation from bounding boxes:
@@ -38,7 +38,7 @@ The `micro_sam` python library can be used via
 ```python
 import micro_sam
 ```
-It is explained in more detail [here](#how-to-use-the-python-library).
+It is explained in more details [here](#how-to-use-the-python-library).
 
 Our support for finetuned models is still experimental. We will soon release better finetuned models and host them on zenodo.
 For now, check out [the example script for the 2d annotator](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_2d.py#L62) to see how the finetuned models can be used within `micro_sam`.

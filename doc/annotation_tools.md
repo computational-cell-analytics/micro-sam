@@ -85,7 +85,7 @@ The user interface of the tracking annotator looks like this:
 Most elements are the same as in [the 2d annotator](#annotator-2d):
 1. The napari layers that contain the image, segmentation and prompts. Same as for [the 2d segmentation app](#annotator-2d) but without the `auto_segmentation` layer, `current_tracks` and `committed_tracks` are the equivalent of `current_object` and `committed_objects`.
 2. The prompt menu.
-3. The menu with tracking settings: `track_state` is used to indicate that the object you are tracking is dividing in the current frame. `track_id` is used to select which of the tracks after divsion you are following.
+3. The menu with tracking settings: `track_state` is used to indicate that the object you are tracking is dividing in the current frame. `track_id` is used to select which of the tracks after division you are following.
 4. The menu for interactive segmentation.
 5. The tracking menu. Press `Track Object` (or `v`) to track the current object across time.
 6. The menu for committing the current tracking result.
@@ -107,11 +107,11 @@ You can activate tiling by passing the parameters `tile_shape`, which determines
     - You should choose the `halo` such that it is larger than half of the maximal radius of the objects your segmenting.
 - The applications pre-compute the image embeddings produced by SegmentAnything and (optionally) store them on disc. If you are using a CPU this step can take a while for 3d data or timeseries (you will see a progress bar with a time estimate). If you have access to a GPU without graphical interface (e.g. via a local computer cluster or a cloud provider), you can also pre-compute the embeddings there and then copy them to your laptop / local machine to speed this up. You can use the command `micro_sam.precompute_embeddings` for this (it is installed with the rest of the applications). You can specify the location of the precomputed embeddings via the `embedding_path` argument.
 - Most other processing steps are very fast even on a CPU, so interactive annotation is possible. An exception is the automatic segmentation step (2d segmentation), which takes several minutes without a GPU (depending on the image size). For large volumes and timeseries segmenting an object in 3d / tracking across time can take a couple settings with a CPU (it is very fast with a GPU).
-- You can also try using a smaller version of the SegmentAnything model to speed up the computations. For this you can pass the `model_type` argument and either set it to `vit_l` or `vit_b` (default is `vit_h`). However, this may lead to worse results.
-- You can save and load the results from the `committed_objects` / `committed_tracks` layer to correct segmentations you obtained from another tool (e.g. CellPose) or to save intermediate annotation results. The results can be saved via `File->Save Selected Layer(s) ...` in the napari menu (see the tutorial videos for details). They can be loaded again by specifying the corresponding location via the `segmentation_result` (2d and 3d segmentation) or `tracking_result` (tracking) argument.
+- You can also try using a smaller version of the SegmentAnything model to speed up the computations. For this you can pass the `model_type` argument and either set it to `vit_b` or `vit_l` as well (default is `vit_h`). However, this may lead to worse results.
+- You can save and load the results from the `committed_objects` / `committed_tracks` layer to correct segmentations you obtained from another tool (e.g. CellPose) or to save intermediate annotation results. The results can be saved via `File -> Save Selected Layer(s) ...` in the napari menu (see the tutorial videos for details). They can be loaded again by specifying the corresponding location via the `segmentation_result` (2d and 3d segmentation) or `tracking_result` (tracking) argument.
 
 ### Known limitations
 
-- Segment Anything does not work well for very small or fine-graind objects (e.g. filaments).
+- Segment Anything does not work well for very small or fine-grained objects (e.g. filaments).
 - For the automatic segmentation functionality we currently rely on the automatic mask generation provided by SegmentAnything. It is slow and often misses objects in microscopy images. For now, we only offer this functionality in the 2d segmentation app; we are working on improving it and extending it to 3d segmentation and tracking.
 - Prompt bounding boxes do not provide the full functionality for tracking yet (they cannot be used for divisions or for starting new tracks). See also [this github issue](https://github.com/computational-cell-analytics/micro-sam/issues/23).

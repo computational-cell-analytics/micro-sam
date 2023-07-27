@@ -30,15 +30,15 @@ $ cd micro_sam
 3. Create the GPU or CPU environment:
 
 ```
-conda env create -f <ENV_FILE>.yaml
+$ conda env create -f <ENV_FILE>.yaml
 ```
 4. Activate the environment:
 ```
-conda activate sam
+$ conda activate sam
 ```
 5. Install `micro_sam`:
 ```
-pip install -e .
+$ pip install -e .
 ```
 
 **Troubleshooting:**
