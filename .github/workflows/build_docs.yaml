@@ -24,7 +24,7 @@ jobs:
           activate-environment: sam
           mamba-version: "*"
           auto-update-conda: true
-          environment-file: .github/workflows/doc_env.yaml
+          environment-file: .github/doc_env.yaml
           python-version: ${{ matrix.python-version }}
           auto-activate-base: false
         env:
