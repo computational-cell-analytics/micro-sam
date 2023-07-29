@@ -5,8 +5,10 @@ name:
     sam
 dependencies:
     - cpuonly
+    - napari
     - pdoc
     - pooch
+    - pyqt
     - python-elf
     - pytorch
     - torchvision

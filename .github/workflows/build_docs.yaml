@@ -1,10 +1,12 @@
 name: build_documentation
 
-# build the documentation for a new commit
-on:
-  release:
-    types: created
+# build the documentation for a new release
+# on:
+#   release:
+#     types: created
 
+# for debugging
+on: [push, pull_request]
 
 # security: restrict permissions for CI jobs.
 permissions:
@@ -17,6 +19,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v3
 
       - name: Setup miniconda
         uses: conda-incubator/setup-miniconda@v2
