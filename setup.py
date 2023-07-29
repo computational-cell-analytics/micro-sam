@@ -9,7 +9,7 @@ setup(
     description="SegmentAnything For Microscopy",
     author="Anwai Archit, Constantin Pape",
     url="https://user.informatik.uni-goettingen.de/~pape41/",
-    packages=["micro_sam"],
+    packages=["micro_sam", "micro_sam.sam_annotator"],
     license="MIT",
     entry_points={
         "console_scripts": [
