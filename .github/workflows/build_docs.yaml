@@ -15,13 +15,16 @@ permissions:
 jobs:
   # Build the documentation and upload the static HTML files as an artifact.
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      matrix:
+        platform: [ubuntu-latest]
+        python: ["3.10"]
+		backend: [pyqt5`]
+
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v3
 
       - name: Setup miniconda
         uses: conda-incubator/setup-miniconda@v2
