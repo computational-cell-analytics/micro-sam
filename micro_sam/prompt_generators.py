@@ -1,3 +1,8 @@
+"""
+Classes for generating prompts from ground-truth segmentation masks.
+For training or evaluation of prompt-based segmentation.
+"""
+
 from collections.abc import Mapping
 from typing import Optional
 

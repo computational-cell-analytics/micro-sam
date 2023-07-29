@@ -1,3 +1,7 @@
+"""
+Functionality for visualizing image embeddings.
+"""
+
 import numpy as np
 
 from elf.segmentation.embeddings import embedding_pca

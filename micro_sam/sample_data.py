@@ -1,11 +1,21 @@
+"""
+Sample microscopy data.
+"""
+
 import os
 from pathlib import Path
+from typing import Union
 
 import pooch
 
 
-def fetch_image_series_example_data(save_directory):
+def fetch_image_series_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
     """Download the sample images for the image series annotator.
+
+    Args:
+        save_directory: Root folder to save the downloaded data.
+    Returns:
+        The folder that contains the downloaded data.
     """
     save_directory = Path(save_directory)
     os.makedirs(save_directory, exist_ok=True)
@@ -26,11 +36,16 @@ def fetch_image_series_example_data(save_directory):
     return data_folder
 
 
-def fetch_wholeslide_example_data(save_directory):
+def fetch_wholeslide_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
     """Download the sample data for the 2d annotator.
 
     This downloads part of a whole-slide image from the NeurIPS Cell Segmentation Challenge.
     See https://neurips22-cellseg.grand-challenge.org/ for details on the data.
+
+    Args:
+        save_directory: Root folder to save the downloaded data.
+    Returns:
+        The path of the downloaded image.
     """
     save_directory = Path(save_directory)
     os.makedirs(save_directory, exist_ok=True)
@@ -46,11 +61,16 @@ def fetch_wholeslide_example_data(save_directory):
     return os.path.join(save_directory, fname)
 
 
-def fetch_livecell_example_data(save_directory):
+def fetch_livecell_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
     """Download the sample data for the 2d annotator.
 
     This downloads a single image from the LiveCELL dataset.
     See https://doi.org/10.1038/s41592-021-01249-6 for details on the data.
+
+    Args:
+        save_directory: Root folder to save the downloaded data.
+    Returns:
+        The path of the downloaded image.
     """
     save_directory = Path(save_directory)
     os.makedirs(save_directory, exist_ok=True)
@@ -66,10 +86,15 @@ def fetch_livecell_example_data(save_directory):
     return os.path.join(save_directory, fname)
 
 
-def fetch_hela_2d_example_data(save_directory):
+def fetch_hela_2d_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
     """Download the sample data for the 2d annotator.
 
     This downloads a single image from the HeLa CTC dataset.
+
+    Args:
+        save_directory: Root folder to save the downloaded data.
+    Returns:
+        The path of the downloaded image.
     """
     save_directory = Path(save_directory)
     os.makedirs(save_directory, exist_ok=True)
@@ -85,11 +110,16 @@ def fetch_hela_2d_example_data(save_directory):
     return os.path.join(save_directory, fname)
 
 
-def fetch_3d_example_data(save_directory):
+def fetch_3d_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
     """Download the sample data for the 3d annotator.
 
     This downloads the Lucchi++ datasets from https://casser.io/connectomics/.
     It is a dataset for mitochondria segmentation in EM.
+
+    Args:
+        save_directory: Root folder to save the downloaded data.
+    Returns:
+        The folder that contains the downloaded data.
     """
     save_directory = Path(save_directory)
     os.makedirs(save_directory, exist_ok=True)
@@ -109,7 +139,7 @@ def fetch_3d_example_data(save_directory):
     return str(lucchi_dir)
 
 
-def fetch_tracking_example_data(save_directory):
+def fetch_tracking_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
     """Download the sample data for the tracking annotator.
 
     This data is the cell tracking challenge dataset DIC-C2DH-HeLa.
@@ -118,6 +148,11 @@ def fetch_tracking_example_data(save_directory):
     Dr. G. van Cappellen. Erasmus Medical Center, Rotterdam, The Netherlands
     Training dataset: http://data.celltrackingchallenge.net/training-datasets/DIC-C2DH-HeLa.zip (37 MB)
     Challenge dataset: http://data.celltrackingchallenge.net/challenge-datasets/DIC-C2DH-HeLa.zip (41 MB)
+
+    Args:
+        save_directory: Root folder to save the downloaded data.
+    Returns:
+        The folder that contains the downloaded data.
     """
     save_directory = Path(save_directory)
     os.makedirs(save_directory, exist_ok=True)

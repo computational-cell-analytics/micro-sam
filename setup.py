@@ -8,7 +8,7 @@ setup(
     version=__version__,
     description="SegmentAnything For Microscopy",
     author="Anwai Archit, Constantin Pape",
-    url="https://user.informatik.uni-goettingen.de/~pape41/",
+    url="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html",
     packages=["micro_sam", "micro_sam.sam_annotator"],
     license="MIT",
     entry_points={

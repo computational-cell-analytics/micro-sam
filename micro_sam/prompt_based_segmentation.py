@@ -1,3 +1,7 @@
+"""
+Functions for prompt-based segmentation with Segment Anything.
+"""
+
 import warnings
 from typing import Optional
 
