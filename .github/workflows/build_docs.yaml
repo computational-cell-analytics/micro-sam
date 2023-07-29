@@ -1,26 +1,31 @@
 name: build_documentation
 
 # build the documentation for a new release
-# on:
-#   release:
-#     types: created
+on:
+  release:
+    types: created
 
-# for debugging
-on: [push, pull_request]
+# # for debugging
+# on: [push, pull_request]
 
 # security: restrict permissions for CI jobs.
 permissions:
   contents: read
 
+# NOTE: importing of napari fails with CI and I am not quite sure why
+# I tried to adjust it based on the napari CI tests, but that didn't seem to help
+
+# https://github.com/napari/napari/blob/main/.github/workflows/test_comprehensive.yml
 jobs:
   # Build the documentation and upload the static HTML files as an artifact.
   build:
-    runs-on: ${{ matrix.platform }}
-    strategy:
-      matrix:
-        platform: [ubuntu-latest]
-        python: ["3.10"]
-		backend: [pyqt5`]
+	runs-on: ubuntu-latest
+  # runs-on: ${{ matrix.platform }}
+  # strategy:
+  #   matrix:
+  #     platform: [ubuntu-latest]
+  #     python: ["3.10"]
+  # 	backend: [pyqt5`]
 
     steps:
       - name: Checkout
