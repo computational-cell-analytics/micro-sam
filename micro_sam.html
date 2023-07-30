@@ -53,6 +53,7 @@
                     <li><a href="micro_sam/instance_segmentation.html">instance_segmentation</a></li>
                     <li><a href="micro_sam/prompt_based_segmentation.html">prompt_based_segmentation</a></li>
                     <li><a href="micro_sam/prompt_generators.html">prompt_generators</a></li>
+                    <li><a href="micro_sam/sam_annotator.html">sam_annotator</a></li>
                     <li><a href="micro_sam/sample_data.html">sample_data</a></li>
                     <li><a href="micro_sam/util.html">util</a></li>
                     <li><a href="micro_sam/visualization.html">visualization</a></li>
@@ -246,7 +247,7 @@ The <code><a href="">micro_sam</a></code> applications are mainly based on <a hr
 <ul>
 <li>clicking <code>2d annotator</code> in the <code><a href="">micro_sam</a></code> GUI.</li>
 <li>running <code>$ micro_sam.annotator_2d</code> in the command line. Run <code>micro_sam.annotator_2d -h</code> for details.</li>
-<li>calling <code>micro_sam.sam_annotator.annotator_2d</code> in a python script. Check out <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py">examples/annotator_2d.py</a> for details. </li>
+<li>calling <code><a href="micro_sam/sam_annotator/annotator_2d.html">micro_sam.sam_annotator.annotator_2d</a></code> in a python script. Check out <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py">examples/annotator_2d.py</a> for details. </li>
 </ul>
 
 <p>The user interface of the 2d annotator looks like this:</p>
@@ -285,7 +286,7 @@ The <code><a href="">micro_sam</a></code> applications are mainly based on <a hr
 <ul>
 <li>clicking <code>3d annotator</code> in the <code><a href="">micro_sam</a></code> GUI.</li>
 <li>running <code>$ micro_sam.annotator_3d</code> in the command line. Run <code>micro_sam.annotator_3d -h</code> for details.</li>
-<li>calling <code>micro_sam.sam_annotator.annotator_3d</code> in a python script. Check out <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_3d.py">examples/annotator_3d.py</a> for details.</li>
+<li>calling <code><a href="micro_sam/sam_annotator/annotator_3d.html">micro_sam.sam_annotator.annotator_3d</a></code> in a python script. Check out <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_3d.py">examples/annotator_3d.py</a> for details.</li>
 </ul>
 
 <p>The user interface of the 3d annotator looks like this:</p>
@@ -314,7 +315,7 @@ The <code><a href="">micro_sam</a></code> applications are mainly based on <a hr
 <ul>
 <li>clicking <code>Tracking annotator</code> in the <code><a href="">micro_sam</a></code> GUI.</li>
 <li>running <code>$ micro_sam.annotator_tracking</code> in the command line. Run <code>micro_sam.annotator_tracking -h</code> for details.</li>
-<li>calling <code>micro_sam.sam_annotator.annotator_tracking</code> in a python script. Check out <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_tracking.py">examples/annotator_tracking.py</a> for details. </li>
+<li>calling <code><a href="micro_sam/sam_annotator/annotator_tracking.html">micro_sam.sam_annotator.annotator_tracking</a></code> in a python script. Check out <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_tracking.py">examples/annotator_tracking.py</a> for details. </li>
 </ul>
 
 <p>The user interface of the tracking annotator looks like this:</p>
@@ -378,9 +379,22 @@ This functionality is used to implement the <code><a href="">micro_sam</a></code
 
 <h2 id="finetuned-models">Finetuned models</h2>
 
-<p>We provide fine-tuned Segment Anything models for microscopy data. They are still in an experimental stage and we will upload more and better models soon, as well as the code for fine-tuning.
-For using the current models, check out the <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py#L62">2d annotator example</a> and set <code>use_finetuned_model</code> to <code>True</code>.
-See the difference between the normal and fine-tuned Segment Anything ViT-h model on an image from <a href="https://sartorius-research.github.io/LIVECell/">LiveCELL</a>:</p>
+<p>We provide finetuned Segment Anything models for microscopy data. They are still in an experimental stage and we will upload more and better models soon, as well as the code for fine-tuning.
+For using the preliminary models, check out the <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py#L62">2d annotator example</a> and set <code>use_finetuned_model</code> to <code>True</code>.</p>
+
+<p>We currently provide support for the following models:</p>
+
+<ul>
+<li><code>vit_h</code>: The default Segment Anything model with vit-h backbone.</li>
+<li><code>vit_l</code>: The default Segment Anything model with vit-l backbone.</li>
+<li><code>vit_b</code>: The default Segment Anything model with vit-b backbone.</li>
+<li><code>vit_h_lm</code>: The preliminary finetuned Segment Anything model for light microscopy data with vit-h backbone.</li>
+<li><code>vit_b_lm</code>: The preliminary finetuned Segment Anything model for light microscopy data with vit-b backbone.</li>
+</ul>
+
+<p>These are also the valid names for the <code>model_type</code> parameter in <code><a href="">micro_sam</a></code>. The library will automatically choose and if necessary download the corresponding model.</p>
+
+<p>See the difference between the normal and finetuned Segment Anything ViT-h model on an image from <a href="https://sartorius-research.github.io/LIVECell/">LiveCELL</a>:</p>
 
 <p><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/vanilla-v-finetuned.png" width="768"></p>
 </div>
@@ -389,21 +403,14 @@ See the difference between the normal and fine-tuned Segment Anything ViT-h mode
 
                         <label class="view-source-button" for="mod-micro_sam-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a><span class="sd">.. include:: ../doc/start_page.md</span>
-</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="sd">.. include:: ../doc/installation.md</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="sd">.. include:: ../doc/annotation_tools.md</span>
-</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="sd">.. include:: ../doc/python_library.md</span>
-</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a>
-</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a>    <span class="s2">&quot;instance_segmentation&quot;</span><span class="p">,</span>
-</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a>    <span class="s2">&quot;prompt_based_segmentation&quot;</span><span class="p">,</span>
-</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>    <span class="s2">&quot;prompt_generators&quot;</span><span class="p">,</span>
-</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a>    <span class="s2">&quot;sample_data&quot;</span><span class="p">,</span>
-</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>    <span class="s2">&quot;util&quot;</span><span class="p">,</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>    <span class="s2">&quot;visualization&quot;</span><span class="p">,</span>
-</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a><span class="p">]</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a><span class="sd">.. include:: ../doc/start_page.md</span>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="sd">.. include:: ../doc/installation.md</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a><span class="sd">.. include:: ../doc/annotation_tools.md</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">5</span></a><span class="sd">.. include:: ../doc/python_library.md</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos">6</span></a><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos">7</span></a>
+</span><span id="L-8"><a href="#L-8"><span class="linenos">8</span></a><span class="kn">from</span> <span class="nn">.__version__</span> <span class="kn">import</span> <span class="n">__version__</span>
 </span></pre></div>
 
 
