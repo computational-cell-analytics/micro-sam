@@ -1,3 +1,6 @@
+"""The main GUI for starting annotation tools.
+"""
+
 import os
 import magicgui
 import numpy as np
@@ -12,10 +15,13 @@ from .image_series_annotator import image_folder_annotator
 from .annotator_tracking import annotator_tracking
 
 config_dict = {}
+"""@private"""
 main_widget = None
+"""@private"""
 
 
 def show_error(msg):
+    """@private"""
     msg_box = QMessageBox()
     msg_box.setIcon(QMessageBox.Critical)
     msg_box.setText(msg)
@@ -24,6 +30,7 @@ def show_error(msg):
 
 
 def file_is_hirarchical(path_s):
+    """@private"""
     if isinstance(path_s, list):
         return all([file_is_hirarchical(path) for path in path_s])
     else:
@@ -31,7 +38,7 @@ def file_is_hirarchical(path_s):
 
 
 @magicgui.magicgui(call_button="2d annotator", labels=False)
-def on_2d():
+def _on_2d():
     global config_dict
     sub_widget = None
     config_dict["args"] = {}
@@ -123,7 +130,7 @@ def on_2d():
 
 
 @magicgui.magicgui(call_button="3d annotator", labels=False)
-def on_3d():
+def _on_3d():
     global config_dict
     config_dict["args"] = {}
     args = config_dict["args"]
@@ -238,7 +245,7 @@ def on_3d():
 
 
 @magicgui.magicgui(call_button="Image series annotator", labels=False)
-def on_series():
+def _on_series():
     global config_dict
     config_dict["args"] = {}
     args = config_dict["args"]
@@ -327,7 +334,7 @@ def on_series():
 
 
 @magicgui.magicgui(call_button="Tracking annotator", labels=False)
-def on_tracking():
+def _on_tracking():
     global config_dict
     config_dict["args"] = {}
     args = config_dict["args"]
@@ -442,10 +449,15 @@ def on_tracking():
 
 
 def annotator():
+    """Start the main micro_sam GUI.
+
+    From this GUI you can select which annotation tool you want to use and then
+    select the parameters for the tool.
+    """
     global main_widget, config_dict
     config_dict["workflow"] = ""
-    sub_container1 = Container(widgets=[on_2d, on_series], labels=False)
-    sub_container2 = Container(widgets=[on_3d, on_tracking], labels=False)
+    sub_container1 = Container(widgets=[_on_2d, _on_series], labels=False)
+    sub_container2 = Container(widgets=[_on_3d, _on_tracking], labels=False)
     sub_container3 = Container(widgets=[sub_container1, sub_container2], layout="horizontal", labels=False)
     main_widget = Container(widgets=[Label(value="Segment Anything for Microscopy"), sub_container3], labels=False)
     main_widget.show(run=True)
@@ -468,4 +480,5 @@ def annotator():
 
 
 def main():
+    """@private"""
     annotator()

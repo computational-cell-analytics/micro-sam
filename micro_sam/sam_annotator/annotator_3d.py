@@ -125,7 +125,7 @@ def _segment_volume(
 
 
 @magicgui(call_button="Segment Slice [S]")
-def segment_slice_wigdet(v: Viewer):
+def _segment_slice_wigdet(v: Viewer) -> None:
     position = v.cursor.position
     z = int(position[0])
 
@@ -153,9 +153,9 @@ def segment_slice_wigdet(v: Viewer):
 
 
 @magicgui(call_button="Segment Volume [V]", projection={"choices": ["default", "bounding_box", "mask", "points"]})
-def segment_volume_widget(
+def _segment_volume_widget(
     v: Viewer, iou_threshold: float = 0.8, projection: str = "default", box_extension: float = 0.1
-):
+) -> None:
     # step 1: segment all slices with prompts
     shape = v.layers["raw"].data.shape
 
@@ -197,7 +197,30 @@ def annotator_3d(
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
     predictor: Optional[SamPredictor] = None,
-) -> None:
+) -> Optional[Viewer]:
+    """The 3d annotation tool.
+
+    Args:
+        raw: The image data.
+        embedding_path: Filepath for saving the precomputed embeddings.
+        show_embeddings: Show PCA visualization of the image embeddings.
+            This can be helpful to judge how well Segment Anything works for your data,
+            and which objects can be segmented.
+        segmentation_result: An initial segmentation to load.
+            This can be used to correct segmentations with Segment Anything or to save and load progress.
+            The segmentation will be loaded as the 'committed_objects' layer.
+        model_type: The Segment Anything model to use. For details on the available models check out
+            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
+        tile_shape: Shape of tiles for tiled embedding prediction.
+            If `None` then the whole image is passed to Segment Anything.
+        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
+        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
+        predictor: The Segment Anything model. Passing this enables using fully custom models.
+            If you pass `predictor` then `model_type` will be ignored.
+
+    Returns:
+        The napari viewer, only returned if `return_viewer=True`.
+    """
     # for access to the predictor and the image embeddings in the widgets
     global PREDICTOR, IMAGE_EMBEDDINGS
 
@@ -258,11 +281,11 @@ def annotator_3d(
     prompt_widget = vutil.create_prompt_menu(prompts, labels)
     v.window.add_dock_widget(prompt_widget)
 
-    v.window.add_dock_widget(segment_slice_wigdet)
+    v.window.add_dock_widget(_segment_slice_wigdet)
 
-    v.window.add_dock_widget(segment_volume_widget)
-    v.window.add_dock_widget(vutil.commit_segmentation_widget)
-    v.window.add_dock_widget(vutil.clear_widget)
+    v.window.add_dock_widget(_segment_volume_widget)
+    v.window.add_dock_widget(vutil._commit_segmentation_widget)
+    v.window.add_dock_widget(vutil._clear_widget)
 
     #
     # key bindings
@@ -270,15 +293,15 @@ def annotator_3d(
 
     @v.bind_key("s")
     def _seg_slice(v):
-        segment_slice_wigdet(v)
+        _segment_slice_wigdet(v)
 
     @v.bind_key("v")
     def _seg_volume(v):
-        segment_volume_widget(v)
+        _segment_volume_widget(v)
 
     @v.bind_key("c")
     def _commit(v):
-        vutil.commit_segmentation_widget(v)
+        vutil._commit_segmentation_widget(v)
 
     @v.bind_key("t")
     def _toggle_label(event=None):
@@ -301,6 +324,7 @@ def annotator_3d(
 
 
 def main():
+    """@private"""
     parser = vutil._initialize_parser(description="Run interactive segmentation for an image volume.")
     args = parser.parse_args()
     raw = util.load_image_data(args.input, key=args.key)
