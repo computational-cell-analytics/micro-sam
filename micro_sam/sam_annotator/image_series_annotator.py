@@ -1,7 +1,7 @@
 import os
 import warnings
 from glob import glob
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import imageio.v3 as imageio
 import napari
@@ -31,13 +31,22 @@ def _precompute_embeddings_for_image_series(predictor, image_files, embedding_ro
 
 
 def image_series_annotator(
-    image_files: List[str],
+    image_files: List[Union[os.PathLike, str]],
     output_folder: str,
     embedding_path: Optional[str] = None,
     predictor: Optional[SamPredictor] = None,
     **kwargs
 ) -> None:
-    """
+    """Run the 2d annotation tool for a series of images.
+
+    Args:
+        input_files: List of the file paths for the images to be annotated.
+        output_folder: The folder where the segmentation results are saved.
+        pattern: The glob patter for loading files from `input_folder`.
+            By default all files will be loaded.
+        embedding_path: Filepath where to save the embeddings.
+        predictor: The Segment Anything model. Passing this enables using fully custom models.
+            If you pass `predictor` then `model_type` will be ignored.
     """
     # make sure we don't set incompatible kwargs
     assert kwargs.get("show_embeddings", False) is False
@@ -108,13 +117,23 @@ def image_folder_annotator(
     predictor: Optional[SamPredictor] = None,
     **kwargs
 ) -> None:
-    """
+    """Run the 2d annotation tool for a series of images in a folder.
+
+    Args:
+        input_folder: The folder with the images to be annotated.
+        output_folder: The folder where the segmentation results are saved.
+        pattern: The glob patter for loading files from `input_folder`.
+            By default all files will be loaded.
+        embedding_path: Filepath where to save the embeddings.
+        predictor: The Segment Anything model. Passing this enables using fully custom models.
+            If you pass `predictor` then `model_type` will be ignored.
     """
     image_files = sorted(glob(os.path.join(input_folder, pattern)))
     image_series_annotator(image_files, output_folder, embedding_path, predictor, **kwargs)
 
 
 def main():
+    """@private"""
     import argparse
 
     parser = argparse.ArgumentParser(description="Annotate a series of images from a folder.")

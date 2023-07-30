@@ -16,7 +16,7 @@ from .gui_utils import show_wrong_file_warning
 
 
 @magicgui(call_button="Segment Object [S]")
-def segment_wigdet(v: Viewer):
+def _segment_widget(v: Viewer) -> None:
     # get the current box and point prompts
     boxes = vutil.prompt_layer_to_boxes(v.layers["box_prompts"])
     points, labels = vutil.prompt_layer_to_points(v.layers["prompts"])
@@ -60,14 +60,14 @@ def _changed_param(amg, **params):
 
 
 @magicgui(call_button="Automatic Segmentation")
-def autosegment_widget(
+def _autosegment_widget(
     v: Viewer,
     with_background: bool = True,
     pred_iou_thresh: float = 0.88,
     stability_score_thresh: float = 0.95,
     min_initial_size: int = 10,
     box_extension: float = 0.05,
-):
+) -> None:
     global AMG
     is_tiled = IMAGE_EMBEDDINGS["input_size"] is None
     param_changed = _changed_param(
@@ -150,12 +150,10 @@ def _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings):
     prompt_widget = vutil.create_prompt_menu(prompts, labels)
     v.window.add_dock_widget(prompt_widget)
 
-    # (optional) auto-segmentation functionality
-    v.window.add_dock_widget(autosegment_widget)
-
-    v.window.add_dock_widget(segment_wigdet)
-    v.window.add_dock_widget(vutil.commit_segmentation_widget)
-    v.window.add_dock_widget(vutil.clear_widget)
+    v.window.add_dock_widget(_autosegment_widget)
+    v.window.add_dock_widget(_segment_widget)
+    v.window.add_dock_widget(vutil._commit_segmentation_widget)
+    v.window.add_dock_widget(vutil._clear_widget)
 
     #
     # key bindings
@@ -163,11 +161,11 @@ def _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings):
 
     @v.bind_key("s")
     def _segmet(v):
-        segment_wigdet(v)
+        _segment_widget(v)
 
     @v.bind_key("c")
     def _commit(v):
-        vutil.commit_segmentation_widget(v)
+        vutil._commit_segmentation_widget(v)
 
     @v.bind_key("t")
     def _toggle_label(event=None):
@@ -206,7 +204,30 @@ def annotator_2d(
     v: Optional[Viewer] = None,
     predictor: Optional[SamPredictor] = None,
 ) -> Optional[Viewer]:
-    """
+    """The 2d annotation tool.
+
+    Args:
+        raw: The image data.
+        embedding_path: Filepath where to save the embeddings.
+        show_embeddings: Show PCA visualization of the image embeddings.
+            This can be helpful to judge how well Segment Anything works for your data,
+            and which objects can be segmented.
+        segmentation_result: An initial segmentation to load.
+            This can be used to correct segmentations with Segment Anything or to save and load progress.
+            The segmentation will be loaded as the 'committed_objects' layer.
+        model_type: The Segment Anything model to use. For details on the available models check out
+            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
+        tile_shape: Shape of tiles for tiled embedding prediction.
+            If `None` then the whole image is passed to Segment Anything.
+        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
+        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
+        v: The viewer to which the SegmentAnything functionality should be added.
+            This enables using a pre-initialized viewer, for example in `sam_annotator.image_series_annotator`.
+        predictor: The Segment Anything model. Passing this enables using fully custom models.
+            If you pass `predictor` then `model_type` will be ignored.
+
+    Returns:
+        The napari viewer, only returned if `return_viewer=True`.
     """
     # for access to the predictor and the image embeddings in the widgets
     global PREDICTOR, IMAGE_EMBEDDINGS, AMG
@@ -245,6 +266,7 @@ def annotator_2d(
 
 
 def main():
+    """@private"""
     parser = vutil._initialize_parser(description="Run interactive segmentation for an image.")
     args = parser.parse_args()
     raw = util.load_image_data(args.input, key=args.key)

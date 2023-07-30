@@ -1,3 +1,9 @@
+"""
+Automated instance segmentation functionality.
+The classes implemented here extend the automatic instance segmentation from Segment Anything:
+https://computational-cell-analytics.github.io/micro-sam/micro_sam.html
+"""
+
 import multiprocessing as mp
 import warnings
 from abc import ABC

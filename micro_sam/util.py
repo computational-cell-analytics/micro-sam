@@ -1,3 +1,7 @@
+"""
+Helper functions for downloading Segment Anything models and predicting image embeddings.
+"""
+
 import hashlib
 import os
 import warnings

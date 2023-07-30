@@ -1,18 +1,21 @@
 import argparse
+from typing import Optional, Tuple
 
+import napari
 import numpy as np
 
 from magicgui import magicgui
 from magicgui.widgets import ComboBox, Container
-from napari import Viewer
 
 from ..prompt_based_segmentation import segment_from_box, segment_from_box_and_points, segment_from_points
 
 # Green and Red
 LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
+"""@private"""
 
 
-def clear_annotations(v: Viewer, clear_segmentations=True) -> None:
+def clear_annotations(v: napari.Viewer, clear_segmentations=True) -> None:
+    """@private"""
     v.layers["prompts"].data = []
     v.layers["prompts"].refresh()
     if "box_prompts" in v.layers:
@@ -29,12 +32,12 @@ def clear_annotations(v: Viewer, clear_segmentations=True) -> None:
 
 
 @magicgui(call_button="Clear Annotations [Shfit + C]")
-def clear_widget(v: Viewer) -> None:
+def _clear_widget(v: napari.Viewer) -> None:
     clear_annotations(v)
 
 
 @magicgui(call_button="Commit [C]", layer={"choices": ["current_object", "auto_segmentation"]})
-def commit_segmentation_widget(v: Viewer, layer: str = "current_object") -> None:
+def _commit_segmentation_widget(v: napari.Viewer, layer: str = "current_object") -> None:
     seg = v.layers[layer].data
     shape = seg.shape
 
@@ -52,6 +55,7 @@ def commit_segmentation_widget(v: Viewer, layer: str = "current_object") -> None
 
 
 def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="label"):
+    """@private"""
     label_menu = ComboBox(label=menu_name, choices=labels)
     label_widget = Container(widgets=[label_menu])
 
@@ -73,13 +77,19 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
     return label_widget
 
 
-def prompt_layer_to_points(prompt_layer, i=None, track_id=None):
-    """Extract point prompts for SAM from point layer.
+def prompt_layer_to_points(
+    prompt_layer: napari.layers.Points, i=None, track_id=None
+) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """Extract point prompts for SAM from a napari point layer.
 
     Args:
-        prompt_layer: the point layer
-        i [int] - index for the data (required for 3d or timeseries data)
-        track_id [int] - id of the current track (required for tracking data)
+        prompt_layer: The point layer from which to extract the prompts.
+        i: Index for the data (required for 3d or timeseries data).
+        track_id: Id of the current track (required for tracking data).
+
+    Returns:
+        The point coordinates for the prompts.
+        The labels (positive or negative / 1 or 0) for the prompts.
     """
 
     points = prompt_layer.data
@@ -112,13 +122,16 @@ def prompt_layer_to_points(prompt_layer, i=None, track_id=None):
     return this_points, this_labels
 
 
-def prompt_layer_to_boxes(prompt_layer, i=None, track_id=None):
-    """Extract box prompts for SAM from shape layer.
+def prompt_layer_to_boxes(prompt_layer: napari.layers.Shapes, i=None, track_id=None) -> np.ndarray:
+    """Extract box prompts for SAM from a napari shape layer.
 
     Args:
-        prompt_layer: the point layer
-        i [int] - index for the data (required for 3d or timeseries data)
-        track_id [int] - id of the current track (required for tracking data)
+        prompt_layer: The napari shape layer.
+        i: Index for the data (required for 3d or timeseries data).
+        track_id: Id of the current track (required for tracking data).
+
+    Returns:
+        The box prompts.
     """
     shape_data = prompt_layer.data
     shape_types = prompt_layer.shape_type
@@ -159,13 +172,17 @@ def prompt_layer_to_boxes(prompt_layer, i=None, track_id=None):
     return boxes
 
 
-def prompt_layer_to_state(prompt_layer, i: int):
-    """Get the state of the track from the prompt layer.
+def prompt_layer_to_state(prompt_layer: napari.layers.Points, i: int) -> str:
+    """Get the state of the track from a point layer for a given timeframe.
+
     Only relevant for annotator_tracking.
 
     Args:
-        prompt_layer: The point layer.
-        i: Frame of the data.
+        prompt_layer: The napari layer.
+        i: Timeframe of the data.
+
+    Returns:
+        The state of this frame (either "division" or "track").
     """
     state = prompt_layer.properties["state"]
 
@@ -183,14 +200,20 @@ def prompt_layer_to_state(prompt_layer, i: int):
         return "track"
 
 
-def prompt_layers_to_state(point_layer, box_layer, i):
-    """Get the state of the track from the point and box prompt layer.
+def prompt_layers_to_state(
+    point_layer: napari.layers.Points, box_layer: napari.layers.Shapes, i: int
+) -> str:
+    """Get the state of the track from a point layer and shape layer for a given timeframe.
+
     Only relevant for annotator_tracking.
 
     Args:
-        point_layer: the point layer
-        box_layer: the box layer
-        i [int] - frame of the data
+        point_layer: The napari point layer.
+        box_layer: The napari box layer.
+        i: Timeframe of the data.
+
+    Returns:
+        The state of this frame (either "division" or "track").
     """
     state = point_layer.properties["state"]
 
@@ -219,8 +242,7 @@ def prompt_layers_to_state(point_layer, box_layer, i):
 def segment_slices_with_prompts(
     predictor, point_prompts, box_prompts, image_embeddings, shape, progress_bar=None, track_id=None
 ):
-    """
-    """
+    """@private"""
     assert len(shape) == 3
     image_shape = shape[1:]
     seg = np.zeros(shape, dtype="uint32")
@@ -285,8 +307,7 @@ def segment_slices_with_prompts(
 def prompt_segmentation(
     predictor, points, labels, boxes, shape, multiple_box_prompts, image_embeddings=None, i=None
 ):
-    """
-    """
+    """@private"""
     assert len(points) == len(labels)
     have_points = len(points) > 0
     have_boxes = len(boxes) > 0
@@ -329,6 +350,7 @@ def prompt_segmentation(
 
 
 def toggle_label(prompts):
+    """@private"""
     # get the currently selected label
     current_properties = prompts.current_properties
     current_label = current_properties["label"][0]

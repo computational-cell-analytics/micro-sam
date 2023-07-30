@@ -22,6 +22,7 @@ from .gui_utils import show_wrong_file_warning
 
 # Cyan (track) and Magenta (division)
 STATE_COLOR_CYCLE = ["#00FFFF", "#FF00FF", ]
+"""@private"""
 
 
 #
@@ -180,7 +181,7 @@ def _update_lineage():
 
 
 @magicgui(call_button="Segment Frame [S]")
-def segment_frame_wigdet(v: Viewer):
+def _segment_frame_wigdet(v: Viewer) -> None:
     position = v.cursor.position
     t = int(position[0])
 
@@ -213,10 +214,10 @@ def segment_frame_wigdet(v: Viewer):
 
 
 @magicgui(call_button="Track Object [V]", projection={"choices": ["default", "bounding_box", "mask"]})
-def track_objet_widget(
+def _track_objet_widget(
     v: Viewer, iou_threshold: float = 0.5, projection: str = "default",
     motion_smoothing: float = 0.5, box_extension: float = 0.1,
-):
+) -> None:
     shape = v.layers["raw"].data.shape
 
     # we use the bounding box projection method as default which generally seems to work better for larger changes
@@ -252,6 +253,7 @@ def track_objet_widget(
 
 
 def create_tracking_menu(points_layer, box_layer, states, track_ids):
+    """@private"""
     state_menu = ComboBox(label="track_state", choices=states)
     track_id_menu = ComboBox(label="track_id", choices=list(map(str, track_ids)))
     tracking_widget = Container(widgets=[state_menu, track_id_menu])
@@ -321,7 +323,7 @@ def create_tracking_menu(points_layer, box_layer, states, track_ids):
 
 
 @magicgui(call_button="Commit [C]", layer={"choices": ["current_track"]})
-def commit_tracking_widget(v: Viewer, layer: str = "current_track"):
+def _commit_tracking_widget(v: Viewer, layer: str = "current_track") -> None:
     global CURRENT_TRACK_ID, LINEAGE, TRACKING_WIDGET
 
     seg = v.layers[layer].data
@@ -357,7 +359,30 @@ def annotator_tracking(
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
     predictor: Optional[SamPredictor] = None,
-) -> None:
+) -> Optional[Viewer]:
+    """The annotation tool for tracking in timeseries data.
+
+    Args:
+        raw: The image data.
+        embedding_path: Filepath for saving the precomputed embeddings.
+        show_embeddings: Show PCA visualization of the image embeddings.
+            This can be helpful to judge how well Segment Anything works for your data,
+            and which objects can be segmented.
+        tracking_result: An initial tracking result to load.
+            This can be used to correct tracking with Segment Anything or to save and load progress.
+            The segmentation will be loaded as the 'committed_tracks' layer.
+        model_type: The Segment Anything model to use. For details on the available models check out
+            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
+        tile_shape: Shape of tiles for tiled embedding prediction.
+            If `None` then the whole image is passed to Segment Anything.
+        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
+        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
+        predictor: The Segment Anything model. Passing this enables using fully custom models.
+            If you pass `predictor` then `model_type` will be ignored.
+
+    Returns:
+        The napari viewer, only returned if `return_viewer=True`.
+    """
     # global state
     global PREDICTOR, IMAGE_EMBEDDINGS, CURRENT_TRACK_ID, LINEAGE
     global TRACKING_WIDGET
@@ -449,10 +474,10 @@ def annotator_tracking(
     TRACKING_WIDGET = create_tracking_menu(prompts, box_prompts, state_labels, list(LINEAGE.keys()))
     v.window.add_dock_widget(TRACKING_WIDGET)
 
-    v.window.add_dock_widget(segment_frame_wigdet)
-    v.window.add_dock_widget(track_objet_widget)
-    v.window.add_dock_widget(commit_tracking_widget)
-    v.window.add_dock_widget(vutil.clear_widget)
+    v.window.add_dock_widget(_segment_frame_wigdet)
+    v.window.add_dock_widget(_track_objet_widget)
+    v.window.add_dock_widget(_commit_tracking_widget)
+    v.window.add_dock_widget(vutil._clear_widget)
 
     #
     # key bindings
@@ -460,11 +485,11 @@ def annotator_tracking(
 
     @v.bind_key("s")
     def _seg_slice(v):
-        segment_frame_wigdet(v)
+        _segment_frame_wigdet(v)
 
     @v.bind_key("v")
     def _track_object(v):
-        track_objet_widget(v)
+        _track_objet_widget(v)
 
     @v.bind_key("t")
     def _toggle_label(event=None):
@@ -472,7 +497,7 @@ def annotator_tracking(
 
     @v.bind_key("c")
     def _commit(v):
-        commit_tracking_widget(v)
+        _commit_tracking_widget(v)
 
     @v.bind_key("Shift-C")
     def clear_prompts(v):
@@ -494,6 +519,7 @@ def annotator_tracking(
 
 
 def main():
+    """@private"""
     parser = vutil._initialize_parser(
         description="Run interactive segmentation for an image volume.",
         with_segmentation_result=False,
