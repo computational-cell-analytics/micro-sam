@@ -1,0 +1,89 @@
+name: build_installers
+
+on:
+  push:
+    tags:
+      - '**'
+
+jobs:
+  build_intaller:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    
+    env:
+      PREPARE_SCRIPT: |
+        cd deployment
+        conda install -y -c conda-forge constructor
+        conda install -y -c conda-forge ruamel.yaml
+        conda install -y -c conda-forge mamba
+        mamba env create --file=env.yaml
+      RUN_SCRIPT: |
+        python version_getter.py
+        mkdir ./${{ matrix.os }}_x86_64
+        constructor --output-dir ./${{ matrix.os }}_x86_64 .
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v3
+
+      - name: setup conda
+        if: matrix.os == 'windows-latest' || matrix.os == 'ubuntu-latest'
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          miniconda-version: "latest"
+          auto-activate-base: true
+          activate-environment: ""
+        env:
+          ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+
+      - name: build ${{ matrix.os }}_x86_64
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          ${{ env.PREPARE_SCRIPT }}
+          conda activate __MICROSAM_BUILD_ENV__
+          conda install -c anaconda menuinst
+          python windows_menu_setup.py
+          conda activate base
+          ${{ env.RUN_SCRIPT }}
+
+      - name: build ${{ matrix.os }}_x86_64
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash -el {0}
+        run: |
+          ${{ env.PREPARE_SCRIPT }}
+          ${{ env.RUN_SCRIPT }}
+
+      - name: build ${{ matrix.os }}_x86_64_step1
+        if: matrix.os == 'macos-latest'
+        shell: bash -el {0}
+        run: |
+          brew install micromamba
+          /usr/local/opt/micromamba/bin/micromamba shell init -s bash -p ~/micromamba
+
+      - name: build ${{ matrix.os }}_x86_64_step2
+        if: matrix.os == 'macos-latest'
+        shell: bash -el {0}
+        run: |
+          cd deployment
+          micromamba activate base
+          micromamba install -y -c conda-forge python=3.10
+          micromamba install -y -c conda-forge constructor
+          micromamba install -y -c conda-forge ruamel.yaml
+          micromamba install -y -c conda-forge mamba
+          mamba env create --file=env.yaml
+          python version_getter.py
+          mkdir ./${{ matrix.os }}_x86_64
+          constructor --conda-exe=$(which mamba) --output-dir ./${{ matrix.os }}_x86_64 .
+
+      - name: upload installer
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.os }}_x86_64
+          path: ./deployment/${{ matrix.os }}_x86_64
+          retention-days: 5
