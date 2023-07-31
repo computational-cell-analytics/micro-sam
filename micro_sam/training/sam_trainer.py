@@ -9,6 +9,12 @@ from torchvision.utils import make_grid
 from torch_em.trainer.logger_base import TorchEmLogger
 
 
+# TODO
+# - rename n_prompts! This refers to the number of objects, not the number of prompts!
+# - OR: does this actually make sense? what is the advantage of sampling a random number of objects?
+#       this is all done batch-wise anyways, so I don't think that has any advantage re generalization
+#       maybe we should just set this to a single value (because we still want to be able to sub-sample)
+#       but remove the randomness here. (I currently don't see any advantage from it.)
 class SamTrainer(torch_em.trainer.DefaultTrainer):
     """The trainer used for finetuning (training) the Segment Anything model.
     The model expects to be initialized using the below mentioned arguments:
@@ -374,7 +380,8 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
                     n_samples = self._get_n_prompts()
                     n_samples = self._update_samples_for_gt_instances(y, n_samples)
 
-                    n_pos, n_neg, get_boxes, multimask_output = self._get_prompt_and_multimasking_choices_for_val(val_iteration)
+                    (n_pos, n_neg,
+                     get_boxes, multimask_output) = self._get_prompt_and_multimasking_choices_for_val(val_iteration)
 
                     batched_inputs, sampled_ids = self.convert_inputs(x, y, n_pos, n_neg, get_boxes, n_samples)
 
@@ -403,7 +410,8 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
         if self.logger is not None:
             self.logger.log_validation(
-                self._iteration, metric_val, loss_val, x, y, sampled_binary_y, mask_loss, iou_regression_loss, model_iou_val
+                self._iteration, metric_val, loss_val, x, y,
+                sampled_binary_y, mask_loss, iou_regression_loss, model_iou_val
             )
 
         return metric_val
