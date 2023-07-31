@@ -47,6 +47,7 @@ _CHECKSUMS = {
 
 # TODO define the proper type for image embeddings
 ImageEmbeddings = Dict[str, Any]
+"""@private"""
 
 
 def _download(url, path, model_type):
@@ -96,7 +97,7 @@ def get_sam_model(
     device: Optional[str] = None,
     model_type: str = "vit_h",
     checkpoint_path: Optional[str] = None,
-    return_sam: bool = False
+    return_sam: bool = False,
 ) -> SamPredictor:
     """Get the SegmentAnything Predictor.
 
@@ -114,7 +115,8 @@ def get_sam_model(
         The segment anything predictor.
     """
     checkpoint = _get_checkpoint(model_type, checkpoint_path)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Our custom model types have a suffix "_...". This suffix needs to be stripped
     # before calling sam_model_registry.
