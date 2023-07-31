@@ -33,6 +33,8 @@ _MODEL_URLS = {
     # preliminary finetuned models
     "vit_h_lm": "https://owncloud.gwdg.de/index.php/s/CnxBvsdGPN0TD3A/download",
     "vit_b_lm": "https://owncloud.gwdg.de/index.php/s/gGlR1LFsav0eQ2k/download",
+    "vit_h_em": "https://owncloud.gwdg.de/index.php/s/VcHoLC6AM0CrRpM/download",
+    "vit_b_em": "https://owncloud.gwdg.de/index.php/s/BWupWhG1HRflI97/download",
 }
 _CHECKPOINT_FOLDER = os.environ.get("SAM_MODELS", os.path.expanduser("~/.sam_models"))
 _CHECKSUMS = {
@@ -42,6 +44,8 @@ _CHECKSUMS = {
     # preliminary finetuned models
     "vit_h_lm": "c30a580e6ccaff2f4f0fbaf9cad10cee615a915cdd8c7bc4cb50ea9bdba3fc09",
     "vit_b_lm": "f2b8676f92a123f6f8ac998818118bd7269a559381ec60af4ac4be5c86024a1b",
+    "vit_h_em": "652f70acad89ab855502bc10965e7d0baf7ef5f38fef063dd74f1787061d3919",
+    "vit_b_em": "9eb783e538bb287c7086f825f1e1dc5d5681bd116541a0b98cab85f1e7f4dd62",
 }
 
 
