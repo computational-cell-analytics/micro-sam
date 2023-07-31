@@ -491,7 +491,7 @@ def get_centers_and_bounding_boxes(
 
     bbox_coordinates = {prop.label: prop.bbox for prop in properties}
 
-    assert len(bbox_coordinates) == len(center_coordinates)
+    assert len(bbox_coordinates) == len(center_coordinates), f"{len(bbox_coordinates)}, {len(center_coordinates)}"
     return center_coordinates, bbox_coordinates
 
 

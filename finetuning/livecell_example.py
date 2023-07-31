@@ -15,11 +15,15 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
     that retuns `x, y` tensors, where `x` is the image data and `y` are the labels.
     The labels have to be in a label mask instance segmentation format.
     I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
+    Important: the ID 0 is reseved for background, and the IDs must be consecutive
     """
+    label_transform = torch_em.transform.label.label_consecutive  # to ensure consecutive IDs
     train_loader = get_livecell_loader(path=data_path, patch_shape=patch_shape, split="train", batch_size=2,
-                                       num_workers=8, cell_types=cell_type, download=True)
+                                       num_workers=8, cell_types=cell_type, download=True,
+                                       label_transform=label_transform)
     val_loader = get_livecell_loader(path=data_path, patch_shape=patch_shape, split="val", batch_size=1,
-                                     num_workers=8, cell_types=cell_type, download=True)
+                                     num_workers=8, cell_types=cell_type, download=True,
+                                     label_transform=label_transform)
     return train_loader, val_loader
 
 
@@ -30,7 +34,7 @@ def finetune_livecell(args):
     model_type = "vit_b"  # change this for fine-tuning a different model
     checkpoint_path = None  # override this to start training from a custom checkpoint
     device = "cuda"  # override this if you have some more complex set-up and need to specify the exact gpu
-    patch_shape = ()  # the patch shape for training
+    patch_shape = (520, 740)  # the patch shape for training
     # NOTE: this parameter will most likely change because I don't think it makes sense right now
     n_prompts = [10, 25]  # this is the number of objects per batch that will be sampled (with a random range)
 
@@ -91,4 +95,4 @@ def main():
 
 
 if __name__ == "__main__":
-    finetune_livecell()
+    main()
