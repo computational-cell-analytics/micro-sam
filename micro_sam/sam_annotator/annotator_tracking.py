@@ -135,6 +135,11 @@ def _track_from_prompts(
                 print(msg)
                 break
 
+        # stop if we have a division
+        if track_state == "division":
+            has_division = True
+            break
+
         seg[t] = seg_t
         t += 1
 
@@ -144,11 +149,6 @@ def _track_from_prompts(
 
         # stop if we are at the last slce
         if t == seg.shape[0]:
-            break
-
-        # stop if we have a division
-        if track_state == "division":
-            has_division = True
             break
 
     return seg, has_division
