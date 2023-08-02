@@ -4,11 +4,12 @@
 import os
 import magicgui
 import numpy as np
+import zarr
 from magicgui.widgets import Container, Label, LineEdit, SpinBox, ComboBox
 from magicgui.application import use_app
 from PyQt5.QtWidgets import QFileDialog, QMessageBox
 
-from ..util import load_image_data
+from ..util import load_image_data, get_model_names
 from .annotator_2d import annotator_2d
 from .annotator_3d import annotator_3d
 from .image_series_annotator import image_folder_annotator
@@ -37,6 +38,19 @@ def file_is_hirarchical(path_s):
         return os.path.splitext(path_s)[1] in [".hdf5", ".h5", "n5", ".zarr"]
 
 
+def _set_embeddings_file_attributes(embeddings_path: str, cb_model, re_tile_x, re_tile_y):
+    f = zarr.open(embeddings_path, "a")
+    if "tile_shape" in f.attrs:
+        if f.attrs["tile_shape"] is None:
+            re_tile_x.value = 0
+            re_tile_y.value = 0
+        else:
+            re_tile_x.value = f.attrs["tile_shape"][0]
+            re_tile_y.value = f.attrs["tile_shape"][1]
+    if "model_type" in f.attrs:
+        cb_model.value = f.attrs["model_type"]
+
+
 @magicgui.magicgui(call_button="2d annotator", labels=False)
 def _on_2d():
     global config_dict
@@ -46,6 +60,11 @@ def _on_2d():
 
     le_file_key_img = LineEdit(value="*", label="File key input")
     le_file_key_segm = LineEdit(value="*", label="File key segmentation")
+    re_halo_x = SpinBox(value=0, max=10000, label="Halo x")
+    re_halo_y = SpinBox(value=0, max=10000, label="Halo y")
+    re_tile_x = SpinBox(value=0, max=10000, label="Tile x")
+    re_tile_y = SpinBox(value=0, max=10000, label="Tile y")
+    cb_model = ComboBox(value="vit_h_lm", choices=get_model_names(), label="Model Type")
 
     @magicgui.magicgui(call_button="Select image", labels=False)
     def on_select_image():
@@ -73,6 +92,7 @@ def _on_2d():
                 show_error("Precompute embeddings file does not exist or has wrong file extension.")
                 return
             args["embedding_path"] = path
+            _set_embeddings_file_attributes(path, cb_model, re_tile_x, re_tile_y)
         except Exception as e:
             show_error(str(e))
 
@@ -92,12 +112,6 @@ def _on_2d():
     pb_img_sel = Container(widgets=[on_select_image], layout="horizontal", labels=False)
     pb_embed_sel = Container(widgets=[on_select_embed], layout="horizontal", labels=False)
     pb_seg_segm = Container(widgets=[on_select_segm], layout="horizontal", labels=False)
-
-    re_halo_x = SpinBox(value=0, max=10000, label="Halo x")
-    re_halo_y = SpinBox(value=0, max=10000, label="Halo y")
-    re_tile_x = SpinBox(value=0, max=10000, label="Tile x")
-    re_tile_y = SpinBox(value=0, max=10000, label="Tile y")
-    cb_model = ComboBox(value="vit_h", choices=["vit_h", "vit_l", "vit_b"], label="Model Type")
 
     @magicgui.magicgui(call_button="2d annotator", labels=False)
     def on_start():
@@ -125,6 +139,7 @@ def _on_2d():
     sub_widget = Container(widgets=[Container(widgets=[on_start], layout="horizontal", labels=False),
                                     pb_img_sel, lbl_opt, pb_embed_sel, pb_seg_segm, le_file_key_img, le_file_key_segm,
                                     cb_model, re_tile_x, re_tile_y, re_halo_x, re_halo_y])
+    sub_widget.root_native_widget.setWindowTitle("Segment Anything for Microscopy")
     main_widget.close()
     sub_widget.show()
 
@@ -136,6 +151,12 @@ def _on_3d():
     args = config_dict["args"]
     le_file_key_img = LineEdit(value="*", label="File key input")
     le_file_key_segm = LineEdit(value="*", label="File key segmentation")
+
+    re_halo_x = SpinBox(value=0, max=10000, label="Halo x")
+    re_halo_y = SpinBox(value=0, max=10000, label="Halo y")
+    re_tile_x = SpinBox(value=0, max=10000, label="Tile x")
+    re_tile_y = SpinBox(value=0, max=10000, label="Tile y")
+    cb_model = ComboBox(value="vit_h_lm", choices=get_model_names(), label="Model Type")
 
     @magicgui.magicgui(call_button="Select images", labels=False)
     def on_select_image():
@@ -175,6 +196,7 @@ def _on_3d():
                 show_error("Precompute embeddings file does not exist or has wrong file extension.")
                 return
             args["embedding_path"] = path
+            _set_embeddings_file_attributes(path, cb_model, re_tile_x, re_tile_y)
         except Exception as e:
             show_error(str(e))
 
@@ -208,12 +230,6 @@ def _on_3d():
     pb_embed_sel = Container(widgets=[on_select_embed], layout="horizontal", labels=False)
     pb_seg_segm = Container(widgets=[on_select_segm, on_select_segm_dir], layout="horizontal", labels=False)
 
-    re_halo_x = SpinBox(value=0, max=10000, label="Halo x")
-    re_halo_y = SpinBox(value=0, max=10000, label="Halo y")
-    re_tile_x = SpinBox(value=0, max=10000, label="Tile x")
-    re_tile_y = SpinBox(value=0, max=10000, label="Tile y")
-    cb_model = ComboBox(value="vit_h", choices=["vit_h", "vit_l", "vit_b"], label="Model Type")
-
     @magicgui.magicgui(call_button="3d annotator", labels=False)
     def on_start():
         try:
@@ -240,6 +256,7 @@ def _on_3d():
     sub_widget = Container(widgets=[Container(widgets=[on_start], layout="horizontal", labels=False),
                                     pb_img_sel, lbl_opt, pb_embed_sel, pb_seg_segm, le_file_key_img, le_file_key_segm,
                                     cb_model, re_tile_x, re_tile_y, re_halo_x, re_halo_y])
+    sub_widget.root_native_widget.setWindowTitle("Segment Anything for Microscopy")
     main_widget.close()
     sub_widget.show()
 
@@ -249,6 +266,12 @@ def _on_series():
     global config_dict
     config_dict["args"] = {}
     args = config_dict["args"]
+
+    re_halo_x = SpinBox(value=0, max=10000, label="Halo x")
+    re_halo_y = SpinBox(value=0, max=10000, label="Halo y")
+    re_tile_x = SpinBox(value=0, max=10000, label="Tile x")
+    re_tile_y = SpinBox(value=0, max=10000, label="Tile y")
+    cb_model = ComboBox(value="vit_h_lm", choices=get_model_names(), label="Model Type")
 
     @magicgui.magicgui(call_button="Select input directory", labels=False)
     def on_select_input_dir():
@@ -288,18 +311,13 @@ def _on_series():
                 show_error("Precompute embeddings file does not exist or has wrong file extension.")
                 return
             args["embedding_path"] = path
+            _set_embeddings_file_attributes(path, cb_model, re_tile_x, re_tile_y)
         except Exception as e:
             show_error(str(e))
 
     pb_input_sel = Container(widgets=[on_select_input_dir], layout="horizontal", labels=False)
     pb_output_sel = Container(widgets=[on_select_output_dir], layout="horizontal", labels=False)
     pb_embed_sel = Container(widgets=[on_select_embed], layout="horizontal", labels=False)
-
-    re_halo_x = SpinBox(value=0, max=10000, label="Halo x")
-    re_halo_y = SpinBox(value=0, max=10000, label="Halo y")
-    re_tile_x = SpinBox(value=0, max=10000, label="Tile x")
-    re_tile_y = SpinBox(value=0, max=10000, label="Tile y")
-    cb_model = ComboBox(value="vit_h", choices=["vit_h", "vit_l", "vit_b"], label="Model Type")
 
     @magicgui.magicgui(call_button="Image series annotator", labels=False)
     def on_start():
@@ -329,6 +347,7 @@ def _on_series():
     sub_widget = Container(widgets=[Container(widgets=[on_start], layout="horizontal", labels=False),
                                     pb_input_sel, pb_output_sel, lbl_opt, pb_embed_sel, cb_model, re_tile_x,
                                     re_tile_y, re_halo_x, re_halo_y])
+    sub_widget.root_native_widget.setWindowTitle("Segment Anything for Microscopy")
     main_widget.close()
     sub_widget.show()
 
@@ -340,6 +359,12 @@ def _on_tracking():
     args = config_dict["args"]
     le_file_key_img = LineEdit(value="*", label="File key input")
     le_file_key_segm = LineEdit(value="*", label="File key segmentation")
+
+    re_halo_x = SpinBox(value=0, max=10000, label="Halo x")
+    re_halo_y = SpinBox(value=0, max=10000, label="Halo y")
+    re_tile_x = SpinBox(value=0, max=10000, label="Tile x")
+    re_tile_y = SpinBox(value=0, max=10000, label="Tile y")
+    cb_model = ComboBox(value="vit_h_lm", choices=get_model_names(), label="Model Type")
 
     @magicgui.magicgui(call_button="Select images", labels=False)
     def on_select_image():
@@ -379,6 +404,7 @@ def _on_tracking():
                 show_error("Precompute embeddings file does not exist or has wrong file extension.")
                 return
             args["embedding_path"] = path
+            _set_embeddings_file_attributes(path, cb_model, re_tile_x, re_tile_y)
         except Exception as e:
             show_error(str(e))
 
@@ -412,12 +438,6 @@ def _on_tracking():
     pb_embed_sel = Container(widgets=[on_select_embed], layout="horizontal", labels=False)
     pb_seg_sel = Container(widgets=[on_select_results, on_select_result_dir], layout="horizontal", labels=False)
 
-    re_halo_x = SpinBox(value=0, max=10000, label="Halo x")
-    re_halo_y = SpinBox(value=0, max=10000, label="Halo y")
-    re_tile_x = SpinBox(value=0, max=10000, label="Tile x")
-    re_tile_y = SpinBox(value=0, max=10000, label="Tile y")
-    cb_model = ComboBox(value="vit_h", choices=["vit_h", "vit_l", "vit_b"], label="Model Type")
-
     @magicgui.magicgui(call_button="Tracking annotator", labels=False)
     def on_start():
         try:
@@ -444,6 +464,7 @@ def _on_tracking():
     sub_widget = Container(widgets=[Container(widgets=[on_start], layout="horizontal", labels=False),
                                     pb_img_sel, lbl_opt, pb_embed_sel, pb_seg_sel, le_file_key_img, le_file_key_segm,
                                     cb_model, re_tile_x, re_tile_y, re_halo_x, re_halo_y])
+    sub_widget.root_native_widget.setWindowTitle("Segment Anything for Microscopy")
     main_widget.close()
     sub_widget.show()
 
@@ -460,6 +481,7 @@ def annotator():
     sub_container2 = Container(widgets=[_on_3d, _on_tracking], labels=False)
     sub_container3 = Container(widgets=[sub_container1, sub_container2], layout="horizontal", labels=False)
     main_widget = Container(widgets=[Label(value="Segment Anything for Microscopy"), sub_container3], labels=False)
+    main_widget.root_native_widget.setWindowTitle("Segment Anything for Microscopy")
     main_widget.show(run=True)
 
     if config_dict["workflow"] == "2d":
