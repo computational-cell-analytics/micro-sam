@@ -135,6 +135,11 @@ def _track_from_prompts(
                 print(msg)
                 break
 
+        # stop if we have a division
+        if track_state == "division":
+            has_division = True
+            break
+
         seg[t] = seg_t
         t += 1
 
@@ -144,11 +149,6 @@ def _track_from_prompts(
 
         # stop if we are at the last slce
         if t == seg.shape[0]:
-            break
-
-        # stop if we have a division
-        if track_state == "division":
-            has_division = True
             break
 
     return seg, has_division
@@ -322,17 +322,8 @@ def create_tracking_menu(points_layer, box_layer, states, track_ids):
     return tracking_widget
 
 
-@magicgui(call_button="Commit [C]", layer={"choices": ["current_track"]})
-def _commit_tracking_widget(v: Viewer, layer: str = "current_track") -> None:
+def _reset_tracking_state():
     global CURRENT_TRACK_ID, LINEAGE, TRACKING_WIDGET
-
-    seg = v.layers[layer].data
-
-    id_offset = int(v.layers["committed_tracks"].data.max())
-    mask = seg != 0
-
-    v.layers["committed_tracks"].data[mask] = (seg[mask] + id_offset)
-    v.layers["committed_tracks"].refresh()
 
     # reset the lineage and track id
     CURRENT_TRACK_ID = 1
@@ -342,11 +333,29 @@ def _commit_tracking_widget(v: Viewer, layer: str = "current_track") -> None:
     track_ids = list(map(str, LINEAGE.keys()))
     TRACKING_WIDGET[1].choices = track_ids
 
+
+@magicgui(call_button="Commit [C]", layer={"choices": ["current_track"]})
+def _commit_tracking_widget(v: Viewer, layer: str = "current_track") -> None:
+    seg = v.layers[layer].data
+
+    id_offset = int(v.layers["committed_tracks"].data.max())
+    mask = seg != 0
+
+    v.layers["committed_tracks"].data[mask] = (seg[mask] + id_offset)
+    v.layers["committed_tracks"].refresh()
+
     shape = v.layers["raw"].data.shape
     v.layers[layer].data = np.zeros(shape, dtype="uint32")
     v.layers[layer].refresh()
 
+    _reset_tracking_state()
     vutil.clear_annotations(v, clear_segmentations=False)
+
+
+@magicgui(call_button="Clear Annotations [Shfit + C]")
+def _clear_widget_tracking(v: Viewer) -> None:
+    _reset_tracking_state()
+    vutil.clear_annotations(v)
 
 
 def annotator_tracking(
@@ -477,7 +486,7 @@ def annotator_tracking(
     v.window.add_dock_widget(_segment_frame_wigdet)
     v.window.add_dock_widget(_track_objet_widget)
     v.window.add_dock_widget(_commit_tracking_widget)
-    v.window.add_dock_widget(vutil._clear_widget)
+    v.window.add_dock_widget(_clear_widget_tracking)
 
     #
     # key bindings
@@ -501,7 +510,7 @@ def annotator_tracking(
 
     @v.bind_key("Shift-C")
     def clear_prompts(v):
-        vutil.clear_annotations(v)
+        _clear_widget_tracking(v)
 
     #
     # start the viewer

@@ -1,0 +1,14 @@
+{
+    "menu_name": "micro_sam",
+    "menu_items":
+        [
+            {
+                "script": "${PREFIX}/Scripts/micro_sam.annotator.exe",
+				"name": "micro_sam",
+				"icon": "${PREFIX}/Menu/micro-sam-logo.ico",
+				"workdir": "${PREFIX}",
+                "desktop": true,
+                "quicklaunch": true
+            }
+        ]
+}
