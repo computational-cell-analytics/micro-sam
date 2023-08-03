@@ -43,7 +43,7 @@ def analyse_predictions(gt_dir, pred_dir, current_metric):
     return pd.DataFrame([result_dict])
 
 
-def main(args):
+def run_livecell_evaluation(args):
     gt_dir = os.path.join(args.input, "annotations", "livecell_test_images")
     list_of_combinations = ["box", "points"]
     for pred_mode in list_of_combinations:
@@ -61,12 +61,11 @@ def main(args):
         results.to_csv(os.path.join(csv_save_dir, f"{save_result_filename}.csv"), index=False)
 
 
-if __name__ == "__main__":
+def livecell_evaluation_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("-i", "--input", type=str, default="./livecell/",
                         help="Provide the data directory for LIVECell Dataset")
     parser.add_argument("-p", "--pred_path", type=str, default="./predictions")
     parser.add_argument("-s", "--save_path", type=str, default="./results/")
     parser.add_argument("--name", type=str)
-    args = parser.parse_args()
-    main(args)
+    return parser

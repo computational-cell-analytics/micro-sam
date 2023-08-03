@@ -9,7 +9,7 @@ setup(
     description="SegmentAnything For Microscopy",
     author="Anwai Archit, Constantin Pape",
     url="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html",
-    packages=["micro_sam", "micro_sam.sam_annotator", "micro_sam.training"],
+    packages=["micro_sam", "micro_sam.sam_annotator", "micro_sam.training", "micro_sam.evaluation"],
     license="MIT",
     entry_points={
         "console_scripts": [
