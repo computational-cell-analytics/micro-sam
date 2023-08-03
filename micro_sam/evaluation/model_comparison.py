@@ -41,16 +41,14 @@ def predict_models_with_loader(loader, n_samples, prompt_generator, predictor1, 
 
             point_coords, point_labels, box, _ = prompt_generator(gt, gt_id, boxes[gt_id], centers[gt_id])
 
-            # TODO multimask output???
             box = np.array(box[0])
             mask1_box = segment_from_box(predictor1, box)
             mask2_box = segment_from_box(predictor2, box)
             mask1_box, mask2_box = mask1_box.squeeze(), mask2_box.squeeze()
 
-            # TODO multimask output if we just have a single point
             point_coords, point_labels = np.array(point_coords), np.array(point_labels)
-            mask1_points, ious, _ = segment_from_points(predictor1, point_coords, point_labels, return_all=True)
-            mask2_points, ious, _ = segment_from_points(predictor2, point_coords, point_labels, return_all=True)
+            mask1_points = segment_from_points(predictor1, point_coords, point_labels)
+            mask2_points = segment_from_points(predictor2, point_coords, point_labels)
             mask1_points, mask2_points = mask1_points.squeeze(), mask2_points.squeeze()
 
             with h5py.File(out_path, "a") as f:
