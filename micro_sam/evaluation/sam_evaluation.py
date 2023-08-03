@@ -10,16 +10,20 @@ from elf.evaluation import mean_segmentation_accuracy
 CELL_TYPES = ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"]
 
 
+# FIXME this is called multiple times for the 'current_metric', but we would only need to call it once
 def analyse_predictions(gt_dir, pred_dir, current_metric):
     """ Calculate mSA, SA50, SA75
     """
-    assert os.path.exists(pred_dir)
+    assert os.path.exists(pred_dir), pred_dir
 
     metric_list = []
     result_dict = {"cell_type": current_metric}
     for ct in tqdm(CELL_TYPES, desc=current_metric.upper()):
         metric_list_ct = []
-        for gt_path in glob(gt_dir + f"{ct}/*"):
+        gt_pattern = os.path.join(gt_dir, f"{ct}/*.tif")
+        gt_paths = glob(gt_pattern)
+        assert len(gt_paths) > 0, f"{gt_pattern}"
+        for gt_path in gt_paths:
             cell_id = os.path.basename(gt_path)
             pred_path = os.path.join(pred_dir, cell_id)
             gt = imageio.imread(gt_path)
@@ -45,7 +49,7 @@ def analyse_predictions(gt_dir, pred_dir, current_metric):
 
 def run_livecell_evaluation(args):
     gt_dir = os.path.join(args.input, "annotations", "livecell_test_images")
-    list_of_combinations = ["box", "points"]
+    list_of_combinations = ["points", "box"]
     for pred_mode in list_of_combinations:
         pred_dir = os.path.join(args.pred_path, args.name, pred_mode)
         save_result_filename = f"{pred_mode}"
@@ -67,5 +71,5 @@ def livecell_evaluation_parser():
                         help="Provide the data directory for LIVECell Dataset")
     parser.add_argument("-p", "--pred_path", type=str, default="./predictions")
     parser.add_argument("-s", "--save_path", type=str, default="./results/")
-    parser.add_argument("--name", type=str)
+    parser.add_argument("--name", type=str, required=True)
     return parser

@@ -70,7 +70,7 @@ def get_prompted_segmentations_sam(predictor, img_dir, gt_dir, root_embedding_di
     """ Function to get prompted segmentations from SAM
     """
     for ctype in ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"]:
-        for img_path in tqdm(glob(os.path.join(img_dir, f"{ctype}*"))):
+        for img_path in tqdm(glob(os.path.join(img_dir, f"{ctype}*")), desc=f"Run inference for {ctype}"):
             img_id = os.path.split(img_path)[-1]
 
             # We skip the images which already have been segmented
