@@ -33,8 +33,16 @@ class TestPromptBasedSegmentation(unittest.TestCase):
     def test_segment_from_points(self):
         from micro_sam.prompt_based_segmentation import segment_from_points
 
+        # segment with one positive and four negative points
         points = np.array([[128, 128], [64, 64], [192, 192], [64, 192], [192, 64]])
         labels = np.array([1, 0, 0, 0, 0])
+
+        predicted = segment_from_points(self.predictor, points, labels)
+        self.assertGreater(util.compute_iou(self.mask, predicted), 0.9)
+
+        # segment with one positive point, using the best multimask
+        points = np.array([[128, 128]])
+        labels = np.array([1])
 
         predicted = segment_from_points(self.predictor, points, labels)
         self.assertGreater(util.compute_iou(self.mask, predicted), 0.9)
