@@ -251,6 +251,7 @@ def segment_from_points(
     i: Optional[int] = None,
     multimask_output: bool = False,
     return_all: bool = False,
+    use_best_multimask: Optional[bool] = None,
 ):
     """Segmentation from point prompts.
 
@@ -264,6 +265,8 @@ def segment_from_points(
              or a time dimension and two spatial dimensions.
         multimask_output: Whether to return multiple or just a single mask.
         return_all: Whether to return the score and logits in addition to the mask.
+        use_best_multimask: Whether to use multimask output and then choose the best mask.
+            By default this is used for a single positive point and not otherwise.
 
     Returns:
         The binary segmentation mask.
@@ -273,12 +276,20 @@ def segment_from_points(
     )
     points, labels = prompts
 
+    if use_best_multimask is None:
+        use_best_multimask = len(points) == 1 and labels[0] == 1
+    multimask_output_ = multimask_output or use_best_multimask
+
     # predict the mask
     mask, scores, logits = predictor.predict(
         point_coords=points[:, ::-1],  # SAM has reversed XY conventions
         point_labels=labels,
-        multimask_output=multimask_output,
+        multimask_output=multimask_output_,
     )
+
+    if use_best_multimask:
+        best_mask_id = np.argmax(scores)
+        mask = mask[best_mask_id][None]
 
     if tile is not None:
         return _tile_to_full_mask(mask, shape, tile, return_all, multimask_output)
