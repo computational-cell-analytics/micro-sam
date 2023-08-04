@@ -1,53 +1,256 @@
 import os
-import argparse
+import pickle
+from copy import deepcopy
 
-from .util import get_predictor_for_amg, get_prompted_segmentations_sam
+import imageio.v3 as imageio
+import numpy as np
+import torch
+
+from skimage.segmentation import relabel_sequential
+from tqdm import tqdm
+from segment_anything.utils.transforms import ResizeLongestSide
+
+from .. import util as sam_util
+from ..prompt_generators import PointAndBoxPromptGenerator
 
 
-def run_livecell_inference(args):
-    assert os.path.exists(args.input), "Please download the LIVECell Dataset"
-    img_dir = os.path.join(args.input, "images", "livecell_test_images")
-    gt_dir = os.path.join(args.input, "annotations", "livecell_test_images")
+def _load_prompts(save_path):
+    with open(save_path, "rb") as f:
+        saved_prompts = pickle.load(f)
+    return saved_prompts
 
-    predictor = get_predictor_for_amg(args.ckpt, args.model)
 
-    if args.box:
-        print("Getting box-prompted predictions for LiveCELL")
-        pred_dir = os.path.join(args.pred_path, args.name, "box")
-    elif args.points:
-        assert args.positive and args.negative is not None
-        print("Getting point-prompted predictions for LiveCELL")
-        pred_dir = os.path.join(args.pred_path, args.name, "points", f"p{args.positive}-n{args.negative}")
-    else:
-        raise ValueError("Choose (only) either points / box")
-    os.makedirs(pred_dir, exist_ok=True)
-    print("The predictions will be saved to", pred_dir)
+def _get_batched_prompts(
+    gt,
+    gt_ids,
+    use_points,
+    use_boxes,
+    n_positive,
+    n_negative,
+    dilation,
+    transform_function,
+):
+    input_point, input_label, input_box = [], [], []
 
-    root_embedding_dir = os.path.join(args.embedding_path, "embeddings", args.name)
-    get_prompted_segmentations_sam(
-        predictor, img_dir, gt_dir, root_embedding_dir, pred_dir,
-        n_positive=args.positive, n_negative=args.negative,
-        dilation=5, get_points=args.points, get_boxes=args.box,
-        _name=args.name
+    # Initialize the prompt generator.
+    center_coordinates, bbox_coordinates = sam_util.get_centers_and_bounding_boxes(gt)
+    prompt_generator = PointAndBoxPromptGenerator(
+        n_positive_points=n_positive, n_negative_points=n_negative,
+        dilation_strength=dilation, get_point_prompts=use_points,
+        get_box_prompts=use_boxes
     )
 
+    # Iterate over the gt ids, generate the corresponding prompts and combine them to batched input.
+    for gt_id in gt_ids:
+        centers, bboxes = center_coordinates.get(gt_id), bbox_coordinates.get(gt_id)
+        input_point_list, input_label_list, input_box_list, objm = prompt_generator(gt, gt_id, bboxes, centers)
 
-def livecell_inference_parser():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--box", action='store_true', help="Activate box-prompted based inference")
-    parser.add_argument("--points", action='store_true', help="Activate point-prompt based inference")
-    parser.add_argument("--positive", type=int, default=1, help="No. of positive prompts")
-    parser.add_argument("--negative", type=int, default=0, help="No. of negative prompts")
-    parser.add_argument("-i", "--input", type=str, default="./livecell/",
-                        help="Provide the data directory for LIVECell Dataset")
-    parser.add_argument("-e", "--embedding_path", type=str, default="./sam_embeddings/",
-                        help="Provide the path where embeddings will be saved")
-    parser.add_argument("-p", "--pred_path", type=str, default="./predictions/",
-                        help="Provide the path where the predictions will be saved")
-    parser.add_argument("-c", "--ckpt", type=str, required=True,
-                        help="Provide model checkpoints (vanilla / finetuned)")
-    parser.add_argument("-m", "--model", type=str, default="vit_b",
-                        help="Pass the checkpoint-specific model name being used for inference")
-    parser.add_argument("-n", "--name", type=str, default="finetuned_livecell",
-                        help="Provide a name for the saving nomenclature")
-    return parser
+        if use_boxes:
+            # indexes hard-coded to adapt with SAM's bbox format
+            # default format: [a, b, c, d] -> SAM's format: [b, a, d, c]
+            _ib = [input_box_list[0][1], input_box_list[0][0],
+                   input_box_list[0][3], input_box_list[0][2]]
+            # transform boxes to the expected format - see predictor.predict function for details
+            _ib = transform_function.apply_boxes(np.array(_ib), gt.shape)
+            input_box.append(_ib)
+
+        if use_points:
+
+            # fill up to the necessary number of points if we did not sample enough of them
+            if len(input_point_list) != (n_positive + n_negative):
+                # to stay consistent, we add random points in the background of an object
+                # if there's no neg region around the object - usually happens with small rois
+                needed_points = (n_positive + n_negative) - len(input_point_list)
+                more_neg_points = np.where(objm == 0)
+                chosen_idxx = np.random.choice(len(more_neg_points[0]), size=needed_points)
+                for idx in chosen_idxx:
+                    input_point_list.append((more_neg_points[0][idx], more_neg_points[1][idx]))
+                    input_label_list.append(0)
+
+            assert len(input_point_list) == (n_positive + n_negative)
+            _ip = [ip[::-1] for ip in input_point_list]  # to match the coordinate system used by SAM
+
+            # transform coords to the expected format - see predictor.predict function for details
+            _ip = transform_function.apply_coords(np.array(_ip), gt.shape)
+            input_point.append(_ip)
+            input_label.append(input_label_list)
+
+    return input_point, input_label, input_box
+
+
+def _run_inference_with_prompts_for_image(
+    predictor,
+    gt,
+    use_points,
+    use_boxes,
+    n_positive,
+    n_negative,
+    dilation,
+    batch_size,
+    prompts,
+):
+    # We need the resize transformation for the expected model input size.
+    # TODO: don't hard-code to 1024 but get from the corresponding mdoel attribute
+    # or even better: can we get the transform function from the model?
+    transform_function = ResizeLongestSide(1024)
+    gt_ids = np.unique(gt)[1:]
+
+    input_point, input_label, input_box = _get_batched_prompts(
+        gt, gt_ids, use_points, use_boxes, n_positive, n_negative, dilation, transform_function
+    )
+    # If we have saved prompts already then use them instead of the ones we just sampled.
+    # Note that this only affects point prompts.
+    if prompts is not None:
+        input_point, input_label = prompts
+
+    # Make a copy of the point prompts to return them at the end.
+    prompts = deepcopy((input_point, input_label))
+
+    # Transform the prompts into batches
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    input_point = torch.tensor(np.array(input_point)).to(device) if len(input_point) > 0 else None
+    input_label = torch.tensor(np.array(input_label)).to(device) if len(input_label) > 0 else None
+    input_box = torch.tensor(np.array(input_box)).to(device) if len(input_box) > 0 else None
+
+    # Use multi-masking only if we have a single positive point without box
+    multimasking = False
+    if not use_boxes and (n_positive == 1 and n_negative == 0):
+        multimasking = True
+
+    # Run the batched inference.
+    n_samples = input_box.shape[0] if input_point is None else input_point.shape[0]
+    n_batches = int(np.ceil(float(n_samples) / batch_size))
+    masks, ious = [], []
+    with torch.no_grad():
+        for batch_idx in range(n_batches):
+            batch_start = batch_idx * batch_size
+            batch_stop = min((batch_idx + 1) * batch_size, n_samples)
+
+            batch_points = None if input_point is None else input_point[batch_start:batch_stop]
+            batch_labels = None if input_label is None else input_label[batch_start:batch_stop]
+            batch_boxes = None if input_box is None else input_box[batch_start:batch_stop]
+
+            batch_masks, batch_ious, _ = predictor.predict_torch(
+                point_coords=batch_points, point_labels=batch_labels,
+                boxes=batch_boxes, multimask_output=multimasking
+            )
+            masks.append(batch_masks)
+            ious.append(batch_ious)
+    masks = torch.cat(masks)
+    ious = torch.cat(ious)
+    assert len(masks) == len(ious) == n_samples
+
+    # TODO we should actually use non-max suppression here
+    # I will implement it somewhere to have it refactored
+    instance_labels = np.zeros_like(gt, dtype=int)
+    for m, iou, gt_idx in zip(masks, ious, gt_ids):
+        best_idx = torch.argmax(iou)
+        best_mask = m[best_idx]
+        instance_labels[best_mask.detach().cpu().numpy()] = gt_idx
+
+    return instance_labels, prompts
+
+
+def get_predictor(checkpoint_path, model_type):
+    """@private"""
+    # TODO use try-except rather than this construct, so that we don't rely on the checkpoint name
+    if checkpoint_path.split("/")[-1] == "best.pt":  # Finetuned SAM model
+        predictor = sam_util.get_custom_sam_model(checkpoint_path=checkpoint_path, model_type=model_type)
+    else:  # Vanilla SAM model
+        predictor = sam_util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path)  # type: ignore
+    return predictor
+
+
+def run_inference_with_prompts(
+    predictor,
+    image_paths,
+    gt_paths,
+    embedding_dir,
+    prediction_dir,
+    use_points,
+    use_boxes,
+    n_positive,
+    n_negative,
+    dilation=5,
+    prompt_save_dir=None,
+    batch_size=512,
+) -> None:
+    """Run segment anything inference for multiple images using prompts derived form ground-truth.
+
+    Args:
+        predictor -
+    """
+    if not (use_points or use_boxes):
+        raise ValueError("You need to use at least one of point or box prompts.")
+
+    if len(image_paths) != len(gt_paths):
+        raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
+
+    # Check if prompt serialization is enabled.
+    # If it is then check if the current prompt setting needs serialization.
+    # If it does and they exist, then load the prompts instead of re-generating them.
+    if prompt_save_dir is None:
+        saved_prompts = None
+        dump_prompts = False
+    elif not use_points:  # we don't need to load points if they're not used as prompts
+        saved_prompts = None
+        dump_prompts = False
+    elif n_positive == 1 and n_negative == 0:  # we don't need to load points for just a single pos. prompt
+        saved_prompts = None
+        dump_prompts = False
+    else:
+        prompt_save_path = os.path.join(prompt_save_dir, f"points-p{n_positive}-n{n_negative}.pkl")
+        if os.path.exists(prompt_save_path):
+            # we delay loading the prompts, so we only have to load them once they're needed the first time.
+            # this avoids loading the prompts (which are in a big pickle file) if all predictions
+            # were done already
+            saved_prompts = prompt_save_path
+            dump_prompts = False
+        else:
+            saved_prompts = {}
+            dump_prompts = True
+
+    for image_path, gt_path in tqdm(
+        zip(image_paths, gt_paths), total=len(image_paths), desc="Run inference with prompts"
+    ):
+        image_name = os.path.basename(image_path)
+
+        # We skip the images that already have been segmented.
+        prediction_path = os.path.join(prediction_dir, image_name)
+        if os.path.exists(prediction_path):
+            continue
+
+        assert os.path.exists(image_path), image_path
+        assert os.path.exists(gt_path), gt_path
+
+        im = imageio.imread(image_path)
+        gt = imageio.imread(gt_path)
+        gt = relabel_sequential(gt)[0]
+
+        embedding_path = os.path.join(embedding_dir, f"{image_name[:-4]}.zarr")
+        image_embeddings = sam_util.precompute_image_embeddings(predictor, im, embedding_path)
+        sam_util.set_precomputed(predictor, image_embeddings)
+
+        # Check if we have saved prompts.
+        if saved_prompts is None or dump_prompts:  # we don't have saved_prompts
+            this_prompts = None
+        elif isinstance(saved_prompts, str):  # we have saved prompts, but they have not been loaded yet
+            saved_prompts = _load_prompts(saved_prompts)
+            this_prompts = saved_prompts[image_name]
+        else:  # we have saved prompts
+            this_prompts = saved_prompts[image_name]
+
+        instances, this_prompts = _run_inference_with_prompts_for_image(
+            predictor, gt, n_positive=n_positive, n_negative=n_negative,
+            dilation=dilation, use_points=use_points, use_boxes=use_boxes,
+            batch_size=batch_size, prompts=this_prompts
+        )
+
+        if dump_prompts:
+            saved_prompts[image_name] = this_prompts
+        # TODO can we activate compression here? would save a lot of space
+        imageio.imsave(prediction_path, instances)
+
+    if dump_prompts:
+        with open(prompt_save_path, "wb") as f:
+            pickle.dump(saved_prompts, f)
