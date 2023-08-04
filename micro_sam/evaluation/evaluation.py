@@ -35,7 +35,7 @@ def analyse_livecell_predictions(gt_dir, pred_dir):
             pred = imageio.imread(pred_path)
 
             msa, scores = mean_segmentation_accuracy(pred, gt, return_accuracies=True)  # type: ignore
-            msa, sa50, sa75 = np.round(msa, 4), np.round(scores[0], 4), np.round(scores[5], 4)
+            sa50, sa75 = scores[0], scores[5]
 
             this_msas.append(msa), this_sa50s.append(sa50), this_sa75s.append(sa75)
 
@@ -50,7 +50,9 @@ def analyse_livecell_predictions(gt_dir, pred_dir):
         "sa50": sa50s_ct + [np.mean(sa50s_ct)],
         "sa75": sa75s_ct + [np.mean(sa75s_ct)],
     }
-    return pd.DataFrame.from_dict(result_dict)
+    df = pd.DataFrame.from_dict(result_dict)
+    df = df.round(decimals=4)
+    return df
 
 
 def run_livecell_evaluation(args):
