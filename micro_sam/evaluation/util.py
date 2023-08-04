@@ -1,7 +1,6 @@
 import os
 import pickle
 from glob import glob
-from collections import OrderedDict
 
 import imageio.v2 as imageio
 import numpy as np
@@ -9,59 +8,19 @@ import torch
 
 from skimage.segmentation import relabel_sequential
 from tqdm import tqdm
-
-from segment_anything import sam_model_registry, SamPredictor
 from segment_anything.utils.transforms import ResizeLongestSide
 
+from .. import util as sam_util
 from ..prompt_generators import PointAndBoxPromptGenerator
-from ..util import get_sam_model, set_precomputed, precompute_image_embeddings, get_centers_and_bounding_boxes
-
-
-# We write a custom unpickler that skips objects that cannot be found instead of
-# throwing an AttributeError (for LM) / ModueNotFoundError (for EM) for them.
-# NOTE: since we just want to unpickle the model to load it's weights these errors don't matter.
-# See also https://stackoverflow.com/questions/27732354/unable-to-load-files-using-pickle-and-multiple-modules
-class CustomUnpickler(pickle.Unpickler):
-    def find_class(self, module, name):
-        try:
-            return super().find_class(module, name)
-        except (AttributeError, ModuleNotFoundError) as e:
-            print("Did not find", module, name, "and will skip it for", e)
-            return None
-
-
-# over-ride the unpickler with our custom one
-custom_pickle = pickle
-custom_pickle.Unpickler = CustomUnpickler
-
-
-def custom_sam_model(checkpoint, device=None, model_type="vit_h"):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    sam = sam_model_registry[model_type]()
-
-    # load the model state, ignoring any attributes that can't be found by pickle
-    model_state = torch.load(checkpoint, map_location=device, pickle_module=custom_pickle)["model_state"]
-
-    # copy the model weights from torch_em's training format
-    sam_prefix = "sam."
-    model_state = OrderedDict(
-            [(k[len(sam_prefix):] if k.startswith(sam_prefix) else k, v) for k, v in model_state.items()]
-    )
-    sam.load_state_dict(model_state)
-    sam.to(device)
-
-    predictor = SamPredictor(sam)
-
-    return predictor, sam
 
 
 def get_predictor_for_amg(ckpt, model_type):
     """ Initializes the SAM predictor based on finetuned / vanilla checkpoints
     """
     if ckpt.split("/")[-1] == "best.pt":  # Finetuned SAM model
-        predictor, _ = custom_sam_model(checkpoint=ckpt, model_type=model_type)
+        predictor = sam_util.custom_sam_model(checkpoint_path=ckpt, model_type=model_type)
     else:  # Vanilla SAM model
-        predictor, _ = get_sam_model(model_type=model_type, checkpoint_path=ckpt, return_sam=True)  # type: ignore
+        predictor = sam_util.get_sam_model(model_type=model_type, checkpoint_path=ckpt)  # type: ignore
     return predictor
 
 
@@ -92,8 +51,8 @@ def get_prompted_segmentations_sam(predictor, img_dir, gt_dir, root_embedding_di
             gt = relabel_sequential(gt)[0]
 
             embedding_path = os.path.join(root_embedding_dir, f"{img_id[:-4]}.zarr")
-            image_embeddings = precompute_image_embeddings(predictor, im, embedding_path)
-            predictor = set_precomputed(predictor, image_embeddings)
+            image_embeddings = sam_util.precompute_image_embeddings(predictor, im, embedding_path)
+            predictor = sam_util.set_precomputed(predictor, image_embeddings)
 
             im = np.stack((im,)*3, axis=-1)
             predictor.set_image(im)
@@ -125,7 +84,7 @@ def sam_predictor(
     """ Generates instance segmentation per image from each assigned prompting method
     """
     # returns the set of cell coordinates and respective bboxes for all instances
-    center_coordinates, bbox_coordinates = get_centers_and_bounding_boxes(gt)
+    center_coordinates, bbox_coordinates = sam_util.get_centers_and_bounding_boxes(gt)
 
     prompt_generator = PointAndBoxPromptGenerator(n_positive_points=n_positive, n_negative_points=n_negative,
                                                   dilation_strength=dilation, get_point_prompts=get_points,

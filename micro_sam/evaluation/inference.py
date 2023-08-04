@@ -24,9 +24,12 @@ def run_livecell_inference(args):
     print("The predictions will be saved to", pred_dir)
 
     root_embedding_dir = os.path.join(args.embedding_path, "embeddings", args.name)
-    get_prompted_segmentations_sam(predictor, img_dir, gt_dir, root_embedding_dir, pred_dir, n_positive=args.positive,
-                                   n_negative=args.negative, dilation=5, get_points=args.points, get_boxes=args.box,
-                                   _name=args.name)
+    get_prompted_segmentations_sam(
+        predictor, img_dir, gt_dir, root_embedding_dir, pred_dir,
+        n_positive=args.positive, n_negative=args.negative,
+        dilation=5, get_points=args.points, get_boxes=args.box,
+        _name=args.name
+    )
 
 
 def livecell_inference_parser():

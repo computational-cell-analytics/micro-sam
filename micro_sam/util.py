@@ -4,7 +4,9 @@ Helper functions for downloading Segment Anything models and predicting image em
 
 import hashlib
 import os
+import pickle
 import warnings
+from collections import OrderedDict
 from shutil import copyfileobj
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -136,6 +138,61 @@ def get_sam_model(
 
     sam = sam_model_registry[model_type_](checkpoint=checkpoint)
     sam.to(device=device)
+    predictor = SamPredictor(sam)
+    if return_sam:
+        return predictor, sam
+    return predictor
+
+
+# We write a custom unpickler that skips objects that cannot be found instead of
+# throwing an AttributeError or ModueNotFoundError.
+# NOTE: since we just want to unpickle the model to load its weights these errors don't matter.
+# See also https://stackoverflow.com/questions/27732354/unable-to-load-files-using-pickle-and-multiple-modules
+class _CustomUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        try:
+            return super().find_class(module, name)
+        except (AttributeError, ModuleNotFoundError) as e:
+            print("Did not find", module, name, "and will skip it due to", e)
+            return None
+
+
+def get_custom_sam_model(
+    checkpoint_path: str,
+    device: Optional[str] = None,
+    model_type: str = "vit_h",
+    return_sam: bool = False,
+) -> SamPredictor:
+    """Load a SAM model from a torch_em checkpoint.
+
+    This function enables loading from the checkpoints saved by
+    the functionality in `micro_sam.training`.
+
+    Args:
+        checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
+        device: The device for the model. If none is given will use GPU if available.
+        model_type: The SegmentAnything model to use.
+        return_sam: Return the sam model object as well as the predictor.
+    """
+
+    # over-ride the unpickler with our custom one
+    custom_pickle = pickle
+    custom_pickle.Unpickler = _CustomUnpickler
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    sam = sam_model_registry[model_type]()
+
+    # load the model state, ignoring any attributes that can't be found by pickle
+    model_state = torch.load(checkpoint_path, map_location=device, pickle_module=custom_pickle)["model_state"]
+
+    # copy the model weights from torch_em's training format
+    sam_prefix = "sam."
+    model_state = OrderedDict(
+            [(k[len(sam_prefix):] if k.startswith(sam_prefix) else k, v) for k, v in model_state.items()]
+    )
+    sam.load_state_dict(model_state)
+    sam.to(device)
+
     predictor = SamPredictor(sam)
     if return_sam:
         return predictor, sam
