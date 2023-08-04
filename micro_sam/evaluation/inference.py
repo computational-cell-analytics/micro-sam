@@ -1,7 +1,10 @@
 import os
 import pickle
+
+from concurrent import futures
 from copy import deepcopy
-from typing import List, Optional, Union
+from functools import partial
+from typing import Any, Dict, List, Optional, Union
 
 import imageio.v3 as imageio
 import numpy as np
@@ -28,8 +31,8 @@ def _get_batched_prompts(
     gt_ids,
     use_points,
     use_boxes,
-    n_positive,
-    n_negative,
+    n_positives,
+    n_negatives,
     dilation,
     transform_function,
 ):
@@ -38,7 +41,7 @@ def _get_batched_prompts(
     # Initialize the prompt generator.
     center_coordinates, bbox_coordinates = util.get_centers_and_bounding_boxes(gt)
     prompt_generator = PointAndBoxPromptGenerator(
-        n_positive_points=n_positive, n_negative_points=n_negative,
+        n_positive_points=n_positives, n_negative_points=n_negatives,
         dilation_strength=dilation, get_point_prompts=use_points,
         get_box_prompts=use_boxes
     )
@@ -60,17 +63,17 @@ def _get_batched_prompts(
         if use_points:
 
             # fill up to the necessary number of points if we did not sample enough of them
-            if len(input_point_list) != (n_positive + n_negative):
+            if len(input_point_list) != (n_positives + n_negatives):
                 # to stay consistent, we add random points in the background of an object
                 # if there's no neg region around the object - usually happens with small rois
-                needed_points = (n_positive + n_negative) - len(input_point_list)
+                needed_points = (n_positives + n_negatives) - len(input_point_list)
                 more_neg_points = np.where(objm == 0)
                 chosen_idxx = np.random.choice(len(more_neg_points[0]), size=needed_points)
                 for idx in chosen_idxx:
                     input_point_list.append((more_neg_points[0][idx], more_neg_points[1][idx]))
                     input_label_list.append(0)
 
-            assert len(input_point_list) == (n_positive + n_negative)
+            assert len(input_point_list) == (n_positives + n_negatives)
             _ip = [ip[::-1] for ip in input_point_list]  # to match the coordinate system used by SAM
 
             # transform coords to the expected format - see predictor.predict function for details
@@ -86,20 +89,18 @@ def _run_inference_with_prompts_for_image(
     gt,
     use_points,
     use_boxes,
-    n_positive,
-    n_negative,
+    n_positives,
+    n_negatives,
     dilation,
     batch_size,
     prompts,
 ):
     # We need the resize transformation for the expected model input size.
-    # TODO: don't hard-code to 1024 but get from the corresponding mdoel attribute
-    # or even better: can we get the transform function from the model?
     transform_function = ResizeLongestSide(1024)
     gt_ids = np.unique(gt)[1:]
 
     input_point, input_label, input_box = _get_batched_prompts(
-        gt, gt_ids, use_points, use_boxes, n_positive, n_negative, dilation, transform_function
+        gt, gt_ids, use_points, use_boxes, n_positives, n_negatives, dilation, transform_function
     )
     # If we have saved prompts already then use them instead of the ones we just sampled.
     # Note that this only affects point prompts.
@@ -117,7 +118,7 @@ def _run_inference_with_prompts_for_image(
 
     # Use multi-masking only if we have a single positive point without box
     multimasking = False
-    if not use_boxes and (n_positive == 1 and n_negative == 0):
+    if not use_boxes and (n_positives == 1 and n_negatives == 0):
         multimasking = True
 
     # Run the batched inference.
@@ -185,6 +186,81 @@ def precompute_all_embeddings(
         util.precompute_image_embeddings(predictor, im, embedding_path)
 
 
+def _precompute_prompts(gt_path, use_points, use_boxes, n_positives, n_negatives, dilation):
+    transform_function = ResizeLongestSide(1024)
+    name = os.path.basename(gt_path)
+
+    gt = imageio.imread(gt_path)
+    gt = relabel_sequential(gt)[0]
+    gt_ids = np.unique(gt)[1:]
+
+    input_point, input_label, input_box = _get_batched_prompts(
+        gt, gt_ids, use_points, use_boxes, n_positives, n_negatives, dilation, transform_function
+    )
+
+    return name, (input_point, input_label)
+
+
+def precompute_all_prompts(
+    gt_paths: List[Union[str, os.PathLike]],
+    prompt_save_dir: Union[str, os.PathLike],
+    prompt_settings: List[Dict[str, Any]],
+    n_workers: Optional[int] = None,
+):
+    """Precompute all point prompts.
+
+    To enable running different inference tasks in parallel afterwards.
+
+    Args:
+        gt_paths:
+        prompt_save_dir:
+        prompt_settings:
+        n_workers:
+    """
+    os.makedirs(prompt_save_dir, exist_ok=True)
+    # parallelization not working (or needs too much RAM)
+    # n_workers = mp.cpu_count() if n_workers is None else n_workers
+    n_workers = 0 if n_workers is None else n_workers
+
+    for settings in tqdm(prompt_settings, desc="Precompute prompts"):
+
+        use_points, use_boxes = settings["use_points"], settings["use_boxes"]
+        n_positives, n_negatives = settings["n_positives"], settings["n_negatives"]
+        dilation = settings.get("dilation", 5)
+
+        # check if we need to save the embeddings for the given settings
+        if not use_points or (n_positives == 1 and n_negatives == 0):
+            continue
+
+        # check if the prompts were already computed
+        prompt_save_path = os.path.join(prompt_save_dir, f"points-p{n_positives}-n{n_negatives}.pkl")
+        if os.path.exists(prompt_save_path):
+            continue
+
+        _precompute = partial(
+            _precompute_prompts,
+            use_points=use_points,
+            use_boxes=use_boxes,
+            n_positives=n_positives,
+            n_negatives=n_negatives,
+            dilation=dilation,
+        )
+        if n_workers == 0:
+            results = []
+            for gt_path in tqdm(gt_paths, desc=f"Precompute prompts for p{n_positives}-n{n_negatives}"):
+                results.append(_precompute(gt_path))
+        else:
+            with futures.ProcessPoolExecutor(n_workers) as tp:
+                results = list(tqdm(
+                    tp.map(_precompute, gt_paths), total=len(gt_paths),
+                    desc=f"Precompute prompts for p{n_positives}-n{n_negatives}"
+                ))
+
+        saved_embeddings = {res[0]: res[1] for res in results}
+        with open(prompt_save_path, "wb") as f:
+            pickle.dump(saved_embeddings, f)
+
+
 def run_inference_with_prompts(
     predictor: SamPredictor,
     image_paths: List[Union[str, os.PathLike]],
@@ -193,8 +269,8 @@ def run_inference_with_prompts(
     prediction_dir: Union[str, os.PathLike],
     use_points: bool,
     use_boxes: bool,
-    n_positive: int,
-    n_negative: int,
+    n_positives: int,
+    n_negatives: int,
     dilation: int = 5,
     prompt_save_dir: Optional[Union[str, os.PathLike]] = None,
     batch_size: int = 512,
@@ -208,10 +284,11 @@ def run_inference_with_prompts(
         embedding_dir:
         use_points:
         use_boxes:
-        n_positives:
-        n_negatives:
+        n_positivess:
+        n_negativess:
         dilation:
         prompt_save_dir:
+        batch_size:
     """
     if not (use_points or use_boxes):
         raise ValueError("You need to use at least one of point or box prompts.")
@@ -228,18 +305,20 @@ def run_inference_with_prompts(
     elif not use_points:  # we don't need to load points if they're not used as prompts
         saved_prompts = None
         dump_prompts = False
-    elif n_positive == 1 and n_negative == 0:  # we don't need to load points for just a single pos. prompt
+    elif n_positives == 1 and n_negatives == 0:  # we don't need to load points for just a single pos. prompt
         saved_prompts = None
         dump_prompts = False
     else:
-        prompt_save_path = os.path.join(prompt_save_dir, f"points-p{n_positive}-n{n_negative}.pkl")
+        prompt_save_path = os.path.join(prompt_save_dir, f"points-p{n_positives}-n{n_negatives}.pkl")
         if os.path.exists(prompt_save_path):
+            print("Using precomputed prompts from", prompt_save_path)
             # we delay loading the prompts, so we only have to load them once they're needed the first time.
             # this avoids loading the prompts (which are in a big pickle file) if all predictions
             # were done already
             saved_prompts = prompt_save_path
             dump_prompts = False
         else:
+            print("Saving prompts in", prompt_save_path)
             saved_prompts = {}
             dump_prompts = True
 
@@ -274,7 +353,7 @@ def run_inference_with_prompts(
             this_prompts = saved_prompts[image_name]
 
         instances, this_prompts = _run_inference_with_prompts_for_image(
-            predictor, gt, n_positive=n_positive, n_negative=n_negative,
+            predictor, gt, n_positives=n_positives, n_negatives=n_negatives,
             dilation=dilation, use_points=use_points, use_boxes=use_boxes,
             batch_size=batch_size, prompts=this_prompts
         )
