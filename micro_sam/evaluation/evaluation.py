@@ -1,50 +1,56 @@
-import os
 import argparse
+import os
+from glob import glob
+
+import imageio.v3 as imageio
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
-from glob import glob
-import imageio.v2 as imageio
+
 from elf.evaluation import mean_segmentation_accuracy
+from tqdm import tqdm
 
 CELL_TYPES = ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"]
 
 
-# FIXME this is called multiple times for the 'current_metric', but we would only need to call it once
-def analyse_predictions(gt_dir, pred_dir, current_metric):
+def analyse_livecell_predictions(gt_dir, pred_dir):
     """ Calculate mSA, SA50, SA75
     """
     assert os.path.exists(pred_dir), pred_dir
 
-    metric_list = []
-    result_dict = {"cell_type": current_metric}
-    for ct in tqdm(CELL_TYPES, desc=current_metric.upper()):
-        metric_list_ct = []
+    msas, sa50s, sa75s = [], [], []
+    msas_ct, sa50s_ct, sa75s_ct = [], [], []
+
+    for ct in tqdm(CELL_TYPES, desc="Evaluate livecell predictions"):
+
         gt_pattern = os.path.join(gt_dir, f"{ct}/*.tif")
         gt_paths = glob(gt_pattern)
         assert len(gt_paths) > 0, f"{gt_pattern}"
+
+        this_msas, this_sa50s, this_sa75s = [], [], []
+
         for gt_path in gt_paths:
             cell_id = os.path.basename(gt_path)
             pred_path = os.path.join(pred_dir, cell_id)
             gt = imageio.imread(gt_path)
             pred = imageio.imread(pred_path)
 
-            m_sas, sas = mean_segmentation_accuracy(pred, gt, return_accuracies=True)  # type: ignore
+            msa, scores = mean_segmentation_accuracy(pred, gt, return_accuracies=True)  # type: ignore
+            msa, sa50, sa75 = np.round(msa, 4), np.round(scores[0], 4), np.round(scores[5], 4)
 
-            if current_metric == "msa":
-                metric_score = m_sas
-            elif current_metric == "sa50":
-                metric_score = sas[0]
-            elif current_metric == "sa75":
-                metric_score = sas[5]
-            else:
-                raise ValueError
+            this_msas.append(msa), this_sa50s.append(sa50), this_sa75s.append(sa75)
 
-            metric_list.append(metric_score)
-            metric_list_ct.append(metric_score)
-        result_dict[ct] = np.mean(metric_list_ct)
-    result_dict["Mean"] = np.mean(metric_list)
-    return pd.DataFrame([result_dict])
+        msas.extend(this_msas), sa50s.extend(this_sa50s), sa75s.extend(this_sa75s)
+        msas_ct.append(np.mean(this_msas))
+        sa50s_ct.append(np.mean(this_sa50s))
+        sa75s_ct.append(np.mean(this_sa75s))
+
+    result_dict = {
+        "cell_type": CELL_TYPES + ["Total"],
+        "msa": msas_ct + [np.mean(msas)],
+        "sa50": sa50s_ct + [np.mean(sa50s_ct)],
+        "sa75": sa75s_ct + [np.mean(sa75s_ct)],
+    }
+    return pd.DataFrame.from_dict(result_dict)
 
 
 def run_livecell_evaluation(args):
@@ -60,8 +66,7 @@ def run_livecell_evaluation(args):
         csv_save_dir = os.path.join(args.save_path, args.name)
         os.makedirs(csv_save_dir, exist_ok=True)
 
-        results = [analyse_predictions(gt_dir, pred_dir, current_metric) for current_metric in ["msa", "sa50", "sa75"]]
-        results = pd.concat(results)
+        results = analyse_livecell_predictions(gt_dir, pred_dir)
         results.to_csv(os.path.join(csv_save_dir, f"{save_result_filename}.csv"), index=False)
 
 
