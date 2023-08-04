@@ -175,9 +175,9 @@ def precompute_all_embeddings(
     To enable running different inference tasks in parallel afterwards.
 
     Args:
-        predictor:
-        image_paths:
-        embedding_dir:
+        predictor: The SegmentAnything predictor.
+        image_paths: The image file paths.
+        embedding_dir: The directory where the embeddings will be saved.
     """
     for image_path in tqdm(image_paths, desc="Precompute embeddings"):
         image_name = os.path.basename(image_path)
@@ -212,10 +212,11 @@ def precompute_all_prompts(
     To enable running different inference tasks in parallel afterwards.
 
     Args:
-        gt_paths:
-        prompt_save_dir:
-        prompt_settings:
-        n_workers:
+        gt_paths: The file paths to the ground-truth segmentations.
+        prompt_save_dir: The directory where the prompt files will be saved.
+        prompt_settings: The settings for which the prompts will be computed.
+        n_workers: The number of workers to use for pre-computation.
+            By default only a single process will be used to precompute the prompts.
     """
     os.makedirs(prompt_save_dir, exist_ok=True)
     # parallelization not working (or needs too much RAM)
@@ -278,17 +279,19 @@ def run_inference_with_prompts(
     """Run segment anything inference for multiple images using prompts derived form groundtruth.
 
     Args:
-        predictor:
-        image_paths:
-        gt_paths:
-        embedding_dir:
-        use_points:
-        use_boxes:
-        n_positivess:
-        n_negativess:
-        dilation:
-        prompt_save_dir:
-        batch_size:
+        predictor: The SegmentAnything predictor.
+        image_paths: The image file paths.
+        gt_paths: The ground-truth segmentation file paths.
+        embedding_dir: The directory where the image embddings will be saved or are already saved.
+        use_points: Whether to use point prompts.
+        use_boxes: Whetehr to use box prompts
+        n_positives: The number of positive point prompts that will be sampled.
+        n_negativess: The number of negative point prompts that will be sampled.
+        dilation: The dilation factor for the radius around the ground-truth object
+            around which points will not be sampled.
+        prompt_save_dir: The directory where point prompts will be saved or are already saved.
+            This enables running multiple experiments in a reproducible manner.
+        batch_size: The batch size used for batched prediction.
     """
     if not (use_points or use_boxes):
         raise ValueError("You need to use at least one of point or box prompts.")

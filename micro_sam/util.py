@@ -429,7 +429,7 @@ def precompute_image_embeddings(
     If 'save_path' is given the embeddings will be loaded/saved in a zarr container.
 
     Args:
-        predictor: The SegmentAnything predictor
+        predictor: The SegmentAnything predictor.
         input_: The input data. Can be 2 or 3 dimensional, corresponding to an image, volume or timeseries.
         save_path: Path to save the embeddings in a zarr container.
         lazy_loading: Whether to load all embeddings into memory or return an
