@@ -2,7 +2,7 @@ import argparse
 import os
 from glob import glob
 
-from .util import get_predictor, run_inference_with_prompts
+from .inference import get_predictor, run_inference_with_prompts
 
 CELL_TYPES = ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"]
 
@@ -45,11 +45,14 @@ def run_livecell_inference(args):
         embedding_dir=root_embedding_dir,
         prediction_dir=pred_dir,
         use_points=args.points,
-        use_boxes=args.boxes,
+        use_boxes=args.box,
         n_positive=args.positive,
         n_negative=args.negative,
         prompt_save_dir=prompt_save_dir,
     )
+
+
+# TODO fully automate the experiment
 
 
 def livecell_inference_parser():

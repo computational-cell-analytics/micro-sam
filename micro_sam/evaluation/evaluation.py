@@ -9,6 +9,8 @@ import pandas as pd
 from elf.evaluation import mean_segmentation_accuracy
 from tqdm import tqdm
 
+from .livecell import CELL_TYPES
+
 
 def analyse_livecell_predictions(gt_dir, pred_dir):
     """ Calculate mSA, SA50, SA75

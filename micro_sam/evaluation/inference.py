@@ -1,6 +1,7 @@
 import os
 import pickle
 from copy import deepcopy
+from typing import List, Optional, Union
 
 import imageio.v3 as imageio
 import numpy as np
@@ -8,9 +9,11 @@ import torch
 
 from skimage.segmentation import relabel_sequential
 from tqdm import tqdm
+
+from segment_anything import SamPredictor
 from segment_anything.utils.transforms import ResizeLongestSide
 
-from .. import util as sam_util
+from .. import util as util
 from ..prompt_generators import PointAndBoxPromptGenerator
 
 
@@ -33,7 +36,7 @@ def _get_batched_prompts(
     input_point, input_label, input_box = [], [], []
 
     # Initialize the prompt generator.
-    center_coordinates, bbox_coordinates = sam_util.get_centers_and_bounding_boxes(gt)
+    center_coordinates, bbox_coordinates = util.get_centers_and_bounding_boxes(gt)
     prompt_generator = PointAndBoxPromptGenerator(
         n_positive_points=n_positive, n_negative_points=n_negative,
         dilation_strength=dilation, get_point_prompts=use_points,
@@ -155,30 +158,60 @@ def get_predictor(checkpoint_path, model_type):
     """@private"""
     # TODO use try-except rather than this construct, so that we don't rely on the checkpoint name
     if checkpoint_path.split("/")[-1] == "best.pt":  # Finetuned SAM model
-        predictor = sam_util.get_custom_sam_model(checkpoint_path=checkpoint_path, model_type=model_type)
+        predictor = util.get_custom_sam_model(checkpoint_path=checkpoint_path, model_type=model_type)
     else:  # Vanilla SAM model
-        predictor = sam_util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path)  # type: ignore
+        predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path)  # type: ignore
     return predictor
 
 
-def run_inference_with_prompts(
-    predictor,
-    image_paths,
-    gt_paths,
-    embedding_dir,
-    prediction_dir,
-    use_points,
-    use_boxes,
-    n_positive,
-    n_negative,
-    dilation=5,
-    prompt_save_dir=None,
-    batch_size=512,
-) -> None:
-    """Run segment anything inference for multiple images using prompts derived form ground-truth.
+def precompute_all_embeddings(
+    predictor: SamPredictor,
+    image_paths: List[Union[str, os.PathLike]],
+    embedding_dir: Union[str, os.PathLike],
+):
+    """Precompute all image embeddings.
+
+    To enable running different inference tasks in parallel afterwards.
 
     Args:
-        predictor -
+        predictor:
+        image_paths:
+        embedding_dir:
+    """
+    for image_path in tqdm(image_paths, desc="Precompute embeddings"):
+        image_name = os.path.basename(image_path)
+        im = imageio.imread(image_path)
+        embedding_path = os.path.join(embedding_dir, f"{image_name[:-4]}.zarr")
+        util.precompute_image_embeddings(predictor, im, embedding_path)
+
+
+def run_inference_with_prompts(
+    predictor: SamPredictor,
+    image_paths: List[Union[str, os.PathLike]],
+    gt_paths: List[Union[str, os.PathLike]],
+    embedding_dir: Union[str, os.PathLike],
+    prediction_dir: Union[str, os.PathLike],
+    use_points: bool,
+    use_boxes: bool,
+    n_positive: int,
+    n_negative: int,
+    dilation: int = 5,
+    prompt_save_dir: Optional[Union[str, os.PathLike]] = None,
+    batch_size: int = 512,
+) -> None:
+    """Run segment anything inference for multiple images using prompts derived form groundtruth.
+
+    Args:
+        predictor:
+        image_paths:
+        gt_paths:
+        embedding_dir:
+        use_points:
+        use_boxes:
+        n_positives:
+        n_negatives:
+        dilation:
+        prompt_save_dir:
     """
     if not (use_points or use_boxes):
         raise ValueError("You need to use at least one of point or box prompts.")
@@ -228,8 +261,8 @@ def run_inference_with_prompts(
         gt = relabel_sequential(gt)[0]
 
         embedding_path = os.path.join(embedding_dir, f"{image_name[:-4]}.zarr")
-        image_embeddings = sam_util.precompute_image_embeddings(predictor, im, embedding_path)
-        sam_util.set_precomputed(predictor, image_embeddings)
+        image_embeddings = util.precompute_image_embeddings(predictor, im, embedding_path)
+        util.set_precomputed(predictor, image_embeddings)
 
         # Check if we have saved prompts.
         if saved_prompts is None or dump_prompts:  # we don't have saved_prompts
@@ -248,8 +281,9 @@ def run_inference_with_prompts(
 
         if dump_prompts:
             saved_prompts[image_name] = this_prompts
-        # TODO can we activate compression here? would save a lot of space
-        imageio.imsave(prediction_path, instances)
+
+        # It's important to compress here, otherwise the predictions would take up a lot of space.
+        imageio.imwrite(prediction_path, instances, compression=5)
 
     if dump_prompts:
         with open(prompt_save_path, "wb") as f:
