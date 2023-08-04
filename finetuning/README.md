@@ -13,11 +13,11 @@ Run the script `livecell_finetuning.py` for fine-tuning a model on LiveCELL.
 The script `livecell_inference.py` can be used to run inference on the test set. It supports different arguments for inference with different configurations.
 For example run
 ```
-python livecell_inference.py -c checkpoints/livecell_sam/best.pt -p predictions -i /scratch/projects/nim00007/data/LiveCELL/ --points --positive 1 --negative 0
+python livecell_inference.py -c checkpoints/livecell_sam/best.pt -m vit_b -e experiment -i /scratch/projects/nim00007/data/LiveCELL/ --points --positive 1 --negative 0
 ```
 for inference with 1 positive point prompt and no negative point prompt (the prompts are derived from ground-truth).
 
-The arguments `-c`, `-p` and `-i` specify where the checkpoint for the model is, where the predictions from the model will be saved, and where the input (LiveCELL) dataset is stored.
+The arguments `-c`, `-e` and `-i` specify where the checkpoint for the model is, where the predictions from the model and other experiment data will be saved, and where the input dataset (LiveCELL) is stored.
 
 Our standard evaluation procedure uses the following three settings:
 - `--points --positive 1 --negative 0` (using point prompts with a single positive point)
