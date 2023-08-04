@@ -66,11 +66,19 @@ def get_predictor_for_amg(ckpt, model_type):
 
 
 def get_prompted_segmentations_sam(predictor, img_dir, gt_dir, root_embedding_dir, pred_dir, n_positive, n_negative,
-                                   dilation, get_points=False, get_boxes=False, batch_size=512):
+                                   dilation, get_points=False, get_boxes=False, batch_size=512, _name=None):
     """ Function to get prompted segmentations from SAM
     """
+    _n = _name.split("_")[0]
+    point_save_path = f"{_n}-points-p{n_positive}-n{n_negative}.pkl"
+    if n_positive > 1 and n_negative > 0:
+        if os.path.exists(point_save_path):
+            print("Using point prompts saved previously")
+
+    f_save_points = []
+
     for ctype in ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"]:
-        for img_path in tqdm(glob(os.path.join(img_dir, f"{ctype}*")), desc=f"Run inference for {ctype}"):
+        for i, img_path in enumerate(tqdm(glob(os.path.join(img_dir, f"{ctype}*")), desc=f"Run inference for {ctype}")):
             img_id = os.path.split(img_path)[-1]
 
             # We skip the images which already have been segmented
@@ -89,13 +97,30 @@ def get_prompted_segmentations_sam(predictor, img_dir, gt_dir, root_embedding_di
 
             im = np.stack((im,)*3, axis=-1)
             predictor.set_image(im)
-            instances = sam_predictor(gt, predictor, n_positive=n_positive, n_negative=n_negative, dilation=dilation,
-                                      get_points=get_points, get_boxes=get_boxes, batch_size=batch_size)
+
+            past_inputs = None
+            if n_positive > 1 and n_negative > 0:
+                if os.path.exists(point_save_path):
+                    with open(point_save_path, 'rb') as file:
+                        myvar = pickle.load(file)
+                    past_inputs = myvar[i][img_id]
+
+            instances, save_points = sam_predictor(img_id, gt, predictor, n_positive=n_positive, n_negative=n_negative,
+                                                   dilation=dilation, get_points=get_points, get_boxes=get_boxes,
+                                                   batch_size=batch_size, past_inputs=past_inputs)
+            f_save_points.append(save_points)
             imageio.imsave(os.path.join(pred_dir, img_id), instances)
+
+    if n_positive > 1 and n_negative > 0:
+        if not os.path.exists(point_save_path):
+            print(f"Saving points at {point_save_path}")
+            with open(point_save_path, "wb") as file:
+                pickle.dump(f_save_points, file)
 
 
 def sam_predictor(
-    gt, predictor, n_positive=1, n_negative=0, dilation=5, get_points=False, get_boxes=False, batch_size=512
+    img_id, gt, predictor, n_positive=1, n_negative=0, dilation=5, get_points=False, get_boxes=False,
+    batch_size=512, past_inputs=None
 ):
     """ Generates instance segmentation per image from each assigned prompting method
     """
@@ -107,14 +132,16 @@ def sam_predictor(
                                                   get_box_prompts=get_boxes)
     transform_function = ResizeLongestSide(1024)  # from the model
     gt_ids = np.unique(gt)[1:]
-    instance_labels = batched_prompts_per_image(gt, gt_ids, center_coordinates, bbox_coordinates, prompt_generator,
-                                                get_points, get_boxes, n_positive, n_negative, predictor,
-                                                transform_function, batch_size=batch_size)
-    return instance_labels
+    instance_labels, save_points = batched_prompts_per_image(img_id, gt, gt_ids, center_coordinates, bbox_coordinates,
+                                                             prompt_generator, get_points, get_boxes, n_positive,
+                                                             n_negative, predictor, transform_function,
+                                                             batch_size=batch_size, past_inputs=past_inputs)
+    return instance_labels, save_points
 
 
-def batched_prompts_per_image(gt, gt_ids, center_coordinates, bbox_coordinates, prompt_generator, get_points,
-                              get_boxes, n_positive, n_negative, predictor, transform_function, batch_size):
+def batched_prompts_per_image(img_id, gt, gt_ids, center_coordinates, bbox_coordinates, prompt_generator,
+                              get_points, get_boxes, n_positive, n_negative, predictor, transform_function,
+                              batch_size, past_inputs):
     """Generates the batch-level instance segmentations from the predictor
     """
     input_point, input_label, input_box = [], [], []
@@ -163,6 +190,9 @@ def batched_prompts_per_image(gt, gt_ids, center_coordinates, bbox_coordinates, 
     masks = []
     ious = []
 
+    if past_inputs is not None:
+        input_point, input_label = past_inputs
+
     n_samples = input_box.shape[0] if input_point is None else input_point.shape[0]
     n_batches = int(np.ceil(float(n_samples) / batch_size))
 
@@ -186,6 +216,10 @@ def batched_prompts_per_image(gt, gt_ids, center_coordinates, bbox_coordinates, 
     ious = torch.cat(ious)
     assert len(masks) == len(ious) == n_samples
 
+    save_points = {
+        img_id: (input_point, input_label)
+    }
+
     # TODO we should actually use non-max suppression here
     # I will implement it somewhere to have it refactored
     instance_labels = np.zeros_like(gt, dtype=int)
@@ -194,4 +228,4 @@ def batched_prompts_per_image(gt, gt_ids, center_coordinates, bbox_coordinates, 
         best_mask = m[best_idx]
         instance_labels[best_mask.detach().cpu().numpy()] = gt_idx
 
-    return instance_labels
+    return instance_labels, save_points
