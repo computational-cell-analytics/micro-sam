@@ -25,8 +25,8 @@ class CustomUnpickler(pickle.Unpickler):
     def find_class(self, module, name):
         try:
             return super().find_class(module, name)
-        except AttributeError or ModuleNotFoundError:
-            print("Did not find", module, name, "and will skip it")
+        except (AttributeError, ModuleNotFoundError) as e:
+            print("Did not find", module, name, "and will skip it for", e)
             return None
 
 
