@@ -120,9 +120,19 @@ def batched_prompts_per_image(gt, gt_ids, center_coordinates, bbox_coordinates, 
     input_point, input_label, input_box = [], [], []
     for gt_id in gt_ids:
         centers, bboxes = center_coordinates.get(gt_id), bbox_coordinates.get(gt_id)
-        input_point_list, input_label_list, input_box_list, _ = prompt_generator(gt, gt_id, bboxes, centers)
+        input_point_list, input_label_list, input_box_list, objm = prompt_generator(gt, gt_id, bboxes, centers)
 
         if get_points:
+            if len(input_point_list) != (n_positive + n_negative):
+                # to stay consistent, we add random points in the background of an object
+                # if there's no neg region around the object - usually happens with small rois
+                needed_points = (n_positive + n_negative) - len(input_point_list)
+                more_neg_points = np.where(objm == 0)
+                chosen_idxx = np.random.choice(len(more_neg_points[0]), size=needed_points)
+                for idx in chosen_idxx:
+                    input_point_list.append((more_neg_points[0][idx], more_neg_points[1][idx]))
+                    input_label_list.append(0)
+            assert len(input_point_list) == (n_positive + n_negative)
             _ip = [ip[::-1] for ip in input_point_list]  # to match the coordinate system used by SAM
             # NOTE: ADDL. STEP (transform coords as per expected format - see predictor.predict function for details)
             _ip = transform_function.apply_coords(np.array(_ip), gt.shape)
