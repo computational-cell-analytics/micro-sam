@@ -1,6 +1,7 @@
 import os
 from glob import glob
 from pathlib import Path
+from typing import Optional, Union
 
 import imageio.v3 as imageio
 import numpy as np
@@ -31,14 +32,29 @@ def _run_evaluation(gt_paths, prediction_paths, verbose=True):
 
 
 def run_evaluation(
-    gt_folder,
-    prediction_folder,
-    save_path=None,
-    pattern="*.tif",
-    verbose=True
+    gt_folder: Union[os.PathLike, str],
+    prediction_folder: Union[os.PathLike, str],
+    save_path: Optional[Union[os.PathLike, str]] = None,
+    pattern: str = "*.tif",
+    verbose: bool = True,
 ) -> pd.DataFrame:
+    """Run evaluation for instance segmentation predictions.
+
+    Args:
+        gt_folder: The folder with ground-truth images.
+        prediction_folder: The folder with the instance segmentations to evaluate.
+        save_path: Optional path for saving the results.
+        pattern: Optional pattern for selecting the images to evaluate via glob.
+            By default all images with ending .tif will be evaluated.
+        verbose: Whether to print the progress.
+
+    Returns:
+        A DataFrame that contains the evaluation results.
     """
-    """
+    # if a save_path is given and it already exists then just load it instead of running the eval
+    if save_path is not None and os.path.exists(save_path):
+        return pd.from_csv(save_path)
+
     gt_paths = glob(os.path.join(gt_folder, pattern))
     prediction_paths = [
         os.path.join(prediction_folder, os.path.basename(path)) for path in gt_paths
@@ -57,3 +73,6 @@ def run_evaluation(
         results.to_csv(save_path, index=False)
 
     return results
+
+
+# TODO function to evaluate full experiment and resave in one table

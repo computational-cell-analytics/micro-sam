@@ -232,7 +232,7 @@ def precompute_all_prompts(
     gt_paths: List[Union[str, os.PathLike]],
     prompt_save_dir: Union[str, os.PathLike],
     prompt_settings: List[Dict[str, Any]],
-):
+) -> None:
     """Precompute all point prompts.
 
     To enable running different inference tasks in parallel afterwards.
