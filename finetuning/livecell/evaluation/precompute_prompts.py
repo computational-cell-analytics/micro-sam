@@ -14,9 +14,7 @@ def precompute_setting(prompt_settings):
 
 def submit_array_job(prompt_settings, full_settings):
     n_settings = len(prompt_settings)
-    cmd = [
-        "sbatch", "-a", f"0-{n_settings-1}", "precompute_prompts.sbatch"
-    ]
+    cmd = ["sbatch", "-a", f"0-{n_settings-1}", "precompute_prompts.sbatch"]
     if full_settings:
         cmd.append("-f")
     run(cmd)

@@ -47,7 +47,7 @@ def _load_prompts(
     if box_prompts is None:
         input_box = []
     else:
-        input_box = point_prompts
+        input_box = box_prompts
 
     prompts = (input_point, input_label, input_box)
     return prompts, cached_point_prompts, cached_box_prompts
