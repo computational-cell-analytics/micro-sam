@@ -42,12 +42,12 @@ def _load_prompts(
     if point_prompts is None:
         input_point, input_label = [], []
     else:
-        input_point, input_label = []
+        input_point, input_label = point_prompts
 
     if box_prompts is None:
         input_box = []
     else:
-        input_box = []
+        input_box = point_prompts
 
     prompts = (input_point, input_label, input_box)
     return prompts, cached_point_prompts, cached_box_prompts
@@ -88,18 +88,6 @@ def _get_batched_prompts(
             input_box.append(_ib)
 
         if use_points:
-
-            # fill up to the necessary number of points if we did not sample enough of them
-            if len(input_point_list) != (n_positives + n_negatives):
-                # to stay consistent, we add random points in the background of an object
-                # if there's no neg region around the object - usually happens with small rois
-                needed_points = (n_positives + n_negatives) - len(input_point_list)
-                more_neg_points = np.where(objm == 0)
-                chosen_idxx = np.random.choice(len(more_neg_points[0]), size=needed_points)
-                for idx in chosen_idxx:
-                    input_point_list.append((more_neg_points[0][idx], more_neg_points[1][idx]))
-                    input_label_list.append(0)
-
             assert len(input_point_list) == (n_positives + n_negatives)
             _ip = [ip[::-1] for ip in input_point_list]  # to match the coordinate system used by SAM
 
