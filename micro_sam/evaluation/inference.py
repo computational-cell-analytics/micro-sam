@@ -26,6 +26,7 @@ def _load_prompts(save_path):
     return saved_prompts
 
 
+# TODO don't generate point prompts if they're already cached
 def _get_batched_prompts(
     gt,
     gt_ids,

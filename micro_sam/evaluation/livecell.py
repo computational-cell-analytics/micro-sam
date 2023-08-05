@@ -2,9 +2,19 @@ import argparse
 import os
 from glob import glob
 
-from . import inference
+import numpy as np
+import pandas as pd
+
+from tqdm import tqdm
+
+from . import inference, evaluation
 
 CELL_TYPES = ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"]
+
+
+#
+# Inference
+#
 
 
 def _get_livecell_paths(input_folder):
@@ -178,3 +188,82 @@ def run_livecell_inference():
         _run_multiple_prompt_settings(args, prompt_settings)
     else:
         _run_single_prompt_setting(args)
+
+
+#
+# Evaluation
+#
+
+
+def evaluate_livecell_predictions(gt_dir, pred_dir, verbose):
+    assert os.path.exists(gt_dir), gt_dir
+    assert os.path.exists(pred_dir), pred_dir
+
+    msas, sa50s, sa75s = [], [], []
+    msas_ct, sa50s_ct, sa75s_ct = [], [], []
+
+    for ct in tqdm(CELL_TYPES, desc="Evaluate livecell predictions", disable=not verbose):
+
+        gt_pattern = os.path.join(gt_dir, f"{ct}/*.tif")
+        gt_paths = glob(gt_pattern)
+        assert len(gt_paths) > 0, "gt_pattern"
+
+        pred_paths = [
+            os.path.join(pred_dir, os.path.basename(path)) for path in gt_paths
+        ]
+
+        this_msas, this_sa50s, this_sa75s = evaluation._run_evaluation(
+            gt_paths, pred_paths, False
+        )
+
+        msas.extend(this_msas), sa50s.extend(this_sa50s), sa75s.extend(this_sa75s)
+        msas_ct.append(np.mean(this_msas))
+        sa50s_ct.append(np.mean(this_sa50s))
+        sa75s_ct.append(np.mean(this_sa75s))
+
+    result_dict = {
+        "cell_type": CELL_TYPES + ["Total"],
+        "msa": msas_ct + [np.mean(msas)],
+        "sa50": sa50s_ct + [np.mean(sa50s_ct)],
+        "sa75": sa75s_ct + [np.mean(sa75s_ct)],
+    }
+    df = pd.DataFrame.from_dict(result_dict)
+    df = df.round(decimals=4)
+    return df
+
+
+def run_livecell_evaluation():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-i", "--input", required=True, help="Provide the data directory for LIVECell Dataset"
+    )
+    parser.add_argument(
+        "-e", "--experiment_folder", required=True,
+        help="Provide the path where the inference data is stored."
+    )
+    parser.add_argument(
+        "-f", "--force", action="store_true",
+        help="Force recomputation of already cached eval results."
+    )
+    args = parser.parse_args()
+
+    gt_dir = os.path.join(args.input, "annotations", "livecell_test_images")
+    assert os.path.exists(gt_dir), "The LiveCELL Dataset is incomplete"
+
+    experiment_folder = args.experiment_folder
+    save_root = os.path.join(experiment_folder, "results")
+
+    inference_root_names = ["points", "box"]
+    for inf_root in inference_root_names:
+
+        pred_folders = sorted(glob(os.path.join(experiment_folder, inf_root, "*")))
+        save_folder = os.path.join(save_root, inf_root)
+        os.makedirs(save_folder, exist_ok=True)
+
+        for pred_folder in tqdm(pred_folders, desc=f"Evaluate predictions for {inf_root} prompt settings"):
+            exp_name = os.path.basename(pred_folder)
+            save_path = os.path.join(save_folder, f"{exp_name}.csv")
+            if os.path.exists(save_path) and not args.force:
+                continue
+            results = evaluate_livecell_predictions(gt_dir, pred_folder, verbose=False)
+            results.to_csv(save_path, index=False)
