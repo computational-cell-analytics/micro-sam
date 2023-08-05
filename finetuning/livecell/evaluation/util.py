@@ -5,6 +5,7 @@ from micro_sam.evaluation.livecell import _get_livecell_paths
 
 DATA_ROOT = "/scratch/projects/nim00007/data/LiveCELL"
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/livecell"
+PROMPT_FOLDER = "/scratch-grete/projects/nim00007/sam/experiments/prompts/livecell"
 MODELS = {
     "vit_b": "/scratch-grete/projects/nim00007/sam/vanilla/sam_vit_b_01ec64.pth",
     "vit_h": "/scratch-grete/projects/nim00007/sam/vanilla/sam_vit_h_4b8939.pth",
@@ -36,6 +37,11 @@ def get_model(name):
 
 def get_experiment_folder(name):
     return os.path.join(EXPERIMENT_ROOT, name)
+
+
+def check_model(name):
+    if name not in MODELS:
+        raise ValueError(f"Invalid model {name}, expect one of {MODELS.keys()}")
 
 
 def download_livecell():

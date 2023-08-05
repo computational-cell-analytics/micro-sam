@@ -20,15 +20,25 @@ def submit_array_job(prompt_settings, full_settings):
     run(cmd)
 
 
+# TODO
+def check_settings(settings):
+    pass
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-f", "--full_settings", action="store_true")
+    parser.add_argument("-c", "--check", action="store_true")
     args = parser.parse_args()
 
     if args.full_settings:
         settings = evaluation.full_experiment_settings(use_boxes=True)
     else:
         settings = evaluation.default_experiment_settings()
+
+    if args.check:
+        check_settings(settings)
+        return
 
     job_id = os.environ.get("SLURM_ARRAY_TASK_ID", None)
 

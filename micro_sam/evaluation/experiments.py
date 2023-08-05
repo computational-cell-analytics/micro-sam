@@ -17,7 +17,7 @@ def full_experiment_settings(
         positive_range: The different number of positive points that will be used.
             By defaul the values are set to [1, 2, 4, 8, 16].
         negative_range: The different number of negative points that will be used.
-            By defaul the values are set to [1, 2, 4, 8, 16].
+            By defaul the values are set to [0, 1, 2, 4, 8, 16].
 
     Returns:
         The list of experiment settings.
@@ -32,12 +32,14 @@ def full_experiment_settings(
     if positive_range is None:
         positive_range = [1, 2, 4, 8, 16]
     if negative_range is None:
-        negative_range = [1, 2, 4, 8, 16]
+        negative_range = [0, 1, 2, 4, 8, 16]
 
     for n_positives in positive_range:
         for n_negatives in negative_range:
+            if n_positives == 0 and n_negatives == 0:
+                continue
             experiment_settings.append(
-                {"use_points": True, "use_boxes": use_boxes, "n_positives": n_negatives, "n_negatives": n_negatives}
+                {"use_points": True, "use_boxes": use_boxes, "n_positives": n_positives, "n_negatives": n_negatives}
             )
 
     return experiment_settings

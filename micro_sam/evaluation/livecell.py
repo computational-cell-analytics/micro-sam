@@ -122,7 +122,6 @@ def _run_single_prompt_setting(args):
 
 
 # TODO add grid-search / automatic instance segmentation
-# TODO enable over-riding paths for convenience (to set paths on GRETE)
 def run_livecell_inference():
     parser = argparse.ArgumentParser()
 
@@ -137,16 +136,12 @@ def run_livecell_inference():
                         help="Pass the checkpoint-specific model name being used for inference.")
 
     # the experiment type:
-    # - standard: run the following prompt settings:
-    #   - p1-n0
-    #   - p2-n4
-    #   - box
-    # - full:
-    #   - TODO define it
+    # - default settings (p1-n0, p2-n4, box)
+    # - full experiment (ranges: p:1-16, n:0-16)
     # if none of the two are active then the prompt setting arguments will be parsed
     # and used to run inference for a single prompt setting
     parser.add_argument("-f", "--full_experiment", action="store_true")
-    parser.add_argument("-s", "--standard_experiment", action="store_true")
+    parser.add_argument("-d", "--default_experiment", action="store_true")
 
     # the prompt settings for an individual inference run
     parser.add_argument("--box", action="store_true", help="Activate box-prompted based inference")
@@ -161,7 +156,7 @@ def run_livecell_inference():
     if args.full_experiment:
         prompt_settings = full_experiment_settings(args.box)
         _run_multiple_prompt_settings(args, prompt_settings)
-    elif args.standard_experiment:
+    elif args.default_experiment:
         prompt_settings = default_experiment_settings()
         _run_multiple_prompt_settings(args, prompt_settings)
     else:
