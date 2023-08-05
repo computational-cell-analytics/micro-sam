@@ -4,7 +4,7 @@ from micro_sam.evaluation import get_predictor
 from micro_sam.evaluation.livecell import _get_livecell_paths
 
 DATA_ROOT = "/scratch/projects/nim00007/data/LiveCELL"
-EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments"
+EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/livecell"
 MODELS = {
     "vit_b": "/scratch-grete/projects/nim00007/sam/vanilla/sam_vit_b_01ec64.pth",
     "vit_h": "/scratch-grete/projects/nim00007/sam/vanilla/sam_vit_h_4b8939.pth",
