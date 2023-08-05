@@ -1,6 +1,7 @@
-import argparse
 import os
 from glob import glob
+from pathlib import Path
+from typing import Optional, Union
 
 import imageio.v3 as imageio
 import numpy as np
@@ -9,74 +10,69 @@ import pandas as pd
 from elf.evaluation import mean_segmentation_accuracy
 from tqdm import tqdm
 
-from .livecell import CELL_TYPES
 
-
-def analyse_livecell_predictions(gt_dir, pred_dir):
-    """ Calculate mSA, SA50, SA75
-    """
-    assert os.path.exists(pred_dir), pred_dir
-
+def _run_evaluation(gt_paths, prediction_paths, verbose=True):
+    assert len(gt_paths) == len(prediction_paths)
     msas, sa50s, sa75s = [], [], []
-    msas_ct, sa50s_ct, sa75s_ct = [], [], []
 
-    for ct in tqdm(CELL_TYPES, desc="Evaluate livecell predictions"):
+    for gt_path, pred_path in tqdm(
+        zip(gt_paths, prediction_paths), desc="Evaluate predictions", total=len(gt_paths), disable=not verbose
+    ):
+        assert os.path.exists(gt_path), gt_path
+        assert os.path.exists(pred_path), pred_path
 
-        gt_pattern = os.path.join(gt_dir, f"{ct}/*.tif")
-        gt_paths = glob(gt_pattern)
-        assert len(gt_paths) > 0, f"{gt_pattern}"
+        gt = imageio.imread(gt_path)
+        pred = imageio.imread(pred_path)
 
-        this_msas, this_sa50s, this_sa75s = [], [], []
+        msa, scores = mean_segmentation_accuracy(pred, gt, return_accuracies=True)
+        sa50, sa75 = scores[0], scores[5]
+        msas.append(msa), sa50s.append(sa50), sa75s.append(sa75)
 
-        for gt_path in gt_paths:
-            cell_id = os.path.basename(gt_path)
-            pred_path = os.path.join(pred_dir, cell_id)
-            gt = imageio.imread(gt_path)
-            pred = imageio.imread(pred_path)
-
-            msa, scores = mean_segmentation_accuracy(pred, gt, return_accuracies=True)  # type: ignore
-            sa50, sa75 = scores[0], scores[5]
-
-            this_msas.append(msa), this_sa50s.append(sa50), this_sa75s.append(sa75)
-
-        msas.extend(this_msas), sa50s.extend(this_sa50s), sa75s.extend(this_sa75s)
-        msas_ct.append(np.mean(this_msas))
-        sa50s_ct.append(np.mean(this_sa50s))
-        sa75s_ct.append(np.mean(this_sa75s))
-
-    result_dict = {
-        "cell_type": CELL_TYPES + ["Total"],
-        "msa": msas_ct + [np.mean(msas)],
-        "sa50": sa50s_ct + [np.mean(sa50s_ct)],
-        "sa75": sa75s_ct + [np.mean(sa75s_ct)],
-    }
-    df = pd.DataFrame.from_dict(result_dict)
-    df = df.round(decimals=4)
-    return df
+    return msas, sa50s, sa75s
 
 
-def run_livecell_evaluation(args):
-    gt_dir = os.path.join(args.input, "annotations", "livecell_test_images")
-    list_of_combinations = ["points", "box"]
-    for pred_mode in list_of_combinations:
-        pred_dir = os.path.join(args.pred_path, args.name, pred_mode)
-        save_result_filename = f"{pred_mode}"
-        if pred_mode == "points":
-            pred_dir = os.path.join(pred_dir, "p1-n0")
-            save_result_filename = f"{save_result_filename}-p1-n0"
+def run_evaluation(
+    gt_folder: Union[os.PathLike, str],
+    prediction_folder: Union[os.PathLike, str],
+    save_path: Optional[Union[os.PathLike, str]] = None,
+    pattern: str = "*.tif",
+    verbose: bool = True,
+) -> pd.DataFrame:
+    """Run evaluation for instance segmentation predictions.
 
-        csv_save_dir = os.path.join(args.save_path, args.name)
-        os.makedirs(csv_save_dir, exist_ok=True)
+    Args:
+        gt_folder: The folder with ground-truth images.
+        prediction_folder: The folder with the instance segmentations to evaluate.
+        save_path: Optional path for saving the results.
+        pattern: Optional pattern for selecting the images to evaluate via glob.
+            By default all images with ending .tif will be evaluated.
+        verbose: Whether to print the progress.
 
-        results = analyse_livecell_predictions(gt_dir, pred_dir)
-        results.to_csv(os.path.join(csv_save_dir, f"{save_result_filename}.csv"), index=False)
+    Returns:
+        A DataFrame that contains the evaluation results.
+    """
+    # if a save_path is given and it already exists then just load it instead of running the eval
+    if save_path is not None and os.path.exists(save_path):
+        return pd.from_csv(save_path)
+
+    gt_paths = glob(os.path.join(gt_folder, pattern))
+    prediction_paths = [
+        os.path.join(prediction_folder, os.path.basename(path)) for path in gt_paths
+    ]
+    assert all(os.path.exists(path) for path in prediction_paths)
+    msas, sa50s, sa75s = _run_evaluation(gt_paths, prediction_paths, verbose=verbose)
+
+    results = pd.DataFrame.from_dict({
+        "msa": [np.mean(msas)],
+        "sa50": [np.mean(sa50s)],
+        "sa75": [np.mean(sa75s)],
+    })
+
+    if save_path is not None:
+        os.makedirs(Path(save_path).parent, exist_ok=True)
+        results.to_csv(save_path, index=False)
+
+    return results
 
 
-def livecell_evaluation_parser():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-i", "--input", type=str, default="./livecell/",
-                        help="Provide the data directory for LIVECell Dataset")
-    parser.add_argument("-p", "--pred_path", type=str, default="./predictions")
-    parser.add_argument("-s", "--save_path", type=str, default="./results/")
-    parser.add_argument("--name", type=str, required=True)
-    return parser
+# TODO function to evaluate full experiment and resave in one table

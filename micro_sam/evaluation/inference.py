@@ -1,9 +1,7 @@
 import os
 import pickle
 
-from concurrent import futures
 from copy import deepcopy
-from functools import partial
 from typing import Any, Dict, List, Optional, Union
 
 import imageio.v3 as imageio
@@ -20,10 +18,39 @@ from .. import util as util
 from ..prompt_generators import PointAndBoxPromptGenerator
 
 
-def _load_prompts(save_path):
-    with open(save_path, "rb") as f:
-        saved_prompts = pickle.load(f)
-    return saved_prompts
+def _load_prompts(
+    cached_point_prompts, save_point_prompts,
+    cached_box_prompts, save_box_prompts,
+    image_name
+):
+
+    def load_prompt_type(cached_prompts, save_prompts):
+        # Check if we have saved prompts.
+        if cached_prompts is None or save_prompts:  # we don't have cached prompts
+            prompts = None
+        elif isinstance(cached_prompts, str):  # we have cached prompts, but they have not been loaded yet
+            with open(cached_prompts, "rb") as f:
+                cached_prompts = pickle.load(f)
+            prompts = cached_prompts[image_name]
+        else:  # we have cached prompts
+            prompts = cached_prompts[image_name]
+        return cached_prompts, prompts
+
+    cached_point_prompts, point_prompts = load_prompt_type(cached_point_prompts, save_point_prompts)
+    cached_box_prompts, box_prompts = load_prompt_type(cached_box_prompts, save_box_prompts)
+
+    if point_prompts is None:
+        input_point, input_label = [], []
+    else:
+        input_point, input_label = []
+
+    if box_prompts is None:
+        input_box = []
+    else:
+        input_box = []
+
+    prompts = (input_point, input_label, input_box)
+    return prompts, cached_point_prompts, cached_box_prompts
 
 
 def _get_batched_prompts(
@@ -93,22 +120,21 @@ def _run_inference_with_prompts_for_image(
     n_negatives,
     dilation,
     batch_size,
-    prompts,
+    cached_prompts,
 ):
     # We need the resize transformation for the expected model input size.
     transform_function = ResizeLongestSide(1024)
     gt_ids = np.unique(gt)[1:]
 
-    input_point, input_label, input_box = _get_batched_prompts(
-        gt, gt_ids, use_points, use_boxes, n_positives, n_negatives, dilation, transform_function
-    )
-    # If we have saved prompts already then use them instead of the ones we just sampled.
-    # Note that this only affects point prompts.
-    if prompts is not None:
-        input_point, input_label = prompts
+    if cached_prompts is None:
+        input_point, input_label, input_box = _get_batched_prompts(
+            gt, gt_ids, use_points, use_boxes, n_positives, n_negatives, dilation, transform_function,
+        )
+    else:
+        input_point, input_label, input_box = cached_prompts
 
     # Make a copy of the point prompts to return them at the end.
-    prompts = deepcopy((input_point, input_label))
+    prompts = deepcopy((input_point, input_label, input_box))
 
     # Transform the prompts into batches
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -186,8 +212,7 @@ def precompute_all_embeddings(
         util.precompute_image_embeddings(predictor, im, embedding_path)
 
 
-def _precompute_prompts(gt_path, use_points, use_boxes, n_positives, n_negatives, dilation):
-    transform_function = ResizeLongestSide(1024)
+def _precompute_prompts(gt_path, use_points, use_boxes, n_positives, n_negatives, dilation, transform_function):
     name = os.path.basename(gt_path)
 
     gt = imageio.imread(gt_path)
@@ -198,6 +223,8 @@ def _precompute_prompts(gt_path, use_points, use_boxes, n_positives, n_negatives
         gt, gt_ids, use_points, use_boxes, n_positives, n_negatives, dilation, transform_function
     )
 
+    if use_boxes and not use_points:
+        return name, input_box
     return name, (input_point, input_label)
 
 
@@ -205,8 +232,7 @@ def precompute_all_prompts(
     gt_paths: List[Union[str, os.PathLike]],
     prompt_save_dir: Union[str, os.PathLike],
     prompt_settings: List[Dict[str, Any]],
-    n_workers: Optional[int] = None,
-):
+) -> None:
     """Precompute all point prompts.
 
     To enable running different inference tasks in parallel afterwards.
@@ -215,13 +241,9 @@ def precompute_all_prompts(
         gt_paths: The file paths to the ground-truth segmentations.
         prompt_save_dir: The directory where the prompt files will be saved.
         prompt_settings: The settings for which the prompts will be computed.
-        n_workers: The number of workers to use for pre-computation.
-            By default only a single process will be used to precompute the prompts.
     """
     os.makedirs(prompt_save_dir, exist_ok=True)
-    # parallelization not working (or needs too much RAM)
-    # n_workers = mp.cpu_count() if n_workers is None else n_workers
-    n_workers = 0 if n_workers is None else n_workers
+    transform_function = ResizeLongestSide(1024)
 
     for settings in tqdm(prompt_settings, desc="Precompute prompts"):
 
@@ -229,37 +251,68 @@ def precompute_all_prompts(
         n_positives, n_negatives = settings["n_positives"], settings["n_negatives"]
         dilation = settings.get("dilation", 5)
 
-        # check if we need to save the embeddings for the given settings
-        if not use_points or (n_positives == 1 and n_negatives == 0):
-            continue
-
         # check if the prompts were already computed
-        prompt_save_path = os.path.join(prompt_save_dir, f"points-p{n_positives}-n{n_negatives}.pkl")
+        if use_boxes and not use_points:
+            prompt_save_path = os.path.join(prompt_save_dir, "boxes.pkl")
+        else:
+            prompt_save_path = os.path.join(prompt_save_dir, f"points-p{n_positives}-n{n_negatives}.pkl")
         if os.path.exists(prompt_save_path):
             continue
 
-        _precompute = partial(
-            _precompute_prompts,
-            use_points=use_points,
-            use_boxes=use_boxes,
-            n_positives=n_positives,
-            n_negatives=n_negatives,
-            dilation=dilation,
-        )
-        if n_workers == 0:
-            results = []
-            for gt_path in tqdm(gt_paths, desc=f"Precompute prompts for p{n_positives}-n{n_negatives}"):
-                results.append(_precompute(gt_path))
-        else:
-            with futures.ProcessPoolExecutor(n_workers) as tp:
-                results = list(tqdm(
-                    tp.map(_precompute, gt_paths), total=len(gt_paths),
-                    desc=f"Precompute prompts for p{n_positives}-n{n_negatives}"
-                ))
+        results = []
+        for gt_path in tqdm(gt_paths, desc=f"Precompute prompts for p{n_positives}-n{n_negatives}"):
+            prompts = _precompute_prompts(
+                gt_path,
+                use_points=use_points,
+                use_boxes=use_boxes,
+                n_positives=n_positives,
+                n_negatives=n_negatives,
+                dilation=dilation,
+                transform_function=transform_function,
+            )
+            results.append(prompts)
 
-        saved_embeddings = {res[0]: res[1] for res in results}
+        saved_prompts = {res[0]: res[1] for res in results}
         with open(prompt_save_path, "wb") as f:
-            pickle.dump(saved_embeddings, f)
+            pickle.dump(saved_prompts, f)
+
+
+def _get_prompt_caching(prompt_save_dir, use_points, use_boxes, n_positives, n_negatives):
+
+    def get_prompt_type_caching(use_type, save_name):
+        if not use_type:
+            return None, False, None
+
+        prompt_save_path = os.path.join(prompt_save_dir, save_name)
+        if os.path.exists(prompt_save_path):
+            print("Using precomputed prompts from", prompt_save_path)
+            # We delay loading the prompts, so we only have to load them once they're needed the first time.
+            # This avoids loading the prompts (which are in a big pickle file) if all predictions are done already.
+            cached_prompts = prompt_save_path
+            save_prompts = False
+        else:
+            print("Saving prompts in", prompt_save_path)
+            cached_prompts = {}
+            save_prompts = True
+        return cached_prompts, save_prompts, prompt_save_path
+
+    # Check if prompt serialization is enabled.
+    # If it is then load the prompts if they are already cached and otherwise store them.
+    if prompt_save_dir is None:
+        print("Prompts are not cached.")
+        cached_point_prompts, cached_box_prompts = None, None
+        save_point_prompts, save_box_prompts = False, False
+        point_prompt_save_path, box_prompt_save_path = None, None
+    else:
+        cached_point_prompts, save_point_prompts, point_prompt_save_path = get_prompt_type_caching(
+            use_points, f"points-p{n_positives}-n{n_negatives}.pkl"
+        )
+        cached_box_prompts, save_box_prompts, box_prompt_save_path = get_prompt_type_caching(
+            use_boxes, "boxes.pkl"
+        )
+
+    return (cached_point_prompts, save_point_prompts, point_prompt_save_path,
+            cached_box_prompts, save_box_prompts, box_prompt_save_path)
 
 
 def run_inference_with_prompts(
@@ -299,31 +352,10 @@ def run_inference_with_prompts(
     if len(image_paths) != len(gt_paths):
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
 
-    # Check if prompt serialization is enabled.
-    # If it is then check if the current prompt setting needs serialization.
-    # If it does and they exist, then load the prompts instead of re-generating them.
-    if prompt_save_dir is None:
-        saved_prompts = None
-        dump_prompts = False
-    elif not use_points:  # we don't need to load points if they're not used as prompts
-        saved_prompts = None
-        dump_prompts = False
-    elif n_positives == 1 and n_negatives == 0:  # we don't need to load points for just a single pos. prompt
-        saved_prompts = None
-        dump_prompts = False
-    else:
-        prompt_save_path = os.path.join(prompt_save_dir, f"points-p{n_positives}-n{n_negatives}.pkl")
-        if os.path.exists(prompt_save_path):
-            print("Using precomputed prompts from", prompt_save_path)
-            # we delay loading the prompts, so we only have to load them once they're needed the first time.
-            # this avoids loading the prompts (which are in a big pickle file) if all predictions
-            # were done already
-            saved_prompts = prompt_save_path
-            dump_prompts = False
-        else:
-            print("Saving prompts in", prompt_save_path)
-            saved_prompts = {}
-            dump_prompts = True
+    (cached_point_prompts, save_point_prompts, point_prompt_save_path,
+     cached_box_prompts, save_box_prompts, box_prompt_save_path) = _get_prompt_caching(
+         prompt_save_dir, use_points, use_boxes, n_positives, n_negatives
+     )
 
     for image_path, gt_path in tqdm(
         zip(image_paths, gt_paths), total=len(image_paths), desc="Run inference with prompts"
@@ -346,27 +378,30 @@ def run_inference_with_prompts(
         image_embeddings = util.precompute_image_embeddings(predictor, im, embedding_path)
         util.set_precomputed(predictor, image_embeddings)
 
-        # Check if we have saved prompts.
-        if saved_prompts is None or dump_prompts:  # we don't have saved_prompts
-            this_prompts = None
-        elif isinstance(saved_prompts, str):  # we have saved prompts, but they have not been loaded yet
-            saved_prompts = _load_prompts(saved_prompts)
-            this_prompts = saved_prompts[image_name]
-        else:  # we have saved prompts
-            this_prompts = saved_prompts[image_name]
-
+        this_prompts, cached_point_prompts, cached_box_prompts = _load_prompts(
+            cached_point_prompts, save_point_prompts,
+            cached_box_prompts, save_box_prompts,
+            image_name
+        )
         instances, this_prompts = _run_inference_with_prompts_for_image(
             predictor, gt, n_positives=n_positives, n_negatives=n_negatives,
             dilation=dilation, use_points=use_points, use_boxes=use_boxes,
             batch_size=batch_size, prompts=this_prompts
         )
 
-        if dump_prompts:
-            saved_prompts[image_name] = this_prompts
+        if save_point_prompts:
+            cached_point_prompts[image_name] = this_prompts[:2]
+        if save_box_prompts:
+            cached_box_prompts[image_name] = this_prompts[-1]
 
         # It's important to compress here, otherwise the predictions would take up a lot of space.
         imageio.imwrite(prediction_path, instances, compression=5)
 
-    if dump_prompts:
-        with open(prompt_save_path, "wb") as f:
-            pickle.dump(saved_prompts, f)
+    # Save the prompts if we run experiments with prompt caching and have computed them
+    # for the first time.
+    if save_point_prompts:
+        with open(point_prompt_save_path, "wb") as f:
+            pickle.dump(cached_point_prompts, f)
+    if save_box_prompts:
+        with open(box_prompt_save_path, "wb") as f:
+            pickle.dump(cached_box_prompts, f)

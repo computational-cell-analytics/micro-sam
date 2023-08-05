@@ -36,3 +36,14 @@ def get_model(name):
 
 def get_experiment_folder(name):
     return os.path.join(EXPERIMENT_ROOT, name)
+
+
+def download_livecell():
+    from torch_em.data.datasets import get_livecell_loader
+    get_livecell_loader(DATA_ROOT, "train", (512, 512), 1, download=True)
+    get_livecell_loader(DATA_ROOT, "val", (512, 512), 1, download=True)
+    get_livecell_loader(DATA_ROOT, "test", (512, 512), 1, download=True)
+
+
+if __name__ == "__main__":
+    download_livecell()

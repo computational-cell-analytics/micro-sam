@@ -2,9 +2,20 @@ import argparse
 import os
 from glob import glob
 
-from . import inference
+import numpy as np
+import pandas as pd
+
+from tqdm import tqdm
+
+from . import inference, evaluation
+from .experiments import default_experiment_settings, full_experiment_settings
 
 CELL_TYPES = ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"]
+
+
+#
+# Inference
+#
 
 
 def _get_livecell_paths(input_folder):
@@ -79,8 +90,6 @@ def livecell_inference(
     )
 
 
-# TODO optionally distribute this on multiple slurm jobs
-# in that case ensure that embeddings and prompts are precomputed
 def _run_multiple_prompt_settings(args, prompt_settings):
 
     predictor = inference.get_predictor(args.checkpoint, args.model_type)
@@ -117,22 +126,6 @@ def _run_single_prompt_setting(args):
     )
 
 
-# TODO refactor these to to a more general file
-
-# TODO implement
-def _full_experiment_settings():
-    raise NotImplementedError
-
-
-def _standard_experiment_settings():
-    experiment_settings = [
-        {"use_points": True, "use_boxes": False, "n_positives": 1, "n_negatives": 0},  # p1-n0
-        {"use_points": True, "use_boxes": False, "n_positives": 1, "n_negatives": 4},  # p2-n4
-        {"use_points": False, "use_boxes": True, "n_positives": 0, "n_negatives": 0},  # only box prompts
-    ]
-    return experiment_settings
-
-
 # TODO add grid-search / automatic instance segmentation
 # TODO enable over-riding paths for convenience (to set paths on GRETE)
 def run_livecell_inference():
@@ -163,18 +156,97 @@ def run_livecell_inference():
     # the prompt settings for an individual inference run
     parser.add_argument("--box", action="store_true", help="Activate box-prompted based inference")
     parser.add_argument("--points", action="store_true", help="Activate point-prompt based inference")
-    parser.add_argument("--positive", type=int, default=1, help="No. of positive prompts")
-    parser.add_argument("--negative", type=int, default=0, help="No. of negative prompts")
+    parser.add_argument("-p", "--positive", type=int, default=1, help="No. of positive prompts")
+    parser.add_argument("-n", "--negative", type=int, default=0, help="No. of negative prompts")
 
     # optional external prompt folder
     parser.add_argument("--prompt_folder", help="")
 
     args = parser.parse_args()
     if args.full_experiment:
-        prompt_settings = _full_experiment_settings()
+        prompt_settings = full_experiment_settings(args.box)
         _run_multiple_prompt_settings(args, prompt_settings)
     elif args.standard_experiment:
-        prompt_settings = _standard_experiment_settings()
+        prompt_settings = default_experiment_settings()
         _run_multiple_prompt_settings(args, prompt_settings)
     else:
         _run_single_prompt_setting(args)
+
+
+#
+# Evaluation
+#
+
+
+def evaluate_livecell_predictions(gt_dir, pred_dir, verbose):
+    assert os.path.exists(gt_dir), gt_dir
+    assert os.path.exists(pred_dir), pred_dir
+
+    msas, sa50s, sa75s = [], [], []
+    msas_ct, sa50s_ct, sa75s_ct = [], [], []
+
+    for ct in tqdm(CELL_TYPES, desc="Evaluate livecell predictions", disable=not verbose):
+
+        gt_pattern = os.path.join(gt_dir, f"{ct}/*.tif")
+        gt_paths = glob(gt_pattern)
+        assert len(gt_paths) > 0, "gt_pattern"
+
+        pred_paths = [
+            os.path.join(pred_dir, os.path.basename(path)) for path in gt_paths
+        ]
+
+        this_msas, this_sa50s, this_sa75s = evaluation._run_evaluation(
+            gt_paths, pred_paths, False
+        )
+
+        msas.extend(this_msas), sa50s.extend(this_sa50s), sa75s.extend(this_sa75s)
+        msas_ct.append(np.mean(this_msas))
+        sa50s_ct.append(np.mean(this_sa50s))
+        sa75s_ct.append(np.mean(this_sa75s))
+
+    result_dict = {
+        "cell_type": CELL_TYPES + ["Total"],
+        "msa": msas_ct + [np.mean(msas)],
+        "sa50": sa50s_ct + [np.mean(sa50s_ct)],
+        "sa75": sa75s_ct + [np.mean(sa75s_ct)],
+    }
+    df = pd.DataFrame.from_dict(result_dict)
+    df = df.round(decimals=4)
+    return df
+
+
+def run_livecell_evaluation():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-i", "--input", required=True, help="Provide the data directory for LIVECell Dataset"
+    )
+    parser.add_argument(
+        "-e", "--experiment_folder", required=True,
+        help="Provide the path where the inference data is stored."
+    )
+    parser.add_argument(
+        "-f", "--force", action="store_true",
+        help="Force recomputation of already cached eval results."
+    )
+    args = parser.parse_args()
+
+    gt_dir = os.path.join(args.input, "annotations", "livecell_test_images")
+    assert os.path.exists(gt_dir), "The LiveCELL Dataset is incomplete"
+
+    experiment_folder = args.experiment_folder
+    save_root = os.path.join(experiment_folder, "results")
+
+    inference_root_names = ["points", "box"]
+    for inf_root in inference_root_names:
+
+        pred_folders = sorted(glob(os.path.join(experiment_folder, inf_root, "*")))
+        save_folder = os.path.join(save_root, inf_root)
+        os.makedirs(save_folder, exist_ok=True)
+
+        for pred_folder in tqdm(pred_folders, desc=f"Evaluate predictions for {inf_root} prompt settings"):
+            exp_name = os.path.basename(pred_folder)
+            save_path = os.path.join(save_folder, f"{exp_name}.csv")
+            if os.path.exists(save_path) and not args.force:
+                continue
+            results = evaluate_livecell_predictions(gt_dir, pred_folder, verbose=False)
+            results.to_csv(save_path, index=False)
