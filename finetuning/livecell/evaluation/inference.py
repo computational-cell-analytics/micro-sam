@@ -1,5 +1,6 @@
 import argparse
 import os
+from glob import glob
 from subprocess import run
 
 import micro_sam.evaluation as evaluation
@@ -31,10 +32,24 @@ def submit_array_job(prompt_settings, model_name, test_run):
     run(cmd)
 
 
+def check_inference(settings, model_name):
+    experiment_folder = get_experiment_folder(model_name)
+    for setting in settings:
+        prefix = "box" if setting["use_boxes"] else "points"
+        pos, neg = setting["n_positives"], setting["n_negatives"]
+        pred_folder = os.path.join(experiment_folder, prefix, f"p{pos}-n{neg}")
+        assert os.path.exists(pred_folder), pred_folder
+        n_files = len(glob(os.path.join(pred_folder, "*.tif")))
+        assert n_files == 1512, str(n_files)
+
+    print("Inference checks successful!")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-n", "--name", required=True)
     parser.add_argument("-t", "--test_run", action="store_true")
+    parser.add_argument("-c", "--check", action="store_true")
     args = parser.parse_args()
 
     if args.test_run:  # test run with only the three default experiment settings
@@ -43,9 +58,14 @@ def main():
         settings = evaluation.full_experiment_settings()
         settings.extend(evaluation.full_experiment_settings(use_boxes=True))
 
-    job_id = os.environ.get("SLURM_ARRAY_TASK_ID", None)
     model_name = args.name
     check_model(model_name)
+
+    if args.check:
+        check_inference(settings, model_name)
+        return
+
+    job_id = os.environ.get("SLURM_ARRAY_TASK_ID", None)
 
     if job_id is None:  # this is the main script that submits slurm jobs
         submit_array_job(settings, model_name, args.test_run)

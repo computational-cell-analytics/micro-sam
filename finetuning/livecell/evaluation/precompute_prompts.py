@@ -1,15 +1,16 @@
 import argparse
 import os
+import pickle
 from subprocess import run
 
 import micro_sam.evaluation as evaluation
-from util import get_paths, EXPERIMENT_ROOT
+from tqdm import tqdm
+from util import get_paths, PROMPT_FOLDER
 
 
 def precompute_setting(prompt_settings):
-    prompt_save_dir = os.path.join(EXPERIMENT_ROOT, "prompts")
     _, gt_paths = get_paths()
-    evaluation.precompute_all_prompts(gt_paths, prompt_save_dir, prompt_settings)
+    evaluation.precompute_all_prompts(gt_paths, PROMPT_FOLDER, prompt_settings)
 
 
 def submit_array_job(prompt_settings, full_settings):
@@ -20,9 +21,22 @@ def submit_array_job(prompt_settings, full_settings):
     run(cmd)
 
 
-# TODO
 def check_settings(settings):
-    pass
+
+    def check_prompt_file(prompt_file):
+        assert os.path.exists(prompt_file), prompt_file
+        with open(prompt_file, "rb") as f:
+            prompts = pickle.load(f)
+        assert len(prompts) == 1512, f"{len(prompts)}"
+
+    for setting in tqdm(settings, desc="Check prompt files"):
+        pos, neg = setting["n_positives"], setting["n_negatives"]
+        prompt_file = os.path.join(PROMPT_FOLDER, f"points-p{pos}-n{neg}.pkl")
+        if pos == 0 and neg == 0:
+            prompt_file = os.path.join(PROMPT_FOLDER, "boxes.pkl")
+        check_prompt_file(prompt_file)
+
+    print("All files checked!")
 
 
 def main():
