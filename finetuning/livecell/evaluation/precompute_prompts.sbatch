@@ -1,10 +1,8 @@
 #! /bin/bash
-#SBATCH -N 1
-#SBATCH -p grete:shared
-#SBATCH -G A100:1
-#SBATCH -c 16
-#SBATCH --mem 128G
-#SBATCH -t 2880
+#SBATCH -p standard96
+#SBATCH -c 4
+#SBATCH --mem 64G
+#SBATCH -t 600
 
 source activate sam
-python precompute_prompts.py
+python precompute_prompts.py $@
