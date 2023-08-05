@@ -173,8 +173,8 @@ def run_livecell_inference():
     # the prompt settings for an individual inference run
     parser.add_argument("--box", action="store_true", help="Activate box-prompted based inference")
     parser.add_argument("--points", action="store_true", help="Activate point-prompt based inference")
-    parser.add_argument("--positive", type=int, default=1, help="No. of positive prompts")
-    parser.add_argument("--negative", type=int, default=0, help="No. of negative prompts")
+    parser.add_argument("-p", "--positive", type=int, default=1, help="No. of positive prompts")
+    parser.add_argument("-n", "--negative", type=int, default=0, help="No. of negative prompts")
 
     # optional external prompt folder
     parser.add_argument("--prompt_folder", help="")

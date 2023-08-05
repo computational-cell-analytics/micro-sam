@@ -26,7 +26,6 @@ def _load_prompts(save_path):
     return saved_prompts
 
 
-# TODO don't generate point prompts if they're already cached
 def _get_batched_prompts(
     gt,
     gt_ids,
@@ -36,51 +35,64 @@ def _get_batched_prompts(
     n_negatives,
     dilation,
     transform_function,
+    cached_prompts=None,
 ):
     input_point, input_label, input_box = [], [], []
 
-    # Initialize the prompt generator.
-    center_coordinates, bbox_coordinates = util.get_centers_and_bounding_boxes(gt)
-    prompt_generator = PointAndBoxPromptGenerator(
-        n_positive_points=n_positives, n_negative_points=n_negatives,
-        dilation_strength=dilation, get_point_prompts=use_points,
-        get_box_prompts=use_boxes
-    )
+    # If we have cached prompts already then we don't need to recompute points.
+    _use_points = use_points if cached_prompts is None else False
 
-    # Iterate over the gt ids, generate the corresponding prompts and combine them to batched input.
-    for gt_id in gt_ids:
-        centers, bboxes = center_coordinates.get(gt_id), bbox_coordinates.get(gt_id)
-        input_point_list, input_label_list, input_box_list, objm = prompt_generator(gt, gt_id, bboxes, centers)
+    # We don't have to do anything if we have cached points and don't compute boxes.
+    if _use_points or use_boxes:
 
-        if use_boxes:
-            # indexes hard-coded to adapt with SAM's bbox format
-            # default format: [a, b, c, d] -> SAM's format: [b, a, d, c]
-            _ib = [input_box_list[0][1], input_box_list[0][0],
-                   input_box_list[0][3], input_box_list[0][2]]
-            # transform boxes to the expected format - see predictor.predict function for details
-            _ib = transform_function.apply_boxes(np.array(_ib), gt.shape)
-            input_box.append(_ib)
+        # Initialize the prompt generator.
+        center_coordinates, bbox_coordinates = util.get_centers_and_bounding_boxes(gt)
+        prompt_generator = PointAndBoxPromptGenerator(
+            n_positive_points=n_positives, n_negative_points=n_negatives,
+            dilation_strength=dilation, get_point_prompts=_use_points,
+            get_box_prompts=use_boxes
+        )
 
-        if use_points:
+        # Iterate over the gt ids, generate the corresponding prompts and combine them to batched input.
+        for gt_id in gt_ids:
+            centers, bboxes = center_coordinates.get(gt_id), bbox_coordinates.get(gt_id)
+            input_point_list, input_label_list, input_box_list, objm = prompt_generator(gt, gt_id, bboxes, centers)
 
-            # fill up to the necessary number of points if we did not sample enough of them
-            if len(input_point_list) != (n_positives + n_negatives):
-                # to stay consistent, we add random points in the background of an object
-                # if there's no neg region around the object - usually happens with small rois
-                needed_points = (n_positives + n_negatives) - len(input_point_list)
-                more_neg_points = np.where(objm == 0)
-                chosen_idxx = np.random.choice(len(more_neg_points[0]), size=needed_points)
-                for idx in chosen_idxx:
-                    input_point_list.append((more_neg_points[0][idx], more_neg_points[1][idx]))
-                    input_label_list.append(0)
+            if use_boxes:
+                # indexes hard-coded to adapt with SAM's bbox format
+                # default format: [a, b, c, d] -> SAM's format: [b, a, d, c]
+                _ib = [input_box_list[0][1], input_box_list[0][0],
+                       input_box_list[0][3], input_box_list[0][2]]
+                # transform boxes to the expected format - see predictor.predict function for details
+                _ib = transform_function.apply_boxes(np.array(_ib), gt.shape)
+                input_box.append(_ib)
 
-            assert len(input_point_list) == (n_positives + n_negatives)
-            _ip = [ip[::-1] for ip in input_point_list]  # to match the coordinate system used by SAM
+            if use_points and cached_prompts is not None:
+                continue
 
-            # transform coords to the expected format - see predictor.predict function for details
-            _ip = transform_function.apply_coords(np.array(_ip), gt.shape)
-            input_point.append(_ip)
-            input_label.append(input_label_list)
+            if use_points:
+
+                # fill up to the necessary number of points if we did not sample enough of them
+                if len(input_point_list) != (n_positives + n_negatives):
+                    # to stay consistent, we add random points in the background of an object
+                    # if there's no neg region around the object - usually happens with small rois
+                    needed_points = (n_positives + n_negatives) - len(input_point_list)
+                    more_neg_points = np.where(objm == 0)
+                    chosen_idxx = np.random.choice(len(more_neg_points[0]), size=needed_points)
+                    for idx in chosen_idxx:
+                        input_point_list.append((more_neg_points[0][idx], more_neg_points[1][idx]))
+                        input_label_list.append(0)
+
+                assert len(input_point_list) == (n_positives + n_negatives)
+                _ip = [ip[::-1] for ip in input_point_list]  # to match the coordinate system used by SAM
+
+                # transform coords to the expected format - see predictor.predict function for details
+                _ip = transform_function.apply_coords(np.array(_ip), gt.shape)
+                input_point.append(_ip)
+                input_label.append(input_label_list)
+
+    if use_points and cached_prompts is not None:
+        input_point, input_label = cached_prompts
 
     return input_point, input_label, input_box
 
@@ -101,12 +113,9 @@ def _run_inference_with_prompts_for_image(
     gt_ids = np.unique(gt)[1:]
 
     input_point, input_label, input_box = _get_batched_prompts(
-        gt, gt_ids, use_points, use_boxes, n_positives, n_negatives, dilation, transform_function
+        gt, gt_ids, use_points, use_boxes, n_positives, n_negatives, dilation, transform_function,
+        cached_prompts=prompts,
     )
-    # If we have saved prompts already then use them instead of the ones we just sampled.
-    # Note that this only affects point prompts.
-    if prompts is not None:
-        input_point, input_label = prompts
 
     # Make a copy of the point prompts to return them at the end.
     prompts = deepcopy((input_point, input_label))
