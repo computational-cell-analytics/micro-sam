@@ -145,7 +145,7 @@ class PointAndBoxPromptGenerator:
 
         coord_list, label_list = self._sample_positive_points(object_mask, center_coordinates, coord_list, label_list)
         coord_list, label_list = self._sample_negative_points(object_mask, bbox_coordinates, coord_list, label_list)
-        coord_list, label_list = self._ensure_num_points()
+        coord_list, label_list = self._ensure_num_points(object_mask, coord_list, label_list)
 
         return coord_list, label_list
 
@@ -177,7 +177,7 @@ class PointAndBoxPromptGenerator:
         object_mask = segmentation == segmentation_id
 
         if self.get_point_prompts:
-            coord_list, label_list = self._sample_point_prompts(object_mask, bbox_coordinates, center_coordinates)
+            coord_list, label_list = self._sample_points(object_mask, bbox_coordinates, center_coordinates)
         else:
             coord_list, label_list = None, None
 
