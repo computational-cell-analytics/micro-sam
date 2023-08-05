@@ -1,5 +1,6 @@
 import os
 from glob import glob
+from pathlib import Path
 
 import imageio.v3 as imageio
 import numpy as np
@@ -29,6 +30,30 @@ def _run_evaluation(gt_paths, prediction_paths, verbose=True):
     return msas, sa50s, sa75s
 
 
-# TODO
-def run_evaluation(gt_folder, prediction_folder, save_path):
-    pass
+def run_evaluation(
+    gt_folder,
+    prediction_folder,
+    save_path=None,
+    pattern="*.tif",
+    verbose=True
+) -> pd.DataFrame:
+    """
+    """
+    gt_paths = glob(os.path.join(gt_folder, pattern))
+    prediction_paths = [
+        os.path.join(prediction_folder, os.path.basename(path)) for path in gt_paths
+    ]
+    assert all(os.path.exists(path) for path in prediction_paths)
+    msas, sa50s, sa75s = _run_evaluation(gt_paths, prediction_paths, verbose=verbose)
+
+    results = pd.DataFrame.from_dict({
+        "msa": [np.mean(msas)],
+        "sa50": [np.mean(sa50s)],
+        "sa75": [np.mean(sa75s)],
+    })
+
+    if save_path is not None:
+        os.makedirs(Path(save_path).parent, exist_ok=True)
+        results.to_csv(save_path, index=False)
+
+    return results

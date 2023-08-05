@@ -8,6 +8,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from . import inference, evaluation
+from .experiments import default_experiment_settings, full_experiment_settings
 
 CELL_TYPES = ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"]
 
@@ -89,8 +90,6 @@ def livecell_inference(
     )
 
 
-# TODO optionally distribute this on multiple slurm jobs
-# in that case ensure that embeddings and prompts are precomputed
 def _run_multiple_prompt_settings(args, prompt_settings):
 
     predictor = inference.get_predictor(args.checkpoint, args.model_type)
@@ -125,22 +124,6 @@ def _run_single_prompt_setting(args):
         args.negative,
         args.prompt_folder,
     )
-
-
-# TODO refactor these to to a more general file
-
-# TODO implement
-def _full_experiment_settings():
-    raise NotImplementedError
-
-
-def _standard_experiment_settings():
-    experiment_settings = [
-        {"use_points": True, "use_boxes": False, "n_positives": 1, "n_negatives": 0},  # p1-n0
-        {"use_points": True, "use_boxes": False, "n_positives": 1, "n_negatives": 4},  # p2-n4
-        {"use_points": False, "use_boxes": True, "n_positives": 0, "n_negatives": 0},  # only box prompts
-    ]
-    return experiment_settings
 
 
 # TODO add grid-search / automatic instance segmentation
@@ -181,10 +164,10 @@ def run_livecell_inference():
 
     args = parser.parse_args()
     if args.full_experiment:
-        prompt_settings = _full_experiment_settings()
+        prompt_settings = full_experiment_settings(args.box)
         _run_multiple_prompt_settings(args, prompt_settings)
     elif args.standard_experiment:
-        prompt_settings = _standard_experiment_settings()
+        prompt_settings = default_experiment_settings()
         _run_multiple_prompt_settings(args, prompt_settings)
     else:
         _run_single_prompt_setting(args)
