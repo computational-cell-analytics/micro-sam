@@ -91,12 +91,7 @@ def livecell_inference(
 
 
 def _run_multiple_prompt_settings(args, prompt_settings):
-
-    predictor = inference.get_predictor(args.checkpoint, args.model_type)
-    image_paths, _ = _get_livecell_paths()
-    embedding_folder = os.path.join(args.experiment_folder, "embeddings")
-    inference.precompute_image_embeddings(predictor, image_paths, embedding_folder)
-
+    predictor = inference.get_predictor(args.ckpt, args.model)
     for settings in prompt_settings:
         livecell_inference(
             args.ckpt,

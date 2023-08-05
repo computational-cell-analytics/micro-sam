@@ -374,7 +374,7 @@ def run_inference_with_prompts(
         instances, this_prompts = _run_inference_with_prompts_for_image(
             predictor, gt, n_positives=n_positives, n_negatives=n_negatives,
             dilation=dilation, use_points=use_points, use_boxes=use_boxes,
-            batch_size=batch_size, prompts=this_prompts
+            batch_size=batch_size, cached_prompts=this_prompts
         )
 
         if save_point_prompts:
