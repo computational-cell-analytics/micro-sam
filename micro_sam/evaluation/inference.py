@@ -203,7 +203,7 @@ def precompute_all_embeddings(
 def _precompute_prompts(gt_path, use_points, use_boxes, n_positives, n_negatives, dilation, transform_function):
     name = os.path.basename(gt_path)
 
-    gt = imageio.imread(gt_path)
+    gt = imageio.imread(gt_path).astype("uint32")
     gt = relabel_sequential(gt)[0]
     gt_ids = np.unique(gt)[1:]
 
