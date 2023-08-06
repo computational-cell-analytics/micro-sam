@@ -9,6 +9,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from . import inference, evaluation
+from .automatic_mask_generation import run_amg_grid_search_and_inference
 from .experiments import default_experiment_settings, full_experiment_settings
 
 CELL_TYPES = ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"]
@@ -19,10 +20,12 @@ CELL_TYPES = ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"
 #
 
 
-def _get_livecell_paths(input_folder, split="test"):
+def _get_livecell_paths(input_folder, split="test", n_val_per_cell_type=None):
     assert split in ["val", "test"]
     assert os.path.exists(input_folder), "Please download the LIVECell Dataset"
+
     if split == "test":
+
         img_dir = os.path.join(input_folder, "images", "livecell_test_images")
         assert os.path.exists(img_dir), "The LIVECell Dataset is incomplete"
         gt_dir = os.path.join(input_folder, "annotations", "livecell_test_images")
@@ -36,18 +39,27 @@ def _get_livecell_paths(input_folder, split="test"):
                 assert os.path.exists(gt_path), gt_path
                 gt_paths.append(gt_path)
     else:
-        f = open(os.path.join(input_folder, "val.json"))
-        data = json.load(f)
+
+        with open(os.path.join(input_folder, "val.json")) as f:
+            data = json.load(f)
         livecell_val_ids = [i["file_name"] for i in data["images"]]
 
         img_dir = os.path.join(input_folder, "images", "livecell_train_val_images")
         assert os.path.exists(img_dir), "The LIVECell Dataset is incomplete"
         gt_dir = os.path.join(input_folder, "annotations", "livecell_train_val_images")
         assert os.path.exists(gt_dir), "The LIVECell Dataset is incomplete"
+
         image_paths, gt_paths = [], []
+        count_per_cell_type = {ct: 0 for ct in CELL_TYPES}
+
         for img_name in livecell_val_ids:
+            cell_type = img_name.split("_")[0]
+            if n_val_per_cell_type is not None and count_per_cell_type[cell_type] >= n_val_per_cell_type:
+                continue
+
             image_paths.append(os.path.join(img_dir, img_name))
-            gt_paths.append(os.path.join(gt_dir, img_name))
+            gt_paths.append(os.path.join(gt_dir, cell_type, img_name))
+            count_per_cell_type[cell_type] += 1
 
     return image_paths, gt_paths
 
@@ -107,6 +119,40 @@ def livecell_inference(
     )
 
 
+# TODO optional params for testing the other amg
+def run_livecell_amg(
+    checkpoint,
+    model,
+    input_folder,
+    experiment_folder,
+    iou_thresh_values=None,
+    stability_score_values=None,
+    verbose_gs=False,
+    n_val_per_cell_type=None,
+):
+    """Run automatic mask generation grid-search and inference for livecell.
+    """
+    embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
+    os.makedirs(embedding_folder, exist_ok=True)
+
+    prediction_folder = os.path.join(experiment_folder, "amg", "inference")  # where the predictions are saved
+    os.makedirs(prediction_folder, exist_ok=True)
+
+    gs_result_folder = os.path.join(experiment_folder, "amg", "grid_search")  # where the grid search results are saved
+    os.makedirs(gs_result_folder, exist_ok=True)
+
+    val_image_paths, val_gt_paths = _get_livecell_paths(input_folder, "val", n_val_per_cell_type=n_val_per_cell_type)
+    test_image_paths, _ = _get_livecell_paths(input_folder, "test")
+
+    predictor = inference.get_predictor(checkpoint, model)
+    run_amg_grid_search_and_inference(
+        predictor, val_image_paths, val_gt_paths, test_image_paths,
+        embedding_folder, prediction_folder, gs_result_folder,
+        iou_thresh_values=iou_thresh_values, stability_score_values=stability_score_values,
+        verbose_gs=verbose_gs,
+    )
+
+
 def _run_multiple_prompt_settings(args, prompt_settings):
     predictor = inference.get_predictor(args.ckpt, args.model)
     for settings in prompt_settings:
@@ -124,21 +170,6 @@ def _run_multiple_prompt_settings(args, prompt_settings):
         )
 
 
-def _run_single_prompt_setting(args):
-    livecell_inference(
-        args.ckpt,
-        args.input,
-        args.model,
-        args.experiment_folder,
-        args.points,
-        args.box,
-        args.positive,
-        args.negative,
-        args.prompt_folder,
-    )
-
-
-# TODO add grid-search / automatic instance segmentation
 def run_livecell_inference():
     parser = argparse.ArgumentParser()
 
@@ -172,36 +203,26 @@ def run_livecell_inference():
     parser.add_argument("--prompt_folder", help="")
 
     args = parser.parse_args()
+    if args.full_experiment and args.default_experiment:
+        raise ValueError("Can only run one of 'full_experiment' and 'default_experiment'.")
+
     if args.full_experiment:
         prompt_settings = full_experiment_settings(args.box)
         _run_multiple_prompt_settings(args, prompt_settings)
     elif args.default_experiment:
         prompt_settings = default_experiment_settings()
         _run_multiple_prompt_settings(args, prompt_settings)
-    elif args.auto_mask_generation:
-        run_livecell_amg(args)
     else:
-        _run_single_prompt_setting(args)
+        livecell_inference(
+            args.ckpt, args.input, args.model, args.experiment_folder,
+            args.points, args.box, args.positive, args.negative, args.prompt_folder,
+        )
 
+    # if it has been requested then
+    # the auto mask generation experiment will be run after the other experiments
+    if args.auto_mask_generation:
+        run_livecell_amg(args.ckpt, args.model, args.input, args.experiment_folder)
 
-def run_livecell_amg(args):
-    from .automatic_mask_generation import per_image_amg, get_auto_segmentation_from_gs
-
-    # #### GRID SEARCH ####
-    checkpoint = args.ckpt
-    model = args.model
-    input_folder = args.input
-    embedding_dir = None  # @ Constantin : I am not sure how to handle this but maybe you already do this via args.experiment_folder?
-    save_pred_dir = None  # @ Constantin : same as above
-
-    image_paths, gt_paths = _get_livecell_paths(input_folder, "val")
-    predictor = inference.get_predictor(checkpoint, model)
-
-    per_image_amg(predictor, image_paths, gt_paths, embedding_dir)
-
-    # #### ANALYSIS OVER GRID SEARCH AND AMG
-    image_paths, _ = _get_livecell_paths(input_folder, "test")
-    get_auto_segmentation_from_gs(predictor, image_paths, save_pred_dir, embedding_dir)
 
 #
 # Evaluation
