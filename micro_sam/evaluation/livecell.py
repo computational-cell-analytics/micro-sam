@@ -200,6 +200,7 @@ def run_livecell_amg(args):
     per_image_amg(predictor, image_paths, gt_paths, embedding_dir)
 
     # #### ANALYSIS OVER GRID SEARCH AND AMG
+    image_paths, _ = _get_livecell_paths(input_folder, "test")
     get_auto_segmentation_from_gs(predictor, image_paths, save_pred_dir, embedding_dir)
 
 #
