@@ -8,25 +8,11 @@ from glob import glob
 import imageio.v2 as imageio
 from elf.evaluation import mean_segmentation_accuracy
 
+from micro_sam.instance_segmentation import mask_data_to_segmentation
 from micro_sam.util import precompute_image_embeddings
 from micro_sam.instance_segmentation import AutomaticMaskGenerator
 
 from .inference import get_predictor
-
-
-def remove_bg_as_biggest_element(image, masks):
-    """This function removes the background by sorting the masks based on area,
-    and ignores the object with biggest area
-    """
-    instance_labels = np.zeros((image.shape[0], image.shape[1]), dtype=int)
-
-    sorted_anns = sorted(masks, key=(lambda x: x['area']), reverse=True)
-    for j, ann in enumerate(sorted_anns):
-        if j > 0:  # workaround to ignore the background masks segmented from SAM
-            m = ann['segmentation']
-            instance_labels[m] = j
-
-    return instance_labels
 
 
 def get_range_of_search_values(input_vals):
@@ -46,7 +32,7 @@ def _grid_search(img_name, image, gt, img_save_path, amg):
     for iou_thresh in search_range_for_iou:
         for stability_thresh in search_range_for_ss:
             masks = amg.generate(pred_iou_thresh=iou_thresh, stability_score_thresh=stability_thresh)
-            instance_labels = remove_bg_as_biggest_element(image, masks)
+            instance_labels = mask_data_to_segmentation(masks, image.shape, with_background=True)
             m_sas, sas = mean_segmentation_accuracy(instance_labels, gt, return_accuracies=True)  # type: ignore
 
             result_dict = {
@@ -152,7 +138,7 @@ def get_auto_segmentation_from_gs(args):
         amg.initialize(image, image_embeddings)
 
         masks = amg.generate(pred_iou_thresh=iou_thresh, stability_score_thresh=ss_thresh)
-        instance_labels = remove_bg_as_biggest_element(image, masks)
+        instance_labels = mask_data_to_segmentation(masks, image.shape, with_background=True)
         imageio.imsave(os.path.join(save_auto_pred_dir, img_name), instance_labels)
 
 
