@@ -1,6 +1,7 @@
 import argparse
 import os
 from glob import glob
+import json
 
 import numpy as np
 import pandas as pd
@@ -18,20 +19,36 @@ CELL_TYPES = ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"
 #
 
 
-def _get_livecell_paths(input_folder):
+def _get_livecell_paths(input_folder, split="test"):
+    assert split in ["val", "test"]
     assert os.path.exists(input_folder), "Please download the LIVECell Dataset"
-    img_dir = os.path.join(input_folder, "images", "livecell_test_images")
-    assert os.path.exists(img_dir), "The LiveCELL Dataset is incomplete"
-    gt_dir = os.path.join(input_folder, "annotations", "livecell_test_images")
-    assert os.path.exists(gt_dir), "The LiveCELL Dataset is incomplete"
-    image_paths, gt_paths = [], []
-    for ctype in CELL_TYPES:
-        for img_path in glob(os.path.join(img_dir, f"{ctype}*")):
-            image_paths.append(img_path)
-            img_name = os.path.basename(img_path)
-            gt_path = os.path.join(gt_dir, ctype, img_name)
-            assert os.path.exists(gt_path), gt_path
-            gt_paths.append(gt_path)
+    if split == "test":
+        img_dir = os.path.join(input_folder, "images", "livecell_test_images")
+        assert os.path.exists(img_dir), "The LIVECell Dataset is incomplete"
+        gt_dir = os.path.join(input_folder, "annotations", "livecell_test_images")
+        assert os.path.exists(gt_dir), "The LIVECell Dataset is incomplete"
+        image_paths, gt_paths = [], []
+        for ctype in CELL_TYPES:
+            for img_path in glob(os.path.join(img_dir, f"{ctype}*")):
+                image_paths.append(img_path)
+                img_name = os.path.basename(img_path)
+                gt_path = os.path.join(gt_dir, ctype, img_name)
+                assert os.path.exists(gt_path), gt_path
+                gt_paths.append(gt_path)
+    else:
+        f = open(os.path.join(input_folder, "val.json"))
+        data = json.load(f)
+        livecell_val_ids = [i["file_name"] for i in data["images"]]
+
+        img_dir = os.path.join(input_folder, "images", "livecell_train_val_images")
+        assert os.path.exists(img_dir), "The LIVECell Dataset is incomplete"
+        gt_dir = os.path.join(input_folder, "annotations", "livecell_train_val_images")
+        assert os.path.exists(gt_dir), "The LIVECell Dataset is incomplete"
+        image_paths, gt_paths = [], []
+        for img_name in livecell_val_ids:
+            image_paths.append(os.path.join(img_dir, img_name))
+            gt_paths.append(os.path.join(gt_dir, img_name))
+
     return image_paths, gt_paths
 
 
@@ -138,10 +155,12 @@ def run_livecell_inference():
     # the experiment type:
     # - default settings (p1-n0, p2-n4, box)
     # - full experiment (ranges: p:1-16, n:0-16)
+    # - automatic mask generation (auto)
     # if none of the two are active then the prompt setting arguments will be parsed
     # and used to run inference for a single prompt setting
     parser.add_argument("-f", "--full_experiment", action="store_true")
     parser.add_argument("-d", "--default_experiment", action="store_true")
+    parser.add_argument("-a", "--auto_mask_generation", action="store_true")
 
     # the prompt settings for an individual inference run
     parser.add_argument("--box", action="store_true", help="Activate box-prompted based inference")
@@ -159,9 +178,29 @@ def run_livecell_inference():
     elif args.default_experiment:
         prompt_settings = default_experiment_settings()
         _run_multiple_prompt_settings(args, prompt_settings)
+    elif args.auto_mask_generation:
+        run_livecell_amg(args)
     else:
         _run_single_prompt_setting(args)
 
+
+def run_livecell_amg(args):
+    from .automatic_mask_generation import per_image_amg, get_auto_segmentation_from_gs
+
+    # #### GRID SEARCH ####
+    checkpoint = args.ckpt
+    model = args.model
+    input_folder = args.input
+    embedding_dir = None  # @ Constantin : I am not sure how to handle this but maybe you already do this via args.experiment_folder?
+    save_pred_dir = None  # @ Constantin : same as above
+
+    image_paths, gt_paths = _get_livecell_paths(input_folder, "val")
+    predictor = inference.get_predictor(checkpoint, model)
+
+    per_image_amg(predictor, image_paths, gt_paths, embedding_dir)
+
+    # #### ANALYSIS OVER GRID SEARCH AND AMG
+    get_auto_segmentation_from_gs(predictor, image_paths, save_pred_dir, embedding_dir)
 
 #
 # Evaluation
