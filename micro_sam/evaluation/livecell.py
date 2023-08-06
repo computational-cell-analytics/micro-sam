@@ -8,7 +8,8 @@ import pandas as pd
 
 from tqdm import tqdm
 
-from . import inference, evaluation
+from ..instance_segmentation import AutomaticMaskGenerator, EmbeddingMaskGenerator
+from . import automatic_mask_generation, inference, evaluation
 from .automatic_mask_generation import run_amg_grid_search_and_inference
 from .experiments import default_experiment_settings, full_experiment_settings
 
@@ -119,7 +120,6 @@ def livecell_inference(
     )
 
 
-# TODO optional params for testing the other amg
 def run_livecell_amg(
     checkpoint,
     model,
@@ -128,17 +128,27 @@ def run_livecell_amg(
     iou_thresh_values=None,
     stability_score_values=None,
     verbose_gs=False,
-    n_val_per_cell_type=None,
+    n_val_per_cell_type=25,
+    use_mws=False,
 ):
     """Run automatic mask generation grid-search and inference for livecell.
     """
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
 
-    prediction_folder = os.path.join(experiment_folder, "amg", "inference")  # where the predictions are saved
+    if use_mws:
+        amg_prefix = "amg_mws"
+        AMG = EmbeddingMaskGenerator
+    else:
+        amg_prefix = "amg"
+        AMG = AutomaticMaskGenerator
+
+    # where the predictions are saved
+    prediction_folder = os.path.join(experiment_folder, amg_prefix, "inference")
     os.makedirs(prediction_folder, exist_ok=True)
 
-    gs_result_folder = os.path.join(experiment_folder, "amg", "grid_search")  # where the grid search results are saved
+    # where the grid-search results are saved
+    gs_result_folder = os.path.join(experiment_folder, amg_prefix, "grid_search")
     os.makedirs(gs_result_folder, exist_ok=True)
 
     val_image_paths, val_gt_paths = _get_livecell_paths(input_folder, "val", n_val_per_cell_type=n_val_per_cell_type)
@@ -149,7 +159,7 @@ def run_livecell_amg(
         predictor, val_image_paths, val_gt_paths, test_image_paths,
         embedding_folder, prediction_folder, gs_result_folder,
         iou_thresh_values=iou_thresh_values, stability_score_values=stability_score_values,
-        verbose_gs=verbose_gs,
+        AMG=AMG, verbose_gs=verbose_gs,
     )
 
 

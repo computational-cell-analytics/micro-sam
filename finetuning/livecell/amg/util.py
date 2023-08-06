@@ -23,3 +23,8 @@ def get_checkpoint(name):
 
 def get_experiment_folder(name):
     return os.path.join(EXPERIMENT_ROOT, name)
+
+
+def check_model(name):
+    if name not in MODELS:
+        raise ValueError(f"Invalid model {name}, expect one of {MODELS.keys()}")

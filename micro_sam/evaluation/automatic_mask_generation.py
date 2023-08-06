@@ -15,9 +15,9 @@ from .. import instance_segmentation
 from .. import util
 
 
-def _get_range_of_search_values(input_vals):
+def _get_range_of_search_values(input_vals, step):
     if isinstance(input_vals, list):
-        search_range = np.arange(input_vals[0], input_vals[1] + 0.01, 0.01)
+        search_range = np.arange(input_vals[0], input_vals[1] + step, step)
         search_range = [round(e, 2) for e in search_range]
     else:
         search_range = [input_vals]
@@ -67,6 +67,8 @@ def run_amg_grid_search(
     verbose_gs: bool = False,
 ) -> None:
     """
+
+    Args:
     """
     assert len(image_paths) == len(gt_paths)
     amg_kwargs = {} if amg_kwargs is None else amg_kwargs
@@ -74,9 +76,10 @@ def run_amg_grid_search(
     if "pred_iou_thresh" in amg_generate_kwargs or "stability_score_thresh" in amg_generate_kwargs:
         raise ValueError("The threshold parameters are optimized in the grid-search. You must not pass them as kwargs.")
 
-    iou_thresh_values = _get_range_of_search_values([0.6, 0.9]) if iou_thresh_values is None else iou_thresh_values
-    stability_score_values = _get_range_of_search_values([0.6, 0.95]) if stability_score_values is None\
-        else stability_score_values
+    if iou_thresh_values is None:
+        iou_thresh_values = _get_range_of_search_values([0.6, 0.9], step=0.025)
+    if stability_score_values is None:
+        stability_score_values = _get_range_of_search_values([0.6, 0.95], step=0.025)
 
     os.makedirs(result_dir, exist_ok=True)
     amg = AMG(predictor, **amg_kwargs)
@@ -148,27 +151,29 @@ def run_amg_inference(
         imageio.imwrite(prediction_path, instances, compression=5)
 
 
-def evaluate_amg_grid_search(
-    result_dir: Union[str, os.PathLike],
-    criterion: str = "mSA",
-) -> Tuple[float, float]:
+def evaluate_amg_grid_search(result_dir: Union[str, os.PathLike], criterion: str = "mSA") -> Tuple[float, float, float]:
     """
+
+    Args:
     """
 
     # load all the grid search results
     gs_files = glob(os.path.join(result_dir, "*.csv"))
-    gs_result = pd.concat([pd.from_csv(gs_file) for gs_file in gs_files])
+    gs_result = pd.concat([pd.read_csv(gs_file) for gs_file in gs_files])
 
     # contain only the relevant columns and group by the gridsearch columns
     gs_col1 = "pred_iou_thresh"
     gs_col2 = "stability_score_thresh"
     gs_result = gs_result[[gs_col1, gs_col2, criterion]]
 
-    # TODO
     # compute the mean over the grouped columns
-    gs_result.groupby([gs_col1, gs_col2]).mean()
+    grouped_result = gs_result.groupby([gs_col1, gs_col2]).mean()
 
     # find the best grouped result and return the corresponding thresholds
+    best_score = grouped_result.max().values[0]
+    best_result = grouped_result.idxmax()
+    best_iou_thresh, best_stability_score = best_result.values[0]
+    return best_iou_thresh, best_stability_score, best_score
 
 
 def run_amg_grid_search_and_inference(
@@ -197,10 +202,14 @@ def run_amg_grid_search_and_inference(
     )
 
     amg_generate_kwargs = {} if amg_generate_kwargs is None else amg_generate_kwargs
-    best_iou_thresh, best_stability_score = evaluate_amg_grid_search(result_dir)
+    best_iou_thresh, best_stability_score, best_msa = evaluate_amg_grid_search(result_dir)
+    print(
+        "Best grid-search result:", best_msa,
+        f"@ iou_thresh = {best_iou_thresh}, stability_score = {best_stability_score}"
+    )
     amg_generate_kwargs["pred_iou_thresh"] = best_iou_thresh
     amg_generate_kwargs["stability_score_thresh"] = best_stability_score
 
     run_amg_inference(
-        predictor, test_image_paths, embedding_dir, amg_kwargs, amg_generate_kwargs, AMG
+        predictor, test_image_paths, embedding_dir, embedding_dir, amg_kwargs, amg_generate_kwargs, AMG
     )
