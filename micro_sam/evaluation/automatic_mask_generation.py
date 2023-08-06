@@ -1,133 +1,215 @@
 import os
+from glob import glob
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import imageio.v3 as imageio
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
-from glob import glob
-import imageio.v2 as imageio
+
 from elf.evaluation import mean_segmentation_accuracy
+from segment_anything import SamPredictor
+from tqdm import tqdm
 
-from micro_sam.instance_segmentation import mask_data_to_segmentation
-from micro_sam.util import precompute_image_embeddings
-from micro_sam.instance_segmentation import AutomaticMaskGenerator
+from .. import instance_segmentation
+from .. import util
 
 
-def get_range_of_search_values(input_vals):
+def _get_range_of_search_values(input_vals, step):
     if isinstance(input_vals, list):
-        search_range = np.arange(input_vals[0], input_vals[1] + 0.01, 0.01)
+        search_range = np.arange(input_vals[0], input_vals[1] + step, step)
         search_range = [round(e, 2) for e in search_range]
     else:
         search_range = [input_vals]
     return search_range
 
 
-def _grid_search(img_name, image, gt, img_save_path, amg):
-    search_range_for_iou = get_range_of_search_values([0.6, 0.9])
-    search_range_for_ss = get_range_of_search_values([0.6, 0.95])
-
+def _grid_search(
+    amg, gt, image_name, iou_thresh_values, stability_score_values, result_path, amg_generate_kwargs, verbose,
+):
     net_list = []
-    for iou_thresh in search_range_for_iou:
-        for stability_thresh in search_range_for_ss:
-            masks = amg.generate(pred_iou_thresh=iou_thresh, stability_score_thresh=stability_thresh)
-            instance_labels = mask_data_to_segmentation(masks, image.shape, with_background=True)
-            m_sas, sas = mean_segmentation_accuracy(instance_labels, gt, return_accuracies=True)  # type: ignore
+    gs_combinations = [(r1, r2) for r1 in iou_thresh_values for r2 in stability_score_values]
 
-            result_dict = {
-                "cell_name": img_name,
-                "pred_iou_thresh": iou_thresh,
-                "stability_score_thresh": stability_thresh,
-                "mSA": m_sas,
-                "SA50": sas[0],
-                "SA75": sas[5]
-            }
-            tmp_df = pd.DataFrame([result_dict])
-            net_list.append(tmp_df)
+    for iou_thresh, stability_thresh in tqdm(gs_combinations, disable=not verbose):
+        masks = amg.generate(
+            pred_iou_thresh=iou_thresh, stability_score_thresh=stability_thresh, **amg_generate_kwargs
+        )
+        instance_labels = instance_segmentation.mask_data_to_segmentation(masks, gt.shape, with_background=True)
+        m_sas, sas = mean_segmentation_accuracy(instance_labels, gt, return_accuracies=True)  # type: ignore
+
+        result_dict = {
+            "image_name": image_name,
+            "pred_iou_thresh": iou_thresh,
+            "stability_score_thresh": stability_thresh,
+            "mSA": m_sas,
+            "SA50": sas[0],
+            "SA75": sas[5]
+        }
+        tmp_df = pd.DataFrame([result_dict])
+        net_list.append(tmp_df)
 
     img_gs_df = pd.concat(net_list)
-    img_gs_df.to_csv(img_save_path, index=False)
+    img_gs_df.to_csv(result_path, index=False)
 
 
-def per_image_amg(
-        predictor,
-        image_paths,
-        gt_paths,
-        embedding_dir
-):
-    amg = AutomaticMaskGenerator(predictor)
+# ideally we would generalize the parameters that GS runs over
+def run_amg_grid_search(
+    predictor: SamPredictor,
+    image_paths: List[Union[str, os.PathLike]],
+    gt_paths: List[Union[str, os.PathLike]],
+    embedding_dir: Union[str, os.PathLike],
+    result_dir: Union[str, os.PathLike],
+    iou_thresh_values: Optional[List[float]] = None,
+    stability_score_values: Optional[List[float]] = None,
+    amg_kwargs: Optional[Dict[str, Any]] = None,
+    amg_generate_kwargs: Optional[Dict[str, Any]] = None,
+    AMG: instance_segmentation.AMGBase = instance_segmentation.AutomaticMaskGenerator,
+    verbose_gs: bool = False,
+) -> None:
+    """
 
-    for _img_path, _gt_path in tqdm(zip(image_paths, gt_paths), desc="Grid search..."):
-        # check if the grid search is completed already
-        img_name = os.path.basename(_img_path)
-        gs_save_dir = "./grid_search"
-        os.makedirs(gs_save_dir, exist_ok=True)
-        gs_save_path = os.path.join(gs_save_dir, f"{img_name[:-4]}.csv")
-        if os.path.exists(gs_save_path):
+    Args:
+    """
+    assert len(image_paths) == len(gt_paths)
+    amg_kwargs = {} if amg_kwargs is None else amg_kwargs
+    amg_generate_kwargs = {} if amg_generate_kwargs is None else amg_generate_kwargs
+    if "pred_iou_thresh" in amg_generate_kwargs or "stability_score_thresh" in amg_generate_kwargs:
+        raise ValueError("The threshold parameters are optimized in the grid-search. You must not pass them as kwargs.")
+
+    if iou_thresh_values is None:
+        iou_thresh_values = _get_range_of_search_values([0.6, 0.9], step=0.025)
+    if stability_score_values is None:
+        stability_score_values = _get_range_of_search_values([0.6, 0.95], step=0.025)
+
+    os.makedirs(result_dir, exist_ok=True)
+    amg = AMG(predictor, **amg_kwargs)
+
+    for image_path, gt_path in tqdm(
+        zip(image_paths, gt_paths), desc="Run grid search for AMG", total=len(image_paths)
+    ):
+        image_name = Path(image_path).stem
+        result_path = os.path.join(result_dir, f"{image_name}.csv")
+
+        # We skip images for which the grid search was done already.
+        if os.path.exists(result_path):
             continue
 
-        image = imageio.imread(_img_path)
-        gt = imageio.imread(_gt_path)
+        assert os.path.exists(image_path), image_path
+        assert os.path.exists(gt_path), gt_path
 
-        embedding_path = os.path.join(embedding_dir, "embeddings", f"{img_name[:-4]}.zarr")
-        image_embeddings = precompute_image_embeddings(predictor, image, embedding_path)
+        image = imageio.imread(image_path)
+        gt = imageio.imread(gt_path)
+
+        embedding_path = os.path.join(embedding_dir, f"{image_name[:-4]}.zarr")
+        image_embeddings = util.precompute_image_embeddings(predictor, image, embedding_path)
         amg.initialize(image, image_embeddings)
 
-        _grid_search(img_name, image, gt, gs_save_path, amg)
+        _grid_search(
+            amg, gt, image_name,
+            iou_thresh_values, stability_score_values,
+            result_path, amg_generate_kwargs, verbose=verbose_gs,
+        )
 
 
-def get_auto_segmentation_from_gs(
-        predictor,
-        image_paths,
-        save_pred_dir,
-        embedding_dir
-):
-    # mean over all image results per parameter for getting the best parameter
-    search_range_for_iou = get_range_of_search_values([0.6, 0.9])
-    search_range_for_ss = get_range_of_search_values([0.6, 0.95])
-    list_of_combs = [(r1, r2) for r1 in search_range_for_iou for r2 in search_range_for_ss]
+def run_amg_inference(
+    predictor: SamPredictor,
+    image_paths: List[Union[str, os.PathLike]],
+    embedding_dir: Union[str, os.PathLike],
+    prediction_dir: Union[str, os.PathLike],
+    amg_kwargs: Optional[Dict[str, Any]] = None,
+    amg_generate_kwargs: Optional[Dict[str, Any]] = None,
+    AMG: instance_segmentation.AMGBase = instance_segmentation.AutomaticMaskGenerator,
+) -> None:
+    """
 
-    gs_save_dir = glob("./grid_search/*.csv")
+    Args:
+    """
+    amg_kwargs = {} if amg_kwargs is None else amg_kwargs
+    amg_generate_kwargs = {} if amg_generate_kwargs is None else amg_generate_kwargs
 
-    f_list = []
-    for i, comb in enumerate(tqdm(list_of_combs)):
-        tmp_list_of_maps = []
-        for p in sorted(gs_save_dir):
-            df = pd.read_csv(p)
-            map_list = df["mSA"].tolist()
-            tmp_list_of_maps.append(map_list[i])
-        result = {
-            "pred_iou_thresh": comb[0],
-            "stability_score_thresh": comb[1],
-            "Mean mSA": np.mean(tmp_list_of_maps)
-        }
-        f_list.append(pd.DataFrame([result]))
+    amg = AMG(predictor, **amg_kwargs)
 
-    df = pd.concat(f_list)
+    for image_path in tqdm(image_paths, desc="Run inference for automatic mask generation"):
+        image_name = os.path.basename(image_path)
 
-    # obtain the best parameters from the analysis above
-    idxs = [i for i, x in enumerate(df["Mean mSA"]) if x == max(df["Mean mSA"])]
-    f_iou_thresh, f_ss_thresh = [], []
-    for idx in idxs:
-        chosen_row = df.loc[[idx]]
-        iou_thresh = chosen_row["pred_iou_thresh"].tolist()[0]
-        ss_thresh = chosen_row["stability_score_thresh"].tolist()[0]
-        print(f"The AMG grid search has the best performance at \
-              IoU thresh: {iou_thresh} and Stability Score: {ss_thresh}")
-        f_iou_thresh.append(iou_thresh)
-        f_ss_thresh.append(ss_thresh)
+        # We skip the images that already have been segmented.
+        prediction_path = os.path.join(prediction_dir, image_name)
+        if os.path.exists(prediction_path):
+            continue
 
-    iou_thresh, ss_thresh = f_iou_thresh[0], f_ss_thresh[0]
+        assert os.path.exists(image_path), image_path
+        image = imageio.imread(image_path)
 
-    os.makedirs(save_pred_dir, exist_ok=True)
+        embedding_path = os.path.join(embedding_dir, f"{image_name[:-4]}.zarr")
+        image_embeddings = util.precompute_image_embeddings(predictor, image, embedding_path)
 
-    amg = AutomaticMaskGenerator(predictor)
-
-    for img_path in tqdm(image_paths, desc="Auto Predictions..."):
-        img_name = os.path.basename(img_path)
-        image = imageio.imread(img_path)
-
-        embedding_path = os.path.join(embedding_dir, "embeddings", f"{img_name[:-4]}.zarr")
-        image_embeddings = precompute_image_embeddings(predictor, image, embedding_path)
         amg.initialize(image, image_embeddings)
+        masks = amg.generate(**amg_generate_kwargs)
+        instances = instance_segmentation.mask_data_to_segmentation(masks, image.shape, with_background=True)
 
-        masks = amg.generate(pred_iou_thresh=iou_thresh, stability_score_thresh=ss_thresh)
-        instance_labels = mask_data_to_segmentation(masks, image.shape, with_background=True)
-        imageio.imsave(os.path.join(save_pred_dir, img_name), instance_labels)
+        # It's important to compress here, otherwise the predictions would take up a lot of space.
+        imageio.imwrite(prediction_path, instances, compression=5)
+
+
+def evaluate_amg_grid_search(result_dir: Union[str, os.PathLike], criterion: str = "mSA") -> Tuple[float, float, float]:
+    """
+
+    Args:
+    """
+
+    # load all the grid search results
+    gs_files = glob(os.path.join(result_dir, "*.csv"))
+    gs_result = pd.concat([pd.read_csv(gs_file) for gs_file in gs_files])
+
+    # contain only the relevant columns and group by the gridsearch columns
+    gs_col1 = "pred_iou_thresh"
+    gs_col2 = "stability_score_thresh"
+    gs_result = gs_result[[gs_col1, gs_col2, criterion]]
+
+    # compute the mean over the grouped columns
+    grouped_result = gs_result.groupby([gs_col1, gs_col2]).mean()
+
+    # find the best grouped result and return the corresponding thresholds
+    best_score = grouped_result.max().values[0]
+    best_result = grouped_result.idxmax()
+    best_iou_thresh, best_stability_score = best_result.values[0]
+    return best_iou_thresh, best_stability_score, best_score
+
+
+def run_amg_grid_search_and_inference(
+    predictor: SamPredictor,
+    val_image_paths: List[Union[str, os.PathLike]],
+    val_gt_paths: List[Union[str, os.PathLike]],
+    test_image_paths: List[Union[str, os.PathLike]],
+    embedding_dir: Union[str, os.PathLike],
+    prediction_dir: Union[str, os.PathLike],
+    result_dir: Union[str, os.PathLike],
+    iou_thresh_values: Optional[List[float]] = None,
+    stability_score_values: Optional[List[float]] = None,
+    amg_kwargs: Optional[Dict[str, Any]] = None,
+    amg_generate_kwargs: Optional[Dict[str, Any]] = None,
+    AMG: instance_segmentation.AMGBase = instance_segmentation.AutomaticMaskGenerator,
+    verbose_gs: bool = True,
+) -> None:
+    """
+
+    Args:
+    """
+    run_amg_grid_search(
+        predictor, val_image_paths, val_gt_paths, embedding_dir, result_dir,
+        iou_thresh_values=iou_thresh_values, stability_score_values=stability_score_values,
+        amg_kwargs=amg_kwargs, amg_generate_kwargs=amg_generate_kwargs, AMG=AMG, verbose_gs=verbose_gs,
+    )
+
+    amg_generate_kwargs = {} if amg_generate_kwargs is None else amg_generate_kwargs
+    best_iou_thresh, best_stability_score, best_msa = evaluate_amg_grid_search(result_dir)
+    print(
+        "Best grid-search result:", best_msa,
+        f"@ iou_thresh = {best_iou_thresh}, stability_score = {best_stability_score}"
+    )
+    amg_generate_kwargs["pred_iou_thresh"] = best_iou_thresh
+    amg_generate_kwargs["stability_score_thresh"] = best_stability_score
+
+    run_amg_inference(
+        predictor, test_image_paths, embedding_dir, embedding_dir, amg_kwargs, amg_generate_kwargs, AMG
+    )

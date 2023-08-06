@@ -1,3 +1,8 @@
+from .automatic_mask_generation import (
+    run_amg_inference,
+    run_amg_grid_search,
+    run_amg_grid_search_and_inference,
+)
 from .inference import (
     get_predictor,
     run_inference_with_prompts,
