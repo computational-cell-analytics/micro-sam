@@ -6,7 +6,7 @@ import hashlib
 import os
 import warnings
 from shutil import copyfileobj
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple, Iterable
 
 import imageio.v3 as imageio
 import numpy as np
@@ -135,9 +135,14 @@ def get_sam_model(
     sam = sam_model_registry[model_type_](checkpoint=checkpoint)
     sam.to(device=device)
     predictor = SamPredictor(sam)
+    predictor.model_type = model_type
     if return_sam:
         return predictor, sam
     return predictor
+
+
+def get_model_names() -> Iterable:
+    return _MODEL_URLS.keys()
 
 
 def _to_image(input_):
@@ -392,19 +397,22 @@ def precompute_image_embeddings(
         data_signature = _compute_data_signature(input_)
 
         f = zarr.open(save_path, "a")
-        if "input_size" in f.attrs:  # we have computed the embeddings already
+        key_vals = [("data_signature", data_signature),
+                    ("tile_shape", tile_shape), ("model_type", predictor.model_type)]
+        for key, val in key_vals:
+            if "input_size" in f.attrs:  # we have computed the embeddings already
+                # key signature does not match or is not in the file
+                if key not in f.attrs or f.attrs[key] != val:
+                    warnings.warn(f"Embeddings file is invalid due to unmatching {key}. \
+                        Please recompute embeddings in a new file.")
+                    if wrong_file_callback is not None:
+                        save_path = wrong_file_callback(save_path)
+                        f = zarr.open(save_path, "a")
+                    break
 
-            # data signature does not match or is not in the file
-            if "data_signature" not in f.attrs or f.attrs["data_signature"] != data_signature:
-                warnings.warn("Embeddings file is invalid. Please recompute embeddings in a new file.")
-                if wrong_file_callback is not None:
-                    save_path = wrong_file_callback(save_path)
-                f = zarr.open(save_path, "a")
-                if "data_signature" not in f.attrs:
-                    f.attrs["data_signature"] = data_signature
-
-        else:  # embeddings have not yet been computed
-            f.attrs["data_signature"] = data_signature
+        for key, val in key_vals:
+            if key not in f.attrs:
+                f.attrs[key] = val
 
     if ndim == 2:
         image_embeddings = _compute_2d(input_, predictor) if save_path is None else\
