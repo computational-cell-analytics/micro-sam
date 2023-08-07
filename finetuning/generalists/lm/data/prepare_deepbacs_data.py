@@ -15,7 +15,7 @@ def download_deepbacs():
     get_deepbacs_loader(ROOT, "test", bac_type="mixed", download=True, patch_shape=(256, 256), batch_size=1)
 
 
-# this is the code from Anwai, but I am not sure if it's trustworthy
+# old code from Anwai
 def get_deepbacs_test_images():
     root = ROOT
     output_root = "/scratch-grete/projects/nim00007/sam/ood/LM/deepbacs"
@@ -44,6 +44,7 @@ def get_deepbacs_test_images():
     write_split(test_images, test_labels, "test")
 
 
+# new simplified code
 def get_deepbacs_test_images_new():
     root = ROOT
     output_root = "/scratch-grete/projects/nim00007/sam/ood/LM/deepbacs"

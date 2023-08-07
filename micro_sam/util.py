@@ -153,7 +153,7 @@ class _CustomUnpickler(pickle.Unpickler):
         try:
             return super().find_class(module, name)
         except (AttributeError, ModuleNotFoundError) as e:
-            print("Did not find", module, name, "and will skip it due to", e)
+            warnings.warn(f"Did not find {module}:{name} and will skip it, due to error {e}")
             return None
 
 
@@ -162,6 +162,7 @@ def get_custom_sam_model(
     device: Optional[str] = None,
     model_type: str = "vit_h",
     return_sam: bool = False,
+    return_state: bool = False,
 ) -> SamPredictor:
     """Load a SAM model from a torch_em checkpoint.
 
@@ -173,7 +174,9 @@ def get_custom_sam_model(
         device: The device for the model. If none is given will use GPU if available.
         model_type: The SegmentAnything model to use.
         return_sam: Return the sam model object as well as the predictor.
+        return_state: Return the full state of the checkpoint in addition to the predictor.
     """
+    assert not (return_sam and return_state)
 
     # over-ride the unpickler with our custom one
     custom_pickle = pickle
@@ -183,7 +186,8 @@ def get_custom_sam_model(
     sam = sam_model_registry[model_type]()
 
     # load the model state, ignoring any attributes that can't be found by pickle
-    model_state = torch.load(checkpoint_path, map_location=device, pickle_module=custom_pickle)["model_state"]
+    state = torch.load(checkpoint_path, map_location=device, pickle_module=custom_pickle)
+    model_state = state["model_state"]
 
     # copy the model weights from torch_em's training format
     sam_prefix = "sam."
@@ -196,6 +200,8 @@ def get_custom_sam_model(
     predictor = SamPredictor(sam)
     if return_sam:
         return predictor, sam
+    if return_state:
+        return predictor, state
     return predictor
 
 

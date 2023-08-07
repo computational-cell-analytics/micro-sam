@@ -57,6 +57,16 @@ def default_experiment_settings() -> ExperimentSettings:
     experiment_settings = [
         {"use_points": True, "use_boxes": False, "n_positives": 1, "n_negatives": 0},  # p1-n0
         {"use_points": True, "use_boxes": False, "n_positives": 2, "n_negatives": 4},  # p2-n4
+        {"use_points": True, "use_boxes": False, "n_positives": 4, "n_negatives": 8},  # p4-n8
         {"use_points": False, "use_boxes": True, "n_positives": 0, "n_negatives": 0},  # only box prompts
     ]
     return experiment_settings
+
+
+def get_experiment_setting_name(setting):
+    use_points, use_boxes = setting["use_points"], setting["use_boxes"]
+    assert use_points or use_boxes
+    prefix = "points" if use_points else "box"
+    pos, neg = setting["n_positives"], setting["n_negatives"]
+    name = f"p{pos}-{neg}" if use_points else "p0-n0"
+    return f"{prefix}/{name}"

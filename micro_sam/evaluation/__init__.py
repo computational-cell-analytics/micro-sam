@@ -9,4 +9,8 @@ from .inference import (
     precompute_all_embeddings,
     precompute_all_prompts,
 )
-from .experiments import full_experiment_settings, default_experiment_settings
+from .experiments import (
+    default_experiment_settings,
+    full_experiment_settings,
+    get_experiment_setting_name,
+)

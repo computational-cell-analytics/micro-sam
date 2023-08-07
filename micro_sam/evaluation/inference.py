@@ -27,17 +27,22 @@ def _load_prompts(
     def load_prompt_type(cached_prompts, save_prompts):
         # Check if we have saved prompts.
         if cached_prompts is None or save_prompts:  # we don't have cached prompts
-            prompts = None
-        elif isinstance(cached_prompts, str):  # we have cached prompts, but they have not been loaded yet
+            return cached_prompts, None
+
+        # we have cached prompts, but they have not been loaded yet
+        if isinstance(cached_prompts, str):
             with open(cached_prompts, "rb") as f:
                 cached_prompts = pickle.load(f)
-            prompts = cached_prompts[image_name]
-        else:  # we have cached prompts
-            prompts = cached_prompts[image_name]
+
+        prompts = cached_prompts[image_name]
         return cached_prompts, prompts
 
     cached_point_prompts, point_prompts = load_prompt_type(cached_point_prompts, save_point_prompts)
     cached_box_prompts, box_prompts = load_prompt_type(cached_box_prompts, save_box_prompts)
+
+    # we don't have anything cached
+    if point_prompts is None and box_prompts is None:
+        return None, cached_point_prompts, cached_box_prompts
 
     if point_prompts is None:
         input_point, input_label = [], []
@@ -169,12 +174,15 @@ def _run_inference_with_prompts_for_image(
     return instance_labels, prompts
 
 
-def get_predictor(checkpoint_path, model_type):
+def get_predictor(checkpoint_path, model_type, return_state=False):
     """@private"""
     # TODO use try-except rather than this construct, so that we don't rely on the checkpoint name
     if checkpoint_path.split("/")[-1] == "best.pt":  # Finetuned SAM model
-        predictor = util.get_custom_sam_model(checkpoint_path=checkpoint_path, model_type=model_type)
+        predictor = util.get_custom_sam_model(
+            checkpoint_path=checkpoint_path, model_type=model_type, return_state=return_state
+        )
     else:  # Vanilla SAM model
+        assert not return_state
         predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path)  # type: ignore
     return predictor
 
@@ -349,6 +357,7 @@ def run_inference_with_prompts(
         zip(image_paths, gt_paths), total=len(image_paths), desc="Run inference with prompts"
     ):
         image_name = os.path.basename(image_path)
+        label_name = os.path.basename(gt_path)
 
         # We skip the images that already have been segmented.
         prediction_path = os.path.join(prediction_dir, image_name)
@@ -359,7 +368,7 @@ def run_inference_with_prompts(
         assert os.path.exists(gt_path), gt_path
 
         im = imageio.imread(image_path)
-        gt = imageio.imread(gt_path)
+        gt = imageio.imread(gt_path).astype("uint32")
         gt = relabel_sequential(gt)[0]
 
         embedding_path = os.path.join(embedding_dir, f"{image_name[:-4]}.zarr")
@@ -369,7 +378,7 @@ def run_inference_with_prompts(
         this_prompts, cached_point_prompts, cached_box_prompts = _load_prompts(
             cached_point_prompts, save_point_prompts,
             cached_box_prompts, save_box_prompts,
-            image_name
+            label_name
         )
         instances, this_prompts = _run_inference_with_prompts_for_image(
             predictor, gt, n_positives=n_positives, n_negatives=n_negatives,
@@ -378,9 +387,9 @@ def run_inference_with_prompts(
         )
 
         if save_point_prompts:
-            cached_point_prompts[image_name] = this_prompts[:2]
+            cached_point_prompts[label_name] = this_prompts[:2]
         if save_box_prompts:
-            cached_box_prompts[image_name] = this_prompts[-1]
+            cached_box_prompts[label_name] = this_prompts[-1]
 
         # It's important to compress here, otherwise the predictions would take up a lot of space.
         imageio.imwrite(prediction_path, instances, compression=5)

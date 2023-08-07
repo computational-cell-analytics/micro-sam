@@ -10,7 +10,6 @@ from tqdm import tqdm
 
 from ..instance_segmentation import AutomaticMaskGenerator, EmbeddingMaskGenerator
 from . import automatic_mask_generation, inference, evaluation
-from .automatic_mask_generation import run_amg_grid_search_and_inference
 from .experiments import default_experiment_settings, full_experiment_settings
 
 CELL_TYPES = ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"]
@@ -155,7 +154,7 @@ def run_livecell_amg(
     test_image_paths, _ = _get_livecell_paths(input_folder, "test")
 
     predictor = inference.get_predictor(checkpoint, model)
-    run_amg_grid_search_and_inference(
+    automatic_mask_generation.run_amg_grid_search_and_inference(
         predictor, val_image_paths, val_gt_paths, test_image_paths,
         embedding_folder, prediction_folder, gs_result_folder,
         iou_thresh_values=iou_thresh_values, stability_score_values=stability_score_values,
