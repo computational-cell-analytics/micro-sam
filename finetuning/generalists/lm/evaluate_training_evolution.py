@@ -3,6 +3,7 @@ import os
 import warnings
 from glob import glob
 
+import pandas as pd
 from micro_sam.util import get_custom_sam_model
 from util import evaluate_checkpoint_for_datasets
 
@@ -22,7 +23,7 @@ def evaluate_training_evolution(model_type):
     ))
     assert len(checkpoints) > 0
 
-    epochs = []
+    epochs, results = [], []
     for checkpoint in checkpoints:
 
         with warnings.catch_warnings():
@@ -35,13 +36,19 @@ def evaluate_training_evolution(model_type):
 
         print("Run evaluation for", model_type, "epoch", epoch)
         experiment_root = os.path.join(EXPERIMENT_ROOT, f"{model_type}-epoch-{epoch}")
-        evaluate_checkpoint_for_datasets(
+        result = evaluate_checkpoint_for_datasets(
             None, None, experiment_root, DATASETS,
             run_default_evaluation=True, run_amg=False,
             predictor=predictor,
         )
+        result.insert(0, "epoch", [epoch] * result.shape[0])
+        results.append(result)
 
         epochs.append(epoch)
+
+    results = pd.concat(results)
+    save_path = os.path.join(EXPERIMENT_ROOT, f"{model_type}.csv")
+    results.to_csv(save_path, index=False)
 
 
 def main():

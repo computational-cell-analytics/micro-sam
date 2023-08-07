@@ -2,6 +2,7 @@ import os
 from glob import glob
 from pathlib import Path
 
+import pandas as pd
 from micro_sam.evaluation import (
     inference, evaluation,
     default_experiment_settings, get_experiment_setting_name
@@ -35,6 +36,7 @@ def evaluate_checkpoint_for_dataset(
 ):
     """Evaluate a generalist checkpoint for a given dataset
     """
+    assert run_default_evaluation or run_amg
 
     prompt_dir = os.path.join(PROMPT_ROOT, dataset)
 
@@ -42,6 +44,7 @@ def evaluate_checkpoint_for_dataset(
         predictor = inference.get_predictor(checkpoint, model_type)
     test_image_paths, test_gt_paths = get_data_paths(dataset, "test")
 
+    results = []
     if run_default_evaluation:
         embedding_dir = os.path.join(experiment_folder, "test", "embeddings")
         os.makedirs(embedding_dir, exist_ok=True)
@@ -67,11 +70,16 @@ def evaluate_checkpoint_for_dataset(
             result_path = os.path.join(result_dir, f"{setting_name}.csv")
             os.makedirs(Path(result_path).parent, exist_ok=True)
 
-            # TODO return the result and combine all in one table
-            evaluation.run_evaluation(test_gt_paths, pred_paths, result_path)
+            result = evaluation.run_evaluation(test_gt_paths, pred_paths, result_path)
+            result.insert(0, "setting", [setting_name])
+            results.append(result)
 
     if run_amg:
         raise NotImplementedError
+
+    results = pd.concat(results)
+    results.insert(0, "dataset", [dataset] * results.shape[0])
+    return results
 
 
 def evaluate_checkpoint_for_datasets(
@@ -80,14 +88,19 @@ def evaluate_checkpoint_for_datasets(
 ):
     if predictor is None:
         predictor = inference.get_predictor(checkpoint, model_type)
+
+    results = []
     for dataset in datasets:
         experiment_folder = os.path.join(experiment_root, dataset)
         os.makedirs(experiment_folder, exist_ok=True)
-        evaluate_checkpoint_for_dataset(
+        result = evaluate_checkpoint_for_dataset(
             None, None, dataset, experiment_folder,
             run_default_evaluation=run_default_evaluation,
             run_amg=run_amg, predictor=predictor,
         )
+        results.append(result)
+
+    return pd.concat(results)
 
 
 def evaluate_checkpoint_for_datasets_slurm(
