@@ -52,7 +52,7 @@ def run_evaluation(
     assert len(gt_paths) == len(prediction_paths)
     # if a save_path is given and it already exists then just load it instead of running the eval
     if save_path is not None and os.path.exists(save_path):
-        return pd.from_csv(save_path)
+        return pd.read_csv(save_path)
 
     msas, sa50s, sa75s = _run_evaluation(gt_paths, prediction_paths, verbose=verbose)
 

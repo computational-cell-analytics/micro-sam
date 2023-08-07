@@ -212,8 +212,8 @@ def run_livecell_inference():
     parser.add_argument("--prompt_folder", help="")
 
     args = parser.parse_args()
-    if args.full_experiment and args.default_experiment:
-        raise ValueError("Can only run one of 'full_experiment' and 'default_experiment'.")
+    if sum([args.full_experiment, args.default_experiment, args.auto_mask_generation]) > 2:
+        raise ValueError("Can only run one of 'full_experiment', 'default_experiment' or 'auto_mask_generation'.")
 
     if args.full_experiment:
         prompt_settings = full_experiment_settings(args.box)
@@ -221,16 +221,13 @@ def run_livecell_inference():
     elif args.default_experiment:
         prompt_settings = default_experiment_settings()
         _run_multiple_prompt_settings(args, prompt_settings)
+    elif args.auto_mask_generation:
+        run_livecell_amg(args.ckpt, args.model, args.input, args.experiment_folder)
     else:
         livecell_inference(
             args.ckpt, args.input, args.model, args.experiment_folder,
             args.points, args.box, args.positive, args.negative, args.prompt_folder,
         )
-
-    # if it has been requested then
-    # the auto mask generation experiment will be run after the other experiments
-    if args.auto_mask_generation:
-        run_livecell_amg(args.ckpt, args.model, args.input, args.experiment_folder)
 
 
 #
@@ -296,11 +293,14 @@ def run_livecell_evaluation():
     experiment_folder = args.experiment_folder
     save_root = os.path.join(experiment_folder, "results")
 
-    inference_root_names = ["points", "box"]
+    inference_root_names = ["points", "box", "amg/inference"]
     for inf_root in inference_root_names:
 
         pred_folders = sorted(glob(os.path.join(experiment_folder, inf_root, "*")))
-        save_folder = os.path.join(save_root, inf_root)
+        if inf_root == "amg/inference":
+            save_folder = os.path.join(save_root, "amg")
+        else:
+            save_folder = os.path.join(save_root, inf_root)
         os.makedirs(save_folder, exist_ok=True)
 
         for pred_folder in tqdm(pred_folders, desc=f"Evaluate predictions for {inf_root} prompt settings"):
