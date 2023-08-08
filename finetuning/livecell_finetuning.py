@@ -36,7 +36,7 @@ def finetune_livecell(args):
     device = "cuda"  # override this if you have some more complex set-up and need to specify the exact gpu
     patch_shape = (520, 740)  # the patch shape for training
     # NOTE: this parameter will most likely change because I don't think it makes sense right now
-    n_prompts = [10, 25]  # this is the number of objects per batch that will be sampled (with a random range)
+    n_prompts = 25  # this is the number of objects per batch that will be sampled
 
     # get the trainable segment anything model
     model = sam_training.get_trainable_sam_model(model_type, checkpoint_path, device=device)

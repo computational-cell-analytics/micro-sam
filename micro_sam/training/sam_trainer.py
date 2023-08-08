@@ -34,15 +34,6 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         self.n_sub_iteration = n_sub_iteration
         self._kwargs = kwargs
 
-    def _get_n_prompts(self):
-        """Choose eiher randomly from a range of numbers or pass a fixed value
-        """
-        if isinstance(self.n_prompts, list):
-            n_samples = np.random.randint(self.n_prompts[0], self.n_prompts[1] + 1)
-        else:
-            n_samples = self.n_prompts
-        return n_samples
-
     def _get_prompt_and_multimasking_choices(self, current_iteration):
         """Choose the type of prompts we sample for training, and then we call
         'convert_inputs' with the correct prompting from here.
@@ -315,7 +306,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             self.optimizer.zero_grad()
 
             with forward_context():
-                n_samples = self._get_n_prompts()
+                n_samples = self.n_prompts
                 n_samples = self._update_samples_for_gt_instances(y, n_samples)
 
                 n_pos, n_neg, get_boxes, multimask_output = self._get_prompt_and_multimasking_choices(self._iteration)
@@ -377,7 +368,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         with torch.no_grad():
             for x, y in self.val_loader:
                 with forward_context():
-                    n_samples = self._get_n_prompts()
+                    n_samples = self.n_prompts
                     n_samples = self._update_samples_for_gt_instances(y, n_samples)
 
                     (n_pos, n_neg,
