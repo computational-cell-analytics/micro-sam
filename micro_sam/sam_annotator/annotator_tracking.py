@@ -333,6 +333,8 @@ def _reset_tracking_state():
     track_ids = list(map(str, LINEAGE.keys()))
     TRACKING_WIDGET[1].choices = track_ids
 
+    TRACKING_WIDGET[0].set_choice("track")
+
 
 @magicgui(call_button="Commit [C]", layer={"choices": ["current_track"]})
 def _commit_tracking_widget(v: Viewer, layer: str = "current_track") -> None:
