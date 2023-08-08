@@ -39,14 +39,15 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         """Choose the type of prompts we sample for training, and then we call
         'convert_inputs' with the correct prompting from here.
         """
-        multimask_output = True
         if current_iteration % 2 == 0:  # sample only a single point per object
             n_pos, n_neg = 1, 0
             get_boxes = False
+            multimask_output = True
 
         else:  # sample only a single box per object
             n_pos, n_neg = 0, 0
             get_boxes = True
+            multimask_output = False
 
         return n_pos, n_neg, get_boxes, multimask_output
 
@@ -62,7 +63,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         elif current_iteration % 4 == 1:  # sample only a single box per object
             n_pos, n_neg = 0, 0
             get_boxes = True
-            multimask_output = True
+            multimask_output = False
 
         elif current_iteration % 4 == 2:  # sample a random no. of points
             pos_range, neg_range = 4, 4
@@ -174,7 +175,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
     #
     # Update Masks Iteratively while Training
     #
-    def _update_masks(self, batched_inputs, y, sampled_binary_y, sampled_ids, num_subiter):
+    def _update_masks(self, batched_inputs, y, sampled_binary_y, sampled_ids, num_subiter, multimask_output):
         # estimating the image inputs to make the computations faster for the decoder
         input_images = torch.stack([self.model.preprocess(x=x["image"].to(self.device)) for x in batched_inputs], dim=0)
         image_embeddings = self.model.image_embeddings_oft(input_images)
@@ -189,7 +190,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             # we do multimasking only in the first sub-iteration as we then pass single prompt
             # after the first sub-iteration, we don't do multimasking because we get multiple prompts
             batched_outputs = self.model(batched_inputs,
-                                         multimask_output=True if i == 0 else False,
+                                         multimask_output=multimask_output if i == 0 else False,
                                          image_embeddings=image_embeddings)
 
             # we want to average the loss and then backprop over the net sub-iterations
@@ -339,7 +340,8 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
                 loss, mask_loss, iou_regression_loss, model_iou = self._update_masks(batched_inputs, y,
                                                                                      sampled_binary_y, sampled_ids,
-                                                                                     num_subiter=self.n_sub_iteration)
+                                                                                     num_subiter=self.n_sub_iteration,
+                                                                                     multimask_output=multimask_output)
 
             backprop(loss)
 
