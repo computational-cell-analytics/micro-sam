@@ -296,7 +296,12 @@ def run_livecell_evaluation():
     inference_root_names = ["points", "box", "amg/inference"]
     for inf_root in inference_root_names:
 
-        pred_folders = sorted(glob(os.path.join(experiment_folder, inf_root, "*")))
+        pred_root = os.path.join(experiment_folder, inf_root)
+        if inf_root.startswith("amg"):
+            pred_folders = [pred_root]
+        else:
+            pred_folders = sorted(glob(os.path.join(pred_root, "*")))
+
         if inf_root == "amg/inference":
             save_folder = os.path.join(save_root, "amg")
         else:
