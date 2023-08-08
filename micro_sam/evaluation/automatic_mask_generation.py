@@ -211,5 +211,5 @@ def run_amg_grid_search_and_inference(
     amg_generate_kwargs["stability_score_thresh"] = best_stability_score
 
     run_amg_inference(
-        predictor, test_image_paths, embedding_dir, embedding_dir, amg_kwargs, amg_generate_kwargs, AMG
+        predictor, test_image_paths, embedding_dir, prediction_dir, amg_kwargs, amg_generate_kwargs, AMG
     )
