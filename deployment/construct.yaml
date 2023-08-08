@@ -12,4 +12,4 @@ welcome_text: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do ei
   tempor incididunt ut labore et dolore magna aliqua.
 conclusion_text: Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris
   nisi ut aliquip ex ea commodo consequat.
-initialize_by_default: true
+initialize_by_default: false
