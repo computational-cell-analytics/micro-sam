@@ -35,7 +35,6 @@ def finetune_livecell(args):
     checkpoint_path = None  # override this to start training from a custom checkpoint
     device = "cuda"  # override this if you have some more complex set-up and need to specify the exact gpu
     patch_shape = (520, 740)  # the patch shape for training
-    # NOTE: this parameter will most likely change because I don't think it makes sense right now
     n_prompts = 25  # this is the number of objects per batch that will be sampled
 
     # get the trainable segment anything model

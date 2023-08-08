@@ -15,6 +15,7 @@ from torch_em.trainer.logger_base import TorchEmLogger
 #       this is all done batch-wise anyways, so I don't think that has any advantage re generalization
 #       maybe we should just set this to a single value (because we still want to be able to sub-sample)
 #       but remove the randomness here. (I currently don't see any advantage from it.)
+# NOTE: AA: The aforementioned has been updated for now
 class SamTrainer(torch_em.trainer.DefaultTrainer):
     """The trainer used for finetuning (training) the Segment Anything model.
     The model expects to be initialized using the below mentioned arguments:
