@@ -1,37 +1,49 @@
 import os
 import time
-import numpy as np
-from kornia.morphology import dilation
+from typing import Optional
 
+import numpy as np
 import torch
 import torch_em
+
+from kornia.morphology import dilation
 from torchvision.utils import make_grid
 from torch_em.trainer.logger_base import TorchEmLogger
 
 
-# TODO
-# - rename n_prompts! This refers to the number of objects, not the number of prompts!
-# - OR: does this actually make sense? what is the advantage of sampling a random number of objects?
-#       this is all done batch-wise anyways, so I don't think that has any advantage re generalization
-#       maybe we should just set this to a single value (because we still want to be able to sub-sample)
-#       but remove the randomness here. (I currently don't see any advantage from it.)
-# NOTE: AA: The aforementioned has been updated for now
 class SamTrainer(torch_em.trainer.DefaultTrainer):
-    """The trainer used for finetuning (training) the Segment Anything model.
-    The model expects to be initialized using the below mentioned arguments:
-    - convert_inputs : translates the inputs from the classical dataloaders to SAM's expect input formats
-    - mse_loss : to calculate the "regression loss" over IoUs
-    - _sigmoid : sigmoid function for normalizing the output tensors
-    - n_prompts : if n_prompts is None, we get prompts for all objects, else limited to n_prompts
-    - n_sub_iteration : number of sub-iterations around for which the "mask updating" happens per training-iters
+    """Trainer class for training the Segment Anything model.
+
+    This class is derived from `torch_em.trainer.DefaultTrainer`.
+    Check out https://github.com/constantinpape/torch-em/blob/main/torch_em/trainer/default_trainer.py
+    for details on its usage and implementation.
+
+    Args:
+        convert_inputs: Class that converts the output of the dataloader to the expected input format of SAM.
+            The class `micro_sam.training.util.ConvertToSamInputs` can be used here.
+        n_sub_iteration: The number of iteration steps for which the masks predicted for one object are updated.
+            In each sub-iteration new point prompts are sampled where the model was wrong.
+        n_objects_per_batch: If not given, we compute the loss for all objects in a sample.
+            Otherwise the loss computation is limited to n_objects_per_batch, and the objects are randomly sampled.
+        mse_loss: The regression loss to compare the IoU predicted by the model with the true IoU.
+        sigmoid: The actuction function for normalizing the model output.
+        **kwargs: The keyword arguments of the DefaultTrainer super class.
     """
 
-    def __init__(self, convert_inputs, mse_loss, _sigmoid, n_sub_iteration, n_prompts=None, **kwargs):
+    def __init__(
+        self,
+        convert_inputs,
+        n_sub_iteration: int,
+        n_objects_per_batch: Optional[int] = None,
+        mse_loss: torch.nn.Module = torch.nn.MSELoss(),
+        _sigmoid: torch.nn.Module = torch.nn.Sigmoid(),
+        **kwargs
+    ):
         super().__init__(**kwargs)
         self.convert_inputs = convert_inputs
         self.mse_loss = mse_loss
         self._sigmoid = _sigmoid
-        self.n_prompts = n_prompts
+        self.n_objects_per_batch = n_objects_per_batch
         self.n_sub_iteration = n_sub_iteration
         self._kwargs = kwargs
 
@@ -308,7 +320,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             self.optimizer.zero_grad()
 
             with forward_context():
-                n_samples = self.n_prompts
+                n_samples = self.n_objects_per_batch
                 n_samples = self._update_samples_for_gt_instances(y, n_samples)
 
                 n_pos, n_neg, get_boxes, multimask_output = self._get_prompt_and_multimasking_choices(self._iteration)
@@ -371,7 +383,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         with torch.no_grad():
             for x, y in self.val_loader:
                 with forward_context():
-                    n_samples = self.n_prompts
+                    n_samples = self.n_objects_per_batch
                     n_samples = self._update_samples_for_gt_instances(y, n_samples)
 
                     (n_pos, n_neg,
@@ -412,6 +424,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
 
 class SamLogger(TorchEmLogger):
+    """@private"""
     def __init__(self, trainer, save_root, **unused_kwargs):
         super().__init__(trainer, save_root)
         self.log_dir = f"./logs/{trainer.name}" if save_root is None else\

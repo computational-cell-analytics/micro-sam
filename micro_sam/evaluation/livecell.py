@@ -84,7 +84,7 @@ def livecell_inference(
     Args:
         checkpoint: The segment anything model checkpoint.
         input_folder: The folder with the livecell data.
-        model_type: The type of the segmenta anything model.
+        model_type: The type of the segment anything model.
         experiment_folder: The folder where to save all data associated with the experiment.
         use_points: Whether to use point prompts.
         use_boxes: Whether to use box prompts.

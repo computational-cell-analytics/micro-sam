@@ -1,13 +1,31 @@
-import numpy as np
+import os
+from typing import List, Optional
+
 import torch
+import numpy as np
 
 from ..prompt_generators import PointAndBoxPromptGenerator
 from ..util import get_centers_and_bounding_boxes, get_sam_model
 from .trainable_sam import TrainableSAM
 
 
-def get_trainable_sam_model(model_type="vit_h", checkpoint_path=None, freeze=None, device=None):
-    """TODO
+def get_trainable_sam_model(
+    model_type: str = "vit_h",
+    checkpoint_path: Optional[str, os.PathLike] = None,
+    freeze: Optional[List[str]] = None,
+    device: Optional[str, torch.device] = None,
+) -> TrainableSAM:
+    """Get the trainable sam model.
+
+    Args:
+        model_type: The type of the segment anything model.
+        checkpoint_path: Path to a custom checkpoint from which to load the model weights.
+        freeze: Specify parts of the model that should be frozen.
+            By default nothing is frozen and the full model is updated.
+        device: The device to use for training.
+
+    Returns:
+        The trainable segment anything model.
     """
     # set the device here so that the correct one is passed to TrainableSAM below
     if device is None:
@@ -35,33 +53,42 @@ def get_trainable_sam_model(model_type="vit_h", checkpoint_path=None, freeze=Non
     return trainable_sam
 
 
-# TODO:
-# - we should rename this class (and also its name in the trainer).
-#   Input commonly just refers to the model inputs, but this here processes the labels,
-#   goes from labels to prompts and then prepares the whole training batch.
 class ConvertToSamInputs:
-    # initalize the class with dil_str and box-distrotion-factor (rang eof values)
+    """Convert outputs of data loader to the expected batched inputs of the SegmentAnything model.
+
+    Args:
+        dilation_strength: The dilation factor.
+            It determines a "safety" border from which prompts are not sampled to avoid ambiguous prompts
+            due to imprecise groundtruth masks.
+        box_distortion_factor: Factor for distorting the box annotations derived from the groundtruth masks.
+            Not yet implemented.
+    """
+    def __init__(
+        self,
+        dilation_strength: int = 10,
+        box_distortion_factor: Optional[float] = None,
+    ) -> None:
+        self.dilation_strength = dilation_strength
+        # TODO implement the box distortion logic
+        if box_distortion_factor is not None:
+            raise NotImplementedError
 
     def _get_prompt_generator(self, n_positive_points, n_negative_points, get_boxes, get_points):
-        """
-        Returns the prompt generator w.r.t. the "random" attributes inputed
-        """
+        """Returns the prompt generator w.r.t. the "random" attributes inputed."""
 
         # the class initialization below gets the random choice of n_positive and n_negative points as inputs
         # (done in the trainer)
         # in case of dynamic choice while choosing between points and/or box, it gets those as well
         prompt_generator = PointAndBoxPromptGenerator(n_positive_points=n_positive_points,
                                                       n_negative_points=n_negative_points,
-                                                      dilation_strength=10,
+                                                      dilation_strength=self.dilation_strength,
                                                       get_box_prompts=get_boxes,
                                                       get_point_prompts=get_points)
         return prompt_generator
 
     def _get_prompt_lists(self, gt, n_samples, n_positive_points, n_negative_points, get_boxes,
                           get_points, prompt_generator, point_coordinates, bbox_coordinates):
-        """
-        Returns a list of "expected" prompts subjected to the random input attributes for prompting
-        """
+        """Returns a list of "expected" prompts subjected to the random input attributes for prompting."""
         box_prompts = []
         point_prompts = []
         point_label_prompts = []
@@ -107,8 +134,7 @@ class ConvertToSamInputs:
         return box_prompts, point_prompts, point_label_prompts, accepted_cell_ids
 
     def __call__(self, x, y, n_pos, n_neg, get_boxes=False, n_samples=None):
-        """
-        Here, we implement the logic of converting the inputs to a batch of elements expected by SAM
+        """Convert the outputs of dataloader and prompt settings to the batch format expected by SAM.
         """
 
         # condition to see if we get point prompts, then we (ofc) use point-prompting
