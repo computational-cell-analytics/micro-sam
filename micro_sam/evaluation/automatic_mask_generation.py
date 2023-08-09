@@ -66,9 +66,27 @@ def run_amg_grid_search(
     AMG: instance_segmentation.AMGBase = instance_segmentation.AutomaticMaskGenerator,
     verbose_gs: bool = False,
 ) -> None:
-    """
+    """Run grid search for automatic mask generation.
+
+    The grid search goes over the two most important parameters:
+    - `pred_iou_thresh`, the threshold for keeping objects according to the IoU predicted by the model
+    - `stability_score_thresh`, the theshold for keepong objects according to their stability
 
     Args:
+        predictor: The segment anything predictor.
+        image_paths: The input images for the grid search.
+        gt_paths: The ground-truth segmentation for the grid search.
+        embedding_dir: Folder to cache the image embeddings.
+        result_dir: Folder to cache the evaluation results per image.
+        iou_thresh_values: The values for `pred_iou_thresh` used in the gridsearch.
+            By default values in the range from 0.6 to 0.9 with a stepsize of 0.025 will be used.
+        stability_score_values: The values for `stability_score_thresh` used in the gridsearch.
+            By default values in the range from 0.6 to 0.9 with a stepsize of 0.025 will be used.
+        amg_kwargs: The keyword arguments for the automatic mask generator class.
+        amg_generate_kwargs: The keyword arguments for the `generate` method of the mask generator.
+            This must not contain `pred_iou_thresh` or `stability_score_thresh`.
+        AMG: The automatic mask generator. By default `micro_sam.instance_segmentation.AutomaticMaskGenerator`.
+        verbose_gs: Whether to run the gridsearch for individual images in a verbose mode.
     """
     assert len(image_paths) == len(gt_paths)
     amg_kwargs = {} if amg_kwargs is None else amg_kwargs
@@ -120,9 +138,17 @@ def run_amg_inference(
     amg_generate_kwargs: Optional[Dict[str, Any]] = None,
     AMG: instance_segmentation.AMGBase = instance_segmentation.AutomaticMaskGenerator,
 ) -> None:
-    """
+    """Run inference for automatic mask generation.
 
     Args:
+        predictor: The segment anything predictor.
+        image_paths: The input images.
+        embedding_dir: Folder to cache the image embeddings.
+        prediction_dir: Folder to save the predictions.
+        amg_kwargs: The keyword arguments for the automatic mask generator class.
+        amg_generate_kwargs: The keyword arguments for the `generate` method of the mask generator.
+            This must not contain `pred_iou_thresh` or `stability_score_thresh`.
+        AMG: The automatic mask generator. By default `micro_sam.instance_segmentation.AutomaticMaskGenerator`.
     """
     amg_kwargs = {} if amg_kwargs is None else amg_kwargs
     amg_generate_kwargs = {} if amg_generate_kwargs is None else amg_generate_kwargs
@@ -152,9 +178,16 @@ def run_amg_inference(
 
 
 def evaluate_amg_grid_search(result_dir: Union[str, os.PathLike], criterion: str = "mSA") -> Tuple[float, float, float]:
-    """
+    """Evaluate gridsearch results.
 
     Args:
+        result_dir: The folder with the gridsearch results.
+        criterion: The metric to use for determining the best parameters.
+
+    Returns:
+        The best value for `pred_iou_thresh`.
+        The best value for ``stability_score_thresh.
+        The evaluation score for the best setting.
     """
 
     # load all the grid search results
@@ -191,9 +224,25 @@ def run_amg_grid_search_and_inference(
     AMG: instance_segmentation.AMGBase = instance_segmentation.AutomaticMaskGenerator,
     verbose_gs: bool = True,
 ) -> None:
-    """
+    """Run grid search and inference for automatic mask generation.
 
     Args:
+        predictor: The segment anything predictor.
+        val_image_paths: The input images for the grid search.
+        val_gt_paths: The ground-truth segmentation for the grid search.
+        test_image_paths: The input images for inference.
+        embedding_dir: Folder to cache the image embeddings.
+        prediction_dir: Folder to save the predictions.
+        result_dir: Folder to cache the evaluation results per image.
+        iou_thresh_values: The values for `pred_iou_thresh` used in the gridsearch.
+            By default values in the range from 0.6 to 0.9 with a stepsize of 0.025 will be used.
+        stability_score_values: The values for `stability_score_thresh` used in the gridsearch.
+            By default values in the range from 0.6 to 0.9 with a stepsize of 0.025 will be used.
+        amg_kwargs: The keyword arguments for the automatic mask generator class.
+        amg_generate_kwargs: The keyword arguments for the `generate` method of the mask generator.
+            This must not contain `pred_iou_thresh` or `stability_score_thresh`.
+        AMG: The automatic mask generator. By default `micro_sam.instance_segmentation.AutomaticMaskGenerator`.
+        verbose_gs: Whether to run the gridsearch for individual images in a verbose mode.
     """
     run_amg_grid_search(
         predictor, val_image_paths, val_gt_paths, embedding_dir, result_dir,

@@ -1,11 +1,14 @@
 import argparse
-import os
-from glob import glob
 import json
+import os
+
+from glob import glob
+from typing import List, Optional, Union
 
 import numpy as np
 import pandas as pd
 
+from segment_anything import SamPredictor
 from tqdm import tqdm
 
 from ..instance_segmentation import AutomaticMaskGenerator, EmbeddingMaskGenerator
@@ -65,18 +68,30 @@ def _get_livecell_paths(input_folder, split="test", n_val_per_cell_type=None):
 
 
 def livecell_inference(
-    checkpoint,
-    input_folder,
-    model_type,
-    experiment_folder,
-    use_points,
-    use_boxes,
-    n_positives=None,
-    n_negatives=None,
-    prompt_folder=None,
-    predictor=None,
-):
+    checkpoint: Union[str, os.PathLike],
+    input_folder: Union[str, os.PathLike],
+    model_type: str,
+    experiment_folder: Union[str, os.PathLike],
+    use_points: bool,
+    use_boxes: bool,
+    n_positives: Optional[int] = None,
+    n_negatives: Optional[int] = None,
+    prompt_folder: Optional[Union[str, os.PathLike]] = None,
+    predictor: Optional[SamPredictor] = None,
+) -> None:
     """Run inference for livecell with a fixed prompt setting.
+
+    Args:
+        checkpoint: The segment anything model checkpoint.
+        input_folder: The folder with the livecell data.
+        model_type: The type of the segmenta anything model.
+        experiment_folder: The folder where to save all data associated with the experiment.
+        use_points: Whether to use point prompts.
+        use_boxes: Whether to use box prompts.
+        n_positives: The number of positive point prompts.
+        n_negatives: The number of negative point prompts.
+        prompt_folder: The folder where the prompts should be saved.
+        predictor: The segment anything predictor.
     """
     image_paths, gt_paths = _get_livecell_paths(input_folder)
     if predictor is None:
@@ -120,17 +135,29 @@ def livecell_inference(
 
 
 def run_livecell_amg(
-    checkpoint,
-    model,
-    input_folder,
-    experiment_folder,
-    iou_thresh_values=None,
-    stability_score_values=None,
-    verbose_gs=False,
-    n_val_per_cell_type=25,
-    use_mws=False,
-):
+    checkpoint: Union[str, os.PathLike],
+    input_folder: Union[str, os.PathLike],
+    model_type: str,
+    experiment_folder: Union[str, os.PathLike],
+    iou_thresh_values: Optional[List[float]] = None,
+    stability_score_values: Optional[List[float]] = None,
+    verbose_gs: bool = False,
+    n_val_per_cell_type: int = 25,
+    use_mws: bool = False,
+) -> None:
     """Run automatic mask generation grid-search and inference for livecell.
+
+        checkpoint: The segment anything model checkpoint.
+        input_folder: The folder with the livecell data.
+        model_type: The type of the segmenta anything model.
+        experiment_folder: The folder where to save all data associated with the experiment.
+        iou_thresh_values: The values for `pred_iou_thresh` used in the gridsearch.
+            By default values in the range from 0.6 to 0.9 with a stepsize of 0.025 will be used.
+        stability_score_values: The values for `stability_score_thresh` used in the gridsearch.
+            By default values in the range from 0.6 to 0.9 with a stepsize of 0.025 will be used.
+        verbose_gs: Whether to run the gridsearch for individual images in a verbose mode.
+        n_val_per_cell_type: The number of validation images per cell type.
+        use_mws: Whether to use the mutex watershed based automatic mask generator approach.
     """
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
@@ -153,7 +180,7 @@ def run_livecell_amg(
     val_image_paths, val_gt_paths = _get_livecell_paths(input_folder, "val", n_val_per_cell_type=n_val_per_cell_type)
     test_image_paths, _ = _get_livecell_paths(input_folder, "test")
 
-    predictor = inference.get_predictor(checkpoint, model)
+    predictor = inference.get_predictor(checkpoint, model_type)
     automatic_mask_generation.run_amg_grid_search_and_inference(
         predictor, val_image_paths, val_gt_paths, test_image_paths,
         embedding_folder, prediction_folder, gs_result_folder,
@@ -179,7 +206,8 @@ def _run_multiple_prompt_settings(args, prompt_settings):
         )
 
 
-def run_livecell_inference():
+def run_livecell_inference() -> None:
+    """Run LiveCELL inference with command line tool."""
     parser = argparse.ArgumentParser()
 
     # the checkpoint, input and experiment folder
@@ -222,7 +250,7 @@ def run_livecell_inference():
         prompt_settings = default_experiment_settings()
         _run_multiple_prompt_settings(args, prompt_settings)
     elif args.auto_mask_generation:
-        run_livecell_amg(args.ckpt, args.model, args.input, args.experiment_folder)
+        run_livecell_amg(args.ckpt, args.input, args.model, args.experiment_folder)
     else:
         livecell_inference(
             args.ckpt, args.input, args.model, args.experiment_folder,
@@ -235,7 +263,18 @@ def run_livecell_inference():
 #
 
 
-def evaluate_livecell_predictions(gt_dir, pred_dir, verbose):
+def evaluate_livecell_predictions(
+    gt_dir: Union[os.PathLike, str],
+    pred_dir: Union[os.PathLike, str],
+    verbose: bool,
+) -> None:
+    """Evaluate LiveCELL predictions.
+
+    Args:
+        gt_dir: The folder with the groundtruth segmentations.
+        pred_dir: The folder with the segmentation predictions.
+        verbose: Whether to run the evaluation in verbose mode.
+    """
     assert os.path.exists(gt_dir), gt_dir
     assert os.path.exists(pred_dir), pred_dir
 
@@ -272,7 +311,8 @@ def evaluate_livecell_predictions(gt_dir, pred_dir, verbose):
     return df
 
 
-def run_livecell_evaluation():
+def run_livecell_evaluation() -> None:
+    """Run LiveCELL evaluation with command line tool."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "-i", "--input", required=True, help="Provide the data directory for LIVECell Dataset"

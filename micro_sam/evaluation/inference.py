@@ -174,8 +174,20 @@ def _run_inference_with_prompts_for_image(
     return instance_labels, prompts
 
 
-def get_predictor(checkpoint_path, model_type, return_state=False):
-    """@private"""
+def get_predictor(
+    checkpoint_path: Union[str, os.PathLike],
+    model_type: str,
+    return_state: bool = False
+) -> SamPredictor:
+    """Get the segment anything predictor from an exported or custom checkpoint.
+
+    Args:
+        checkpoint_path: The checkpoint filepath.
+        model_type: The type of the model, either vit_h, vit_b or vit_l.
+        return_state: Whether to return the complete state of the checkpoint in addtion to the predictor.
+    Returns:
+        The segment anything predictor.
+    """
     # TODO use try-except rather than this construct, so that we don't rely on the checkpoint name
     if checkpoint_path.split("/")[-1] == "best.pt":  # Finetuned SAM model
         predictor = util.get_custom_sam_model(

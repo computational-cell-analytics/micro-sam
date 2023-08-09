@@ -7,6 +7,7 @@ import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import torch
 
 import skimage.draw as draw
 from scipy.ndimage import binary_dilation
@@ -14,6 +15,7 @@ from skimage import exposure
 from skimage.segmentation import relabel_sequential, find_boundaries
 
 from tqdm import tqdm
+from typing import Optional, Union
 
 from .. import util
 from ..prompt_generators import PointAndBoxPromptGenerator
@@ -25,7 +27,7 @@ from ..prompt_based_segmentation import segment_from_box, segment_from_points
 #
 
 
-def predict_models_with_loader(loader, n_samples, prompt_generator, predictor1, predictor2, output_folder):
+def _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1, predictor2, output_folder):
     i = 0
     os.makedirs(output_folder, exist_ok=True)
 
@@ -80,8 +82,26 @@ def predict_models_with_loader(loader, n_samples, prompt_generator, predictor1, 
             return
 
 
-# TODO expose more params (prompt generation scheme)
-def generate_data_for_model_comparison(loader, output_folder, model_type1, model_type2, n_samples):
+def generate_data_for_model_comparison(
+    loader: torch.utils.DataLoader,
+    output_folder: Union[str, os.PathLike],
+    model_type1: str,
+    model_type2: str,
+    n_samples: int,
+) -> None:
+    """Generate samples for qualitative model comparison.
+
+    This precomputes the input for `model_comparison` and `model_comparison_with_napari`.
+
+    Args:
+        loader: The torch dataloader from which samples are drawn.
+        output_folder: The folder where the samples will be saved.
+        model_type1: The first model to use for comparison.
+            The value needs to be a valid model_type for `micro_sam.util.get_sam_model`.
+        model_type1: The second model to use for comparison.
+            The value needs to be a valid model_type for `micro_sam.util.get_sam_model`.
+        n_samples: The number of samples to draw from the dataloader.
+    """
     prompt_generator = PointAndBoxPromptGenerator(
         n_positive_points=1,
         n_negative_points=0,
@@ -91,7 +111,7 @@ def generate_data_for_model_comparison(loader, output_folder, model_type1, model
     )
     predictor1 = util.get_sam_model(model_type=model_type1)
     predictor2 = util.get_sam_model(model_type=model_type2)
-    predict_models_with_loader(loader, n_samples, prompt_generator, predictor1, predictor2, output_folder)
+    _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1, predictor2, output_folder)
 
 
 #
@@ -317,13 +337,23 @@ def _compare_models(
 
 
 def model_comparison(
-    output_folder,
-    n_images_per_sample,
-    min_size,
-    plot_folder=None,
-    point_radius=4,
-    outline_dilation=0,
-):
+    output_folder: Union[str, os.PathLike],
+    n_images_per_sample: int,
+    min_size: int,
+    plot_folder: Optional[Union[str, os.PathLike]] = None,
+    point_radius: int = 4,
+    outline_dilation: int = 0,
+) -> None:
+    """Create images for a qualitative model comparision.
+
+    Args:
+        output_folder: The folder with the data precomputed by `generate_data_for_model_comparison`.
+        n_images_per_sample: The number of images to generate per precomputed sample.
+        min_size: The min size of ground-truth objects to take into account.
+        plot_folder: The folder where to save the plots. If not given the plots will be displayed.
+        point_radius: The radius of the point overlay.
+        outline_dilation: The dilation factor of the outline overlay.
+    """
     files = glob(os.path.join(output_folder, "*.h5"))
     for path in tqdm(files):
         _compare_models(
@@ -375,7 +405,13 @@ def _check_group(g, show_points):
     napari.run()
 
 
-def model_comparison_with_napari(output_folder, show_points=True):
+def model_comparison_with_napari(output_folder: Union[str, os.PathLike], show_points: bool = True) -> None:
+    """Use napari to display the qualtiative comparison results for two models.
+
+    Args:
+        output_folder: The folder with the data precomputed by `generate_data_for_model_comparison`.
+        show_points: Whether to show the results for point or for box prompts.
+    """
     files = glob(os.path.join(output_folder, "*.h5"))
     for path in files:
         print("Comparing models in", path)

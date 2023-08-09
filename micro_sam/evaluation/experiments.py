@@ -63,7 +63,14 @@ def default_experiment_settings() -> ExperimentSettings:
     return experiment_settings
 
 
-def get_experiment_setting_name(setting):
+def get_experiment_setting_name(setting: ExperimentSettings) -> str:
+    """Get the name for the given experiment setting.
+
+    Args:
+        setting: The experiment setting.
+    Returns:
+        The name for this experiment setting.
+    """
     use_points, use_boxes = setting["use_points"], setting["use_boxes"]
     assert use_points or use_boxes
     prefix = "points" if use_points else "box"
