@@ -90,6 +90,10 @@ def main():
         help="The filepath to the LiveCELL data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(
+        "--model_type", "-m", default="vit_b",
+        help="The model type to use for fine-tuning. Either vit_h, vit_b or vit_l."
+    )
+    parser.add_argument(
         "--save_root", "-s",
         help="Where to save the checkpoint and logs. By default they will be saved where this script is run."
     )

@@ -36,13 +36,13 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         n_sub_iteration: int,
         n_objects_per_batch: Optional[int] = None,
         mse_loss: torch.nn.Module = torch.nn.MSELoss(),
-        sigmoid: torch.nn.Module = torch.nn.Sigmoid(),
+        _sigmoid: torch.nn.Module = torch.nn.Sigmoid(),
         **kwargs
     ):
         super().__init__(**kwargs)
         self.convert_inputs = convert_inputs
         self.mse_loss = mse_loss
-        self._sigmoid = sigmoid
+        self._sigmoid = _sigmoid
         self.n_objects_per_batch = n_objects_per_batch
         self.n_sub_iteration = n_sub_iteration
         self._kwargs = kwargs
