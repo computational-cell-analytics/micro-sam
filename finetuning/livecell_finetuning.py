@@ -38,7 +38,7 @@ def finetune_livecell(args):
     checkpoint_path = None  # override this to start training from a custom checkpoint
     device = "cuda"  # override this if you have some more complex set-up and need to specify the exact gpu
     patch_shape = (520, 740)  # the patch shape for training
-    n_prompts = 25  # this is the number of objects per batch that will be sampled
+    n_objects_per_batch = 25  # this is the number of objects per batch that will be sampled
 
     # get the trainable segment anything model
     model = sam_training.get_trainable_sam_model(model_type, checkpoint_path, device=device)
@@ -49,7 +49,6 @@ def finetune_livecell(args):
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
-    # NOTE: will likely rename this class
     convert_inputs = sam_training.ConvertToSamInputs()
 
     checkpoint_name = "livecell_sam"
@@ -70,9 +69,7 @@ def finetune_livecell(args):
         log_image_interval=10,
         mixed_precision=True,
         convert_inputs=convert_inputs,
-        mse_loss=torch.nn.MSELoss(),
-        _sigmoid=torch.nn.Sigmoid(),
-        n_prompts=n_prompts,
+        n_objects_per_batch=n_objects_per_batch,
         n_sub_iteration=8,
         compile_model=False
     )
