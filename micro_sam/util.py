@@ -8,7 +8,7 @@ import pickle
 import warnings
 from collections import OrderedDict
 from shutil import copyfileobj
-from typing import Any, Callable, Dict, Optional, Tuple, Iterable
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 
 import imageio.v3 as imageio
 import numpy as np
@@ -109,7 +109,7 @@ def _get_checkpoint(model_type, checkpoint_path=None):
 def get_sam_model(
     device: Optional[str] = None,
     model_type: str = "vit_h",
-    checkpoint_path: Optional[str] = None,
+    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
 ) -> SamPredictor:
     """Get the SegmentAnything Predictor.
@@ -159,7 +159,7 @@ class _CustomUnpickler(pickle.Unpickler):
 
 
 def get_custom_sam_model(
-    checkpoint_path: str,
+    checkpoint_path: Union[str, os.PathLike],
     device: Optional[str] = None,
     model_type: str = "vit_h",
     return_sam: bool = False,
@@ -176,6 +176,9 @@ def get_custom_sam_model(
         model_type: The SegmentAnything model to use.
         return_sam: Return the sam model object as well as the predictor.
         return_state: Return the full state of the checkpoint in addition to the predictor.
+
+    Returns:
+        The segment anything predictor.
     """
     assert not (return_sam and return_state)
 
@@ -204,6 +207,29 @@ def get_custom_sam_model(
     if return_state:
         return predictor, state
     return predictor
+
+
+def export_custom_sam_model(
+    checkpoint_path: Union[str, os.PathLike],
+    model_type: str,
+    save_path: Union[str, os.PathLike],
+) -> None:
+    """Export a finetuned segment anything model to the standard model format.
+
+    The exported model can be used by the interactive annotation tools in `micro_sam.annotator`.
+
+    Args:
+        checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
+        model_type: The SegmentAnything model type to use (vit_h, vit_b or vit_l).
+        save_path: Where to save the exported model.
+    """
+    _, state = get_custom_sam_model(checkpoint_path, model_type=model_type, return_state=True)
+    model_state = state["model_state"]
+    prefix = "sam."
+    model_state = OrderedDict(
+        [(k[len(prefix):] if k.startswith(prefix) else k, v) for k, v in model_state.items()]
+    )
+    torch.save(model_state, save_path)
 
 
 def get_model_names() -> Iterable:

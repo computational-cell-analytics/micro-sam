@@ -1,9 +1,12 @@
 import argparse
+import os
 
 import micro_sam.training as sam_training
 import torch
 import torch_em
+
 from torch_em.data.datasets import get_livecell_loader
+from micro_sam.util import export_custom_sam_model
 
 
 def get_dataloaders(patch_shape, data_path, cell_type=None):
@@ -28,10 +31,10 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
 
 
 def finetune_livecell(args):
-    """Example code for finetuning SAM with ViT-b back-bone on LiveCELL"""
+    """Example code for finetuning SAM on LiveCELL"""
 
     # training settings:
-    model_type = "vit_b"  # change this for fine-tuning a different model
+    model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
     device = "cuda"  # override this if you have some more complex set-up and need to specify the exact gpu
     patch_shape = (520, 740)  # the patch shape for training
@@ -50,9 +53,10 @@ def finetune_livecell(args):
     # NOTE: will likely rename this class
     convert_inputs = sam_training.ConvertToSamInputs()
 
+    checkpoint_name = "livecell_sam"
     # the trainer which performs training and validation (implemented using "torch_em")
     trainer = sam_training.SamTrainer(
-        name="livecell_sam",
+        name=checkpoint_name,
         save_root=args.save_root,
         train_loader=train_loader,
         val_loader=val_loader,
@@ -74,6 +78,13 @@ def finetune_livecell(args):
         compile_model=False
     )
     trainer.fit(args.iterations)
+    if args.export_path is not None:
+        checkpoint_path = os.path.join("" if args.save_root is None else args.save_root, "checkpoints", "best.pt")
+        export_custom_sam_model(
+            checkpoint_path=checkpoint_path,
+            model_type=model_type,
+            save_path=args.export_path,
+        )
 
 
 def main():
@@ -89,6 +100,10 @@ def main():
     parser.add_argument(
         "--iterations", type=int, default=int(1e5),
         help="For how many iterations should the model be trained? By default 100k."
+    )
+    parser.add_argument(
+        "--export_path", "-e",
+        help="Where to export the finetuned model to. The exported model can be use din the annotation tools."
     )
     args = parser.parse_args()
     finetune_livecell(args)
