@@ -1,21 +1,38 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Union
 
 import torch
 from torch import nn
 from torch.nn import functional as F
 
+from segment_anything.modeling import Sam
+
 
 # simple wrapper around SAM in order to keep things trainable
 class TrainableSAM(nn.Module):
-    """TODO
+    """Wrapper to make the SegmentAnything model trainable.
+
+    Args:
+        sam: The SegmentAnything Model.
+        device: The device for training.
     """
-    def __init__(self, sam, device):
+    def __init__(
+        self,
+        sam: Sam,
+        device: Union[str, torch.device],
+    ) -> None:
         super().__init__()
         self.sam = sam
         self.device = device
 
     def preprocess(self, x: torch.Tensor) -> torch.Tensor:
-        """Normalize pixel values and pad to a square input."""
+        """Normalize pixel values and pad to a square input.
+
+        Args:
+            x: The input tensor.
+
+        Returns:
+            The normalized and padded tensor.
+        """
         # Normalize colors
         x = (x - self.sam.pixel_mean) / self.sam.pixel_std
 
@@ -27,14 +44,27 @@ class TrainableSAM(nn.Module):
         return x
 
     def image_embeddings_oft(self, input_images):
+        """@private"""
         image_embeddings = self.sam.image_encoder(input_images)
         return image_embeddings
 
     # batched inputs follow the same syntax as the input to sam.forward
-    def forward(self,
-                batched_inputs: List[Dict[str, Any]],
-                multimask_output=False,
-                image_embeddings=None):
+    def forward(
+        self,
+        batched_inputs: List[Dict[str, Any]],
+        multimask_output: bool = False,
+        image_embeddings: Optional[torch.Tensor] = None,
+    ) -> List[Dict[str, Any]]:
+        """Forward pass.
+
+        Args:
+            batched_inputs: The batched input images and prompts.
+            multimask_output: Whether to predict mutiple or just a single mask.
+            image_embeddings: The precompute image embeddings. If not passed then they will be computed.
+
+        Returns:
+            The predicted segmentation masks and iou values.
+        """
         input_images = torch.stack([self.preprocess(x=x["image"].to(self.device)) for x in batched_inputs], dim=0)
         if image_embeddings is None:
             image_embeddings = self.sam.image_encoder(input_images)
