@@ -202,6 +202,8 @@ def get_custom_sam_model(
     sam.to(device)
 
     predictor = SamPredictor(sam)
+    predictor.model_type = model_type
+
     if return_sam:
         return predictor, sam
     if return_state:
