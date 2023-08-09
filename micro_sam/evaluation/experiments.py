@@ -68,5 +68,5 @@ def get_experiment_setting_name(setting):
     assert use_points or use_boxes
     prefix = "points" if use_points else "box"
     pos, neg = setting["n_positives"], setting["n_negatives"]
-    name = f"p{pos}-{neg}" if use_points else "p0-n0"
+    name = f"p{pos}-n{neg}" if use_points else "p0-n0"
     return f"{prefix}/{name}"
