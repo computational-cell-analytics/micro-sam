@@ -1,8 +1,6 @@
 import argparse
 import os
 import warnings
-
-from glob import glob
 from subprocess import run
 
 import pandas as pd
@@ -32,6 +30,7 @@ MODELS = {
 
 def evaluate_model(model_id):
     model_name = list(MODELS.keys())[model_id]
+    print("Evaluating", model_name)
 
     try:
         checkpoint = os.path.join(MODELS[model_name], "best.pt")
@@ -68,7 +67,8 @@ def evaluate_model(model_id):
             prompt_save_dir=PROMPT_DIR, **setting
         )
 
-        pred_paths = sorted(glob(os.path.join(prediction_dir, "*.tif")))
+        pred_paths = [os.path.join(prediction_dir, os.path.basename(gt_path)) for gt_path in gt_paths]
+        assert len(pred_paths) == len(gt_paths)
         result_path = os.path.join(result_dir, f"{setting_name}.csv")
 
         if os.path.exists(result_path):
