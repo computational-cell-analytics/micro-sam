@@ -9,6 +9,9 @@ from typing import Optional
 import numpy as np
 from scipy.ndimage import binary_dilation
 
+import torch
+from kornia.morphology import dilation
+
 
 class PointAndBoxPromptGenerator:
     """Generate point and/or box prompts from an instance segmentation.
@@ -187,3 +190,75 @@ class PointAndBoxPromptGenerator:
             bbox_list = None
 
         return coord_list, label_list, bbox_list, object_mask
+
+
+class IterativePromptGenerator:
+    """Generate point prompts from an instance segmentation iteratively.
+    """
+    def __init__(self, device=None):
+        self.device = device if device is not None else "cuda" if torch.cuda.is_available() else "cpu"
+
+    def get_positive_points(self, pos_region, overlap_region):
+        tmp_pos_loc = torch.where(pos_region)
+        # condiion below where there is no room for improvement for the model
+        # hence we put a positive point in the "already correct" regions
+        if torch.stack(tmp_pos_loc).shape[-1] == 0:
+            tmp_pos_loc = torch.where(overlap_region)
+
+        pos_index = np.random.choice(len(tmp_pos_loc[1]))
+        pos_coordinates = int(tmp_pos_loc[1][pos_index]), int(tmp_pos_loc[2][pos_index])
+        pos_coordinates = pos_coordinates[::-1]
+        pos_labels = 1
+        return pos_coordinates, pos_labels
+
+    def get_negative_points(self, neg_region, true_object, gt):
+        tmp_neg_loc = torch.where(neg_region)
+        if torch.stack(tmp_neg_loc).shape[-1] == 0:
+            tmp_true_loc = torch.where(true_object)
+            x_coords, y_coords = tmp_true_loc[1], tmp_true_loc[2]
+            bbox = torch.stack([torch.min(x_coords), torch.min(y_coords),
+                                torch.max(x_coords) + 1, torch.max(y_coords) + 1])
+            bbox_mask = torch.zeros_like(true_object).squeeze(0)
+            bbox_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = 1
+            bbox_mask = bbox_mask[None].to(self.device)
+
+            # NOTE: FIX: here we add dilation to the bbox because in some case we couldn't find objects at all
+            # TODO: just expand the pixels of bbox
+            dilated_bbox_mask = dilation(bbox_mask[None], torch.ones(3, 3).to(self.device)).squeeze(0)
+            background_mask = abs(dilated_bbox_mask - true_object)
+            tmp_neg_loc = torch.where(background_mask)
+
+            # there is a chance that the object is small to not return a decent-sized bounding box
+            # hence we might not find points sometimes there as well, hence we sample points from true background
+            if torch.stack(tmp_neg_loc).shape[-1] == 0:
+                tmp_neg_loc = torch.where(gt == 0)
+
+        neg_index = np.random.choice(len(tmp_neg_loc[1]))
+        neg_coordinates = int(tmp_neg_loc[1][neg_index]), int(tmp_neg_loc[2][neg_index])
+        neg_coordinates = neg_coordinates[::-1]
+        neg_labels = 0
+
+        return neg_coordinates, neg_labels
+
+    def __call__(
+            self,
+            gt,
+            object_mask,
+            current_points,
+            current_labels
+    ):
+        """Generate the prompts for each object iteratively in the segmentation.
+        """
+        true_object = gt.to(self.device)
+        expected_diff = (object_mask - true_object)
+        neg_region = (expected_diff == 1).to(torch.float)
+        pos_region = (expected_diff == -1)
+        overlap_region = torch.logical_and(object_mask == 1, true_object == 1).to(torch.float32)
+
+        pos_coordinates, pos_labels = self.get_positive_points(pos_region, overlap_region)
+        neg_coordinates, neg_labels = self.get_negative_points(neg_region, true_object, gt)
+
+        net_coords = torch.cat([current_points, torch.tensor([[pos_coordinates, neg_coordinates]])], dim=1)
+        net_labels = torch.cat([current_labels, torch.tensor([[pos_labels, neg_labels]])], dim=1)
+
+        return net_coords, net_labels
