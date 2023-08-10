@@ -241,11 +241,11 @@ class IterativePromptGenerator:
         return neg_coordinates, neg_labels
 
     def __call__(
-            self,
-            gt,
-            object_mask,
-            current_points,
-            current_labels
+        self,
+        gt,
+        object_mask,
+        current_points,
+        current_labels
     ):
         """Generate the prompts for each object iteratively in the segmentation.
         """
