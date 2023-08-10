@@ -10,8 +10,9 @@ from micro_sam.evaluation import (
     default_experiment_settings, get_experiment_setting_name
 )
 
-DATA_ROOT = "/scratch/projects/nim00007/sam/ood/LM"
+DATA_ROOT = "/scratch/projects/nim00007/sam/datasets"
 PROMPT_ROOT = "/scratch-grete/projects/nim00007/sam/experiments/prompts"
+# TODO add EM datasets
 DATASETS = (
     "covid-if",
     "deepbacs",
