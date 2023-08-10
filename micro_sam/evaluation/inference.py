@@ -1,5 +1,6 @@
 import os
 import pickle
+import warnings
 
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Union
@@ -517,10 +518,9 @@ def run_inference_with_iterative_prompting(
     n_iterations: int = 8,
     batch_size: int = 32,
 ) -> None:
-    """
+    """@private"""
+    warnings.warn("The iterative prompting functionality is not working correctly yet.")
 
-    Args:
-    """
     device = torch.device("cuda")
     model = get_trainable_sam_model(model_type, checkpoint_path)
 
