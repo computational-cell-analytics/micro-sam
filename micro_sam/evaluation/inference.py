@@ -458,7 +458,7 @@ def _run_inference_with_iterative_prompting_for_image(
     image_embeddings = model.image_embeddings_oft(input_images)
 
     multimasking = n_pos == 1
-    prompt_generator = IterativePromptGenerator(device)
+    prompt_generator = IterativePromptGenerator()
 
     n_samples = len(sampled_ids[0])
     n_batches = int(np.ceil(float(n_samples) / batch_size))
