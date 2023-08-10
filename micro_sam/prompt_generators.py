@@ -199,46 +199,62 @@ class IterativePromptGenerator:
         self.device = device if device is not None else "cuda" if torch.cuda.is_available() else "cpu"
 
     def get_positive_points(self, pos_region, overlap_region):
-        tmp_pos_loc = torch.where(pos_region)
-        # condiion below where there is no room for improvement for the model
-        # hence we put a positive point in the "already correct" regions
-        if torch.stack(tmp_pos_loc).shape[-1] == 0:
-            tmp_pos_loc = torch.where(overlap_region)
+        positive_locations = [torch.where(pos_reg) for pos_reg in pos_region]
+        # we may have objects withput a positive region (= missing true foreground)
+        # in this case we just sample a point where the model was already correct
+        positive_locations = [
+            torch.where(ovlp_reg) if len(pos_loc[0]) == 0 else pos_loc
+            for pos_loc, ovlp_reg in zip(positive_locations, overlap_region)
+        ]
+        # we sample one location for each object in the batch
+        sampled_indices = [np.random.choice(len(pos_loc[0])) for pos_loc in positive_locations]
+        # get the corresponding coordinates (Note that we flip the axis order here due to the expected order of SAM)
+        pos_coordinates = [
+            [pos_loc[-1][idx], pos_loc[-2][idx]] for pos_loc, idx in zip(positive_locations, sampled_indices)
+        ]
 
-        pos_index = np.random.choice(len(tmp_pos_loc[1]))
-        pos_coordinates = int(tmp_pos_loc[1][pos_index]), int(tmp_pos_loc[2][pos_index])
-        pos_coordinates = pos_coordinates[::-1]
-        pos_labels = 1
+        # make sure that we still have the correct batch size
+        assert len(pos_coordinates) == pos_region.shape[0]
+        pos_labels = [1] * len(pos_coordinates)
+
         return pos_coordinates, pos_labels
 
-    def get_negative_points(self, neg_region, true_object, gt):
-        tmp_neg_loc = torch.where(neg_region)
-        if torch.stack(tmp_neg_loc).shape[-1] == 0:
-            tmp_true_loc = torch.where(true_object)
-            x_coords, y_coords = tmp_true_loc[1], tmp_true_loc[2]
-            bbox = torch.stack([torch.min(x_coords), torch.min(y_coords),
-                                torch.max(x_coords) + 1, torch.max(y_coords) + 1])
-            bbox_mask = torch.zeros_like(true_object).squeeze(0)
-            bbox_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = 1
-            bbox_mask = bbox_mask[None].to(self.device)
+    # TODO get rid of this looped implementation and use proper batched computation instead
+    def get_negative_points(self, negative_region_batched, true_object_batched, gt_batched):
+        negative_coordinates, negative_labels = [], []
 
-            # NOTE: FIX: here we add dilation to the bbox because in some case we couldn't find objects at all
-            # TODO: just expand the pixels of bbox
-            dilated_bbox_mask = dilation(bbox_mask[None], torch.ones(3, 3).to(self.device)).squeeze(0)
-            background_mask = abs(dilated_bbox_mask - true_object)
-            tmp_neg_loc = torch.where(background_mask)
+        for neg_region, true_object, gt in zip(negative_region_batched, true_object_batched, gt_batched):
 
-            # there is a chance that the object is small to not return a decent-sized bounding box
-            # hence we might not find points sometimes there as well, hence we sample points from true background
+            tmp_neg_loc = torch.where(neg_region)
             if torch.stack(tmp_neg_loc).shape[-1] == 0:
-                tmp_neg_loc = torch.where(gt == 0)
+                tmp_true_loc = torch.where(true_object)
+                x_coords, y_coords = tmp_true_loc[1], tmp_true_loc[2]
+                bbox = torch.stack([torch.min(x_coords), torch.min(y_coords),
+                                    torch.max(x_coords) + 1, torch.max(y_coords) + 1])
+                bbox_mask = torch.zeros_like(true_object).squeeze(0)
+                bbox_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = 1
+                bbox_mask = bbox_mask[None].to(self.device)
 
-        neg_index = np.random.choice(len(tmp_neg_loc[1]))
-        neg_coordinates = int(tmp_neg_loc[1][neg_index]), int(tmp_neg_loc[2][neg_index])
-        neg_coordinates = neg_coordinates[::-1]
-        neg_labels = 0
+                # NOTE: FIX: here we add dilation to the bbox because in some case we couldn't find objects at all
+                # TODO: just expand the pixels of bbox
+                dilated_bbox_mask = dilation(bbox_mask[None], torch.ones(3, 3).to(self.device)).squeeze(0)
+                background_mask = abs(dilated_bbox_mask - true_object)
+                tmp_neg_loc = torch.where(background_mask)
 
-        return neg_coordinates, neg_labels
+                # there is a chance that the object is small to not return a decent-sized bounding box
+                # hence we might not find points sometimes there as well, hence we sample points from true background
+                if torch.stack(tmp_neg_loc).shape[-1] == 0:
+                    tmp_neg_loc = torch.where(gt == 0)
+
+            neg_index = np.random.choice(len(tmp_neg_loc[1]))
+            neg_coordinates = [tmp_neg_loc[1][neg_index], tmp_neg_loc[2][neg_index]]
+            neg_coordinates = neg_coordinates[::-1]
+            neg_labels = 0
+
+            negative_coordinates.append(neg_coordinates)
+            negative_labels.append(neg_labels)
+
+        return negative_coordinates, negative_labels
 
     def __call__(
         self,
@@ -249,6 +265,7 @@ class IterativePromptGenerator:
     ):
         """Generate the prompts for each object iteratively in the segmentation.
         """
+        assert gt.shape == object_mask.shape
         true_object = gt.to(self.device)
         expected_diff = (object_mask - true_object)
         neg_region = (expected_diff == 1).to(torch.float)
@@ -257,8 +274,12 @@ class IterativePromptGenerator:
 
         pos_coordinates, pos_labels = self.get_positive_points(pos_region, overlap_region)
         neg_coordinates, neg_labels = self.get_negative_points(neg_region, true_object, gt)
+        assert len(pos_coordinates) == len(pos_labels) == len(neg_coordinates) == len(neg_labels)
 
-        net_coords = torch.cat([current_points, torch.tensor([[pos_coordinates, neg_coordinates]])], dim=1)
-        net_labels = torch.cat([current_labels, torch.tensor([[pos_labels, neg_labels]])], dim=1)
+        pos_coordinates, neg_coordinates = torch.tensor(pos_coordinates)[:, None], torch.tensor(neg_coordinates)[:, None]
+        pos_labels, neg_labels = torch.tensor(pos_labels)[:, None], torch.tensor(neg_labels)[:, None]
+
+        net_coords = torch.cat([current_points, pos_coordinates, neg_coordinates], dim=1)
+        net_labels = torch.cat([current_labels, pos_labels, neg_labels], dim=1)
 
         return net_coords, net_labels

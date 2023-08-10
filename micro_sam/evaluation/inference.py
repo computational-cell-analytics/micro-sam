@@ -425,10 +425,9 @@ def run_inference_with_prompts(
 
 def _save_segmentation(masks, prediction_path):
     # masks to segmentation
-    masks = masks.numpy().squeeze()
+    masks = masks.cpu().numpy().squeeze().astype("bool")
     shape = masks.shape[-2:]
-    masks = {"segmentation": mask for mask in masks}
-    breakpoint()
+    masks = [{"segmentation": mask, "area": mask.sum()} for mask in masks]
     segmentation = mask_data_to_segmentation(masks, shape, with_background=True)
     imageio.imwrite(prediction_path, segmentation)
 
@@ -441,7 +440,7 @@ def _run_inference_with_iterative_prompting_for_image(
     device,
     use_boxes,
     prediction_paths,
-    batch_size=64
+    batch_size,
 ):
     assert len(prediction_paths) == n_iterations, f"{len(prediction_paths)}, {n_iterations}"
     to_sam_inputs = ConvertToSamInputs()
@@ -453,9 +452,6 @@ def _run_inference_with_iterative_prompting_for_image(
 
     n_pos = 0 if use_boxes else 1
     batched_inputs, sampled_ids = to_sam_inputs(image, gt, n_pos=n_pos, n_neg=0, get_boxes=use_boxes)
-    sampled_binary_y = torch.stack([
-        torch.stack([_gt == idx for idx in sampled]) for _gt, sampled in zip(gt, sampled_ids)
-    ]).to(torch.float32)
 
     input_images = torch.stack([model.preprocess(x=x["image"].to(device)) for x in batched_inputs], dim=0)
     image_embeddings = model.image_embeddings_oft(input_images)
@@ -471,15 +467,19 @@ def _run_inference_with_iterative_prompting_for_image(
         for batch_idx in range(n_batches):
             batch_start = batch_idx * batch_size
             batch_stop = min((batch_idx + 1) * batch_size, n_samples)
-            tmp_batched_inputs = deepcopy(batched_inputs)
-            for k, v in tmp_batched_inputs[0].items():
-                if k == "point_coords":
-                    tmp_batched_inputs[0]["point_coords"] = v[batch_start:batch_stop]
-                if k == "point_labels":
-                    tmp_batched_inputs[0]["point_labels"] = v[batch_start:batch_stop]
+
+            this_batched_inputs = [{
+                k: v[batch_start:batch_stop] if k in ("point_coords", "point_labels") else v
+                for k, v in batched_inputs[0].items()
+            }]
+
+            sampled_binary_y = torch.stack([
+                torch.stack([_gt == idx for idx in sampled[batch_start:batch_stop]])[:, None]
+                for _gt, sampled in zip(gt, sampled_ids)
+            ]).to(torch.float32)
 
             batched_outputs = model(
-                tmp_batched_inputs,
+                this_batched_inputs,
                 multimask_output=multimasking if iteration == 0 else False,
                 image_embeddings=image_embeddings
             )
@@ -499,7 +499,7 @@ def _run_inference_with_iterative_prompting_for_image(
             masks = (masks > 0.5).to(torch.float32)
             final_masks.append(masks)
 
-            for _pred, _gt, _inp, logits in zip(masks, sampled_binary_y, tmp_batched_inputs, logits_masks):
+            for _pred, _gt, _inp, logits in zip(masks, sampled_binary_y, this_batched_inputs, logits_masks):
                 next_coords, next_labels = prompt_generator(_gt, _pred, _inp["point_coords"], _inp["point_labels"])
                 _inp["point_coords"], _inp["point_labels"], _inp["mask_inputs"] = next_coords, next_labels, logits
 
@@ -515,6 +515,7 @@ def run_inference_with_iterative_prompting(
     prediction_root: Union[str, os.PathLike],
     use_boxes: bool,
     n_iterations: int = 8,
+    batch_size: int = 32,
 ) -> None:
     """
 
@@ -545,5 +546,5 @@ def run_inference_with_iterative_prompting(
 
         with torch.no_grad():
             _run_inference_with_iterative_prompting_for_image(
-                model, image, gt, n_iterations, device, use_boxes, prediction_paths,
+                model, image, gt, n_iterations, device, use_boxes, prediction_paths, batch_size,
             )

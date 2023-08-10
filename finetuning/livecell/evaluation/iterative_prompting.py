@@ -10,7 +10,7 @@ def main():
 
     run_inference_with_iterative_prompting(
         checkpoint, model_type, image_paths, gt_paths,
-        prediction_root, use_boxes=False,
+        prediction_root, use_boxes=False, batch_size=16,
     )
 
 
