@@ -592,7 +592,7 @@ class EmbeddingMaskGenerator(AMGBase):
             mask = initial_segmentation == seg_id
             masks, iou_preds, _ = segment_from_mask(
                 self._predictor, mask, original_size=original_size,
-                multimask_output=True, return_logits=True, return_all=True,
+                multimask_output=False, return_logits=True, return_all=True,
                 use_box=self._use_box, use_mask=self._use_mask, use_points=self._use_points,
                 box_extension=self._box_extension,
             )

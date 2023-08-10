@@ -12,6 +12,7 @@ dependencies:
     - pytorch-cuda>=11.7  # you may need to update the cuda version to match your system
     - segment-anything
     - torchvision
+    - torch_em >=0.5.1
     - tqdm
     # - pip:
     #     - git+https://github.com/facebookresearch/segment-anything.git

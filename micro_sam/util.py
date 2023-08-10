@@ -4,9 +4,11 @@ Helper functions for downloading Segment Anything models and predicting image em
 
 import hashlib
 import os
+import pickle
 import warnings
+from collections import OrderedDict
 from shutil import copyfileobj
-from typing import Any, Callable, Dict, Optional, Tuple, Iterable
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 
 import imageio.v3 as imageio
 import numpy as np
@@ -43,7 +45,7 @@ _CHECKSUMS = {
     "vit_b": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
     # preliminary finetuned models
     "vit_h_lm": "c30a580e6ccaff2f4f0fbaf9cad10cee615a915cdd8c7bc4cb50ea9bdba3fc09",
-    "vit_b_lm": "f2b8676f92a123f6f8ac998818118bd7269a559381ec60af4ac4be5c86024a1b",
+    "vit_b_lm": "f862febddb1c43ebe8263c42ed71e4fb281adf14a8ba83b7a5b0574bf0613ec6",
     "vit_h_em": "652f70acad89ab855502bc10965e7d0baf7ef5f38fef063dd74f1787061d3919",
     "vit_b_em": "9eb783e538bb287c7086f825f1e1dc5d5681bd116541a0b98cab85f1e7f4dd62",
 }
@@ -58,6 +60,7 @@ _DOWNLOAD_NAMES = {
 
 # TODO define the proper type for image embeddings
 ImageEmbeddings = Dict[str, Any]
+"""@private"""
 
 
 def _download(url, path, model_type):
@@ -106,8 +109,8 @@ def _get_checkpoint(model_type, checkpoint_path=None):
 def get_sam_model(
     device: Optional[str] = None,
     model_type: str = "vit_h",
-    checkpoint_path: Optional[str] = None,
-    return_sam: bool = False
+    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
+    return_sam: bool = False,
 ) -> SamPredictor:
     """Get the SegmentAnything Predictor.
 
@@ -125,7 +128,8 @@ def get_sam_model(
         The segment anything predictor.
     """
     checkpoint = _get_checkpoint(model_type, checkpoint_path)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Our custom model types have a suffix "_...". This suffix needs to be stripped
     # before calling sam_model_registry.
@@ -139,6 +143,95 @@ def get_sam_model(
     if return_sam:
         return predictor, sam
     return predictor
+
+
+# We write a custom unpickler that skips objects that cannot be found instead of
+# throwing an AttributeError or ModueNotFoundError.
+# NOTE: since we just want to unpickle the model to load its weights these errors don't matter.
+# See also https://stackoverflow.com/questions/27732354/unable-to-load-files-using-pickle-and-multiple-modules
+class _CustomUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        try:
+            return super().find_class(module, name)
+        except (AttributeError, ModuleNotFoundError) as e:
+            warnings.warn(f"Did not find {module}:{name} and will skip it, due to error {e}")
+            return None
+
+
+def get_custom_sam_model(
+    checkpoint_path: Union[str, os.PathLike],
+    device: Optional[str] = None,
+    model_type: str = "vit_h",
+    return_sam: bool = False,
+    return_state: bool = False,
+) -> SamPredictor:
+    """Load a SAM model from a torch_em checkpoint.
+
+    This function enables loading from the checkpoints saved by
+    the functionality in `micro_sam.training`.
+
+    Args:
+        checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
+        device: The device for the model. If none is given will use GPU if available.
+        model_type: The SegmentAnything model to use.
+        return_sam: Return the sam model object as well as the predictor.
+        return_state: Return the full state of the checkpoint in addition to the predictor.
+
+    Returns:
+        The segment anything predictor.
+    """
+    assert not (return_sam and return_state)
+
+    # over-ride the unpickler with our custom one
+    custom_pickle = pickle
+    custom_pickle.Unpickler = _CustomUnpickler
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    sam = sam_model_registry[model_type]()
+
+    # load the model state, ignoring any attributes that can't be found by pickle
+    state = torch.load(checkpoint_path, map_location=device, pickle_module=custom_pickle)
+    model_state = state["model_state"]
+
+    # copy the model weights from torch_em's training format
+    sam_prefix = "sam."
+    model_state = OrderedDict(
+            [(k[len(sam_prefix):] if k.startswith(sam_prefix) else k, v) for k, v in model_state.items()]
+    )
+    sam.load_state_dict(model_state)
+    sam.to(device)
+
+    predictor = SamPredictor(sam)
+    predictor.model_type = model_type
+
+    if return_sam:
+        return predictor, sam
+    if return_state:
+        return predictor, state
+    return predictor
+
+
+def export_custom_sam_model(
+    checkpoint_path: Union[str, os.PathLike],
+    model_type: str,
+    save_path: Union[str, os.PathLike],
+) -> None:
+    """Export a finetuned segment anything model to the standard model format.
+
+    The exported model can be used by the interactive annotation tools in `micro_sam.annotator`.
+
+    Args:
+        checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
+        model_type: The SegmentAnything model type to use (vit_h, vit_b or vit_l).
+        save_path: Where to save the exported model.
+    """
+    _, state = get_custom_sam_model(checkpoint_path, model_type=model_type, return_state=True)
+    model_state = state["model_state"]
+    prefix = "sam."
+    model_state = OrderedDict(
+        [(k[len(prefix):] if k.startswith(prefix) else k, v) for k, v in model_state.items()]
+    )
+    torch.save(model_state, save_path)
 
 
 def get_model_names() -> Iterable:
@@ -375,7 +468,7 @@ def precompute_image_embeddings(
     If 'save_path' is given the embeddings will be loaded/saved in a zarr container.
 
     Args:
-        predictor: The SegmentAnything predictor
+        predictor: The SegmentAnything predictor.
         input_: The input data. Can be 2 or 3 dimensional, corresponding to an image, volume or timeseries.
         save_path: Path to save the embeddings in a zarr container.
         lazy_loading: Whether to load all embeddings into memory or return an
@@ -403,8 +496,10 @@ def precompute_image_embeddings(
             if "input_size" in f.attrs:  # we have computed the embeddings already
                 # key signature does not match or is not in the file
                 if key not in f.attrs or f.attrs[key] != val:
-                    warnings.warn(f"Embeddings file is invalid due to unmatching {key}. \
-                        Please recompute embeddings in a new file.")
+                    warnings.warn(
+                        f"Embeddings file {save_path} is invalid due to unmatching {key}."
+                        "Please recompute embeddings in a new file."
+                    )
                     if wrong_file_callback is not None:
                         save_path = wrong_file_callback(save_path)
                         f = zarr.open(save_path, "a")
@@ -508,7 +603,7 @@ def get_centers_and_bounding_boxes(
 
     bbox_coordinates = {prop.label: prop.bbox for prop in properties}
 
-    assert len(bbox_coordinates) == len(center_coordinates)
+    assert len(bbox_coordinates) == len(center_coordinates), f"{len(bbox_coordinates)}, {len(center_coordinates)}"
     return center_coordinates, bbox_coordinates
 
 
