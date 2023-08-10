@@ -178,7 +178,8 @@ def _run_inference_with_prompts_for_image(
 def get_predictor(
     checkpoint_path: Union[str, os.PathLike],
     model_type: str,
-    return_state: bool = False
+    return_state: bool = False,
+    is_custom_model: Optional[bool] = None,
 ) -> SamPredictor:
     """Get the segment anything predictor from an exported or custom checkpoint.
 
@@ -186,11 +187,15 @@ def get_predictor(
         checkpoint_path: The checkpoint filepath.
         model_type: The type of the model, either vit_h, vit_b or vit_l.
         return_state: Whether to return the complete state of the checkpoint in addtion to the predictor.
+        is_custom_model: Whether this is a custom model or not.
     Returns:
         The segment anything predictor.
     """
-    # TODO use try-except rather than this construct, so that we don't rely on the checkpoint name
-    if checkpoint_path.split("/")[-1] == "best.pt":  # Finetuned SAM model
+    # By default we check if the model follows the torch_em checkpint naming scheme to check whether it is a
+    # custom model or not. This can be over-ridden by passing True or False for is_custom_model.
+    is_custom_model = checkpoint_path.split("/")[-1] == "best.pt" if is_custom_model is None else is_custom_model
+
+    if is_custom_model:  # Finetuned SAM model
         predictor = util.get_custom_sam_model(
             checkpoint_path=checkpoint_path, model_type=model_type, return_state=return_state
         )
@@ -217,7 +222,7 @@ def precompute_all_embeddings(
     for image_path in tqdm(image_paths, desc="Precompute embeddings"):
         image_name = os.path.basename(image_path)
         im = imageio.imread(image_path)
-        embedding_path = os.path.join(embedding_dir, f"{image_name[:-4]}.zarr")
+        embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
         util.precompute_image_embeddings(predictor, im, embedding_path)
 
 
@@ -384,7 +389,7 @@ def run_inference_with_prompts(
         gt = imageio.imread(gt_path).astype("uint32")
         gt = relabel_sequential(gt)[0]
 
-        embedding_path = os.path.join(embedding_dir, f"{image_name[:-4]}.zarr")
+        embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
         image_embeddings = util.precompute_image_embeddings(predictor, im, embedding_path)
         util.set_precomputed(predictor, image_embeddings)
 

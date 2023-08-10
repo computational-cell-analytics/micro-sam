@@ -118,7 +118,7 @@ def run_amg_grid_search(
         image = imageio.imread(image_path)
         gt = imageio.imread(gt_path)
 
-        embedding_path = os.path.join(embedding_dir, f"{image_name[:-4]}.zarr")
+        embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
         image_embeddings = util.precompute_image_embeddings(predictor, image, embedding_path)
         amg.initialize(image, image_embeddings)
 
@@ -166,7 +166,7 @@ def run_amg_inference(
         assert os.path.exists(image_path), image_path
         image = imageio.imread(image_path)
 
-        embedding_path = os.path.join(embedding_dir, f"{image_name[:-4]}.zarr")
+        embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
         image_embeddings = util.precompute_image_embeddings(predictor, image, embedding_path)
 
         amg.initialize(image, image_embeddings)

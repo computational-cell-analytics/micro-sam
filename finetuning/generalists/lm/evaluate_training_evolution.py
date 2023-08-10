@@ -1,11 +1,9 @@
 import argparse
 import os
-import warnings
 from glob import glob
 
 import pandas as pd
-from micro_sam.util import get_custom_sam_model
-from util import evaluate_checkpoint_for_datasets
+from util import evaluate_checkpoint_for_datasets, get_generalist_predictor
 
 CHECKPOINT_ROOT = "/scratch-grete/projects/nim00007/sam/LM/generalist"
 EXPERIMENT_ROOT = "/scratch-grete/projects/nim00007/sam/experiments/generalists/lm"
@@ -26,9 +24,7 @@ def evaluate_training_evolution(model_type):
     epochs, results = [], []
     for checkpoint in checkpoints:
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            predictor, state = get_custom_sam_model(checkpoint, model_type=model_type, return_state=True)
+        predictor, state = get_generalist_predictor(checkpoint, model_type, return_state=True)
         epoch = state["epoch"] + 1
 
         if epoch in epochs:

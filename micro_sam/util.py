@@ -496,8 +496,10 @@ def precompute_image_embeddings(
             if "input_size" in f.attrs:  # we have computed the embeddings already
                 # key signature does not match or is not in the file
                 if key not in f.attrs or f.attrs[key] != val:
-                    warnings.warn(f"Embeddings file is invalid due to unmatching {key}. \
-                        Please recompute embeddings in a new file.")
+                    warnings.warn(
+                        f"Embeddings file {save_path} is invalid due to unmatching {key}."
+                        "Please recompute embeddings in a new file."
+                    )
                     if wrong_file_callback is not None:
                         save_path = wrong_file_callback(save_path)
                         f = zarr.open(save_path, "a")

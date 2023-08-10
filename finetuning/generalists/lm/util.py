@@ -1,10 +1,12 @@
+import json
 import os
+import warnings
 from glob import glob
 from pathlib import Path
 
 import pandas as pd
 from micro_sam.evaluation import (
-    inference, evaluation,
+    automatic_mask_generation, inference, evaluation,
     default_experiment_settings, get_experiment_setting_name
 )
 
@@ -22,35 +24,46 @@ DATASETS = (
 )
 
 
-def get_data_paths(dataset, split):
-    image_paths = sorted(glob(os.path.join(DATA_ROOT, dataset, split, "image_*.tif")))
+def get_generalist_predictor(checkpoint, model_type, return_state=False):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return inference.get_predictor(
+            checkpoint, model_type=model_type, return_state=return_state, is_custom_model=True
+        )
+
+
+def get_data_paths(dataset, split, max_num_images=None):
+    image_pattern = os.path.join(DATA_ROOT, dataset, split, "image_*.tif")
+    image_paths = sorted(glob(image_pattern))
     gt_paths = sorted(glob(os.path.join(DATA_ROOT, dataset, split, "labels_*.tif")))
     assert len(image_paths) == len(gt_paths)
-    assert len(image_paths) > 0
+    assert len(image_paths) > 0, image_pattern
+    if max_num_images is not None:
+        image_paths, gt_paths = image_paths[:max_num_images], gt_paths[:max_num_images]
     return image_paths, gt_paths
 
 
 def evaluate_checkpoint_for_dataset(
     checkpoint, model_type, dataset, experiment_folder,
     run_default_evaluation, run_amg, predictor=None,
+    max_num_val_images=None,
 ):
-    """Evaluate a generalist checkpoint for a given dataset
+    """Evaluate a generalist checkpoint for a given dataset.
     """
     assert run_default_evaluation or run_amg
 
     prompt_dir = os.path.join(PROMPT_ROOT, dataset)
 
     if predictor is None:
-        predictor = inference.get_predictor(checkpoint, model_type)
+        predictor = get_generalist_predictor(checkpoint, model_type)
     test_image_paths, test_gt_paths = get_data_paths(dataset, "test")
+
+    embedding_dir = os.path.join(experiment_folder, "test", "embeddings")
+    os.makedirs(embedding_dir, exist_ok=True)
+    result_dir = os.path.join(experiment_folder, "results")
 
     results = []
     if run_default_evaluation:
-        embedding_dir = os.path.join(experiment_folder, "test", "embeddings")
-        os.makedirs(embedding_dir, exist_ok=True)
-
-        result_dir = os.path.join(experiment_folder, "results")
-
         prompt_settings = default_experiment_settings()
         for setting in prompt_settings:
 
@@ -75,7 +88,36 @@ def evaluate_checkpoint_for_dataset(
             results.append(result)
 
     if run_amg:
-        raise NotImplementedError
+        val_embedding_dir = os.path.join(experiment_folder, "val", "embeddings")
+        val_result_dir = os.path.join(experiment_folder, "val", "results")
+        os.makedirs(val_embedding_dir, exist_ok=True)
+
+        val_image_paths, val_gt_paths = get_data_paths(dataset, "val", max_num_images=max_num_val_images)
+        automatic_mask_generation.run_amg_grid_search(
+            predictor, val_image_paths, val_gt_paths, val_embedding_dir,
+            val_result_dir, verbose_gs=True,
+        )
+
+        best_iou_thresh, best_stability_thresh, _ = automatic_mask_generation.evaluate_amg_grid_search(val_result_dir)
+        best_settings = {"pred_iou_thresh": best_iou_thresh, "stability_score_thresh": best_stability_thresh}
+        gs_result_path = os.path.join(experiment_folder, "best_gs_params.json")
+        with open(gs_result_path, "w") as f:
+            json.dump(best_settings, f)
+
+        prediction_dir = os.path.join(experiment_folder, "test", "amg")
+        os.makedirs(prediction_dir, exist_ok=True)
+        automatic_mask_generation.run_amg_inference(
+            predictor, test_image_paths, embedding_dir, prediction_dir,
+            amg_generate_kwargs=best_settings,
+        )
+
+        pred_paths = sorted(glob(os.path.join(prediction_dir, "*.tif")))
+        result_path = os.path.join(result_dir, "amg.csv")
+        os.makedirs(Path(result_path).parent, exist_ok=True)
+
+        result = evaluation.run_evaluation(test_gt_paths, pred_paths, result_path)
+        result.insert(0, "setting", ["amg"])
+        results.append(result)
 
     results = pd.concat(results)
     results.insert(0, "dataset", [dataset] * results.shape[0])
@@ -85,9 +127,10 @@ def evaluate_checkpoint_for_dataset(
 def evaluate_checkpoint_for_datasets(
     checkpoint, model_type, experiment_root, datasets,
     run_default_evaluation, run_amg, predictor=None,
+    max_num_val_images=None,
 ):
     if predictor is None:
-        predictor = inference.get_predictor(checkpoint, model_type)
+        predictor = get_generalist_predictor(checkpoint, model_type)
 
     results = []
     for dataset in datasets:
@@ -97,6 +140,7 @@ def evaluate_checkpoint_for_datasets(
             None, None, dataset, experiment_folder,
             run_default_evaluation=run_default_evaluation,
             run_amg=run_amg, predictor=predictor,
+            max_num_val_images=max_num_val_images,
         )
         results.append(result)
 
