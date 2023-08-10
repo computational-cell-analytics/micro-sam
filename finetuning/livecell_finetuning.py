@@ -75,7 +75,9 @@ def finetune_livecell(args):
     )
     trainer.fit(args.iterations)
     if args.export_path is not None:
-        checkpoint_path = os.path.join("" if args.save_root is None else args.save_root, "checkpoints", "best.pt")
+        checkpoint_path = os.path.join(
+            "" if args.save_root is None else args.save_root, "checkpoints", checkpoint_name, "best.pt"
+        )
         export_custom_sam_model(
             checkpoint_path=checkpoint_path,
             model_type=model_type,

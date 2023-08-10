@@ -1,5 +1,5 @@
 import os
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import torch
 import numpy as np
@@ -11,9 +11,9 @@ from .trainable_sam import TrainableSAM
 
 def get_trainable_sam_model(
     model_type: str = "vit_h",
-    checkpoint_path: Optional[str, os.PathLike] = None,
+    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     freeze: Optional[List[str]] = None,
-    device: Optional[str, torch.device] = None,
+    device: Optional[Union[str, torch.device]] = None,
 ) -> TrainableSAM:
     """Get the trainable sam model.
 
