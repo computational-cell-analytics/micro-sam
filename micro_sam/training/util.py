@@ -153,8 +153,9 @@ class ConvertToSamInputs:
             gt = gt.squeeze().numpy().astype(np.int32)
             point_coordinates, bbox_coordinates = get_centers_and_bounding_boxes(gt)
 
+            this_n_samples = len(point_coordinates) if n_samples is None else n_samples
             box_prompts, point_prompts, point_label_prompts, sampled_cell_ids = self._get_prompt_lists(
-                gt, n_samples,
+                gt, this_n_samples,
                 n_pos, n_neg,
                 get_boxes,
                 get_points,

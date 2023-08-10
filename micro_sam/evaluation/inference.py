@@ -1,5 +1,6 @@
 import os
 import pickle
+import warnings
 
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Union
@@ -15,8 +16,9 @@ from segment_anything import SamPredictor
 from segment_anything.utils.transforms import ResizeLongestSide
 
 from .. import util as util
-from ..training import get_trainable_sam_model, ConvertToSamInputs
+from ..instance_segmentation import mask_data_to_segmentation
 from ..prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
+from ..training import get_trainable_sam_model, ConvertToSamInputs
 
 
 def _load_prompts(
@@ -422,48 +424,127 @@ def run_inference_with_prompts(
             pickle.dump(cached_box_prompts, f)
 
 
-def run_inference_with_iterative_prompting(
-        image, gt, model_type, checkpoint_path, n_iterations, n_positive, n_negative,
-        use_boxes, device=None, _sigmoid=torch.nn.Sigmoid()
-):
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+def _save_segmentation(masks, prediction_path):
+    # masks to segmentation
+    masks = masks.cpu().numpy().squeeze().astype("bool")
+    shape = masks.shape[-2:]
+    masks = [{"segmentation": mask, "area": mask.sum()} for mask in masks]
+    segmentation = mask_data_to_segmentation(masks, shape, with_background=True)
+    imageio.imwrite(prediction_path, segmentation)
 
-    model = get_trainable_sam_model(model_type, checkpoint_path)
-    _to_sam_inputs = ConvertToSamInputs()
-    batched_inputs, sampled_ids = _to_sam_inputs(image, gt, n_positive, n_negative, use_boxes)
-    sampled_binary_y = [np.isin(gt, idx) for idx in sampled_ids]
+
+def _run_inference_with_iterative_prompting_for_image(
+    model,
+    image,
+    gt,
+    n_iterations,
+    device,
+    use_boxes,
+    prediction_paths,
+    batch_size,
+):
+    assert len(prediction_paths) == n_iterations, f"{len(prediction_paths)}, {n_iterations}"
+    to_sam_inputs = ConvertToSamInputs()
+
+    image = torch.from_numpy(
+        image[None, None] if image.ndim == 2 else image[None]
+    )
+    gt = torch.from_numpy(gt[None].astype("int32"))
+
+    n_pos = 0 if use_boxes else 1
+    batched_inputs, sampled_ids = to_sam_inputs(image, gt, n_pos=n_pos, n_neg=0, get_boxes=use_boxes)
 
     input_images = torch.stack([model.preprocess(x=x["image"].to(device)) for x in batched_inputs], dim=0)
     image_embeddings = model.image_embeddings_oft(input_images)
 
+    multimasking = n_pos == 1
     prompt_generator = IterativePromptGenerator(device)
 
-    multimasking = False
-    if n_positive == 1 and n_negative == 0:
-        if not use_boxes:
-            multimasking = True
+    n_samples = len(sampled_ids[0])
+    n_batches = int(np.ceil(float(n_samples) / batch_size))
 
     for iteration in range(n_iterations):
-        batched_outputs = model(
-            batched_inputs,
-            multimask_output=multimasking if iteration == 0 else False,
-            image_embeddings=image_embeddings
-        )
+        final_masks = []
+        for batch_idx in range(n_batches):
+            batch_start = batch_idx * batch_size
+            batch_stop = min((batch_idx + 1) * batch_size, n_samples)
 
-        masks, logits_masks = [], []
-        for m in batched_outputs:
-            mask, l_mask = [], []
-            for _m, _l, _iou in zip(m["masks"], m["low_res_masks"], m["iou_predictions"]):
-                best_iou_idx = torch.argmax(_iou)
-                mask.append(_sigmoid(_m[best_iou_idx][None]))
-                l_mask.append(_l[best_iou_idx][None])
-            mask, l_mask = torch.stack(mask), torch.stack(l_mask)
-            masks.append(mask)
-            logits_masks.append(l_mask)
-        masks, logits_masks = torch.stack(masks), torch.stack(logits_masks)
-        masks = (masks > 0.5).to(torch.float32)
+            this_batched_inputs = [{
+                k: v[batch_start:batch_stop] if k in ("point_coords", "point_labels") else v
+                for k, v in batched_inputs[0].items()
+            }]
 
-        for _pred, _gt, _inp, logits in zip(masks, sampled_binary_y, batched_inputs, logits_masks):
-            net_coords, net_labels = prompt_generator(_gt, _pred, _inp["point_coords"], _inp["point_labels"])
-            _inp["point_coords"], _inp["point_labels"], _inp["mask_inputs"] = net_coords, net_labels, logits
+            sampled_binary_y = torch.stack([
+                torch.stack([_gt == idx for idx in sampled[batch_start:batch_stop]])[:, None]
+                for _gt, sampled in zip(gt, sampled_ids)
+            ]).to(torch.float32)
+
+            batched_outputs = model(
+                this_batched_inputs,
+                multimask_output=multimasking if iteration == 0 else False,
+                image_embeddings=image_embeddings
+            )
+
+            masks, logits_masks = [], []
+            for m in batched_outputs:
+                mask, l_mask = [], []
+                for _m, _l, _iou in zip(m["masks"], m["low_res_masks"], m["iou_predictions"]):
+                    best_iou_idx = torch.argmax(_iou)
+                    mask.append(torch.sigmoid(_m[best_iou_idx][None]))
+                    l_mask.append(_l[best_iou_idx][None])
+                mask, l_mask = torch.stack(mask), torch.stack(l_mask)
+                masks.append(mask)
+                logits_masks.append(l_mask)
+
+            masks, logits_masks = torch.stack(masks), torch.stack(logits_masks)
+            masks = (masks > 0.5).to(torch.float32)
+            final_masks.append(masks)
+
+            for _pred, _gt, _inp, logits in zip(masks, sampled_binary_y, this_batched_inputs, logits_masks):
+                next_coords, next_labels = prompt_generator(_gt, _pred, _inp["point_coords"], _inp["point_labels"])
+                _inp["point_coords"], _inp["point_labels"], _inp["mask_inputs"] = next_coords, next_labels, logits
+
+        final_masks = torch.cat(final_masks, dim=1)
+        _save_segmentation(final_masks, prediction_paths[iteration])
+
+
+def run_inference_with_iterative_prompting(
+    checkpoint_path: Union[str, os.PathLike],
+    model_type: str,
+    image_paths: List[Union[str, os.PathLike]],
+    gt_paths: List[Union[str, os.PathLike]],
+    prediction_root: Union[str, os.PathLike],
+    use_boxes: bool,
+    n_iterations: int = 8,
+    batch_size: int = 32,
+) -> None:
+    """@private"""
+    warnings.warn("The iterative prompting functionality is not working correctly yet.")
+
+    device = torch.device("cuda")
+    model = get_trainable_sam_model(model_type, checkpoint_path)
+
+    # create all prediction folders
+    for i in range(n_iterations):
+        os.makedirs(os.path.join(prediction_root, f"iteration{i:02}"), exist_ok=True)
+
+    for image_path, gt_path in tqdm(
+        zip(image_paths, gt_paths), total=len(image_paths), desc="Run inference with prompts"
+    ):
+        image_name = os.path.basename(image_path)
+
+        prediction_paths = [os.path.join(prediction_root, f"iteration{i:02}", image_name) for i in range(n_iterations)]
+        if all(os.path.exists(prediction_path) for prediction_path in prediction_paths):
+            continue
+
+        assert os.path.exists(image_path), image_path
+        assert os.path.exists(gt_path), gt_path
+
+        image = imageio.imread(image_path)
+        gt = imageio.imread(gt_path).astype("uint32")
+        gt = relabel_sequential(gt)[0]
+
+        with torch.no_grad():
+            _run_inference_with_iterative_prompting_for_image(
+                model, image, gt, n_iterations, device, use_boxes, prediction_paths, batch_size,
+            )
