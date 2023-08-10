@@ -15,7 +15,8 @@ from segment_anything import SamPredictor
 from segment_anything.utils.transforms import ResizeLongestSide
 
 from .. import util as util
-from ..prompt_generators import PointAndBoxPromptGenerator
+from ..training import get_trainable_sam_model, ConvertToSamInputs
+from ..prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
 
 
 def _load_prompts(
@@ -414,3 +415,50 @@ def run_inference_with_prompts(
     if save_box_prompts:
         with open(box_prompt_save_path, "wb") as f:
             pickle.dump(cached_box_prompts, f)
+
+
+def run_inference_with_iterative_prompting(
+        image, gt, model_type, checkpoint_path, n_iterations, n_positive, n_negative,
+        use_boxes, device=None, _sigmoid=torch.nn.Sigmoid()
+):
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    model = get_trainable_sam_model(model_type, checkpoint_path)
+    _to_sam_inputs = ConvertToSamInputs()
+    batched_inputs, sampled_ids = _to_sam_inputs(image, gt, n_positive, n_negative, use_boxes)
+    sampled_binary_y = [np.isin(gt, idx) for idx in sampled_ids]
+
+    input_images = torch.stack([model.preprocess(x=x["image"].to(device)) for x in batched_inputs], dim=0)
+    image_embeddings = model.image_embeddings_oft(input_images)
+
+    prompt_generator = IterativePromptGenerator(device)
+
+    multimasking = False
+    if n_positive == 1 and n_negative == 0:
+        if not use_boxes:
+            multimasking = True
+
+    for iteration in range(n_iterations):
+        batched_outputs = model(
+            batched_inputs,
+            multimask_output=multimasking if iteration == 0 else False,
+            image_embeddings=image_embeddings
+        )
+
+        masks, logits_masks = [], []
+        for m in batched_outputs:
+            mask, l_mask = [], []
+            for _m, _l, _iou in zip(m["masks"], m["low_res_masks"], m["iou_predictions"]):
+                best_iou_idx = torch.argmax(_iou)
+                mask.append(_sigmoid(_m[best_iou_idx][None]))
+                l_mask.append(_l[best_iou_idx][None])
+            mask, l_mask = torch.stack(mask), torch.stack(l_mask)
+            masks.append(mask)
+            logits_masks.append(l_mask)
+        masks, logits_masks = torch.stack(masks), torch.stack(logits_masks)
+        masks = (masks > 0.5).to(torch.float32)
+
+        for _pred, _gt, _inp, logits in zip(masks, sampled_binary_y, batched_inputs, logits_masks):
+            net_coords, net_labels = prompt_generator(_gt, _pred, _inp["point_coords"], _inp["point_labels"])
+            _inp["point_coords"], _inp["point_labels"], _inp["mask_inputs"] = net_coords, net_labels, logits
