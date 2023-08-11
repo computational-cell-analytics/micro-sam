@@ -1,3 +1,5 @@
+import os
+import pickle
 import warnings
 from typing import Optional, Tuple
 
@@ -38,15 +40,13 @@ def _segment_widget(v: Viewer) -> None:
     v.layers["current_object"].refresh()
 
 
-def _get_amg(is_tiled, with_background, min_initial_size, box_extension=0.05):
+def _get_amg(is_tiled, with_background=True, box_extension=0.05):
     if is_tiled:
-        amg = instance_segmentation.TiledEmbeddingMaskGenerator(
-            PREDICTOR, with_background=with_background, min_initial_size=min_initial_size, box_extension=box_extension,
+        amg = instance_segmentation.TiledAutomaticMaskGenerator(
+            PREDICTOR, with_background=with_background, box_extension=box_extension,
         )
     else:
-        amg = instance_segmentation.EmbeddingMaskGenerator(
-            PREDICTOR, min_initial_size=min_initial_size, box_extension=box_extension,
-        )
+        amg = instance_segmentation.EmbeddingMaskGenerator(PREDICTOR, box_extension=box_extension)
     return amg
 
 
@@ -62,29 +62,27 @@ def _changed_param(amg, **params):
 @magicgui(call_button="Automatic Segmentation")
 def _autosegment_widget(
     v: Viewer,
-    with_background: bool = True,
     pred_iou_thresh: float = 0.88,
     stability_score_thresh: float = 0.95,
-    min_initial_size: int = 10,
-    box_extension: float = 0.05,
+    min_object_size: int = 25,
 ) -> None:
     global AMG
     is_tiled = IMAGE_EMBEDDINGS["input_size"] is None
-    param_changed = _changed_param(
-        AMG, with_background=with_background, min_initial_size=min_initial_size, box_extension=box_extension
-    )
-    if AMG is None or param_changed:
-        if param_changed:
-            print(f"The parameter {param_changed} was changed, so the full instance segmentation has to be recomputed.")
-        AMG = _get_amg(is_tiled, with_background, min_initial_size, box_extension)
+    if AMG is None:
+        AMG = _get_amg(is_tiled)
 
     if not AMG.is_initialized:
         AMG.initialize(v.layers["raw"].data, image_embeddings=IMAGE_EMBEDDINGS, verbose=True)
 
-    seg = AMG.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
-    if not is_tiled:
-        shape = v.layers["raw"].data.shape[:2]
-        seg = instance_segmentation.mask_data_to_segmentation(seg, shape, with_background)
+    seg = AMG.generate(
+        pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
+        min_mask_region_area=min_object_size
+    )
+
+    shape = v.layers["raw"].data.shape[:2]
+    seg = instance_segmentation.mask_data_to_segmentation(
+        seg, shape, with_background=True, min_object_size=min_object_size
+    )
     assert isinstance(seg, np.ndarray)
 
     v.layers["auto_segmentation"].data = seg
@@ -192,6 +190,25 @@ def _update_viewer(v, raw, show_embeddings, segmentation_result):
     v.layers["current_object"].data = np.zeros(shape, dtype="uint32")
 
 
+def _precompute_amg_state(raw, save_path):
+    global AMG
+
+    is_tiled = IMAGE_EMBEDDINGS["input_size"] is None
+    AMG = _get_amg(is_tiled)
+
+    save_path_amg = os.path.join(save_path, "amg_state.pickle")
+    if os.path.exists(save_path_amg):
+        with open(save_path_amg, "rb") as f:
+            amg_state = pickle.load(f)
+        AMG.set_state(amg_state)
+        return
+
+    print("Precomputing the state for instance segmentation")
+    AMG.initialize(raw, image_embeddings=IMAGE_EMBEDDINGS, verbose=True)
+    with open(save_path_amg, "wb") as f:
+        pickle.dump(AMG.get_state(), f)
+
+
 def annotator_2d(
     raw: np.ndarray,
     embedding_path: Optional[str] = None,
@@ -241,6 +258,8 @@ def annotator_2d(
         PREDICTOR, raw, save_path=embedding_path, ndim=2, tile_shape=tile_shape, halo=halo,
         wrong_file_callback=show_wrong_file_warning
     )
+    if embedding_path is not None:
+        _precompute_amg_state(raw, embedding_path)
 
     # we set the pre-computed image embeddings if we don't use tiling
     # (if we use tiling we cannot directly set it because the tile will be chosen dynamically)
