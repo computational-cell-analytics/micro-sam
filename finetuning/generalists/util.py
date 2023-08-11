@@ -1,12 +1,9 @@
-import argparse
 import json
 import os
-import pickle
 import warnings
 
 from glob import glob
 from pathlib import Path
-from tqdm import tqdm
 
 import pandas as pd
 from micro_sam.evaluation import (
@@ -67,68 +64,25 @@ def get_data_paths(dataset, split, max_num_images=None):
     return image_paths, gt_paths
 
 
-def _check_prompts(dataset, settings, expected_len):
-    prompt_folder = os.path.join(PROMPT_ROOT, dataset)
-
-    def check_prompt_file(prompt_file):
-        assert os.path.exists(prompt_file), prompt_file
-        with open(prompt_file, "rb") as f:
-            prompts = pickle.load(f)
-        assert len(prompts) == expected_len, f"{len(prompts)}, {expected_len}"
-
-    for setting in settings:
-        pos, neg = setting["n_positives"], setting["n_negatives"]
-        prompt_file = os.path.join(prompt_folder, f"points-p{pos}-n{neg}.pkl")
-        if pos == 0 and neg == 0:
-            prompt_file = os.path.join(prompt_folder, "boxes.pkl")
-        check_prompt_file(prompt_file)
-
-    print("All files checked!")
-
-
-def check_all_datasets(check_prompts=False):
-
-    def check_dataset(dataset):
-        try:
-            images, _ = get_data_paths(dataset, "test")
-        except AssertionError as e:
-            print("Checking test split failed for datasset", dataset, "due to", e)
-
-        if dataset not in LM_DATASETS:
-            return len(images)
-
-        try:
-            get_data_paths(dataset, "val")
-        except AssertionError as e:
-            print("Checking val split failed for datasset", dataset, "due to", e)
-
-        return len(images)
-
-    settings = default_experiment_settings()
-    for ds in tqdm(ALL_DATASETS, desc="Checking datasets"):
-        n_images = check_dataset(ds)
-        if check_prompts:
-            _check_prompts(ds, settings, n_images)
-    print("All checks done!")
-
-
 ###
 # Evaluation functionality
 ###
 
 
-def get_generalist_predictor(checkpoint, model_type, return_state=False):
+def get_generalist_predictor(checkpoint, model_type, is_custom_model, return_state=False):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         return inference.get_predictor(
-            checkpoint, model_type=model_type, return_state=return_state, is_custom_model=True
+            checkpoint, model_type=model_type,
+            return_state=return_state, is_custom_model=is_custom_model
         )
 
 
+# TODO use model comparison func to generate the image data for qualitative comp
 def evaluate_checkpoint_for_dataset(
     checkpoint, model_type, dataset, experiment_folder,
-    run_default_evaluation, run_amg, predictor=None,
-    max_num_val_images=None,
+    run_default_evaluation, run_amg, is_custom_model,
+    predictor=None, max_num_val_images=None,
 ):
     """Evaluate a generalist checkpoint for a given dataset.
     """
@@ -137,7 +91,7 @@ def evaluate_checkpoint_for_dataset(
     prompt_dir = os.path.join(PROMPT_ROOT, dataset)
 
     if predictor is None:
-        predictor = get_generalist_predictor(checkpoint, model_type)
+        predictor = get_generalist_predictor(checkpoint, model_type, is_custom_model)
     test_image_paths, test_gt_paths = get_data_paths(dataset, "test")
 
     embedding_dir = os.path.join(experiment_folder, "test", "embeddings")
@@ -208,11 +162,11 @@ def evaluate_checkpoint_for_dataset(
 
 def evaluate_checkpoint_for_datasets(
     checkpoint, model_type, experiment_root, datasets,
-    run_default_evaluation, run_amg, predictor=None,
-    max_num_val_images=None,
+    run_default_evaluation, run_amg, is_custom_model,
+    predictor=None, max_num_val_images=None,
 ):
     if predictor is None:
-        predictor = get_generalist_predictor(checkpoint, model_type)
+        predictor = get_generalist_predictor(checkpoint, model_type, is_custom_model)
 
     results = []
     for dataset in datasets:
@@ -221,23 +175,9 @@ def evaluate_checkpoint_for_datasets(
         result = evaluate_checkpoint_for_dataset(
             None, None, dataset, experiment_folder,
             run_default_evaluation=run_default_evaluation,
-            run_amg=run_amg, predictor=predictor,
-            max_num_val_images=max_num_val_images,
+            run_amg=run_amg, is_custom_model=is_custom_model,
+            predictor=predictor, max_num_val_images=max_num_val_images,
         )
         results.append(result)
 
     return pd.concat(results)
-
-
-def evaluate_checkpoint_for_datasets_slurm(
-    checkpoint, model_type, experiment_root, datasets,
-    run_default_evaluation, run_amg,
-):
-    raise NotImplementedError
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--check_prompts", "-c", action="store_true")
-    args = parser.parse_args()
-    check_all_datasets(args.check_prompts)
