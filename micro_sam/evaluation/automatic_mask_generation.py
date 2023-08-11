@@ -34,7 +34,10 @@ def _grid_search(
         masks = amg.generate(
             pred_iou_thresh=iou_thresh, stability_score_thresh=stability_thresh, **amg_generate_kwargs
         )
-        instance_labels = instance_segmentation.mask_data_to_segmentation(masks, gt.shape, with_background=True)
+        instance_labels = instance_segmentation.mask_data_to_segmentation(
+            masks, gt.shape, with_background=True,
+            min_object_size=amg_generate_kwargs.get("min_mask_region_area", 0),
+        )
         m_sas, sas = mean_segmentation_accuracy(instance_labels, gt, return_accuracies=True)  # type: ignore
 
         result_dict = {
@@ -171,7 +174,9 @@ def run_amg_inference(
 
         amg.initialize(image, image_embeddings)
         masks = amg.generate(**amg_generate_kwargs)
-        instances = instance_segmentation.mask_data_to_segmentation(masks, image.shape, with_background=True)
+        instances = instance_segmentation.mask_data_to_segmentation(
+            masks, image.shape, with_background=True, min_object_size=amg_generate_kwargs.get("min_mask_region_area", 0)
+        )
 
         # It's important to compress here, otherwise the predictions would take up a lot of space.
         imageio.imwrite(prediction_path, instances, compression=5)
