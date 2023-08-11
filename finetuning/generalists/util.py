@@ -1,28 +1,120 @@
+import argparse
 import json
 import os
+import pickle
 import warnings
+
 from glob import glob
 from pathlib import Path
+from tqdm import tqdm
 
 import pandas as pd
 from micro_sam.evaluation import (
     automatic_mask_generation, inference, evaluation,
     default_experiment_settings, get_experiment_setting_name
 )
+from micro_sam.evaluation.livecell import _get_livecell_paths
 
 DATA_ROOT = "/scratch/projects/nim00007/sam/datasets"
+LIVECELL_ROOT = "/scratch/projects/nim00007/data/LiveCELL"
 PROMPT_ROOT = "/scratch-grete/projects/nim00007/sam/experiments/prompts"
-# TODO add EM datasets
-DATASETS = (
+
+LM_DATASETS = (
     "covid-if",
     "deepbacs",
     "hpa",
+    "livecell",
     "lizard",
     "mouse-embryo",
     "plantseg-ovules",
     "plantseg-root",
     "tissuenet",
 )
+
+EM_DATASETS = (
+    "cremi",
+    "lucchi",
+    "mitoem",
+    "nuc_mm/mouse",
+    "nuc_mm/zebrafish",
+    "platy-cell",
+    "platy-cuticle",
+    "platy-nuclei",
+    "snemi",
+    "sponge-em",
+    "vnc",
+)
+ALL_DATASETS = EM_DATASETS + LM_DATASETS
+
+
+###
+# Dataset functionality
+###
+
+
+def get_data_paths(dataset, split, max_num_images=None):
+    if dataset == "livecell":
+        n_val_per_cell_type = None if max_num_images is None else int(max_num_images / 8)
+        return _get_livecell_paths(LIVECELL_ROOT, split=split, n_val_per_cell_type=n_val_per_cell_type)
+
+    image_pattern = os.path.join(DATA_ROOT, dataset, split, "image*.tif")
+    image_paths = sorted(glob(image_pattern))
+    gt_paths = sorted(glob(os.path.join(DATA_ROOT, dataset, split, "label*.tif")))
+    assert len(image_paths) == len(gt_paths)
+    assert len(image_paths) > 0, image_pattern
+    if max_num_images is not None:
+        image_paths, gt_paths = image_paths[:max_num_images], gt_paths[:max_num_images]
+    return image_paths, gt_paths
+
+
+def _check_prompts(dataset, settings, expected_len):
+    prompt_folder = os.path.join(PROMPT_ROOT, dataset)
+
+    def check_prompt_file(prompt_file):
+        assert os.path.exists(prompt_file), prompt_file
+        with open(prompt_file, "rb") as f:
+            prompts = pickle.load(f)
+        assert len(prompts) == expected_len, f"{len(prompts)}, {expected_len}"
+
+    for setting in settings:
+        pos, neg = setting["n_positives"], setting["n_negatives"]
+        prompt_file = os.path.join(prompt_folder, f"points-p{pos}-n{neg}.pkl")
+        if pos == 0 and neg == 0:
+            prompt_file = os.path.join(prompt_folder, "boxes.pkl")
+        check_prompt_file(prompt_file)
+
+    print("All files checked!")
+
+
+def check_all_datasets(check_prompts=False):
+
+    def check_dataset(dataset):
+        try:
+            images, _ = get_data_paths(dataset, "test")
+        except AssertionError as e:
+            print("Checking test split failed for datasset", dataset, "due to", e)
+
+        if dataset not in LM_DATASETS:
+            return len(images)
+
+        try:
+            get_data_paths(dataset, "val")
+        except AssertionError as e:
+            print("Checking val split failed for datasset", dataset, "due to", e)
+
+        return len(images)
+
+    settings = default_experiment_settings()
+    for ds in tqdm(ALL_DATASETS, desc="Checking datasets"):
+        n_images = check_dataset(ds)
+        if check_prompts:
+            _check_prompts(ds, settings, n_images)
+    print("All checks done!")
+
+
+###
+# Evaluation functionality
+###
 
 
 def get_generalist_predictor(checkpoint, model_type, return_state=False):
@@ -31,17 +123,6 @@ def get_generalist_predictor(checkpoint, model_type, return_state=False):
         return inference.get_predictor(
             checkpoint, model_type=model_type, return_state=return_state, is_custom_model=True
         )
-
-
-def get_data_paths(dataset, split, max_num_images=None):
-    image_pattern = os.path.join(DATA_ROOT, dataset, split, "image_*.tif")
-    image_paths = sorted(glob(image_pattern))
-    gt_paths = sorted(glob(os.path.join(DATA_ROOT, dataset, split, "labels_*.tif")))
-    assert len(image_paths) == len(gt_paths)
-    assert len(image_paths) > 0, image_pattern
-    if max_num_images is not None:
-        image_paths, gt_paths = image_paths[:max_num_images], gt_paths[:max_num_images]
-    return image_paths, gt_paths
 
 
 def evaluate_checkpoint_for_dataset(
@@ -153,3 +234,10 @@ def evaluate_checkpoint_for_datasets_slurm(
     run_default_evaluation, run_amg,
 ):
     raise NotImplementedError
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--check_prompts", "-c", action="store_true")
+    args = parser.parse_args()
+    check_all_datasets(args.check_prompts)
