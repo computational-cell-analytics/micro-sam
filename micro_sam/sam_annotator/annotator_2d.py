@@ -40,13 +40,11 @@ def _segment_widget(v: Viewer) -> None:
     v.layers["current_object"].refresh()
 
 
-def _get_amg(is_tiled, with_background=True, box_extension=0.05):
+def _get_amg(is_tiled):
     if is_tiled:
-        amg = instance_segmentation.TiledAutomaticMaskGenerator(
-            PREDICTOR, with_background=with_background, box_extension=box_extension,
-        )
+        amg = instance_segmentation.TiledAutomaticMaskGenerator(PREDICTOR)
     else:
-        amg = instance_segmentation.EmbeddingMaskGenerator(PREDICTOR, box_extension=box_extension)
+        amg = instance_segmentation.AutomaticMaskGenerator(PREDICTOR)
     return amg
 
 
@@ -64,7 +62,8 @@ def _autosegment_widget(
     v: Viewer,
     pred_iou_thresh: float = 0.88,
     stability_score_thresh: float = 0.95,
-    min_object_size: int = 25,
+    min_object_size: int = 100,
+    with_background: bool = True,
 ) -> None:
     global AMG
     is_tiled = IMAGE_EMBEDDINGS["input_size"] is None
@@ -203,7 +202,7 @@ def _precompute_amg_state(raw, save_path):
         AMG.set_state(amg_state)
         return
 
-    print("Precomputing the state for instance segmentation")
+    print("Precomputing the state for instance segmentation.")
     AMG.initialize(raw, image_embeddings=IMAGE_EMBEDDINGS, verbose=True)
     with open(save_path_amg, "wb") as f:
         pickle.dump(AMG.get_state(), f)
@@ -220,6 +219,7 @@ def annotator_2d(
     return_viewer: bool = False,
     v: Optional[Viewer] = None,
     predictor: Optional[SamPredictor] = None,
+    precompute_amg_state: bool = False,
 ) -> Optional[Viewer]:
     """The 2d annotation tool.
 
@@ -242,6 +242,9 @@ def annotator_2d(
             This enables using a pre-initialized viewer, for example in `sam_annotator.image_series_annotator`.
         predictor: The Segment Anything model. Passing this enables using fully custom models.
             If you pass `predictor` then `model_type` will be ignored.
+        precompute_amg_state: Whether to precompute the state for automatic mask generation.
+            This will take more time when precomputing embeddings, but will then make
+            automatic mask generation much faster.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -254,11 +257,12 @@ def annotator_2d(
         PREDICTOR = util.get_sam_model(model_type=model_type)
     else:
         PREDICTOR = predictor
+
     IMAGE_EMBEDDINGS = util.precompute_image_embeddings(
         PREDICTOR, raw, save_path=embedding_path, ndim=2, tile_shape=tile_shape, halo=halo,
         wrong_file_callback=show_wrong_file_warning
     )
-    if embedding_path is not None:
+    if precompute_amg_state and (embedding_path is not None):
         _precompute_amg_state(raw, embedding_path)
 
     # we set the pre-computed image embeddings if we don't use tiling
@@ -287,6 +291,7 @@ def annotator_2d(
 def main():
     """@private"""
     parser = vutil._initialize_parser(description="Run interactive segmentation for an image.")
+    parser.add_argument("--precompute_amg_state", action="store_true")
     args = parser.parse_args()
     raw = util.load_image_data(args.input, key=args.key)
 
@@ -302,4 +307,5 @@ def main():
         raw, embedding_path=args.embedding_path,
         show_embeddings=args.show_embeddings, segmentation_result=segmentation_result,
         model_type=args.model_type, tile_shape=args.tile_shape, halo=args.halo,
+        precompute_amg_state=args.precompute_amg_state,
     )
