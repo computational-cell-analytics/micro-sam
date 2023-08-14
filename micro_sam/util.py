@@ -490,14 +490,18 @@ def precompute_image_embeddings(
         data_signature = _compute_data_signature(input_)
 
         f = zarr.open(save_path, "a")
-        key_vals = [("data_signature", data_signature),
-                    ("tile_shape", tile_shape), ("model_type", predictor.model_type)]
+        key_vals = [
+            ("data_signature", data_signature),
+            ("tile_shape", tile_shape if tile_shape is None else list(tile_shape)),
+            ("halo", halo if halo is None else list(halo)),
+            ("model_type", predictor.model_type)
+        ]
         for key, val in key_vals:
             if "input_size" in f.attrs:  # we have computed the embeddings already
                 # key signature does not match or is not in the file
                 if key not in f.attrs or f.attrs[key] != val:
                     warnings.warn(
-                        f"Embeddings file {save_path} is invalid due to unmatching {key}."
+                        f"Embeddings file {save_path} is invalid due to unmatching {key}. "
                         "Please recompute embeddings in a new file."
                     )
                     if wrong_file_callback is not None:

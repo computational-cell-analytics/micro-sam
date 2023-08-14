@@ -135,7 +135,6 @@ class AMGBase(ABC):
         original_size,
         pred_iou_thresh,
         stability_score_thresh,
-        stability_score_offset,
         box_nms_thresh,
     ):
         orig_h, orig_w = original_size
@@ -145,27 +144,15 @@ class AMGBase(ABC):
             keep_mask = data["iou_preds"] > pred_iou_thresh
             data.filter(keep_mask)
 
-        # calculate stability score
-        data["stability_score"] = amg_utils.calculate_stability_score(
-            data["masks"], self._predictor.model.mask_threshold, stability_score_offset
-        )
+        # filter by stability score
         if stability_score_thresh > 0.0:
             keep_mask = data["stability_score"] >= stability_score_thresh
             data.filter(keep_mask)
-
-        # threshold masks and calculate boxes
-        data["masks"] = data["masks"] > self._predictor.model.mask_threshold
-        data["boxes"] = amg_utils.batched_mask_to_box(data["masks"])
 
         # filter boxes that touch crop boundaries
         keep_mask = ~amg_utils.is_box_near_crop_edge(data["boxes"], crop_box, [0, 0, orig_w, orig_h])
         if not torch.all(keep_mask):
             data.filter(keep_mask)
-
-        # compress to RLE
-        data["masks"] = amg_utils.uncrop_masks(data["masks"], crop_box, orig_h, orig_w)
-        data["rles"] = amg_utils.mask_to_rle_pytorch(data["masks"])
-        del data["masks"]
 
         # remove duplicates within this crop.
         keep_by_nms = batched_nms(
@@ -267,6 +254,32 @@ class AMGBase(ABC):
 
         return curr_anns
 
+    def _to_mask_data(self, masks, iou_preds, crop_box, original_size, points=None):
+        orig_h, orig_w = original_size
+
+        # serialize predictions and store in MaskData
+        data = amg_utils.MaskData(masks=masks.flatten(0, 1), iou_preds=iou_preds.flatten(0, 1))
+        if points is not None:
+            data["points"] = torch.as_tensor(points.repeat(masks.shape[1], axis=0))
+
+        del masks
+
+        # calculate the stability scores
+        data["stability_score"] = amg_utils.calculate_stability_score(
+            data["masks"], self._predictor.model.mask_threshold, self._stability_score_offset
+        )
+
+        # threshold masks and calculate boxes
+        data["masks"] = data["masks"] > self._predictor.model.mask_threshold
+        data["boxes"] = amg_utils.batched_mask_to_box(data["masks"])
+
+        # compress to RLE
+        data["masks"] = amg_utils.uncrop_masks(data["masks"], crop_box, orig_h, orig_w)
+        data["rles"] = amg_utils.mask_to_rle_pytorch(data["masks"])
+        del data["masks"]
+
+        return data
+
     def get_state(self) -> Dict[str, Any]:
         """Get the initialized state of the mask generator.
 
@@ -315,6 +328,7 @@ class AutomaticMaskGenerator(AMGBase):
         crop_n_points_downscale_factor: How the number of points is downsampled when predicting with crops.
         point_grids: A lisst over explicit grids of points used for sampling masks.
             Normalized to [0, 1] with respect to the image coordinate system.
+        stability_score_offset: The amount to shift the cutoff when calculating the stability score.
     """
     def __init__(
         self,
@@ -325,6 +339,7 @@ class AutomaticMaskGenerator(AMGBase):
         crop_overlap_ratio: float = 512 / 1500,
         crop_n_points_downscale_factor: int = 1,
         point_grids: Optional[List[np.ndarray]] = None,
+        stability_score_offset: float = 1.0,
     ):
         super().__init__()
 
@@ -345,8 +360,9 @@ class AutomaticMaskGenerator(AMGBase):
         self._crop_n_layers = crop_n_layers
         self._crop_overlap_ratio = crop_overlap_ratio
         self._crop_n_points_downscale_factor = crop_n_points_downscale_factor
+        self._stability_score_offset = stability_score_offset
 
-    def _process_batch(self, points, im_size):
+    def _process_batch(self, points, im_size, crop_box, original_size):
         # run model on this batch
         transformed_points = self._predictor.transform.apply_coords(points, im_size)
         in_points = torch.as_tensor(transformed_points, device=self._predictor.device)
@@ -357,24 +373,14 @@ class AutomaticMaskGenerator(AMGBase):
             multimask_output=True,
             return_logits=True,
         )
-
-        # serialize predictions and store in MaskData
-        data = amg_utils.MaskData(
-            masks=masks.flatten(0, 1),
-            iou_preds=iou_preds.flatten(0, 1),
-            points=torch.as_tensor(points.repeat(masks.shape[1], axis=0)),
-        )
+        data = self._to_mask_data(masks, iou_preds, crop_box, original_size, points=points)
         del masks
-
         return data
 
     def _process_crop(self, image, crop_box, crop_layer_idx, verbose, precomputed_embeddings):
         # crop the image and calculate embeddings
-        if crop_box is None:
-            cropped_im = image
-        else:
-            x0, y0, x1, y1 = crop_box
-            cropped_im = image[y0:y1, x0:x1, :]
+        x0, y0, x1, y1 = crop_box
+        cropped_im = image[y0:y1, x0:x1, :]
         cropped_im_size = cropped_im.shape[:2]
 
         if not precomputed_embeddings:
@@ -393,7 +399,7 @@ class AutomaticMaskGenerator(AMGBase):
             disable=not verbose, total=n_batches,
             desc="Predict masks for point grid prompts",
         ):
-            batch_data = self._process_batch(points, cropped_im_size)
+            batch_data = self._process_batch(points, cropped_im_size, crop_box, self.original_size)
             data.cat(batch_data)
             del batch_data
 
@@ -421,6 +427,8 @@ class AutomaticMaskGenerator(AMGBase):
             verbose: Whether to print computation progress.
         """
         original_size = image.shape[:2]
+        self._original_size = original_size
+
         crop_boxes, layer_idxs = amg_utils.generate_crop_boxes(
             original_size, self._crop_n_layers, self._crop_overlap_ratio
         )
@@ -449,14 +457,12 @@ class AutomaticMaskGenerator(AMGBase):
         self._is_initialized = True
         self._crop_list = crop_list
         self._crop_boxes = crop_boxes
-        self._original_size = original_size
 
     @torch.no_grad()
     def generate(
         self,
         pred_iou_thresh: float = 0.88,
         stability_score_thresh: float = 0.95,
-        stability_score_offset: float = 1.0,
         box_nms_thresh: float = 0.7,
         crop_nms_thresh: float = 0.7,
         min_mask_region_area: int = 0,
@@ -468,7 +474,6 @@ class AutomaticMaskGenerator(AMGBase):
             pred_iou_thresh: Filter threshold in [0, 1], using the mask quality predicted by the model.
             stability_score_thresh: Filter threshold in [0, 1], using the stability of the mask
                 under changes to the cutoff used to binarize the model prediction.
-            stability_score_offset: The amount to shift the cutoff when calculating the stability score.
             box_nms_thresh: The IoU threshold used by nonmax suppression to filter duplicate masks.
             crop_nms_thresh: The IoU threshold used by nonmax suppression to filter duplicate masks between crops.
             min_mask_region_area: Minimal size for the predicted masks.
@@ -487,7 +492,6 @@ class AutomaticMaskGenerator(AMGBase):
                 crop_box=crop_box, original_size=self.original_size,
                 pred_iou_thresh=pred_iou_thresh,
                 stability_score_thresh=stability_score_thresh,
-                stability_score_offset=stability_score_offset,
                 box_nms_thresh=box_nms_thresh
             )
             data.cat(crop_data)
@@ -535,6 +539,7 @@ class EmbeddingMaskGenerator(AMGBase):
         use_mask: Whether to use the initial segments as prompts.
         use_points: Whether to use points derived from the initial segments as prompts.
         box_extension: Factor for extending the bounding box prompts, given in the relative box size.
+        stability_score_offset: The amount to shift the cutoff when calculating the stability score.
     """
     default_offsets = [[-1, 0], [0, -1], [-3, 0], [0, -3], [-9, 0], [0, -9]]
 
@@ -549,6 +554,7 @@ class EmbeddingMaskGenerator(AMGBase):
         use_mask: bool = True,
         use_points: bool = False,
         box_extension: float = 0.05,
+        stability_score_offset: float = 1.0,
     ):
         super().__init__()
 
@@ -561,6 +567,7 @@ class EmbeddingMaskGenerator(AMGBase):
         self._use_mask = use_mask
         self._use_points = use_points
         self._box_extension = box_extension
+        self._stability_score_offset = stability_score_offset
 
         # additional state that is set 'initialize'
         self._initial_segmentation = None
@@ -587,7 +594,7 @@ class EmbeddingMaskGenerator(AMGBase):
 
         return initial_segmentation
 
-    def _compute_mask_data(self, initial_segmentation, original_size, verbose):
+    def _compute_mask_data(self, initial_segmentation, crop_box, original_size, verbose):
         seg_ids = np.unique(initial_segmentation)
         if seg_ids[0] == 0:
             seg_ids = seg_ids[1:]
@@ -602,11 +609,9 @@ class EmbeddingMaskGenerator(AMGBase):
                 use_box=self._use_box, use_mask=self._use_mask, use_points=self._use_points,
                 box_extension=self._box_extension,
             )
-            data = amg_utils.MaskData(
-                masks=torch.from_numpy(masks),
-                iou_preds=torch.from_numpy(iou_preds),
-                seg_id=torch.from_numpy(np.full(len(masks), seg_id, dtype="int64")),
-            )
+            # bring masks and iou_preds to a format compatible with _to_mask_data
+            masks, iou_preds = torch.from_numpy(masks[None]), torch.from_numpy(iou_preds[None])
+            data = self._to_mask_data(masks, iou_preds, crop_box, original_size)
             del masks
             mask_data.cat(data)
 
@@ -631,6 +636,11 @@ class EmbeddingMaskGenerator(AMGBase):
             verbose: Whether to print computation progress.
         """
         original_size = image.shape[:2]
+        self._original_size = original_size
+
+        # the crop box is always the full image
+        crop_box = [0, 0, original_size[1], original_size[0]]
+        self._crop_boxes = [crop_box]
 
         if image_embeddings is None:
             image_embeddings = util.precompute_image_embeddings(self._predictor, image,)
@@ -639,7 +649,7 @@ class EmbeddingMaskGenerator(AMGBase):
         # compute the initial segmentation via embedding based MWS and then refine the masks
         # with the segment anything model
         initial_segmentation = self._compute_initial_segmentation()
-        mask_data = self._compute_mask_data(initial_segmentation, original_size, verbose)
+        mask_data = self._compute_mask_data(initial_segmentation, crop_box, original_size, verbose)
         # to be compatible with the file format of the super class we have to wrap the mask data in a list
         crop_list = [mask_data]
 
@@ -647,18 +657,12 @@ class EmbeddingMaskGenerator(AMGBase):
         self._is_initialized = True
         self._initial_segmentation = initial_segmentation
         self._crop_list = crop_list
-        # the crop box is always the full image
-        self._crop_boxes = [
-            [0, 0, original_size[1], original_size[0]]
-        ]
-        self._original_size = original_size
 
     @torch.no_grad()
     def generate(
         self,
         pred_iou_thresh: float = 0.88,
         stability_score_thresh: float = 0.95,
-        stability_score_offset: float = 1.0,
         box_nms_thresh: float = 0.7,
         min_mask_region_area: int = 0,
         output_mode: str = "binary_mask",
@@ -669,7 +673,6 @@ class EmbeddingMaskGenerator(AMGBase):
             pred_iou_thresh: Filter threshold in [0, 1], using the mask quality predicted by the model.
             stability_score_thresh: Filter threshold in [0, 1], using the stability of the mask
                 under changes to the cutoff used to binarize the model prediction.
-            stability_score_offset: The amount to shift the cutoff when calculating the stability score.
             box_nms_thresh: The IoU threshold used by nonmax suppression to filter duplicate masks.
             min_mask_region_area: Minimal size for the predicted masks.
             output_mode: The form masks are returned in.
@@ -685,7 +688,6 @@ class EmbeddingMaskGenerator(AMGBase):
             original_size=self.original_size,
             pred_iou_thresh=pred_iou_thresh,
             stability_score_thresh=stability_score_thresh,
-            stability_score_offset=stability_score_offset,
             box_nms_thresh=box_nms_thresh
         )
 
@@ -777,6 +779,7 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
             Higher numbers may be faster but use more GPU memory.
         point_grids: A lisst over explicit grids of points used for sampling masks.
             Normalized to [0, 1] with respect to the image coordinate system.
+        stability_score_offset: The amount to shift the cutoff when calculating the stability score.
     """
 
     # We only expose the arguments that make sense for the tiled mask generator.
@@ -788,12 +791,14 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         points_per_side: Optional[int] = 32,
         points_per_batch: int = 64,
         point_grids: Optional[List[np.ndarray]] = None,
+        stability_score_offset: float = 1.0,
     ) -> None:
         super().__init__(
             predictor=predictor,
             points_per_side=points_per_side,
             points_per_batch=points_per_batch,
             point_grids=point_grids,
+            stability_score_offset=stability_score_offset,
         )
 
     @torch.no_grad()
@@ -821,6 +826,8 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
             embedding_save_path: Where to save the image embeddings.
         """
         original_size = image.shape[:2]
+        self._original_size = original_size
+
         image_embeddings, tile_shape, halo = _compute_tiled_embeddings(
             self._predictor, image, image_embeddings, embedding_save_path, tile_shape, halo
         )
@@ -828,13 +835,15 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         tiling = blocking([0, 0], original_size, tile_shape)
         n_tiles = tiling.numberOfBlocks
 
+        # the crop box is always the full local tile
+        tiles = [tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock for tile_id in range(n_tiles)]
+        crop_boxes = [[tile.begin[1], tile.begin[0], tile.end[1], tile.end[0]] for tile in tiles]
+
+        # we need to cast to the image representation that is compatible with SAM
+        image = util._to_image(image)
+
         mask_data = []
         for tile_id in tqdm(range(n_tiles), total=n_tiles, desc="Compute masks for tile", disable=not verbose):
-            # get the bounding box for this tile and crop the image data
-            tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
-            tile_bb = tuple(slice(beg, end) for beg, end in zip(tile.begin, tile.end))
-            tile_data = image[tile_bb]
-
             # set the pre-computed embeddings for this tile
             features = image_embeddings["features"][tile_id]
             tile_embeddings = {
@@ -846,18 +855,14 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
 
             # compute the mask data for this tile and append it
             this_mask_data = self._process_crop(
-                tile_data, crop_box=None, crop_layer_idx=0, verbose=verbose, precomputed_embeddings=True
+                image, crop_box=crop_boxes[tile_id], crop_layer_idx=0, verbose=verbose, precomputed_embeddings=True
             )
             mask_data.append(this_mask_data)
 
         # set the initialized data
         self._is_initialized = True
         self._crop_list = mask_data
-        self._original_size = original_size
-
-        # the crop box is always the full local tile
-        tiles = [tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock for tile_id in range(n_tiles)]
-        self._crop_boxes = [[tile.begin[1], tile.begin[0], tile.end[1], tile.end[0]] for tile in tiles]
+        self._crop_boxes = crop_boxes
 
 
 class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
@@ -924,7 +929,10 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
                 "original_size": this_tile_shape
             }
             util.set_precomputed(self._predictor, tile_image_embeddings, i)
-            tile_data = self._compute_mask_data(initial_segmentations[tile_id], this_tile_shape, verbose=False)
+            this_crop_box = [0, 0, this_tile_shape[1], this_tile_shape[0]]
+            tile_data = self._compute_mask_data(
+                initial_segmentations[tile_id], this_crop_box, this_tile_shape, verbose=False
+            )
             mask_data.append(tile_data)
 
         return mask_data
@@ -982,7 +990,6 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
         self,
         pred_iou_thresh: float = 0.88,
         stability_score_thresh: float = 0.95,
-        stability_score_offset: float = 1.0,
         box_nms_thresh: float = 0.7,
         min_mask_region_area: int = 0,
         verbose: bool = False
@@ -993,7 +1000,6 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
             pred_iou_thresh: Filter threshold in [0, 1], using the mask quality predicted by the model.
             stability_score_thresh: Filter threshold in [0, 1], using the stability of the mask
                 under changes to the cutoff used to binarize the model prediction.
-            stability_score_offset: The amount to shift the cutoff when calculating the stability score.
             box_nms_thresh: The IoU threshold used by nonmax suppression to filter duplicate masks.
             min_mask_region_area: Minimal size for the predicted masks.
             verbose: Whether to print progress of the computation.
@@ -1014,7 +1020,6 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
                 data=mask_data, crop_box=crop_box, original_size=this_tile_shape,
                 pred_iou_thresh=pred_iou_thresh,
                 stability_score_thresh=stability_score_thresh,
-                stability_score_offset=stability_score_offset,
                 box_nms_thresh=box_nms_thresh,
             )
             mask_data.to_numpy()
