@@ -78,7 +78,6 @@ def get_generalist_predictor(checkpoint, model_type, is_custom_model, return_sta
         )
 
 
-# TODO use model comparison func to generate the image data for qualitative comp
 def evaluate_checkpoint_for_dataset(
     checkpoint, model_type, dataset, experiment_folder,
     run_default_evaluation, run_amg, is_custom_model,
