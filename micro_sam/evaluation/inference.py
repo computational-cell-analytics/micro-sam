@@ -211,7 +211,7 @@ def precompute_all_embeddings(
     predictor: SamPredictor,
     image_paths: List[Union[str, os.PathLike]],
     embedding_dir: Union[str, os.PathLike],
-):
+) -> None:
     """Precompute all image embeddings.
 
     To enable running different inference tasks in parallel afterwards.
@@ -225,7 +225,7 @@ def precompute_all_embeddings(
         image_name = os.path.basename(image_path)
         im = imageio.imread(image_path)
         embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
-        util.precompute_image_embeddings(predictor, im, embedding_path)
+        util.precompute_image_embeddings(predictor, im, embedding_path, ndim=2)
 
 
 def _precompute_prompts(gt_path, use_points, use_boxes, n_positives, n_negatives, dilation, transform_function):
@@ -392,7 +392,7 @@ def run_inference_with_prompts(
         gt = relabel_sequential(gt)[0]
 
         embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
-        image_embeddings = util.precompute_image_embeddings(predictor, im, embedding_path)
+        image_embeddings = util.precompute_image_embeddings(predictor, im, embedding_path, ndim=2)
         util.set_precomputed(predictor, image_embeddings)
 
         this_prompts, cached_point_prompts, cached_box_prompts = _load_prompts(
