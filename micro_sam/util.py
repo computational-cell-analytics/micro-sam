@@ -29,25 +29,27 @@ except ImportError:
     from tqdm import tqdm
 
 _MODEL_URLS = {
+    # the default segment anything models
     "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
     "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
     "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
-    # preliminary finetuned models
-    "vit_h_lm": "https://owncloud.gwdg.de/index.php/s/CnxBvsdGPN0TD3A/download",
-    "vit_b_lm": "https://owncloud.gwdg.de/index.php/s/gGlR1LFsav0eQ2k/download",
-    "vit_h_em": "https://owncloud.gwdg.de/index.php/s/VcHoLC6AM0CrRpM/download",
-    "vit_b_em": "https://owncloud.gwdg.de/index.php/s/BWupWhG1HRflI97/download",
+    # first version of finetuned models on zenodo
+    "vit_h_lm": "https://zenodo.org/record/8250299/files/vit_h_lm.pth?download=1",
+    "vit_b_lm": "https://zenodo.org/record/8250281/files/vit_b_lm.pth?download=1",
+    "vit_h_em": "https://zenodo.org/record/8250291/files/vit_h_em.pth?download=1",
+    "vit_b_em": "https://zenodo.org/record/8250260/files/vit_b_em.pth?download=1",
 }
 _CHECKPOINT_FOLDER = os.environ.get("SAM_MODELS", os.path.expanduser("~/.sam_models"))
 _CHECKSUMS = {
+    # the default segment anything models
     "vit_h": "a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e",
     "vit_l": "3adcc4315b642a4d2101128f611684e8734c41232a17c648ed1693702a49a622",
     "vit_b": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
-    # preliminary finetuned models
-    "vit_h_lm": "c30a580e6ccaff2f4f0fbaf9cad10cee615a915cdd8c7bc4cb50ea9bdba3fc09",
-    "vit_b_lm": "f862febddb1c43ebe8263c42ed71e4fb281adf14a8ba83b7a5b0574bf0613ec6",
-    "vit_h_em": "652f70acad89ab855502bc10965e7d0baf7ef5f38fef063dd74f1787061d3919",
-    "vit_b_em": "9eb783e538bb287c7086f825f1e1dc5d5681bd116541a0b98cab85f1e7f4dd62",
+    # first version of finetuned models on zenodo
+    "vit_h_lm": "9a65ee0cddc05a98d60469a12a058859c89dc3ea3ba39fed9b90d786253fbf26",
+    "vit_b_lm": "5a59cc4064092d54cd4d92cd967e39168f3760905431e868e474d60fe5464ecd",
+    "vit_h_em": "ae3798a0646c8df1d4db147998a2d37e402ff57d3aa4e571792fbb911d8a979c",
+    "vit_b_em": "c04a714a4e14a110f0eec055a65f7409d54e6bf733164d2933a0ce556f7d6f81",
 }
 # this is required so that the downloaded file is not called 'download'
 _DOWNLOAD_NAMES = {
