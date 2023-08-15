@@ -501,8 +501,8 @@ def precompute_image_embeddings(
                 # key signature does not match or is not in the file
                 if key not in f.attrs or f.attrs[key] != val:
                     warnings.warn(
-                        f"Embeddings file {save_path} is invalid due to unmatching {key}. "
-                        "Please recompute embeddings in a new file."
+                        f"Embeddings file {save_path} is invalid due to unmatching {key}: "
+                        f"{f.atrs[key]} != {val}.Please recompute embeddings in a new file."
                     )
                     if wrong_file_callback is not None:
                         save_path = wrong_file_callback(save_path)

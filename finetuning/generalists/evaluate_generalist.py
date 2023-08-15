@@ -11,11 +11,11 @@ CHECKPOINTS = {
     "vit_b": "/home/nimcpape/.sam_models/sam_vit_b_01ec64.pth",
     "vit_h": "/home/nimcpape/.sam_models/sam_vit_h_4b8939.pth",
     # Generalist LM models
-    "vit_b_lm": "/scratch-grete/projects/nim00007/sam/models/LM/generalist/v2/vit_b/best.pt",
-    "vit_h_lm": "/scratch-grete/projects/nim00007/sam/models/LM/generalist/v2/vit_h/best.pt",
+    "vit_b_lm": "/scratch/projects/nim00007/sam/models/LM/generalist/v2/vit_b/best.pt",
+    "vit_h_lm": "/scratch/projects/nim00007/sam/models/LM/generalist/v2/vit_h/best.pt",
     # Generalist EM models
-    "vit_b_em": "/scratch-grete/projects/nim00007/sam/models/EM/generalist/v2/vit_b/best.pt",
-    "vit_h_em": "/scratch-grete/projects/nim00007/sam/models/EM/generalist/v2/vit_h/best.pt",
+    "vit_b_em": "/scratch/projects/nim00007/sam/models/EM/generalist/v2/vit_b/best.pt",
+    "vit_h_em": "/scratch/projects/nim00007/sam/models/EM/generalist/v2/vit_h/best.pt",
 }
 
 
