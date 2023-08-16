@@ -54,7 +54,6 @@ def compile_em():
     )
 
 
-# TODO
 def compile_lm():
     compile_results(
         ["vit_h", "vit_h_lm", "vit_b", "vit_b_lm"],
@@ -64,7 +63,8 @@ def compile_lm():
 
 
 def main():
-    compile_em()
+    # compile_em()
+    compile_lm()
 
 
 if __name__ == "__main__":

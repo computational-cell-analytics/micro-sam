@@ -16,6 +16,11 @@ CHECKPOINTS = {
     # Generalist EM models
     "vit_b_em": "/scratch/projects/nim00007/sam/models/EM/generalist/v2/vit_b/best.pt",
     "vit_h_em": "/scratch/projects/nim00007/sam/models/EM/generalist/v2/vit_h/best.pt",
+    # Specialist Models (we don't add livecell, because these results are all computed already)
+    "vit_b_tissuenet": "/scratch/projects/nim00007/sam/models/LM/TissueNet/vit_b/best.pt",
+    "vit_h_tissuenet": "/scratch/projects/nim00007/sam/models/LM/TissueNet/vit_h/best.pt",
+    "vit_b_deepbacs": "/scratch/projects/nim00007/sam/models/LM/DeepBacs/vit_b/best.pt",
+    "vit_h_deepbacs": "/scratch/projects/nim00007/sam/models/LM/DeepBacs/vit_h/best.pt",
 }
 
 
