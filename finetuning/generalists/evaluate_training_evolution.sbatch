@@ -1,7 +1,7 @@
 #! /bin/bash
 #SBATCH -c 4
 #SBATCH --mem 96G
-#SBATCH -t 2880
+#SBATCH -t 240
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
 #SBATCH -A nim00007

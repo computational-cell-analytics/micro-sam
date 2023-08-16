@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from elf.evaluation import mean_segmentation_accuracy
+from skimage.measure import label
 from tqdm import tqdm
 
 
@@ -21,6 +22,7 @@ def _run_evaluation(gt_paths, prediction_paths, verbose=True):
         assert os.path.exists(pred_path), pred_path
 
         gt = imageio.imread(gt_path)
+        gt = label(gt)
         pred = imageio.imread(pred_path)
 
         msa, scores = mean_segmentation_accuracy(pred, gt, return_accuracies=True)

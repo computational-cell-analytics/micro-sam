@@ -83,7 +83,7 @@ def _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1,
 
 
 def generate_data_for_model_comparison(
-    loader: torch.utils.DataLoader,
+    loader: torch.utils.data.DataLoader,
     output_folder: Union[str, os.PathLike],
     model_type1: str,
     model_type2: str,

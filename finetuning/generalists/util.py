@@ -1,6 +1,7 @@
 import json
 import os
 import warnings
+
 from glob import glob
 from pathlib import Path
 
@@ -9,14 +10,17 @@ from micro_sam.evaluation import (
     automatic_mask_generation, inference, evaluation,
     default_experiment_settings, get_experiment_setting_name
 )
+from micro_sam.evaluation.livecell import _get_livecell_paths
 
 DATA_ROOT = "/scratch/projects/nim00007/sam/datasets"
+LIVECELL_ROOT = "/scratch/projects/nim00007/data/LiveCELL"
 PROMPT_ROOT = "/scratch-grete/projects/nim00007/sam/experiments/prompts"
-# TODO add EM datasets
-DATASETS = (
+
+LM_DATASETS = (
     "covid-if",
     "deepbacs",
     "hpa",
+    "livecell",
     "lizard",
     "mouse-embryo",
     "plantseg-ovules",
@@ -24,19 +28,35 @@ DATASETS = (
     "tissuenet",
 )
 
+EM_DATASETS = (
+    "cremi",
+    "lucchi",
+    "mitoem",
+    "nuc_mm/mouse",
+    "nuc_mm/zebrafish",
+    "platy-cell",
+    "platy-cuticle",
+    "platy-nuclei",
+    "snemi",
+    "sponge-em",
+    "vnc",
+)
+ALL_DATASETS = EM_DATASETS + LM_DATASETS
 
-def get_generalist_predictor(checkpoint, model_type, return_state=False):
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        return inference.get_predictor(
-            checkpoint, model_type=model_type, return_state=return_state, is_custom_model=True
-        )
+
+###
+# Dataset functionality
+###
 
 
 def get_data_paths(dataset, split, max_num_images=None):
-    image_pattern = os.path.join(DATA_ROOT, dataset, split, "image_*.tif")
+    if dataset == "livecell":
+        n_val_per_cell_type = None if max_num_images is None else int(max_num_images / 8)
+        return _get_livecell_paths(LIVECELL_ROOT, split=split, n_val_per_cell_type=n_val_per_cell_type)
+
+    image_pattern = os.path.join(DATA_ROOT, dataset, split, "image*.tif")
     image_paths = sorted(glob(image_pattern))
-    gt_paths = sorted(glob(os.path.join(DATA_ROOT, dataset, split, "labels_*.tif")))
+    gt_paths = sorted(glob(os.path.join(DATA_ROOT, dataset, split, "label*.tif")))
     assert len(image_paths) == len(gt_paths)
     assert len(image_paths) > 0, image_pattern
     if max_num_images is not None:
@@ -44,10 +64,24 @@ def get_data_paths(dataset, split, max_num_images=None):
     return image_paths, gt_paths
 
 
+###
+# Evaluation functionality
+###
+
+
+def get_generalist_predictor(checkpoint, model_type, is_custom_model, return_state=False):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return inference.get_predictor(
+            checkpoint, model_type=model_type,
+            return_state=return_state, is_custom_model=is_custom_model
+        )
+
+
 def evaluate_checkpoint_for_dataset(
     checkpoint, model_type, dataset, experiment_folder,
-    run_default_evaluation, run_amg, predictor=None,
-    max_num_val_images=None,
+    run_default_evaluation, run_amg, is_custom_model,
+    predictor=None, max_num_val_images=None,
 ):
     """Evaluate a generalist checkpoint for a given dataset.
     """
@@ -56,7 +90,7 @@ def evaluate_checkpoint_for_dataset(
     prompt_dir = os.path.join(PROMPT_ROOT, dataset)
 
     if predictor is None:
-        predictor = get_generalist_predictor(checkpoint, model_type)
+        predictor = get_generalist_predictor(checkpoint, model_type, is_custom_model)
     test_image_paths, test_gt_paths = get_data_paths(dataset, "test")
 
     embedding_dir = os.path.join(experiment_folder, "test", "embeddings")
@@ -80,7 +114,13 @@ def evaluate_checkpoint_for_dataset(
                 prompt_save_dir=prompt_dir,
             )
 
-            pred_paths = sorted(glob(os.path.join(prediction_dir, "*.tif")))
+            if dataset == "livecell":
+                pred_paths = [
+                    os.path.join(prediction_dir, os.path.basename(gt_path)) for gt_path in test_gt_paths
+                ]
+                assert all(os.path.exists(pred_path) for pred_path in pred_paths)
+            else:
+                pred_paths = sorted(glob(os.path.join(prediction_dir, "*.tif")))
             result_path = os.path.join(result_dir, f"{setting_name}.csv")
             os.makedirs(Path(result_path).parent, exist_ok=True)
 
@@ -112,7 +152,14 @@ def evaluate_checkpoint_for_dataset(
             amg_generate_kwargs=best_settings,
         )
 
-        pred_paths = sorted(glob(os.path.join(prediction_dir, "*.tif")))
+        if dataset == "livecell":
+            pred_paths = [
+                os.path.join(prediction_dir, os.path.basename(gt_path)) for gt_path in test_gt_paths
+            ]
+            assert all(os.path.exists(pred_path) for pred_path in pred_paths)
+        else:
+            pred_paths = sorted(glob(os.path.join(prediction_dir, "*.tif")))
+
         result_path = os.path.join(result_dir, "amg.csv")
         os.makedirs(Path(result_path).parent, exist_ok=True)
 
@@ -127,11 +174,11 @@ def evaluate_checkpoint_for_dataset(
 
 def evaluate_checkpoint_for_datasets(
     checkpoint, model_type, experiment_root, datasets,
-    run_default_evaluation, run_amg, predictor=None,
-    max_num_val_images=None,
+    run_default_evaluation, run_amg, is_custom_model,
+    predictor=None, max_num_val_images=None,
 ):
     if predictor is None:
-        predictor = get_generalist_predictor(checkpoint, model_type)
+        predictor = get_generalist_predictor(checkpoint, model_type, is_custom_model)
 
     results = []
     for dataset in datasets:
@@ -140,16 +187,9 @@ def evaluate_checkpoint_for_datasets(
         result = evaluate_checkpoint_for_dataset(
             None, None, dataset, experiment_folder,
             run_default_evaluation=run_default_evaluation,
-            run_amg=run_amg, predictor=predictor,
-            max_num_val_images=max_num_val_images,
+            run_amg=run_amg, is_custom_model=is_custom_model,
+            predictor=predictor, max_num_val_images=max_num_val_images,
         )
         results.append(result)
 
     return pd.concat(results)
-
-
-def evaluate_checkpoint_for_datasets_slurm(
-    checkpoint, model_type, experiment_root, datasets,
-    run_default_evaluation, run_amg,
-):
-    raise NotImplementedError
