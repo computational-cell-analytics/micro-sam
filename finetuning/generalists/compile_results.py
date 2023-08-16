@@ -64,6 +64,8 @@ def add_cellpose_results(datasets, out_path):
 
     results = []
     for dataset in datasets:
+        if dataset == "livecell":
+            continue
         res_path = os.path.join(cp_root, dataset, "cellpose.csv")
         ds_res = pd.read_csv(res_path)
         ds_res.insert(0, "prompt", ["cellpose"] * ds_res.shape[0])
@@ -87,7 +89,7 @@ def compile_lm():
     # add the deepbacs and tissuenet specialist results
     assert os.path.exists(res_path)
     compile_results(["vit_h_tissuenet", "vit_b_tissuenet"], ["tissuenet"], res_path, True)
-    compile_results(["vit_h_deepbacs", "vit_b_deebacs"], ["deepbacs"], res_path, True)
+    compile_results(["vit_h_deepbacs", "vit_b_deepbacs"], ["deepbacs"], res_path, True)
 
     # add the cellpose results
     add_cellpose_results(LM_DATASETS, res_path)
