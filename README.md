@@ -56,6 +56,13 @@ Compared to these we support more applications (2d, 3d and tracking), and provid
 
 ## Release Overview
 
+**New in version 0.2.0**
+
+- Functionality for training / finetuning and evaluation of Segment Anything Models
+- Full support for our finetuned segment anything models
+- Improvements of the automated instance segmentation functionality in the 2d annotator
+- And several other small improvements
+
 **New in version 0.1.1**
 
 - Fine-tuned segment anything models for microscopy (experimental)
