@@ -28,7 +28,7 @@ def get_results(model, ds):
     return results
 
 
-def compile_results(models, datasets, out_path):
+def compile_results(models, datasets, out_path, load_results=False):
     results = []
 
     for model in models:
@@ -43,6 +43,11 @@ def compile_results(models, datasets, out_path):
         results.append(model_results)
 
     results = pd.concat(results)
+    if load_results:
+        assert os.path.exists(out_path)
+        all_results = pd.read_csv(out_path)
+        results = pd.concat([all_results, results])
+
     results.to_csv(out_path, index=False)
 
 
@@ -54,12 +59,38 @@ def compile_em():
     )
 
 
+def add_cellpose_results(datasets, out_path):
+    cp_root = "/scratch/projects/nim00007/sam/experiments/cellpose"
+
+    results = []
+    for dataset in datasets:
+        res_path = os.path.join(cp_root, dataset, "cellpose.csv")
+        ds_res = pd.read_csv(res_path)
+        ds_res.insert(0, "prompt", ["cellpose"] * ds_res.shape[0])
+        ds_res.insert(0, "dataset", [dataset] * ds_res.shape[0])
+        results.append(ds_res)
+
+    results = pd.concat(results)
+    results.insert(0, "model", ["cellpose"] * results.shape[0])
+
+    all_results = pd.read_csv(out_path)
+    results = pd.concat([all_results, results])
+    results.to_csv(out_path, index=False)
+
+
 def compile_lm():
+    res_path = os.path.join(EXPERIMENT_ROOT, "evaluation-lm.csv")
     compile_results(
-        ["vit_h", "vit_h_lm", "vit_b", "vit_b_lm"],
-        LM_DATASETS,
-        os.path.join(EXPERIMENT_ROOT, "evaluation-lm.csv")
+        ["vit_h", "vit_h_lm", "vit_b", "vit_b_lm"], LM_DATASETS, res_path
     )
+
+    # add the deepbacs and tissuenet specialist results
+    assert os.path.exists(res_path)
+    compile_results(["vit_h_tissuenet", "vit_b_tissuenet"], ["tissuenet"], res_path, True)
+    compile_results(["vit_h_deepbacs", "vit_b_deebacs"], ["deepbacs"], res_path, True)
+
+    # add the cellpose results
+    add_cellpose_results(LM_DATASETS, res_path)
 
 
 def main():
