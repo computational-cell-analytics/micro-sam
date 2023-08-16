@@ -114,7 +114,13 @@ def evaluate_checkpoint_for_dataset(
                 prompt_save_dir=prompt_dir,
             )
 
-            pred_paths = sorted(glob(os.path.join(prediction_dir, "*.tif")))
+            if dataset == "livecell":
+                pred_paths = [
+                    os.path.join(prediction_dir, os.path.basename(gt_path)) for gt_path in test_gt_paths
+                ]
+                assert all(os.path.exists(pred_path) for pred_path in pred_paths)
+            else:
+                pred_paths = sorted(glob(os.path.join(prediction_dir, "*.tif")))
             result_path = os.path.join(result_dir, f"{setting_name}.csv")
             os.makedirs(Path(result_path).parent, exist_ok=True)
 
@@ -146,7 +152,14 @@ def evaluate_checkpoint_for_dataset(
             amg_generate_kwargs=best_settings,
         )
 
-        pred_paths = sorted(glob(os.path.join(prediction_dir, "*.tif")))
+        if dataset == "livecell":
+            pred_paths = [
+                os.path.join(prediction_dir, os.path.basename(gt_path)) for gt_path in test_gt_paths
+            ]
+            assert all(os.path.exists(pred_path) for pred_path in pred_paths)
+        else:
+            pred_paths = sorted(glob(os.path.join(prediction_dir, "*.tif")))
+
         result_path = os.path.join(result_dir, "amg.csv")
         os.makedirs(Path(result_path).parent, exist_ok=True)
 
