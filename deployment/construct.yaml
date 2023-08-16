@@ -8,8 +8,6 @@ header_image: ../doc/images/micro-sam-logo.png
 icon_image: ../doc/images/micro-sam-logo.png
 channels:
 - conda-forge
-welcome_text: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
-  tempor incididunt ut labore et dolore magna aliqua.
-conclusion_text: Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris
-  nisi ut aliquip ex ea commodo consequat.
+welcome_text: Install Segment Anything for Microscopy.
+conclusion_text: Segment Anything for Microscopy has been installed.
 initialize_by_default: false
