@@ -68,6 +68,11 @@ ImageEmbeddings = Dict[str, Any]
 """@private"""
 
 
+#
+# Functionality for model download and export
+#
+
+
 def _download(url, path, model_type):
     with requests.get(url, stream=True, verify=True) as r:
         if r.status_code != 200:
@@ -244,6 +249,11 @@ def export_custom_sam_model(
 
 def get_model_names() -> Iterable:
     return _MODEL_URLS.keys()
+
+
+#
+# Functionality for precomputing embeddings and other state
+#
 
 
 def _to_image(input_):
@@ -570,6 +580,11 @@ def set_precomputed(
     return predictor
 
 
+#
+# Misc functionality
+#
+
+
 def compute_iou(mask1: np.ndarray, mask2: np.ndarray) -> float:
     """Compute the intersection over union of two masks.
 
@@ -642,25 +657,3 @@ def load_image_data(
             if not lazy_loading:
                 image_data = image_data[:]
     return image_data
-
-
-def main():
-    """@private"""
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Compute the embeddings for an image.")
-    parser.add_argument("-i", "--input_path", required=True)
-    parser.add_argument("-o", "--output_path", required=True)
-    parser.add_argument("-m", "--model_type", default="vit_h")
-    parser.add_argument("-c", "--checkpoint_path", default=None)
-    parser.add_argument("-k", "--key")
-    args = parser.parse_args()
-
-    predictor = get_sam_model(model_type=args.model_type, checkpoint_path=args.checkpoint_path)
-    with open_file(args.input_path, mode="r") as f:
-        data = f[args.key]
-        precompute_image_embeddings(predictor, data, save_path=args.output_path)
-
-
-if __name__ == "__main__":
-    main()

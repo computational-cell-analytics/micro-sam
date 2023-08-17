@@ -9,6 +9,7 @@ from napari import Viewer
 from segment_anything import SamPredictor
 
 from .. import instance_segmentation, util
+from ..precompute_state import cache_amg_state
 from ..visualization import project_embeddings_for_visualization
 from . import util as vutil
 from .gui_utils import show_wrong_file_warning
@@ -57,7 +58,7 @@ def _autosegment_widget(
     global AMG
     is_tiled = IMAGE_EMBEDDINGS["input_size"] is None
     if AMG is None:
-        AMG = vutil.get_amg(PREDICTOR, is_tiled)
+        AMG = instance_segmentation.get_amg(PREDICTOR, is_tiled)
 
     if not AMG.is_initialized:
         AMG.initialize(v.layers["raw"].data, image_embeddings=IMAGE_EMBEDDINGS, verbose=True)
@@ -230,7 +231,7 @@ def annotator_2d(
         wrong_file_callback=show_wrong_file_warning
     )
     if precompute_amg_state and (embedding_path is not None):
-        AMG = vutil.cache_amg_state(PREDICTOR, raw, IMAGE_EMBEDDINGS, embedding_path)
+        AMG = cache_amg_state(PREDICTOR, raw, IMAGE_EMBEDDINGS, embedding_path)
 
     # we set the pre-computed image embeddings if we don't use tiling
     # (if we use tiling we cannot directly set it because the tile will be chosen dynamically)
