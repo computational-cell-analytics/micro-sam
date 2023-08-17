@@ -9,7 +9,7 @@ from typing import Union
 import pooch
 
 
-def fetch_image_series_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
+def fetch_image_series_example_data(save_directory: Union[str, os.PathLike]) -> str:
     """Download the sample images for the image series annotator.
 
     Args:
@@ -36,7 +36,7 @@ def fetch_image_series_example_data(save_directory: Union[str, os.PathLike]) -> 
     return data_folder
 
 
-def fetch_wholeslide_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
+def fetch_wholeslide_example_data(save_directory: Union[str, os.PathLike]) -> str:
     """Download the sample data for the 2d annotator.
 
     This downloads part of a whole-slide image from the NeurIPS Cell Segmentation Challenge.
@@ -61,7 +61,7 @@ def fetch_wholeslide_example_data(save_directory: Union[str, os.PathLike]) -> Un
     return os.path.join(save_directory, fname)
 
 
-def fetch_livecell_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
+def fetch_livecell_example_data(save_directory: Union[str, os.PathLike]) -> str:
     """Download the sample data for the 2d annotator.
 
     This downloads a single image from the LiveCELL dataset.
@@ -86,7 +86,7 @@ def fetch_livecell_example_data(save_directory: Union[str, os.PathLike]) -> Unio
     return os.path.join(save_directory, fname)
 
 
-def fetch_hela_2d_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
+def fetch_hela_2d_example_data(save_directory: Union[str, os.PathLike]) -> str:
     """Download the sample data for the 2d annotator.
 
     This downloads a single image from the HeLa CTC dataset.
@@ -110,7 +110,7 @@ def fetch_hela_2d_example_data(save_directory: Union[str, os.PathLike]) -> Union
     return os.path.join(save_directory, fname)
 
 
-def fetch_3d_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
+def fetch_3d_example_data(save_directory: Union[str, os.PathLike]) -> str:
     """Download the sample data for the 3d annotator.
 
     This downloads the Lucchi++ datasets from https://casser.io/connectomics/.
@@ -139,7 +139,7 @@ def fetch_3d_example_data(save_directory: Union[str, os.PathLike]) -> Union[str,
     return str(lucchi_dir)
 
 
-def fetch_tracking_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
+def fetch_tracking_example_data(save_directory: Union[str, os.PathLike]) -> str:
     """Download the sample data for the tracking annotator.
 
     This data is the cell tracking challenge dataset DIC-C2DH-HeLa.
@@ -169,5 +169,34 @@ def fetch_tracking_example_data(save_directory: Union[str, os.PathLike]) -> Unio
         processor=unpack,
     )
     cell_tracking_dir = save_directory.joinpath(f"{fname}.unzip", "DIC-C2DH-HeLa", "01")
+    assert os.path.exists(cell_tracking_dir)
+    return str(cell_tracking_dir)
+
+
+def fetch_tracking_segmentation_data(save_directory: Union[str, os.PathLike]) -> str:
+    """Download groundtruth segmentation for the tracking example data.
+
+    This downloads the groundtruth segmentation for the image data from `fetch_tracking_example_data`.
+
+    Args:
+        save_directory: Root folder to save the downloaded data.
+    Returns:
+        The folder that contains the downloaded data.
+    """
+    save_directory = Path(save_directory)
+    os.makedirs(save_directory, exist_ok=True)
+    print("Example data directory is:", save_directory.resolve())
+    unpack_filenames = [os.path.join("masks", f"mask_{str(i).zfill(4)}.tif") for i in range(84)]
+    unpack = pooch.Unzip(members=unpack_filenames)
+    fname = "hela-ctc-01-gt.zip"
+    pooch.retrieve(
+        url="https://owncloud.gwdg.de/index.php/s/AWxQMblxwR99OjC/download",
+        known_hash="c0644d8ebe1390fb60125560ba15aa2342caf44f50ff0667a0318ea0ac6c958b",
+        fname=fname,
+        path=save_directory,
+        progressbar=True,
+        processor=unpack,
+    )
+    cell_tracking_dir = save_directory.joinpath(f"{fname}.unzip", "masks")
     assert os.path.exists(cell_tracking_dir)
     return str(cell_tracking_dir)
