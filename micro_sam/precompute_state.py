@@ -1,3 +1,6 @@
+"""Precompute image embeddings and automatic mask generator state for image data.
+"""
+
 import os
 import pickle
 
@@ -26,7 +29,7 @@ def cache_amg_state(
         predictor: The segment anything predictor.
         raw: The image data.
         image_embeddings: The image embeddings.
-        save_path: The embedding save path. The AMG state will be stored in <save_path>/amg_state.pickle.
+        save_path: The embedding save path. The AMG state will be stored in 'save_path/amg_state.pickle'.
         verbose: Whether to run the computation verbose.
         kwargs: The keyword arguments for the amg class.
 

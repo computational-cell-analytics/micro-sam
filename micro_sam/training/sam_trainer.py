@@ -26,7 +26,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         n_objects_per_batch: If not given, we compute the loss for all objects in a sample.
             Otherwise the loss computation is limited to n_objects_per_batch, and the objects are randomly sampled.
         mse_loss: The regression loss to compare the IoU predicted by the model with the true IoU.
-        sigmoid: The actuction function for normalizing the model output.
+        sigmoid: The activation function for normalizing the model output.
         **kwargs: The keyword arguments of the DefaultTrainer super class.
     """
 
