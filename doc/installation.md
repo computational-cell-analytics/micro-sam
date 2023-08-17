@@ -30,9 +30,9 @@ Once you have it installed you can simply replace the `conda` commands with `mam
 ## From installer
 
 We also provide installers for Linux, Mac and Windows:
-- [Linux](https://owncloud.gwdg.de/index.php/s/HRp948SDkaWzCuV)
-- [Mac](https://owncloud.gwdg.de/index.php/s/HpGzlXrgJ8VDgnI)
-- [Windows](https://owncloud.gwdg.de/index.php/s/BVipOmDPR2TXmxk)
+- [Linux](https://owncloud.gwdg.de/index.php/s/Cw9RmA3BlyqKJeU)
+- [Mac](https://owncloud.gwdg.de/index.php/s/7YupGgACw9SHy2P)
+- [Windows](https://owncloud.gwdg.de/index.php/s/1iD1eIcMZvEyE6d)
 
 Note that these installers are stil experimental and not yet fully tested.
 If you encounter problems with them then please consider installing `micro_sam` via [conda](#from-conda) instead.

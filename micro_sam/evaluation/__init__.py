@@ -1,3 +1,6 @@
+"""Functionality for evaluating Segment Anything models on microscopy data.
+"""
+
 from .automatic_mask_generation import (
     run_amg_inference,
     run_amg_grid_search,

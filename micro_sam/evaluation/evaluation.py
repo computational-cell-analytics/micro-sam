@@ -1,3 +1,7 @@
+"""Evaluation functionality for segmentation predictions from `micro_sam.evaluation.automatic_mask_generation`
+and `micro_sam.evaluation.inference`.
+"""
+
 import os
 from pathlib import Path
 from typing import List, Optional, Union

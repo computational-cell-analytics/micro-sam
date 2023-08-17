@@ -1,3 +1,6 @@
+"""Functionality for qualitative comparison of Segment Anything models on microscopy data.
+"""
+
 import os
 from functools import partial
 from glob import glob
