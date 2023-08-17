@@ -1091,6 +1091,35 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
         super().set_state(state)
 
 
+def get_amg(
+    predictor: SamPredictor,
+    is_tiled: bool,
+    embedding_based_amg: bool = False,
+    **kwargs,
+) -> AMGBase:
+    """Get the automatic mask generator class.
+
+    Args:
+        predictor: The segment anything predictor.
+        is_tiled: Whether tiled embeddings are used.
+        embedding_based_amg: Whether to use the embedding based instance segmentation functionality.
+            This functionality is still experimental.
+        kwargs: The keyword arguments for the amg class.
+
+    Returns:
+        The automatic mask generator.
+    """
+    if embedding_based_amg:
+        warnings.warn("The embedding based instance segmentation functionality is experimental.")
+    if is_tiled:
+        amg = TiledEmbeddingMaskGenerator(predictor, **kwargs) if embedding_based_amg else\
+            TiledAutomaticMaskGenerator(predictor, **kwargs)
+    else:
+        amg = EmbeddingMaskGenerator(predictor, **kwargs) if embedding_based_amg else\
+            AutomaticMaskGenerator(predictor, **kwargs)
+    return amg
+
+
 #
 # Experimental functionality
 #

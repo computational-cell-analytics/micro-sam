@@ -1,43 +1,19 @@
 import os
 import warnings
+
 from glob import glob
+from pathlib import Path
 from typing import List, Optional, Union
 
 import imageio.v3 as imageio
 import napari
 
 from magicgui import magicgui
-from napari.utils import progress as tqdm
 from segment_anything import SamPredictor
 
 from .. import util
+from ..precompute_state import _precompute_state_for_files
 from .annotator_2d import annotator_2d
-from .util import cache_amg_state
-
-
-def _precompute_embeddings_for_image_series(
-    predictor,
-    image_files,
-    embedding_root,
-    tile_shape,
-    halo,
-    precompute_amg_state,
-):
-    os.makedirs(embedding_root, exist_ok=True)
-    embedding_paths = []
-    for image_file in tqdm(image_files, desc="Precompute embeddings"):
-        fname = os.path.basename(image_file)
-        fname = os.path.splitext(fname)[0] + ".zarr"
-        embedding_path = os.path.join(embedding_root, fname)
-        image = imageio.imread(image_file)
-        embeddings = util.precompute_image_embeddings(
-            predictor, image, save_path=embedding_path, ndim=2,
-            tile_shape=tile_shape, halo=halo
-        )
-        if precompute_amg_state:
-            cache_amg_state(predictor, image, embeddings, embedding_path)
-        embedding_paths.append(embedding_path)
-    return embedding_paths
 
 
 def image_series_annotator(
@@ -73,12 +49,16 @@ def image_series_annotator(
     if embedding_path is None:
         embedding_paths = None
     else:
-        embedding_paths = _precompute_embeddings_for_image_series(
-            predictor, image_files, embedding_path,
+        _precompute_state_for_files(
+            predictor, image_files, embedding_path, ndim=2,
             tile_shape=kwargs.get("tile_shape", None),
             halo=kwargs.get("halo", None),
             precompute_amg_state=kwargs.get("precompute_amg_state", False),
         )
+        embedding_paths = [
+            os.path.join(embedding_path, f"{Path(path).stem}.zarr") for path in image_files
+        ]
+        assert all(os.path.exists(emb_path) for emb_path in embedding_paths)
 
     def _save_segmentation(image_path, segmentation):
         fname = os.path.basename(image_path)
@@ -151,7 +131,7 @@ def main():
     """@private"""
     import argparse
 
-    available_models = list(util._MODEL_URLS.keys())
+    available_models = list(util.get_model_names())
     available_models = ", ".join(available_models)
 
     parser = argparse.ArgumentParser(description="Annotate a series of images from a folder.")
