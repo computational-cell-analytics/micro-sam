@@ -73,10 +73,7 @@ def _autosegment_widget(
     if not AMG.is_initialized:
         AMG.initialize(v.layers["raw"].data, image_embeddings=IMAGE_EMBEDDINGS, verbose=True)
 
-    seg = AMG.generate(
-        pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
-        min_mask_region_area=min_object_size
-    )
+    seg = AMG.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
 
     shape = v.layers["raw"].data.shape[:2]
     seg = instance_segmentation.mask_data_to_segmentation(
