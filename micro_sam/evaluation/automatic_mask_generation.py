@@ -1,3 +1,6 @@
+"""Inference and evaluation for the automatic instance segmentation functionality.
+"""
+
 import os
 from glob import glob
 from pathlib import Path
@@ -190,9 +193,9 @@ def evaluate_amg_grid_search(result_dir: Union[str, os.PathLike], criterion: str
         criterion: The metric to use for determining the best parameters.
 
     Returns:
-        The best value for `pred_iou_thresh`.
-        The best value for ``stability_score_thresh.
-        The evaluation score for the best setting.
+        - The best value for `pred_iou_thresh`.
+        - The best value for `stability_score_thresh`.
+        - The evaluation score for the best setting.
     """
 
     # load all the grid search results

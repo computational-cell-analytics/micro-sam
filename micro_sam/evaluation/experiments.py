@@ -1,7 +1,11 @@
+"""Predefined experiment settings for experiments with different prompt strategies.
+"""
+
 from typing import Dict, List, Optional
 
 # TODO fully define the dict type
-ExperimentSettings = List[Dict]
+ExperimentSetting = Dict
+ExperimentSettings = List[ExperimentSetting]
 """@private"""
 
 
@@ -63,7 +67,7 @@ def default_experiment_settings() -> ExperimentSettings:
     return experiment_settings
 
 
-def get_experiment_setting_name(setting: ExperimentSettings) -> str:
+def get_experiment_setting_name(setting: ExperimentSetting) -> str:
     """Get the name for the given experiment setting.
 
     Args:

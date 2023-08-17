@@ -1,3 +1,7 @@
+"""Inference and evaluation for the [LiveCELL dataset](https://www.nature.com/articles/s41592-021-01249-6) and
+the different cell lines contained in it.
+"""
+
 import argparse
 import json
 import os
@@ -147,6 +151,7 @@ def run_livecell_amg(
 ) -> None:
     """Run automatic mask generation grid-search and inference for livecell.
 
+    Args:
         checkpoint: The segment anything model checkpoint.
         input_folder: The folder with the livecell data.
         model_type: The type of the segmenta anything model.

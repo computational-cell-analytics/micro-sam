@@ -1,3 +1,6 @@
+"""Inference with Segment Anything models and different prompt strategies.
+"""
+
 import os
 import pickle
 import warnings
