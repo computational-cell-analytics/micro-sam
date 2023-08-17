@@ -1,4 +1,6 @@
 import argparse
+import os
+import pickle
 from typing import Optional, Tuple
 
 import napari
@@ -7,7 +9,7 @@ import numpy as np
 from magicgui import magicgui
 from magicgui.widgets import ComboBox, Container
 
-from .. import util
+from .. import instance_segmentation, util
 from ..prompt_based_segmentation import segment_from_box, segment_from_box_and_points, segment_from_points
 
 # Green and Red
@@ -360,6 +362,36 @@ def toggle_label(prompts):
     prompts.current_properties = current_properties
     prompts.refresh()
     prompts.refresh_colors()
+
+
+def get_amg(predictor, is_tiled):
+    """@private
+    """
+    if is_tiled:
+        amg = instance_segmentation.TiledAutomaticMaskGenerator(predictor)
+    else:
+        amg = instance_segmentation.AutomaticMaskGenerator(predictor)
+    return amg
+
+
+def cache_amg_state(predictor, raw, image_embeddings, save_path, verbose=True):
+    """@private"""
+    is_tiled = image_embeddings["input_size"] is None
+    amg = get_amg(predictor, is_tiled)
+
+    save_path_amg = os.path.join(save_path, "amg_state.pickle")
+    if os.path.exists(save_path_amg):
+        with open(save_path_amg, "rb") as f:
+            amg_state = pickle.load(f)
+        amg.set_state(amg_state)
+        return amg
+
+    print("Precomputing the state for instance segmentation.")
+    amg.initialize(raw, image_embeddings=image_embeddings, verbose=verbose)
+    with open(save_path_amg, "wb") as f:
+        pickle.dump(amg.get_state(), f)
+
+    return amg
 
 
 def _initialize_parser(description, with_segmentation_result=True, with_show_embeddings=True):

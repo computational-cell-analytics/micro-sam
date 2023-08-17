@@ -23,7 +23,7 @@ If you run into any problems or have questions regarding our tool please open an
 
 You can install `micro_sam` via conda:
 ```
-conda install -c conda-forge micro_sam
+conda install -c conda-forge micro_sam napari pyqt
 ```
 You can then start the `micro_sam` tools by running `$ micro_sam.annotator` in the command line.
 

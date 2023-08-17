@@ -10,11 +10,19 @@ from magicgui import magicgui
 from napari.utils import progress as tqdm
 from segment_anything import SamPredictor
 
-from .annotator_2d import annotator_2d
 from .. import util
+from .annotator_2d import annotator_2d
+from .util import cache_amg_state
 
 
-def _precompute_embeddings_for_image_series(predictor, image_files, embedding_root, tile_shape, halo):
+def _precompute_embeddings_for_image_series(
+    predictor,
+    image_files,
+    embedding_root,
+    tile_shape,
+    halo,
+    precompute_amg_state,
+):
     os.makedirs(embedding_root, exist_ok=True)
     embedding_paths = []
     for image_file in tqdm(image_files, desc="Precompute embeddings"):
@@ -22,10 +30,12 @@ def _precompute_embeddings_for_image_series(predictor, image_files, embedding_ro
         fname = os.path.splitext(fname)[0] + ".zarr"
         embedding_path = os.path.join(embedding_root, fname)
         image = imageio.imread(image_file)
-        util.precompute_image_embeddings(
+        embeddings = util.precompute_image_embeddings(
             predictor, image, save_path=embedding_path, ndim=2,
             tile_shape=tile_shape, halo=halo
         )
+        if precompute_amg_state:
+            cache_amg_state(predictor, image, embeddings, embedding_path)
         embedding_paths.append(embedding_path)
     return embedding_paths
 
@@ -47,6 +57,7 @@ def image_series_annotator(
         embedding_path: Filepath where to save the embeddings.
         predictor: The Segment Anything model. Passing this enables using fully custom models.
             If you pass `predictor` then `model_type` will be ignored.
+        kwargs: The keywored arguments for `micro_sam.sam_annotator.annotator_2d`.
     """
     # make sure we don't set incompatible kwargs
     assert kwargs.get("show_embeddings", False) is False
@@ -63,7 +74,10 @@ def image_series_annotator(
         embedding_paths = None
     else:
         embedding_paths = _precompute_embeddings_for_image_series(
-            predictor, image_files, embedding_path, kwargs.get("tile_shape", None), kwargs.get("halo", None)
+            predictor, image_files, embedding_path,
+            tile_shape=kwargs.get("tile_shape", None),
+            halo=kwargs.get("halo", None),
+            precompute_amg_state=kwargs.get("precompute_amg_state", False),
         )
 
     def _save_segmentation(image_path, segmentation):
@@ -127,6 +141,7 @@ def image_folder_annotator(
         embedding_path: Filepath where to save the embeddings.
         predictor: The Segment Anything model. Passing this enables using fully custom models.
             If you pass `predictor` then `model_type` will be ignored.
+        kwargs: The keywored arguments for `micro_sam.sam_annotator.annotator_2d`.
     """
     image_files = sorted(glob(os.path.join(input_folder, pattern)))
     image_series_annotator(image_files, output_folder, embedding_path, predictor, **kwargs)
@@ -169,6 +184,7 @@ def main():
     parser.add_argument(
         "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
     )
+    parser.add_argument("--precompute_amg_state", action="store_true")
 
     args = parser.parse_args()
 
@@ -179,4 +195,5 @@ def main():
         args.input_folder, args.output_folder, args.pattern,
         embedding_path=args.embedding_path, model_type=args.model_type,
         tile_shape=args.tile_shape, halo=args.halo,
+        precompute_amg_state=args.precompute_amg_state,
     )
