@@ -50,6 +50,10 @@ Compared to these we support more applications (2d, 3d and tracking), and provid
 
 ## Release Overview
 
+**New in version 0.2.1**
+
+- Several bugfixes for the newly introduced functionality in 0.2.0
+
 **New in version 0.2.0**
 
 - Functionality for training / finetuning and evaluation of Segment Anything Models
