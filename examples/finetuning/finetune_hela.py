@@ -62,12 +62,8 @@ def get_dataloader(split, patch_shape, batch_size):
     return loader
 
 
-def main():
-    """Finetune a Segment Anything model.
-
-    This example uses image data and segmentations from the cell tracking challenge,
-    but can easily be adapted for other data (including data you have annoated with micro_sam beforehand).
-    """
+def run_training(checkpoint_name, model_type):
+    """Run the actual model training."""
 
     # All hyperparameters for training.
     batch_size = 1  # the training batch size
@@ -75,9 +71,6 @@ def main():
     n_objects_per_batch = 25  # the number of objects per batch that will be sampled
     device = torch.device("cuda")  # the device/GPU used for training
     n_iterations = 10000  # how long we train (in iterations)
-
-    model_type = "vit_b"  # the name of the model which is used to initialize the weights that are finetuned
-    # We use vit_b here because it can be trained faster. Note that vit_h usually yields higher quality results.
 
     # Get the dataloaders.
     train_loader = get_dataloader("train", patch_shape, batch_size)
@@ -91,7 +84,6 @@ def main():
     # This class creates all the training data for a batch (inputs, prompts and labels).
     convert_inputs = sam_training.ConvertToSamInputs()
 
-    checkpoint_name = "sam_hela"
     # the trainer which performs training and validation (implemented using "torch_em")
     trainer = sam_training.SamTrainer(
         name=checkpoint_name,
@@ -114,6 +106,9 @@ def main():
     )
     trainer.fit(n_iterations)
 
+
+def export_model(checkpoint_name, model_type):
+    """Export the trained model."""
     # export the model after training so that it can be used by the rest of the micro_sam library
     export_path = "./finetuned_hela_model.pth"
     checkpoint_path = os.path.join("checkpoints", checkpoint_name, "best.pt")
@@ -122,6 +117,23 @@ def main():
         model_type=model_type,
         save_path=export_path,
     )
+
+
+def main():
+    """Finetune a Segment Anything model.
+
+    This example uses image data and segmentations from the cell tracking challenge,
+    but can easily be adapted for other data (including data you have annoated with micro_sam beforehand).
+    """
+    # The model_type determines which base model is used to initialize the weights that are finetuned.
+    # We use vit_b here because it can be trained faster. Note that vit_h usually yields higher quality results.
+    model_type = "vit_b"
+
+    # The name of the checkpoint. The checkpoints will be stored in './checkpoints/<checkpoint_name>'
+    checkpoint_name = "sam_hela"
+
+    run_training(checkpoint_name, model_type)
+    export_model(checkpoint_name, model_type)
 
 
 if __name__ == "__main__":

@@ -191,7 +191,8 @@ def get_custom_sam_model(
     custom_pickle = pickle
     custom_pickle.Unpickler = _CustomUnpickler
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
     sam = sam_model_registry[model_type]()
 
     # load the model state, ignoring any attributes that can't be found by pickle
