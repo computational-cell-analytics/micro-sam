@@ -191,7 +191,8 @@ def get_custom_sam_model(
     custom_pickle = pickle
     custom_pickle.Unpickler = _CustomUnpickler
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
     sam = sam_model_registry[model_type]()
 
     # load the model state, ignoring any attributes that can't be found by pickle
@@ -230,7 +231,9 @@ def export_custom_sam_model(
         model_type: The SegmentAnything model type to use (vit_h, vit_b or vit_l).
         save_path: Where to save the exported model.
     """
-    _, state = get_custom_sam_model(checkpoint_path, model_type=model_type, return_state=True)
+    _, state = get_custom_sam_model(
+        checkpoint_path, model_type=model_type, return_state=True, device=torch.device("cpu"),
+    )
     model_state = state["model_state"]
     prefix = "sam."
     model_state = OrderedDict(
