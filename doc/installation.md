@@ -3,13 +3,64 @@
 `micro_sam` requires the following dependencies:
 - [PyTorch](https://pytorch.org/get-started/locally/)
 - [SegmentAnything](https://github.com/facebookresearch/segment-anything#installation)
-- [napari](https://napari.org/stable/)
 - [elf](https://github.com/constantinpape/elf)
+- [napari](https://napari.org/stable/) (for the interactive annotation tools)
+- [torch_em](https://github.com/constantinpape/torch-em) (for the training functionality)
 
-It is available as a conda package and can be installed via
+## From conda
+
+`micro_sam` is available as a conda package and can be installed via
 ```
 $ conda install -c conda-forge micro_sam
 ```
+
+This command will only install the `micro_sam` library without the required dependencies for the annotation functionality and training.
+To use the annotation functionality you also need to install `napari`:
+```
+$ conda install -c conda-forge napari pyqt
+```
+And to use the training functionality `torch_em`:
+```
+$ conda install -c conda-forge torch_em
+```
+
+In case the installation via conda takes too long consider using [mamba](https://mamba.readthedocs.io/en/latest/).
+Once you have it installed you can simply replace the `conda` commands with `mamba`.
+
+## From installer
+
+We also provide installers for Linux, Mac and Windows:
+- [Linux](https://owncloud.gwdg.de/index.php/s/HRp948SDkaWzCuV)
+- [Mac](https://owncloud.gwdg.de/index.php/s/HpGzlXrgJ8VDgnI)
+- [Windows](https://owncloud.gwdg.de/index.php/s/BVipOmDPR2TXmxk)
+
+Note that these installers are stil experimental and not yet fully tested.
+If you encounter problems with them then please consider installing `micro_sam` via [conda](#from-conda) instead.
+
+**Linux Installer:**
+
+To use the installer:
+- Unpack the you have downloaded.
+- Make the installer executable: `$ chmod +x micro_sam-0.2.0post1-Linux-x86_64.sh`
+- Run the installer: `$./micro_sam-0.2.0post1-Linux-x86_64.sh$` 
+    - You can select where to install `micro_sam` during the installation. By default it will be installed in `$HOME/micro_sam`.
+    - The installer will unpack all `micro_sam` files to the installation directory.
+- After the installation you can start the annotator with the command `.../micro_sam/bin/micro_sam.annotator`.
+    - To make it easier to run the annotation tool you can add `.../micro_sam/bin` to your `PATH` or set a softlink to `.../micro_sam/bin/micro_sam.annotator`.
+
+**Mac Installer:**
+
+To use the Mac installer you will need to enable installing unsigned applications. Please follow [the instructions for 'Disabling Gatekeeper for one application only' here](https://disable-gatekeeper.github.io/).
+<!---
+Alternative link on how to disable gatekeeper.
+https://www.makeuseof.com/how-to-disable-gatekeeper-mac/
+-->
+
+TODO detailed instruction
+
+**Windows Installer:**
+
+TODO
 
 ## From source
 
