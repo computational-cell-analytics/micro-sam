@@ -74,7 +74,7 @@ def main():
     patch_shape = (1, 512, 512)  # the size of patches for training
     n_objects_per_batch = 25  # the number of objects per batch that will be sampled
     device = torch.device("cuda")  # the device/GPU used for training
-    n_iterations = 10000  # how long we train
+    n_iterations = 10000  # how long we train (in iterations)
 
     model_type = "vit_b"  # the name of the model which is used to initialize the weights that are finetuned
     # We use vit_b here because it can be trained faster. Note that vit_h usually yields higher quality results.

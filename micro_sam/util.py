@@ -230,7 +230,9 @@ def export_custom_sam_model(
         model_type: The SegmentAnything model type to use (vit_h, vit_b or vit_l).
         save_path: Where to save the exported model.
     """
-    _, state = get_custom_sam_model(checkpoint_path, model_type=model_type, return_state=True)
+    _, state = get_custom_sam_model(
+        checkpoint_path, model_type=model_type, return_state=True, device=torch.device("cpu"),
+    )
     model_state = state["model_state"]
     prefix = "sam."
     model_state = OrderedDict(

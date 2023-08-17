@@ -1,45 +1,33 @@
 import imageio.v3 as imageio
+
 import micro_sam.util as util
+from micro_sam.sam_annotator import annotator_2d
 
 
-# TODO update to hela
-def get_image_and_predictor(finetuned_model, with_tiling):
-    im = imageio.imread("./data/VID529_F7_1_10d08h00m.tif")
+def run_annotator_with_custom_model():
+    """Run the 2d anntator with a custom (finetuned) model.
 
-    if finetuned_model:
-        checkpoint = "./pdo_vit_h_finetuned.pth"
-        embedding_path = "./embeddings/embeddings-pdo-finetuned"
-    else:
-        checkpoint = None
-        embedding_path = "./embeddings/embeddings-pdo-vith"
+    Here, we use the model that is produced by `finetuned_hela.py` and apply it
+    for an image from the validation set.
+    """
+    # take the last frame, which is part of the val set, so the model was not directly trained on it
+    im = imageio.imread("./data/DIC-C2DH-HeLa.zip.unzip/DIC-C2DH-HeLa/01/t083.tif")
 
-    if with_tiling:
-        tile_shape = (512, 512)
-        halo = (128, 128)
-        embedding_path += "_tiled.zarr"
-    else:
-        tile_shape, halo = None, None
-        embedding_path += ".zarr"
+    # set the checkpoint and the path for caching the embeddings
+    checkpoint = "./finetuned_hela_model.pth"
+    embedding_path = "./embeddings/embeddings-finetuned.zarr"
 
-    predictor = util.get_sam_model(model_type="vit_h", checkpoint_path=checkpoint)
-    util.precompute_image_embeddings(predictor, im, embedding_path, tile_shape=tile_shape, halo=halo)
+    model_type = "vit_b"  # We finetune a vit_b in the example script.
+    # Adapt this if you finetune a different model type, e.g. vit_h.
 
-    return im, predictor, embedding_path, tile_shape, halo
+    # Load the custom model.
+    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint)
 
-
-def run_annotator():
-    from micro_sam.sam_annotator import annotator_2d
-
-    im, predictor, embedding_path, tile_shape, halo = get_image_and_predictor(
-        finetuned_model=True, with_tiling=True
-    )
-
+    # Run the 2d annotator with the custom model.
     annotator_2d(
-        im, embedding_path=embedding_path,
-        predictor=predictor, tile_shape=tile_shape, halo=halo,
-        precompute_amg_state=True,
+        im, embedding_path=embedding_path, predictor=predictor, precompute_amg_state=True,
     )
 
 
 if __name__ == "__main__":
-    run_annotator()
+    run_annotator_with_custom_model()
