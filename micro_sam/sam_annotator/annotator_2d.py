@@ -1,5 +1,3 @@
-import os
-import pickle
 import warnings
 from typing import Optional, Tuple
 
@@ -10,8 +8,7 @@ from magicgui import magicgui
 from napari import Viewer
 from segment_anything import SamPredictor
 
-from .. import util
-from .. import instance_segmentation
+from .. import instance_segmentation, util
 from ..visualization import project_embeddings_for_visualization
 from . import util as vutil
 from .gui_utils import show_wrong_file_warning
@@ -40,14 +37,6 @@ def _segment_widget(v: Viewer) -> None:
     v.layers["current_object"].refresh()
 
 
-def _get_amg(is_tiled):
-    if is_tiled:
-        amg = instance_segmentation.TiledAutomaticMaskGenerator(PREDICTOR)
-    else:
-        amg = instance_segmentation.AutomaticMaskGenerator(PREDICTOR)
-    return amg
-
-
 def _changed_param(amg, **params):
     if amg is None:
         return None
@@ -68,7 +57,7 @@ def _autosegment_widget(
     global AMG
     is_tiled = IMAGE_EMBEDDINGS["input_size"] is None
     if AMG is None:
-        AMG = _get_amg(is_tiled)
+        AMG = vutil.get_amg(PREDICTOR, is_tiled)
 
     if not AMG.is_initialized:
         AMG.initialize(v.layers["raw"].data, image_embeddings=IMAGE_EMBEDDINGS, verbose=True)
@@ -189,25 +178,6 @@ def _update_viewer(v, raw, show_embeddings, segmentation_result):
     v.layers["current_object"].data = np.zeros(shape, dtype="uint32")
 
 
-def _precompute_amg_state(raw, save_path):
-    global AMG
-
-    is_tiled = IMAGE_EMBEDDINGS["input_size"] is None
-    AMG = _get_amg(is_tiled)
-
-    save_path_amg = os.path.join(save_path, "amg_state.pickle")
-    if os.path.exists(save_path_amg):
-        with open(save_path_amg, "rb") as f:
-            amg_state = pickle.load(f)
-        AMG.set_state(amg_state)
-        return
-
-    print("Precomputing the state for instance segmentation.")
-    AMG.initialize(raw, image_embeddings=IMAGE_EMBEDDINGS, verbose=True)
-    with open(save_path_amg, "wb") as f:
-        pickle.dump(AMG.get_state(), f)
-
-
 def annotator_2d(
     raw: np.ndarray,
     embedding_path: Optional[str] = None,
@@ -263,7 +233,7 @@ def annotator_2d(
         wrong_file_callback=show_wrong_file_warning
     )
     if precompute_amg_state and (embedding_path is not None):
-        _precompute_amg_state(raw, embedding_path)
+        AMG = vutil.cache_amg_state(PREDICTOR, raw, IMAGE_EMBEDDINGS, embedding_path)
 
     # we set the pre-computed image embeddings if we don't use tiling
     # (if we use tiling we cannot directly set it because the tile will be chosen dynamically)
