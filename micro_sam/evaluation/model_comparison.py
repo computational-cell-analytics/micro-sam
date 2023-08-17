@@ -35,6 +35,9 @@ def _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1,
         out_path = os.path.join(output_folder, f"sample_{i}.h5")
 
         im = x.numpy().squeeze()
+        if im.ndim == 3 and im.shape[0] == 3:
+            im = im.transpose((1, 2, 0))
+
         gt = y.numpy().squeeze().astype("uint32")
         gt = relabel_sequential(gt)[0]
 
@@ -152,12 +155,13 @@ def _evaluate_samples(f, prefix, min_size):
 
 
 def _overlay_mask(image, mask):
-    # TODO add support for RGB inptus
-    assert image.ndim == 2
+    assert image.ndim in (2, 3)
     # overlay the mask
-    overlay = np.stack(
-        [image, image, image]
-    ).transpose((1, 2, 0))
+    if image.ndim == 2:
+        overlay = np.stack([image, image, image]).transpose((1, 2, 0))
+    else:
+        overlay = image
+    assert overlay.shape[-1] == 3
     mask_overlay = np.zeros_like(overlay)
     mask_overlay[mask == 1] = [255, 0, 0]
     alpha = 0.6
