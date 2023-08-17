@@ -382,7 +382,7 @@ def annotator_tracking(
     embedding_path: Optional[str] = None,
     show_embeddings: bool = False,
     tracking_result: Optional[str] = None,
-    model_type: str = "vit_h",
+    model_type: str = util._DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,

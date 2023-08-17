@@ -58,7 +58,7 @@ def image_series_annotator(
     next_image_id = 0
 
     if predictor is None:
-        predictor = util.get_sam_model(model_type=kwargs.get("model_type", "vit_h"))
+        predictor = util.get_sam_model(model_type=kwargs.get("model_type", util._DEFAULT_MODEL))
     if embedding_path is None:
         embedding_paths = None
     else:
@@ -136,6 +136,9 @@ def main():
     """@private"""
     import argparse
 
+    available_models = list(util._MODEL_URLS.keys())
+    available_models = ", ".join(available_models)
+
     parser = argparse.ArgumentParser(description="Annotate a series of images from a folder.")
     parser.add_argument(
         "-i", "--input_folder", required=True,
@@ -157,7 +160,8 @@ def main():
         "otherwise they will be recomputed every time (which can take a long time)."
     )
     parser.add_argument(
-        "--model_type", default="vit_h", help="The segment anything model that will be used, one of vit_h,l,b."
+        "--model_type", default=util._DEFAULT_MODEL,
+        help=f"The segment anything model that will be used, one of {available_models}."
     )
     parser.add_argument(
         "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None

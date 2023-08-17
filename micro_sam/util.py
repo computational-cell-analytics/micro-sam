@@ -58,6 +58,9 @@ _DOWNLOAD_NAMES = {
     "vit_h_em": "vit_h_em.pth",
     "vit_b_em": "vit_b_em.pth",
 }
+# this is the default model used in micro_sam
+# currently set to the default vit_h
+_DEFAULT_MODEL = "vit_h"
 
 
 # TODO define the proper type for image embeddings
@@ -110,7 +113,7 @@ def _get_checkpoint(model_type, checkpoint_path=None):
 
 def get_sam_model(
     device: Optional[str] = None,
-    model_type: str = "vit_h",
+    model_type: str = _DEFAULT_MODEL,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
 ) -> SamPredictor:
@@ -122,7 +125,7 @@ def get_sam_model(
 
     Args:
         device: The device for the model. If none is given will use GPU if available.
-        model_type: The SegmentAnything model to use.
+        model_type: The SegmentAnything model to use. Will use the standard vit_h model by default.
         checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
         return_sam: Return the sam model object as well as the predictor.
 
