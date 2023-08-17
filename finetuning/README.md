@@ -1,8 +1,8 @@
 # Segment Anything Finetuning
 
-Preliminary examples for fine-tuning segment anything on custom datasets.
+Code for finetuning segment anything data on microscopy data and evaluating the finetuned models.
 
-## LiveCELL
+## Example: LiveCELL
 
 **Finetuning**
 
@@ -47,3 +47,12 @@ E.g. run the script like below to evaluate the previous predictions.
 python livecell_evaluation.py -i /scratch/projects/nim00007/data/LiveCELL -e experiment
 ```
 This will create a folder `experiment/results` with csv tables with the results per cell type and averaged over all images.
+
+
+## Finetuning and evaluation code
+
+The subfolders contain the code for different finetuning and evaluation experiments for microscopy data:
+- `livecell`: TODO
+- `generalist`: TODO
+
+Note: we still need to clean up most of this code and will add it later.

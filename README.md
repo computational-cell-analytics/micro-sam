@@ -16,13 +16,7 @@ We implement napari applications for:
 <img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/dfca3d9b-dba5-440b-b0f9-72a0683ac410" width="256">
 <img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/aefbf99f-e73a-4125-bb49-2e6592367a64" width="256">
 
-**Beta version**
-
-This is an advanced beta version. While many features are still under development, we aim to keep the user interface and python library stable.
-Any feedback is welcome, but please be aware that the functionality is under active development and that some features may not be thoroughly tested yet.
-We will soon provide a stand-alone application for running the `micro_sam` annotation tools, and plan to also release it as [napari plugin](https://napari.org/stable/plugins/index.html) in the future.
-
-If you run into any problems or have questions please open an issue on Github or reach out via [image.sc](https://forum.image.sc/) using the tag `micro-sam` and tagging @constantinpape.
+If you run into any problems or have questions regarding our tool please open an issue on Github or reach out via [image.sc](https://forum.image.sc/) using the tag `micro-sam` and tagging @constantinpape.
 
 
 ## Installation and Usage
