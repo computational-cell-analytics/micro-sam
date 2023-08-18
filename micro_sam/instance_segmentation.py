@@ -288,6 +288,7 @@ class AMGBase(ABC):
         """
         if not self.is_initialized:
             raise RuntimeError("The state has not been computed yet. Call initialize first.")
+
         return {"crop_list": self.crop_list, "crop_boxes": self.crop_boxes, "original_size": self.original_size}
 
     def set_state(self, state: Dict[str, Any]) -> None:
