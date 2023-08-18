@@ -50,7 +50,8 @@ def cell_segmentation():
 
     # Generate the instance segmentation. You can call this again for different values of 'pred_iou_thresh'
     # without having to call initialize again.
-    # NOTE: the main advantage of this method is that it's considerably faster than the original implementation.
+    # NOTE: the main advantage of this method is that it's faster than the original implementation,
+    # however the quality is not as high as the original instance segmentation quality yet.
     instances_mws = amg_mws.generate(pred_iou_thresh=0.88)
     instances_mws = instance_segmentation.mask_data_to_segmentation(
         instances_mws, shape=image.shape, with_background=True
@@ -64,7 +65,7 @@ def cell_segmentation():
     napari.run()
 
 
-def segmentation_with_tiling():
+def cell_segmentation_with_tiling():
     """Run the instance segmentation functionality from micro_sam for segmentation of
     cells in a large image. You need to run examples/annotator_2d.py:wholeslide_annotator once before
     running this script so that all required data is downloaded and pre-computed.
@@ -111,20 +112,21 @@ def segmentation_with_tiling():
 
     # Generate the instance segmentation. You can call this again for different values of 'pred_iou_thresh'
     # without having to call initialize again.
-    # NOTE: the main advantage of this method is that it's considerably faster than the original implementation.
+    # NOTE: the main advantage of this method is that it's faster than the original implementation.
+    # however the quality is not as high as the original instance segmentation quality yet.
     instances_mws = amg_mws.generate(pred_iou_thresh=0.88)
 
     # Show the results.
     v = napari.Viewer()
     v.add_image(image)
-    # v.add_labels(instances_amg)
+    v.add_labels(instances_amg)
     v.add_labels(instances_mws)
     napari.run()
 
 
 def main():
     cell_segmentation()
-    # segmentation_with_tiling()
+    # cell_segmentation_with_tiling()
 
 
 if __name__ == "__main__":
