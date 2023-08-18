@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional, Tuple, Union
 
 import numpy as np
+import torch
 from segment_anything.predictor import SamPredictor
 from tqdm import tqdm
 
@@ -50,9 +51,21 @@ def cache_amg_state(
 
     if verbose:
         print("Precomputing the state for instance segmentation.")
+
     amg.initialize(raw, image_embeddings=image_embeddings, verbose=verbose)
+    amg_state = amg.get_state()
+
+    # put all state onto the cpu so that the state can be deserialized without a gpu
+    new_crop_list = []
+    for mask_data in amg_state["crop_list"]:
+        for k, v in mask_data.items():
+            if torch.is_tensor(v):
+                mask_data[k] = v.cpu()
+        new_crop_list.append(mask_data)
+    amg_state["crop_list"] = new_crop_list
+
     with open(save_path_amg, "wb") as f:
-        pickle.dump(amg.get_state(), f)
+        pickle.dump(amg_state, f)
 
     return amg
 
