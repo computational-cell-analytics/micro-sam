@@ -514,13 +514,15 @@ def precompute_image_embeddings(
             ("halo", halo if halo is None else list(halo)),
             ("model_type", predictor.model_type)
         ]
-        for key, val in key_vals:
-            if "input_size" in f.attrs:  # we have computed the embeddings already
-                # key signature does not match or is not in the file
+        if "input_size" in f.attrs:  # we have computed the embeddings already and perform checks
+            for key, val in key_vals:
+                if val is None:
+                    continue
+                # check whether the key signature does not match or is not in the file
                 if key not in f.attrs or f.attrs[key] != val:
                     warnings.warn(
                         f"Embeddings file {save_path} is invalid due to unmatching {key}: "
-                        f"{f.attrs[key]} != {val}.Please recompute embeddings in a new file."
+                        f"{f.attrs.get(key)} != {val}.Please recompute embeddings in a new file."
                     )
                     if wrong_file_callback is not None:
                         save_path = wrong_file_callback(save_path)
