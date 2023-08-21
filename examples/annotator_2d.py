@@ -34,7 +34,7 @@ def hela_2d_annotator(use_finetuned_model):
         embedding_path = "./embeddings/embeddings-hela2d.zarr"
         model_type = "vit_h"
 
-    annotator_2d(image, embedding_path, show_embeddings=False, model_type=model_type)
+    annotator_2d(image, embedding_path, show_embeddings=False, model_type=model_type, precompute_amg_state=True)
 
 
 def wholeslide_annotator(use_finetuned_model):

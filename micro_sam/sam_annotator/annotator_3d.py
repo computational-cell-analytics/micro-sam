@@ -154,7 +154,7 @@ def _segment_slice_wigdet(v: Viewer) -> None:
 
 @magicgui(call_button="Segment Volume [V]", projection={"choices": ["default", "bounding_box", "mask", "points"]})
 def _segment_volume_widget(
-    v: Viewer, iou_threshold: float = 0.8, projection: str = "default", box_extension: float = 0.1
+    v: Viewer, iou_threshold: float = 0.8, projection: str = "default", box_extension: float = 0.05
 ) -> None:
     # step 1: segment all slices with prompts
     shape = v.layers["raw"].data.shape
