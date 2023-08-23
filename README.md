@@ -27,6 +27,7 @@ conda install -c conda-forge micro_sam napari pyqt
 ```
 You can then start the `micro_sam` tools by running `$ micro_sam.annotator` in the command line.
 
+For an introduction in how to use the napari based annotation tools check out [the video tutorials](https://www.youtube.com/watch?v=ket7bDUP9tI&list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO&pp=gAQBiAQB).
 Please check out [the documentation](https://computational-cell-analytics.github.io/micro-sam/) for more details on the installation and usage of `micro_sam`.
 
 
