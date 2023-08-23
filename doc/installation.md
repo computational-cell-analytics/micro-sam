@@ -86,6 +86,7 @@ We also provide installers for Linuxand Windows:
 <!---
 - [Mac](https://owncloud.gwdg.de/index.php/s/7YupGgACw9SHy2P)
 -->
+
 **The installers are stil experimental and not fully tested.** Mac is not supported yet, but we are working on also providing an installer for it.
 
 If you encounter problems with them then please consider installing `micro_sam` via [conda](#from-conda) instead.

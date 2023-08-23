@@ -17,8 +17,17 @@ They are built using [napari](https://napari.org/stable/) and [magicgui](https:/
 If you are not familiar with napari yet, [start here](https://napari.org/stable/tutorials/fundamentals/quick_start.html).
 The `micro_sam` tools use [the point layer](https://napari.org/stable/howtos/layers/points.html), [shape layer](https://napari.org/stable/howtos/layers/shapes.html) and [label layer](https://napari.org/stable/howtos/layers/labels.html).
 
-The annotation tools are explained in detail below. In addition to the documentation we provide [video tutorials](https://www.youtube.com/watch?v=ket7bDUP9tI&list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO) for the tools.
+The annotation tools are explained in detail below. In addition to the documentation here we also provide [video tutorials](https://www.youtube.com/watch?v=ket7bDUP9tI&list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO).
 
+
+## Starting via GUI
+
+The annotation toools can be started from a central GUI, which can be started with the command `$ micro_sam.annotator` or using the executable [from an installer](#from-installer).
+
+In the GUI you can select with of the four annotation tools you want to use:
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/micro-sam-gui.png">
+
+And after selecting them a new window will open where you can select the input file path and other optional parameter. Then click the top button to start the tool. **Note: If you are not starting the annotation tool with a path to pre-computed embeddings then it can take several minutes to open napari after pressing the button because the embeddings are being computed.**
 
 
 ## Annotator 2D
