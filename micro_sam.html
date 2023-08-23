@@ -32,11 +32,12 @@
   <li><a href="#installation">Installation</a>
   <ul>
     <li><a href="#from-conda">From conda</a></li>
-    <li><a href="#from-installer">From installer</a></li>
     <li><a href="#from-source">From source</a></li>
+    <li><a href="#from-installer">From installer</a></li>
   </ul></li>
   <li><a href="#annotation-tools">Annotation Tools</a>
   <ul>
+    <li><a href="#starting-via-gui">Starting via GUI</a></li>
     <li><a href="#annotator-2d">Annotator 2D</a></li>
     <li><a href="#annotator-3d">Annotator 3D</a></li>
     <li><a href="#annotator-tracking">Annotator Tracking</a></li>
@@ -147,7 +148,15 @@ For now, check out <a href="https://github.com/computational-cell-analytics/micr
 
 <h1 id="installation">Installation</h1>
 
-<p><code><a href="">micro_sam</a></code> requires the following dependencies:</p>
+<p>We provide three different ways of installing <code><a href="">micro_sam</a></code>:</p>
+
+<ul>
+<li><a href="#from-conda">From conda</a> is the recommended way if you want to use all functionality.</li>
+<li><a href="#from-source">From source</a> for setting up a development environment to change and potentially contribute to our software.</li>
+<li><a href="#from-installer">From installer</a> to install without having to use conda. This mode of installation is still experimental! It only provides the annotation tools and does not enable model finetuning.</li>
+</ul>
+
+<p>Our software requires the following dependencies:</p>
 
 <ul>
 <li><a href="https://pytorch.org/get-started/locally/">PyTorch</a></li>
@@ -164,7 +173,7 @@ For now, check out <a href="https://github.com/computational-cell-analytics/micr
 <pre><code>$ conda install -c conda-forge micro_sam
 </code></pre>
 
-<p>This command will only install the <code><a href="">micro_sam</a></code> library without the required dependencies for the annotation functionality and training.
+<p>This command will not install the required dependencies for the annotation tools and for training / finetuning.
 To use the annotation functionality you also need to install <code>napari</code>:</p>
 
 <pre><code>$ conda install -c conda-forge napari pyqt
@@ -177,51 +186,6 @@ To use the annotation functionality you also need to install <code>napari</code>
 
 <p>In case the installation via conda takes too long consider using <a href="https://mamba.readthedocs.io/en/latest/">mamba</a>.
 Once you have it installed you can simply replace the <code>conda</code> commands with <code>mamba</code>.</p>
-
-<h2 id="from-installer">From installer</h2>
-
-<p>We also provide installers for Linux, Mac and Windows:</p>
-
-<ul>
-<li><a href="https://owncloud.gwdg.de/index.php/s/Cw9RmA3BlyqKJeU">Linux</a></li>
-<li><a href="https://owncloud.gwdg.de/index.php/s/7YupGgACw9SHy2P">Mac</a></li>
-<li><a href="https://owncloud.gwdg.de/index.php/s/1iD1eIcMZvEyE6d">Windows</a></li>
-</ul>
-
-<p>Note that these installers are stil experimental and not yet fully tested.
-If you encounter problems with them then please consider installing <code><a href="">micro_sam</a></code> via <a href="#from-conda">conda</a> instead.</p>
-
-<p><strong>Linux Installer:</strong></p>
-
-<p>To use the installer:</p>
-
-<ul>
-<li>Unpack the you have downloaded.</li>
-<li>Make the installer executable: <code>$ chmod +x micro_sam-0.2.0post1-Linux-x86_64.sh</code></li>
-<li>Run the installer: <code>$./micro_sam-0.2.0post1-Linux-x86_64.sh$</code> 
-<ul>
-<li>You can select where to install <code><a href="">micro_sam</a></code> during the installation. By default it will be installed in <code>$HOME/micro_sam</code>.</li>
-<li>The installer will unpack all <code><a href="">micro_sam</a></code> files to the installation directory.</li>
-</ul></li>
-<li>After the installation you can start the annotator with the command <code>.../micro_sam/bin/micro_sam.annotator</code>.
-<ul>
-<li>To make it easier to run the annotation tool you can add <code>.../micro_sam/bin</code> to your <code>PATH</code> or set a softlink to <code>.../micro_sam/bin/micro_sam.annotator</code>.</li>
-</ul></li>
-</ul>
-
-<p><strong>Mac Installer:</strong></p>
-
-<p>To use the Mac installer you will need to enable installing unsigned applications. Please follow <a href="https://disable-gatekeeper.github.io/">the instructions for 'Disabling Gatekeeper for one application only' here</a>.
-<!---
-Alternative link on how to disable gatekeeper.
-<a href="https://www.makeuseof.com/how-to-disable-gatekeeper-mac/">https://www.makeuseof.com/how-to-disable-gatekeeper-mac/</a>
---></p>
-
-<p>TODO detailed instruction</p>
-
-<p><strong>Windows Installer:</strong></p>
-
-<p>TODO</p>
 
 <h2 id="from-source">From source</h2>
 
@@ -289,6 +253,64 @@ Alternative link on how to disable gatekeeper.
 </ul></li>
 </ul>
 
+<h2 id="from-installer">From installer</h2>
+
+<p>We also provide installers for Linuxand Windows:</p>
+
+<ul>
+<li><a href="https://owncloud.gwdg.de/index.php/s/Cw9RmA3BlyqKJeU">Linux</a></li>
+<li><a href="https://owncloud.gwdg.de/index.php/s/1iD1eIcMZvEyE6d">Windows</a>
+<!---</li>
+<li><a href="https://owncloud.gwdg.de/index.php/s/7YupGgACw9SHy2P">Mac</a>
+--></li>
+</ul>
+
+<p><strong>The installers are stil experimental and not fully tested.</strong> Mac is not supported yet, but we are working on also providing an installer for it.</p>
+
+<p>If you encounter problems with them then please consider installing <code><a href="">micro_sam</a></code> via <a href="#from-conda">conda</a> instead.</p>
+
+<p><strong>Linux Installer:</strong></p>
+
+<p>To use the installer:</p>
+
+<ul>
+<li>Unpack the zip file you have downloaded.</li>
+<li>Make the installer executable: <code>$ chmod +x micro_sam-0.2.0post1-Linux-x86_64.sh</code></li>
+<li>Run the installer: <code>$./micro_sam-0.2.0post1-Linux-x86_64.sh$</code> 
+<ul>
+<li>You can select where to install <code><a href="">micro_sam</a></code> during the installation. By default it will be installed in <code>$HOME/micro_sam</code>.</li>
+<li>The installer will unpack all <code><a href="">micro_sam</a></code> files to the installation directory.</li>
+</ul></li>
+<li>After the installation you can start the annotator with the command <code>.../micro_sam/bin/micro_sam.annotator</code>.
+<ul>
+<li>To make it easier to run the annotation tool you can add <code>.../micro_sam/bin</code> to your <code>PATH</code> or set a softlink to <code>.../micro_sam/bin/micro_sam.annotator</code>.</li>
+</ul></li>
+</ul>
+
+<p><!---
+<strong>Mac Installer:</strong></p>
+
+<p>To use the Mac installer you will need to enable installing unsigned applications. Please follow <a href="https://disable-gatekeeper.github.io/">the instructions for 'Disabling Gatekeeper for one application only' here</a>.</p>
+
+<p>Alternative link on how to disable gatekeeper.
+<a href="https://www.makeuseof.com/how-to-disable-gatekeeper-mac/">https://www.makeuseof.com/how-to-disable-gatekeeper-mac/</a></p>
+
+<p>TODO detailed instruction
+--></p>
+
+<p><strong>Windows Installer:</strong></p>
+
+<ul>
+<li>Unpack the zip file you have downloaded.</li>
+<li>Run the installer by double clicking on it.</li>
+<li>Choose installation type: <code>Just Me(recommended)</code> or <code>All Users(requires admin privileges)</code>.</li>
+<li>Choose installation path. By default it will be installed in <code>C:\Users\&lt;Username&gt;\micro_sam</code> for <code>Just Me</code> installation or in <code>C:\ProgramData\micro_sam</code> for <code>All Users</code>.
+<ul>
+<li>The installer will unpack all micro_sam files to the installation directory.</li>
+</ul></li>
+<li>After the installation you can start the annotator by double clicking on <code>.\micro_sam\Scripts\micro_sam.annotator.exe</code> or  with the command <code>.\micro_sam\Scripts\micro_sam.annotator.exe</code> from the Command Prompt.</li>
+</ul>
+
 <h1 id="annotation-tools">Annotation Tools</h1>
 
 <p><code><a href="">micro_sam</a></code> provides applications for fast interactive 2d segmentation, 3d segmentation and tracking.
@@ -304,9 +326,20 @@ of mitochondria in volume EM (middle) and interactive tracking of cells (right).
 <pre><code>$ micro_sam.annotator
 </code></pre>
 
-<p>They are built with <a href="https://napari.org/stable/">napari</a> to implement the viewer and user interaction.
+<p>They are built using <a href="https://napari.org/stable/">napari</a> and <a href="https://pyapp-kit.github.io/magicgui/">magicgui</a> to provide the viewer and user interface.
 If you are not familiar with napari yet, <a href="https://napari.org/stable/tutorials/fundamentals/quick_start.html">start here</a>.
-The <code><a href="">micro_sam</a></code> applications are mainly based on <a href="https://napari.org/stable/howtos/layers/points.html">the point layer</a>, <a href="https://napari.org/stable/howtos/layers/shapes.html">the shape layer</a> and <a href="https://napari.org/stable/howtos/layers/labels.html">the label layer</a>.</p>
+The <code><a href="">micro_sam</a></code> tools use <a href="https://napari.org/stable/howtos/layers/points.html">the point layer</a>, <a href="https://napari.org/stable/howtos/layers/shapes.html">shape layer</a> and <a href="https://napari.org/stable/howtos/layers/labels.html">label layer</a>.</p>
+
+<p>The annotation tools are explained in detail below. In addition to the documentation here we also provide <a href="https://www.youtube.com/watch?v=ket7bDUP9tI&list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO">video tutorials</a>.</p>
+
+<h2 id="starting-via-gui">Starting via GUI</h2>
+
+<p>The annotation toools can be started from a central GUI, which can be started with the command <code>$ micro_sam.annotator</code> or using the executable <a href="#from-installer">from an installer</a>.</p>
+
+<p>In the GUI you can select with of the four annotation tools you want to use:
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/micro-sam-gui.png"></p>
+
+<p>And after selecting them a new window will open where you can select the input file path and other optional parameter. Then click the top button to start the tool. <strong>Note: If you are not starting the annotation tool with a path to pre-computed embeddings then it can take several minutes to open napari after pressing the button because the embeddings are being computed.</strong></p>
 
 <h2 id="annotator-2d">Annotator 2D</h2>
 
@@ -343,7 +376,7 @@ The <code><a href="">micro_sam</a></code> applications are mainly based on <a hr
 
 <p>Note that point prompts and box prompts can be combined. When you're using point prompts you can only segment one object at a time. With box prompts you can segment several objects at once.</p>
 
-<p>Check out <a href="https://youtu.be/DfWE_XRcqN8">this video</a> for an example of how to use the interactive 2d annotator.</p>
+<p>Check out <a href="https://youtu.be/ket7bDUP9tI">this video</a> for a tutorial for the 2d annotation tool.</p>
 
 <p>We also provide the <code>image series annotator</code>, which can be used for running the 2d annotator for several images in a folder. You can start by clicking <code>Image series annotator</code> in the GUI, running <code>micro_sam.image_series_annotator</code> in the command line or from a <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/image_series_annotator.py">python script</a>.</p>
 
@@ -374,7 +407,7 @@ The <code><a href="">micro_sam</a></code> applications are mainly based on <a hr
 
 <p>Note that you can only segment one object at a time with the 3d annotator.</p>
 
-<p>Check out <a href="https://youtu.be/5Jo_CtIefTM">this video</a> for an overview of the interactive 3d segmentation functionality.</p>
+<p>Check out <a href="https://youtu.be/PEy9-rTCdS4">this video</a> for a tutorial for the 3d annotation tool.</p>
 
 <h2 id="annotator-tracking">Annotator Tracking</h2>
 
@@ -404,7 +437,7 @@ The <code><a href="">micro_sam</a></code> applications are mainly based on <a hr
 
 <p>Note that the tracking annotator only supports 2d image data, volumetric data is not supported.</p>
 
-<p>Check out <a href="https://youtu.be/PBPW0rDOn9w">this video</a> for an overview of the interactive tracking functionality.</p>
+<p>Check out <a href="https://youtu.be/Xi5pRWMO6_w">this video</a> for a tutorial for how to use the tracking annotation tool.</p>
 
 <h2 id="tips-tricks">Tips &amp; Tricks</h2>
 
