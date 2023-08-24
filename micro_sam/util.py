@@ -560,7 +560,7 @@ def set_precomputed(
         i: Index for the image data. Required if `image` has three spatial dimensions
             or a time dimension and two spatial dimensions.
     """
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = predictor.device
     features = image_embeddings["features"]
 
     assert features.ndim in (4, 5)
