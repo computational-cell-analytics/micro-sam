@@ -34,8 +34,8 @@ Please check out [the documentation](https://computational-cell-analytics.github
 ## Citation
 
 If you are using this repository in your research please cite
-- [SegmentAnything](https://arxiv.org/abs/2304.02643)
-- and our repository on [zenodo](https://doi.org/10.5281/zenodo.7919746) (we are working on a publication)
+- Our [preprint](https://doi.org/10.1101/2023.08.21.554208)
+- and the original [Segment Anything publication](https://arxiv.org/abs/2304.02643)
 
 
 ## Related Projects

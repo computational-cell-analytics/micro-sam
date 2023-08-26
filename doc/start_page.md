@@ -45,7 +45,5 @@ For now, check out [the example script for the 2d annotator](https://github.com/
 ## Citation
 
 If you are using `micro_sam` in your research please cite
-- [SegmentAnything](https://arxiv.org/abs/2304.02643)
-- and our repository on [zenodo](https://doi.org/10.5281/zenodo.7919746)
-
-We will release a preprint soon that describes this work and can be cited instead of zenodo.
+- Our [preprint](https://doi.org/10.1101/2023.08.21.554208)
+- and the original [Segment Anything publication](https://arxiv.org/abs/2304.02643)
