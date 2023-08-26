@@ -433,7 +433,7 @@ def annotator_tracking(
 
     v = Viewer()
 
-    v.add_image(raw)
+    v.add_image(raw, name="raw")
     if tracking_result is None:
         v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="committed_tracks")
     else:

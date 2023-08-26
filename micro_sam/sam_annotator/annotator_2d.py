@@ -60,6 +60,7 @@ def _autosegment_widget(
     if AMG is None:
         AMG = instance_segmentation.get_amg(PREDICTOR, is_tiled)
 
+    print("initializing autosegment")
     if not AMG.is_initialized:
         AMG.initialize(v.layers["raw"].data, image_embeddings=IMAGE_EMBEDDINGS, verbose=True)
 
@@ -92,7 +93,7 @@ def _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings):
     # initialize the viewer and add layers
     #
 
-    v.add_image(raw)
+    v.add_image(raw, name="raw")
     shape = _get_shape(raw)
 
     v.add_labels(data=np.zeros(shape, dtype="uint32"), name="auto_segmentation")

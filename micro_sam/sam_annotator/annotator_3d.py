@@ -239,7 +239,7 @@ def annotator_3d(
 
     v = Viewer()
 
-    v.add_image(raw)
+    v.add_image(raw, name="raw")
     if segmentation_result is None:
         v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="committed_objects")
     else:
