@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from typing import Union
 
+import imageio.v3 as imageio
+import numpy as np
 import pooch
 
 
@@ -21,7 +23,8 @@ def fetch_image_series_example_data(save_directory: Union[str, os.PathLike]) -> 
     os.makedirs(save_directory, exist_ok=True)
     print("Example data directory is:", save_directory.resolve())
     fname = "image-series.zip"
-    unpack_filenames = [os.path.join("series", f"im{i}.tif") for i in range(3)]
+    # use first two files for image series (thrid file is not the same shape)
+    unpack_filenames = [os.path.join("series", f"im{i}.tif") for i in range(2)]
     unpack = pooch.Unzip(members=unpack_filenames)
     pooch.retrieve(
         url="https://owncloud.gwdg.de/index.php/s/M1zGnfkulWoAhUG/download",
@@ -34,6 +37,23 @@ def fetch_image_series_example_data(save_directory: Union[str, os.PathLike]) -> 
     data_folder = os.path.join(save_directory, f"{fname}.unzip", "series")
     assert os.path.exists(data_folder)
     return data_folder
+
+
+def sample_data_image_series():
+    """Provides 2d image series example data to napari."""
+    # Return list of tuples
+    # [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]
+    # Check the documentation for more information about the
+    # add_image_kwargs
+    # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
+    default_base_data_dir = pooch.os_cache('micro-sam')
+    data_directory = fetch_image_series_example_data(default_base_data_dir)
+    fnames = os.listdir(data_directory)
+    full_filenames = [os.path.join(data_directory, f) for f in fnames]
+    full_filenames.sort()
+    data = np.stack([imageio.imread(f) for f in full_filenames], axis=0)
+    add_image_kwargs = {"name": "image-series"}
+    return [(data, add_image_kwargs)]
 
 
 def fetch_wholeslide_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
@@ -61,6 +81,20 @@ def fetch_wholeslide_example_data(save_directory: Union[str, os.PathLike]) -> Un
     return os.path.join(save_directory, fname)
 
 
+def sample_data_wholeslide():
+    """Provides wholeslide 2d example image to napari."""
+    # Return list of tuples
+    # [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]
+    # Check the documentation for more information about the
+    # add_image_kwargs
+    # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
+    default_base_data_dir = pooch.os_cache('micro-sam')
+    filename = fetch_wholeslide_example_data(default_base_data_dir)
+    data = imageio.imread(filename)
+    add_image_kwargs = {"name", "wholeslide"}
+    return [(data, add_image_kwargs)]
+
+
 def fetch_livecell_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
     """Download the sample data for the 2d annotator.
 
@@ -86,6 +120,20 @@ def fetch_livecell_example_data(save_directory: Union[str, os.PathLike]) -> Unio
     return os.path.join(save_directory, fname)
 
 
+def sample_data_livecell():
+    """Provides livecell 2d example image to napari."""
+    # Return list of tuples
+    # [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]
+    # Check the documentation for more information about the
+    # add_image_kwargs
+    # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
+    default_base_data_dir = pooch.os_cache('micro-sam')
+    filename = fetch_livecell_example_data(default_base_data_dir)
+    data = imageio.imread(filename)
+    add_image_kwargs = {"name": "livecell"}
+    return [(data, add_image_kwargs)]
+
+
 def fetch_hela_2d_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
     """Download the sample data for the 2d annotator.
 
@@ -108,6 +156,20 @@ def fetch_hela_2d_example_data(save_directory: Union[str, os.PathLike]) -> Union
         progressbar=True,
     )
     return os.path.join(save_directory, fname)
+
+
+def sample_data_hela_2d():
+    """Provides HeLa 2d example image to napari."""
+    # Return list of tuples
+    # [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]
+    # Check the documentation for more information about the
+    # add_image_kwargs
+    # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
+    default_base_data_dir = pooch.os_cache("micro-sam")
+    filename = fetch_hela_2d_example_data(default_data_dir)
+    data = imageio.imread(filename)
+    add_image_kwargs = {"name": "hela_2d"}
+    return [(data, add_image_kwargs)]
 
 
 def fetch_3d_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
@@ -137,6 +199,23 @@ def fetch_3d_example_data(save_directory: Union[str, os.PathLike]) -> Union[str,
     )
     lucchi_dir = save_directory.joinpath(f"{fname}.unzip", "Lucchi++", "Test_In")
     return str(lucchi_dir)
+
+
+def sample_data_3d():
+    """Provides Lucchi++ 3d example image to napari."""
+    # Return list of tuples
+    # [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]
+    # Check the documentation for more information about the
+    # add_image_kwargs
+    # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
+    default_base_data_dir = pooch.os_cache("micro-sam")
+    data_directory = fetch_3d_example_data(default_base_data_dir)
+    fnames = os.listdir(data_directory)
+    full_filenames = [os.path.join(data_directory, f) for f in fnames]
+    full_filenames.sort()
+    data = np.stack([imageio.imread(f) for f in full_filenames], axis=0)
+    add_image_kwargs = {"name": "lucchi++"}
+    return [(data, add_image_kwargs)]
 
 
 def fetch_tracking_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
@@ -171,3 +250,20 @@ def fetch_tracking_example_data(save_directory: Union[str, os.PathLike]) -> Unio
     cell_tracking_dir = save_directory.joinpath(f"{fname}.unzip", "DIC-C2DH-HeLa", "01")
     assert os.path.exists(cell_tracking_dir)
     return str(cell_tracking_dir)
+
+
+def sample_data_tracking():
+    """Provides tracking example dataset to napari."""
+    # Return list of tuples
+    # [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]
+    # Check the documentation for more information about the
+    # add_image_kwargs
+    # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
+    default_base_data_dir = pooch.os_cache("micro-sam")
+    data_directory = fetch_tracking_example_data(default_base_data_dir)
+    fnames = os.listdir(data_directory)
+    full_filenames = [os.path.join(data_directory, f) for f in fnames]
+    full_filenames.sort()
+    data = np.stack([imageio.imread(f) for f in full_filenames], axis=0)
+    add_image_kwargs = {"name": "tracking"}
+    return [(data, add_image_kwargs)]

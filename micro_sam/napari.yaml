@@ -1,0 +1,64 @@
+name: micro-sam
+display_name: SegmentAnything for Microscopy
+contributions:
+  commands:
+    - id: micro-sam.make_sample_data
+      python_name: micro_sam._sample_data:make_sample_data
+      title: Load sample data from FooBar Segmentation
+    - id: micro-sam.sample_data_image_series
+      python_name: micro_sam.sample_data:sample_data_image_series
+      title: Load image series sample data from micro-sam plugin
+    - id: micro-sam.sample_data_wholeslide
+      python_name: micro_sam.sample_data:sample_data_wholeslide
+      title: Load WholeSlide sample data from micro-sam plugin
+    - id: micro-sam.sample_data_livecell
+      python_name: micro_sam.sample_data:sample_data_livecell
+      title: Load LiveCell sample data from micro-sam plugin
+    - id: micro-sam.sample_data_hela_2d
+      python_name: micro_sam.sample_data:sample_data_hela_2d
+      title: Load 2D Hela sample data from micro-sam plugin
+    - id: micro-sam.sample_data_3d
+      python_name: micro_sam.sample_data:sample_data_3d
+      title: Load Lucchi++ 3D sample data from micro-sam plugin
+    - id: micro-sam.sample_data_tracking
+      python_name: micro_sam.sample_data:sample_data_tracking
+      title: Load tracking sample data from micro-sam plugin
+    - id: micro-sam.make_qwidget
+      python_name: micro_sam._widget:ExampleQWidget
+      title: Make example QWidget
+    - id: micro-sam.make_magic_widget
+      python_name: micro_sam._widget:example_magic_widget
+      title: Make example magic widget
+    - id: micro-sam.make_func_widget
+      python_name: micro_sam._widget:example_function_widget
+      title: Make example function widget
+  sample_data:
+    - command: micro-sam.make_sample_data
+      display_name: micro-sam FooBar Segmentation
+      key: unique_id.1
+    - command: micro-sam.sample_data_image_series
+      display_name: image series
+      key: micro-sam-image-series
+    - command: micro-sam.sample_data_wholeslide
+      display_name: WholeSlide example data
+      key: micro-sam-wholeslide
+    - command: micro-sam.sample_data_livecell
+      display_name: LiveCell example data
+      key: micro-sam-livecell
+    - command: micro-sam.sample_data_hela_2d
+      display_name: HeLa 2d example data
+      key: micro-sam-hela2d
+    - command: micro-sam.sample_data_3d
+      display_name: Lucchi++ 3d dataset
+      key: micro-sam-lucchi
+    - command: micro-sam.sample_data_tracking
+      display_name: Tracking sample dataset
+      key: micro-sam-tracking
+  widgets:
+    - command: micro-sam.make_qwidget
+      display_name: Example QWidget
+    - command: micro-sam.make_magic_widget
+      display_name: Example Magic Widget
+    - command: micro-sam.make_func_widget
+      autogenerate: true
+      display_name: Example Function Widget
