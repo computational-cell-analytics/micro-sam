@@ -54,11 +54,3 @@ contributions:
     - command: micro-sam.sample_data_tracking
       display_name: Tracking sample dataset
       key: micro-sam-tracking
-  widgets:
-    - command: micro-sam.make_qwidget
-      display_name: Example QWidget
-    - command: micro-sam.make_magic_widget
-      display_name: Example Magic Widget
-    - command: micro-sam.make_func_widget
-      autogenerate: true
-      display_name: Example Function Widget
