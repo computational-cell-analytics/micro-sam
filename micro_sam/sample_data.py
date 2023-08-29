@@ -91,7 +91,7 @@ def sample_data_wholeslide():
     default_base_data_dir = pooch.os_cache('micro-sam')
     filename = fetch_wholeslide_example_data(default_base_data_dir)
     data = imageio.imread(filename)
-    add_image_kwargs = {"name", "wholeslide"}
+    add_image_kwargs = {"name": "wholeslide"}
     return [(data, add_image_kwargs)]
 
 
@@ -108,7 +108,6 @@ def fetch_livecell_example_data(save_directory: Union[str, os.PathLike]) -> Unio
     """
     save_directory = Path(save_directory)
     os.makedirs(save_directory, exist_ok=True)
-    print("Example data directory is:", save_directory.resolve())
     fname = "livecell-2d-image.png"
     pooch.retrieve(
         url="https://owncloud.gwdg.de/index.php/s/fSaOJIOYjmFBjPM/download",
@@ -166,7 +165,7 @@ def sample_data_hela_2d():
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
     default_base_data_dir = pooch.os_cache("micro-sam")
-    filename = fetch_hela_2d_example_data(default_data_dir)
+    filename = fetch_hela_2d_example_data(default_base_data_dir)
     data = imageio.imread(filename)
     add_image_kwargs = {"name": "hela_2d"}
     return [(data, add_image_kwargs)]
@@ -235,7 +234,6 @@ def fetch_tracking_example_data(save_directory: Union[str, os.PathLike]) -> Unio
     """
     save_directory = Path(save_directory)
     os.makedirs(save_directory, exist_ok=True)
-    print("Example data directory is:", save_directory.resolve())
     unpack_filenames = [os.path.join("DIC-C2DH-HeLa", "01", f"t{str(i).zfill(3)}.tif") for i in range(84)]
     unpack = pooch.Unzip(members=unpack_filenames)
     fname = "DIC-C2DH-HeLa.zip"
