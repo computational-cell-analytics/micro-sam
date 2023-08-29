@@ -2,9 +2,6 @@ name: micro-sam
 display_name: SegmentAnything for Microscopy
 contributions:
   commands:
-    - id: micro-sam.make_sample_data
-      python_name: micro_sam._sample_data:make_sample_data
-      title: Load sample data from FooBar Segmentation
     - id: micro-sam.sample_data_image_series
       python_name: micro_sam.sample_data:sample_data_image_series
       title: Load image series sample data from micro-sam plugin
@@ -23,19 +20,7 @@ contributions:
     - id: micro-sam.sample_data_tracking
       python_name: micro_sam.sample_data:sample_data_tracking
       title: Load tracking sample data from micro-sam plugin
-    - id: micro-sam.make_qwidget
-      python_name: micro_sam._widget:ExampleQWidget
-      title: Make example QWidget
-    - id: micro-sam.make_magic_widget
-      python_name: micro_sam._widget:example_magic_widget
-      title: Make example magic widget
-    - id: micro-sam.make_func_widget
-      python_name: micro_sam._widget:example_function_widget
-      title: Make example function widget
   sample_data:
-    - command: micro-sam.make_sample_data
-      display_name: micro-sam FooBar Segmentation
-      key: unique_id.1
     - command: micro-sam.sample_data_image_series
       display_name: image series
       key: micro-sam-image-series
