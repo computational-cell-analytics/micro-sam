@@ -8,8 +8,8 @@ from magicgui import magicgui
 from napari import Viewer
 from segment_anything import SamPredictor
 
-from .. import util
-from .. import instance_segmentation
+from .. import instance_segmentation, util
+from ..precompute_state import cache_amg_state
 from ..visualization import project_embeddings_for_visualization
 from . import util as vutil
 from .gui_utils import show_wrong_file_warning
@@ -38,18 +38,6 @@ def _segment_widget(v: Viewer) -> None:
     v.layers["current_object"].refresh()
 
 
-def _get_amg(is_tiled, with_background, min_initial_size, box_extension=0.05):
-    if is_tiled:
-        amg = instance_segmentation.TiledEmbeddingMaskGenerator(
-            PREDICTOR, with_background=with_background, min_initial_size=min_initial_size, box_extension=box_extension,
-        )
-    else:
-        amg = instance_segmentation.EmbeddingMaskGenerator(
-            PREDICTOR, min_initial_size=min_initial_size, box_extension=box_extension,
-        )
-    return amg
-
-
 def _changed_param(amg, **params):
     if amg is None:
         return None
@@ -62,29 +50,25 @@ def _changed_param(amg, **params):
 @magicgui(call_button="Automatic Segmentation")
 def _autosegment_widget(
     v: Viewer,
-    with_background: bool = True,
     pred_iou_thresh: float = 0.88,
     stability_score_thresh: float = 0.95,
-    min_initial_size: int = 10,
-    box_extension: float = 0.05,
+    min_object_size: int = 100,
+    with_background: bool = True,
 ) -> None:
     global AMG
     is_tiled = IMAGE_EMBEDDINGS["input_size"] is None
-    param_changed = _changed_param(
-        AMG, with_background=with_background, min_initial_size=min_initial_size, box_extension=box_extension
-    )
-    if AMG is None or param_changed:
-        if param_changed:
-            print(f"The parameter {param_changed} was changed, so the full instance segmentation has to be recomputed.")
-        AMG = _get_amg(is_tiled, with_background, min_initial_size, box_extension)
+    if AMG is None:
+        AMG = instance_segmentation.get_amg(PREDICTOR, is_tiled)
 
     if not AMG.is_initialized:
         AMG.initialize(v.layers["raw"].data, image_embeddings=IMAGE_EMBEDDINGS, verbose=True)
 
     seg = AMG.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
-    if not is_tiled:
-        shape = v.layers["raw"].data.shape[:2]
-        seg = instance_segmentation.mask_data_to_segmentation(seg, shape, with_background)
+
+    shape = v.layers["raw"].data.shape[:2]
+    seg = instance_segmentation.mask_data_to_segmentation(
+        seg, shape, with_background=True, min_object_size=min_object_size
+    )
     assert isinstance(seg, np.ndarray)
 
     v.layers["auto_segmentation"].data = seg
@@ -197,12 +181,13 @@ def annotator_2d(
     embedding_path: Optional[str] = None,
     show_embeddings: bool = False,
     segmentation_result: Optional[np.ndarray] = None,
-    model_type: str = "vit_h",
+    model_type: str = util._DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
     v: Optional[Viewer] = None,
     predictor: Optional[SamPredictor] = None,
+    precompute_amg_state: bool = False,
 ) -> Optional[Viewer]:
     """The 2d annotation tool.
 
@@ -225,6 +210,9 @@ def annotator_2d(
             This enables using a pre-initialized viewer, for example in `sam_annotator.image_series_annotator`.
         predictor: The Segment Anything model. Passing this enables using fully custom models.
             If you pass `predictor` then `model_type` will be ignored.
+        precompute_amg_state: Whether to precompute the state for automatic mask generation.
+            This will take more time when precomputing embeddings, but will then make
+            automatic mask generation much faster.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -237,10 +225,13 @@ def annotator_2d(
         PREDICTOR = util.get_sam_model(model_type=model_type)
     else:
         PREDICTOR = predictor
+
     IMAGE_EMBEDDINGS = util.precompute_image_embeddings(
         PREDICTOR, raw, save_path=embedding_path, ndim=2, tile_shape=tile_shape, halo=halo,
         wrong_file_callback=show_wrong_file_warning
     )
+    if precompute_amg_state and (embedding_path is not None):
+        AMG = cache_amg_state(PREDICTOR, raw, IMAGE_EMBEDDINGS, embedding_path)
 
     # we set the pre-computed image embeddings if we don't use tiling
     # (if we use tiling we cannot directly set it because the tile will be chosen dynamically)
@@ -268,6 +259,7 @@ def annotator_2d(
 def main():
     """@private"""
     parser = vutil._initialize_parser(description="Run interactive segmentation for an image.")
+    parser.add_argument("--precompute_amg_state", action="store_true")
     args = parser.parse_args()
     raw = util.load_image_data(args.input, key=args.key)
 
@@ -283,4 +275,5 @@ def main():
         raw, embedding_path=args.embedding_path,
         show_embeddings=args.show_embeddings, segmentation_result=segmentation_result,
         model_type=args.model_type, tile_shape=args.tile_shape, halo=args.halo,
+        precompute_amg_state=args.precompute_amg_state,
     )

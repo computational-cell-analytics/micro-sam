@@ -154,7 +154,7 @@ def _segment_slice_wigdet(v: Viewer) -> None:
 
 @magicgui(call_button="Segment Volume [V]", projection={"choices": ["default", "bounding_box", "mask", "points"]})
 def _segment_volume_widget(
-    v: Viewer, iou_threshold: float = 0.8, projection: str = "default", box_extension: float = 0.1
+    v: Viewer, iou_threshold: float = 0.8, projection: str = "default", box_extension: float = 0.05
 ) -> None:
     # step 1: segment all slices with prompts
     shape = v.layers["raw"].data.shape
@@ -192,7 +192,7 @@ def annotator_3d(
     embedding_path: Optional[str] = None,
     show_embeddings: bool = False,
     segmentation_result: Optional[np.ndarray] = None,
-    model_type: str = "vit_h",
+    model_type: str = util._DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,

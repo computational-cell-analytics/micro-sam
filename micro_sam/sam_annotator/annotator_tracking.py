@@ -1,4 +1,6 @@
+import json
 import warnings
+from pathlib import Path
 from typing import Optional, Tuple
 
 import napari
@@ -22,6 +24,9 @@ from .gui_utils import show_wrong_file_warning
 
 # Cyan (track) and Magenta (division)
 STATE_COLOR_CYCLE = ["#00FFFF", "#FF00FF", ]
+"""@private"""
+
+COMMITTED_LINEAGES = []
 """@private"""
 
 
@@ -336,6 +341,8 @@ def _reset_tracking_state():
 
 @magicgui(call_button="Commit [C]", layer={"choices": ["current_track"]})
 def _commit_tracking_widget(v: Viewer, layer: str = "current_track") -> None:
+    global COMMITTED_LINEAGES
+
     seg = v.layers[layer].data
 
     id_offset = int(v.layers["committed_tracks"].data.max())
@@ -348,6 +355,11 @@ def _commit_tracking_widget(v: Viewer, layer: str = "current_track") -> None:
     v.layers[layer].data = np.zeros(shape, dtype="uint32")
     v.layers[layer].refresh()
 
+    updated_lineage = {
+        parent + id_offset: [child + id_offset for child in children] for parent, children in LINEAGE.items()
+    }
+    COMMITTED_LINEAGES.append(updated_lineage)
+
     _reset_tracking_state()
     vutil.clear_annotations(v, clear_segmentations=False)
 
@@ -358,12 +370,19 @@ def _clear_widget_tracking(v: Viewer) -> None:
     vutil.clear_annotations(v)
 
 
+@magicgui(call_button="Save Lineage")
+def _save_lineage_widget(v: Viewer, path: Path) -> None:
+    path = path.with_suffix(".json")
+    with open(path, "w") as f:
+        json.dump(COMMITTED_LINEAGES, f)
+
+
 def annotator_tracking(
     raw: np.ndarray,
     embedding_path: Optional[str] = None,
     show_embeddings: bool = False,
     tracking_result: Optional[str] = None,
-    model_type: str = "vit_h",
+    model_type: str = util._DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
@@ -486,6 +505,7 @@ def annotator_tracking(
     v.window.add_dock_widget(_segment_frame_wigdet)
     v.window.add_dock_widget(_track_objet_widget)
     v.window.add_dock_widget(_commit_tracking_widget)
+    v.window.add_dock_widget(_save_lineage_widget)
     v.window.add_dock_widget(_clear_widget_tracking)
 
     #

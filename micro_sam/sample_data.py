@@ -11,7 +11,57 @@ import numpy as np
 import pooch
 
 
-def fetch_wholeslide_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
+def fetch_image_series_example_data(save_directory: Union[str, os.PathLike]) -> str:
+    """Download the sample images for the image series annotator.
+
+    Args:
+        save_directory: Root folder to save the downloaded data.
+    Returns:
+        The folder that contains the downloaded data.
+    """
+    # This sample dataset is currently not provided to napari by the micro-sam
+    # plugin, because images are not all the same shape and cannot be combined
+    # into a single layer
+    save_directory = Path(save_directory)
+    os.makedirs(save_directory, exist_ok=True)
+    print("Example data directory is:", save_directory.resolve())
+    fname = "image-series.zip"
+    unpack_filenames = [os.path.join("series", f"im{i}.tif") for i in range(3)]
+    unpack = pooch.Unzip(members=unpack_filenames)
+    pooch.retrieve(
+        url="https://owncloud.gwdg.de/index.php/s/M1zGnfkulWoAhUG/download",
+        known_hash="92346ca9770bcaf55248efee590718d54c7135b6ebca15d669f3b77b6afc8706",
+        fname=fname,
+        path=save_directory,
+        progressbar=True,
+        processor=unpack,
+    )
+    data_folder = os.path.join(save_directory, f"{fname}.unzip", "series")
+    assert os.path.exists(data_folder)
+    return data_folder
+
+
+def sample_data_image_series():
+    """Provides image series example image to napari.
+
+    Opens as three separate image layers in napari (one per image in series).
+    The third image in the series has a different size and modality.
+    """
+    # Return list of tuples
+    # [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]
+    # Check the documentation for more information about the
+    # add_image_kwargs
+    # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
+    default_base_data_dir = pooch.os_cache('micro-sam')
+    data_directory = fetch_image_series_example_data(default_base_data_dir)
+    fnames = os.listdir(data_directory)
+    full_filenames = [os.path.join(data_directory, f) for f in fnames]
+    full_filenames.sort()
+    data_and_image_kwargs = [(imageio.imread(f), {"name": f"img-{i}"}) for i, f in enumerate(full_filenames)]
+    return data_and_image_kwargs
+
+
+def fetch_wholeslide_example_data(save_directory: Union[str, os.PathLike]) -> str:
     """Download the sample data for the 2d annotator.
 
     This downloads part of a whole-slide image from the NeurIPS Cell Segmentation Challenge.
@@ -219,4 +269,50 @@ def sample_data_tracking():
     full_filenames.sort()
     data = np.stack([imageio.imread(f) for f in full_filenames], axis=0)
     add_image_kwargs = {"name": "tracking"}
+    return [(data, add_image_kwargs)]
+
+
+def fetch_tracking_segmentation_data(save_directory: Union[str, os.PathLike]) -> str:
+    """Download groundtruth segmentation for the tracking example data.
+
+    This downloads the groundtruth segmentation for the image data from `fetch_tracking_example_data`.
+
+    Args:
+        save_directory: Root folder to save the downloaded data.
+    Returns:
+        The folder that contains the downloaded data.
+    """
+    save_directory = Path(save_directory)
+    os.makedirs(save_directory, exist_ok=True)
+    print("Example data directory is:", save_directory.resolve())
+    unpack_filenames = [os.path.join("masks", f"mask_{str(i).zfill(4)}.tif") for i in range(84)]
+    unpack = pooch.Unzip(members=unpack_filenames)
+    fname = "hela-ctc-01-gt.zip"
+    pooch.retrieve(
+        url="https://owncloud.gwdg.de/index.php/s/AWxQMblxwR99OjC/download",
+        known_hash="c0644d8ebe1390fb60125560ba15aa2342caf44f50ff0667a0318ea0ac6c958b",
+        fname=fname,
+        path=save_directory,
+        progressbar=True,
+        processor=unpack,
+    )
+    cell_tracking_dir = save_directory.joinpath(f"{fname}.unzip", "masks")
+    assert os.path.exists(cell_tracking_dir)
+    return str(cell_tracking_dir)
+
+
+def sample_data_segmentation():
+    """Provides segmentation example dataset to napari."""
+    # Return list of tuples
+    # [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]
+    # Check the documentation for more information about the
+    # add_image_kwargs
+    # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
+    default_base_data_dir = pooch.os_cache("micro-sam")
+    data_directory = fetch_tracking_segmentation_data(default_base_data_dir)
+    fnames = os.listdir(data_directory)
+    full_filenames = [os.path.join(data_directory, f) for f in fnames]
+    full_filenames.sort()
+    data = np.stack([imageio.imread(f) for f in full_filenames], axis=0)
+    add_image_kwargs = {"name": "segmentation"}
     return [(data, add_image_kwargs)]

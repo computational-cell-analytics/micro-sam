@@ -5,24 +5,25 @@ The python library can be imported via
 import micro_sam
 ```
 
-It implements functionality for running Segment Anything for 2d and 3d data, provides more instance segmentation functionality and several other helpful functions for using Segment Anything.
-This functionality is used to implement the `micro_sam` annotation tools, but you can also use it as a standalone python library. Check out the documentation under `Submodules` for more details on the python library.
+The library
+- implements function to apply Segment Anything to 2d and 3d data more conviently in `micro_sam.prompt_based_segmentation`.
+- provides more and imporoved automatic instance segmentation functionality in `micro_sam.instance_segmentation`.
+- implements training functionality that can be used for finetuning on your own data in `micro_sam.training`.
+- provides functionality for quantitative and qualitative evaluation of Segment Anything models in `micro_sam.evaluation`.
 
-## Finetuned models
+This functionality is used to implement the interactive annotation tools and can also be used as a standalone python library.
+Some preliminary examples for how to use the python library can be found [here](https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/use_as_library). Check out the `Submodules` documentation for more details.
 
-We provide finetuned Segment Anything models for microscopy data. They are still in an experimental stage and we will upload more and better models soon, as well as the code for fine-tuning.
-For using the preliminary models, check out the [2d annotator example](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py#L62) and set `use_finetuned_model` to `True`.
+## Training your own model
 
-We currently provide support for the following models:
-- `vit_h`: The default Segment Anything model with vit-h backbone.
-- `vit_l`: The default Segment Anything model with vit-l backbone.
-- `vit_b`: The default Segment Anything model with vit-b backbone.
-- `vit_h_lm`: The preliminary finetuned Segment Anything model for light microscopy data with vit-h backbone.
-- `vit_b_lm`: The preliminary finetuned Segment Anything model for light microscopy data with vit-b backbone.
+We reimplement the training logic described in the [Segment Anything publication](https://arxiv.org/abs/2304.02643) to enable finetuning on custom data.
+We use this functionality to provide the [finetuned microscopy models](#finetuned-models) and it can also be used to finetune models on your own data.
+In fact the best results can be expected when finetuning on your own data, and we found that it does not require much annotated training data to get siginficant improvements in model performance.
+So a good strategy is to annotate a few images with one of the provided models using one of the interactive annotation tools and, if the annotation is not working as good as expected yet, finetune on the annotated data.
+<!--
+TODO: provide link to the paper with results on how much data is needed
+-->
 
-These are also the valid names for the `model_type` parameter in `micro_sam`. The library will automatically choose and if necessary download the corresponding model.
+The training logic is implemented in `micro_sam.training` and is based on [torch-em](https://github.com/constantinpape/torch-em). Please check out [examples/finetuning](https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/finetuning) to see how you can finetune on your own data with it. The script `finetune_hela.py` contains an example for finetuning on a small custom microscopy dataset and `use_finetuned_model.py` shows how this model can then be used in the interactive annotatin tools.
 
-See the difference between the normal and finetuned Segment Anything ViT-h model on an image from [LiveCELL](https://sartorius-research.github.io/LIVECell/):
-
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/vanilla-v-finetuned.png" width="768">
-
+More advanced examples, including quantitative and qualitative evaluation, of finetuned models can be found in [finetuning](https://github.com/computational-cell-analytics/micro-sam/tree/master/finetuning), which contains the code for training and evaluating our microscopy models.

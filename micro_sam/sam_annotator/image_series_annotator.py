@@ -1,33 +1,19 @@
 import os
 import warnings
+
 from glob import glob
+from pathlib import Path
 from typing import List, Optional, Union
 
 import imageio.v3 as imageio
 import napari
 
 from magicgui import magicgui
-from napari.utils import progress as tqdm
 from segment_anything import SamPredictor
 
-from .annotator_2d import annotator_2d
 from .. import util
-
-
-def _precompute_embeddings_for_image_series(predictor, image_files, embedding_root, tile_shape, halo):
-    os.makedirs(embedding_root, exist_ok=True)
-    embedding_paths = []
-    for image_file in tqdm(image_files, desc="Precompute embeddings"):
-        fname = os.path.basename(image_file)
-        fname = os.path.splitext(fname)[0] + ".zarr"
-        embedding_path = os.path.join(embedding_root, fname)
-        image = imageio.imread(image_file)
-        util.precompute_image_embeddings(
-            predictor, image, save_path=embedding_path, ndim=2,
-            tile_shape=tile_shape, halo=halo
-        )
-        embedding_paths.append(embedding_path)
-    return embedding_paths
+from ..precompute_state import _precompute_state_for_files
+from .annotator_2d import annotator_2d
 
 
 def image_series_annotator(
@@ -47,6 +33,7 @@ def image_series_annotator(
         embedding_path: Filepath where to save the embeddings.
         predictor: The Segment Anything model. Passing this enables using fully custom models.
             If you pass `predictor` then `model_type` will be ignored.
+        kwargs: The keywored arguments for `micro_sam.sam_annotator.annotator_2d`.
     """
     # make sure we don't set incompatible kwargs
     assert kwargs.get("show_embeddings", False) is False
@@ -58,13 +45,20 @@ def image_series_annotator(
     next_image_id = 0
 
     if predictor is None:
-        predictor = util.get_sam_model(model_type=kwargs.get("model_type", "vit_h"))
+        predictor = util.get_sam_model(model_type=kwargs.get("model_type", util._DEFAULT_MODEL))
     if embedding_path is None:
         embedding_paths = None
     else:
-        embedding_paths = _precompute_embeddings_for_image_series(
-            predictor, image_files, embedding_path, kwargs.get("tile_shape", None), kwargs.get("halo", None)
+        _precompute_state_for_files(
+            predictor, image_files, embedding_path, ndim=2,
+            tile_shape=kwargs.get("tile_shape", None),
+            halo=kwargs.get("halo", None),
+            precompute_amg_state=kwargs.get("precompute_amg_state", False),
         )
+        embedding_paths = [
+            os.path.join(embedding_path, f"{Path(path).stem}.zarr") for path in image_files
+        ]
+        assert all(os.path.exists(emb_path) for emb_path in embedding_paths)
 
     def _save_segmentation(image_path, segmentation):
         fname = os.path.basename(image_path)
@@ -127,6 +121,7 @@ def image_folder_annotator(
         embedding_path: Filepath where to save the embeddings.
         predictor: The Segment Anything model. Passing this enables using fully custom models.
             If you pass `predictor` then `model_type` will be ignored.
+        kwargs: The keywored arguments for `micro_sam.sam_annotator.annotator_2d`.
     """
     image_files = sorted(glob(os.path.join(input_folder, pattern)))
     image_series_annotator(image_files, output_folder, embedding_path, predictor, **kwargs)
@@ -135,6 +130,9 @@ def image_folder_annotator(
 def main():
     """@private"""
     import argparse
+
+    available_models = list(util.get_model_names())
+    available_models = ", ".join(available_models)
 
     parser = argparse.ArgumentParser(description="Annotate a series of images from a folder.")
     parser.add_argument(
@@ -157,7 +155,8 @@ def main():
         "otherwise they will be recomputed every time (which can take a long time)."
     )
     parser.add_argument(
-        "--model_type", default="vit_h", help="The segment anything model that will be used, one of vit_h,l,b."
+        "--model_type", default=util._DEFAULT_MODEL,
+        help=f"The segment anything model that will be used, one of {available_models}."
     )
     parser.add_argument(
         "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
@@ -165,6 +164,7 @@ def main():
     parser.add_argument(
         "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
     )
+    parser.add_argument("--precompute_amg_state", action="store_true")
 
     args = parser.parse_args()
 
@@ -175,4 +175,5 @@ def main():
         args.input_folder, args.output_folder, args.pattern,
         embedding_path=args.embedding_path, model_type=args.model_type,
         tile_shape=args.tile_shape, halo=args.halo,
+        precompute_amg_state=args.precompute_amg_state,
     )

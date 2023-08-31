@@ -16,31 +16,26 @@ We implement napari applications for:
 <img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/dfca3d9b-dba5-440b-b0f9-72a0683ac410" width="256">
 <img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/aefbf99f-e73a-4125-bb49-2e6592367a64" width="256">
 
-**Beta version**
-
-This is an advanced beta version. While many features are still under development, we aim to keep the user interface and python library stable.
-Any feedback is welcome, but please be aware that the functionality is under active development and that some features may not be thoroughly tested yet.
-We will soon provide a stand-alone application for running the `micro_sam` annotation tools, and plan to also release it as [napari plugin](https://napari.org/stable/plugins/index.html) in the future.
-
-If you run into any problems or have questions please open an issue on Github or reach out via [image.sc](https://forum.image.sc/) using the tag `micro-sam` and tagging @constantinpape.
+If you run into any problems or have questions regarding our tool please open an issue on Github or reach out via [image.sc](https://forum.image.sc/) using the tag `micro-sam` and tagging @constantinpape.
 
 
 ## Installation and Usage
 
 You can install `micro_sam` via conda:
 ```
-conda install -c conda-forge micro_sam
+conda install -c conda-forge micro_sam napari pyqt
 ```
 You can then start the `micro_sam` tools by running `$ micro_sam.annotator` in the command line.
 
+For an introduction in how to use the napari based annotation tools check out [the video tutorials](https://www.youtube.com/watch?v=ket7bDUP9tI&list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO&pp=gAQBiAQB).
 Please check out [the documentation](https://computational-cell-analytics.github.io/micro-sam/) for more details on the installation and usage of `micro_sam`.
 
 
 ## Citation
 
 If you are using this repository in your research please cite
-- [SegmentAnything](https://arxiv.org/abs/2304.02643)
-- and our repository on [zenodo](https://doi.org/10.5281/zenodo.7919746) (we are working on a publication)
+- Our [preprint](https://doi.org/10.1101/2023.08.21.554208)
+- and the original [Segment Anything publication](https://arxiv.org/abs/2304.02643)
 
 
 ## Related Projects
@@ -55,6 +50,17 @@ Compared to these we support more applications (2d, 3d and tracking), and provid
 
 
 ## Release Overview
+
+**New in version 0.2.1 and 0.2.2**
+
+- Several bugfixes for the newly introduced functionality in 0.2.0.
+
+**New in version 0.2.0**
+
+- Functionality for training / finetuning and evaluation of Segment Anything Models
+- Full support for our finetuned segment anything models
+- Improvements of the automated instance segmentation functionality in the 2d annotator
+- And several other small improvements
 
 **New in version 0.1.1**
 

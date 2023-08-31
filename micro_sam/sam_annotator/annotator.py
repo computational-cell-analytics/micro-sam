@@ -9,7 +9,7 @@ from magicgui.widgets import Container, Label, LineEdit, SpinBox, ComboBox
 from magicgui.application import use_app
 from PyQt5.QtWidgets import QFileDialog, QMessageBox
 
-from ..util import load_image_data, get_model_names
+from ..util import load_image_data, get_model_names, _DEFAULT_MODEL
 from .annotator_2d import annotator_2d
 from .annotator_3d import annotator_3d
 from .image_series_annotator import image_folder_annotator
@@ -64,7 +64,7 @@ def _on_2d():
     re_halo_y = SpinBox(value=0, max=10000, label="Halo y")
     re_tile_x = SpinBox(value=0, max=10000, label="Tile x")
     re_tile_y = SpinBox(value=0, max=10000, label="Tile y")
-    cb_model = ComboBox(value="vit_h_lm", choices=get_model_names(), label="Model Type")
+    cb_model = ComboBox(value=_DEFAULT_MODEL, choices=get_model_names(), label="Model Type")
 
     @magicgui.magicgui(call_button="Select image", labels=False)
     def on_select_image():
@@ -156,7 +156,7 @@ def _on_3d():
     re_halo_y = SpinBox(value=0, max=10000, label="Halo y")
     re_tile_x = SpinBox(value=0, max=10000, label="Tile x")
     re_tile_y = SpinBox(value=0, max=10000, label="Tile y")
-    cb_model = ComboBox(value="vit_h_lm", choices=get_model_names(), label="Model Type")
+    cb_model = ComboBox(value=_DEFAULT_MODEL, choices=get_model_names(), label="Model Type")
 
     @magicgui.magicgui(call_button="Select images", labels=False)
     def on_select_image():
@@ -271,7 +271,7 @@ def _on_series():
     re_halo_y = SpinBox(value=0, max=10000, label="Halo y")
     re_tile_x = SpinBox(value=0, max=10000, label="Tile x")
     re_tile_y = SpinBox(value=0, max=10000, label="Tile y")
-    cb_model = ComboBox(value="vit_h_lm", choices=get_model_names(), label="Model Type")
+    cb_model = ComboBox(value=_DEFAULT_MODEL, choices=get_model_names(), label="Model Type")
 
     @magicgui.magicgui(call_button="Select input directory", labels=False)
     def on_select_input_dir():
@@ -364,7 +364,7 @@ def _on_tracking():
     re_halo_y = SpinBox(value=0, max=10000, label="Halo y")
     re_tile_x = SpinBox(value=0, max=10000, label="Tile x")
     re_tile_y = SpinBox(value=0, max=10000, label="Tile y")
-    cb_model = ComboBox(value="vit_h_lm", choices=get_model_names(), label="Model Type")
+    cb_model = ComboBox(value=_DEFAULT_MODEL, choices=get_model_names(), label="Model Type")
 
     @magicgui.magicgui(call_button="Select images", labels=False)
     def on_select_image():

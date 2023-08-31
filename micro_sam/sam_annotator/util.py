@@ -1,4 +1,6 @@
 import argparse
+import os
+import pickle
 from typing import Optional, Tuple
 
 import napari
@@ -7,6 +9,7 @@ import numpy as np
 from magicgui import magicgui
 from magicgui.widgets import ComboBox, Container
 
+from .. import instance_segmentation, util
 from ..prompt_based_segmentation import segment_from_box, segment_from_box_and_points, segment_from_points
 
 # Green and Red
@@ -362,6 +365,10 @@ def toggle_label(prompts):
 
 
 def _initialize_parser(description, with_segmentation_result=True, with_show_embeddings=True):
+
+    available_models = list(util.get_model_names())
+    available_models = ", ".join(available_models)
+
     parser = argparse.ArgumentParser(description=description)
 
     parser.add_argument(
@@ -401,7 +408,8 @@ def _initialize_parser(description, with_segmentation_result=True, with_show_emb
             help="Visualize the embeddings computed by SegmentAnything. This can be helpful for debugging."
         )
     parser.add_argument(
-        "--model_type", default="vit_h", help="The segment anything model that will be used, one of vit_h,l,b."
+        "--model_type", default=util._DEFAULT_MODEL,
+        help=f"The segment anything model that will be used, one of {available_models}."
     )
     parser.add_argument(
         "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None

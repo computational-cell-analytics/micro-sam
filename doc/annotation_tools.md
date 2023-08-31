@@ -13,9 +13,22 @@ The annotation tools can be started from the `micro_sam` GUI, the command line o
 $ micro_sam.annotator
 ```
 
-They are built with [napari](https://napari.org/stable/) to implement the viewer and user interaction.
+They are built using [napari](https://napari.org/stable/) and [magicgui](https://pyapp-kit.github.io/magicgui/) to provide the viewer and user interface.
 If you are not familiar with napari yet, [start here](https://napari.org/stable/tutorials/fundamentals/quick_start.html).
-The `micro_sam` applications are mainly based on [the point layer](https://napari.org/stable/howtos/layers/points.html), [the shape layer](https://napari.org/stable/howtos/layers/shapes.html) and [the label layer](https://napari.org/stable/howtos/layers/labels.html).
+The `micro_sam` tools use [the point layer](https://napari.org/stable/howtos/layers/points.html), [shape layer](https://napari.org/stable/howtos/layers/shapes.html) and [label layer](https://napari.org/stable/howtos/layers/labels.html).
+
+The annotation tools are explained in detail below. In addition to the documentation here we also provide [video tutorials](https://www.youtube.com/watch?v=ket7bDUP9tI&list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO).
+
+
+## Starting via GUI
+
+The annotation toools can be started from a central GUI, which can be started with the command `$ micro_sam.annotator` or using the executable [from an installer](#from-installer).
+
+In the GUI you can select with of the four annotation tools you want to use:
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/micro-sam-gui.png">
+
+And after selecting them a new window will open where you can select the input file path and other optional parameter. Then click the top button to start the tool. **Note: If you are not starting the annotation tool with a path to pre-computed embeddings then it can take several minutes to open napari after pressing the button because the embeddings are being computed.**
+
 
 ## Annotator 2D
 
@@ -44,7 +57,7 @@ It contains the following elements:
 
 Note that point prompts and box prompts can be combined. When you're using point prompts you can only segment one object at a time. With box prompts you can segment several objects at once.
 
-Check out [this video](https://youtu.be/DfWE_XRcqN8) for an example of how to use the interactive 2d annotator.
+Check out [this video](https://youtu.be/ket7bDUP9tI) for a tutorial for the 2d annotation tool.
 
 We also provide the `image series annotator`, which can be used for running the 2d annotator for several images in a folder. You can start by clicking `Image series annotator` in the GUI, running `micro_sam.image_series_annotator` in the command line or from a [python script](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/image_series_annotator.py).
 
@@ -69,7 +82,7 @@ Most elements are the same as in [the 2d annotator](#annotator-2d):
 
 Note that you can only segment one object at a time with the 3d annotator.
 
-Check out [this video](https://youtu.be/5Jo_CtIefTM) for an overview of the interactive 3d segmentation functionality.
+Check out [this video](https://youtu.be/PEy9-rTCdS4) for a tutorial for the 3d annotation tool.
 
 ## Annotator Tracking
 
@@ -93,7 +106,7 @@ Most elements are the same as in [the 2d annotator](#annotator-2d):
 
 Note that the tracking annotator only supports 2d image data, volumetric data is not supported.
 
-Check out [this video](https://youtu.be/PBPW0rDOn9w) for an overview of the interactive tracking functionality.
+Check out [this video](https://youtu.be/Xi5pRWMO6_w) for a tutorial for how to use the tracking annotation tool.
 
 ## Tips & Tricks
 
@@ -105,7 +118,7 @@ You can activate tiling by passing the parameters `tile_shape`, which determines
     - If you're using the command line functions you can pass them via the options `--tile_shape 1024 1024 --halo 128 128`
     - Note that prediction with tiling only works when the embeddings are cached to file, so you must specify an `embedding_path` (`-e` in the CLI).
     - You should choose the `halo` such that it is larger than half of the maximal radius of the objects your segmenting.
-- The applications pre-compute the image embeddings produced by SegmentAnything and (optionally) store them on disc. If you are using a CPU this step can take a while for 3d data or timeseries (you will see a progress bar with a time estimate). If you have access to a GPU without graphical interface (e.g. via a local computer cluster or a cloud provider), you can also pre-compute the embeddings there and then copy them to your laptop / local machine to speed this up. You can use the command `micro_sam.precompute_embeddings` for this (it is installed with the rest of the applications). You can specify the location of the precomputed embeddings via the `embedding_path` argument.
+- The applications pre-compute the image embeddings produced by SegmentAnything and (optionally) store them on disc. If you are using a CPU this step can take a while for 3d data or timeseries (you will see a progress bar with a time estimate). If you have access to a GPU without graphical interface (e.g. via a local computer cluster or a cloud provider), you can also pre-compute the embeddings there and then copy them to your laptop / local machine to speed this up. You can use the command `micro_sam.precompute_state` for this (it is installed with the rest of the applications). You can specify the location of the precomputed embeddings via the `embedding_path` argument.
 - Most other processing steps are very fast even on a CPU, so interactive annotation is possible. An exception is the automatic segmentation step (2d segmentation), which takes several minutes without a GPU (depending on the image size). For large volumes and timeseries segmenting an object in 3d / tracking across time can take a couple settings with a CPU (it is very fast with a GPU).
 - You can also try using a smaller version of the SegmentAnything model to speed up the computations. For this you can pass the `model_type` argument and either set it to `vit_b` or to `vit_l` (default is `vit_h`). However, this may lead to worse results.
 - You can save and load the results from the `committed_objects` / `committed_tracks` layer to correct segmentations you obtained from another tool (e.g. CellPose) or to save intermediate annotation results. The results can be saved via `File -> Save Selected Layer(s) ...` in the napari menu (see the tutorial videos for details). They can be loaded again by specifying the corresponding location via the `segmentation_result` (2d and 3d segmentation) or `tracking_result` (tracking) argument.

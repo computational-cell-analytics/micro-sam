@@ -2,7 +2,7 @@
 
 Segment Anything for Microscopy implements automatic and interactive annotation for microscopy data. It is built on top of [Segment Anything](https://segment-anything.com/) by Meta AI and specializes it for microscopy and other bio-imaging data.
 Its core components are:
-- The `micro_sam` annotator tools for interactive data annotation with [napari](https://napari.org/stable/).
+- The `micro_sam` tools for interactive data annotation with [napari](https://napari.org/stable/).
 - The `micro_sam` library to apply Segment Anything to 2d and 3d data or fine-tune it on your data.
 - The `micro_sam` models that are fine-tuned on publicly available microscopy data.
 
@@ -19,20 +19,18 @@ On our roadmap for more functionality are:
 
 If you run into any problems or have questions please open an issue on Github or reach out via [image.sc](https://forum.image.sc/) using the tag `micro-sam` and tagging @constantinpape.
 
-<!----
-Better instance segmentation, Few-shot adapation (using LORA, QLORA, etc.)
----->
 
 ## Quickstart
 
 You can install `micro_sam` via conda:
 ```
-$ conda install -c conda-forge micro_sam
+$ conda install -c conda-forge micro_sam napari pyqt
 ```
-For more installation options check out [Installation](#installation)
+We also provide experimental installers for all operating systems.
+For more details on the available installation options check out [the installation section](#installation).
 
 After installing `micro_sam` you can run the annotation tool via `$ micro_sam.annotator`, which opens a menu for selecting the annotation tool and its inputs.
-See [Annotation Tools](#annotation-tools) for an overview and explanation of the annotation functionality.
+See [the annotation tool section](#annotation-tools) for an overview and explanation of the annotation functionality.
 
 The `micro_sam` python library can be used via
 ```python
@@ -47,7 +45,5 @@ For now, check out [the example script for the 2d annotator](https://github.com/
 ## Citation
 
 If you are using `micro_sam` in your research please cite
-- [SegmentAnything](https://arxiv.org/abs/2304.02643)
-- and our repository on [zenodo](https://doi.org/10.5281/zenodo.7919746)
-
-We will release a preprint soon that describes this work and can be cited instead of zenodo.
+- Our [preprint](https://doi.org/10.1101/2023.08.21.554208)
+- and the original [Segment Anything publication](https://arxiv.org/abs/2304.02643)

@@ -47,36 +47,26 @@ def show_wrong_file_warning(file_path: Union[str, os.PathLike]) -> Union[str, os
 
     @magicgui.magicgui(call_button="Create new file", labels=False)
     def _create():
-        msg_box.close()
         # unfortunately there exists no dialog to create a directory so we have
         # to use "create new file" dialog with some adjustments.
         dialog = QtWidgets.QFileDialog(None)
         dialog.setFileMode(QtWidgets.QFileDialog.AnyFile)
         dialog.setOption(QtWidgets.QFileDialog.ShowDirsOnly)
         dialog.setNameFilter("Archives (*.zarr)")
-        try_cnt = 0
-        while os.path.splitext(new_path["value"])[1] != ".zarr":
-            if try_cnt > 3:
-                new_path["value"] = file_path
-                return
-            dialog.exec_()
-            res = dialog.selectedFiles()
-            new_path["value"] = res[0] if len(res) > 0 else ""
-            try_cnt += 1
+        dialog.exec_()
+        res = dialog.selectedFiles()
+        new_path["value"] = res[0] if len(res) > 0 else ""
+        if os.path.splitext(new_path["value"])[1] != ".zarr":
+            new_path["value"] += ".zarr"
         os.makedirs(new_path["value"])
+        msg_box.close()
 
     @magicgui.magicgui(call_button="Select different file", labels=False)
     def _select():
+        new_path["value"] = QtWidgets.QFileDialog.getExistingDirectory(
+            None, "Open a folder", os.path.split(file_path)[0], QtWidgets.QFileDialog.ShowDirsOnly
+        )
         msg_box.close()
-        try_cnt = 0
-        while not os.path.exists(new_path["value"]):
-            if try_cnt > 3:
-                new_path["value"] = file_path
-                return
-            new_path["value"] = QtWidgets.QFileDialog.getExistingDirectory(
-                None, "Open a folder", os.path.split(file_path)[0], QtWidgets.QFileDialog.ShowDirsOnly
-            )
-            try_cnt += 1
 
     msg_box = Container(widgets=[_select, _ignore, _overwrite, _create], layout='horizontal', labels=False)
     msg_box.root_native_widget.setWindowTitle("The input data does not match the embeddings file")

@@ -11,6 +11,7 @@ dependencies:
     - pytorch
     - segment-anything
     - torchvision
+    - torch_em >=0.5.1
     - tqdm
     # - pip:
     #     - git+https://github.com/facebookresearch/segment-anything.git
