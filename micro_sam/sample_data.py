@@ -100,7 +100,7 @@ def sample_data_wholeslide():
     return [(data, add_image_kwargs)]
 
 
-def fetch_livecell_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
+def fetch_livecell_example_data(save_directory: Union[str, os.PathLike]) -> str:
     """Download the sample data for the 2d annotator.
 
     This downloads a single image from the LiveCELL dataset.
@@ -176,7 +176,7 @@ def sample_data_hela_2d():
     return [(data, add_image_kwargs)]
 
 
-def fetch_3d_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
+def fetch_3d_example_data(save_directory: Union[str, os.PathLike]) -> str:
     """Download the sample data for the 3d annotator.
 
     This downloads the Lucchi++ datasets from https://casser.io/connectomics/.
@@ -222,7 +222,7 @@ def sample_data_3d():
     return [(data, add_image_kwargs)]
 
 
-def fetch_tracking_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
+def fetch_tracking_example_data(save_directory: Union[str, os.PathLike]) -> str:
     """Download the sample data for the tracking annotator.
 
     This data is the cell tracking challenge dataset DIC-C2DH-HeLa.
