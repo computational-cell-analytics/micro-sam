@@ -2,9 +2,6 @@ name: micro-sam
 display_name: SegmentAnything for Microscopy
 contributions:
   commands:
-    - id: micro-sam.sample_data_image_series
-      python_name: micro_sam.sample_data:sample_data_image_series
-      title: Load image series sample data from micro-sam plugin
     - id: micro-sam.sample_data_wholeslide
       python_name: micro_sam.sample_data:sample_data_wholeslide
       title: Load WholeSlide sample data from micro-sam plugin
@@ -21,9 +18,6 @@ contributions:
       python_name: micro_sam.sample_data:sample_data_tracking
       title: Load tracking sample data from micro-sam plugin
   sample_data:
-    - command: micro-sam.sample_data_image_series
-      display_name: image series
-      key: micro-sam-image-series
     - command: micro-sam.sample_data_wholeslide
       display_name: WholeSlide example data
       key: micro-sam-wholeslide

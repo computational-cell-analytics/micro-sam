@@ -11,51 +11,6 @@ import numpy as np
 import pooch
 
 
-def fetch_image_series_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
-    """Download the sample images for the image series annotator.
-
-    Args:
-        save_directory: Root folder to save the downloaded data.
-    Returns:
-        The folder that contains the downloaded data.
-    """
-    save_directory = Path(save_directory)
-    os.makedirs(save_directory, exist_ok=True)
-    print("Example data directory is:", save_directory.resolve())
-    fname = "image-series.zip"
-    # use first two files for image series (thrid file is not the same shape)
-    unpack_filenames = [os.path.join("series", f"im{i}.tif") for i in range(2)]
-    unpack = pooch.Unzip(members=unpack_filenames)
-    pooch.retrieve(
-        url="https://owncloud.gwdg.de/index.php/s/M1zGnfkulWoAhUG/download",
-        known_hash="92346ca9770bcaf55248efee590718d54c7135b6ebca15d669f3b77b6afc8706",
-        fname=fname,
-        path=save_directory,
-        progressbar=True,
-        processor=unpack,
-    )
-    data_folder = os.path.join(save_directory, f"{fname}.unzip", "series")
-    assert os.path.exists(data_folder)
-    return data_folder
-
-
-def sample_data_image_series():
-    """Provides 2d image series example data to napari."""
-    # Return list of tuples
-    # [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]
-    # Check the documentation for more information about the
-    # add_image_kwargs
-    # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    default_base_data_dir = pooch.os_cache('micro-sam')
-    data_directory = fetch_image_series_example_data(default_base_data_dir)
-    fnames = os.listdir(data_directory)
-    full_filenames = [os.path.join(data_directory, f) for f in fnames]
-    full_filenames.sort()
-    data = np.stack([imageio.imread(f) for f in full_filenames], axis=0)
-    add_image_kwargs = {"name": "image-series"}
-    return [(data, add_image_kwargs)]
-
-
 def fetch_wholeslide_example_data(save_directory: Union[str, os.PathLike]) -> Union[str, os.PathLike]:
     """Download the sample data for the 2d annotator.
 
