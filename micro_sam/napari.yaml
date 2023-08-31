@@ -1,0 +1,47 @@
+name: micro-sam
+display_name: SegmentAnything for Microscopy
+contributions:
+  commands:
+    - id: micro-sam.sample_data_image_series
+      python_name: micro_sam.sample_data:sample_data_image_series
+      title: Load image series sample data from micro-sam plugin
+    - id: micro-sam.sample_data_wholeslide
+      python_name: micro_sam.sample_data:sample_data_wholeslide
+      title: Load WholeSlide sample data from micro-sam plugin
+    - id: micro-sam.sample_data_livecell
+      python_name: micro_sam.sample_data:sample_data_livecell
+      title: Load LiveCell sample data from micro-sam plugin
+    - id: micro-sam.sample_data_hela_2d
+      python_name: micro_sam.sample_data:sample_data_hela_2d
+      title: Load 2D Hela sample data from micro-sam plugin
+    - id: micro-sam.sample_data_3d
+      python_name: micro_sam.sample_data:sample_data_3d
+      title: Load Lucchi++ 3D sample data from micro-sam plugin
+    - id: micro-sam.sample_data_tracking
+      python_name: micro_sam.sample_data:sample_data_tracking
+      title: Load tracking sample data from micro-sam plugin
+    - id: micro-sam.sample_data_segmentation
+      python_name: micro_sam.sample_data:sample_data_segmentation
+      title: Load segmentation sample data from micro-sam plugin
+  sample_data:
+    - command: micro-sam.sample_data_image_series
+      display_name: Image series example data
+      key: micro-sam-image-series
+    - command: micro-sam.sample_data_wholeslide
+      display_name: WholeSlide example data
+      key: micro-sam-wholeslide
+    - command: micro-sam.sample_data_livecell
+      display_name: LiveCell example data
+      key: micro-sam-livecell
+    - command: micro-sam.sample_data_hela_2d
+      display_name: HeLa 2d example data
+      key: micro-sam-hela2d
+    - command: micro-sam.sample_data_3d
+      display_name: Lucchi++ 3d dataset
+      key: micro-sam-lucchi
+    - command: micro-sam.sample_data_tracking
+      display_name: Tracking sample dataset
+      key: micro-sam-tracking
+    - command: micro-sam.sample_data_segmentation
+      display_name: Segmentation sample dataset
+      key: micro-sam-segmentation
