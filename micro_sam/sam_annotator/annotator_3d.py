@@ -1,4 +1,8 @@
+import os
+import pickle
 import warnings
+from glob import glob
+from pathlib import Path
 from typing import Optional, Tuple
 
 import napari
@@ -9,114 +13,11 @@ from napari import Viewer
 from napari.utils import progress
 from segment_anything import SamPredictor
 
-from .. import util
-from ..prompt_based_segmentation import segment_from_mask
+from .. import instance_segmentation, util
+from ..multi_dimensional_segmentation import segment_mask_in_volume
 from ..visualization import project_embeddings_for_visualization
 from . import util as vutil
 from .gui_utils import show_wrong_file_warning
-
-
-#
-# utility functionality
-# (some of this should be refactored to util.py)
-#
-
-
-# TODO refactor
-def _segment_volume(
-    seg, predictor, image_embeddings, segmented_slices,
-    stop_lower, stop_upper, iou_threshold, projection,
-    progress_bar=None, box_extension=0,
-):
-    assert projection in ("mask", "bounding_box", "points")
-    if projection == "mask":
-        use_box, use_mask, use_points = True, True, False
-    elif projection == "points":
-        use_box, use_mask, use_points = True, True, True
-    else:
-        use_box, use_mask, use_points = True, False, False
-
-    def _update_progress():
-        if progress_bar is not None:
-            progress_bar.update(1)
-
-    # TODO refactor to utils so that it can be used by other plugins
-    def segment_range(z_start, z_stop, increment, stopping_criterion, threshold=None, verbose=False):
-        z = z_start + increment
-        while True:
-            if verbose:
-                print(f"Segment {z_start} to {z_stop}: segmenting slice {z}")
-            seg_prev = seg[z - increment]
-            seg_z = segment_from_mask(predictor, seg_prev, image_embeddings=image_embeddings, i=z,
-                                      use_mask=use_mask, use_box=use_box, use_points=use_points,
-                                      box_extension=box_extension)
-            if threshold is not None:
-                iou = util.compute_iou(seg_prev, seg_z)
-                if iou < threshold:
-                    msg = f"Segmentation stopped at slice {z} due to IOU {iou} < {iou_threshold}."
-                    print(msg)
-                    break
-            seg[z] = seg_z
-            z += increment
-            if stopping_criterion(z, z_stop):
-                if verbose:
-                    print(f"Segment {z_start} to {z_stop}: stop at slice {z}")
-                break
-            _update_progress()
-
-    z0, z1 = int(segmented_slices.min()), int(segmented_slices.max())
-
-    # segment below the min slice
-    if z0 > 0 and not stop_lower:
-        segment_range(z0, 0, -1, np.less, iou_threshold)
-
-    # segment above the max slice
-    if z1 < seg.shape[0] - 1 and not stop_upper:
-        segment_range(z1, seg.shape[0] - 1, 1, np.greater, iou_threshold)
-
-    verbose = False
-    # segment in between min and max slice
-    if z0 != z1:
-        for z_start, z_stop in zip(segmented_slices[:-1], segmented_slices[1:]):
-            slice_diff = z_stop - z_start
-            z_mid = int((z_start + z_stop) // 2)
-
-            if slice_diff == 1:  # the slices are adjacent -> we don't need to do anything
-                pass
-
-            elif z_start == z0 and stop_lower:  # the lower slice is stop: we just segment from upper
-                segment_range(z_stop, z_start, -1, np.less_equal, verbose=verbose)
-
-            elif z_stop == z1 and stop_upper:  # the upper slice is stop: we just segment from lower
-                segment_range(z_start, z_stop, 1, np.greater_equal, verbose=verbose)
-
-            elif slice_diff == 2:  # there is only one slice in between -> use combined mask
-                z = z_start + 1
-                seg_prompt = np.logical_or(seg[z_start] == 1, seg[z_stop] == 1)
-                seg[z] = segment_from_mask(predictor, seg_prompt, image_embeddings=image_embeddings, i=z,
-                                           use_mask=use_mask, use_box=use_box, use_points=use_points,
-                                           box_extension=box_extension)
-                _update_progress()
-
-            else:  # there is a range of more than 2 slices in between -> segment ranges
-                # segment from bottom
-                segment_range(
-                    z_start, z_mid, 1, np.greater_equal if slice_diff % 2 == 0 else np.greater, verbose=verbose
-                )
-                # segment from top
-                segment_range(z_stop, z_mid, -1, np.less_equal, verbose=verbose)
-                # if the difference between start and stop is even,
-                # then we have a slice in the middle that is the same distance from top bottom
-                # in this case the slice is not segmented in the ranges above, and we segment it
-                # using the combined mask from the adjacent top and bottom slice as prompt
-                if slice_diff % 2 == 0:
-                    seg_prompt = np.logical_or(seg[z_mid - 1] == 1, seg[z_mid + 1] == 1)
-                    seg[z_mid] = segment_from_mask(predictor, seg_prompt, image_embeddings=image_embeddings, i=z_mid,
-                                                   use_mask=use_mask, use_box=use_box, use_points=use_points,
-                                                   box_extension=box_extension)
-                    _update_progress()
-
-    return seg
 
 
 #
@@ -152,39 +53,138 @@ def _segment_slice_wigdet(v: Viewer) -> None:
     v.layers["current_object"].refresh()
 
 
-@magicgui(call_button="Segment Volume [V]", projection={"choices": ["default", "bounding_box", "mask", "points"]})
-def _segment_volume_widget(
-    v: Viewer, iou_threshold: float = 0.8, projection: str = "default", box_extension: float = 0.05
-) -> None:
-    # step 1: segment all slices with prompts
+def _segment_volume_for_current_object(v, projection, iou_threshold, box_extension):
     shape = v.layers["raw"].data.shape
+
+    with progress(total=shape[0]) as progress_bar:
+
+        # step 1: segment all slices with prompts
+        seg, slices, stop_lower, stop_upper = vutil.segment_slices_with_prompts(
+            PREDICTOR, v.layers["prompts"], v.layers["box_prompts"], IMAGE_EMBEDDINGS, shape, progress_bar=progress_bar,
+        )
+
+        # step 2: segment the rest of the volume based on smart prompting
+        seg = segment_mask_in_volume(
+            seg, PREDICTOR, IMAGE_EMBEDDINGS, slices,
+            stop_lower, stop_upper,
+            iou_threshold=iou_threshold, projection=projection,
+            progress_bar=progress_bar, box_extension=box_extension,
+        )
+
+    return seg
+
+
+def _segment_volume_for_auto_segmentation(
+    v, projection, iou_threshold, box_extension, with_background, start_slice
+):
+    seg = v.layers["auto_segmentation"].data
+
+    object_ids = np.unique(seg)
+    if with_background and object_ids[0] == 0:
+        object_ids = object_ids[1:]
+
+    for object_id in progress(object_ids):
+        object_seg = seg == object_id
+        segmented_slices = np.array([start_slice])
+        object_seg = segment_mask_in_volume(
+            segmentation=object_seg, predictor=PREDICTOR,
+            image_embeddings=IMAGE_EMBEDDINGS, segmented_slices=segmented_slices,
+            stop_lower=False, stop_upper=False, iou_threshold=iou_threshold,
+            projection=projection, box_extension=box_extension,
+        )
+        seg[object_seg == 1] = object_id
+
+    return seg
+
+
+@magicgui(
+    call_button="Segment Volume [V]",
+    layer={"choices": ["current_object", "auto_segmentation"]},
+    projection={"choices": ["default", "bounding_box", "mask", "points"]},
+)
+def _segment_volume_widget(
+    v: Viewer,
+    layer: str = "current_object",
+    iou_threshold: float = 0.8,
+    projection: str = "default",
+    box_extension: float = 0.05,
+) -> None:
 
     # we have the following projection modes:
     # bounding_box: uses only the bounding box as prompt
     # mask: uses the bounding box and the mask
     # points: uses the bounding box, mask and points derived from the mask
     # by default we choose mask, which qualitatively seems to work the best
-    if projection == "default":
-        projection_ = "mask"
+    projection = "mask" if projection == "default" else projection
+
+    if layer == "current_object":
+        seg = _segment_volume_for_current_object(v, projection, iou_threshold, box_extension)
     else:
-        projection_ = projection
-
-    with progress(total=shape[0]) as progress_bar:
-
-        seg, slices, stop_lower, stop_upper = vutil.segment_slices_with_prompts(
-            PREDICTOR, v.layers["prompts"], v.layers["box_prompts"], IMAGE_EMBEDDINGS, shape, progress_bar=progress_bar,
+        start_slice = int(v.cursor.position[0])
+        seg = _segment_volume_for_auto_segmentation(
+            v, projection, iou_threshold, box_extension, with_background=True, start_slice=start_slice
         )
 
-        # step 2: segment the rest of the volume based on smart prompting
-        seg = _segment_volume(
-            seg, PREDICTOR, IMAGE_EMBEDDINGS, slices,
-            stop_lower, stop_upper,
-            iou_threshold=iou_threshold, projection=projection_,
-            progress_bar=progress_bar, box_extension=box_extension,
-        )
+    v.layers[layer].data = seg
+    v.layers[layer].refresh()
 
-    v.layers["current_object"].data = seg
-    v.layers["current_object"].refresh()
+
+@magicgui(call_button="Automatic Segmentation")
+def _autosegment_widget(
+    v: Viewer,
+    pred_iou_thresh: float = 0.88,
+    stability_score_thresh: float = 0.95,
+    min_object_size: int = 100,
+    with_background: bool = True,
+) -> None:
+    global AMG, AMG_STATE
+    is_tiled = IMAGE_EMBEDDINGS["input_size"] is None
+    if AMG is None:
+        AMG = instance_segmentation.get_amg(PREDICTOR, is_tiled)
+
+    i = int(v.cursor.position[0])
+    if i in AMG_STATE:
+        state = AMG_STATE[i]
+        AMG.set_state(state)
+
+    else:
+        image_data = v.layers["raw"].data[i]
+        AMG.initialize(image_data, image_embeddings=IMAGE_EMBEDDINGS, verbose=True, i=i)
+        state = AMG.get_state()
+
+        cache_folder = AMG_STATE["cache_folder"]
+        if cache_folder is not None:
+            cache_path = os.path.join(cache_folder, f"state-{i}.pkl")
+            with open(cache_path, "wb") as f:
+                pickle.dump(state, f)
+
+    seg = AMG.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
+
+    shape = v.layers["raw"].data.shape[-2:]
+    seg = instance_segmentation.mask_data_to_segmentation(
+        seg, shape, with_background=with_background, min_object_size=min_object_size
+    )
+    assert isinstance(seg, np.ndarray)
+
+    v.layers["auto_segmentation"].data[i] = seg
+    v.layers["auto_segmentation"].refresh()
+
+
+def _load_amg_state(embedding_path):
+    if not os.path.exists(embedding_path):
+        return {"cache_folder": None}
+
+    cache_folder = os.path.join(embedding_path, "amg_state")
+    os.makedirs(cache_folder, exist_ok=True)
+    amg_state = {"cache_folder": cache_folder}
+
+    state_paths = glob(os.path.join(cache_folder, "*.pkl"))
+    for path in state_paths:
+        with open(path, "rb") as f:
+            state = pickle.load(f)
+        i = int(Path(path).stem.split("-")[-1])
+        amg_state[i] = state
+    return amg_state
 
 
 def annotator_3d(
@@ -222,7 +222,8 @@ def annotator_3d(
         The napari viewer, only returned if `return_viewer=True`.
     """
     # for access to the predictor and the image embeddings in the widgets
-    global PREDICTOR, IMAGE_EMBEDDINGS
+    global PREDICTOR, IMAGE_EMBEDDINGS, AMG, AMG_STATE
+    AMG = None
 
     if predictor is None:
         PREDICTOR = util.get_sam_model(model_type=model_type)
@@ -232,6 +233,8 @@ def annotator_3d(
         PREDICTOR, raw, save_path=embedding_path, tile_shape=tile_shape, halo=halo,
         wrong_file_callback=show_wrong_file_warning,
     )
+
+    AMG_STATE = _load_amg_state(embedding_path)
 
     #
     # initialize the viewer and add layers
@@ -247,6 +250,7 @@ def annotator_3d(
         v.add_labels(data=segmentation_result, name="committed_objects")
     v.layers["committed_objects"].new_colormap()  # randomize colors so it is easy to see when object committed
     v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="current_object")
+    v.add_labels(data=np.zeros(raw.shape, dtype="uint32"), name="auto_segmentation")
 
     # show the PCA of the image embeddings
     if show_embeddings:
@@ -276,12 +280,11 @@ def annotator_3d(
     # add the widgets
     #
 
-    # TODO add (optional) auto-segmentation functionality
-
     prompt_widget = vutil.create_prompt_menu(prompts, labels)
     v.window.add_dock_widget(prompt_widget)
 
     v.window.add_dock_widget(_segment_slice_wigdet)
+    v.window.add_dock_widget(_autosegment_widget)
 
     v.window.add_dock_widget(_segment_volume_widget)
     v.window.add_dock_widget(vutil._commit_segmentation_widget)
