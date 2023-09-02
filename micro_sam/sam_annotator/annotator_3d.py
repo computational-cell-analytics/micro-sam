@@ -171,7 +171,7 @@ def _autosegment_widget(
 
 
 def _load_amg_state(embedding_path):
-    if not os.path.exists(embedding_path):
+    if embedding_path is None or not os.path.exists(embedding_path):
         return {"cache_folder": None}
 
     cache_folder = os.path.join(embedding_path, "amg_state")
