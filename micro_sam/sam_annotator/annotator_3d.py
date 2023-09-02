@@ -10,113 +10,10 @@ from napari.utils import progress
 from segment_anything import SamPredictor
 
 from .. import util
-from ..prompt_based_segmentation import segment_from_mask
+from ..multi_dimensional_segmentation import segment_mask_in_volume
 from ..visualization import project_embeddings_for_visualization
 from . import util as vutil
 from .gui_utils import show_wrong_file_warning
-
-
-#
-# utility functionality
-# (some of this should be refactored to util.py)
-#
-
-
-# TODO refactor
-def _segment_volume(
-    seg, predictor, image_embeddings, segmented_slices,
-    stop_lower, stop_upper, iou_threshold, projection,
-    progress_bar=None, box_extension=0,
-):
-    assert projection in ("mask", "bounding_box", "points")
-    if projection == "mask":
-        use_box, use_mask, use_points = True, True, False
-    elif projection == "points":
-        use_box, use_mask, use_points = True, True, True
-    else:
-        use_box, use_mask, use_points = True, False, False
-
-    def _update_progress():
-        if progress_bar is not None:
-            progress_bar.update(1)
-
-    # TODO refactor to utils so that it can be used by other plugins
-    def segment_range(z_start, z_stop, increment, stopping_criterion, threshold=None, verbose=False):
-        z = z_start + increment
-        while True:
-            if verbose:
-                print(f"Segment {z_start} to {z_stop}: segmenting slice {z}")
-            seg_prev = seg[z - increment]
-            seg_z = segment_from_mask(predictor, seg_prev, image_embeddings=image_embeddings, i=z,
-                                      use_mask=use_mask, use_box=use_box, use_points=use_points,
-                                      box_extension=box_extension)
-            if threshold is not None:
-                iou = util.compute_iou(seg_prev, seg_z)
-                if iou < threshold:
-                    msg = f"Segmentation stopped at slice {z} due to IOU {iou} < {iou_threshold}."
-                    print(msg)
-                    break
-            seg[z] = seg_z
-            z += increment
-            if stopping_criterion(z, z_stop):
-                if verbose:
-                    print(f"Segment {z_start} to {z_stop}: stop at slice {z}")
-                break
-            _update_progress()
-
-    z0, z1 = int(segmented_slices.min()), int(segmented_slices.max())
-
-    # segment below the min slice
-    if z0 > 0 and not stop_lower:
-        segment_range(z0, 0, -1, np.less, iou_threshold)
-
-    # segment above the max slice
-    if z1 < seg.shape[0] - 1 and not stop_upper:
-        segment_range(z1, seg.shape[0] - 1, 1, np.greater, iou_threshold)
-
-    verbose = False
-    # segment in between min and max slice
-    if z0 != z1:
-        for z_start, z_stop in zip(segmented_slices[:-1], segmented_slices[1:]):
-            slice_diff = z_stop - z_start
-            z_mid = int((z_start + z_stop) // 2)
-
-            if slice_diff == 1:  # the slices are adjacent -> we don't need to do anything
-                pass
-
-            elif z_start == z0 and stop_lower:  # the lower slice is stop: we just segment from upper
-                segment_range(z_stop, z_start, -1, np.less_equal, verbose=verbose)
-
-            elif z_stop == z1 and stop_upper:  # the upper slice is stop: we just segment from lower
-                segment_range(z_start, z_stop, 1, np.greater_equal, verbose=verbose)
-
-            elif slice_diff == 2:  # there is only one slice in between -> use combined mask
-                z = z_start + 1
-                seg_prompt = np.logical_or(seg[z_start] == 1, seg[z_stop] == 1)
-                seg[z] = segment_from_mask(predictor, seg_prompt, image_embeddings=image_embeddings, i=z,
-                                           use_mask=use_mask, use_box=use_box, use_points=use_points,
-                                           box_extension=box_extension)
-                _update_progress()
-
-            else:  # there is a range of more than 2 slices in between -> segment ranges
-                # segment from bottom
-                segment_range(
-                    z_start, z_mid, 1, np.greater_equal if slice_diff % 2 == 0 else np.greater, verbose=verbose
-                )
-                # segment from top
-                segment_range(z_stop, z_mid, -1, np.less_equal, verbose=verbose)
-                # if the difference between start and stop is even,
-                # then we have a slice in the middle that is the same distance from top bottom
-                # in this case the slice is not segmented in the ranges above, and we segment it
-                # using the combined mask from the adjacent top and bottom slice as prompt
-                if slice_diff % 2 == 0:
-                    seg_prompt = np.logical_or(seg[z_mid - 1] == 1, seg[z_mid + 1] == 1)
-                    seg[z_mid] = segment_from_mask(predictor, seg_prompt, image_embeddings=image_embeddings, i=z_mid,
-                                                   use_mask=use_mask, use_box=use_box, use_points=use_points,
-                                                   box_extension=box_extension)
-                    _update_progress()
-
-    return seg
 
 
 #
@@ -176,7 +73,7 @@ def _segment_volume_widget(
         )
 
         # step 2: segment the rest of the volume based on smart prompting
-        seg = _segment_volume(
+        seg = segment_mask_in_volume(
             seg, PREDICTOR, IMAGE_EMBEDDINGS, slices,
             stop_lower, stop_upper,
             iou_threshold=iou_threshold, projection=projection_,
