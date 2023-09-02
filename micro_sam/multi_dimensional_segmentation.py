@@ -1,3 +1,7 @@
+"""
+Multi-dimensional segmentation with segment anything.
+"""
+
 from typing import Any, Optional
 
 import numpy as np
@@ -18,8 +22,23 @@ def segment_mask_in_volume(
     projection: str,
     progress_bar: Optional[Any] = None,
     box_extension: int = 0,
-):
-    """
+) -> np.ndarray:
+    """Segment an object mask in in volumetric data.
+
+    Args:
+        segmentation: The initial segmentation for the object.
+        predictor: The segment anything predictor.
+        image_embeddings: The precomputed image embeddings for the volume.
+        segmented_slices: List of slices for which this object has already been segmented.
+        stop_lower: Whether to stop at the lowest segmented slice.
+        stop_upper: Wheter to stop at the topmost segmented slice.
+        iou_threshold: The IOU threshold for continuing segmentation across 3d.
+        projection: The projection method to use. One of 'mask', 'bounding_box' or 'points'.
+        progress_bar: Optional progress bar.
+        box_extension: Extension factor for increasing the box size after projection
+
+    Returns:
+        Array with the volumetric segmentation
     """
     assert projection in ("mask", "bounding_box", "points")
     if projection == "mask":
