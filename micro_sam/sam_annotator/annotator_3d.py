@@ -79,9 +79,14 @@ def _segment_volume_for_auto_segmentation(
 ):
     seg = v.layers["auto_segmentation"].data
 
-    object_ids = np.unique(seg)
+    object_ids = np.unique(seg[start_slice])
     if with_background and object_ids[0] == 0:
         object_ids = object_ids[1:]
+
+    # clear the auto segmentation outside of the start slice
+    # to avoid errors due to previous auto segmentation results
+    seg[:start_slice] = 0
+    seg[(start_slice+1):]
 
     for object_id in progress(object_ids):
         object_seg = seg == object_id
