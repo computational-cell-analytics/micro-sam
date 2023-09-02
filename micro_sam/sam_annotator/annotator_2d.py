@@ -67,7 +67,7 @@ def _autosegment_widget(
 
     shape = v.layers["raw"].data.shape[:2]
     seg = instance_segmentation.mask_data_to_segmentation(
-        seg, shape, with_background=True, min_object_size=min_object_size
+        seg, shape, with_background=with_background, min_object_size=min_object_size
     )
     assert isinstance(seg, np.ndarray)
 
