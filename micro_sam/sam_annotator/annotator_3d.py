@@ -134,7 +134,10 @@ def _segment_volume_widget(
     v.layers[layer].refresh()
 
 
-@magicgui(call_button="Automatic Segmentation")
+@magicgui(
+    call_button="Automatic Segmentation",
+    min_object_size={"min": 0, "max": 10000}
+)
 def _autosegment_widget(
     v: Viewer,
     pred_iou_thresh: float = 0.88,
