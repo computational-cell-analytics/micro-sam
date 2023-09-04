@@ -116,6 +116,24 @@ def _get_checkpoint(model_type, checkpoint_path=None):
     return checkpoint_path
 
 
+def _get_device(device):
+    if device is not None:
+        return device
+
+    # Use cuda enabled gpu if it's available.
+    if torch.cuda.is_available():
+        device = "cuda"
+    # As second priority use mps.
+    # See https://pytorch.org/docs/stable/notes/mps.html for details
+    elif torch.backends.mps.is_avalable() and torch.backends.mps.is_built():
+        print("Using apple MPS device.")
+        device = "mps"
+    # Use the CPU as fallback.
+    else:
+        device = "cpu"
+    return device
+
+
 def get_sam_model(
     device: Optional[str] = None,
     model_type: str = _DEFAULT_MODEL,
@@ -138,8 +156,7 @@ def get_sam_model(
         The segment anything predictor.
     """
     checkpoint = _get_checkpoint(model_type, checkpoint_path)
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = _get_device(device)
 
     # Our custom model types have a suffix "_...". This suffix needs to be stripped
     # before calling sam_model_registry.
@@ -196,8 +213,7 @@ def get_custom_sam_model(
     custom_pickle = pickle
     custom_pickle.Unpickler = _CustomUnpickler
 
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = _get_device()
     sam = sam_model_registry[model_type]()
 
     # load the model state, ignoring any attributes that can't be found by pickle
