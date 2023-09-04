@@ -21,8 +21,12 @@ from elf.io import open_file
 from nifty.tools import blocking
 from skimage.measure import regionprops
 
-# from segment_anything import sam_model_registry, SamPredictor
-from mobile_sam import sam_model_registry, SamPredictor
+try:
+    from mobile_sam import sam_model_registry, SamPredictor
+    VIT_T_SUPPORT = True
+except ImportError:
+    from segment_anything import sam_model_registry, SamPredictor
+    VIT_T_SUPPORT = False
 
 try:
     from napari.utils import progress as tqdm
@@ -151,6 +155,11 @@ def get_sam_model(
     # before calling sam_model_registry.
     model_type_ = model_type[:5]
     assert model_type_ in ("vit_h", "vit_b", "vit_l", "vit_t")
+    if model_type == "vit_t" and not VIT_T_SUPPORT:
+        raise RuntimeError(
+            "mobile_sam is required for the vit-tiny."
+            "You can install it via 'pip install git+https://github.com/ChaoningZhang/MobileSAM.git'"
+        )
 
     sam = sam_model_registry[model_type_](checkpoint=checkpoint)
     sam.to(device=device)
@@ -213,7 +222,7 @@ def get_custom_sam_model(
     # copy the model weights from torch_em's training format
     sam_prefix = "sam."
     model_state = OrderedDict(
-            [(k[len(sam_prefix):] if k.startswith(sam_prefix) else k, v) for k, v in model_state.items()]
+        [(k[len(sam_prefix):] if k.startswith(sam_prefix) else k, v) for k, v in model_state.items()]
     )
     sam.load_state_dict(model_state)
     sam.to(device)
