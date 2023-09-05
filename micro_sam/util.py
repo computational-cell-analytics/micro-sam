@@ -125,7 +125,7 @@ def _get_device(device):
         device = "cuda"
     # As second priority use mps.
     # See https://pytorch.org/docs/stable/notes/mps.html for details
-    elif torch.backends.mps.is_avalable() and torch.backends.mps.is_built():
+    elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
         print("Using apple MPS device.")
         device = "mps"
     # Use the CPU as fallback.
