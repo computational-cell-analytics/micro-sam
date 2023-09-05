@@ -170,6 +170,8 @@ def _setup_layers(v: napari.Viewer, raw, segmentation_result=None):
 
 def _setup_dock_widgets(v: napari.Viewer):
     print("_setup_dock_widgets")
+    #TODO: how can we check if these dock widgets are already opened or not?
+
     # TODO: try to make this a cleaner code design to get the prompt_widget
     prompts = v.layers["prompts"]
     labels = ["positive", "negative"]
