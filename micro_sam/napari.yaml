@@ -23,6 +23,12 @@ contributions:
     - id: micro-sam.sample_data_segmentation
       python_name: micro_sam.sample_data:sample_data_segmentation
       title: Load segmentation sample data from micro-sam plugin
+    - id: micro-sam.annotator_2d_plugin
+      python_name: micro_sam.sam_annotator.annotator_2d:annotator_2d_plugin
+      title: micro-sam 2D annotator
+  widgets:
+    - command: micro-sam.annotator_2d_plugin
+      display_name: micro-sam 2D annotator
   sample_data:
     - command: micro-sam.sample_data_image_series
       display_name: Image series example data

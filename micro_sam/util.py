@@ -2,6 +2,7 @@
 Helper functions for downloading Segment Anything models and predicting image embeddings.
 """
 
+from enum import Enum
 import hashlib
 import os
 import pickle
@@ -61,7 +62,7 @@ _DOWNLOAD_NAMES = {
 # this is the default model used in micro_sam
 # currently set to the default vit_h
 _DEFAULT_MODEL = "vit_h"
-
+AVAILABLE_MODELS = Enum("AVAILABLE MODELS", _MODEL_URLS)
 
 # TODO define the proper type for image embeddings
 ImageEmbeddings = Dict[str, Any]

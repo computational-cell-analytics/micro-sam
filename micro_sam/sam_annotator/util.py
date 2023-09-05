@@ -19,7 +19,7 @@ LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
 
 def clear_annotations(v: napari.Viewer, clear_segmentations=True) -> None:
     """@private"""
-    v.layers["prompts"].data = []
+    v.layers["prompts"].data = []  # warning, this also erases v.layers["prompts"].properties["labels"]
     v.layers["prompts"].refresh()
     if "box_prompts" in v.layers:
         v.layers["box_prompts"].data = []
