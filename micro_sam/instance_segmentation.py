@@ -189,7 +189,7 @@ class AMGBase(ABC):
             mask, changed = amg_utils.remove_small_regions(mask, min_area, mode="islands")
             unchanged = unchanged and not changed
 
-            new_masks.append(torch.as_tensor(mask).unsqueeze(0))
+            new_masks.append(torch.as_tensor(mask, dtype=torch.int).unsqueeze(0))
             # give score=0 to changed masks and score=1 to unchanged masks
             # so NMS will prefer ones that didn't need postprocessing
             scores.append(float(unchanged))
@@ -199,7 +199,7 @@ class AMGBase(ABC):
         boxes = amg_utils.batched_mask_to_box(masks)
         keep_by_nms = batched_nms(
             boxes.float(),
-            torch.as_tensor(scores),
+            torch.as_tensor(scores, dtype=torch.float),
             torch.zeros_like(boxes[:, 0]),  # categories
             iou_threshold=nms_thresh,
         )
@@ -258,7 +258,7 @@ class AMGBase(ABC):
         # serialize predictions and store in MaskData
         data = amg_utils.MaskData(masks=masks.flatten(0, 1), iou_preds=iou_preds.flatten(0, 1))
         if points is not None:
-            data["points"] = torch.as_tensor(points.repeat(masks.shape[1], axis=0))
+            data["points"] = torch.as_tensor(points.repeat(masks.shape[1], axis=0), dtype=torch.float)
 
         del masks
 
@@ -269,6 +269,7 @@ class AMGBase(ABC):
 
         # threshold masks and calculate boxes
         data["masks"] = data["masks"] > self._predictor.model.mask_threshold
+        data["masks"] = data["masks"].type(torch.int)
         data["boxes"] = amg_utils.batched_mask_to_box(data["masks"])
 
         # compress to RLE
@@ -364,7 +365,7 @@ class AutomaticMaskGenerator(AMGBase):
     def _process_batch(self, points, im_size, crop_box, original_size):
         # run model on this batch
         transformed_points = self._predictor.transform.apply_coords(points, im_size)
-        in_points = torch.as_tensor(transformed_points, device=self._predictor.device)
+        in_points = torch.as_tensor(transformed_points, device=self._predictor.device, dtype=torch.float)
         in_labels = torch.ones(in_points.shape[0], dtype=torch.int, device=in_points.device)
         masks, iou_preds, _ = self._predictor.predict_torch(
             in_points[:, None, :],
