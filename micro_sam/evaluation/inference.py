@@ -136,7 +136,7 @@ def _run_inference_with_prompts_for_image(
     prompts = deepcopy((input_point, input_label, input_box))
 
     # Transform the prompts into batches
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = util._get_device()
     input_point = torch.tensor(np.array(input_point)).to(device) if len(input_point) > 0 else None
     input_label = torch.tensor(np.array(input_label)).to(device) if len(input_label) > 0 else None
     input_box = torch.tensor(np.array(input_box)).to(device) if len(input_box) > 0 else None
@@ -524,7 +524,7 @@ def run_inference_with_iterative_prompting(
     """@private"""
     warnings.warn("The iterative prompting functionality is not working correctly yet.")
 
-    device = torch.device("cuda")
+    device = util._get_device()
     model = get_trainable_sam_model(model_type, checkpoint_path)
 
     # create all prediction folders

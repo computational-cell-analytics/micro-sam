@@ -5,7 +5,7 @@ import torch
 import numpy as np
 
 from ..prompt_generators import PointAndBoxPromptGenerator
-from ..util import get_centers_and_bounding_boxes, get_sam_model
+from ..util import get_centers_and_bounding_boxes, get_sam_model, _get_device
 from .trainable_sam import TrainableSAM
 
 
@@ -28,8 +28,7 @@ def get_trainable_sam_model(
         The trainable segment anything model.
     """
     # set the device here so that the correct one is passed to TrainableSAM below
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = _get_device(device)
     _, sam = get_sam_model(device, model_type, checkpoint_path, return_sam=True)
 
     # freeze components of the model if freeze was passed
