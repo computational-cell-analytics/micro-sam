@@ -269,7 +269,7 @@ class AMGBase(ABC):
 
         # threshold masks and calculate boxes
         data["masks"] = data["masks"] > self._predictor.model.mask_threshold
-        data["masks"] = data["masks"].type(torch.int)
+        data["masks"] = data["masks"].type(torch.bool)
         data["boxes"] = batched_mask_to_box(data["masks"])
 
         # compress to RLE
