@@ -32,7 +32,7 @@ except ImportError:
 
 from . import util
 from .prompt_based_segmentation import segment_from_mask
-
+from ._vendored import batched_mask_to_box
 
 #
 # Utility Functionality
@@ -196,7 +196,7 @@ class AMGBase(ABC):
 
         # recalculate boxes and remove any new duplicates
         masks = torch.cat(new_masks, dim=0)
-        boxes = amg_utils.batched_mask_to_box(masks)
+        boxes = batched_mask_to_box(masks)
         keep_by_nms = batched_nms(
             boxes.float(),
             torch.as_tensor(scores, dtype=torch.float),
@@ -270,7 +270,7 @@ class AMGBase(ABC):
         # threshold masks and calculate boxes
         data["masks"] = data["masks"] > self._predictor.model.mask_threshold
         data["masks"] = data["masks"].type(torch.int)
-        data["boxes"] = amg_utils.batched_mask_to_box(data["masks"])
+        data["boxes"] = batched_mask_to_box(data["masks"])
 
         # compress to RLE
         data["masks"] = amg_utils.uncrop_masks(data["masks"], crop_box, orig_h, orig_w)
