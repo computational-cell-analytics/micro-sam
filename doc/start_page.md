@@ -46,4 +46,5 @@ For now, check out [the example script for the 2d annotator](https://github.com/
 
 If you are using `micro_sam` in your research please cite
 - Our [preprint](https://doi.org/10.1101/2023.08.21.554208)
-- and the original [Segment Anything publication](https://arxiv.org/abs/2304.02643)
+- and the original [Segment Anything publication](https://arxiv.org/abs/2304.02643).
+- If you use a `vit-tiny` models please also cite [Mobile SAM](https://arxiv.org/abs/2306.14289).
