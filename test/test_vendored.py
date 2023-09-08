@@ -52,14 +52,7 @@ class TestVendored(unittest.TestCase):
             one_hot[i, masks == idx] = 1
         one_hot = torch.from_numpy(one_hot)
 
-        # make sure that all corner pixels are zero
-        one_hot[:, 0, 0] = 0
-        one_hot[:, -1, -1] = 0
-        one_hot[:, 0, -1] = 0
-        one_hot[:, -1, 0] = 0
-
         expected_result = mask_to_rle_pytorch_sam(one_hot)
-
         return one_hot, expected_result
 
     def test_mask_to_rle_pytorch(self):

@@ -83,7 +83,10 @@ def mask_to_rle_pytorch(tensor: torch.Tensor) -> List[Dict[str, Any]]:
     out = []
     for mask in tensor:
         diffs = mask[1:] != mask[:-1]  # pairwise unequal (string safe)
-        indices = np.append(np.where(diffs), n - 1)  # must include last element posi
-        counts = np.diff(np.append(-1, indices))  # run lengths
-        out.append({"size": [h, w], "counts": counts.tolist()})
+        indices = np.append(np.where(diffs), n - 1)  # must include last element position
+        # count needs to start with 0 if the mask begins with 1
+        counts = [] if mask[0] == 0 else [0]
+        # compute the actual RLE
+        counts += np.diff(np.append(-1, indices)).tolist()
+        out.append({"size": [h, w], "counts": counts})
     return out
