@@ -8,7 +8,7 @@ from skimage.draw import random_shapes
 
 
 class TestVendored(unittest.TestCase):
-    def _get_mask_to_box_data():
+    def _get_mask_to_box_data(self):
         mask_numpy = np.zeros((10, 10)).astype(bool)
         mask_numpy[7:9, 3:5] = True
         expected_result = [3, 7, 4, 8]
@@ -18,8 +18,8 @@ class TestVendored(unittest.TestCase):
         from micro_sam._vendored import batched_mask_to_box
 
         mask, expected_result = self._get_mask_to_box_data()
-        mask = torch.as_tensor(self.mask, dtype=torch.bool, device=device)
-        expected_result = torch.as_tensor(self.expected_result, dtype=torch.int, device=device)
+        mask = torch.as_tensor(mask, dtype=torch.bool, device=device)
+        expected_result = torch.as_tensor(expected_result, dtype=torch.int, device=device)
         result = batched_mask_to_box(mask)
         assert all(result == expected_result)
 
