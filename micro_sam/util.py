@@ -39,7 +39,7 @@ _MODEL_URLS = {
     "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
     "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
     # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
-    "vit_t": "https://github.com/ChaoningZhang/MobileSAM/raw/master/weights/mobile_sam.pt",
+    "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
     # first version of finetuned models on zenodo
     "vit_h_lm": "https://zenodo.org/record/8250299/files/vit_h_lm.pth?download=1",
     "vit_b_lm": "https://zenodo.org/record/8250281/files/vit_b_lm.pth?download=1",
