@@ -336,7 +336,7 @@ class AutomaticMaskGenerator(AMGBase):
         self,
         predictor: SamPredictor,
         points_per_side: Optional[int] = 32,
-        points_per_batch: int = 64,
+        points_per_batch: Optional[int] = None,
         crop_n_layers: int = 0,
         crop_overlap_ratio: float = 512 / 1500,
         crop_n_points_downscale_factor: int = 1,
@@ -358,7 +358,13 @@ class AutomaticMaskGenerator(AMGBase):
 
         self._predictor = predictor
         self._points_per_side = points_per_side
+
+        # we set the points per batch to 16 for mps for performance reasons
+        # and otherwise keep them at the default of 64
+        if points_per_batch is None:
+            points_per_batch = 16 if str(predictor.device) == "mps" else 64
         self._points_per_batch = points_per_batch
+
         self._crop_n_layers = crop_n_layers
         self._crop_overlap_ratio = crop_overlap_ratio
         self._crop_n_points_downscale_factor = crop_n_points_downscale_factor
