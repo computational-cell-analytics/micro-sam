@@ -32,7 +32,7 @@ except ImportError:
 
 from . import util
 from .prompt_based_segmentation import segment_from_mask
-from ._vendored import batched_mask_to_box
+from ._vendored import batched_mask_to_box, mask_to_rle_pytorch
 
 #
 # Utility Functionality
@@ -208,7 +208,8 @@ class AMGBase(ABC):
         for i_mask in keep_by_nms:
             if scores[i_mask] == 0.0:
                 mask_torch = masks[i_mask].unsqueeze(0)
-                mask_data["rles"][i_mask] = amg_utils.mask_to_rle_pytorch(mask_torch)[0]
+                # mask_data["rles"][i_mask] = amg_utils.mask_to_rle_pytorch(mask_torch)[0]
+                mask_data["rles"][i_mask] = mask_to_rle_pytorch(mask_torch)[0]
                 mask_data["boxes"][i_mask] = boxes[i_mask]  # update res directly
         mask_data.filter(keep_by_nms)
 
@@ -274,7 +275,8 @@ class AMGBase(ABC):
 
         # compress to RLE
         data["masks"] = amg_utils.uncrop_masks(data["masks"], crop_box, orig_h, orig_w)
-        data["rles"] = amg_utils.mask_to_rle_pytorch(data["masks"])
+        # data["rles"] = amg_utils.mask_to_rle_pytorch(data["masks"])
+        data["rles"] = mask_to_rle_pytorch(data["masks"])
         del data["masks"]
 
         return data
