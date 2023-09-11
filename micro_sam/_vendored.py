@@ -1,11 +1,14 @@
 """
 Functions from other third party libraries.
 
-We can remove these functions once the bug affecting our code is fixed upstream.
+We can remove these functions once the bugs affecting our code is fixed upstream.
 
 The license type of the thrid party software project must be compatible with
 the software license the micro-sam project is distributed under.
 """
+from typing import Any, Dict, List
+
+import numpy as np
 import torch
 
 
@@ -58,4 +61,32 @@ def batched_mask_to_box(masks: torch.Tensor) -> torch.Tensor:
     else:
         out = out[0]
 
+    return out
+
+
+# segment_anything/util/amg.py
+# https://github.com/facebookresearch/segment-anything
+def mask_to_rle_pytorch(tensor: torch.Tensor) -> List[Dict[str, Any]]:
+    """Calculates the runlength encoding of binary input masks.
+
+    Implementation based on
+    https://stackoverflow.com/questions/1066758/find-length-of-sequences-of-identical-values-in-a-numpy-array-run-length-encodi
+    """
+    # Put in fortran order and flatten h, w
+    b, h, w = tensor.shape
+    tensor = tensor.permute(0, 2, 1).flatten(1)
+    tensor = tensor.detach().cpu().numpy()
+
+    n = tensor.shape[1]
+
+    # encode the rle for the individual masks
+    out = []
+    for mask in tensor:
+        diffs = mask[1:] != mask[:-1]  # pairwise unequal (string safe)
+        indices = np.append(np.where(diffs), n - 1)  # must include last element position
+        # count needs to start with 0 if the mask begins with 1
+        counts = [] if mask[0] == 0 else [0]
+        # compute the actual RLE
+        counts += np.diff(np.append(-1, indices)).tolist()
+        out.append({"size": [h, w], "counts": counts})
     return out
