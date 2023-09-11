@@ -1,3 +1,22 @@
+"""
+Run benchmarks
+--------------
+1. Install pandas tabulate dependency `python -m pip install tabulate`
+2. Run benchmark script, eg: `python benchmark.py --model_type vit_h --device cpu`
+
+Line profiling
+--------------
+1. Install line profiler: `python -m pip install line_profiler`
+2. Add `@profile` decorator to any function in the call stack
+3. Run `kernprof -lv benchmark.py --model_type vit_h --device cpu`
+
+Snakeviz visualization
+----------------------
+https://jiffyclub.github.io/snakeviz/
+1. Install snakeviz: `python -m pip install snakeviz`
+2. Generate profile file: `python -m cProfile -o program.prof benchmark.py --model_type vit_h --device cpu`
+3. Visualize profile file: `snakeviz program.prof`
+"""
 import argparse
 import time
 
@@ -124,7 +143,7 @@ def benchmark_prompts(image, predictor, n=10):
     return names, runtimes
 
 
-def benchmark_amg(image, predictor, n=3):
+def benchmark_amg(image, predictor, n=1):
     print("Running benchmark_amg ...")
     embeddings = util.precompute_image_embeddings(predictor, image)
     amg = instance_seg.AutomaticMaskGenerator(predictor)
