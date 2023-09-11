@@ -12,12 +12,15 @@ import numpy as np
 import torch
 
 
-# segment_anything/util/amg.py
-# https://github.com/facebookresearch/segment-anything
 def batched_mask_to_box(masks: torch.Tensor) -> torch.Tensor:
-    """
-    Calculates boxes in XYXY format around masks. Return [0,0,0,0] for
-    an empty mask. For input shape C1xC2x...xHxW, the output shape is C1xC2x...x4.
+    """Calculates boxes in XYXY format around masks. Return [0,0,0,0] for an empty mask.
+
+    For input shape C1xC2x...xHxW, the output shape is C1xC2x...x4.
+
+    This function is adapted from https://github.com/facebookresearch/segment-anything/segment_anything/util/amg.py
+    so that it also supports tensors that have MPS device.
+    It further ensures that inputs are boolean tensors, otherwise the function yields wrong results.
+    See https://github.com/facebookresearch/segment-anything/issues/552 for details.
     """
     assert masks.dtype == torch.bool
 
@@ -64,12 +67,15 @@ def batched_mask_to_box(masks: torch.Tensor) -> torch.Tensor:
     return out
 
 
-# segment_anything/util/amg.py
-# https://github.com/facebookresearch/segment-anything
 def mask_to_rle_pytorch(tensor: torch.Tensor) -> List[Dict[str, Any]]:
     """Calculates the runlength encoding of binary input masks.
 
-    Implementation based on
+    This replaces the function in
+    https://github.com/facebookresearch/segment-anything/segment_anything/util/amg.py
+    with a version that computes the RLE purely on the CPU.
+    This does not lead to any performance deficits when running on the GPU, but it speeds the computation
+    up significantly compared to running this on an MPS device.
+    The RLE implementation is based on
     https://stackoverflow.com/questions/1066758/find-length-of-sequences-of-identical-values-in-a-numpy-array-run-length-encodi
     """
     # Put in fortran order and flatten h, w
