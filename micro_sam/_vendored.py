@@ -8,8 +8,10 @@ the software license the micro-sam project is distributed under.
 """
 from typing import Any, Dict, List
 
-import numpy as np
+# import numpy as np
 import torch
+
+from numba import njit
 
 
 def batched_mask_to_box(masks: torch.Tensor) -> torch.Tensor:
@@ -67,6 +69,22 @@ def batched_mask_to_box(masks: torch.Tensor) -> torch.Tensor:
     return out
 
 
+@njit
+def _compute_rle(mask):
+    val = mask[0]
+    counts = [int(x) for x in range(0)] if val == 0 else [0]
+    count = 0
+    for m in mask:
+        if val == m:
+            count += 1
+        else:
+            val = m
+            counts.append(count)
+            count = 1
+    counts.append(count)
+    return counts
+
+
 def mask_to_rle_pytorch(tensor: torch.Tensor) -> List[Dict[str, Any]]:
     """Calculates the runlength encoding of binary input masks.
 
@@ -83,16 +101,20 @@ def mask_to_rle_pytorch(tensor: torch.Tensor) -> List[Dict[str, Any]]:
     tensor = tensor.permute(0, 2, 1).flatten(1)
     tensor = tensor.detach().cpu().numpy()
 
-    n = tensor.shape[1]
+    # n = tensor.shape[1]
 
     # encode the rle for the individual masks
     out = []
     for mask in tensor:
-        diffs = mask[1:] != mask[:-1]  # pairwise unequal (string safe)
-        indices = np.append(np.where(diffs), n - 1)  # must include last element position
-        # count needs to start with 0 if the mask begins with 1
-        counts = [] if mask[0] == 0 else [0]
-        # compute the actual RLE
-        counts += np.diff(np.append(-1, indices)).tolist()
+
+        counts = _compute_rle(mask)
+
+        # diffs = mask[1:] != mask[:-1]  # pairwise unequal (string safe)
+        # indices = np.append(np.where(diffs), n - 1)  # must include last element position
+        # # count needs to start with 0 if the mask begins with 1
+        # counts = [] if mask[0] == 0 else [0]
+        # # compute the actual RLE
+        # counts += np.diff(np.append(-1, indices)).tolist()
+
         out.append({"size": [h, w], "counts": counts})
     return out
