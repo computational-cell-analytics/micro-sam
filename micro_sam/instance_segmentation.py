@@ -263,10 +263,22 @@ class AMGBase(ABC):
 
         del masks
 
+        # prefilter the masks with the pred iou threshold
+        if self._pred_iou_thresh > 0.0:
+            keep_mask = data["iou_preds"] > self._pred_iou_thresh
+            # print(keep_mask.sum(), "/", len(keep_mask), "masks left after filtering with iou thresh = ", self._pred_iou_thresh)
+            data.filter(keep_mask)
+
         # calculate the stability scores
         data["stability_score"] = amg_utils.calculate_stability_score(
             data["masks"], self._predictor.model.mask_threshold, self._stability_score_offset
         )
+
+        # prefilter the masks with the stability score threshold
+        if self._stability_score_thresh > 0.0:
+            keep_mask = data["stability_score"] > self._stability_score_thresh
+            # print(keep_mask.sum(), "/", len(keep_mask), "masks left after filtering with stab thresh = ", self._stability_score_thresh)
+            data.filter(keep_mask)
 
         # threshold masks and calculate boxes
         data["masks"] = data["masks"] > self._predictor.model.mask_threshold
@@ -342,6 +354,8 @@ class AutomaticMaskGenerator(AMGBase):
         crop_n_points_downscale_factor: int = 1,
         point_grids: Optional[List[np.ndarray]] = None,
         stability_score_offset: float = 1.0,
+        pred_iou_thresh: float = 0.5,
+        stability_score_thresh: float = 0.5,
     ):
         super().__init__()
 
@@ -369,6 +383,8 @@ class AutomaticMaskGenerator(AMGBase):
         self._crop_overlap_ratio = crop_overlap_ratio
         self._crop_n_points_downscale_factor = crop_n_points_downscale_factor
         self._stability_score_offset = stability_score_offset
+        self._pred_iou_thresh = pred_iou_thresh
+        self._stability_score_thresh = stability_score_thresh
 
     def _process_batch(self, points, im_size, crop_box, original_size):
         # run model on this batch
