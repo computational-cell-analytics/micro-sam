@@ -12,6 +12,8 @@ from typing import Any, Dict, List
 import torch
 
 from numba import njit
+# NEW IMPLEMENTED FUNCTION, NOT YET RELEASED
+# from nifty.tools import computeRLE
 
 
 def batched_mask_to_box(masks: torch.Tensor) -> torch.Tensor:
@@ -108,6 +110,7 @@ def mask_to_rle_pytorch(tensor: torch.Tensor) -> List[Dict[str, Any]]:
     for mask in tensor:
 
         counts = _compute_rle(mask)
+        # counts = computeRLE(mask)
 
         # diffs = mask[1:] != mask[:-1]  # pairwise unequal (string safe)
         # indices = np.append(np.where(diffs), n - 1)  # must include last element position
