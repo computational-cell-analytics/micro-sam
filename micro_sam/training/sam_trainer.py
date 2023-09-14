@@ -131,8 +131,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
         # outer loop is over the batch (different image/patch predictions)
         for m_, y_, ids_, predicted_iou_ in zip(masks, y, sampled_ids, predicted_iou_values):
-            per_object_dice_scores = []
-            per_object_iou_scores = []
+            per_object_dice_scores, per_object_iou_scores = [], []
 
             # inner loop is over the channels, this corresponds to the different predicted objects
             for i, (predicted_obj, predicted_iou) in enumerate(zip(m_, predicted_iou_)):
@@ -157,7 +156,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         return loss, mask_loss, iou_regression_loss, mean_model_iou
 
     def _postprocess_outputs(self, masks):
-        """ masks look like -> (B, 1, X, Y)
+        """ "masks" look like -> (B, 1, X, Y)
         where, B is the number of objects, (X, Y) is the input image shape
         """
         instance_labels = []
@@ -174,8 +173,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         masks = [m["masks"] for m in batched_outputs]
         pred_labels = self._postprocess_outputs(masks)
 
-        # we do the condition below to adapt w.r.t. the multimask output
-        # to select the "objectively" best response
+        # we do the condition below to adapt w.r.t. the multimask output to select the "objectively" best response
         if pred_labels.dim() == 5:
             metric = min([self.metric(pred_labels[:, :, i, :, :], sampled_binary_y.to(self.device))
                           for i in range(pred_labels.shape[2])])
@@ -192,10 +190,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         input_images = torch.stack([self.model.preprocess(x=x["image"].to(self.device)) for x in batched_inputs], dim=0)
         image_embeddings = self.model.image_embeddings_oft(input_images)
 
-        loss = 0.0
-        mask_loss = 0.0
-        iou_regression_loss = 0.0
-        mean_model_iou = 0.0
+        loss, mask_loss, iou_regression_loss, mean_model_iou = 0.0, 0.0, 0.0, 0.0
 
         # this loop takes care of the idea of sub-iterations, i.e. the number of times we iterate over each batch
         for i in range(0, num_subiter):
@@ -219,9 +214,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
                 mask, l_mask = [], []
                 for _m, _l, _iou in zip(m["masks"], m["low_res_masks"], m["iou_predictions"]):
                     best_iou_idx = torch.argmax(_iou)
-
-                    best_mask, best_logits = _m[best_iou_idx], _l[best_iou_idx]
-                    best_mask, best_logits = best_mask[None], best_logits[None]
+                    best_mask, best_logits = _m[best_iou_idx][None], _l[best_iou_idx][None]
                     mask.append(self._sigmoid(best_mask))
                     l_mask.append(best_logits)
 
@@ -320,8 +313,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             self.optimizer.zero_grad()
 
             with forward_context():
-                n_samples = self.n_objects_per_batch
-                n_samples = self._update_samples_for_gt_instances(y, n_samples)
+                n_samples = self._update_samples_for_gt_instances(y, self.n_objects_per_batch)
 
                 n_pos, n_neg, get_boxes, multimask_output = self._get_prompt_and_multimasking_choices(self._iteration)
 
@@ -375,16 +367,12 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
     def _validate_impl(self, forward_context):
         self.model.eval()
 
-        metric_val = 0.0
-        loss_val = 0.0
-        model_iou_val = 0.0
-        val_iteration = 0
+        metric_val, loss_val, model_iou_val, val_iteration = 0.0, 0.0, 0.0, 0.0
 
         with torch.no_grad():
             for x, y in self.val_loader:
                 with forward_context():
-                    n_samples = self.n_objects_per_batch
-                    n_samples = self._update_samples_for_gt_instances(y, n_samples)
+                    n_samples = self._update_samples_for_gt_instances(y, self.n_objects_per_batch)
 
                     (n_pos, n_neg,
                      get_boxes, multimask_output) = self._get_prompt_and_multimasking_choices_for_val(val_iteration)
