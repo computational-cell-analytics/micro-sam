@@ -6,27 +6,34 @@ import torch_em
 
 import torch.utils.data as data_util
 from torch_em.data.datasets import get_lizard_dataset
+from torch_em.data.sampler import MinInstanceSampler
 from micro_sam.util import export_custom_sam_model
 
 
 # TODO use other datasets than lizard
 def get_dataloaders(patch_shape, data_path):
     label_transform = torch_em.transform.label.label_consecutive  # to ensure consecutive IDs
-    dataset = get_lizard_dataset(path=data_path, patch_shape=patch_shape, label_transform=label_transform)
+    sampler = MinInstanceSampler(min_num_instances=5)
+    dataset = get_lizard_dataset(
+        path=data_path, download=True, patch_shape=patch_shape, label_transform=label_transform,
+        sampler=sampler,
+    )
     train_ds, val_ds = data_util.random_split(dataset, [0.9, 0.1])
-    train_loader = torch_em.get_data_loader(train_ds, batch_size=2)
+    train_loader = torch_em.get_data_loader(train_ds, batch_size=1)
     val_loader = torch_em.get_data_loader(val_ds, batch_size=1)
     return train_loader, val_loader
 
 
-def finetune_histopatho(input_path, export_path, model_type="vit_h", iterations=int(2.5e4), save_root=None):
+def finetune_histopatho(input_path, export_path, model_type="vit_h", iterations=int(2e4), save_root=None):
     """Example code for finetuning SAM on LiveCELL"""
 
     # training settings:
     checkpoint_path = None  # override this to start training from a custom checkpoint
     device = "cuda"  # override this if you have some more complex set-up and need to specify the exact gpu
     patch_shape = (512, 512)  # the patch shape for training
-    n_objects_per_batch = 25  # this is the number of objects per batch that will be sampled
+    n_objects_per_batch = 50  # this is the number of objects per batch that will be sampled
+
+    train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=input_path)
 
     # get the trainable segment anything model
     model = sam_training.get_trainable_sam_model(model_type, checkpoint_path, device=device)
@@ -34,7 +41,6 @@ def finetune_histopatho(input_path, export_path, model_type="vit_h", iterations=
     # all the stuff we need for training
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10, verbose=True)
-    train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=input_path)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
     convert_inputs = sam_training.ConvertToSamInputs()
@@ -74,7 +80,7 @@ def finetune_histopatho(input_path, export_path, model_type="vit_h", iterations=
 
 
 def main():
-    input_path = ""
+    input_path = "/scratch-grete/projects/nim00007/data/lizard"
     export_path = "./sam-vith-histopatho-v1.pth"
     finetune_histopatho(input_path, export_path)
 
