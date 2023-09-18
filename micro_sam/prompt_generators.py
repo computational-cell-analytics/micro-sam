@@ -197,7 +197,7 @@ class IterativePromptGenerator:
     """
     def _get_positive_points(self, pos_region, overlap_region):
         positive_locations = [torch.where(pos_reg) for pos_reg in pos_region]
-        # we may have objects withput a positive region (= missing true foreground)
+        # we may have objects without a positive region (= missing true foreground)
         # in this case we just sample a point where the model was already correct
         positive_locations = [
             torch.where(ovlp_reg) if len(pos_loc[0]) == 0 else pos_loc
@@ -258,16 +258,12 @@ class IterativePromptGenerator:
         self,
         gt: torch.Tensor,
         object_mask: torch.Tensor,
-        current_points: torch.Tensor,
-        current_labels: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Generate the prompts for each object iteratively in the segmentation.
 
         Args:
             The groundtruth segmentation.
             The predicted objects.
-            The current points.
-            Thr current labels.
 
         Returns:
             The updated point prompt coordinates.
@@ -278,7 +274,7 @@ class IterativePromptGenerator:
 
         true_object = gt.to(device)
         expected_diff = (object_mask - true_object)
-        neg_region = (expected_diff == 1).to(torch.float)
+        neg_region = (expected_diff == 1).to(torch.float32)
         pos_region = (expected_diff == -1)
         overlap_region = torch.logical_and(object_mask == 1, true_object == 1).to(torch.float32)
 
@@ -290,7 +286,7 @@ class IterativePromptGenerator:
         neg_coordinates = torch.tensor(neg_coordinates)[:, None]
         pos_labels, neg_labels = torch.tensor(pos_labels)[:, None], torch.tensor(neg_labels)[:, None]
 
-        net_coords = torch.cat([current_points, pos_coordinates, neg_coordinates], dim=1)
-        net_labels = torch.cat([current_labels, pos_labels, neg_labels], dim=1)
+        net_coords = torch.cat([pos_coordinates, neg_coordinates], dim=1)
+        net_labels = torch.cat([pos_labels, neg_labels], dim=1)
 
         return net_coords, net_labels

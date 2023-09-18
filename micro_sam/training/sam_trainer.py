@@ -237,57 +237,15 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
     def _get_updated_points_per_mask_per_subiter(self, masks, sampled_binary_y, batched_inputs, logits_masks):
         # here, we get the pair-per-batch of predicted and true elements (and also the "batched_inputs")
         for x1, x2, _inp, logits in zip(masks, sampled_binary_y, batched_inputs, logits_masks):
-            net_coords, net_labels = [], []
-
             # here, we get each object in the pairs and do the point choices per-object
-            for pred_obj, true_obj in zip(x1, x2):
-                true_obj = true_obj.to(self.device)
+            from micro_sam.prompt_generators import IterativePromptGenerator
+            iterative_prompter = IterativePromptGenerator()
+            net_coords, net_labels = iterative_prompter(x2, x1)
 
-                expected_diff = (pred_obj - true_obj)
-
-                neg_region = (expected_diff == 1).to(torch.float32)
-                pos_region = (expected_diff == -1)
-                overlap_region = torch.logical_and(pred_obj == 1, true_obj == 1).to(torch.float32)
-
-                # POSITIVE POINTS
-                tmp_pos_loc = torch.where(pos_region)
-                if torch.stack(tmp_pos_loc).shape[-1] == 0:
-                    tmp_pos_loc = torch.where(overlap_region)
-
-                pos_index = np.random.choice(len(tmp_pos_loc[1]))
-                pos_coordinates = int(tmp_pos_loc[1][pos_index]), int(tmp_pos_loc[2][pos_index])
-                pos_coordinates = pos_coordinates[::-1]
-                pos_labels = 1
-
-                # NEGATIVE POINTS
-                tmp_neg_loc = torch.where(neg_region)
-                if torch.stack(tmp_neg_loc).shape[-1] == 0:
-                    tmp_true_loc = torch.where(true_obj)
-                    x_coords, y_coords = tmp_true_loc[1], tmp_true_loc[2]
-                    bbox = torch.stack([torch.min(x_coords), torch.min(y_coords),
-                                        torch.max(x_coords) + 1, torch.max(y_coords) + 1])
-                    bbox_mask = torch.zeros_like(true_obj).squeeze(0)
-                    bbox_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = 1
-                    bbox_mask = bbox_mask[None].to(self.device)
-
-                    dilated_bbox_mask = dilation(bbox_mask[None], torch.ones(3, 3).to(self.device)).squeeze(0)
-                    background_mask = abs(dilated_bbox_mask - true_obj)
-                    tmp_neg_loc = torch.where(background_mask)
-
-                neg_index = np.random.choice(len(tmp_neg_loc[1]))
-                neg_coordinates = int(tmp_neg_loc[1][neg_index]), int(tmp_neg_loc[2][neg_index])
-                neg_coordinates = neg_coordinates[::-1]
-                neg_labels = 0
-
-                net_coords.append([pos_coordinates, neg_coordinates])
-                net_labels.append([pos_labels, neg_labels])
-
-            if "point_labels" in _inp.keys():
-                updated_point_coords = torch.cat([_inp["point_coords"], torch.tensor(net_coords)], dim=1)
-                updated_point_labels = torch.cat([_inp["point_labels"], torch.tensor(net_labels)], dim=1)
-            else:
-                updated_point_coords = torch.tensor(net_coords)
-                updated_point_labels = torch.tensor(net_labels)
+            updated_point_coords = torch.cat([_inp["point_coords"], net_coords], dim=1) \
+                if "point_coords" in _inp.keys() else net_coords
+            updated_point_labels = torch.cat([_inp["point_labels"], net_labels], dim=1) \
+                if "point_labels" in _inp.keys() else net_labels
 
             _inp["point_coords"] = updated_point_coords
             _inp["point_labels"] = updated_point_labels
