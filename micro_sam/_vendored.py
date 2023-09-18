@@ -8,12 +8,14 @@ the software license the micro-sam project is distributed under.
 """
 from typing import Any, Dict, List
 
-# import numpy as np
+import numpy as np
 import torch
 
 from numba import njit
-# NEW IMPLEMENTED FUNCTION, NOT YET RELEASED
-# from nifty.tools import computeRLE
+try:
+    from nifty.tools import computeRLE as _compute_rle_nifty
+except ImportError:
+    _compute_rle_nifty = None
 
 
 def batched_mask_to_box(masks: torch.Tensor) -> torch.Tensor:
@@ -72,7 +74,7 @@ def batched_mask_to_box(masks: torch.Tensor) -> torch.Tensor:
 
 
 @njit
-def _compute_rle(mask):
+def _compute_rle_numba(mask):
     val = mask[0]
     counts = [int(x) for x in range(0)] if val == 0 else [0]
     count = 0
@@ -87,7 +89,17 @@ def _compute_rle(mask):
     return counts
 
 
-def mask_to_rle_pytorch(tensor: torch.Tensor) -> List[Dict[str, Any]]:
+def _compute_rle_numpy(mask):
+    diffs = mask[1:] != mask[:-1]  # pairwise unequal (string safe)
+    indices = np.append(np.where(diffs), len(mask) - 1)  # must include last element position
+    # count needs to start with 0 if the mask begins with 1
+    counts = [] if mask[0] == 0 else [0]
+    # compute the actual RLE
+    counts += np.diff(np.append(-1, indices)).tolist()
+    return counts
+
+
+def mask_to_rle_pytorch(tensor: torch.Tensor, rle_implementation: str = "numba") -> List[Dict[str, Any]]:
     """Calculates the runlength encoding of binary input masks.
 
     This replaces the function in
@@ -103,21 +115,20 @@ def mask_to_rle_pytorch(tensor: torch.Tensor) -> List[Dict[str, Any]]:
     tensor = tensor.permute(0, 2, 1).flatten(1)
     tensor = tensor.detach().cpu().numpy()
 
-    # n = tensor.shape[1]
+    if rle_implementation == "numba":
+        rle_impl = _compute_rle_numba
+    elif rle_implementation == "numpy":
+        rle_impl = _compute_rle_numpy
+    elif rle_implementation == "nifty":
+        rle_impl = _compute_rle_nifty
+        assert _compute_rle_nifty is not None
+    else:
+        raise ValueError(
+            f"RLE implementation {rle_implementation} is not available. Has to be one of 'numpy', 'numba' or 'nifty'."
+        )
 
-    # encode the rle for the individual masks
     out = []
     for mask in tensor:
-
-        counts = _compute_rle(mask)
-        # counts = computeRLE(mask)
-
-        # diffs = mask[1:] != mask[:-1]  # pairwise unequal (string safe)
-        # indices = np.append(np.where(diffs), n - 1)  # must include last element position
-        # # count needs to start with 0 if the mask begins with 1
-        # counts = [] if mask[0] == 0 else [0]
-        # # compute the actual RLE
-        # counts += np.diff(np.append(-1, indices)).tolist()
-
+        counts = rle_impl(mask)
         out.append({"size": [h, w], "counts": counts})
     return out

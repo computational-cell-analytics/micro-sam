@@ -51,8 +51,9 @@ def _add_result(benchmark_results, model_type, device, name, runtimes):
     return benchmark_results
 
 
-def benchmark_embeddings(image, predictor, n=3):
+def benchmark_embeddings(image, predictor, n):
     print("Running benchmark_embeddings ...")
+    n = 3 if n is None else n
     times = []
     for _ in range(n):
         t0 = time.time()
@@ -62,8 +63,9 @@ def benchmark_embeddings(image, predictor, n=3):
     return ["embeddings"], [runtime]
 
 
-def benchmark_prompts(image, predictor, n=10):
+def benchmark_prompts(image, predictor, n):
     print("Running benchmark_prompts ...")
+    n = 10 if n is None else n
     names, runtimes = [], []
 
     embeddings = util.precompute_image_embeddings(predictor, image)
@@ -143,8 +145,9 @@ def benchmark_prompts(image, predictor, n=10):
     return names, runtimes
 
 
-def benchmark_amg(image, predictor, n=1):
+def benchmark_amg(image, predictor, n):
     print("Running benchmark_amg ...")
+    n = 1 if n is None else n
     embeddings = util.precompute_image_embeddings(predictor, image)
     amg = instance_seg.AutomaticMaskGenerator(predictor)
     times = []
@@ -164,6 +167,7 @@ def main():
     parser.add_argument("--benchmark_embeddings", "-e", action="store_false")
     parser.add_argument("--benchmark_prompts", "-p", action="store_false")
     parser.add_argument("--benchmark_amg", "-a", action="store_false")
+    parser.add_argument("-n", "--n", type=int, default=None)
 
     args = parser.parse_args()
 
@@ -176,15 +180,15 @@ def main():
 
     benchmark_results = []
     if args.benchmark_embeddings:
-        name, rt = benchmark_embeddings(image, predictor)
+        name, rt = benchmark_embeddings(image, predictor, args.n)
         benchmark_results = _add_result(benchmark_results, model_type, device, name, rt)
 
     if args.benchmark_prompts:
-        name, rt = benchmark_prompts(image, predictor)
+        name, rt = benchmark_prompts(image, predictor, args.n)
         benchmark_results = _add_result(benchmark_results, model_type, device, name, rt)
 
     if args.benchmark_amg:
-        name, rt = benchmark_amg(image, predictor)
+        name, rt = benchmark_amg(image, predictor, args.n)
         benchmark_results = _add_result(benchmark_results, model_type, device, name, rt)
 
     benchmark_results = pd.concat(benchmark_results)
