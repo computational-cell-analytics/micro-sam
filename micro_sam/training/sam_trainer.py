@@ -6,9 +6,10 @@ import numpy as np
 import torch
 import torch_em
 
-from kornia.morphology import dilation
 from torchvision.utils import make_grid
 from torch_em.trainer.logger_base import TorchEmLogger
+
+from ..prompt_generators import IterativePromptGenerator
 
 
 class SamTrainer(torch_em.trainer.DefaultTrainer):
@@ -238,7 +239,6 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         # here, we get the pair-per-batch of predicted and true elements (and also the "batched_inputs")
         for x1, x2, _inp, logits in zip(masks, sampled_binary_y, batched_inputs, logits_masks):
             # here, we get each object in the pairs and do the point choices per-object
-            from micro_sam.prompt_generators import IterativePromptGenerator
             iterative_prompter = IterativePromptGenerator()
             net_coords, net_labels = iterative_prompter(x2, x1)
 
