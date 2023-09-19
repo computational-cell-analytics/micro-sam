@@ -10,7 +10,6 @@ import numpy as np
 from scipy.ndimage import binary_dilation
 
 import torch
-from kornia.morphology import dilation
 
 
 class PointAndBoxPromptGenerator:
@@ -230,13 +229,13 @@ class IterativePromptGenerator:
                 bbox = torch.stack([torch.min(x_coords), torch.min(y_coords),
                                     torch.max(x_coords) + 1, torch.max(y_coords) + 1])
                 bbox_mask = torch.zeros_like(true_object).squeeze(0)
-                bbox_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = 1
+
+                custom_df = 3  # custom dilation factor to perform dilation by expanding the pixels of bbox
+                bbox_mask[max(bbox[0] - custom_df, 0): min(bbox[2] + custom_df, gt.shape[-1]),
+                          max(bbox[1] - custom_df, 0): min(bbox[3] + custom_df, gt.shape[-2])] = 1
                 bbox_mask = bbox_mask[None].to(device)
 
-                # NOTE: FIX: here we add dilation to the bbox because in some case we couldn't find objects at all
-                # TODO: just expand the pixels of bbox
-                dilated_bbox_mask = dilation(bbox_mask[None], torch.ones(3, 3).to(device)).squeeze(0)
-                background_mask = abs(dilated_bbox_mask - true_object)
+                background_mask = abs(bbox_mask - true_object)
                 tmp_neg_loc = torch.where(background_mask)
 
                 # there is a chance that the object is small to not return a decent-sized bounding box
