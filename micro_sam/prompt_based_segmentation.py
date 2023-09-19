@@ -27,24 +27,8 @@ def _compute_box_from_mask(mask, original_size=None, box_extension=0):
     coords = np.where(mask == 1)
     min_y, min_x = coords[0].min(), coords[1].min()
     max_y, max_x = coords[0].max(), coords[1].max()
-
-    if box_extension == 0:  # no extension
-        extension_y, extension_x = 0, 0
-    elif box_extension >= 1:  # extension by a fixed factor
-        extension_y, extension_x = box_extension, box_extension
-    else:  # extension by fraction of the box len
-        len_y, len_x = max_y + 1 - min_y, max_x + 1 - min_x
-        extension_y = int(np.round(box_extension * len_y))
-        extension_x = int(np.round(box_extension * len_x))
-
-    box = np.array([
-        max(min_x - extension_x, 0), max(min_y - extension_y, 0),
-        min(max_x + 1 + extension_x, mask.shape[1]), min(max_y + 1 + extension_y, mask.shape[0]),
-    ])
-    if original_size is not None:
-        trafo = ResizeLongestSide(max(original_size))
-        box = trafo.apply_boxes(box[None], (256, 256)).squeeze()
-    return box
+    box = np.array([min_y, min_x, max_y + 1, max_x + 1])
+    return _process_box(box, mask.shape, original_size=original_size, box_extension=box_extension)
 
 
 # sample points from a mask. SAM expects the following point inputs:
@@ -128,12 +112,23 @@ def _compute_logits_from_mask(mask, eps=1e-3):
 #
 
 
-def _process_box(box, original_size=None):
-    box_processed = box[[1, 0, 3, 2]]
+def _process_box(box, shape, original_size=None, box_extension=0):
+    if box_extension == 0:  # no extension
+        extension_y, extension_x = 0, 0
+    elif box_extension >= 1:  # extension by a fixed factor
+        extension_y, extension_x = box_extension, box_extension
+    else:  # extension by fraction of the box len
+        len_y, len_x = box[2] - box[0], box[3] - box[1]
+        extension_y, extension_x = box_extension * len_y, box_extension * len_x
+
+    box = np.array([
+        max(box[1] - extension_x, 0), max(box[0] - extension_y, 0),
+        min(box[3] + extension_x, shape[1]), min(box[2] + extension_y, shape[0]),
+    ])
     if original_size is not None:
         trafo = ResizeLongestSide(max(original_size))
-        box_processed = trafo.apply_boxes(box[None], (256, 256)).squeeze()
-    return box_processed
+        box = trafo.apply_boxes(box[None], (256, 256)).squeeze()
+    return box
 
 
 # Select the correct tile based on average of points
@@ -204,7 +199,7 @@ def _mask_to_tile(mask, shape, tile_shape, halo):
 
 
 def _initialize_predictor(predictor, image_embeddings, i, prompts, to_tile):
-    tile, shape = None, None
+    tile = None
 
     # set uthe precomputed state for tiled prediction
     if image_embeddings is not None and image_embeddings["input_size"] is None:
@@ -221,7 +216,11 @@ def _initialize_predictor(predictor, image_embeddings, i, prompts, to_tile):
 
     # set the precomputed state for normal prediction
     elif image_embeddings is not None:
+        shape = image_embeddings["input_size"]
         util.set_precomputed(predictor, image_embeddings, i)
+
+    else:
+        shape = predictor.input_size
 
     return predictor, tile, prompts, shape
 
@@ -313,6 +312,7 @@ def segment_from_mask(
     return_all: bool = False,
     return_logits: bool = False,
     box_extension: float = 0.0,
+    box: Optional[np.ndarray] = None,
 ):
     """Segmentation from a mask prompt.
 
@@ -325,10 +325,12 @@ def segment_from_mask(
              or a time dimension and two spatial dimensions.
         use_box: Whether to derive the bounding box prompt from the mask.
         use_mask: Whether to use the mask itself as prompt.
-        use_points: Wehter to derive point prompts from the mask.
+        use_points: Whether to derive point prompts from the mask.
+        original_size: Full image shape.
         multimask_output: Whether to return multiple or just a single mask.
         return_all: Whether to return the score and logits in addition to the mask.
         box_extension: Relative factor used to enlarge the bounding box prompt.
+        box: Precomputed bounding box that will be used instead of computing it.
 
     Returns:
         The binary segmentation mask.
@@ -343,7 +345,14 @@ def segment_from_mask(
         )
     else:
         point_coords, point_labels = None, None
-    box = _compute_box_from_mask(mask, original_size=original_size, box_extension=box_extension) if use_box else None
+
+    if box is None:
+        box = _compute_box_from_mask(
+            mask, original_size=original_size, box_extension=box_extension
+        ) if use_box else None
+    else:
+        box = _process_box(box, mask.shape, original_size, box_extension=box_extension)
+
     logits = _compute_logits_from_mask(mask) if use_mask else None
 
     mask, scores, logits = predictor.predict(
@@ -354,6 +363,7 @@ def segment_from_mask(
 
     if tile is not None:
         return _tile_to_full_mask(mask, shape, tile, return_all, multimask_output)
+
     if return_all:
         return mask, scores, logits
     else:
@@ -388,7 +398,9 @@ def segment_from_box(
     predictor, tile, box, shape = _initialize_predictor(
         predictor, image_embeddings, i, box, _box_to_tile
     )
-    mask, scores, logits = predictor.predict(box=_process_box(box, original_size), multimask_output=multimask_output)
+    mask, scores, logits = predictor.predict(
+        box=_process_box(box, shape, original_size), multimask_output=multimask_output
+    )
 
     if tile is not None:
         return _tile_to_full_mask(mask, shape, tile, return_all, multimask_output)

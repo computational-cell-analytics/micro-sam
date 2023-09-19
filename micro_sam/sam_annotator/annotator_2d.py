@@ -16,18 +16,22 @@ from .gui_utils import show_wrong_file_warning
 
 
 @magicgui(call_button="Segment Object [S]")
-def _segment_widget(v: Viewer) -> None:
-    # get the current box and point prompts
-    boxes = vutil.prompt_layer_to_boxes(v.layers["box_prompts"])
-    points, labels = vutil.prompt_layer_to_points(v.layers["prompts"])
-
+def _segment_widget(v: Viewer, box_extension: float = 0.1) -> None:
     shape = v.layers["current_object"].data.shape
+
+    # get the current box and point prompts
+    boxes, masks = vutil.shape_layer_to_prompts(v.layers["box_prompts"], shape)
+    points, labels = vutil.point_layer_to_prompts(v.layers["prompts"])
+
     if IMAGE_EMBEDDINGS["original_size"] is None:  # tiled prediction
         seg = vutil.prompt_segmentation(
-            PREDICTOR, points, labels, boxes, shape, image_embeddings=IMAGE_EMBEDDINGS, multiple_box_prompts=True
+            PREDICTOR, points, labels, boxes, masks, shape, image_embeddings=IMAGE_EMBEDDINGS,
+            multiple_box_prompts=True, box_extension=box_extension,
         )
     else:  # normal prediction and we have set the precomputed embeddings already
-        seg = vutil.prompt_segmentation(PREDICTOR, points, labels, boxes, shape, multiple_box_prompts=True)
+        seg = vutil.prompt_segmentation(
+            PREDICTOR, points, labels, boxes, masks, shape, multiple_box_prompts=True, box_extension=box_extension,
+        )
 
     # no prompts were given or prompts were invalid, skip segmentation
     if seg is None:
