@@ -354,7 +354,7 @@ def segment_from_mask(
             tile_id_box, tile, box = _box_to_tile(box, shape, tile_shape, halo)
             if tile_id_box != tile_id:
                 raise RuntimeError(f"Inconsistent tile ids for mask and box prompts: {tile_id_box} != {tile_id}.")
-        return tile_id, tile, (box, points, labels)
+        return tile_id, tile, (mask, box, points, labels)
 
     predictor, tile, prompts, shape = _initialize_predictor(predictor, image_embeddings, i, prompts, _to_tile)
     mask, box, points, labels = prompts
