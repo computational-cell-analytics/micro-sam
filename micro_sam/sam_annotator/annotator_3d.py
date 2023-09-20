@@ -26,22 +26,22 @@ from .gui_utils import show_wrong_file_warning
 
 
 @magicgui(call_button="Segment Slice [S]")
-def _segment_slice_wigdet(v: Viewer) -> None:
+def _segment_slice_wigdet(v: Viewer, box_extension: float = 0.1) -> None:
+    shape = v.layers["current_object"].data.shape[1:]
     position = v.cursor.position
     z = int(position[0])
 
-    point_prompts = vutil.prompt_layer_to_points(v.layers["prompts"], z)
+    point_prompts = vutil.point_layer_to_prompts(v.layers["point_prompts"], z)
     # this is a stop prompt, we do nothing
     if not point_prompts:
         return
 
-    boxes = vutil.prompt_layer_to_boxes(v.layers["box_prompts"], z)
+    boxes, masks = vutil.shape_layer_to_prompts(v.layers["prompts"], shape, i=z)
     points, labels = point_prompts
 
-    shape = v.layers["current_object"].data.shape[1:]
     seg = vutil.prompt_segmentation(
-        PREDICTOR, points, labels, boxes, shape, multiple_box_prompts=False,
-        image_embeddings=IMAGE_EMBEDDINGS, i=z
+        PREDICTOR, points, labels, boxes, masks, shape, multiple_box_prompts=False,
+        image_embeddings=IMAGE_EMBEDDINGS, i=z, box_extension=box_extension,
     )
 
     # no prompts were given or prompts were invalid, skip segmentation
@@ -60,7 +60,8 @@ def _segment_volume_for_current_object(v, projection, iou_threshold, box_extensi
 
         # step 1: segment all slices with prompts
         seg, slices, stop_lower, stop_upper = vutil.segment_slices_with_prompts(
-            PREDICTOR, v.layers["prompts"], v.layers["box_prompts"], IMAGE_EMBEDDINGS, shape, progress_bar=progress_bar,
+            PREDICTOR, v.layers["point_prompts"], v.layers["prompts"], IMAGE_EMBEDDINGS, shape,
+            progress_bar=progress_bar,
         )
 
         # step 2: segment the rest of the volume based on smart prompting
@@ -268,7 +269,7 @@ def annotator_3d(
     labels = ["positive", "negative"]
     prompts = v.add_points(
         data=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],  # FIXME workaround
-        name="prompts",
+        name="point_prompts",
         properties={"label": labels},
         edge_color="label",
         edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
@@ -281,7 +282,7 @@ def annotator_3d(
     prompts.edge_color_mode = "cycle"
 
     v.add_shapes(
-        face_color="transparent", edge_color="green", edge_width=4, name="box_prompts", ndim=3
+        face_color="transparent", edge_color="green", edge_width=4, name="prompts", ndim=3
     )
 
     #

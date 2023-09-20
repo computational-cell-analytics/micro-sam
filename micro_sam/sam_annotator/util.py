@@ -185,32 +185,20 @@ def shape_layer_to_prompts(
     if len(shape_data) == 0:
         return [], []
 
-    if i is None:
-        boxes, masks = _to_prompts(shape_data, shape_types)
-        # boxes = [data for data, stype in zip(shape_data, shape_types) if stype == "rectangle"]
-    else:
-        # we are currently only supporting rectangle shapes.
-        # other shapes could be supported by providing them as rough mask
-        # (and also providing the corresponding bounding box)
-        # but for this we need to figure out the mask prompts for non-square shapes
-        non_rectangle = [stype != "rectangle" for stype in shape_types]
-        if any(non_rectangle):
-            print(f"You have provided {sum(non_rectangle)} shapes that are not rectangles.")
-            print("We currently do not support these as prompts and they will be ignored.")
-
+    if i is not None:
         if track_id is None:
-            boxes = [
-                data[:, 1:] for data, stype in zip(shape_data, shape_types)
-                if (stype == "rectangle" and (data[:, 0] == i).all())
-            ]
+            prompt_selection = [j for j, data in enumerate(shape_data) if (data[:, 0] == i).all()]
         else:
             track_ids = np.array(list(map(int, layer.properties["track_id"])))
-            assert len(track_ids) == len(shape_data), f"{len(track_ids)}, {len(shape_data)}"
-            boxes = [
-                data[:, 1:] for data, stype, this_track_id in zip(shape_data, shape_types, track_ids)
-                if (stype == "rectangle" and (data[:, 0] == i).all() and this_track_id == track_id)
+            prompt_selection = [
+                j for j, (data, this_track_id) in enumerate(zip(shape_data, track_ids))
+                if ((data[:, 0] == i).all() and this_track_id == track_id)
             ]
 
+        shape_data = [shape_data[j][:, 1:] for j in prompt_selection]
+        shape_types = [shape_types[j] for j in prompt_selection]
+
+    boxes, masks = _to_prompts(shape_data, shape_types)
     return boxes, masks
 
 
@@ -311,7 +299,7 @@ def segment_slices_with_prompts(
             progress_bar.update(1)
 
     for i in slices:
-        points_i = prompt_layer_to_points(point_prompts, i, track_id)
+        points_i = point_layer_to_prompts(point_prompts, i, track_id)
 
         # do we end the segmentation at the outer slices?
         if points_i is None:
@@ -327,11 +315,11 @@ def segment_slices_with_prompts(
             _update_progress()
             continue
 
-        boxes = prompt_layer_to_boxes(box_prompts, i, track_id)
+        boxes, masks = shape_layer_to_prompts(box_prompts, image_shape, i=i, track_id=track_id)
         points, labels = points_i
 
         seg_i = prompt_segmentation(
-            predictor, points, labels, boxes, image_shape, multiple_box_prompts=False,
+            predictor, points, labels, boxes, masks, image_shape, multiple_box_prompts=False,
             image_embeddings=image_embeddings, i=i
         )
         if seg_i is None:

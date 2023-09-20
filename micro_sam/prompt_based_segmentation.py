@@ -125,6 +125,7 @@ def _process_box(box, shape, original_size=None, box_extension=0):
         max(box[1] - extension_x, 0), max(box[0] - extension_y, 0),
         min(box[3] + extension_x, shape[1]), min(box[2] + extension_y, shape[0]),
     ])
+
     if original_size is not None:
         trafo = ResizeLongestSide(max(original_size))
         box = trafo.apply_boxes(box[None], (256, 256)).squeeze()
