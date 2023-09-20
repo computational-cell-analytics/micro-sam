@@ -231,8 +231,8 @@ class IterativePromptGenerator:
                 bbox_mask = torch.zeros_like(true_object).squeeze(0)
 
                 custom_df = 3  # custom dilation factor to perform dilation by expanding the pixels of bbox
-                bbox_mask[max(bbox[0] - custom_df, 0): min(bbox[2] + custom_df, gt.shape[-1]),
-                          max(bbox[1] - custom_df, 0): min(bbox[3] + custom_df, gt.shape[-2])] = 1
+                bbox_mask[max(bbox[0] - custom_df, 0): min(bbox[2] + custom_df, gt.shape[-2]),
+                          max(bbox[1] - custom_df, 0): min(bbox[3] + custom_df, gt.shape[-1])] = 1
                 bbox_mask = bbox_mask[None].to(device)
 
                 background_mask = torch.abs(bbox_mask - true_object)
