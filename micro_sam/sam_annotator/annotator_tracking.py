@@ -187,20 +187,20 @@ def _update_lineage():
 
 @magicgui(call_button="Segment Frame [S]")
 def _segment_frame_wigdet(v: Viewer) -> None:
+    shape = v.layers["current_track"].data.shape[1:]
     position = v.cursor.position
     t = int(position[0])
 
-    point_prompts = vutil.prompt_layer_to_points(v.layers["prompts"], t, track_id=CURRENT_TRACK_ID)
+    point_prompts = vutil.point_layer_to_prompts(v.layers["point_prompts"], i=t, track_id=CURRENT_TRACK_ID)
     # this is a stop prompt, we do nothing
     if not point_prompts:
         return
 
-    boxes = vutil.prompt_layer_to_boxes(v.layers["box_prompts"], t, track_id=CURRENT_TRACK_ID)
+    boxes, masks = vutil.shape_layer_to_prompts(v.layers["prompts"], shape, i=t, track_id=CURRENT_TRACK_ID)
     points, labels = point_prompts
 
-    shape = v.layers["current_track"].data.shape[1:]
     seg = vutil.prompt_segmentation(
-        PREDICTOR, points, labels, boxes, shape, multiple_box_prompts=False,
+        PREDICTOR, points, labels, boxes, masks, shape, multiple_box_prompts=False,
         image_embeddings=IMAGE_EMBEDDINGS, i=t
     )
 
@@ -232,13 +232,13 @@ def _track_objet_widget(
     with progress(total=shape[0]) as progress_bar:
         # step 1: segment all slices with prompts
         seg, slices, _, stop_upper = vutil.segment_slices_with_prompts(
-            PREDICTOR, v.layers["prompts"], v.layers["box_prompts"], IMAGE_EMBEDDINGS, shape,
+            PREDICTOR, v.layers["point_prompts"], v.layers["prompts"], IMAGE_EMBEDDINGS, shape,
             progress_bar=progress_bar, track_id=CURRENT_TRACK_ID
         )
 
         # step 2: track the object starting from the lowest annotated slice
         seg, has_division = _track_from_prompts(
-            v.layers["prompts"], v.layers["box_prompts"], seg,
+            v.layers["point_prompts"], v.layers["prompts"], seg,
             PREDICTOR, slices, IMAGE_EMBEDDINGS, stop_upper,
             threshold=iou_threshold, projection=projection_,
             progress_bar=progress_bar, motion_smoothing=motion_smoothing,
@@ -454,7 +454,7 @@ def annotator_tracking(
     state_labels = ["track", "division"]
     prompts = v.add_points(
         data=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],  # FIXME workaround
-        name="prompts",
+        name="point_prompts",
         properties={
             "label": labels,
             "state": state_labels,
@@ -482,7 +482,7 @@ def annotator_tracking(
         shape_type="rectangle",  # FIXME workaround
         edge_width=4, ndim=3,
         face_color="transparent",
-        name="box_prompts",
+        name="prompts",
         edge_color="green",
         properties={"track_id": ["1", "1"]},
         # properties={"track_id": ["1", "1"], "state": state_labels},
