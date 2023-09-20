@@ -38,6 +38,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         n_objects_per_batch: Optional[int] = None,
         mse_loss: torch.nn.Module = torch.nn.MSELoss(),
         _sigmoid: torch.nn.Module = torch.nn.Sigmoid(),
+        prompt_generator=IterativePromptGenerator(),
         **kwargs
     ):
         super().__init__(**kwargs)
@@ -46,6 +47,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         self._sigmoid = _sigmoid
         self.n_objects_per_batch = n_objects_per_batch
         self.n_sub_iteration = n_sub_iteration
+        self.prompt_generator = prompt_generator
         self._kwargs = kwargs
 
     def _get_prompt_and_multimasking_choices(self, current_iteration):
@@ -239,8 +241,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         # here, we get the pair-per-batch of predicted and true elements (and also the "batched_inputs")
         for x1, x2, _inp, logits in zip(masks, sampled_binary_y, batched_inputs, logits_masks):
             # here, we get each object in the pairs and do the point choices per-object
-            iterative_prompter = IterativePromptGenerator()
-            net_coords, net_labels = iterative_prompter(x2, x1)
+            net_coords, net_labels = self.prompt_generator(x2, x1)
 
             updated_point_coords = torch.cat([_inp["point_coords"], net_coords], dim=1) \
                 if "point_coords" in _inp.keys() else net_coords
@@ -256,9 +257,8 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
     #
 
     def _update_samples_for_gt_instances(self, y, n_samples):
-        num_instances_gt = [len(torch.unique(_y)) for _y in y]
-        if n_samples > min(num_instances_gt):
-            n_samples = min(num_instances_gt) - 1
+        num_instances_gt = torch.amax(y, dim=(1, 2, 3))
+        n_samples = min(num_instances_gt) if n_samples > min(num_instances_gt) else n_samples
         return n_samples
 
     def _train_epoch_impl(self, progress, forward_context, backprop):

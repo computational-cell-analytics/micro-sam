@@ -235,7 +235,7 @@ class IterativePromptGenerator:
                           max(bbox[1] - custom_df, 0): min(bbox[3] + custom_df, gt.shape[-2])] = 1
                 bbox_mask = bbox_mask[None].to(device)
 
-                background_mask = abs(bbox_mask - true_object)
+                background_mask = torch.abs(bbox_mask - true_object)
                 tmp_neg_loc = torch.where(background_mask)
 
                 # there is a chance that the object is small to not return a decent-sized bounding box
