@@ -313,6 +313,8 @@ def segment_from_mask(
     return_logits: bool = False,
     box_extension: float = 0.0,
     box: Optional[np.ndarray] = None,
+    points: Optional[np.ndarray] = None,
+    labels: Optional[np.ndarray] = None,
 ):
     """Segmentation from a mask prompt.
 
@@ -330,19 +332,42 @@ def segment_from_mask(
         multimask_output: Whether to return multiple or just a single mask.
         return_all: Whether to return the score and logits in addition to the mask.
         box_extension: Relative factor used to enlarge the bounding box prompt.
-        box: Precomputed bounding box that will be used instead of computing it.
+        box: Precomputed bounding box.
+        points: Precomputed point prompts.
+        labels: Positive/negative labels corresponding to the point prompts.
 
     Returns:
         The binary segmentation mask.
     """
-    predictor, tile, mask, shape = _initialize_predictor(
-        predictor, image_embeddings, i, mask, _mask_to_tile
-    )
+    prompts = (mask, box, points, labels)
 
-    if use_points:
+    def _to_tile(prompts, shape, tile_shape, halo):
+        mask, box, points, labels = prompts
+        tile_id, tile, mask = _mask_to_tile(mask, shape, tile_shape, halo)
+        if points is not None:
+            tile_id_points, tile, point_prompts = _points_to_tile((points, labels), shape, tile_shape, halo)
+            if tile_id_points != tile_id:
+                raise RuntimeError(f"Inconsistent tile ids for mask and point prompts: {tile_id_points} != {tile_id}.")
+            points, labels = point_prompts
+        if box is not None:
+            tile_id_box, tile, box = _box_to_tile(box, shape, tile_shape, halo)
+            if tile_id_box != tile_id:
+                raise RuntimeError(f"Inconsistent tile ids for mask and box prompts: {tile_id_box} != {tile_id}.")
+        return tile_id, tile, (box, points, labels)
+
+    predictor, tile, prompts, shape = _initialize_predictor(predictor, image_embeddings, i, prompts, _to_tile)
+    mask, box, points, labels = prompts
+
+    if points is not None:
+        if labels is None:
+            raise ValueError("If points are passed you also need to pass labels.")
+        point_coords, point_labels = points, labels
+
+    elif use_points:
         point_coords, point_labels = _compute_points_from_mask(
             mask, original_size=original_size, box_extension=box_extension
         )
+
     else:
         point_coords, point_labels = None, None
 
@@ -456,7 +481,7 @@ def segment_from_box_and_points(
     mask, scores, logits = predictor.predict(
         point_coords=points[:, ::-1],  # SAM has reversed XY conventions
         point_labels=labels,
-        box=_process_box(box, original_size),
+        box=_process_box(box, shape, original_size),
         multimask_output=multimask_output
     )
 

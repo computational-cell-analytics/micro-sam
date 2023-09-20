@@ -20,8 +20,8 @@ def _segment_widget(v: Viewer, box_extension: float = 0.1) -> None:
     shape = v.layers["current_object"].data.shape
 
     # get the current box and point prompts
-    boxes, masks = vutil.shape_layer_to_prompts(v.layers["box_prompts"], shape)
-    points, labels = vutil.point_layer_to_prompts(v.layers["prompts"])
+    boxes, masks = vutil.shape_layer_to_prompts(v.layers["prompts"], shape)
+    points, labels = vutil.point_layer_to_prompts(v.layers["point_prompts"], with_stop_annotation=False)
 
     if IMAGE_EMBEDDINGS["original_size"] is None:  # tiled prediction
         seg = vutil.prompt_segmentation(
@@ -118,7 +118,7 @@ def _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings):
     labels = ["positive", "negative"]
     prompts = v.add_points(
         data=[[0.0, 0.0], [0.0, 0.0]],  # FIXME workaround
-        name="prompts",
+        name="point_prompts",
         properties={"label": labels},
         edge_color="label",
         edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
@@ -131,7 +131,7 @@ def _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings):
     prompts.edge_color_mode = "cycle"
 
     v.add_shapes(
-        face_color="transparent", edge_color="green", edge_width=4, name="box_prompts"
+        face_color="transparent", edge_color="green", edge_width=4, name="prompts"
     )
 
     #

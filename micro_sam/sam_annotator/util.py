@@ -18,11 +18,11 @@ LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
 
 def clear_annotations(v: napari.Viewer, clear_segmentations=True) -> None:
     """@private"""
-    v.layers["prompts"].data = []
-    v.layers["prompts"].refresh()
-    if "box_prompts" in v.layers:
-        v.layers["box_prompts"].data = []
-        v.layers["box_prompts"].refresh()
+    v.layers["point_prompts"].data = []
+    v.layers["point_prompts"].refresh()
+    if "prompts" in v.layers:
+        v.layers["prompts"].data = []
+        v.layers["prompts"].refresh()
     if not clear_segmentations:
         return
     if "current_object" in v.layers:
@@ -80,22 +80,24 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
 
 
 def point_layer_to_prompts(
-    prompt_layer: napari.layers.Points, i=None, track_id=None
+    layer: napari.layers.Points, i=None, track_id=None, with_stop_annotation=True,
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     """Extract point prompts for SAM from a napari point layer.
 
     Args:
-        prompt_layer: The point layer from which to extract the prompts.
+        layer: The point layer from which to extract the prompts.
         i: Index for the data (required for 3d or timeseries data).
         track_id: Id of the current track (required for tracking data).
+        with_stop_annotation: Whether a single negative point will be interpreted
+            as stop annotation or just returned as normal prompt.
 
     Returns:
         The point coordinates for the prompts.
         The labels (positive or negative / 1 or 0) for the prompts.
     """
 
-    points = prompt_layer.data
-    labels = prompt_layer.properties["label"]
+    points = layer.data
+    labels = layer.properties["label"]
     assert len(points) == len(labels)
 
     if i is None:
@@ -110,7 +112,7 @@ def point_layer_to_prompts(
 
     if track_id is not None:
         assert i is not None
-        track_ids = np.array(list(map(int, prompt_layer.properties["track_id"])))[mask]
+        track_ids = np.array(list(map(int, layer.properties["track_id"])))[mask]
         track_id_mask = track_ids == track_id
         this_labels, this_points = this_labels[track_id_mask], this_points[track_id_mask]
     assert len(this_points) == len(this_labels)
@@ -118,7 +120,7 @@ def point_layer_to_prompts(
     this_labels = np.array([1 if label == "positive" else 0 for label in this_labels])
     # a single point with a negative label is interpreted as 'stop' signal
     # in this case we return None
-    if len(this_points) == 1 and this_labels[0] == 0:
+    if with_stop_annotation and (len(this_points) == 1 and this_labels[0] == 0):
         return None
 
     return this_points, this_labels
@@ -357,18 +359,22 @@ def prompt_segmentation(
     if not have_points and not have_boxes:
         return
 
-    # box and ppint prompts were given
+    # box and point prompts were given
     elif have_points and have_boxes:
         if len(boxes) > 1:
             print("You have provided point prompts and more than one box prompt.")
             print("This setting is currently not supported.")
             print("When providing both points and prompts you can only segment one object at a time.")
             return
-        # TODO check if we have a mask and also pass it as prompt
-        # (also need to implement the convenience function for it!)
-        seg = prompt_based_segmentation.segment_from_box_and_points(
-            predictor, boxes[0], points, labels, image_embeddings=image_embeddings, i=i
-        ).squeeze()
+        mask = masks[0]
+        if mask is None:
+            seg = prompt_based_segmentation.segment_from_box_and_points(
+                predictor, boxes[0], points, labels, image_embeddings=image_embeddings, i=i
+            ).squeeze()
+        else:
+            seg = prompt_based_segmentation.segment_from_mask(
+                predictor, mask, box=boxes[0], points=points, labels=labels, image_embeddings=image_embeddings, i=i
+            ).squeeze()
 
     # only point prompts were given
     elif have_points and not have_boxes:
