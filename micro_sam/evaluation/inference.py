@@ -376,6 +376,7 @@ def run_inference_with_prompts(
          prompt_save_dir, use_points, use_boxes, n_positives, n_negatives
      )
 
+    os.makedirs(prediction_dir, exist_ok=True)
     for image_path, gt_path in tqdm(
         zip(image_paths, gt_paths), total=len(image_paths), desc="Run inference with prompts"
     ):

@@ -6,6 +6,7 @@ from .automatic_mask_generation import (
     run_amg_grid_search,
     run_amg_grid_search_and_inference,
 )
+from .evaluation import run_evaluation
 from .inference import (
     get_predictor,
     run_inference_with_prompts,

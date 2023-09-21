@@ -1,16 +1,10 @@
 import unittest
 import numpy as np
 
-from skimage.data import binary_blobs
-from skimage.measure import label
+from micro_sam.sample_data import synthetic_data
 
 
 class TestPromptGenerators(unittest.TestCase):
-
-    def _get_test_data(self):
-        data = binary_blobs(length=256)
-        labels = label(data)
-        return labels
 
     def _debug(self, mask, center, box, coords, point_labels):
         import napari
@@ -43,7 +37,7 @@ class TestPromptGenerators(unittest.TestCase):
         from micro_sam.prompt_generators import PointAndBoxPromptGenerator
         from micro_sam.util import get_centers_and_bounding_boxes
 
-        labels = self._get_test_data()
+        _, labels = synthetic_data(shape=(256, 256))
         label_ids = np.unique(labels)[1:]
 
         centers, boxes = get_centers_and_bounding_boxes(labels)
@@ -72,7 +66,7 @@ class TestPromptGenerators(unittest.TestCase):
         from micro_sam.prompt_generators import PointAndBoxPromptGenerator
         from micro_sam.util import get_centers_and_bounding_boxes
 
-        labels = self._get_test_data()
+        _, labels = synthetic_data(shape=(256, 256))
         label_ids = np.unique(labels)[1:]
 
         centers, boxes = get_centers_and_bounding_boxes(labels)
