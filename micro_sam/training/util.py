@@ -107,10 +107,11 @@ class ConvertToSamInputs:
             my_cell_id = np.random.choice(np.setdiff1d(cell_ids, sampled_cell_ids))
             sampled_cell_ids.append(my_cell_id)
 
+            obj_mask = (gt == my_cell_id)
             bbox = bbox_coordinates[my_cell_id]
             # points = point_coordinates[my_cell_id]
             # removed "points" to randomly choose fg points
-            coord_list, label_list, bbox_list, _ = prompt_generator(gt, my_cell_id, bbox)
+            coord_list, label_list, bbox_list, _ = prompt_generator(obj_mask, bbox)
 
             if get_boxes is True and get_points is False:  # only box
                 bbox_list = bbox_list[0]
