@@ -32,11 +32,12 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
 
 def finetune_livecell(args):
     """Example code for finetuning SAM on LiveCELL"""
+    # override this (below) if you have some more complex set-up and need to specify the exact gpu
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # training settings:
     model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
-    device = "cuda"  # override this if you have some more complex set-up and need to specify the exact gpu
     patch_shape = (520, 740)  # the patch shape for training
     n_objects_per_batch = 25  # this is the number of objects per batch that will be sampled
 
@@ -105,7 +106,7 @@ def main():
     )
     parser.add_argument(
         "--export_path", "-e",
-        help="Where to export the finetuned model to. The exported model can be use din the annotation tools."
+        help="Where to export the finetuned model to. The exported model can be used in the annotation tools."
     )
     args = parser.parse_args()
     finetune_livecell(args)

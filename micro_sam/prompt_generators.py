@@ -3,17 +3,46 @@ Classes for generating prompts from ground-truth segmentation masks.
 For training or evaluation of prompt-based segmentation.
 """
 
-from collections.abc import Mapping
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 import numpy as np
 from scipy.ndimage import binary_dilation
 
 import torch
-from kornia.morphology import dilation
 
 
-class PointAndBoxPromptGenerator:
+class PromptGeneratorBase:
+    def __call__(
+            self,
+            segmentation: torch.Tensor[float],
+            prediction: Optional[torch.Tensor[float]] = None,
+            bbox_coordinates: Optional[List[tuple]] = None,
+            center_coordinates: Optional[List[np.ndarray]] = None
+    ) -> Tuple[
+        Optional[torch.Tensor[int]],  # the point coordinates
+        Optional[torch.Tensor[float]],  # the point labels
+        Optional[torch.Tensor[float]],  # the bounding boxes
+        Optional[torch.Tensor[float]],  # the mask prompts
+    ]:
+        """PromptGeneratorBase is an interface to implement specific prompt generators
+
+        Args:
+            segmentation: The object for an instance id from the ground-truth segmentation.
+            prediction: The predicted object for the same instance id as above.
+            bbox_coordinates: The bounding boxes for the passed "segmentation" above
+            center_coordinates: The center coordinates for the passed "segmentation" object
+
+        Returns:
+            The positive (and/or negative) point coordinate(s)
+            The positive (and/or negative) point label(s)
+            The bounding box of the object
+            The mask prompts
+        """
+        raise NotImplementedError("PromptGeneratorBase is just a class template. \
+                                  Use a child class that implements the specific generator instead")
+
+
+class PointAndBoxPromptGenerator(PromptGeneratorBase):
     """Generate point and/or box prompts from an instance segmentation.
 
     You can use this class to derive prompts from an instance segmentation, either for
@@ -27,8 +56,8 @@ class PointAndBoxPromptGenerator:
     # Precompute the bounding boxes for the given segmentation
     bounding_boxes, _ = util.get_centers_and_bounding_boxes(segmentation)
     # generate point prompts for the object with id 1 in 'segmentation'
-    seg_id = 1
-    points, point_labels, _, _ = prompt_generator(segmentation, seg_id, bounding_boxes)
+    object_mask = (segmentation == seg_id)
+    point_coords, point_labels, _, = prompt_generator(object_mask, bounding_boxes)
     ```
 
     Args:
@@ -154,20 +183,22 @@ class PointAndBoxPromptGenerator:
 
     def __call__(
         self,
-        segmentation: np.ndarray,
-        segmentation_id: int,
-        bbox_coordinates: Mapping[int, tuple],
-        center_coordinates: Optional[Mapping[int, np.ndarray]] = None
+        segmentation: torch.Tensor[float],
+        bbox_coordinates: List[tuple],
+        center_coordinates: Optional[List[np.ndarray]] = None,
+        **kwargs,
     ) -> tuple[
-        Optional[list[tuple]], Optional[list[int]], Optional[list[tuple]], np.ndarray
+        Optional[list[tuple]],  # point coordinates
+        Optional[list[int]],  # point labels
+        Optional[list[tuple]],  # box coordinates
+        Optional[list[float]]  # mask prompts
     ]:
         """Generate the prompts for one object in the segmentation.
 
         Args:
-            segmentation: The instance segmentation.
-            segmentation_id: The ID of the instance.
-            bbox_coordinates: The precomputed bounding boxes of all objects in the segmentation.
-            center_coordinates: The precomputed center coordinates of all objects in the segmentation.
+            segmentation: The instance segmentation of the particular instance id.
+            bbox_coordinates: The precomputed bounding boxes of particular object in the segmentation.
+            center_coordinates: The precomputed center coordinates of particular object in the segmentation.
                 If passed, these coordinates will be used as the first positive point prompt.
                 If not passed a random point from within the object mask will be used.
 
@@ -175,12 +206,9 @@ class PointAndBoxPromptGenerator:
             List of point coordinates. Returns None, if get_point_prompts is false.
             List of point labels. Returns None, if get_point_prompts is false.
             List containing the object bounding box. Returns None, if get_box_prompts is false.
-            Object mask.
         """
-        object_mask = segmentation == segmentation_id
-
         if self.get_point_prompts:
-            coord_list, label_list = self._sample_points(object_mask, bbox_coordinates, center_coordinates)
+            coord_list, label_list = self._sample_points(segmentation, bbox_coordinates, center_coordinates)
         else:
             coord_list, label_list = None, None
 
@@ -189,15 +217,15 @@ class PointAndBoxPromptGenerator:
         else:
             bbox_list = None
 
-        return coord_list, label_list, bbox_list, object_mask
+        return coord_list, label_list, bbox_list, None
 
 
-class IterativePromptGenerator:
+class IterativePromptGenerator(PromptGeneratorBase):
     """Generate point prompts from an instance segmentation iteratively.
     """
     def _get_positive_points(self, pos_region, overlap_region):
         positive_locations = [torch.where(pos_reg) for pos_reg in pos_region]
-        # we may have objects withput a positive region (= missing true foreground)
+        # we may have objects without a positive region (= missing true foreground)
         # in this case we just sample a point where the model was already correct
         positive_locations = [
             torch.where(ovlp_reg) if len(pos_loc[0]) == 0 else pos_loc
@@ -230,13 +258,13 @@ class IterativePromptGenerator:
                 bbox = torch.stack([torch.min(x_coords), torch.min(y_coords),
                                     torch.max(x_coords) + 1, torch.max(y_coords) + 1])
                 bbox_mask = torch.zeros_like(true_object).squeeze(0)
-                bbox_mask[bbox[0]:bbox[2], bbox[1]:bbox[3]] = 1
+
+                custom_df = 3  # custom dilation factor to perform dilation by expanding the pixels of bbox
+                bbox_mask[max(bbox[0] - custom_df, 0): min(bbox[2] + custom_df, gt.shape[-2]),
+                          max(bbox[1] - custom_df, 0): min(bbox[3] + custom_df, gt.shape[-1])] = 1
                 bbox_mask = bbox_mask[None].to(device)
 
-                # NOTE: FIX: here we add dilation to the bbox because in some case we couldn't find objects at all
-                # TODO: just expand the pixels of bbox
-                dilated_bbox_mask = dilation(bbox_mask[None], torch.ones(3, 3).to(device)).squeeze(0)
-                background_mask = abs(dilated_bbox_mask - true_object)
+                background_mask = torch.abs(bbox_mask - true_object)
                 tmp_neg_loc = torch.where(background_mask)
 
                 # there is a chance that the object is small to not return a decent-sized bounding box
@@ -256,31 +284,29 @@ class IterativePromptGenerator:
 
     def __call__(
         self,
-        gt: torch.Tensor,
-        object_mask: torch.Tensor,
-        current_points: torch.Tensor,
-        current_labels: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        segmentation: torch.Tensor,
+        prediction: torch.Tensor,
+        **kwargs,
+    ) -> Tuple[torch.Tensor, torch.Tensor, None, None]:
         """Generate the prompts for each object iteratively in the segmentation.
 
         Args:
             The groundtruth segmentation.
             The predicted objects.
-            The current points.
-            Thr current labels.
 
         Returns:
             The updated point prompt coordinates.
             The updated point prompt labels.
+            None.
         """
-        assert gt.shape == object_mask.shape
-        device = object_mask.device
+        assert segmentation.shape == prediction.shape
+        device = prediction.device
 
-        true_object = gt.to(device)
-        expected_diff = (object_mask - true_object)
-        neg_region = (expected_diff == 1).to(torch.float)
+        true_object = segmentation.to(device)
+        expected_diff = (prediction - true_object)
+        neg_region = (expected_diff == 1).to(torch.float32)
         pos_region = (expected_diff == -1)
-        overlap_region = torch.logical_and(object_mask == 1, true_object == 1).to(torch.float32)
+        overlap_region = torch.logical_and(prediction == 1, true_object == 1).to(torch.float32)
 
         pos_coordinates, pos_labels = self._get_positive_points(pos_region, overlap_region)
         neg_coordinates, neg_labels = self._get_negative_points(neg_region, true_object, gt)
@@ -290,7 +316,7 @@ class IterativePromptGenerator:
         neg_coordinates = torch.tensor(neg_coordinates)[:, None]
         pos_labels, neg_labels = torch.tensor(pos_labels)[:, None], torch.tensor(neg_labels)[:, None]
 
-        net_coords = torch.cat([current_points, pos_coordinates, neg_coordinates], dim=1)
-        net_labels = torch.cat([current_labels, pos_labels, neg_labels], dim=1)
+        net_coords = torch.cat([pos_coordinates, neg_coordinates], dim=1)
+        net_labels = torch.cat([pos_labels, neg_labels], dim=1)
 
-        return net_coords, net_labels
+        return net_coords, net_labels, None, None
