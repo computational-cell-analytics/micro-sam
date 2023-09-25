@@ -111,7 +111,7 @@ class ConvertToSamInputs:
             bbox = bbox_coordinates[my_cell_id]
             # points = point_coordinates[my_cell_id]
             # removed "points" to randomly choose fg points
-            coord_list, label_list, bbox_list = prompt_generator(obj_mask, bbox)
+            coord_list, label_list, bbox_list, _ = prompt_generator(obj_mask, bbox)
 
             if get_boxes is True and get_points is False:  # only box
                 bbox_list = bbox_list[0]
