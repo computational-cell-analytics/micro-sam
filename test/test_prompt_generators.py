@@ -128,9 +128,9 @@ class TestPromptGenerators(unittest.TestCase):
                 # v.add_labels(obj.astype("uint8"))
                 # napari.run()
 
-                points, labels = prompt_gen(
-                    torch.from_numpy(mask).to(torch.float32), torch.from_numpy(obj).to(torch.float32)
-                )
+                prompt_mask = torch.from_numpy(mask[:, None]).to(torch.float32)
+                prompt_pred = torch.from_numpy(obj[:, None]).to(torch.float32)
+                points, point_labels, _, _ = prompt_gen(prompt_mask, prompt_pred)
 
 
 if __name__ == "__main__":

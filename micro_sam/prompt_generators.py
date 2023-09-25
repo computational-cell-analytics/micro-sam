@@ -195,6 +195,7 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
 
         return all_coords, all_labels
 
+    # TODO make compatible with exact same input shape
     def __call__(
         self,
         segmentation: torch.Tensor,
@@ -297,6 +298,7 @@ class IterativePromptGenerator(PromptGeneratorBase):
 
         return negative_coordinates, negative_labels
 
+    # TODO is the input shape correct?
     def __call__(
         self,
         segmentation: torch.Tensor,
@@ -306,8 +308,8 @@ class IterativePromptGenerator(PromptGeneratorBase):
         """Generate the prompts for each object iteratively in the segmentation.
 
         Args:
-            The groundtruth segmentation.
-            The predicted objects.
+            The groundtruth segmentation. Expects a tensor of shape NOBJ x 1 x H x W.
+            The predicted objects. Same shape as groundtruth.
 
         Returns:
             The updated point prompt coordinates.
