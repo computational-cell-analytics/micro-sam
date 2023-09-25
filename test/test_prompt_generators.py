@@ -1,7 +1,12 @@
 import unittest
+
 import numpy as np
+import torch
 
 from micro_sam.sample_data import synthetic_data
+from skimage.data import binary_blobs
+from skimage.measure import label
+from skimage.transform import AffineTransform, warp
 
 
 class TestPromptGenerators(unittest.TestCase):
@@ -33,7 +38,7 @@ class TestPromptGenerators(unittest.TestCase):
         prompts.edge_color_mode = "cycle"
         napari.run()
 
-    def test_point_prompt_generator(self):
+    def test_point_prompt_generator_for_single_object(self):
         from micro_sam.prompt_generators import PointAndBoxPromptGenerator
         from micro_sam.util import get_centers_and_bounding_boxes
 
@@ -47,22 +52,24 @@ class TestPromptGenerators(unittest.TestCase):
             generator = PointAndBoxPromptGenerator(n_pos, n_neg, dilation_strength=4)
             for label_id in label_ids:
                 center, box = centers.get(label_id), boxes.get(label_id)
-                _label = (labels == label_id)
-                coords, point_labels, _, _ = generator(_label, box, center)
-                coords_ = (np.array([int(coo[0]) for coo in coords]),
-                           np.array([int(coo[1]) for coo in coords]))
-                expected_labels = _label[coords_]
+                mask = (labels == label_id)[None]
+                coords, point_labels, _, _ = generator(mask, [box], [center])
+                coords_ = (
+                    np.array([int(coo[0]) for coo in coords[0]]),
+                    np.array([int(coo[1]) for coo in coords[0]])
+                )
+                expected_labels = mask[0][coords_]
                 agree = (point_labels == expected_labels)
 
                 # DEBUG: check the points in napari if they don't match
                 debug = False
                 if not agree.all() and debug:
                     print(n_pos, n_neg)
-                    self._debug(_label, center, box, coords, point_labels)
+                    self._debug(mask, center, box, coords, point_labels)
 
                 self.assertTrue(agree.all())
 
-    def test_box_prompt_generator(self):
+    def test_box_prompt_generator_for_single_object(self):
         from micro_sam.prompt_generators import PointAndBoxPromptGenerator
         from micro_sam.util import get_centers_and_bounding_boxes
 
@@ -74,11 +81,56 @@ class TestPromptGenerators(unittest.TestCase):
 
         for label_id in label_ids:
             center, box_ = centers.get(label_id), boxes.get(label_id)
-            _label = (labels == label_id)
-            _, _, box, _ = generator(_label, box_, center)
-            coords = np.where(_label)
+            mask = (labels == label_id)[None]
+            _, _, box, _ = generator(label, [box_], [center])
+            coords = np.where(mask[0])
             expected_box = [coo.min() for coo in coords] + [coo.max() + 1 for coo in coords]
-            self.assertEqual(expected_box, list(box[0]))
+            self.assertEqual(expected_box, list(box[0][0]))
+
+    def test_iterative_prompt_generator(self):
+        from micro_sam.prompt_generators import IterativePromptGenerator
+
+        def _get_labels(n_objects=5):
+            labels = label(binary_blobs(256))
+
+            ids, sizes = np.unique(labels, return_counts=True)
+            ids, sizes = ids[1:], sizes[1:]
+            keep_ids = ids[np.argsort(sizes)[::-1][:n_objects]]
+
+            return labels, keep_ids
+
+        def _to_one_hot(labels, keep_ids):
+            mask = np.zeros((len(keep_ids),) + labels.shape, dtype="float32")
+            for idx, label_id in enumerate(keep_ids):
+                mask[idx, labels == label_id] = 1
+            return mask
+
+        def _deform_labels(labels):
+            scale = np.random.uniform(low=0.9, high=1.1, size=2)
+            translation = np.random.rand(2) * 5
+            trafo = AffineTransform(scale=scale, translation=translation)
+            deformed_labels = warp(labels, trafo.inverse, order=0, preserve_range=True).astype(labels.dtype)
+            return deformed_labels
+
+        prompt_gen = IterativePromptGenerator()
+        n = 5
+        for _ in range(n):
+            labels, keep_ids = _get_labels()
+            mask = _to_one_hot(labels, keep_ids)
+
+            for n in range(n):
+                deformed_labels = _deform_labels(labels)
+                obj = _to_one_hot(deformed_labels, keep_ids)
+
+                # import napari
+                # v = napari.Viewer()
+                # v.add_image(mask)
+                # v.add_labels(obj.astype("uint8"))
+                # napari.run()
+
+                points, labels = prompt_gen(
+                    torch.from_numpy(mask).to(torch.float32), torch.from_numpy(obj).to(torch.float32)
+                )
 
 
 if __name__ == "__main__":

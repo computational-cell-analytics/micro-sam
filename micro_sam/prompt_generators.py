@@ -14,15 +14,15 @@ import torch
 class PromptGeneratorBase:
     def __call__(
             self,
-            segmentation: torch.Tensor[float],
-            prediction: Optional[torch.Tensor[float]] = None,
+            segmentation: torch.Tensor,
+            prediction: Optional[torch.Tensor] = None,
             bbox_coordinates: Optional[List[tuple]] = None,
             center_coordinates: Optional[List[np.ndarray]] = None
     ) -> Tuple[
-        Optional[torch.Tensor[int]],  # the point coordinates
-        Optional[torch.Tensor[float]],  # the point labels
-        Optional[torch.Tensor[float]],  # the bounding boxes
-        Optional[torch.Tensor[float]],  # the mask prompts
+        Optional[torch.Tensor],  # the point coordinates
+        Optional[torch.Tensor],  # the point labels
+        Optional[torch.Tensor],  # the bounding boxes
+        Optional[torch.Tensor],  # the mask prompts
     ]:
         """PromptGeneratorBase is an interface to implement specific prompt generators
 
@@ -86,6 +86,7 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
 
     def _sample_positive_points(self, object_mask, center_coordinates, coord_list, label_list):
         if center_coordinates is not None:
+            # TODO why do we actually need int???
             # getting the center coordinate as the first positive point (OPTIONAL)
             coord_list.append(tuple(map(int, center_coordinates)))  # to get int coords instead of float
             label_list.append(1)
@@ -100,6 +101,8 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
 
         if n_positive_remaining > 0:
             # all coordinates of our current object
+            # TODO adapt this to pytorch
+            # object_coordinates = torch.where(object_mask)
             object_coordinates = np.where(object_mask)
 
             # ([x1, x2, ...], [y1, y2, ...])
@@ -123,6 +126,7 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
         # getting the negative points
         # for this we do the opposite and we set the mask to the bounding box - the object mask
         # we need to dilate the object mask before doing this: we use scipy.ndimage.binary_dilation for this
+        # TODO upldate this to use dilation compatible with pytorch (either use dilation or distance trafo from kornia)
         dilated_object = binary_dilation(object_mask, iterations=self.dilation_strength)
         background_mask = np.zeros(object_mask.shape)
         background_mask[bbox_coordinates[0]:bbox_coordinates[2], bbox_coordinates[1]:bbox_coordinates[3]] = 1
@@ -172,40 +176,50 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
         assert len(coord_list) == len(label_list) == num_points
         return coord_list, label_list
 
-    def _sample_points(self, object_mask, bbox_coordinates, center_coordinates):
-        coord_list, label_list = [], []
+    # Can we batch this properly?
+    def _sample_points(self, segmentation, bbox_coordinates, center_coordinates):
+        all_coords, all_labels = [], []
 
-        coord_list, label_list = self._sample_positive_points(object_mask, center_coordinates, coord_list, label_list)
-        coord_list, label_list = self._sample_negative_points(object_mask, bbox_coordinates, coord_list, label_list)
-        coord_list, label_list = self._ensure_num_points(object_mask, coord_list, label_list)
+        center_coordinates = [None] * len(segmentation) if center_coordinates is None else center_coordinates
+        for object_mask, bbox_coords, center_coords in zip(segmentation, bbox_coordinates, center_coordinates):
+            coord_list, label_list = [], []
+            coord_list, label_list = self._sample_positive_points(
+                object_mask, center_coords, coord_list, label_list
+            )
+            coord_list, label_list = self._sample_negative_points(
+                object_mask, bbox_coords, coord_list, label_list
+            )
+            coord_list, label_list = self._ensure_num_points(object_mask, coord_list, label_list)
+            all_coords.append(coord_list)
+            all_labels.append(label_list)
 
-        return coord_list, label_list
+        return all_coords, all_labels
 
     def __call__(
         self,
-        segmentation: torch.Tensor[float],
+        segmentation: torch.Tensor,
         bbox_coordinates: List[tuple],
         center_coordinates: Optional[List[np.ndarray]] = None,
         **kwargs,
     ) -> Tuple[
-        Optional[list[tuple]],  # point coordinates
-        Optional[list[int]],  # point labels
-        Optional[list[tuple]],  # box coordinates
-        Optional[list[float]]  # mask prompts
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        None
     ]:
         """Generate the prompts for one object in the segmentation.
 
         Args:
-            segmentation: The instance segmentation of the particular instance id.
+            segmentation: Instance segmentation masks .
             bbox_coordinates: The precomputed bounding boxes of particular object in the segmentation.
             center_coordinates: The precomputed center coordinates of particular object in the segmentation.
                 If passed, these coordinates will be used as the first positive point prompt.
                 If not passed a random point from within the object mask will be used.
 
         Returns:
-            List of point coordinates. Returns None, if get_point_prompts is false.
-            List of point labels. Returns None, if get_point_prompts is false.
-            List containing the object bounding box. Returns None, if get_box_prompts is false.
+            Coordinates of point prompts. Returns None, if get_point_prompts is false.
+            Point prompt labels. Returns None, if get_point_prompts is false.
+            Bounding box prompts. Returns None, if get_box_prompts is false.
         """
         if self.get_point_prompts:
             coord_list, label_list = self._sample_points(segmentation, bbox_coordinates, center_coordinates)
@@ -217,6 +231,7 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
         else:
             bbox_list = None
 
+        # TODO return torch tensors
         return coord_list, label_list, bbox_list, None
 
 

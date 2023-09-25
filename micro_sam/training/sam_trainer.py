@@ -325,7 +325,8 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
     def _validate_impl(self, forward_context):
         self.model.eval()
 
-        metric_val, loss_val, model_iou_val, val_iteration = 0.0, 0.0, 0.0, 0.0
+        val_iteration = 0
+        metric_val, loss_val, model_iou_val = 0.0, 0.0, 0.0
 
         with torch.no_grad():
             for x, y in self.val_loader:
