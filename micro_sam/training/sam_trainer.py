@@ -241,7 +241,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         # here, we get the pair-per-batch of predicted and true elements (and also the "batched_inputs")
         for x1, x2, _inp, logits in zip(masks, sampled_binary_y, batched_inputs, logits_masks):
             # here, we get each object in the pairs and do the point choices per-object
-            net_coords, net_labels = self.prompt_generator(x2, x1)
+            net_coords, net_labels, _ = self.prompt_generator(x2, x1)
 
             updated_point_coords = torch.cat([_inp["point_coords"], net_coords], dim=1) \
                 if "point_coords" in _inp.keys() else net_coords

@@ -53,18 +53,18 @@ class TestPromptGenerators(unittest.TestCase):
             generator = PointAndBoxPromptGenerator(n_pos, n_neg, dilation_strength=4)
             for label_id in label_ids:
                 center, box = centers.get(label_id), boxes.get(label_id)
-                coords, point_labels, _, _ = generator(labels, label_id, box, center)
+                _label = (labels == label_id)
+                coords, point_labels, _ = generator(_label, box, center)
                 coords_ = (np.array([int(coo[0]) for coo in coords]),
                            np.array([int(coo[1]) for coo in coords]))
-                mask = labels == label_id
-                expected_labels = mask[coords_]
+                expected_labels = _label[coords_]
                 agree = (point_labels == expected_labels)
 
                 # DEBUG: check the points in napari if they don't match
                 debug = False
                 if not agree.all() and debug:
                     print(n_pos, n_neg)
-                    self._debug(mask, center, box, coords, point_labels)
+                    self._debug(_label, center, box, coords, point_labels)
 
                 self.assertTrue(agree.all())
 
@@ -80,8 +80,9 @@ class TestPromptGenerators(unittest.TestCase):
 
         for label_id in label_ids:
             center, box_ = centers.get(label_id), boxes.get(label_id)
-            _, _, box, _ = generator(labels, label_id, box_, center)
-            coords = np.where(labels == label_id)
+            _label = (labels == label_id)
+            _, _, box = generator(_label, box_, center)
+            coords = np.where(_label)
             expected_box = [coo.min() for coo in coords] + [coo.max() + 1 for coo in coords]
             self.assertEqual(expected_box, list(box[0]))
 
