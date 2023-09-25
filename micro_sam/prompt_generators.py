@@ -17,9 +17,9 @@ class PromptGeneratorBase:
             self,
             **kwargs
     ) -> Tuple[
-        Optional[torch.tensor[int]],  # the point coordinates
-        Optional[torch.tensor[float]],  # the point labels
-        Optional[torch.tensors[float]],  # the bounding boxes
+        Optional[list[int]],  # the point coordinates
+        Optional[list[float]],  # the point labels
+        Optional[list[float]],  # the bounding boxes
     ]:
         """PromptGenerator base is a base class
         TODO: document details here

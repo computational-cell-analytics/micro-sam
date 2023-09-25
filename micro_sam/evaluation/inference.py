@@ -87,7 +87,8 @@ def _get_batched_prompts(
     # Iterate over the gt ids, generate the corresponding prompts and combine them to batched input.
     for gt_id in gt_ids:
         centers, bboxes = center_coordinates.get(gt_id), bbox_coordinates.get(gt_id)
-        input_point_list, input_label_list, input_box_list, objm = prompt_generator(gt, gt_id, bboxes, centers)
+        _obj_mask = (gt == gt_id)
+        input_point_list, input_label_list, input_box_list = prompt_generator(_obj_mask, bboxes, centers)
 
         if use_boxes:
             # indexes hard-coded to adapt with SAM's bbox format
@@ -504,8 +505,15 @@ def _run_inference_with_iterative_prompting_for_image(
             final_masks.append(masks)
 
             for _pred, _gt, _inp, logits in zip(masks, sampled_binary_y, this_batched_inputs, logits_masks):
-                next_coords, next_labels = prompt_generator(_gt, _pred, _inp["point_coords"], _inp["point_labels"])
-                _inp["point_coords"], _inp["point_labels"], _inp["mask_inputs"] = next_coords, next_labels, logits
+                next_coords, next_labels, _ = prompt_generator(_gt, _pred)
+                updated_point_coords = torch.cat([_inp["point_coords"], next_coords], dim=1) \
+                    if "point_coords" in _inp.keys() else next_coords
+                updated_point_labels = torch.cat([_inp["point_labels"], next_labels], dim=1) \
+                    if "point_labels" in _inp.keys() else next_labels
+
+                _inp["point_coords"] = updated_point_coords
+                _inp["point_labels"] = updated_point_labels
+                _inp["mask_inputs"] = logits
 
         final_masks = torch.cat(final_masks, dim=1)
         _save_segmentation(final_masks, prediction_paths[iteration])

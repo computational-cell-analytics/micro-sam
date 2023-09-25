@@ -59,7 +59,7 @@ def _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1,
         for gt_id in tqdm(gt_ids):
 
             gt_mask = (gt == gt_id).astype("uint8")
-            point_coords, point_labels, box, _ = prompt_generator(gt, gt_id, boxes[gt_id], centers[gt_id])
+            point_coords, point_labels, box = prompt_generator(gt_mask, boxes[gt_id], centers[gt_id])
 
             box = np.array(box[0])
             mask1_box = segment_from_box(predictor1, box)
