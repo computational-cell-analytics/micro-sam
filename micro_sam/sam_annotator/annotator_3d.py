@@ -104,7 +104,7 @@ def _segment_volume_for_auto_segmentation(
 
 
 @magicgui(
-    call_button="Segment Volume [Shift-S]",
+    call_button="Segment All Slices [Shift-S]",
     layer={"choices": ["current_object", "auto_segmentation"]},
     projection={"choices": ["default", "bounding_box", "mask", "points"]},
 )
