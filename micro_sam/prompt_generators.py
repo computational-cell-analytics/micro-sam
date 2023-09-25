@@ -187,7 +187,7 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
         bbox_coordinates: List[tuple],
         center_coordinates: Optional[List[np.ndarray]] = None,
         **kwargs,
-    ) -> tuple[
+    ) -> Tuple[
         Optional[list[tuple]],  # point coordinates
         Optional[list[int]],  # point labels
         Optional[list[tuple]],  # box coordinates
@@ -245,11 +245,11 @@ class IterativePromptGenerator(PromptGeneratorBase):
         return pos_coordinates, pos_labels
 
     # TODO get rid of this looped implementation and use proper batched computation instead
-    def _get_negative_points(self, negative_region_batched, true_object_batched, gt_batched):
+    def _get_negative_points(self, negative_region_batched, true_object_batched):
         device = negative_region_batched.device
 
         negative_coordinates, negative_labels = [], []
-        for neg_region, true_object, gt in zip(negative_region_batched, true_object_batched, gt_batched):
+        for neg_region, true_object in zip(negative_region_batched, true_object_batched):
 
             tmp_neg_loc = torch.where(neg_region)
             if torch.stack(tmp_neg_loc).shape[-1] == 0:
@@ -260,8 +260,8 @@ class IterativePromptGenerator(PromptGeneratorBase):
                 bbox_mask = torch.zeros_like(true_object).squeeze(0)
 
                 custom_df = 3  # custom dilation factor to perform dilation by expanding the pixels of bbox
-                bbox_mask[max(bbox[0] - custom_df, 0): min(bbox[2] + custom_df, gt.shape[-2]),
-                          max(bbox[1] - custom_df, 0): min(bbox[3] + custom_df, gt.shape[-1])] = 1
+                bbox_mask[max(bbox[0] - custom_df, 0): min(bbox[2] + custom_df, true_object.shape[-2]),
+                          max(bbox[1] - custom_df, 0): min(bbox[3] + custom_df, true_object.shape[-1])] = 1
                 bbox_mask = bbox_mask[None].to(device)
 
                 background_mask = torch.abs(bbox_mask - true_object)
@@ -270,7 +270,7 @@ class IterativePromptGenerator(PromptGeneratorBase):
                 # there is a chance that the object is small to not return a decent-sized bounding box
                 # hence we might not find points sometimes there as well, hence we sample points from true background
                 if torch.stack(tmp_neg_loc).shape[-1] == 0:
-                    tmp_neg_loc = torch.where(gt == 0)
+                    tmp_neg_loc = torch.where(true_object == 0)
 
             neg_index = np.random.choice(len(tmp_neg_loc[1]))
             neg_coordinates = [tmp_neg_loc[1][neg_index], tmp_neg_loc[2][neg_index]]
@@ -297,7 +297,6 @@ class IterativePromptGenerator(PromptGeneratorBase):
         Returns:
             The updated point prompt coordinates.
             The updated point prompt labels.
-            None.
         """
         assert segmentation.shape == prediction.shape
         device = prediction.device
@@ -309,7 +308,7 @@ class IterativePromptGenerator(PromptGeneratorBase):
         overlap_region = torch.logical_and(prediction == 1, true_object == 1).to(torch.float32)
 
         pos_coordinates, pos_labels = self._get_positive_points(pos_region, overlap_region)
-        neg_coordinates, neg_labels = self._get_negative_points(neg_region, true_object, gt)
+        neg_coordinates, neg_labels = self._get_negative_points(neg_region, true_object)
         assert len(pos_coordinates) == len(pos_labels) == len(neg_coordinates) == len(neg_labels)
 
         pos_coordinates = torch.tensor(pos_coordinates)[:, None]
