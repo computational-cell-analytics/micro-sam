@@ -114,9 +114,7 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
             n_positive_remaining = self.n_positive_points
 
         if n_positive_remaining > 0:
-            # TODO adapt this to pytorch
-            # object_coordinates = torch.where(object_mask)
-            object_coordinates = np.where(object_mask)
+            object_coordinates = torch.where(object_mask)
             n_coordinates = len(object_coordinates[0])
 
             # randomly sampling n_positive_remaining_points from these coordinates
@@ -174,7 +172,7 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
             # to stay consistent, we add random points in the background of an object
             # if there's no neg region around the object - usually happens with small rois
             needed_points = num_points - len(coord_list)
-            more_neg_points = np.where(object_mask == 0)
+            more_neg_points = torch.where(object_mask == 0)
             indices = np.random.choice(len(more_neg_points[0]), size=needed_points, replace=False)
 
             coord_list.extend([

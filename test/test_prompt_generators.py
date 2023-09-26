@@ -78,6 +78,7 @@ class TestPromptGenerators(unittest.TestCase):
             label_centers = [centers[label_id] for label_id in label_ids]
             label_boxes = [boxes[label_id] for label_id in label_ids]
             label_mask = self._to_one_hot(labels, label_ids)
+            label_mask = torch.from_numpy(label_mask)
 
             point_coordinates, point_labels, _, _ = generator(label_mask, label_boxes, label_centers)
 
@@ -89,7 +90,7 @@ class TestPromptGenerators(unittest.TestCase):
                 # we need to reverse the coordinates here to match the different convention
                 coords_ = (coords[:, 1].numpy(), coords[:, 0].numpy())
                 expected_labels = mask[0][coords_]
-                agree = (this_labels.numpy() == expected_labels)
+                agree = (this_labels == expected_labels)
 
                 # DEBUG: check the points in napari if they don't match
                 debug = False
@@ -107,16 +108,17 @@ class TestPromptGenerators(unittest.TestCase):
 
         n_objects = 8
         labels, label_ids = self._get_labels(n_objects)
-        centers, boxes = get_centers_and_bounding_boxes(labels)
+        _, boxes = get_centers_and_bounding_boxes(labels)
 
         label_boxes = [boxes[label_id] for label_id in label_ids]
         label_mask = self._to_one_hot(labels, label_ids)
+        label_mask = torch.from_numpy(label_mask)
 
         _, _, boxes, _ = generator(label_mask, label_boxes)
         self.assertTrue(boxes.shape, (n_objects, 4))
 
         for mask, box in zip(label_mask, boxes):
-            coords = np.where(mask[0])
+            coords = torch.where(mask[0])
             expected_box = [coo.min() for coo in coords] + [coo.max() + 1 for coo in coords]
             # convert the box back to YX axis order
             box = box.numpy()
