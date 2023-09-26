@@ -6,7 +6,7 @@ For training or evaluation of prompt-based segmentation.
 from typing import Optional, Tuple, List
 
 import numpy as np
-from scipy.ndimage import binary_dilation
+from kornia import morphology
 
 import torch
 
@@ -138,12 +138,14 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
         # getting the negative points
         # for this we do the opposite and we set the mask to the bounding box - the object mask
         # we need to dilate the object mask before doing this: we use scipy.ndimage.binary_dilation for this
-        # TODO upldate this to use dilation compatible with pytorch (either use dilation or distance trafo from kornia)
-        dilated_object = binary_dilation(object_mask, iterations=self.dilation_strength)
+        dilated_object = morphology.dilation(object_mask[None, None],
+                                             torch.ones(self.dilation_strength, self.dilation_strength))
+        dilated_object = dilated_object.squeeze().numpy()
+
         background_mask = np.zeros(object_mask.shape)
-        background_mask[bbox_coordinates[0]:bbox_coordinates[2], bbox_coordinates[1]:bbox_coordinates[3]] = 1
-        # TODO we don't need to dilate here, but just need to extend the bounding box
-        background_mask = binary_dilation(background_mask, iterations=self.dilation_strength)
+        _ds = self.dilation_strength
+        background_mask[max(bbox_coordinates[0] - _ds, 0): min(bbox_coordinates[2] + _ds, object_mask.shape[-2]),
+                        max(bbox_coordinates[1] - _ds, 0): min(bbox_coordinates[3] + _ds, object_mask.shape[-1])] = 1
         background_mask = abs(
             background_mask.astype(np.float32) - dilated_object.astype(np.float32)
         )  # casting booleans to do subtraction
