@@ -3,7 +3,7 @@ Classes for generating prompts from ground-truth segmentation masks.
 For training or evaluation of prompt-based segmentation.
 """
 
-from typing import Optional, Tuple, List
+from typing import List, Optional, Tuple
 
 import numpy as np
 from kornia import morphology
@@ -208,7 +208,7 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
     def __call__(
         self,
         segmentation: torch.Tensor,
-        bbox_coordinates: List[tuple],
+        bbox_coordinates: List[Tuple],
         center_coordinates: Optional[List[np.ndarray]] = None,
         **kwargs,
     ) -> Tuple[

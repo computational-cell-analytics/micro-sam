@@ -3,7 +3,7 @@ Functions for prompt-based segmentation with Segment Anything.
 """
 
 import warnings
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 from nifty.tools import blocking
@@ -308,7 +308,7 @@ def segment_from_mask(
     use_box: bool = True,
     use_mask: bool = True,
     use_points: bool = False,
-    original_size: Optional[tuple[int, ...]] = None,
+    original_size: Optional[Tuple[int, ...]] = None,
     multimask_output: bool = False,
     return_all: bool = False,
     return_logits: bool = False,
@@ -365,7 +365,7 @@ def segment_from_box(
     box: np.ndarray,
     image_embeddings: Optional[util.ImageEmbeddings] = None,
     i: Optional[int] = None,
-    original_size: Optional[tuple[int, ...]] = None,
+    original_size: Optional[Tuple[int, ...]] = None,
     multimask_output: bool = False,
     return_all: bool = False,
 ):
@@ -405,7 +405,7 @@ def segment_from_box_and_points(
     labels: np.ndarray,
     image_embeddings: Optional[util.ImageEmbeddings] = None,
     i: Optional[int] = None,
-    original_size: Optional[tuple[int, ...]] = None,
+    original_size: Optional[Tuple[int, ...]] = None,
     multimask_output: bool = False,
     return_all: bool = False,
 ):
