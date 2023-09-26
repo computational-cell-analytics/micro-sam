@@ -137,21 +137,20 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
 
         # getting the negative points
         # for this we do the opposite and we set the mask to the bounding box - the object mask
-        # we need to dilate the object mask before doing this: we use scipy.ndimage.binary_dilation for this
-        dilated_object = morphology.dilation(object_mask[None, None],
-                                             torch.ones(self.dilation_strength, self.dilation_strength))
-        dilated_object = dilated_object.squeeze().numpy()
+        # we need to dilate the object mask before doing this: we use kornia.morphology.dilation for this
+        dilated_object = object_mask[None, None]
+        for _ in range(self.dilation_strength):
+            dilated_object = morphology.dilation(dilated_object, torch.ones(3, 3))
+        dilated_object = dilated_object.squeeze()
 
-        background_mask = np.zeros(object_mask.shape)
+        background_mask = torch.zeros(object_mask.shape, device=object_mask.device)
         _ds = self.dilation_strength
         background_mask[max(bbox_coordinates[0] - _ds, 0): min(bbox_coordinates[2] + _ds, object_mask.shape[-2]),
                         max(bbox_coordinates[1] - _ds, 0): min(bbox_coordinates[3] + _ds, object_mask.shape[-1])] = 1
-        background_mask = abs(
-            background_mask.astype(np.float32) - dilated_object.astype(np.float32)
-        )  # casting booleans to do subtraction
+        background_mask = torch.abs(background_mask - dilated_object)
 
         # the valid background coordinates
-        background_coordinates = np.where(background_mask)
+        background_coordinates = torch.where(background_mask)
         n_coordinates = len(background_coordinates[0])
 
         # randomly sample the negative points from these coordinates
