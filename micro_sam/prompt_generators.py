@@ -140,7 +140,7 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
         # we need to dilate the object mask before doing this: we use kornia.morphology.dilation for this
         dilated_object = object_mask[None, None]
         for _ in range(self.dilation_strength):
-            dilated_object = morphology.dilation(dilated_object, torch.ones(3, 3))
+            dilated_object = morphology.dilation(dilated_object, torch.ones(3, 3), engine="convolution")
         dilated_object = dilated_object.squeeze()
 
         background_mask = torch.zeros(object_mask.shape, device=object_mask.device)
