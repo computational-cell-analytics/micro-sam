@@ -4,7 +4,7 @@ For training or evaluation of prompt-based segmentation.
 """
 
 from collections.abc import Mapping
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 from scipy.ndimage import binary_dilation
@@ -155,10 +155,10 @@ class PointAndBoxPromptGenerator:
         self,
         segmentation: np.ndarray,
         segmentation_id: int,
-        bbox_coordinates: Mapping[int, tuple],
+        bbox_coordinates: Mapping[int, Tuple],
         center_coordinates: Optional[Mapping[int, np.ndarray]] = None
-    ) -> tuple[
-        Optional[list[tuple]], Optional[list[int]], Optional[list[tuple]], np.ndarray
+    ) -> Tuple[
+        Optional[List[Tuple]], Optional[List[int]], Optional[List[Tuple]], np.ndarray
     ]:
         """Generate the prompts for one object in the segmentation.
 
