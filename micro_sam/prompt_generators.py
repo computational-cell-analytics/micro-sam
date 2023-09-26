@@ -12,6 +12,8 @@ import torch
 
 
 class PromptGeneratorBase:
+    """PromptGeneratorBase is an interface to implement specific prompt generators.
+    """
     def __call__(
             self,
             segmentation: torch.Tensor,
@@ -24,19 +26,28 @@ class PromptGeneratorBase:
         Optional[torch.Tensor],  # the bounding boxes
         Optional[torch.Tensor],  # the mask prompts
     ]:
-        """PromptGeneratorBase is an interface to implement specific prompt generators
+        """Return the point prompts given segmentation masks and optional other inputs.
 
         Args:
-            segmentation: The object for an instance id from the ground-truth segmentation.
-            prediction: The predicted object for the same instance id as above.
-            bbox_coordinates: The bounding boxes for the passed "segmentation" above
-            center_coordinates: The center coordinates for the passed "segmentation" object
+            segmentation: The object masks derived from instance segmentation groundtruth.
+                Expects a float tensor of shape NUM_OBJECTS x 1 x H x W.
+                The first axis corresponds to the binary object masks.
+            prediction: The predicted object masks corresponding to the segmentation.
+                Expects the same shape as the segmentation
+            bbox_coordinates: Precomputed bounding boxes for the segmentation.
+                Expects a list of length NUM_OBJECTS.
+            center_coordinates: Precomputed center coordinates for the segmentation.
+                Expects a list of length NUM_OBJECTS.
 
         Returns:
-            The positive (and/or negative) point coordinate(s)
-            The positive (and/or negative) point label(s)
-            The bounding box of the object
-            The mask prompts
+            The point prompt coordinates. Int tensor of shape NUM_OBJECTS x NUM_POINTS x 2.
+                The point coordinates are retuned in XY axis order. This means they are reversed compared
+                to the standard YX axis order used by numpy.
+            The point prompt labels. Int tensor of shape NUM_OBJECTS x NUM_POINTS.
+            The box prompts. Int tensor of shape NUM_OBJECTS x 4.
+                The box coordinates are retunred as MIN_X, MIN_Y, MAX_X, MAX_Y.
+            The mask prompts. Float tensor of shape NUM_OBJECTS x 1 x H' x W'.
+                With H' = W'= 256.
         """
         raise NotImplementedError("PromptGeneratorBase is just a class template. \
                                   Use a child class that implements the specific generator instead")
@@ -49,15 +60,20 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
     evaluation purposes or for training Segment Anything on custom data.
     In order to use this generator you need to precompute the bounding boxes and center
     coordiantes of the instance segmentation, using e.g. `util.get_centers_and_bounding_boxes`.
+
     Here's an example for how to use this class:
     ```python
     # Initialize generator for 1 positive and 4 negative point prompts.
     prompt_generator = PointAndBoxPromptGenerator(1, 4, dilation_strength=8)
+
     # Precompute the bounding boxes for the given segmentation
     bounding_boxes, _ = util.get_centers_and_bounding_boxes(segmentation)
-    # generate point prompts for the object with id 1 in 'segmentation'
-    object_mask = (segmentation == seg_id)
-    point_coords, point_labels, _, = prompt_generator(object_mask, bounding_boxes)
+
+    # generate point prompts for the objects with ids 1, 2 and 3
+    seg_ids = (1, 2, 3)
+    object_mask = np.stack([segmentation == seg_id for seg_id in seg_ids])[:, None]
+    this_bounding_boxes = [bounding_boxes[seg_id] for seg_id in seg_ids]
+    point_coords, point_labels, _, _ = prompt_generator(object_mask, this_bounding_boxes)
     ```
 
     Args:
@@ -86,10 +102,8 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
 
     def _sample_positive_points(self, object_mask, center_coordinates, coord_list, label_list):
         if center_coordinates is not None:
-            # TODO why do we actually need int???
             # getting the center coordinate as the first positive point (OPTIONAL)
             coord_list.append(tuple(map(int, center_coordinates)))  # to get int coords instead of float
-            label_list.append(1)
 
             # getting the additional positive points by randomly sampling points
             # from this mask except the center coordinate
@@ -100,29 +114,29 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
             n_positive_remaining = self.n_positive_points
 
         if n_positive_remaining > 0:
-            # all coordinates of our current object
             # TODO adapt this to pytorch
             # object_coordinates = torch.where(object_mask)
             object_coordinates = np.where(object_mask)
-
-            # ([x1, x2, ...], [y1, y2, ...])
             n_coordinates = len(object_coordinates[0])
 
             # randomly sampling n_positive_remaining_points from these coordinates
-            positive_indices = np.random.choice(
-                n_coordinates, replace=False,
-                size=min(n_positive_remaining, n_coordinates)  # handles the cases with insufficient fg pixels
+            indices = np.random.choice(
+                n_coordinates, size=n_positive_remaining,
+                # Allow replacing if we can't sample enough coordinates otherwise
+                replace=True if n_positive_remaining > n_coordinates else False,
             )
-            for positive_index in positive_indices:
-                positive_coordinates = int(object_coordinates[0][positive_index]), \
-                    int(object_coordinates[1][positive_index])
+            coord_list.extend([
+                [object_coordinates[0][idx], object_coordinates[1][idx]] for idx in indices
+            ])
 
-                coord_list.append(positive_coordinates)
-                label_list.append(1)
-
+        label_list.extend([1] * self.n_positive_points)
+        assert len(coord_list) == len(label_list) == self.n_positive_points
         return coord_list, label_list
 
     def _sample_negative_points(self, object_mask, bbox_coordinates, coord_list, label_list):
+        if self.n_negative_points == 0:
+            return coord_list, label_list
+
         # getting the negative points
         # for this we do the opposite and we set the mask to the bounding box - the object mask
         # we need to dilate the object mask before doing this: we use scipy.ndimage.binary_dilation for this
@@ -130,30 +144,25 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
         dilated_object = binary_dilation(object_mask, iterations=self.dilation_strength)
         background_mask = np.zeros(object_mask.shape)
         background_mask[bbox_coordinates[0]:bbox_coordinates[2], bbox_coordinates[1]:bbox_coordinates[3]] = 1
+        # TODO we don't need to dilate here, but just need to extend the bounding box
         background_mask = binary_dilation(background_mask, iterations=self.dilation_strength)
         background_mask = abs(
             background_mask.astype(np.float32) - dilated_object.astype(np.float32)
         )  # casting booleans to do subtraction
 
-        n_negative_remaining = self.n_negative_points
-        if n_negative_remaining > 0:
-            # all coordinates of our current object
-            background_coordinates = np.where(background_mask)
+        # the valid background coordinates
+        background_coordinates = np.where(background_mask)
+        n_coordinates = len(background_coordinates[0])
 
-            # ([x1, x2, ...], [y1, y2, ...])
-            n_coordinates = len(background_coordinates[0])
-
-            # randomly sample n_positive_remaining_points from these coordinates
-            negative_indices = np.random.choice(
-                n_coordinates, replace=False,
-                size=min(n_negative_remaining, n_coordinates)  # handles the cases with insufficient bg pixels
-            )
-            for negative_index in negative_indices:
-                negative_coordinates = int(background_coordinates[0][negative_index]), \
-                    int(background_coordinates[1][negative_index])
-
-                coord_list.append(negative_coordinates)
-                label_list.append(0)
+        # randomly sample the negative points from these coordinates
+        indices = np.random.choice(
+            n_coordinates, replace=False,
+            size=min(self.n_negative_points, n_coordinates)  # handles the cases with insufficient bg pixels
+        )
+        coord_list.extend([
+            [background_coordinates[0][idx], background_coordinates[1][idx]] for idx in indices
+        ])
+        label_list.extend([0] * len(indices))
 
         return coord_list, label_list
 
@@ -166,10 +175,10 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
             # if there's no neg region around the object - usually happens with small rois
             needed_points = num_points - len(coord_list)
             more_neg_points = np.where(object_mask == 0)
-            chosen_idx = np.random.choice(len(more_neg_points[0]), size=needed_points)
+            indices = np.random.choice(len(more_neg_points[0]), size=needed_points, replace=False)
 
             coord_list.extend([
-                (more_neg_points[0][idx], more_neg_points[1][idx]) for idx in chosen_idx
+                (more_neg_points[0][idx], more_neg_points[1][idx]) for idx in indices
             ])
             label_list.extend([0] * needed_points)
 
@@ -184,12 +193,13 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
         for object_mask, bbox_coords, center_coords in zip(segmentation, bbox_coordinates, center_coordinates):
             coord_list, label_list = [], []
             coord_list, label_list = self._sample_positive_points(
-                object_mask, center_coords, coord_list, label_list
+                object_mask[0], center_coords, coord_list, label_list
             )
             coord_list, label_list = self._sample_negative_points(
-                object_mask, bbox_coords, coord_list, label_list
+                object_mask[0], bbox_coords, coord_list, label_list
             )
-            coord_list, label_list = self._ensure_num_points(object_mask, coord_list, label_list)
+            coord_list, label_list = self._ensure_num_points(object_mask[0], coord_list, label_list)
+
             all_coords.append(coord_list)
             all_labels.append(label_list)
 
@@ -224,15 +234,20 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
         """
         if self.get_point_prompts:
             coord_list, label_list = self._sample_points(segmentation, bbox_coordinates, center_coordinates)
+            # change the axis convention of the point coordinates to match the expected coordinate order of SAM
+            coord_list = np.array(coord_list)[:, :, ::-1].copy()
+            coord_list = torch.from_numpy(coord_list)
+            label_list = torch.tensor(label_list)
         else:
             coord_list, label_list = None, None
 
         if self.get_box_prompts:
-            bbox_list = [bbox_coordinates]
+            # change the axis convention of the point coordinates to match the expected coordinate order of SAM
+            bbox_list = np.array(bbox_coordinates)[:, [1, 0, 3, 2]]
+            bbox_list = torch.from_numpy(bbox_list)
         else:
             bbox_list = None
 
-        # TODO return torch tensors
         return coord_list, label_list, bbox_list, None
 
 
@@ -298,7 +313,6 @@ class IterativePromptGenerator(PromptGeneratorBase):
 
         return negative_coordinates, negative_labels
 
-    # TODO is the input shape correct?
     def __call__(
         self,
         segmentation: torch.Tensor,
@@ -308,8 +322,8 @@ class IterativePromptGenerator(PromptGeneratorBase):
         """Generate the prompts for each object iteratively in the segmentation.
 
         Args:
-            The groundtruth segmentation. Expects a tensor of shape NOBJ x 1 x H x W.
-            The predicted objects. Same shape as groundtruth.
+            The groundtruth segmentation. Expects a float tensor of shape NUM_OBJECTS x 1 x H x W.
+            The predicted objects. Epects a float tensor of the same shape as the segmentation.
 
         Returns:
             The updated point prompt coordinates.
