@@ -1,5 +1,6 @@
 import os
 import unittest
+from functools import partial
 from glob import glob
 from shutil import rmtree
 
@@ -117,7 +118,9 @@ class TestTraining(unittest.TestCase):
             save_path=export_path,
         )
 
-    def _check_model(self, model_path, model_type):
+    def _run_inference_and_check_results(
+        self, model_path, model_type, inference_function, prediction_dir, expected_sa
+    ):
         import micro_sam.evaluation as evaluation
 
         predictor = evaluation.get_predictor(model_path, model_type)
@@ -125,21 +128,19 @@ class TestTraining(unittest.TestCase):
         image_paths = sorted(glob(os.path.join(self.tmp_folder, "synthetic-data", "images", "test", "*.tif")))
         label_paths = sorted(glob(os.path.join(self.tmp_folder, "synthetic-data", "labels", "test", "*.tif")))
 
-        prediction_dir = os.path.join(self.tmp_folder, "predictions")
         embedding_dir = os.path.join(self.tmp_folder, "embeddings")
-        evaluation.run_inference_with_prompts(
-            predictor, image_paths, label_paths, embedding_dir, prediction_dir,
-            use_points=True, use_boxes=False, n_positives=1, n_negatives=0,
-        )
+        inference_function(predictor, image_paths, label_paths, embedding_dir, prediction_dir)
 
         pred_paths = sorted(glob(os.path.join(prediction_dir, "*.tif")))
         self.assertEqual(len(pred_paths), len(label_paths))
         eval_res = evaluation.run_evaluation(label_paths, pred_paths, verbose=False)
         result = eval_res["sa50"].values.item()
         # We expect an SA50 > 90%.
-        self.assertGreater(result, 0.90)
+        self.assertGreater(result, expected_sa)
 
     def test_training(self):
+        import micro_sam.evaluation as evaluation
+
         model_type = "vit_t"
 
         # Fine-tune the model.
@@ -148,12 +149,25 @@ class TestTraining(unittest.TestCase):
         self.assertTrue(os.path.exists(checkpoint_path))
 
         # Export the model.
-        export_path = os.path.join(self.tmp_folder, "exported_mdoel.pth")
+        export_path = os.path.join(self.tmp_folder, "exported_model.pth")
         self._export_model(checkpoint_path, export_path, model_type)
         self.assertTrue(os.path.exists(export_path))
 
-        # Check the model.
-        self._check_model(export_path, model_type)
+        # Check the model with normal inference.
+        prediction_dir = os.path.join(self.tmp_folder, "predictions")
+        normal_inference = partial(
+            evaluation.run_inference_with_prompts,
+            use_points=True, use_boxes=False,
+            n_positives=1, n_negatives=0,
+            batch_size=64
+        )
+        self._run_inference_and_check_results(
+            export_path, model_type, prediction_dir=prediction_dir,
+            inference_function=normal_inference, expected_sa=0.9
+        )
+
+        # TODO
+        # Check the model with interactivel inference
 
 
 if __name__ == "__main__":
