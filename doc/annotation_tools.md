@@ -76,7 +76,7 @@ Most elements are the same as in [the 2d annotator](#annotator-2d):
 1. The napari layers that contain the image, segmentation and prompts. Same as for [the 2d annotator](#annotator-2d) but without the `auto_segmentation` layer.
 2. The prompt menu.
 3. The menu for interactive segmentation.
-4. The 3d segmentation menu. Pressing `Segment Volume` (or `v`) will extend the segmentation for the current object across the volume.
+4. The 3d segmentation menu. Pressing `Segment All Slices` (or `Shift-S`) will extend the segmentation for the current object across the volume.
 5. The menu for committing the segmentation.
 6. The menu for clearing the current annotations.
 
