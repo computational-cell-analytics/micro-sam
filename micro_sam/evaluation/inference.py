@@ -74,41 +74,34 @@ def _get_batched_prompts(
     dilation,
     transform_function,
 ):
-    input_point, input_label, input_box = [], [], []
-
     # Initialize the prompt generator.
-    center_coordinates, bbox_coordinates = util.get_centers_and_bounding_boxes(gt)
     prompt_generator = PointAndBoxPromptGenerator(
         n_positive_points=n_positives, n_negative_points=n_negatives,
         dilation_strength=dilation, get_point_prompts=use_points,
         get_box_prompts=use_boxes
     )
 
-    # Iterate over the gt ids, generate the corresponding prompts and combine them to batched input.
-    for gt_id in gt_ids:
-        centers, bboxes = center_coordinates.get(gt_id), bbox_coordinates.get(gt_id)
-        _obj_mask = (gt == gt_id)
-        input_point_list, input_label_list, input_box_list, _ = prompt_generator(_obj_mask, bboxes, centers)
+    # Generate the prompts.
+    center_coordinates, bbox_coordinates = util.get_centers_and_bounding_boxes(gt)
+    center_coordinates = [center_coordinates[gt_id] for gt_id in gt_ids]
+    bbox_coordinates = [bbox_coordinates[gt_id] for gt_id in gt_ids]
+    masks = util.segmentation_to_one_hot(gt.astype("int64"), gt_ids)
 
-        if use_boxes:
-            # indexes hard-coded to adapt with SAM's bbox format
-            # default format: [a, b, c, d] -> SAM's format: [b, a, d, c]
-            _ib = [input_box_list[0][1], input_box_list[0][0],
-                   input_box_list[0][3], input_box_list[0][2]]
-            # transform boxes to the expected format - see predictor.predict function for details
-            _ib = transform_function.apply_boxes(np.array(_ib), gt.shape)
-            input_box.append(_ib)
+    input_points, input_labels, input_boxes, _ = prompt_generator(
+        masks, bbox_coordinates, center_coordinates
+    )
 
-        if use_points:
-            assert len(input_point_list) == (n_positives + n_negatives)
-            _ip = [ip[::-1] for ip in input_point_list]  # to match the coordinate system used by SAM
+    # apply the transforms to the points and boxes
+    if use_boxes:
+        input_boxes = torch.from_numpy(
+            transform_function.apply_boxes(input_points.numpy(), gt.shape)
+        )
+    if use_points:
+        input_points = torch.from_numpy(
+            transform_function.apply_coords(input_points.numpy(), gt.shape)
+        )
 
-            # transform coords to the expected format - see predictor.predict function for details
-            _ip = transform_function.apply_coords(np.array(_ip), gt.shape)
-            input_point.append(_ip)
-            input_label.append(input_label_list)
-
-    return input_point, input_label, input_box
+    return input_points, input_labels, input_boxes
 
 
 def _run_inference_with_prompts_for_image(
@@ -127,20 +120,20 @@ def _run_inference_with_prompts_for_image(
     gt_ids = np.unique(gt)[1:]
 
     if cached_prompts is None:
-        input_point, input_label, input_box = _get_batched_prompts(
+        input_points, input_labels, input_boxes = _get_batched_prompts(
             gt, gt_ids, use_points, use_boxes, n_positives, n_negatives, dilation, transform_function,
         )
     else:
-        input_point, input_label, input_box = cached_prompts
+        input_points, input_labeles, input_boxes = cached_prompts
 
     # Make a copy of the point prompts to return them at the end.
-    prompts = deepcopy((input_point, input_label, input_box))
+    prompts = deepcopy((input_points, input_labels, input_boxes))
 
     # Transform the prompts into batches
-    device = util._get_device()
-    input_point = torch.tensor(np.array(input_point)).to(device) if len(input_point) > 0 else None
-    input_label = torch.tensor(np.array(input_label)).to(device) if len(input_label) > 0 else None
-    input_box = torch.tensor(np.array(input_box)).to(device) if len(input_box) > 0 else None
+    device = predictor.device
+    input_points = None if input_points is None else torch.tensor(np.array(input_points)).to(device)
+    input_labels = None if input_labels is None else torch.tensor(np.array(input_labels)).to(device)
+    input_boxes = None if input_boxes is None else torch.tensor(np.array(input_boxes)).to(device)
 
     # Use multi-masking only if we have a single positive point without box
     multimasking = False
@@ -148,7 +141,7 @@ def _run_inference_with_prompts_for_image(
         multimasking = True
 
     # Run the batched inference.
-    n_samples = input_box.shape[0] if input_point is None else input_point.shape[0]
+    n_samples = input_boxes.shape[0] if input_points is None else input_points.shape[0]
     n_batches = int(np.ceil(float(n_samples) / batch_size))
     masks, ious = [], []
     with torch.no_grad():
@@ -156,9 +149,9 @@ def _run_inference_with_prompts_for_image(
             batch_start = batch_idx * batch_size
             batch_stop = min((batch_idx + 1) * batch_size, n_samples)
 
-            batch_points = None if input_point is None else input_point[batch_start:batch_stop]
-            batch_labels = None if input_label is None else input_label[batch_start:batch_stop]
-            batch_boxes = None if input_box is None else input_box[batch_start:batch_stop]
+            batch_points = None if input_points is None else input_points[batch_start:batch_stop]
+            batch_labels = None if input_labels is None else input_labels[batch_start:batch_stop]
+            batch_boxes = None if input_boxes is None else input_boxes[batch_start:batch_stop]
 
             batch_masks, batch_ious, _ = predictor.predict_torch(
                 point_coords=batch_points, point_labels=batch_labels,

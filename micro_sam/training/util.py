@@ -4,9 +4,8 @@ from typing import List, Optional, Union
 import numpy as np
 import torch
 
-from skimage.segmentation import relabel_sequential
 from ..prompt_generators import PointAndBoxPromptGenerator
-from ..util import get_centers_and_bounding_boxes, get_sam_model, _get_device
+from ..util import get_centers_and_bounding_boxes, get_sam_model, segmentation_to_one_hot, _get_device
 from .trainable_sam import TrainableSAM
 
 
@@ -76,35 +75,24 @@ class ConvertToSamInputs:
     def _get_prompt_lists(self, gt, n_samples, prompt_generator):
         """Returns a list of "expected" prompts subjected to the random input attributes for prompting."""
 
-        # TODO: if we enable computation of the bounding boxes in the generator we don't need this,
-        # and then we also wouldn't need to cast the gt to numpy
         _, bbox_coordinates = get_centers_and_bounding_boxes(gt, mode="p")
 
         # get the segment ids
         cell_ids = np.unique(gt)[1:]
-        if n_samples is None:  # n-samples is set to none, so we use all ids
+        if n_samples is None:  # n-samples is set to None, so we use all ids
             sampled_cell_ids = cell_ids
+
         else:  # n-samples is set, so we subsample the cell ids
             sampled_cell_ids = np.random.choice(cell_ids, size=min(n_samples, len(cell_ids)), replace=False)
             sampled_cell_ids = np.sort(sampled_cell_ids)
 
-        # only keep
-        bbox_coordinates = [bbox_coordinates[sampled_id] for sampled_id in sampled_cell_ids]
+            # only keep the bounding boxes for sampled cell ids
+            bbox_coordinates = [bbox_coordinates[sampled_id] for sampled_id in sampled_cell_ids]
 
-        # only keep the sampled cell ids and scatter to get the one-hot encoded masks
-        object_masks = gt.copy()
-        if n_samples is not None:
-            object_masks[~np.isin(object_masks, sampled_cell_ids)] = 0
-            object_masks = relabel_sequential(object_masks)[0]
-        object_masks = torch.from_numpy(object_masks)
+        # convert the gt to the one-hot-encoded masks for the sampled cell ids
+        object_masks = segmentation_to_one_hot(gt, None if n_samples is None else sampled_cell_ids)
 
-        one_hot_shape = (len(sampled_cell_ids) + 1,) + object_masks.shape
-        object_masks = object_masks.unsqueeze(0)  # add dimension to scatter
-        object_masks = torch.zeros(one_hot_shape).scatter_(0, object_masks, 1)[1:]
-
-        # add the extra singleton dimenion to get shape NUM_OBJECTS x 1 x H x W
-        object_masks = object_masks.unsqueeze(1)
-
+        # derive and return the prompts
         point_prompts, point_label_prompts, box_prompts, _ = prompt_generator(object_masks, bbox_coordinates)
         return box_prompts, point_prompts, point_label_prompts, sampled_cell_ids
 
@@ -130,7 +118,6 @@ class ConvertToSamInputs:
         batched_sampled_cell_ids_list = []
 
         for image, gt in zip(x, y):
-            # TODO why do we even cast to torch before?
             gt = gt.squeeze().numpy().astype(np.int64)
             box_prompts, point_prompts, point_label_prompts, sampled_cell_ids = self._get_prompt_lists(
                 gt, n_samples, prompt_generator,
