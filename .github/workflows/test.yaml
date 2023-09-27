@@ -34,7 +34,7 @@ jobs:
 
       - name: Run tests
         shell: bash -l {0}
-        run: pytest --cov=micro_sam --cov-report xml:cov.xml
+        run: pytest
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v3
