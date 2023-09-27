@@ -104,7 +104,7 @@ def _segment_volume_for_auto_segmentation(
 
 
 @magicgui(
-    call_button="Segment Volume [V]",
+    call_button="Segment All Slices [Shift-S]",
     layer={"choices": ["current_object", "auto_segmentation"]},
     projection={"choices": ["default", "bounding_box", "mask", "points"]},
 )
@@ -307,7 +307,7 @@ def annotator_3d(
     def _seg_slice(v):
         _segment_slice_wigdet(v)
 
-    @v.bind_key("v")
+    @v.bind_key("Shift-s")
     def _seg_volume(v):
         _segment_volume_widget(v)
 
