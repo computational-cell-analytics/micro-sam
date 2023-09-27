@@ -33,7 +33,7 @@ class TestUtil(unittest.TestCase):
     def test_tiled_prediction(self):
         from micro_sam.util import precompute_image_embeddings, get_sam_model
 
-        predictor = get_sam_model(model_type="vit_b")
+        predictor = get_sam_model(model_type="vit_t")
 
         tile_shape, halo = (256, 256), (16, 16)
         input_ = np.random.rand(512, 512).astype("float32")

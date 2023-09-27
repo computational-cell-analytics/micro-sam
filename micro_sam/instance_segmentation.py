@@ -16,11 +16,9 @@ import torch
 import segment_anything.utils.amg as amg_utils
 import vigra
 
-from elf.evaluation.matching import label_overlap, intersection_over_union
 from elf.segmentation import embeddings as embed
 from elf.segmentation.stitching import stitch_segmentation
-from nifty.tools import blocking, takeDict
-from scipy.optimize import linear_sum_assignment
+from nifty.tools import blocking
 
 from segment_anything.predictor import SamPredictor
 
@@ -34,7 +32,7 @@ except ImportError:
 
 from . import util
 from .prompt_based_segmentation import segment_from_mask
-
+from ._vendored import batched_mask_to_box, mask_to_rle_pytorch
 
 #
 # Utility Functionality
@@ -191,17 +189,17 @@ class AMGBase(ABC):
             mask, changed = amg_utils.remove_small_regions(mask, min_area, mode="islands")
             unchanged = unchanged and not changed
 
-            new_masks.append(torch.as_tensor(mask).unsqueeze(0))
+            new_masks.append(torch.as_tensor(mask, dtype=torch.int).unsqueeze(0))
             # give score=0 to changed masks and score=1 to unchanged masks
             # so NMS will prefer ones that didn't need postprocessing
             scores.append(float(unchanged))
 
         # recalculate boxes and remove any new duplicates
         masks = torch.cat(new_masks, dim=0)
-        boxes = amg_utils.batched_mask_to_box(masks)
+        boxes = batched_mask_to_box(masks)
         keep_by_nms = batched_nms(
             boxes.float(),
-            torch.as_tensor(scores),
+            torch.as_tensor(scores, dtype=torch.float),
             torch.zeros_like(boxes[:, 0]),  # categories
             iou_threshold=nms_thresh,
         )
@@ -210,7 +208,8 @@ class AMGBase(ABC):
         for i_mask in keep_by_nms:
             if scores[i_mask] == 0.0:
                 mask_torch = masks[i_mask].unsqueeze(0)
-                mask_data["rles"][i_mask] = amg_utils.mask_to_rle_pytorch(mask_torch)[0]
+                # mask_data["rles"][i_mask] = amg_utils.mask_to_rle_pytorch(mask_torch)[0]
+                mask_data["rles"][i_mask] = mask_to_rle_pytorch(mask_torch)[0]
                 mask_data["boxes"][i_mask] = boxes[i_mask]  # update res directly
         mask_data.filter(keep_by_nms)
 
@@ -260,7 +259,7 @@ class AMGBase(ABC):
         # serialize predictions and store in MaskData
         data = amg_utils.MaskData(masks=masks.flatten(0, 1), iou_preds=iou_preds.flatten(0, 1))
         if points is not None:
-            data["points"] = torch.as_tensor(points.repeat(masks.shape[1], axis=0))
+            data["points"] = torch.as_tensor(points.repeat(masks.shape[1], axis=0), dtype=torch.float)
 
         del masks
 
@@ -271,11 +270,13 @@ class AMGBase(ABC):
 
         # threshold masks and calculate boxes
         data["masks"] = data["masks"] > self._predictor.model.mask_threshold
-        data["boxes"] = amg_utils.batched_mask_to_box(data["masks"])
+        data["masks"] = data["masks"].type(torch.bool)
+        data["boxes"] = batched_mask_to_box(data["masks"])
 
         # compress to RLE
         data["masks"] = amg_utils.uncrop_masks(data["masks"], crop_box, orig_h, orig_w)
-        data["rles"] = amg_utils.mask_to_rle_pytorch(data["masks"])
+        # data["rles"] = amg_utils.mask_to_rle_pytorch(data["masks"])
+        data["rles"] = mask_to_rle_pytorch(data["masks"])
         del data["masks"]
 
         return data
@@ -335,7 +336,7 @@ class AutomaticMaskGenerator(AMGBase):
         self,
         predictor: SamPredictor,
         points_per_side: Optional[int] = 32,
-        points_per_batch: int = 64,
+        points_per_batch: Optional[int] = None,
         crop_n_layers: int = 0,
         crop_overlap_ratio: float = 512 / 1500,
         crop_n_points_downscale_factor: int = 1,
@@ -357,7 +358,13 @@ class AutomaticMaskGenerator(AMGBase):
 
         self._predictor = predictor
         self._points_per_side = points_per_side
+
+        # we set the points per batch to 16 for mps for performance reasons
+        # and otherwise keep them at the default of 64
+        if points_per_batch is None:
+            points_per_batch = 16 if str(predictor.device) == "mps" else 64
         self._points_per_batch = points_per_batch
+
         self._crop_n_layers = crop_n_layers
         self._crop_overlap_ratio = crop_overlap_ratio
         self._crop_n_points_downscale_factor = crop_n_points_downscale_factor
@@ -366,7 +373,7 @@ class AutomaticMaskGenerator(AMGBase):
     def _process_batch(self, points, im_size, crop_box, original_size):
         # run model on this batch
         transformed_points = self._predictor.transform.apply_coords(points, im_size)
-        in_points = torch.as_tensor(transformed_points, device=self._predictor.device)
+        in_points = torch.as_tensor(transformed_points, device=self._predictor.device, dtype=torch.float)
         in_labels = torch.ones(in_points.shape[0], dtype=torch.int, device=in_points.device)
         masks, iou_preds, _ = self._predictor.predict_torch(
             in_points[:, None, :],
@@ -514,7 +521,162 @@ class AutomaticMaskGenerator(AMGBase):
         return masks
 
 
-class EmbeddingMaskGenerator(AMGBase):
+def _compute_tiled_embeddings(predictor, image, image_embeddings, embedding_save_path, tile_shape, halo):
+    have_tiling_params = (tile_shape is not None) and (halo is not None)
+    if image_embeddings is None and have_tiling_params:
+        if embedding_save_path is None:
+            raise ValueError(
+                "You have passed neither pre-computed embeddings nor a path for saving embeddings."
+                "Embeddings with tiling can only be computed if a save path is given."
+            )
+        image_embeddings = util.precompute_image_embeddings(
+            predictor, image, tile_shape=tile_shape, halo=halo, save_path=embedding_save_path
+        )
+    elif image_embeddings is None and not have_tiling_params:
+        raise ValueError("You passed neither pre-computed embeddings nor tiling parameters (tile_shape and halo)")
+    else:
+        feats = image_embeddings["features"]
+        tile_shape_, halo_ = feats.attrs["tile_shape"], feats.attrs["halo"]
+        if have_tiling_params and (
+            (list(tile_shape) != list(tile_shape_)) or
+            (list(halo) != list(halo_))
+        ):
+            warnings.warn(
+                "You have passed both pre-computed embeddings and tiling parameters (tile_shape and halo) and"
+                "the values of the tiling parameters from the embeddings disagree with the ones that were passed."
+                "The tiling parameters you have passed wil be ignored."
+            )
+        tile_shape = tile_shape_
+        halo = halo_
+
+    return image_embeddings, tile_shape, halo
+
+
+class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
+    """Generates an instance segmentation without prompts, using a point grid.
+
+    Implements the same functionality as `AutomaticMaskGenerator` but for tiled embeddings.
+
+    Args:
+        predictor: The segment anything predictor.
+        points_per_side: The number of points to be sampled along one side of the image.
+            If None, `point_grids` must provide explicit point sampling.
+        points_per_batch: The number of points run simultaneously by the model.
+            Higher numbers may be faster but use more GPU memory.
+        point_grids: A lisst over explicit grids of points used for sampling masks.
+            Normalized to [0, 1] with respect to the image coordinate system.
+        stability_score_offset: The amount to shift the cutoff when calculating the stability score.
+    """
+
+    # We only expose the arguments that make sense for the tiled mask generator.
+    # Anything related to crops doesn't make sense, because we re-use that functionality
+    # for tiling, so these parameters wouldn't have any effect.
+    def __init__(
+        self,
+        predictor: SamPredictor,
+        points_per_side: Optional[int] = 32,
+        points_per_batch: int = 64,
+        point_grids: Optional[List[np.ndarray]] = None,
+        stability_score_offset: float = 1.0,
+    ) -> None:
+        super().__init__(
+            predictor=predictor,
+            points_per_side=points_per_side,
+            points_per_batch=points_per_batch,
+            point_grids=point_grids,
+            stability_score_offset=stability_score_offset,
+        )
+
+    @torch.no_grad()
+    def initialize(
+        self,
+        image: np.ndarray,
+        image_embeddings: Optional[util.ImageEmbeddings] = None,
+        i: Optional[int] = None,
+        tile_shape: Optional[Tuple[int, int]] = None,
+        halo: Optional[Tuple[int, int]] = None,
+        verbose: bool = False,
+        embedding_save_path: Optional[str] = None,
+    ) -> None:
+        """Initialize image embeddings and masks for an image.
+
+        Args:
+            image: The input image, volume or timeseries.
+            image_embeddings: Optional precomputed image embeddings.
+                See `util.precompute_image_embeddings` for details.
+            i: Index for the image data. Required if `image` has three spatial dimensions
+                or a time dimension and two spatial dimensions.
+            tile_shape: The tile shape for embedding prediction.
+            halo: The overlap of between tiles.
+            verbose: Whether to print computation progress.
+            embedding_save_path: Where to save the image embeddings.
+        """
+        original_size = image.shape[:2]
+        self._original_size = original_size
+
+        image_embeddings, tile_shape, halo = _compute_tiled_embeddings(
+            self._predictor, image, image_embeddings, embedding_save_path, tile_shape, halo
+        )
+
+        tiling = blocking([0, 0], original_size, tile_shape)
+        n_tiles = tiling.numberOfBlocks
+
+        # the crop box is always the full local tile
+        tiles = [tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock for tile_id in range(n_tiles)]
+        crop_boxes = [[tile.begin[1], tile.begin[0], tile.end[1], tile.end[0]] for tile in tiles]
+
+        # we need to cast to the image representation that is compatible with SAM
+        image = util._to_image(image)
+
+        mask_data = []
+        for tile_id in tqdm(range(n_tiles), total=n_tiles, desc="Compute masks for tile", disable=not verbose):
+            # set the pre-computed embeddings for this tile
+            features = image_embeddings["features"][tile_id]
+            tile_embeddings = {
+                "features": features,
+                "input_size": features.attrs["input_size"],
+                "original_size": features.attrs["original_size"],
+            }
+            util.set_precomputed(self._predictor, tile_embeddings, i)
+
+            # compute the mask data for this tile and append it
+            this_mask_data = self._process_crop(
+                image, crop_box=crop_boxes[tile_id], crop_layer_idx=0, verbose=verbose, precomputed_embeddings=True
+            )
+            mask_data.append(this_mask_data)
+
+        # set the initialized data
+        self._is_initialized = True
+        self._crop_list = mask_data
+        self._crop_boxes = crop_boxes
+
+
+def get_amg(
+    predictor: SamPredictor,
+    is_tiled: bool,
+    **kwargs,
+) -> AMGBase:
+    """Get the automatic mask generator class.
+
+    Args:
+        predictor: The segment anything predictor.
+        is_tiled: Whether tiled embeddings are used.
+        kwargs: The keyword arguments for the amg class.
+
+    Returns:
+        The automatic mask generator.
+    """
+    amg = TiledAutomaticMaskGenerator(predictor, **kwargs) if is_tiled else\
+        AutomaticMaskGenerator(predictor, **kwargs)
+    return amg
+
+
+#
+# Experimental embedding based instance segmentation functionality
+#
+
+
+class _EmbeddingMaskGenerator(AMGBase):
     """Generates an instance segmentation without prompts, using an initial segmentations derived from image embeddings.
 
     Uses an intial segmentation derived from the image embeddings via the Mutex Watershed,
@@ -736,137 +898,7 @@ class EmbeddingMaskGenerator(AMGBase):
         super().set_state(state)
 
 
-def _compute_tiled_embeddings(predictor, image, image_embeddings, embedding_save_path, tile_shape, halo):
-    have_tiling_params = (tile_shape is not None) and (halo is not None)
-    if image_embeddings is None and have_tiling_params:
-        if embedding_save_path is None:
-            raise ValueError(
-                "You have passed neither pre-computed embeddings nor a path for saving embeddings."
-                "Embeddings with tiling can only be computed if a save path is given."
-            )
-        image_embeddings = util.precompute_image_embeddings(
-            predictor, image, tile_shape=tile_shape, halo=halo, save_path=embedding_save_path
-        )
-    elif image_embeddings is None and not have_tiling_params:
-        raise ValueError("You passed neither pre-computed embeddings nor tiling parameters (tile_shape and halo)")
-    else:
-        feats = image_embeddings["features"]
-        tile_shape_, halo_ = feats.attrs["tile_shape"], feats.attrs["halo"]
-        if have_tiling_params and (
-            (list(tile_shape) != list(tile_shape_)) or
-            (list(halo) != list(halo_))
-        ):
-            warnings.warn(
-                "You have passed both pre-computed embeddings and tiling parameters (tile_shape and halo) and"
-                "the values of the tiling parameters from the embeddings disagree with the ones that were passed."
-                "The tiling parameters you have passed wil be ignored."
-            )
-        tile_shape = tile_shape_
-        halo = halo_
-
-    return image_embeddings, tile_shape, halo
-
-
-class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
-    """Generates an instance segmentation without prompts, using a point grid.
-
-    Implements the same functionality as `AutomaticMaskGenerator` but for tiled embeddings.
-
-    Args:
-        predictor: The segment anything predictor.
-        points_per_side: The number of points to be sampled along one side of the image.
-            If None, `point_grids` must provide explicit point sampling.
-        points_per_batch: The number of points run simultaneously by the model.
-            Higher numbers may be faster but use more GPU memory.
-        point_grids: A lisst over explicit grids of points used for sampling masks.
-            Normalized to [0, 1] with respect to the image coordinate system.
-        stability_score_offset: The amount to shift the cutoff when calculating the stability score.
-    """
-
-    # We only expose the arguments that make sense for the tiled mask generator.
-    # Anything related to crops doesn't make sense, because we re-use that functionality
-    # for tiling, so these parameters wouldn't have any effect.
-    def __init__(
-        self,
-        predictor: SamPredictor,
-        points_per_side: Optional[int] = 32,
-        points_per_batch: int = 64,
-        point_grids: Optional[List[np.ndarray]] = None,
-        stability_score_offset: float = 1.0,
-    ) -> None:
-        super().__init__(
-            predictor=predictor,
-            points_per_side=points_per_side,
-            points_per_batch=points_per_batch,
-            point_grids=point_grids,
-            stability_score_offset=stability_score_offset,
-        )
-
-    @torch.no_grad()
-    def initialize(
-        self,
-        image: np.ndarray,
-        image_embeddings: Optional[util.ImageEmbeddings] = None,
-        i: Optional[int] = None,
-        tile_shape: Optional[Tuple[int, int]] = None,
-        halo: Optional[Tuple[int, int]] = None,
-        verbose: bool = False,
-        embedding_save_path: Optional[str] = None,
-    ) -> None:
-        """Initialize image embeddings and masks for an image.
-
-        Args:
-            image: The input image, volume or timeseries.
-            image_embeddings: Optional precomputed image embeddings.
-                See `util.precompute_image_embeddings` for details.
-            i: Index for the image data. Required if `image` has three spatial dimensions
-                or a time dimension and two spatial dimensions.
-            tile_shape: The tile shape for embedding prediction.
-            halo: The overlap of between tiles.
-            verbose: Whether to print computation progress.
-            embedding_save_path: Where to save the image embeddings.
-        """
-        original_size = image.shape[:2]
-        self._original_size = original_size
-
-        image_embeddings, tile_shape, halo = _compute_tiled_embeddings(
-            self._predictor, image, image_embeddings, embedding_save_path, tile_shape, halo
-        )
-
-        tiling = blocking([0, 0], original_size, tile_shape)
-        n_tiles = tiling.numberOfBlocks
-
-        # the crop box is always the full local tile
-        tiles = [tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock for tile_id in range(n_tiles)]
-        crop_boxes = [[tile.begin[1], tile.begin[0], tile.end[1], tile.end[0]] for tile in tiles]
-
-        # we need to cast to the image representation that is compatible with SAM
-        image = util._to_image(image)
-
-        mask_data = []
-        for tile_id in tqdm(range(n_tiles), total=n_tiles, desc="Compute masks for tile", disable=not verbose):
-            # set the pre-computed embeddings for this tile
-            features = image_embeddings["features"][tile_id]
-            tile_embeddings = {
-                "features": features,
-                "input_size": features.attrs["input_size"],
-                "original_size": features.attrs["original_size"],
-            }
-            util.set_precomputed(self._predictor, tile_embeddings, i)
-
-            # compute the mask data for this tile and append it
-            this_mask_data = self._process_crop(
-                image, crop_box=crop_boxes[tile_id], crop_layer_idx=0, verbose=verbose, precomputed_embeddings=True
-            )
-            mask_data.append(this_mask_data)
-
-        # set the initialized data
-        self._is_initialized = True
-        self._crop_list = mask_data
-        self._crop_boxes = crop_boxes
-
-
-class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
+class _TiledEmbeddingMaskGenerator(_EmbeddingMaskGenerator):
     """Generates an instance segmentation without prompts, using an initial segmentations derived from image embeddings.
 
     Implements the same logic as `EmbeddingMaskGenerator`, but for tiled image embeddings.
@@ -1090,197 +1122,3 @@ class TiledEmbeddingMaskGenerator(EmbeddingMaskGenerator):
         self._tile_shape = state["tile_shape"]
         self._halo = state["halo"]
         super().set_state(state)
-
-
-def get_amg(
-    predictor: SamPredictor,
-    is_tiled: bool,
-    embedding_based_amg: bool = False,
-    **kwargs,
-) -> AMGBase:
-    """Get the automatic mask generator class.
-
-    Args:
-        predictor: The segment anything predictor.
-        is_tiled: Whether tiled embeddings are used.
-        embedding_based_amg: Whether to use the embedding based instance segmentation functionality.
-            This functionality is still experimental.
-        kwargs: The keyword arguments for the amg class.
-
-    Returns:
-        The automatic mask generator.
-    """
-    if embedding_based_amg:
-        warnings.warn("The embedding based instance segmentation functionality is experimental.")
-    if is_tiled:
-        amg = TiledEmbeddingMaskGenerator(predictor, **kwargs) if embedding_based_amg else\
-            TiledAutomaticMaskGenerator(predictor, **kwargs)
-    else:
-        amg = EmbeddingMaskGenerator(predictor, **kwargs) if embedding_based_amg else\
-            AutomaticMaskGenerator(predictor, **kwargs)
-    return amg
-
-
-#
-# Experimental functionality
-#
-
-
-def _segment_instances_from_embeddings(
-    predictor, image_embeddings, i=None,
-    # mws settings
-    offsets=None, distance_type="l2", bias=0.0,
-    # sam settings
-    box_nms_thresh=0.7, pred_iou_thresh=0.88,
-    stability_score_thresh=0.95, stability_score_offset=1.0,
-    use_box=True, use_mask=True, use_points=False,
-    # general settings
-    min_initial_size=5, min_size=0, with_background=False,
-    verbose=True, return_initial_segmentation=False, box_extension=0.1,
-):
-    amg = EmbeddingMaskGenerator(
-        predictor, offsets, min_initial_size, distance_type, bias,
-        use_box, use_mask, use_points, box_extension
-    )
-    shape = image_embeddings["original_size"]
-    input_ = _FakeInput(shape)
-    amg.initialize(input_, image_embeddings, i, verbose=verbose)
-    mask_data = amg.generate(
-        pred_iou_thresh, stability_score_thresh, stability_score_offset, box_nms_thresh, min_size
-    )
-    segmentation = mask_data_to_segmentation(mask_data, shape, with_background)
-    if return_initial_segmentation:
-        initial_segmentation = amg.get_initial_segmentation()
-        return segmentation, initial_segmentation
-    return segmentation
-
-
-def _segment_instances_from_embeddings_with_tiling(
-    predictor, image_embeddings, i=None, verbose=True, with_background=True,
-    return_initial_segmentation=False, **kwargs,
- ):
-    features = image_embeddings["features"]
-    shape, tile_shape, halo = features.attrs["shape"], features.attrs["tile_shape"], features.attrs["halo"]
-
-    initial_segmentations = {}
-
-    def segment_tile(_, tile_id):
-        tile_features = features[tile_id]
-        tile_image_embeddings = {
-            "features": tile_features,
-            "input_size": tile_features.attrs["input_size"],
-            "original_size": tile_features.attrs["original_size"]
-        }
-        if return_initial_segmentation:
-            seg, initial_seg = _segment_instances_from_embeddings(
-                predictor, image_embeddings=tile_image_embeddings, i=i,
-                with_background=with_background, verbose=verbose,
-                return_initial_segmentation=True, **kwargs,
-            )
-            initial_segmentations[tile_id] = initial_seg
-        else:
-            seg = _segment_instances_from_embeddings(
-                predictor, image_embeddings=tile_image_embeddings, i=i,
-                with_background=with_background, verbose=verbose, **kwargs,
-            )
-        return seg
-
-    # fake input data
-    input_ = _FakeInput(shape)
-
-    # run stitching based segmentation
-    segmentation = stitch_segmentation(
-        input_, segment_tile, tile_shape, halo, with_background=with_background, verbose=verbose
-    )
-
-    if return_initial_segmentation:
-        initial_segmentation = stitch_segmentation(
-            input_, lambda _, tile_id: initial_segmentations[tile_id],
-            tile_shape, halo,
-            with_background=with_background, verbose=verbose
-        )
-        return segmentation, initial_segmentation
-
-    return segmentation
-
-
-# TODO refactor in a class with `initialize` and `generate` logic
-# this is still experimental and not yet ready to be integrated within the annotator_3d
-# (will need to see how well it works with retrained models)
-def _segment_instances_from_embeddings_3d(predictor, image_embeddings, verbose=1, iou_threshold=0.50, **kwargs):
-    if image_embeddings["original_size"] is None:  # tiled embeddings
-        is_tiled = True
-        image_shape = tuple(image_embeddings["features"].attrs["shape"])
-        n_slices = len(image_embeddings["features"][0])
-
-    else:  # normal embeddings (not tiled)
-        is_tiled = False
-        image_shape = tuple(image_embeddings["original_size"])
-        n_slices = image_embeddings["features"].shape[0]
-
-    shape = (n_slices,) + image_shape
-    segmentation_function = _segment_instances_from_embeddings_with_tiling if is_tiled else\
-        _segment_instances_from_embeddings
-
-    segmentation = np.zeros(shape, dtype="uint32")
-
-    def match_segments(seg, prev_seg):
-        overlap, ignore_idx = label_overlap(seg, prev_seg, ignore_label=0)
-        scores = intersection_over_union(overlap)
-        # remove ignore_label (remapped to continuous object_ids)
-        if ignore_idx[0] is not None:
-            scores = np.delete(scores, ignore_idx[0], axis=0)
-        if ignore_idx[1] is not None:
-            scores = np.delete(scores, ignore_idx[1], axis=1)
-
-        n_matched = min(scores.shape)
-        no_match = n_matched == 0 or (not np.any(scores >= iou_threshold))
-
-        max_id = segmentation.max()
-        if no_match:
-            seg[seg != 0] += max_id
-
-        else:
-            # compute optimal matching with scores as tie-breaker
-            costs = -(scores >= iou_threshold).astype(float) - scores / (2*n_matched)
-            seg_ind, prev_ind = linear_sum_assignment(costs)
-
-            seg_ids, prev_ids = np.unique(seg)[1:], np.unique(prev_seg)[1:]
-            match_ok = scores[seg_ind, prev_ind] >= iou_threshold
-
-            id_updates = {0: 0}
-            matched_ids, matched_prev = seg_ids[seg_ind[match_ok]], prev_ids[prev_ind[match_ok]]
-            id_updates.update(
-                {seg_id: prev_id for seg_id, prev_id in zip(matched_ids, matched_prev) if seg_id != 0}
-            )
-
-            unmatched_ids = np.setdiff1d(seg_ids, np.concatenate([np.zeros(1, dtype=matched_ids.dtype), matched_ids]))
-            id_updates.update({seg_id: max_id + i for i, seg_id in enumerate(unmatched_ids, 1)})
-
-            seg = takeDict(id_updates, seg)
-
-        return seg
-
-    ids_to_slices = {}
-    # segment the objects starting from slice 0
-    for z in tqdm(
-        range(0, n_slices), total=n_slices, desc="Run instance segmentation in 3d", disable=not bool(verbose)
-    ):
-        seg = segmentation_function(predictor, image_embeddings, i=z, verbose=False, **kwargs)
-        if z > 0:
-            prev_seg = segmentation[z - 1]
-            seg = match_segments(seg, prev_seg)
-
-        # keep track of the slices per object id to get rid of unconnected objects in the post-processing
-        this_ids = np.unique(seg)[1:]
-        for id_ in this_ids:
-            ids_to_slices[id_] = ids_to_slices.get(id_, []) + [z]
-
-        segmentation[z] = seg
-
-    # get rid of objects that are just in a single slice
-    filter_objects = [seg_id for seg_id, slice_list in ids_to_slices.items() if len(slice_list) == 1]
-    segmentation[np.isin(segmentation, filter_objects)] = 0
-    vigra.analysis.relabelConsecutive(segmentation, out=segmentation)
-
-    return segmentation

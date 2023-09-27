@@ -1,16 +1,15 @@
 import argparse
-import os
-import pickle
-from typing import Optional, Tuple
+import warnings
+from typing import List, Optional, Tuple
 
 import napari
 import numpy as np
 
 from magicgui import magicgui
 from magicgui.widgets import ComboBox, Container
+from skimage import draw
 
-from .. import instance_segmentation, util
-from ..prompt_based_segmentation import segment_from_box, segment_from_box_and_points, segment_from_points
+from .. import prompt_based_segmentation, util
 
 # Green and Red
 LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
@@ -19,11 +18,11 @@ LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
 
 def clear_annotations(v: napari.Viewer, clear_segmentations=True) -> None:
     """@private"""
-    v.layers["prompts"].data = []
-    v.layers["prompts"].refresh()
-    if "box_prompts" in v.layers:
-        v.layers["box_prompts"].data = []
-        v.layers["box_prompts"].refresh()
+    v.layers["point_prompts"].data = []
+    v.layers["point_prompts"].refresh()
+    if "prompts" in v.layers:
+        v.layers["prompts"].data = []
+        v.layers["prompts"].refresh()
     if not clear_segmentations:
         return
     if "current_object" in v.layers:
@@ -80,23 +79,25 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
     return label_widget
 
 
-def prompt_layer_to_points(
-    prompt_layer: napari.layers.Points, i=None, track_id=None
+def point_layer_to_prompts(
+    layer: napari.layers.Points, i=None, track_id=None, with_stop_annotation=True,
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     """Extract point prompts for SAM from a napari point layer.
 
     Args:
-        prompt_layer: The point layer from which to extract the prompts.
+        layer: The point layer from which to extract the prompts.
         i: Index for the data (required for 3d or timeseries data).
         track_id: Id of the current track (required for tracking data).
+        with_stop_annotation: Whether a single negative point will be interpreted
+            as stop annotation or just returned as normal prompt.
 
     Returns:
         The point coordinates for the prompts.
         The labels (positive or negative / 1 or 0) for the prompts.
     """
 
-    points = prompt_layer.data
-    labels = prompt_layer.properties["label"]
+    points = layer.data
+    labels = layer.properties["label"]
     assert len(points) == len(labels)
 
     if i is None:
@@ -111,7 +112,7 @@ def prompt_layer_to_points(
 
     if track_id is not None:
         assert i is not None
-        track_ids = np.array(list(map(int, prompt_layer.properties["track_id"])))[mask]
+        track_ids = np.array(list(map(int, layer.properties["track_id"])))[mask]
         track_id_mask = track_ids == track_id
         this_labels, this_points = this_labels[track_id_mask], this_points[track_id_mask]
     assert len(this_points) == len(this_labels)
@@ -119,60 +120,86 @@ def prompt_layer_to_points(
     this_labels = np.array([1 if label == "positive" else 0 for label in this_labels])
     # a single point with a negative label is interpreted as 'stop' signal
     # in this case we return None
-    if len(this_points) == 1 and this_labels[0] == 0:
+    if with_stop_annotation and (len(this_points) == 1 and this_labels[0] == 0):
         return None
 
     return this_points, this_labels
 
 
-def prompt_layer_to_boxes(prompt_layer: napari.layers.Shapes, i=None, track_id=None) -> np.ndarray:
-    """Extract box prompts for SAM from a napari shape layer.
+def shape_layer_to_prompts(
+    layer: napari.layers.Shapes, shape: Tuple[int, int], i=None, track_id=None
+) -> Tuple[List[np.ndarray], List[Optional[np.ndarray]]]:
+    """Extract prompts for SAM from a napari shape layer.
+
+    Extracts the bounding box for 'rectangle' shapes and the bounding box and corresponding mask
+    for 'ellipse' and 'polygon' shapes.
 
     Args:
         prompt_layer: The napari shape layer.
+        shape: The image shape.
         i: Index for the data (required for 3d or timeseries data).
         track_id: Id of the current track (required for tracking data).
 
     Returns:
         The box prompts.
+        The mask prompts.
     """
-    shape_data = prompt_layer.data
-    shape_types = prompt_layer.shape_type
+
+    def _to_prompts(shape_data, shape_types):
+        boxes, masks = [], []
+
+        for data, type_ in zip(shape_data, shape_types):
+
+            if type_ == "rectangle":
+                boxes.append(data)
+                masks.append(None)
+
+            elif type_ == "ellipse":
+                boxes.append(data)
+                center = np.mean(data, axis=0)
+                radius_r = ((data[2] - data[1]) / 2)[0]
+                radius_c = ((data[1] - data[0]) / 2)[1]
+                rr, cc = draw.ellipse(center[0], center[1], radius_r, radius_c, shape=shape)
+                mask = np.zeros(shape, dtype=bool)
+                mask[rr, cc] = 1
+                masks.append(mask)
+
+            elif type_ == "polygon":
+                boxes.append(data)
+                rr, cc = draw.polygon(data[:, 0], data[:, 1], shape=shape)
+                mask = np.zeros(shape, dtype=bool)
+                mask[rr, cc] = 1
+                masks.append(mask)
+
+            else:
+                warnings.warn(f"Shape type {type_} is not supported and will be ignored.")
+
+        # map to correct box format
+        boxes = [
+            np.array([box[:, 0].min(), box[:, 1].min(), box[:, 0].max(), box[:, 1].max()]) for box in boxes
+        ]
+        return boxes, masks
+
+    shape_data, shape_types = layer.data, layer.shape_type
     assert len(shape_data) == len(shape_types)
     if len(shape_data) == 0:
-        return []
+        return [], []
 
-    if i is None:
-        # select all boxes that are rectangles
-        boxes = [data for data, stype in zip(shape_data, shape_types) if stype == "rectangle"]
-    else:
-        # we are currently only supporting rectangle shapes.
-        # other shapes could be supported by providing them as rough mask
-        # (and also providing the corresponding bounding box)
-        # but for this we need to figure out the mask prompts for non-square shapes
-        non_rectangle = [stype != "rectangle" for stype in shape_types]
-        if any(non_rectangle):
-            print(f"You have provided {sum(non_rectangle)} shapes that are not rectangles.")
-            print("We currently do not support these as prompts and they will be ignored.")
-
+    if i is not None:
         if track_id is None:
-            boxes = [
-                data[:, 1:] for data, stype in zip(shape_data, shape_types)
-                if (stype == "rectangle" and (data[:, 0] == i).all())
-            ]
+            prompt_selection = [j for j, data in enumerate(shape_data) if (data[:, 0] == i).all()]
         else:
-            track_ids = np.array(list(map(int, prompt_layer.properties["track_id"])))
-            assert len(track_ids) == len(shape_data), f"{len(track_ids)}, {len(shape_data)}"
-            boxes = [
-                data[:, 1:] for data, stype, this_track_id in zip(shape_data, shape_types, track_ids)
-                if (stype == "rectangle" and (data[:, 0] == i).all() and this_track_id == track_id)
+            track_ids = np.array(list(map(int, layer.properties["track_id"])))
+            prompt_selection = [
+                j for j, (data, this_track_id) in enumerate(zip(shape_data, track_ids))
+                if ((data[:, 0] == i).all() and this_track_id == track_id)
             ]
 
-    # map to correct box format
-    boxes = [
-        np.array([box[:, 0].min(), box[:, 1].min(), box[:, 0].max(), box[:, 1].max()]) for box in boxes
-    ]
-    return boxes
+        shape_data = [shape_data[j][:, 1:] for j in prompt_selection]
+        shape_types = [shape_types[j] for j in prompt_selection]
+
+    boxes, masks = _to_prompts(shape_data, shape_types)
+    return boxes, masks
 
 
 def prompt_layer_to_state(prompt_layer: napari.layers.Points, i: int) -> str:
@@ -272,7 +299,7 @@ def segment_slices_with_prompts(
             progress_bar.update(1)
 
     for i in slices:
-        points_i = prompt_layer_to_points(point_prompts, i, track_id)
+        points_i = point_layer_to_prompts(point_prompts, i, track_id)
 
         # do we end the segmentation at the outer slices?
         if points_i is None:
@@ -288,11 +315,11 @@ def segment_slices_with_prompts(
             _update_progress()
             continue
 
-        boxes = prompt_layer_to_boxes(box_prompts, i, track_id)
+        boxes, masks = shape_layer_to_prompts(box_prompts, image_shape, i=i, track_id=track_id)
         points, labels = points_i
 
         seg_i = prompt_segmentation(
-            predictor, points, labels, boxes, image_shape, multiple_box_prompts=False,
+            predictor, points, labels, boxes, masks, image_shape, multiple_box_prompts=False,
             image_embeddings=image_embeddings, i=i
         )
         if seg_i is None:
@@ -308,7 +335,8 @@ def segment_slices_with_prompts(
 
 
 def prompt_segmentation(
-    predictor, points, labels, boxes, shape, multiple_box_prompts, image_embeddings=None, i=None
+    predictor, points, labels, boxes, masks, shape, multiple_box_prompts,
+    image_embeddings=None, i=None, box_extension=0,
 ):
     """@private"""
     assert len(points) == len(labels)
@@ -319,20 +347,28 @@ def prompt_segmentation(
     if not have_points and not have_boxes:
         return
 
-    # box and ppint prompts were given
+    # box and point prompts were given
     elif have_points and have_boxes:
         if len(boxes) > 1:
             print("You have provided point prompts and more than one box prompt.")
             print("This setting is currently not supported.")
             print("When providing both points and prompts you can only segment one object at a time.")
             return
-        seg = segment_from_box_and_points(
-            predictor, boxes[0], points, labels, image_embeddings=image_embeddings, i=i
-        ).squeeze()
+        mask = masks[0]
+        if mask is None:
+            seg = prompt_based_segmentation.segment_from_box_and_points(
+                predictor, boxes[0], points, labels, image_embeddings=image_embeddings, i=i
+            ).squeeze()
+        else:
+            seg = prompt_based_segmentation.segment_from_mask(
+                predictor, mask, box=boxes[0], points=points, labels=labels, image_embeddings=image_embeddings, i=i
+            ).squeeze()
 
     # only point prompts were given
     elif have_points and not have_boxes:
-        seg = segment_from_points(predictor, points, labels, image_embeddings=image_embeddings, i=i).squeeze()
+        seg = prompt_based_segmentation.segment_from_points(
+            predictor, points, labels, image_embeddings=image_embeddings, i=i
+        ).squeeze()
 
     # only box prompts were given
     elif not have_points and have_boxes:
@@ -343,11 +379,17 @@ def prompt_segmentation(
             print("You can only segment one object at a time in 3d.")
             return
 
-        seg_id = 1
-        for box in boxes:
-            mask = segment_from_box(predictor, box, image_embeddings=image_embeddings, i=i).squeeze()
-            seg[mask] = seg_id
-            seg_id += 1
+        for seg_id, (box, mask) in enumerate(zip(boxes, masks), 1):
+            if mask is None:
+                prediction = prompt_based_segmentation.segment_from_box(
+                    predictor, box, image_embeddings=image_embeddings, i=i
+                ).squeeze()
+            else:
+                prediction = prompt_based_segmentation.segment_from_mask(
+                    predictor, mask, box=box, image_embeddings=image_embeddings, i=i,
+                    box_extension=box_extension,
+                ).squeeze()
+            seg[prediction] = seg_id
 
     return seg
 
