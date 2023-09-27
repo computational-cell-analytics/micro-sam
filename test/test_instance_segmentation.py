@@ -38,7 +38,7 @@ class TestInstanceSegmentation(unittest.TestCase):
 
     @staticmethod
     def _get_model(image):
-        predictor = util.get_sam_model(model_type="vit_b")
+        predictor = util.get_sam_model(model_type="vit_t")
         image_embeddings = util.precompute_image_embeddings(predictor, image)
         return predictor, image_embeddings
 
@@ -86,63 +86,17 @@ class TestInstanceSegmentation(unittest.TestCase):
         predicted3 = mask_data_to_segmentation(predicted3, image.shape, with_background=True)
         self.assertTrue(np.array_equal(predicted, predicted3))
 
-    def test_embedding_mask_generator(self):
-        from micro_sam.instance_segmentation import EmbeddingMaskGenerator, mask_data_to_segmentation
-
-        mask, image = self.mask, self.image
-        predictor, image_embeddings = self.predictor, self.image_embeddings
-        pred_iou_thresh, stability_score_thresh = 0.95, 0.75
-
-        amg = EmbeddingMaskGenerator(predictor)
-        amg.initialize(image, image_embeddings=image_embeddings, verbose=False)
-        predicted = amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
-        predicted = mask_data_to_segmentation(predicted, image.shape, with_background=True)
-
-        self.assertGreater(matching(predicted, mask, threshold=0.75)["segmentation_accuracy"], 0.99)
-
-        initial_seg = amg.get_initial_segmentation()
-        self.assertEqual(initial_seg.shape, image.shape)
-
-        # check that regenerating the segmentation works
-        predicted2 = amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
-        predicted2 = mask_data_to_segmentation(predicted2, image.shape, with_background=True)
-        self.assertTrue(np.array_equal(predicted, predicted2))
-
-        # check that serializing and reserializing the state works
-        state = amg.get_state()
-        amg = EmbeddingMaskGenerator(predictor)
-        amg.set_state(state)
-        predicted3 = amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
-        predicted3 = mask_data_to_segmentation(predicted3, image.shape, with_background=True)
-        self.assertTrue(np.array_equal(predicted, predicted3))
-
-    def test_tiled_embedding_mask_generator(self):
-        from micro_sam.instance_segmentation import TiledEmbeddingMaskGenerator
-
-        mask, image = self.large_mask, self.large_image
-        predictor, image_embeddings = self.predictor, self.tiled_embeddings
-        pred_iou_thresh, stability_score_thresh = 0.90, 0.60
-
-        amg = TiledEmbeddingMaskGenerator(predictor, box_extension=0.1)
-        amg.initialize(image, image_embeddings=image_embeddings)
-        predicted = amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
-        initial_seg = amg.get_initial_segmentation()
-
-        self.assertGreater(matching(predicted, mask, threshold=0.75)["segmentation_accuracy"], 0.99)
-        self.assertEqual(initial_seg.shape, image.shape)
-
-        predicted2 = amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
-        self.assertTrue(np.array_equal(predicted, predicted2))
-
-        # check that serializing and reserializing the state works
-        state = amg.get_state()
-        amg = TiledEmbeddingMaskGenerator(predictor)
-        amg.set_state(state)
-        predicted3 = amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
-        self.assertTrue(np.array_equal(predicted, predicted3))
-
     def test_tiled_automatic_mask_generator(self):
         from micro_sam.instance_segmentation import TiledAutomaticMaskGenerator, mask_data_to_segmentation
+
+        # Release all unoccupied cached memory, tiling requires a lot of memory
+        device = util._get_device(None)
+        if device == "cuda":
+            import torch.cuda
+            torch.cuda.empty_cache()
+        elif device == "mps":
+            import torch.mps
+            torch.mps.empty_cache()
 
         mask, image = self.large_mask, self.large_image
         predictor, image_embeddings = self.predictor, self.tiled_embeddings
@@ -165,6 +119,72 @@ class TestInstanceSegmentation(unittest.TestCase):
         amg.set_state(state)
         predicted3 = amg.generate(pred_iou_thresh=pred_iou_thresh)
         predicted3 = mask_data_to_segmentation(predicted3, image.shape, with_background=True)
+        self.assertTrue(np.array_equal(predicted, predicted3))
+
+    @unittest.skip("Experimental functionality")
+    def test_embedding_mask_generator(self):
+        from micro_sam.instance_segmentation import _EmbeddingMaskGenerator, mask_data_to_segmentation
+
+        mask, image = self.mask, self.image
+        predictor, image_embeddings = self.predictor, self.image_embeddings
+        pred_iou_thresh, stability_score_thresh = 0.95, 0.75
+
+        amg = _EmbeddingMaskGenerator(predictor)
+        amg.initialize(image, image_embeddings=image_embeddings, verbose=False)
+        predicted = amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
+        predicted = mask_data_to_segmentation(predicted, image.shape, with_background=True)
+
+        self.assertGreater(matching(predicted, mask, threshold=0.75)["segmentation_accuracy"], 0.99)
+
+        initial_seg = amg.get_initial_segmentation()
+        self.assertEqual(initial_seg.shape, image.shape)
+
+        # check that regenerating the segmentation works
+        predicted2 = amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
+        predicted2 = mask_data_to_segmentation(predicted2, image.shape, with_background=True)
+        self.assertTrue(np.array_equal(predicted, predicted2))
+
+        # check that serializing and reserializing the state works
+        state = amg.get_state()
+        amg = _EmbeddingMaskGenerator(predictor)
+        amg.set_state(state)
+        predicted3 = amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
+        predicted3 = mask_data_to_segmentation(predicted3, image.shape, with_background=True)
+        self.assertTrue(np.array_equal(predicted, predicted3))
+
+    @unittest.skip("Experimental functionality")
+    def test_tiled_embedding_mask_generator(self):
+        from micro_sam.instance_segmentation import _TiledEmbeddingMaskGenerator
+
+        # Release all unoccupied cached memory, tiling requires a lot of memory
+        device = util._get_device(None)
+        if device == "cuda":
+            import torch.cuda
+            torch.cuda.empty_cache()
+        elif device == "mps":
+            import torch.mps
+            torch.mps.empty_cache()
+
+        mask, image = self.large_mask, self.large_image
+        predictor, image_embeddings = self.predictor, self.tiled_embeddings
+        pred_iou_thresh, stability_score_thresh = 0.90, 0.60
+
+        amg = _TiledEmbeddingMaskGenerator(predictor, box_extension=0.1)
+        amg.initialize(image, image_embeddings=image_embeddings)
+        predicted = amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
+        initial_seg = amg.get_initial_segmentation()
+
+        self.assertGreater(matching(predicted, mask, threshold=0.75)["segmentation_accuracy"], 0.99)
+        self.assertEqual(initial_seg.shape, image.shape)
+
+        predicted2 = amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
+        self.assertTrue(np.array_equal(predicted, predicted2))
+
+        # check that serializing and reserializing the state works
+        state = amg.get_state()
+        amg = _TiledEmbeddingMaskGenerator(predictor)
+        amg.set_state(state)
+        predicted3 = amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
         self.assertTrue(np.array_equal(predicted, predicted3))
 
 

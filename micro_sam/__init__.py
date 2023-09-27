@@ -5,5 +5,8 @@
 .. include:: ../doc/python_library.md
 .. include:: ../doc/finetuned_models.md
 """
+import os
 
 from .__version__ import __version__
+
+os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"

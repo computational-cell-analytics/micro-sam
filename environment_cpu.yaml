@@ -6,6 +6,7 @@ name:
 dependencies:
     - cpuonly
     - napari
+    - pip
     - pooch
     - python-elf >=0.4.8
     - pytorch
@@ -13,5 +14,7 @@ dependencies:
     - torchvision
     - torch_em >=0.5.1
     - tqdm
-    # - pip:
-    #     - git+https://github.com/facebookresearch/segment-anything.git
+    - timm
+    - pip:
+        - git+https://github.com/ChaoningZhang/MobileSAM.git
+    #   - git+https://github.com/facebookresearch/segment-anything.git

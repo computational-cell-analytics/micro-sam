@@ -16,18 +16,22 @@ from .gui_utils import show_wrong_file_warning
 
 
 @magicgui(call_button="Segment Object [S]")
-def _segment_widget(v: Viewer) -> None:
-    # get the current box and point prompts
-    boxes = vutil.prompt_layer_to_boxes(v.layers["box_prompts"])
-    points, labels = vutil.prompt_layer_to_points(v.layers["prompts"])
-
+def _segment_widget(v: Viewer, box_extension: float = 0.1) -> None:
     shape = v.layers["current_object"].data.shape
+
+    # get the current box and point prompts
+    boxes, masks = vutil.shape_layer_to_prompts(v.layers["prompts"], shape)
+    points, labels = vutil.point_layer_to_prompts(v.layers["point_prompts"], with_stop_annotation=False)
+
     if IMAGE_EMBEDDINGS["original_size"] is None:  # tiled prediction
         seg = vutil.prompt_segmentation(
-            PREDICTOR, points, labels, boxes, shape, image_embeddings=IMAGE_EMBEDDINGS, multiple_box_prompts=True
+            PREDICTOR, points, labels, boxes, masks, shape, image_embeddings=IMAGE_EMBEDDINGS,
+            multiple_box_prompts=True, box_extension=box_extension,
         )
     else:  # normal prediction and we have set the precomputed embeddings already
-        seg = vutil.prompt_segmentation(PREDICTOR, points, labels, boxes, shape, multiple_box_prompts=True)
+        seg = vutil.prompt_segmentation(
+            PREDICTOR, points, labels, boxes, masks, shape, multiple_box_prompts=True, box_extension=box_extension,
+        )
 
     # no prompts were given or prompts were invalid, skip segmentation
     if seg is None:
@@ -47,7 +51,10 @@ def _changed_param(amg, **params):
     return None
 
 
-@magicgui(call_button="Automatic Segmentation")
+@magicgui(
+    call_button="Automatic Segmentation",
+    min_object_size={"min": 0, "max": 10000},
+)
 def _autosegment_widget(
     v: Viewer,
     pred_iou_thresh: float = 0.88,
@@ -67,7 +74,7 @@ def _autosegment_widget(
 
     shape = v.layers["raw"].data.shape[:2]
     seg = instance_segmentation.mask_data_to_segmentation(
-        seg, shape, with_background=True, min_object_size=min_object_size
+        seg, shape, with_background=with_background, min_object_size=min_object_size
     )
     assert isinstance(seg, np.ndarray)
 
@@ -111,7 +118,7 @@ def _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings):
     labels = ["positive", "negative"]
     prompts = v.add_points(
         data=[[0.0, 0.0], [0.0, 0.0]],  # FIXME workaround
-        name="prompts",
+        name="point_prompts",
         properties={"label": labels},
         edge_color="label",
         edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
@@ -124,7 +131,7 @@ def _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings):
     prompts.edge_color_mode = "cycle"
 
     v.add_shapes(
-        face_color="transparent", edge_color="green", edge_width=4, name="box_prompts"
+        face_color="transparent", edge_color="green", edge_width=4, name="prompts"
     )
 
     #
