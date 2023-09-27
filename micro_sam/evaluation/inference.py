@@ -124,7 +124,7 @@ def _run_inference_with_prompts_for_image(
             gt, gt_ids, use_points, use_boxes, n_positives, n_negatives, dilation, transform_function,
         )
     else:
-        input_points, input_labeles, input_boxes = cached_prompts
+        input_points, input_labels, input_boxes = cached_prompts
 
     # Make a copy of the point prompts to return them at the end.
     prompts = deepcopy((input_points, input_labels, input_boxes))
