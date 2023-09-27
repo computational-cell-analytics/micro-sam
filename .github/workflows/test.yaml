@@ -20,7 +20,7 @@ jobs:
       - name: Setup micromamba
         uses: mamba-org/setup-micromamba@v1
         with:
-          environment-file: environment_cpu.yml
+          environment-file: environment_cpu.yaml
 
       - name: Install pytest
         shell: bash -l {0}
