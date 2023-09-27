@@ -100,7 +100,7 @@ Most elements are the same as in [the 2d annotator](#annotator-2d):
 2. The prompt menu.
 3. The menu with tracking settings: `track_state` is used to indicate that the object you are tracking is dividing in the current frame. `track_id` is used to select which of the tracks after division you are following.
 4. The menu for interactive segmentation.
-5. The tracking menu. Press `Track Object` (or `v`) to track the current object across time.
+5. The tracking menu. Press `Track Object` (or `Shift-S`) to segment the current object across time.
 6. The menu for committing the current tracking result.
 7. The menu for clearing the current annotations.
 
