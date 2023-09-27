@@ -67,7 +67,7 @@ def finetune_livecell(args):
         device=device,
         lr_scheduler=scheduler,
         logger=sam_training.SamLogger,
-        log_image_interval=10,
+        log_image_interval=100,
         mixed_precision=True,
         convert_inputs=convert_inputs,
         n_objects_per_batch=n_objects_per_batch,

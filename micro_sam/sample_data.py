@@ -10,6 +10,10 @@ import imageio.v3 as imageio
 import numpy as np
 import pooch
 
+from skimage.data import binary_blobs
+from skimage.measure import label
+from skimage.transform import resize
+
 
 def fetch_image_series_example_data(save_directory: Union[str, os.PathLike]) -> str:
     """Download the sample images for the image series annotator.
@@ -316,3 +320,20 @@ def sample_data_segmentation():
     data = np.stack([imageio.imread(f) for f in full_filenames], axis=0)
     add_image_kwargs = {"name": "segmentation"}
     return [(data, add_image_kwargs)]
+
+
+def synthetic_data(shape):
+    """Create synthetic image data and segmentation for training."""
+    ndim = len(shape)
+    assert ndim in (2, 3)
+    image_shape = shape if ndim == 2 else shape[1:]
+    image = binary_blobs(length=image_shape[0], blob_size_fraction=0.05, volume_fraction=0.15)
+
+    if image_shape[1] != image_shape[0]:
+        image = resize(image, image_shape, order=0, anti_aliasing=False, preserve_range=True).astype(image.dtype)
+    if ndim == 3:
+        nz = shape[0]
+        image = np.stack([image] * nz)
+
+    segmentation = label(image)
+    return image, segmentation
