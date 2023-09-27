@@ -228,7 +228,7 @@ def get_custom_sam_model(
     custom_pickle = pickle
     custom_pickle.Unpickler = _CustomUnpickler
 
-    device = _get_device()
+    device = _get_device(device)
     sam = sam_model_registry[model_type]()
 
     # load the model state, ignoring any attributes that can't be found by pickle

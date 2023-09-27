@@ -140,8 +140,7 @@ class TestTraining(unittest.TestCase):
         self.assertGreater(result, 0.90)
 
     def test_training(self):
-        # TODO switch to vit_t once dev is merged
-        model_type = "vit_b"
+        model_type = "vit_t"
 
         # Fine-tune the model.
         self._train_model(model_type)
