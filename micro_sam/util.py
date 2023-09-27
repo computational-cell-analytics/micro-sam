@@ -709,8 +709,14 @@ def segmentation_to_one_hot(
     masks = segmentation.copy()
     if segmentation_ids is None:
         n_ids = int(segmentation.max())
+
     else:
         assert segmentation_ids[0] != 0
+
+        # the segmentation ids have to be sorted
+        segmentation_ids = np.sort(segmentation_ids)
+
+        # set the non selected objects to zero and relabel sequentially
         masks[~np.isin(masks, segmentation_ids)] = 0
         masks = relabel_sequential(masks)[0]
         n_ids = len(segmentation_ids)

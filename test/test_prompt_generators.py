@@ -7,6 +7,8 @@ from skimage.data import binary_blobs
 from skimage.measure import label
 from skimage.transform import AffineTransform, warp
 
+from micro_sam.util import segmentation_to_one_hot
+
 
 class TestPromptGenerators(unittest.TestCase):
 
@@ -27,7 +29,6 @@ class TestPromptGenerators(unittest.TestCase):
         if coordinates is not None:
             assert labels is not None
             coordinates = np.stack(coordinates).T
-            print(coordinates.shape)
             labels = labels.numpy()
             prompts = v.add_points(
                 data=coordinates,
@@ -49,19 +50,22 @@ class TestPromptGenerators(unittest.TestCase):
         napari.run()
 
     def _get_labels(self, n_objects):
-        labels = label(binary_blobs(256))
 
-        ids, sizes = np.unique(labels, return_counts=True)
-        ids, sizes = ids[1:], sizes[1:]
-        keep_ids = ids[np.argsort(sizes)[::-1][:n_objects]]
+        def label_generator():
+            labels = label(binary_blobs(256))
 
+            ids, sizes = np.unique(labels, return_counts=True)
+            ids, sizes = ids[1:], sizes[1:]
+            keep_ids = ids[np.argsort(sizes)[::-1][:n_objects]]
+            keep_ids.sort()
+
+            return labels, keep_ids
+
+        # ensure that we have n_objects
+        labels, keep_ids = label_generator()
+        while len(keep_ids) < n_objects:
+            labels, keep_ids = label_generator()
         return labels, keep_ids
-
-    def _to_one_hot(self, labels, keep_ids):
-        mask = np.zeros((len(keep_ids),) + labels.shape, dtype="float32")
-        for idx, label_id in enumerate(keep_ids):
-            mask[idx, labels == label_id] = 1
-        return mask[:, None]
 
     def test_point_prompt_generator(self):
         from micro_sam.prompt_generators import PointAndBoxPromptGenerator
@@ -77,8 +81,7 @@ class TestPromptGenerators(unittest.TestCase):
 
             label_centers = [centers[label_id] for label_id in label_ids]
             label_boxes = [boxes[label_id] for label_id in label_ids]
-            label_mask = self._to_one_hot(labels, label_ids)
-            label_mask = torch.from_numpy(label_mask)
+            label_mask = segmentation_to_one_hot(labels.astype("int64"), label_ids)
 
             point_coordinates, point_labels, _, _ = generator(label_mask, label_boxes, label_centers)
 
@@ -87,13 +90,14 @@ class TestPromptGenerators(unittest.TestCase):
             self.assertEqual(point_labels.shape, (n_objects, n_points))
 
             for mask, coords, this_labels in zip(label_mask, point_coordinates, point_labels):
+                mask = mask[0].numpy()
                 # we need to reverse the coordinates here to match the different convention
                 coords_ = (coords[:, 1].numpy(), coords[:, 0].numpy())
-                expected_labels = mask[0][coords_]
-                agree = (this_labels == expected_labels)
+                expected_labels = mask[coords_]
+                agree = (this_labels.numpy() == expected_labels)
 
                 # DEBUG: check the points in napari if they don't match
-                debug = False
+                debug = True
                 if not agree.all() and debug:
                     print(n_pos, n_neg)
                     self._debug(mask, coords_, this_labels)
@@ -111,8 +115,7 @@ class TestPromptGenerators(unittest.TestCase):
         _, boxes = get_centers_and_bounding_boxes(labels)
 
         label_boxes = [boxes[label_id] for label_id in label_ids]
-        label_mask = self._to_one_hot(labels, label_ids)
-        label_mask = torch.from_numpy(label_mask)
+        label_mask = segmentation_to_one_hot(labels.astype("int64"), label_ids)
 
         _, _, boxes, _ = generator(label_mask, label_boxes)
         self.assertTrue(boxes.shape, (n_objects, 4))
@@ -135,7 +138,7 @@ class TestPromptGenerators(unittest.TestCase):
             deformed_labels = warp(labels, trafo.inverse, order=0, preserve_range=True).astype(labels.dtype)
             return deformed_labels
 
-        n_tries = 5  # try five times overall to stress test this
+        n_tries = 25  # try five times overall to stress test this
         n_objects = 8  # use 8 objects per try
         n_points = 2  # we expect two labels for each object, one positive, one negative
 
@@ -145,12 +148,10 @@ class TestPromptGenerators(unittest.TestCase):
             labels, keep_ids = self._get_labels(n_objects)
             deformed_labels = _deform_labels(labels)
 
-            label_mask = self._to_one_hot(labels, keep_ids)
-            predicted_mask = self._to_one_hot(deformed_labels, keep_ids)
+            label_mask = segmentation_to_one_hot(labels.astype("int64"), keep_ids)
+            predicted_mask = segmentation_to_one_hot(deformed_labels.astype("int64"), keep_ids)
 
-            prompt_mask = torch.from_numpy(label_mask).to(torch.float32)
-            prompt_pred = torch.from_numpy(predicted_mask).to(torch.float32)
-            point_coordinates, point_labels, _, _ = prompt_gen(prompt_mask, prompt_pred)
+            point_coordinates, point_labels, _, _ = prompt_gen(label_mask, predicted_mask)
 
             self.assertEqual(point_coordinates.shape, (n_objects, n_points, 2))
             self.assertEqual(point_labels.shape, (n_objects, n_points))
@@ -158,13 +159,15 @@ class TestPromptGenerators(unittest.TestCase):
             for mask, pred_mask, coords, this_labels in zip(
                 label_mask, predicted_mask, point_coordinates, point_labels
             ):
+                mask, pred_mask = mask[0].numpy(), pred_mask[0].numpy()
+
                 # we need to reverse the coordinates here to match the different convention
                 coords_ = (coords[:, 1].numpy(), coords[:, 0].numpy())
-                expected_labels = mask[0][coords_]
+                expected_labels = mask[coords_]
                 agree = (this_labels.numpy() == expected_labels)
 
                 # the label and prediction should be different for all selected points
-                diff = (mask != pred_mask)[0][coords_]
+                diff = (mask != pred_mask)[coords_]
 
                 # DEBUG: check the points in napari if they don't match
                 debug = False
@@ -172,7 +175,10 @@ class TestPromptGenerators(unittest.TestCase):
                     self._debug(mask, coords_, this_labels, deformed_mask=pred_mask)
 
                 self.assertTrue(agree.all())
-                self.assertTrue(diff.all())
+
+                # the condition only holds if we have a negative area (predicition mask where we don't have true mask)
+                if ((pred_mask - mask) > 0).sum() > 0:
+                    self.assertTrue(diff.all())
 
 
 if __name__ == "__main__":
