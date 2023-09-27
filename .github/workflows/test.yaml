@@ -1,6 +1,14 @@
 name: test
 
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - main
+      - dev
+    tags:
+      - "v*" # Push events to matching v*, i.e. v1.0, v20.15.10
+  pull_request:  # run CI on commits to any open PR
+  workflow_dispatch:  # can manually trigger CI from GitHub actions tab
 
 jobs:
   test:
