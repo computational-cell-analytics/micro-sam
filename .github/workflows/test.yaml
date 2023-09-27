@@ -33,7 +33,6 @@ jobs:
         shell: bash -l {0}
         run: |
           pip install pytest
-          pip install pytest-qt
 
       - name: Install package
         shell: bash -l {0}
