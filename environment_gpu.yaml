@@ -1,9 +1,8 @@
+name: sam
 channels:
     - pytorch
     - nvidia
     - conda-forge
-name:
-    sam
 dependencies:
     - napari
     - pip
