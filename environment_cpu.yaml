@@ -5,6 +5,7 @@ name:
     sam
 dependencies:
     - cpuonly
+    - imagecodecs
     - napari
     - pip
     - pooch
