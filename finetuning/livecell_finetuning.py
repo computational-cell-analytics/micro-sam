@@ -38,7 +38,7 @@ def finetune_livecell(args):
     # training settings:
     model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
-    patch_shape = (520, 740)  # the patch shape for training
+    patch_shape = (520, 704)  # the patch shape for training
     n_objects_per_batch = 25  # this is the number of objects per batch that will be sampled
 
     # get the trainable segment anything model
