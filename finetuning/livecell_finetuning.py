@@ -23,10 +23,10 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
     label_transform = torch_em.transform.label.label_consecutive  # to ensure consecutive IDs
     train_loader = get_livecell_loader(path=data_path, patch_shape=patch_shape, split="train", batch_size=2,
                                        num_workers=8, cell_types=cell_type, download=True,
-                                       label_transform=label_transform)
+                                       label_transform=label_transform, shuffle=True)
     val_loader = get_livecell_loader(path=data_path, patch_shape=patch_shape, split="val", batch_size=1,
                                      num_workers=8, cell_types=cell_type, download=True,
-                                     label_transform=label_transform)
+                                     label_transform=label_transform, shuffle=True)
     return train_loader, val_loader
 
 
