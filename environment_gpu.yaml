@@ -5,6 +5,7 @@ channels:
 name:
     sam
 dependencies:
+    - imagecodecs
     - napari
     - pip
     - pooch
