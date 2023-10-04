@@ -15,7 +15,7 @@ import pandas as pd
 from segment_anything import SamPredictor
 from tqdm import tqdm
 
-from ..instance_segmentation import AutomaticMaskGenerator, EmbeddingMaskGenerator
+from ..instance_segmentation import AutomaticMaskGenerator, _EmbeddingMaskGenerator
 from . import automatic_mask_generation, inference, evaluation
 from .experiments import default_experiment_settings, full_experiment_settings
 
@@ -169,7 +169,7 @@ def run_livecell_amg(
 
     if use_mws:
         amg_prefix = "amg_mws"
-        AMG = EmbeddingMaskGenerator
+        AMG = _EmbeddingMaskGenerator
     else:
         amg_prefix = "amg"
         AMG = AutomaticMaskGenerator
@@ -231,8 +231,8 @@ def run_livecell_inference() -> None:
     # - automatic mask generation (auto)
     # if none of the two are active then the prompt setting arguments will be parsed
     # and used to run inference for a single prompt setting
-    parser.add_argument("-f", "--full_experiment", action="store_true")
     parser.add_argument("-d", "--default_experiment", action="store_true")
+    parser.add_argument("-f", "--full_experiment", action="store_true")
     parser.add_argument("-a", "--auto_mask_generation", action="store_true")
 
     # the prompt settings for an individual inference run
@@ -242,7 +242,7 @@ def run_livecell_inference() -> None:
     parser.add_argument("-n", "--negative", type=int, default=0, help="No. of negative prompts")
 
     # optional external prompt folder
-    parser.add_argument("--prompt_folder", help="")
+    parser.add_argument("--prompt_folder", help="Provide the path where all input point prompts will be stored")
 
     args = parser.parse_args()
     if sum([args.full_experiment, args.default_experiment, args.auto_mask_generation]) > 2:
