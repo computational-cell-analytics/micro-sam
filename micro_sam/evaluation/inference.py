@@ -94,7 +94,7 @@ def _get_batched_prompts(
     # apply the transforms to the points and boxes
     if use_boxes:
         input_boxes = torch.from_numpy(
-            transform_function.apply_boxes(input_points.numpy(), gt.shape)
+            transform_function.apply_boxes(input_boxes.numpy(), gt.shape)
         )
     if use_points:
         input_points = torch.from_numpy(
