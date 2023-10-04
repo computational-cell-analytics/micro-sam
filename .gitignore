@@ -1,4 +1,5 @@
 coverage.xml
+.coverage
 __pycache__/
 *.egg-info/
 *.pth
