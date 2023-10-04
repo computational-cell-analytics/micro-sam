@@ -30,6 +30,9 @@ jobs:
         with:
           environment-file: environment_cpu.yaml
 
+      # Setup Qt libraries for GUI testing
+      - uses: tlambert03/setup-qt-libs@v1
+
       - name: Install pytest
         shell: bash -l {0}
         run: |
@@ -37,8 +40,10 @@ jobs:
           python -m pip install pytest-cov
 
       - name: Install package
-        shell: bash -l {0}
-        run: pip install --no-deps -e .
+        uses: aganders3/headless-gui@v1
+        with:
+          shell: bash -l {0}
+          run: pip install --no-deps -e .
 
       - name: Run tests
         shell: bash -l {0}
