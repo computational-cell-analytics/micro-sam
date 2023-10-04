@@ -135,7 +135,7 @@ class TestTraining(unittest.TestCase):
         self.assertEqual(len(pred_paths), len(label_paths))
         eval_res = evaluation.run_evaluation(label_paths, pred_paths, verbose=False)
         result = eval_res["sa50"].values.item()
-        # We expect an SA50 > 90%.
+        # We check against the expected segmentation accuracy.
         self.assertGreater(result, expected_sa)
 
     def test_training(self):
@@ -153,21 +153,34 @@ class TestTraining(unittest.TestCase):
         self._export_model(checkpoint_path, export_path, model_type)
         self.assertTrue(os.path.exists(export_path))
 
-        # Check the model with normal inference.
-        prediction_dir = os.path.join(self.tmp_folder, "predictions")
+        # Check the model with inference with a single point prompt.
+        prediction_dir = os.path.join(self.tmp_folder, "predictions-points")
         normal_inference = partial(
             evaluation.run_inference_with_prompts,
             use_points=True, use_boxes=False,
             n_positives=1, n_negatives=0,
-            batch_size=64
+            batch_size=64,
         )
         self._run_inference_and_check_results(
             export_path, model_type, prediction_dir=prediction_dir,
             inference_function=normal_inference, expected_sa=0.9
         )
 
+        # Check the model with inference with a box point prompt.
+        prediction_dir = os.path.join(self.tmp_folder, "predictions-boxes")
+        normal_inference = partial(
+            evaluation.run_inference_with_prompts,
+            use_points=False, use_boxes=True,
+            n_positives=1, n_negatives=0,
+            batch_size=64,
+        )
+        self._run_inference_and_check_results(
+            export_path, model_type, prediction_dir=prediction_dir,
+            inference_function=normal_inference, expected_sa=0.95,
+        )
+
+        # Check the model with interactive inference
         # TODO
-        # Check the model with interactivel inference
 
 
 if __name__ == "__main__":
