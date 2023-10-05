@@ -10,6 +10,7 @@ from skimage.measure import label
 
 
 class TestInstanceSegmentation(unittest.TestCase):
+    model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"
     embedding_path = "./tmp_embeddings.zarr"
     tile_shape = (512, 512)
     halo = (96, 96)
@@ -37,8 +38,8 @@ class TestInstanceSegmentation(unittest.TestCase):
         return mask, image
 
     @staticmethod
-    def _get_model(image):
-        predictor = util.get_sam_model(model_type="vit_t")
+    def _get_model(image, model_type):
+        predictor = util.get_sam_model(model_type=model_type)
         image_embeddings = util.precompute_image_embeddings(predictor, image)
         return predictor, image_embeddings
 
@@ -47,7 +48,7 @@ class TestInstanceSegmentation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.mask, cls.image = cls._get_input()
-        cls.predictor, cls.image_embeddings = cls._get_model(cls.image)
+        cls.predictor, cls.image_embeddings = cls._get_model(cls.image, cls.model_type)
         cls.large_mask, cls.large_image = cls._get_input(shape=(1024, 1024))
         cls.tiled_embeddings = util.precompute_image_embeddings(
             cls.predictor, cls.large_image, save_path=cls.embedding_path, tile_shape=cls.tile_shape, halo=cls.halo
