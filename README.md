@@ -52,6 +52,12 @@ Compared to these we support more applications (2d, 3d and tracking), and provid
 
 ## Release Overview
 
+**New in version 0.3.0**
+
+- Support for ellipse and polygon prompts
+- Support for automatic segmentation in 3d
+- Training refactoring and speed-up of fine-tuning
+
 **New in version 0.2.1 and 0.2.2**
 
 - Several bugfixes for the newly introduced functionality in 0.2.0.
