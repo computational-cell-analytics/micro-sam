@@ -59,6 +59,7 @@
             <ul>
                     <li><a href="micro_sam/evaluation.html">evaluation</a></li>
                     <li><a href="micro_sam/instance_segmentation.html">instance_segmentation</a></li>
+                    <li><a href="micro_sam/multi_dimensional_segmentation.html">multi_dimensional_segmentation</a></li>
                     <li><a href="micro_sam/precompute_state.html">precompute_state</a></li>
                     <li><a href="micro_sam/prompt_based_segmentation.html">prompt_based_segmentation</a></li>
                     <li><a href="micro_sam/prompt_generators.html">prompt_generators</a></li>
@@ -141,7 +142,8 @@ For now, check out <a href="https://github.com/computational-cell-analytics/micr
 
 <ul>
 <li>Our <a href="https://doi.org/10.1101/2023.08.21.554208">preprint</a></li>
-<li>and the original <a href="https://arxiv.org/abs/2304.02643">Segment Anything publication</a></li>
+<li>and the original <a href="https://arxiv.org/abs/2304.02643">Segment Anything publication</a>.</li>
+<li>If you use a <code>vit-tiny</code> models please also cite <a href="https://arxiv.org/abs/2306.14289">Mobile SAM</a>.</li>
 </ul>
 
 <h1 id="installation">Installation</h1>
@@ -339,6 +341,15 @@ The <code><a href="">micro_sam</a></code> tools use <a href="https://napari.org/
 
 <p>And after selecting them a new window will open where you can select the input file path and other optional parameter. Then click the top button to start the tool. <strong>Note: If you are not starting the annotation tool with a path to pre-computed embeddings then it can take several minutes to open napari after pressing the button because the embeddings are being computed.</strong></p>
 
+<p><strong>Changes in version 0.3:</strong></p>
+
+<p>We have made two changes in version 0.3 that are not reflected in the documentation below yet:</p>
+
+<ul>
+<li>We now support prompts from box, ellipse and polygon annotations. To reflect this we have renamed the <code>box_prompts</code> layer to <code>prompts</code> and the <code>prompts</code> layer to <code>point_prompts</code>.</li>
+<li>We support automatic segmentation in 3d! To use it, you can first run automated segmentation in the current slice via <code>Automatic Segmentation</code>, and then extend the segmentation of these objects to 3d by running <code>Segment All Slices</code> with <code>layer: auto segmentation</code>.</li>
+</ul>
+
 <h2 id="annotator-2d">Annotator 2D</h2>
 
 <p>The 2d annotator can be started by</p>
@@ -398,7 +409,7 @@ The <code><a href="">micro_sam</a></code> tools use <a href="https://napari.org/
 <li>The napari layers that contain the image, segmentation and prompts. Same as for <a href="#annotator-2d">the 2d annotator</a> but without the <code>auto_segmentation</code> layer.</li>
 <li>The prompt menu.</li>
 <li>The menu for interactive segmentation.</li>
-<li>The 3d segmentation menu. Pressing <code>Segment Volume</code> (or <code>v</code>) will extend the segmentation for the current object across the volume.</li>
+<li>The 3d segmentation menu. Pressing <code>Segment All Slices</code> (or <code>Shift-S</code>) will extend the segmentation for the current object across the volume.</li>
 <li>The menu for committing the segmentation.</li>
 <li>The menu for clearing the current annotations.</li>
 </ol>
@@ -428,7 +439,7 @@ The <code><a href="">micro_sam</a></code> tools use <a href="https://napari.org/
 <li>The prompt menu.</li>
 <li>The menu with tracking settings: <code>track_state</code> is used to indicate that the object you are tracking is dividing in the current frame. <code>track_id</code> is used to select which of the tracks after division you are following.</li>
 <li>The menu for interactive segmentation.</li>
-<li>The tracking menu. Press <code>Track Object</code> (or <code>v</code>) to track the current object across time.</li>
+<li>The tracking menu. Press <code>Track Object</code> (or <code>Shift-S</code>) to segment the current object across time.</li>
 <li>The menu for committing the current tracking result.</li>
 <li>The menu for clearing the current annotations.</li>
 </ol>
@@ -476,8 +487,8 @@ You can activate tiling by passing the parameters <code>tile_shape</code>, which
 <p>The library</p>
 
 <ul>
-<li>implements function to apply Segment Anything to 2d and 3d data more conviently in <code><a href="micro_sam/prompt_based_segmentation.html">micro_sam.prompt_based_segmentation</a></code>.</li>
-<li>provides more and imporoved automatic instance segmentation functionality in <code><a href="micro_sam/instance_segmentation.html">micro_sam.instance_segmentation</a></code>.</li>
+<li>implements function to apply Segment Anything to 2d and 3d data more conveniently in <code><a href="micro_sam/prompt_based_segmentation.html">micro_sam.prompt_based_segmentation</a></code>.</li>
+<li>provides more and improved automatic instance segmentation functionality in <code><a href="micro_sam/instance_segmentation.html">micro_sam.instance_segmentation</a></code>.</li>
 <li>implements training functionality that can be used for finetuning on your own data in <code><a href="micro_sam/training.html">micro_sam.training</a></code>.</li>
 <li>provides functionality for quantitative and qualitative evaluation of Segment Anything models in <code><a href="micro_sam/evaluation.html">micro_sam.evaluation</a></code>.</li>
 </ul>
@@ -532,9 +543,9 @@ See for example the <a href="https://github.com/computational-cell-analytics/mic
 
 <ul>
 <li>Use the <code>_lm</code> models for segmenting cells or nuclei in light microscopy.</li>
-<li>Use the <code>_em</code> models for segmenting ceells or neurites in electron microscopy.
+<li>Use the <code>_em</code> models for segmenting cells or neurites in electron microscopy.
 <ul>
-<li>Note that this model does not work well for segmenting mitochondria or other organelles becuase it is biased towards segmenting the full cell / cellular compartment.</li>
+<li>Note that this model does not work well for segmenting mitochondria or other organelles because it is biased towards segmenting the full cell / cellular compartment.</li>
 </ul></li>
 <li>For other cases use the default models.</li>
 </ul>
@@ -549,15 +560,18 @@ Currently the model <code>vit_h</code> is used by default.</p>
 
                         <label class="view-source-button" for="mod-micro_sam-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a><span class="sd">.. include:: ../doc/start_page.md</span>
-</span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="sd">.. include:: ../doc/installation.md</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a><span class="sd">.. include:: ../doc/annotation_tools.md</span>
-</span><span id="L-5"><a href="#L-5"><span class="linenos">5</span></a><span class="sd">.. include:: ../doc/python_library.md</span>
-</span><span id="L-6"><a href="#L-6"><span class="linenos">6</span></a><span class="sd">.. include:: ../doc/finetuned_models.md</span>
-</span><span id="L-7"><a href="#L-7"><span class="linenos">7</span></a><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos">8</span></a>
-</span><span id="L-9"><a href="#L-9"><span class="linenos">9</span></a><span class="kn">from</span> <span class="nn">.__version__</span> <span class="kn">import</span> <span class="n">__version__</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a><span class="sd">.. include:: ../doc/start_page.md</span>
+</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="sd">.. include:: ../doc/installation.md</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="sd">.. include:: ../doc/annotation_tools.md</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="sd">.. include:: ../doc/python_library.md</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a><span class="sd">.. include:: ../doc/finetuned_models.md</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="kn">import</span> <span class="nn">os</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a>
+</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="kn">from</span> <span class="nn">.__version__</span> <span class="kn">import</span> <span class="n">__version__</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>
+</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;PYTORCH_ENABLE_MPS_FALLBACK&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;1&quot;</span>
 </span></pre></div>
 
 
