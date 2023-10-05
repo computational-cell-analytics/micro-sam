@@ -34,9 +34,9 @@ class TestUtil(unittest.TestCase):
             self.assertTrue(0.0 < compute_iou(x1, x2) < 1.0)
 
     def test_tiled_prediction(self):
-        from micro_sam.util import precompute_image_embeddings, get_sam_model
+        from micro_sam.util import precompute_image_embeddings, get_sam_model, VIT_T_SUPPORT
 
-        predictor = get_sam_model(model_type="vit_t")
+        predictor = get_sam_model(model_type="vit_t" if VIT_T_SUPPORT else "vit_b")
 
         tile_shape, halo = (256, 256), (16, 16)
         input_ = np.random.rand(512, 512).astype("float32")

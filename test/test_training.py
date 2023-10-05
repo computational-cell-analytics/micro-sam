@@ -9,8 +9,10 @@ import torch
 import torch_em
 
 from micro_sam.sample_data import synthetic_data
+from micro_sam.util import VIT_T_SUPPORT
 
 
+@unittest.skipUnless(VIT_T_SUPPORT, "Integration test is only run with vit_t support, otherwise it takes too long.")
 class TestTraining(unittest.TestCase):
     """Integration test for training a SAM model.
     """
