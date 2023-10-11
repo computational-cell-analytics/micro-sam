@@ -1,5 +1,6 @@
 import os
 import warnings
+from typing import Optional, Union
 
 import torch
 from segment_anything.utils.onnx import SamOnnxModel
@@ -13,8 +14,35 @@ except ImportError:
 from ..util import get_sam_model
 
 
-# TODO check if this is still correct
-DECODER_CONFIG = """name: "sam-decoder"
+ENCODER_CONFIG = """name: "%s"
+backend: "pytorch"
+platform: "pytorch_libtorch"
+
+max_batch_size : 1
+input [
+  {
+    name: "input0__0"
+    data_type: TYPE_FP32
+    dims: [3, -1, -1]
+  }
+]
+output [
+  {
+    name: "output0__0"
+    data_type: TYPE_FP32
+    dims: [256, 64, 64]
+  }
+]
+
+parameters: {
+  key: "INFERENCE_MODE"
+  value: {
+    string_value: "true"
+  }
+}"""
+
+
+DECODER_CONFIG = """name: "%s"
 backend: "onnxruntime"
 platform: "onnxruntime_onnx"
 
@@ -35,19 +63,52 @@ def to_numpy(tensor):
     return tensor.cpu().numpy()
 
 
+def export_image_encoder(
+    model_type: str,
+    output_root: Union[str, os.PathLike],
+    checkpoint_path: Optional[str] = None,
+    export_name: Optional[str] = None,
+):
+    if export_name is None:
+        export_name = model_type
+    name = f"sam-{export_name}-encoder"
+
+    output_folder = os.path.join(output_root, name)
+    weight_output_folder = os.path.join(output_folder, "1")
+    os.makedirs(weight_output_folder, exist_ok=True)
+
+    predictor = get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path)
+    encoder = predictor.model.image_encoder
+
+    encoder.eval()
+    input_ = torch.rand(1, 3, 1024, 1024)
+    traced_model = torch.jit.trace(encoder, input_)
+    weight_path = os.path.join(weight_output_folder, "model.pt")
+    traced_model.save(weight_path)
+
+    config_output_path = os.path.join(output_folder, "config.pbtxt")
+    with open(config_output_path, "w") as f:
+        f.write(ENCODER_CONFIG % name)
+
+
 # ONNX export script adapted from
 # https://github.com/facebookresearch/segment-anything/blob/main/scripts/export_onnx_model.py
-def export_onnx(
+def export_onnx_model(
     model_type,
     output_root,
     opset: int,
-    checkpoint_path=None,
+    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_single_mask: bool = True,
     gelu_approximate: bool = False,
     use_stability_score: bool = False,
     return_extra_metrics: bool = False,
+    export_name: Optional[str] = None,
 ):
-    output_folder = os.path.join(output_root, "sam-decoder")
+    if export_name is None:
+        export_name = model_type
+    name = f"sam-{export_name}-decoder"
+
+    output_folder = os.path.join(output_root, name)
     weight_output_folder = os.path.join(output_folder, "1")
     os.makedirs(weight_output_folder, exist_ok=True)
 
@@ -116,4 +177,29 @@ def export_onnx(
 
     config_output_path = os.path.join(output_folder, "config.pbtxt")
     with open(config_output_path, "w") as f:
-        f.write(DECODER_CONFIG)
+        f.write(DECODER_CONFIG % name)
+
+
+def export_bioengine_model(
+    model_type,
+    output_root,
+    opset: int,
+    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
+    return_single_mask: bool = True,
+    gelu_approximate: bool = False,
+    use_stability_score: bool = False,
+    return_extra_metrics: bool = False,
+    export_name: Optional[str] = None,
+):
+    export_image_encoder(model_type, output_root, checkpoint_path, export_name)
+    export_onnx_model(
+        model_type=model_type,
+        output_root=output_root,
+        opset=opset,
+        checkpoint_path=checkpoint_path,
+        return_single_mask=return_single_mask,
+        gelu_approximate=gelu_approximate,
+        use_stability_score=use_stability_score,
+        return_extra_metrics=return_extra_metrics,
+        export_name=export_name
+    )
