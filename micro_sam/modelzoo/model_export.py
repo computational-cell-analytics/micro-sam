@@ -37,7 +37,7 @@ def _get_livecell_npy_paths(
     label_image = imageio.imread(os.path.join(input_dir, "annotations", "livecell_test_images", cell_type, fname))
 
     save_image_path = "./test-livecell-image.npy"
-    np.save(save_image_path, input_image)
+    np.save(save_image_path, input_image[None, None])
 
     _, sam_model = _get_model(input_image, model_type)
     get_instance_segmentation = PredictorAdaptor(sam_model=sam_model)
@@ -55,7 +55,7 @@ def _get_livecell_npy_paths(
     )
 
     save_output_path = "./test-livecell-output.npy"
-    np.save(save_output_path, instances.squeeze().numpy())
+    np.save(save_output_path, instances.numpy())
 
     return save_image_path, save_output_path
 
@@ -63,7 +63,8 @@ def _get_livecell_npy_paths(
 def _get_documentation(doc_path):
     with open(doc_path, "w") as f:
         f.write("# Segment Anything for Microscopy\n")
-        f.write("Lorem Ipsum\n")
+        f.write("We extend Segment Anything, a vision foundation model for image segmentation ")
+        f.write("by training specialized models for microscopy data.\n")
     return doc_path
 
 
@@ -85,7 +86,8 @@ def get_modelzoo_yaml(
 
     input_list = [input_path, box_prompts_path]
     output_list = [output_path]
-    breakpoint()
+
+    architecture_path = os.path.join(os.path.split(__file__)[0], "predictor_adaptor.py")
 
     build_model(
         weight_uri=_checkpoint,
@@ -101,7 +103,8 @@ def get_modelzoo_yaml(
         license="CC-BY-4.0",
         documentation=_get_documentation(doc_path),
         cite=[{"text": "Archit, ..., Pape et al. Segment Anything for Microscopy", "doi": "10.1101/2023.08.21.554208"}],
-        output_path=output_path
+        output_path=output_path,
+        architecture=architecture_path
     )
 
 
@@ -111,7 +114,7 @@ def _get_modelzoo_parser():
                         help="Path to the raw inputs' directory")
     parser.add_argument("-m", "--model_type", type=str, default="vit_b",
                         help="Name of the model to get the SAM checkpoints")
-    parser.add_argument("-o", "--output_path", type=str, default="./models/sam.zip",
+    parser.add_argument("-o", "--output_path", type=str, default="./models/micro_sam.zip",
                         help="Path to the output bioimage modelzoo-format SAM model")
     parser.add_argument("-d", "--doc_path", type=str, default="./documentation.md",
                         help="Path to the documentation")
