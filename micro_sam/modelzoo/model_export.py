@@ -2,7 +2,6 @@ import os
 import argparse
 import numpy as np
 from glob import glob
-from typing import List
 
 import imageio.v2 as imageio
 
@@ -11,7 +10,7 @@ import torch
 from micro_sam import util
 
 from .predictor_adaptor import PredictorAdaptor
-from .prompt_based_segmentation import _compute_box_from_mask
+from ..prompt_based_segmentation import _compute_box_from_mask
 
 from bioimageio.core.build_spec import build_model
 
@@ -40,16 +39,17 @@ def _get_livecell_npy_paths(
     save_image_path = "./test-livecell-image.npy"
     np.save(save_image_path, input_image)
 
-    predictor, sam_model = _get_model(input_image, model_type)
+    _, sam_model = _get_model(input_image, model_type)
     get_instance_segmentation = PredictorAdaptor(sam_model=sam_model)
 
     box_prompts = _compute_box_from_mask(label_image)
     save_box_prompt_path = "./test-box-prompts.npy"
     np.save(save_box_prompt_path, box_prompts)
 
+    input_image = util._to_image(input_image).transpose(2, 0, 1)
+
     instances = get_instance_segmentation(
-        input_image=torch.from_numpy(input_image)[None, None],
-        predictor=predictor,
+        input_image=torch.from_numpy(input_image)[None],
         image_embeddings=None,
         box_prompts=torch.from_numpy(box_prompts)[None]
     )
@@ -57,7 +57,7 @@ def _get_livecell_npy_paths(
     save_output_path = "./test-livecell-output.npy"
     np.save(save_output_path, instances.squeeze().numpy())
 
-    return [save_image_path, save_box_prompt_path], [save_output_path]
+    return save_image_path, save_output_path
 
 
 def _get_documentation(doc_path):
@@ -75,18 +75,16 @@ def _get_sam_checkpoints(model_type):
 
 def get_modelzoo_yaml(
         image_path: str,
-        box_prompts: List[int],
+        box_prompts_path: str,
         model_type: str,
         output_path: str,
         doc_path: str
 ):
-    # load the model and the image and prompts
-    # feed prompts and image to the model to get the output
-    # save the numpy file for the output to get the expected data
-
-    input_list, output_list = _get_livecell_npy_paths(input_dir=image_path, model_type=model_type)
+    input_path, output_path = _get_livecell_npy_paths(input_dir=image_path, model_type=model_type)
     _checkpoint = _get_sam_checkpoints(model_type)
 
+    input_list = [input_path, box_prompts_path]
+    output_list = [output_path]
     breakpoint()
 
     build_model(
@@ -117,4 +115,6 @@ def _get_modelzoo_parser():
                         help="Path to the output bioimage modelzoo-format SAM model")
     parser.add_argument("-d", "--doc_path", type=str, default="./documentation.md",
                         help="Path to the documentation")
+    parser.add_argument("--boxes_path", type=str, default=None,
+                        help="Path to the saved box prompts")
     return parser

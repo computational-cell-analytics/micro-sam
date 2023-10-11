@@ -1,13 +1,13 @@
-from micro_sam import model_zoo
+from micro_sam.modelzoo import model_export
 
 
 def main():
-    parser = model_zoo._get_modelzoo_parser()
+    parser = model_export._get_modelzoo_parser()
     args = parser.parse_args()
 
-    model_zoo.get_modelzoo_yaml(
+    model_export.get_modelzoo_yaml(
         image_path=args.input_path,
-        box_prompts=None,
+        box_prompts_path=args.boxes_path,
         model_type=args.model_type,
         output_path=args.output_path,
         doc_path=args.doc_path
