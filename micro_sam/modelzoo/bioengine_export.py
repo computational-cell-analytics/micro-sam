@@ -59,16 +59,27 @@ instance_group {
 }"""
 
 
-def to_numpy(tensor):
+def _to_numpy(tensor):
     return tensor.cpu().numpy()
 
 
 def export_image_encoder(
     model_type: str,
     output_root: Union[str, os.PathLike],
-    checkpoint_path: Optional[str] = None,
     export_name: Optional[str] = None,
-):
+    checkpoint_path: Optional[str] = None,
+) -> None:
+    """Export the SAM image encoder to torchscript.
+
+    The torchscript image encoder can be used for predicting image embeddings
+    with a backed, e.g. with [the bioengine](https://github.com/bioimage-io/bioengine-model-runner).
+
+    Args:
+        model_type: The SAM model type.
+        output_root: The output root directory where the SAM model is saved.
+        export_name: The name of the exported model.
+        checkpoint_path: Optional checkpoint for loading the SAM model.
+    """
     if export_name is None:
         export_name = model_type
     name = f"sam-{export_name}-encoder"
@@ -91,19 +102,35 @@ def export_image_encoder(
         f.write(ENCODER_CONFIG % name)
 
 
-# ONNX export script adapted from
-# https://github.com/facebookresearch/segment-anything/blob/main/scripts/export_onnx_model.py
 def export_onnx_model(
     model_type,
     output_root,
     opset: int,
+    export_name: Optional[str] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_single_mask: bool = True,
     gelu_approximate: bool = False,
     use_stability_score: bool = False,
     return_extra_metrics: bool = False,
-    export_name: Optional[str] = None,
-):
+) -> None:
+    """Export the SAM prompt enocer and mask decoder to onnx.
+
+    The onnx encoder and decoder can be used for interactive segmentation in the browser.
+    This code is adapted from
+    https://github.com/facebookresearch/segment-anything/blob/main/scripts/export_onnx_model.py
+
+    Args:
+        model_type: The SAM model type.
+        output_root: The output root directory where the SAM model is saved.
+        opset: The ONNX opset version.
+        export_name: The name of the exported model.
+        checkpoint_path: Optional checkpoint for loading the SAM model.
+        return_single_mask: Whether the mask decoder returns a single or multiple masks.
+        gelu_approximate: Whether to use a GeLU approximation, in case the ONNX backend
+            does not have an efficient GeLU implementation.
+        use_stability_score: Whether to use the stability score instead of the predicted score.
+        return_extra_metrics: Whether to return a larger set of metrics.
+    """
     if export_name is None:
         export_name = model_type
     name = f"sam-{export_name}-decoder"
@@ -168,7 +195,7 @@ def export_onnx_model(
             )
 
     if onnxruntime_exists:
-        ort_inputs = {k: to_numpy(v) for k, v in dummy_inputs.items()}
+        ort_inputs = {k: _to_numpy(v) for k, v in dummy_inputs.items()}
         # set cpu provider default
         providers = ["CPUExecutionProvider"]
         ort_session = onnxruntime.InferenceSession(weight_path, providers=providers)
@@ -184,22 +211,40 @@ def export_bioengine_model(
     model_type,
     output_root,
     opset: int,
+    export_name: Optional[str] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_single_mask: bool = True,
     gelu_approximate: bool = False,
     use_stability_score: bool = False,
     return_extra_metrics: bool = False,
-    export_name: Optional[str] = None,
-):
-    export_image_encoder(model_type, output_root, checkpoint_path, export_name)
+) -> None:
+    """Export the SAM model to a format compatible with the BioEngine.
+
+    [The bioengine](https://github.com/bioimage-io/bioengine-model-runner) enables running the
+    image encoder on an online backend, so that SAM can be used in an online tool, or to predict
+    the image embeddings via the online backend rather than on CPU.
+
+    Args:
+        model_type: The SAM model type.
+        output_root: The output root directory where the SAM model is saved.
+        opset: The ONNX opset version.
+        export_name: The name of the exported model.
+        checkpoint_path: Optional checkpoint for loading the SAM model.
+        return_single_mask: Whether the mask decoder returns a single or multiple masks.
+        gelu_approximate: Whether to use a GeLU approximation, in case the ONNX backend
+            does not have an efficient GeLU implementation.
+        use_stability_score: Whether to use the stability score instead of the predicted score.
+        return_extra_metrics: Whether to return a larger set of metrics.
+    """
+    export_image_encoder(model_type, output_root, export_name, checkpoint_path)
     export_onnx_model(
         model_type=model_type,
         output_root=output_root,
         opset=opset,
+        export_name=export_name,
         checkpoint_path=checkpoint_path,
         return_single_mask=return_single_mask,
         gelu_approximate=gelu_approximate,
         use_stability_score=use_stability_score,
         return_extra_metrics=return_extra_metrics,
-        export_name=export_name
     )
