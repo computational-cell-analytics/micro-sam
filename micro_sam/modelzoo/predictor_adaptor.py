@@ -22,28 +22,34 @@ class PredictorAdaptor(SamPredictor):
             - image_embeddings: precomputed image embeddings
             - box_prompts: box prompts of dimensions C x 4
         """
-        if self.is_image_set and image_embeddings is None:  # we have embeddings set and not passed
+        # We have image embeddings set and image embeddings were not passed.
+        if self.is_image_set and image_embeddings is None:
             pass   # do nothing
+
+        # We have image embeddings set and image embeddings were passed.
         elif self.is_image_set and image_embeddings is not None:
-            raise NotImplementedError  # TODO: replace the image embeedings
+            self.features = image_embeddings
+
+        # We don't have image embeddings set and image embeddings were passed.
         elif image_embeddings is not None:
-            pass   # TODO set the image embeddings
-            # self.features = image_embeddings
+            self.features = image_embeddings
+
+        # We don't have image embeddings set and they were not apassed
         elif not self.is_image_set:
             image = self.transform.apply_image_torch(input_image)
-            self.set_torch_image(image, original_image_size=input_image.numpy().shape[2:])  # compute the image embeddings
+            self.set_torch_image(image, original_image_size=input_image.numpy().shape[2:])
 
-        boxes = self.transform.apply_boxes_torch(box_prompts, original_size=input_image.numpy().shape[2:])  # type: ignore
+        boxes = self.transform.apply_boxes_torch(box_prompts, original_size=input_image.numpy().shape[2:])
 
-        instance_segmentation, _, _ = self.predict_torch(
+        masks, scores, _ = self.predict_torch(
             point_coords=None,
             point_labels=None,
             boxes=boxes,
             multimask_output=False
         )
 
-        assert instance_segmentation.shape[2:] == input_image.shape[2:], f"{instance_segmentation.shape[2:]} is not as expected ({input_image.shape[2:]})"
+        assert masks.shape[2:] == input_image.shape[2:],\
+            f"{masks.shape[2:]} is not as expected ({input_image.shape[2:]})"
 
-        # TODO get the image embeddings via image_embeddings =  self.features
-        # and return them
-        return instance_segmentation
+        image_embeddings = self.features
+        return masks, scores, image_embeddings

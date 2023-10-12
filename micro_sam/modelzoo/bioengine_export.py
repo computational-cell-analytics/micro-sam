@@ -69,16 +69,16 @@ def export_image_encoder(
     export_name: Optional[str] = None,
     checkpoint_path: Optional[str] = None,
 ) -> None:
-    """Export the SAM image encoder to torchscript.
+    """Export SAM image encoder to torchscript.
 
     The torchscript image encoder can be used for predicting image embeddings
     with a backed, e.g. with [the bioengine](https://github.com/bioimage-io/bioengine-model-runner).
 
     Args:
         model_type: The SAM model type.
-        output_root: The output root directory where the SAM model is saved.
+        output_root: The output root directory where the exported model is saved.
         export_name: The name of the exported model.
-        checkpoint_path: Optional checkpoint for loading the SAM model.
+        checkpoint_path: Optional checkpoint for loading the exported model.
     """
     if export_name is None:
         export_name = model_type
@@ -113,7 +113,7 @@ def export_onnx_model(
     use_stability_score: bool = False,
     return_extra_metrics: bool = False,
 ) -> None:
-    """Export the SAM prompt enocer and mask decoder to onnx.
+    """Export SAM prompt enocer and mask decoder to onnx.
 
     The onnx encoder and decoder can be used for interactive segmentation in the browser.
     This code is adapted from
@@ -121,7 +121,7 @@ def export_onnx_model(
 
     Args:
         model_type: The SAM model type.
-        output_root: The output root directory where the SAM model is saved.
+        output_root: The output root directory where the exported model is saved.
         opset: The ONNX opset version.
         export_name: The name of the exported model.
         checkpoint_path: Optional checkpoint for loading the SAM model.
@@ -218,7 +218,7 @@ def export_bioengine_model(
     use_stability_score: bool = False,
     return_extra_metrics: bool = False,
 ) -> None:
-    """Export the SAM model to a format compatible with the BioEngine.
+    """Export SAM model to a format compatible with the BioEngine.
 
     [The bioengine](https://github.com/bioimage-io/bioengine-model-runner) enables running the
     image encoder on an online backend, so that SAM can be used in an online tool, or to predict
@@ -226,7 +226,7 @@ def export_bioengine_model(
 
     Args:
         model_type: The SAM model type.
-        output_root: The output root directory where the SAM model is saved.
+        output_root: The output root directory where the exported model is saved.
         opset: The ONNX opset version.
         export_name: The name of the exported model.
         checkpoint_path: Optional checkpoint for loading the SAM model.
