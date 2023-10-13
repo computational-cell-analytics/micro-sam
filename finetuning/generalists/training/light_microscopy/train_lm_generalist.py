@@ -72,7 +72,7 @@ def main():
     parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LM datasets.")
     parser.add_argument(
         "--input_path", "-i", default="/scratch/usr/nimanwai/data/",
-        help="The filepath to the LM datasets. If the data does not exist yet it will be downloaded"  # TODO: check this
+        help="The filepath to all the respective LM datasets. If the data does not exist yet it will be downloaded"
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
