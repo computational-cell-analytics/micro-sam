@@ -7,6 +7,8 @@ image = np.random.randint(0, 255, size=(1, 3, 1024, 1024), dtype=np.uint8).astyp
 )
 
 # SERVER_URL = 'http://127.0.0.1:9520'  # "https://ai.imjoy.io"
+# SERVER_URL = "https://hypha.bioimage.io"
+# SERVER_URL = "https://ai.imjoy.io"
 SERVER_URL = "https://hypha.bioimage.io"
 
 
