@@ -218,8 +218,8 @@ def _segment_frame_wigdet(v: Viewer) -> None:
     v.layers["current_track"].refresh()
 
 
-@magicgui(call_button="Track Object [V]", projection={"choices": ["default", "bounding_box", "mask"]})
-def _track_objet_widget(
+@magicgui(call_button="Track Object [Shift-S]", projection={"choices": ["default", "bounding_box", "mask"]})
+def _track_object_widget(
     v: Viewer, iou_threshold: float = 0.5, projection: str = "default",
     motion_smoothing: float = 0.5, box_extension: float = 0.1,
 ) -> None:
@@ -503,7 +503,7 @@ def annotator_tracking(
     v.window.add_dock_widget(TRACKING_WIDGET)
 
     v.window.add_dock_widget(_segment_frame_wigdet)
-    v.window.add_dock_widget(_track_objet_widget)
+    v.window.add_dock_widget(_track_object_widget)
     v.window.add_dock_widget(_commit_tracking_widget)
     v.window.add_dock_widget(_save_lineage_widget)
     v.window.add_dock_widget(_clear_widget_tracking)
@@ -516,9 +516,9 @@ def annotator_tracking(
     def _seg_slice(v):
         _segment_frame_wigdet(v)
 
-    @v.bind_key("v")
+    @v.bind_key("Shift-S")
     def _track_object(v):
-        _track_objet_widget(v)
+        _track_object_widget(v)
 
     @v.bind_key("t")
     def _toggle_label(event=None):
