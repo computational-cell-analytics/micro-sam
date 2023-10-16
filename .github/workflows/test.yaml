@@ -46,14 +46,14 @@ jobs:
           python -m pip install pytest-qt
 
       - name: Install package
+        shell: bash -l {0}
+        run: pip install --no-deps -e .
+
+      - name: Run tests
         uses: aganders3/headless-gui@v1
         with:
           shell: bash -l {0}
-          run: pip install --no-deps -e .
-
-      - name: Run tests
-        shell: bash -l {0}
-        run: pytest
+          run: pytest
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v3
