@@ -101,7 +101,7 @@ def precompute_state(
     model_type: str = util._DEFAULT_MODEL,
     checkpoint_path: Optional[Union[os.PathLike, str]] = None,
     key: Optional[str] = None,
-    ndim: Union[int] = None,
+    ndim: Optional[int] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     precompute_amg_state: bool = False,
@@ -158,8 +158,8 @@ def main():
     parser.add_argument(
         "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
     )
-    parser.add_argument("-n", "--ndim")
-    parser.add_argument("-p", "--precompute_amg_state")
+    parser.add_argument("-n", "--ndim", type=int)
+    parser.add_argument("-p", "--precompute_amg_state", action="store_true")
 
     args = parser.parse_args()
     precompute_state(

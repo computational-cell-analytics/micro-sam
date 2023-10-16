@@ -50,7 +50,7 @@ class _FakeInput:
 
 def mask_data_to_segmentation(
     masks: List[Dict[str, Any]],
-    shape: tuple[int, ...],
+    shape: Tuple[int, ...],
     with_background: bool,
     min_object_size: int = 0,
 ) -> np.ndarray:
