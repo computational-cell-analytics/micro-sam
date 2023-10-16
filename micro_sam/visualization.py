@@ -1,6 +1,7 @@
 """
 Functionality for visualizing image embeddings.
 """
+from typing import Tuple
 
 import numpy as np
 
@@ -146,7 +147,7 @@ def _project_tiled_embeddings(image_embeddings):
 
 def project_embeddings_for_visualization(
     image_embeddings: ImageEmbeddings
-) -> tuple[np.ndarray, tuple[float, ...]]:
+) -> Tuple[np.ndarray, Tuple[float, ...]]:
     """Project image embeddings to pixel-wise PCA.
 
     Args:
