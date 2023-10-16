@@ -28,9 +28,9 @@ def test_annotator_2d(make_napari_viewer_proxy, tmp_path):
     model_type = "vit_b"
     embedding_path = tmp_path / "test-embedding.zarr"
     # example data - a basic checkerboard pattern
-    image = np.zeros((16,16,16))
-    image[:8,:8,:8] = 1
-    image[8:,8:,8:] = 1
+    image = np.zeros((16,16))
+    image[:8,:8] = 1
+    image[8:,8:] = 1
 
     viewer = make_napari_viewer_proxy()
     viewer = _initialize_viewer(image, None, None, None)  # TODO: fix hacky workaround
