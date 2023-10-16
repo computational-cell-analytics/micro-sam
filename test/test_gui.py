@@ -1,8 +1,8 @@
 import numpy as np
-import skimage.data
-from micro_sam.sam_annotator import annotator_2d, annotator_3d
-from micro_sam.sam_annotator.annotator_2d import _initialize_viewer, _segment_widget, _autosegment_widget
-from micro_sam.sam_annotator.util import _clear_widget, _commit_segmentation_widget
+import pytest
+
+from micro_sam.sam_annotator import annotator_2d
+from micro_sam.sam_annotator.annotator_2d import _initialize_viewer
 
 
 def _check_layer_initialization(viewer):
@@ -19,6 +19,7 @@ def _check_layer_initialization(viewer):
     assert viewer.layers["prompts"].data == []  # shape data is list, not numpy array
 
 
+@pytest.mark.gui
 def test_annotator_2d(make_napari_viewer_proxy, tmp_path):
     """Integration test for annotator_2d widget with automatic mask generation.
 

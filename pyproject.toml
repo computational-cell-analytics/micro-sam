@@ -4,6 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
 addopts = "--durations=10 --cov=micro_sam --cov-report xml:coverage.xml"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "gui: marks GUI tests (deselect with '-m \"not gui\"')",
+]
 
 [tool.black]
 line-length = 79
