@@ -21,4 +21,13 @@ In order to use BAND and start `micro_sam` on it follow these steps:
 - Then press **2d annotator** and the tool will start.
 
 **Transfering data to BAND**
-- TODO
+
+To copy data to and from BAND you can use any cloud storage, e.g. ownCloud, dropbox or google drive. For this, it's important to note that copy and paste, which you may need for accessing links on BAND, works a bit different in BAND:
+- To copy text into BAND you first need to copy it on your computer (e.g. via selecting it + `ctrl + c`).
+- Then go to the browser window with BAND and press `ctrl + shift + alt`. This will open a side window where you can paste your text via `ctrl + v`.
+- Then select the text in this window and copy it via `ctrl + c`.
+- Now you can close the side window via `ctrl + shift + alt` and paste the text in band via `ctrl + v`
+
+The video below shows how to copy over a link from owncloud and then download the data on BAND using copy and paste:
+
+https://github.com/computational-cell-analytics/micro-sam/assets/4263537/825bf86e-017e-41fc-9e42-995d21203287
