@@ -1,8 +1,7 @@
+name: sam
 channels:
     - pytorch
     - conda-forge
-name:
-    sam
 dependencies:
     - cpuonly
     - imagecodecs
