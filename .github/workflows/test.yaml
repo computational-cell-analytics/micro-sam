@@ -3,6 +3,7 @@ name: test
 on:
   push:
     branches:
+      - master
       - main
       - dev
     tags:
@@ -43,7 +44,9 @@ jobs:
         uses: aganders3/headless-gui@v1
         with:
           shell: bash -l {0}
-          run: pip install --no-deps -e .
+          run: |
+            mamba install napari pyqt -c conda-forge
+            pip install --no-deps -e .
 
       - name: Run tests
         shell: bash -l {0}
