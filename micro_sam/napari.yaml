@@ -23,6 +23,9 @@ contributions:
     - id: micro-sam.sample_data_segmentation
       python_name: micro_sam.sample_data:sample_data_segmentation
       title: Load segmentation sample data from micro-sam plugin
+    - id: micro-sam.embedding_widget
+      python_name: micro_sam.sam_annotator.widgets.embedding_widget
+      title: Embedding widget
   sample_data:
     - command: micro-sam.sample_data_image_series
       display_name: Image series example data
@@ -45,3 +48,7 @@ contributions:
     - command: micro-sam.sample_data_segmentation
       display_name: Segmentation sample dataset
       key: micro-sam-segmentation
+  widgets:
+    - command: micro-sam.embedding_widget
+      display_name: Embedding widget
+      key: micro-sam-embedding
