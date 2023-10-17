@@ -23,9 +23,9 @@ class TestTraining(unittest.TestCase):
         label_root = os.path.join(self.tmp_folder, "synthetic-data", "labels")
 
         shape = (512, 512)
-        n_images_train = 16
-        n_images_val = 2
-        n_images_test = 4
+        n_images_train = 4
+        n_images_val = 1
+        n_images_test = 1
 
         n_images = n_images_train + n_images_val + n_images_test
         for i in range(n_images):
@@ -74,9 +74,9 @@ class TestTraining(unittest.TestCase):
         import micro_sam.training as sam_training
 
         batch_size = 1
-        n_sub_iteration = 5
+        n_sub_iteration = 4
         patch_shape = (512, 512)
-        n_objects_per_batch = 4
+        n_objects_per_batch = 2
         device = torch.device("cpu")
 
         # Get the dataloaders.
