@@ -3,7 +3,11 @@ requires = ["setuptools>=42.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
-addopts = "-v --cov=micro_sam --cov-report xml:coverage.xml --cov-report term"
+addopts = "-v --durations=10 --cov=micro_sam --cov-report xml:coverage.xml"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "gui: marks GUI tests (deselect with '-m \"not gui\"')",
+]
 
 [tool.black]
 line-length = 79
