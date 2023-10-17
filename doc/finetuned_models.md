@@ -26,8 +26,8 @@ See for example the [2d annotator example](https://github.com/computational-cell
 
 As a rule of thumb:
 - Use the `_lm` models for segmenting cells or nuclei in light microscopy.
-- Use the `_em` models for segmenting ceells or neurites in electron microscopy.
-    - Note that this model does not work well for segmenting mitochondria or other organelles becuase it is biased towards segmenting the full cell / cellular compartment.
+- Use the `_em` models for segmenting cells or neurites in electron microscopy.
+    - Note that this model does not work well for segmenting mitochondria or other organelles because it is biased towards segmenting the full cell / cellular compartment.
 - For other cases use the default models.
 
 See also the figures above for examples where the finetuned models work better than the vanilla models.

@@ -4,6 +4,7 @@ channels:
     - conda-forge
 dependencies:
     - cpuonly
+    - imagecodecs
     - napari
     - pip
     - pooch

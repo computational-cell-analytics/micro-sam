@@ -5,6 +5,9 @@ from shutil import rmtree
 import numpy as np
 import zarr
 
+from skimage.data import binary_blobs
+from skimage.measure import label
+
 
 class TestUtil(unittest.TestCase):
     tmp_folder = "tmp-files"
@@ -31,9 +34,9 @@ class TestUtil(unittest.TestCase):
             self.assertTrue(0.0 < compute_iou(x1, x2) < 1.0)
 
     def test_tiled_prediction(self):
-        from micro_sam.util import precompute_image_embeddings, get_sam_model
+        from micro_sam.util import precompute_image_embeddings, get_sam_model, VIT_T_SUPPORT
 
-        predictor = get_sam_model(model_type="vit_t")
+        predictor = get_sam_model(model_type="vit_t" if VIT_T_SUPPORT else "vit_b")
 
         tile_shape, halo = (256, 256), (16, 16)
         input_ = np.random.rand(512, 512).astype("float32")
@@ -44,6 +47,21 @@ class TestUtil(unittest.TestCase):
         with zarr.open(save_path, "r") as f:
             self.assertIn("features", f)
             self.assertEqual(len(f["features"]), 4)
+
+    def test_segmentation_to_one_hot(self):
+        from micro_sam.util import segmentation_to_one_hot
+
+        labels = label(binary_blobs(256, blob_size_fraction=0.05, volume_fraction=0.15))
+        label_ids = np.unique(labels)[1:]
+
+        mask = segmentation_to_one_hot(labels.astype("int64"), label_ids).numpy()
+
+        expected_mask = np.zeros((len(label_ids), 1) + labels.shape, dtype="float32")
+        for idx, label_id in enumerate(label_ids):
+            expected_mask[idx, 0, labels == label_id] = 1
+        self.assertEqual(expected_mask.shape, mask.shape)
+
+        self.assertTrue(np.allclose(mask, expected_mask))
 
 
 if __name__ == "__main__":

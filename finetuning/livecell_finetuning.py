@@ -22,11 +22,11 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
     """
     label_transform = torch_em.transform.label.label_consecutive  # to ensure consecutive IDs
     train_loader = get_livecell_loader(path=data_path, patch_shape=patch_shape, split="train", batch_size=2,
-                                       num_workers=8, cell_types=cell_type, download=True,
-                                       label_transform=label_transform)
+                                       num_workers=16, cell_types=cell_type, download=True,
+                                       label_transform=label_transform, shuffle=True)
     val_loader = get_livecell_loader(path=data_path, patch_shape=patch_shape, split="val", batch_size=1,
-                                     num_workers=8, cell_types=cell_type, download=True,
-                                     label_transform=label_transform)
+                                     num_workers=16, cell_types=cell_type, download=True,
+                                     label_transform=label_transform, shuffle=True)
     return train_loader, val_loader
 
 
@@ -38,7 +38,7 @@ def finetune_livecell(args):
     # training settings:
     model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
-    patch_shape = (520, 740)  # the patch shape for training
+    patch_shape = (520, 704)  # the patch shape for training
     n_objects_per_batch = 25  # this is the number of objects per batch that will be sampled
 
     # get the trainable segment anything model
@@ -67,7 +67,7 @@ def finetune_livecell(args):
         device=device,
         lr_scheduler=scheduler,
         logger=sam_training.SamLogger,
-        log_image_interval=10,
+        log_image_interval=100,
         mixed_precision=True,
         convert_inputs=convert_inputs,
         n_objects_per_batch=n_objects_per_batch,

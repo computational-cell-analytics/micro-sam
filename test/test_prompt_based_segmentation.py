@@ -7,6 +7,8 @@ from skimage.draw import disk
 
 
 class TestPromptBasedSegmentation(unittest.TestCase):
+    model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"
+
     @staticmethod
     def _get_input(shape=(256, 256)):
         mask = np.zeros(shape, dtype="uint8")
@@ -17,8 +19,8 @@ class TestPromptBasedSegmentation(unittest.TestCase):
         return mask, image
 
     @staticmethod
-    def _get_model(image):
-        predictor = util.get_sam_model(model_type="vit_t")
+    def _get_model(image, model_type):
+        predictor = util.get_sam_model(model_type=model_type)
         image_embeddings = util.precompute_image_embeddings(predictor, image)
         util.set_precomputed(predictor, image_embeddings)
         return predictor
@@ -28,7 +30,7 @@ class TestPromptBasedSegmentation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.mask, cls.image = cls._get_input()
-        cls.predictor = cls._get_model(cls.image)
+        cls.predictor = cls._get_model(cls.image, cls.model_type)
 
     def test_segment_from_points(self):
         from micro_sam.prompt_based_segmentation import segment_from_points
@@ -59,7 +61,7 @@ class TestPromptBasedSegmentation(unittest.TestCase):
             expected_iou_mask = 0.9
         else:
             mask, image = self._get_input(shape)
-            predictor = self._get_model(image)
+            predictor = self._get_model(image, self.model_type)
             expected_iou_mask = 0.8
 
         #

@@ -4,6 +4,7 @@ channels:
     - nvidia
     - conda-forge
 dependencies:
+    - imagecodecs
     - napari
     - pip
     - pooch
