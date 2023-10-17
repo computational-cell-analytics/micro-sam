@@ -1,6 +1,7 @@
 """
 Functionality for visualizing image embeddings.
 """
+from typing import Tuple
 
 from typing import Tuple
 
