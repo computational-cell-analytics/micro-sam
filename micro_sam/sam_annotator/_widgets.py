@@ -23,19 +23,22 @@ available_devices_list = ["auto"] + _available_devices()
 
 
 @magic_factory(call_button="Compute image embeddings",
-               device = {"choices": available_devices_list})
+               device = {"choices": available_devices_list},
+               save_path={"mode": "d"},  # choose a directory
+               )
 def embedding_widget(
     image: "napari.layers.Image",
     model: Model = Model.__getitem__(_DEFAULT_MODEL),
     device = "auto",
     save_path: Optional[Path] = None,  # where embeddings for this image are cached (optional)
-    custom_model: Optional[str] = None,  # A filepath or URL to custom model weights.
+    optional_custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
 ) -> ImageEmbeddings:
     """Image embedding widget."""
     # for access to the predictor and the image embeddings in the widgets
     global PREDICTOR, IMAGE_EMBEDDINGS
     # Initialize the model
-    PREDICTOR = get_sam_model(model_type=model.name)
+    PREDICTOR = get_sam_model(device=device, model_type=model.name,
+                              checkpoint_path=optional_custom_weights)
 
     # Get image dimensions
     if not image.rgb:
@@ -46,13 +49,18 @@ def embedding_widget(
 
     # Compute the embeddings for the image data
     with tqdm() as pbar:
-        @thread_worker(connect={"finished": lambda: pbar.progressbar.hide()})
+        @thread_worker(connect={"finished": lambda: pbar._get_progressbar().hide()})
         def _compute_image_embedding(PREDICTOR, image_data, save_path, ndim=None):
+            if save_path is not None:
+                save_path = str(save_path)
             IMAGE_EMBEDDINGS = precompute_image_embeddings(
                 predictor = PREDICTOR,
                 input_ = image_data,
-                save_path = str(save_path),
+                save_path = save_path,
                 ndim=ndim,
             )
+            return IMAGE_EMBEDDINGS
 
-        _compute_image_embedding(PREDICTOR, image.data, save_path, ndim=ndim)
+        result = _compute_image_embedding(PREDICTOR, image.data, save_path, ndim=ndim)
+
+    return result
