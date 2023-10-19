@@ -29,6 +29,11 @@ In the GUI you can select with of the four annotation tools you want to use:
 
 And after selecting them a new window will open where you can select the input file path and other optional parameter. Then click the top button to start the tool. **Note: If you are not starting the annotation tool with a path to pre-computed embeddings then it can take several minutes to open napari after pressing the button because the embeddings are being computed.**
 
+**Changes in version 0.3:**
+
+We have made two changes in version 0.3 that are not reflected in the documentation below yet:
+- We now support prompts from box, ellipse and polygon annotations. To reflect this we have renamed the `box_prompts` layer to `prompts` and the `prompts` layer to `point_prompts`.
+- We support automatic segmentation in 3d! To use it, you can first run automated segmentation in the current slice via `Automatic Segmentation`, and then extend the segmentation of these objects to 3d by running `Segment All Slices` with `layer: auto segmentation`.
 
 ## Annotator 2D
 

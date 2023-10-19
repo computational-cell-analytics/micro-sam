@@ -58,6 +58,7 @@ def get_dataloader(split, patch_shape, batch_size):
         patch_shape=patch_shape, batch_size=batch_size,
         ndim=2, is_seg_dataset=True, rois=roi,
         label_transform=torch_em.transform.label.connected_components,
+        num_workers=8, shuffle=True,
     )
     return loader
 
@@ -97,7 +98,7 @@ def run_training(checkpoint_name, model_type):
         device=device,
         lr_scheduler=scheduler,
         logger=sam_training.SamLogger,
-        log_image_interval=10,
+        log_image_interval=100,
         mixed_precision=True,
         convert_inputs=convert_inputs,
         n_objects_per_batch=n_objects_per_batch,
