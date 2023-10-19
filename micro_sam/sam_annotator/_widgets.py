@@ -47,10 +47,10 @@ def embedding_widget(
     # Compute the embeddings for the image data
     with tqdm() as pbar:
         @thread_worker(connect={"finished": lambda: pbar.progressbar.hide()})
-        def _compute_image_embedding(PREDICTOR, image, save_path, ndim=None):
+        def _compute_image_embedding(PREDICTOR, image_data, save_path, ndim=None):
             IMAGE_EMBEDDINGS = precompute_image_embeddings(
                 predictor = PREDICTOR,
-                input_ = image,
+                input_ = image_data,
                 save_path = str(save_path),
                 ndim=ndim,
             )
