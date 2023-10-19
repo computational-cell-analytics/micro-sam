@@ -24,7 +24,7 @@ contributions:
       python_name: micro_sam.sample_data:sample_data_segmentation
       title: Load segmentation sample data from micro-sam plugin
     - id: micro-sam.embedding_widget
-      python_name: micro_sam.sam_annotator.widgets:embedding_widget
+      python_name: micro_sam.sam_annotator._widgets:embedding_widget
       title: Embedding widget
   sample_data:
     - command: micro-sam.sample_data_image_series
