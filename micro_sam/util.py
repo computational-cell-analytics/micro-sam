@@ -20,6 +20,7 @@ import zarr
 from elf.io import open_file
 from nifty.tools import blocking
 from skimage.measure import regionprops
+from skimage.segmentation import relabel_sequential
 
 try:
     from mobile_sam import sam_model_registry, SamPredictor
@@ -255,7 +256,7 @@ def get_custom_sam_model(
     custom_pickle = pickle
     custom_pickle.Unpickler = _CustomUnpickler
 
-    device = _get_device()
+    device = _get_device(device)
     sam = sam_model_registry[model_type]()
 
     # load the model state, ignoring any attributes that can't be found by pickle
@@ -717,3 +718,42 @@ def load_image_data(
             if not lazy_loading:
                 image_data = image_data[:]
     return image_data
+
+
+def segmentation_to_one_hot(
+    segmentation: np.ndarray,
+    segmentation_ids: Optional[np.ndarray] = None,
+) -> torch.Tensor:
+    """Convert the segmentation to one-hot encoded masks.
+
+    Args:
+        segmentation: The segmentation.
+        segmentation_ids: Optional subset of ids that will be used to subsample the masks.
+
+    Returns:
+        The one-hot encoded masks.
+    """
+    masks = segmentation.copy()
+    if segmentation_ids is None:
+        n_ids = int(segmentation.max())
+
+    else:
+        assert segmentation_ids[0] != 0
+
+        # the segmentation ids have to be sorted
+        segmentation_ids = np.sort(segmentation_ids)
+
+        # set the non selected objects to zero and relabel sequentially
+        masks[~np.isin(masks, segmentation_ids)] = 0
+        masks = relabel_sequential(masks)[0]
+        n_ids = len(segmentation_ids)
+
+    masks = torch.from_numpy(masks)
+
+    one_hot_shape = (n_ids + 1,) + masks.shape
+    masks = masks.unsqueeze(0)  # add dimension to scatter
+    masks = torch.zeros(one_hot_shape).scatter_(0, masks, 1)[1:]
+
+    # add the extra singleton dimenion to get shape NUM_OBJECTS x 1 x H x W
+    masks = masks.unsqueeze(1)
+    return masks

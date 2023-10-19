@@ -404,6 +404,7 @@ def segment_from_box(
     original_size: Optional[Tuple[int, ...]] = None,
     multimask_output: bool = False,
     return_all: bool = False,
+    box_extension: float = 0.0,
 ):
     """Segmentation from a box prompt.
 
@@ -417,6 +418,7 @@ def segment_from_box(
         original_size: The original image shape.
         multimask_output: Whether to return multiple or just a single mask.
         return_all: Whether to return the score and logits in addition to the mask.
+        box_extension: Relative factor used to enlarge the bounding box prompt.
 
     Returns:
         The binary segmentation mask.
@@ -425,7 +427,7 @@ def segment_from_box(
         predictor, image_embeddings, i, box, _box_to_tile
     )
     mask, scores, logits = predictor.predict(
-        box=_process_box(box, shape, original_size), multimask_output=multimask_output
+        box=_process_box(box, shape, original_size, box_extension), multimask_output=multimask_output
     )
 
     if tile is not None:

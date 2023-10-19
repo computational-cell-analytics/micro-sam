@@ -50,27 +50,32 @@ def _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1,
         emb2 = util.precompute_image_embeddings(predictor2, im, ndim=2)
         util.set_precomputed(predictor2, emb2)
 
-        centers, boxes = util.get_centers_and_bounding_boxes(gt)
-
         with h5py.File(out_path, "a") as f:
             f.create_dataset("image", data=im, compression="gzip")
 
         gt_ids = np.unique(gt)[1:]
-        for gt_id in tqdm(gt_ids):
+        centers, boxes = util.get_centers_and_bounding_boxes(gt)
+        centers = [centers[gt_id] for gt_id in gt_ids]
+        boxes = [boxes[gt_id] for gt_id in gt_ids]
 
-            gt_mask = (gt == gt_id).astype("uint8")
-            point_coords, point_labels, box, _ = prompt_generator(gt, gt_id, boxes[gt_id], centers[gt_id])
+        object_masks = util.segmentation_to_one_hot(gt, gt_ids)
+        coords, labels, boxes, _ = prompt_generator(object_masks, boxes, centers)
 
-            box = np.array(box[0])
+        for idx, gt_id in tqdm(enumerate(gt_ids), total=len(gt_ids)):
+
+            # TODO bring the outputs to the correct format
+            box = boxes[idx]
             mask1_box = segment_from_box(predictor1, box)
             mask2_box = segment_from_box(predictor2, box)
             mask1_box, mask2_box = mask1_box.squeeze(), mask2_box.squeeze()
 
-            point_coords, point_labels = np.array(point_coords), np.array(point_labels)
+            # TODO bring the outputs to the correct format
+            point_coords, point_labels = np.array(coords[idx]), np.array(labels[idx])
             mask1_points = segment_from_points(predictor1, point_coords, point_labels)
             mask2_points = segment_from_points(predictor2, point_coords, point_labels)
             mask1_points, mask2_points = mask1_points.squeeze(), mask2_points.squeeze()
 
+            gt_mask = gt == gt_id
             with h5py.File(out_path, "a") as f:
                 g = f.create_group(str(gt_id))
                 g.attrs["point_coords"] = point_coords
@@ -343,6 +348,7 @@ def _compare_models(
         )
 
 
+# TODO adapt to new prompt generator
 def model_comparison(
     output_folder: Union[str, os.PathLike],
     n_images_per_sample: int,
