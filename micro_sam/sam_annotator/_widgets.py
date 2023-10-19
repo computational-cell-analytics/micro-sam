@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Optional
 
 from magicgui import magic_factory
 from magicgui.tqdm import tqdm
-from superqt.utils import thread_worker
+from napari.qt.threading import thread_worker
 
 from micro_sam.util import (
     ImageEmbeddings,
@@ -59,8 +59,7 @@ def embedding_widget(
                 save_path = save_path,
                 ndim=ndim,
             )
-            return IMAGE_EMBEDDINGS
 
-        result = _compute_image_embedding(PREDICTOR, image.data, save_path, ndim=ndim)
+        worker = _compute_image_embedding(PREDICTOR, image.data, save_path, ndim=ndim)
 
-    return result
+    return worker
