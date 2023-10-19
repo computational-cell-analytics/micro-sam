@@ -40,12 +40,7 @@ def embedding_widget(
     PREDICTOR = get_sam_model(device=device, model_type=model.name,
                               checkpoint_path=optional_custom_weights)
 
-    # Get image dimensions
-    if not image.rgb:
-        ndim = image.data.ndim
-    else:
-        # assumes RGB channels are the last dimension
-        ndim = image.data.ndim
+    ndim = image.data.ndim  # Get image dimensions
 
     # Compute the embeddings for the image data
     with tqdm() as pbar:
