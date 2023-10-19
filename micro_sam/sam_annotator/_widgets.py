@@ -12,16 +12,18 @@ from micro_sam.util import (
     precompute_image_embeddings,
     _MODEL_URLS,
     _DEFAULT_MODEL,
+    _available_devices,
 )
 
 if TYPE_CHECKING:
     import napari
 
 Model = Enum("Model", _MODEL_URLS)
+available_devices_list = ["auto"] + _available_devices()
 
 
 @magic_factory(call_button="Compute image embeddings",
-               device = {"choices": ["auto", 'cuda', 'mps', 'cpu']})
+               device = {"choices": available_devices_list})
 def embedding_widget(
     image: "napari.layers.Image",
     model: Model = Model.__getitem__(_DEFAULT_MODEL),

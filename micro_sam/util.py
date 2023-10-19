@@ -146,9 +146,11 @@ def _get_device(device=None):
         device = _get_default_device()
     else:
         if device == "cuda":
-            assert torch.cuda.is_available()
+            if not torch.cuda.is_available():
+                raise RuntimeError("PyTorch CUDA backend is not available.")
         elif device == "mps":
-            assert torch.backends.mps.is_available() and torch.backends.mps.is_built()
+            if not (torch.backends.mps.is_available() and torch.backends.mps.is_built()):
+                raise RuntimeError("PyTorch MPS backend is not available or is not built correctly.")
         elif device == "cpu":
             pass  # cpu is always available
         else:
@@ -158,7 +160,7 @@ def _get_device(device=None):
 
 
 def _available_devices():
-    available_devices = [None]
+    available_devices = []
     for i in ["cuda", "mps", "cpu"]:
         try:
             device = _get_device(i)
@@ -166,7 +168,7 @@ def _available_devices():
             pass
         else:
             available_devices.append(device)
-        return available_devices
+    return available_devices
 
 
 def get_sam_model(
