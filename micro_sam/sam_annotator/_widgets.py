@@ -35,7 +35,7 @@ def embedding_widget(
 ) -> ImageEmbeddings:
     """Image embedding widget."""
     # for access to the predictor and the image embeddings in the widgets
-    global PREDICTOR, IMAGE_EMBEDDINGS
+    global PREDICTOR
     # Initialize the model
     PREDICTOR = get_sam_model(device=device, model_type=model.name,
                               checkpoint_path=optional_custom_weights)
@@ -48,6 +48,7 @@ def embedding_widget(
         def _compute_image_embedding(PREDICTOR, image_data, save_path, ndim=None):
             if save_path is not None:
                 save_path = str(save_path)
+            global IMAGE_EMBEDDINGS
             IMAGE_EMBEDDINGS = precompute_image_embeddings(
                 predictor = PREDICTOR,
                 input_ = image_data,
