@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Setup miniconda
         uses: conda-incubator/setup-miniconda@v2
