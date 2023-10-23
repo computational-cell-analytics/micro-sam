@@ -18,7 +18,7 @@ def test_embedding_widget(make_napari_viewer, tmp_path):
     layer = viewer.open_sample('napari', 'camera')[0]
     my_widget = embedding_widget()
     # run image embedding widget
-    worker = my_widget(layer, model=Model.vit_t, device="cpu", save_path=tmp_path)
+    worker = my_widget(image=layer, model=Model.vit_t, device="cpu", save_path=tmp_path)
     worker.await_workers()  # blocks until thread worker is finished the embedding
     # Open embedding results and check they are as expected
     temp_path_files = os.listdir(tmp_path)
