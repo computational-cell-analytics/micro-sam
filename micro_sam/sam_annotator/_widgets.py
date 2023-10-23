@@ -2,8 +2,7 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from magicgui import magic_factory
-from magicgui.tqdm import tqdm
+from magicgui import magic_factory, widgets
 from napari.qt.threading import thread_worker
 
 from micro_sam.util import (
@@ -22,11 +21,14 @@ Model = Enum("Model", _MODEL_URLS)
 available_devices_list = ["auto"] + _available_devices()
 
 
-@magic_factory(call_button="Compute image embeddings",
-               device = {"choices": available_devices_list},
-               save_path={"mode": "d"},  # choose a directory
-               )
+@magic_factory(
+    pbar={'visible': False, 'max': 0, 'value': 0, 'label': 'working...'},
+    call_button="Compute image embeddings",
+    device = {"choices": available_devices_list},
+    save_path={"mode": "d"},  # choose a directory
+    )
 def embedding_widget(
+    pbar: widgets.ProgressBar,
     image: "napari.layers.Image",
     model: Model = Model.__getitem__(_DEFAULT_MODEL),
     device = "auto",
@@ -44,20 +46,18 @@ def embedding_widget(
     if image.rgb:
         ndim -= 1
 
-    # Compute the embeddings for the image data
-    with tqdm() as pbar:
-        @thread_worker(connect={"finished": lambda: pbar._get_progressbar().hide()})
-        def _compute_image_embedding(PREDICTOR, image_data, save_path, ndim=None):
-            if save_path is not None:
-                save_path = str(save_path)
-            global IMAGE_EMBEDDINGS
-            IMAGE_EMBEDDINGS = precompute_image_embeddings(
-                predictor = PREDICTOR,
-                input_ = image_data,
-                save_path = save_path,
-                ndim=ndim,
-            )
+    # Compute the image embeddings
+    @thread_worker(connect={'started': pbar.show, 'returned': pbar.hide})
+    def _compute_image_embedding(PREDICTOR, image_data, save_path, ndim=None):
+        if save_path is not None:
+            save_path = str(save_path)
+        global IMAGE_EMBEDDINGS
+        IMAGE_EMBEDDINGS = precompute_image_embeddings(
+            predictor = PREDICTOR,
+            input_ = image_data,
+            save_path = save_path,
+            ndim=ndim,
+        )
+        return IMAGE_EMBEDDINGS  # returns napari._qt.qthreading.FunctionWorker
 
-        worker = _compute_image_embedding(PREDICTOR, image.data, save_path, ndim=ndim)
-
-    return worker
+    return _compute_image_embedding(PREDICTOR, image.data, save_path, ndim=ndim)
