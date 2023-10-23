@@ -13,6 +13,7 @@ from micro_sam.util import (
     _DEFAULT_MODEL,
     _available_devices,
 )
+from ._state import SamState
 
 if TYPE_CHECKING:
     import napari
@@ -49,15 +50,17 @@ def embedding_widget(
     # Compute the image embeddings
     @thread_worker(connect={'started': pbar.show, 'returned': pbar.hide})
     def _compute_image_embedding(PREDICTOR, image_data, save_path, ndim=None):
+        print("Start")
         if save_path is not None:
             save_path = str(save_path)
-        global IMAGE_EMBEDDINGS
-        IMAGE_EMBEDDINGS = precompute_image_embeddings(
+        state = SamState()
+        state.image_embeddings = precompute_image_embeddings(
             predictor = PREDICTOR,
             input_ = image_data,
             save_path = save_path,
             ndim=ndim,
         )
-        return IMAGE_EMBEDDINGS  # returns napari._qt.qthreading.FunctionWorker
+        print("Done")
+        return state  # returns napari._qt.qthreading.FunctionWorker
 
     return _compute_image_embedding(PREDICTOR, image.data, save_path, ndim=ndim)
