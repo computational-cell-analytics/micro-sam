@@ -24,7 +24,6 @@ def _segment_widget(v: Viewer, box_extension: float = 0.1) -> None:
     boxes, masks = vutil.shape_layer_to_prompts(v.layers["prompts"], shape)
     points, labels = vutil.point_layer_to_prompts(v.layers["point_prompts"], with_stop_annotation=False)
 
-    # TODO we should check that the image embeddings are initialized
     predictor = AnnotatorState().predictor
     image_embeddings = AnnotatorState().image_embeddings
     if image_embeddings["original_size"] is None:  # tiled prediction
@@ -68,17 +67,19 @@ def _autosegment_widget(
 ) -> None:
     state = AnnotatorState()
 
-    # TODO check that the image embeddings are initialized
     is_tiled = state.image_embeddings["input_size"] is None
     if state.amg is None:
         state.amg = instance_segmentation.get_amg(state.predictor, is_tiled)
 
+    shape = state.image_shape
     if not state.amg.is_initialized:
-        state.amg.initialize(v.layers["raw"].data, image_embeddings=state.image_embeddings, verbose=True)
+        # we don't need to pass the actual image data here, since the embeddings are passed
+        # (the image data is only used by the amg to compute image embeddings, so not needed here)
+        dummy_image = np.zeros(shape, dtype="uint8")
+        state.amg.initialize(dummy_image, image_embeddings=state.image_embeddings, verbose=True)
 
     seg = state.amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
 
-    shape = v.layers["raw"].data.shape[:2]
     seg = instance_segmentation.mask_data_to_segmentation(
         seg, shape, with_background=with_background, min_object_size=min_object_size
     )
@@ -236,6 +237,7 @@ def annotator_2d(
         state.predictor = util.get_sam_model(model_type=model_type)
     else:
         state.predictor = predictor
+    state.image_shape = _get_shape(raw)
 
     state.image_embeddings = util.precompute_image_embeddings(
         state.predictor, raw, save_path=embedding_path, ndim=2, tile_shape=tile_shape, halo=halo,
