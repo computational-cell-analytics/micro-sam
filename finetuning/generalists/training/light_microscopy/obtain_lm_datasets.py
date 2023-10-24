@@ -3,7 +3,6 @@ import numpy as np
 from math import ceil, floor
 
 import torch
-
 import torch_em
 import torch_em.data.datasets as datasets
 from torch_em.transform.label import label_consecutive
@@ -53,7 +52,7 @@ def raw_padding_trafo(raw, desired_shape=(512, 512)):
     return raw
 
 
-def get_concat_datasets(input_path, patch_shape, split_choice):
+def get_concat_lm_datasets(input_path, patch_shape, split_choice):
     assert split_choice in ["train", "val"]
 
     label_dtype = torch.int64
@@ -104,9 +103,14 @@ def get_generalist_lm_loaders(input_path, patch_shape):
     https://github.com/constantinpape/torch-em/tree/main/torch_em/data/datasets
     It will automatically download all the datasets
         - expect NeurIPS CellSeg (Multi-Modal Microscopy Images) (https://neurips22-cellseg.grand-challenge.org/)
+
+    NOTE: to remove / replace the datasets with another dataset, you need to add the datasets (for train and val splits)
+    in `get_concat_lm_dataset`. The labels have to be in a label mask instance segmentation format.
+    i.e. the tensors (inputs & masks) should be of same spatial shape, with each object in the mask having it's own ID.
+    IMPORTANT: the ID 0 is reserved for background, and the IDs must be consecutive.
     """
-    generalist_train_dataset = get_concat_datasets(input_path, patch_shape, "train")
-    generalist_val_dataset = get_concat_datasets(input_path, patch_shape, "val")
+    generalist_train_dataset = get_concat_lm_datasets(input_path, patch_shape, "train")
+    generalist_val_dataset = get_concat_lm_datasets(input_path, patch_shape, "val")
     train_loader = torch_em.get_data_loader(generalist_train_dataset, batch_size=2, shuffle=True, num_workers=16)
     val_loader = torch_em.get_data_loader(generalist_val_dataset, batch_size=1, shuffle=True, num_workers=16)
     return train_loader, val_loader

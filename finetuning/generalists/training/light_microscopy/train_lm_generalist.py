@@ -2,13 +2,12 @@ import os
 import argparse
 
 import torch
-
 from torch_em.loss import DiceLoss
 
 import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
 
-from .obtain_lm_datasets import get_generalist_lm_loaders
+from obtain_lm_datasets import get_generalist_lm_loaders
 
 
 def finetune_lm_generalist(args):
@@ -29,7 +28,7 @@ def finetune_lm_generalist(args):
     # all stuff needed for training
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.9, patience=10, verbose=True)
-    train_loader, val_loader = get_generalist_lm_loaders(args.input_path, patch_shape)
+    train_loader, val_loader = get_generalist_lm_loaders(input_path=args.input_path, patch_shape=patch_shape)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
     convert_inputs = sam_training.ConvertToSamInputs()
