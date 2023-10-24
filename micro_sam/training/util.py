@@ -20,7 +20,7 @@ def get_trainable_sam_model(
     Args:
         model_type: The type of the segment anything model.
         checkpoint_path: Path to a custom checkpoint from which to load the model weights.
-        freeze: Specify parts of the model that should be frozen.
+        freeze: Specify parts of the model that should be frozen, namely: image_encoder, prompt_encoder and mask_decoder
             By default nothing is frozen and the full model is updated.
         device: The device to use for training.
 
