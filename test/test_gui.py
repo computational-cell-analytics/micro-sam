@@ -1,8 +1,7 @@
 import numpy as np
 import pytest
 
-from micro_sam.sam_annotator import annotator_2d
-from micro_sam.sam_annotator.annotator_2d import _initialize_viewer
+from micro_sam.sam_annotator.annotator_2d import annotator_2d, _initialize_viewer
 
 
 def _check_layer_initialization(viewer):
