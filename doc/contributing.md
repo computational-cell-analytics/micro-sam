@@ -14,7 +14,6 @@
     * [Line profiling](#line-profiling)
     * [Snakeviz visualization](#snakeviz-visualization)
     * [Memory profiling with memray](#memory-profiling-with-memray)
-* [Creating a new release](#creating-a-new-release)
 
 ## Discuss your ideas
 
