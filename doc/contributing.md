@@ -163,5 +163,3 @@ If you need to investigate memory use specifically, we use [memray](https://gith
 > Memray is a memory profiler for Python. It can track memory allocations in Python code, in native extension modules, and in the Python interpreter itself. It can generate several different types of reports to help you analyze the captured memory usage data. While commonly used as a CLI tool, it can also be used as a library to perform more fine-grained profiling tasks.
 
 For more details about how to use memray, see [the documentation](https://bloomberg.github.io/memray/getting_started.html).
-
-## Creating a new release
