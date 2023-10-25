@@ -14,7 +14,7 @@ import imageio.v3 as imageio
 import numpy as np
 import requests
 import torch
-# import vigra
+import vigra
 import zarr
 
 from elf.io import open_file
