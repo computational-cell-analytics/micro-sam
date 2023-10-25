@@ -13,7 +13,7 @@ from obtain_em_datasets import get_generalist_em_loaders
 def finetune_em_generalist(args):
     """Example code for finetuning SAM on multiple electron microscopy datasets"""
     # override this (below) if you have some more complex set-up and need to specify the exact gpu
-    device = "cuda" if torch.cuda.is_available() else "gpu"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # training settings
     model_type = args.model_type
