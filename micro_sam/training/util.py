@@ -11,9 +11,9 @@ from .trainable_sam import TrainableSAM
 
 def get_trainable_sam_model(
     model_type: str = "vit_h",
+    device: Optional[str] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     freeze: Optional[List[str]] = None,
-    device: Optional[Union[str, torch.device]] = None,
 ) -> TrainableSAM:
     """Get the trainable sam model.
 
@@ -29,7 +29,7 @@ def get_trainable_sam_model(
     """
     # set the device here so that the correct one is passed to TrainableSAM below
     device = _get_device(device)
-    _, sam = get_sam_model(device, model_type, checkpoint_path, return_sam=True)
+    _, sam = get_sam_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path, return_sam=True)
 
     # freeze components of the model if freeze was passed
     # ideally we would want to add components in such a way that:

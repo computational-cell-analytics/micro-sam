@@ -131,9 +131,9 @@ def _run_inference_with_prompts_for_image(
 
     # Transform the prompts into batches
     device = predictor.device
-    input_points = None if input_points is None else torch.tensor(np.array(input_points)).to(device)
-    input_labels = None if input_labels is None else torch.tensor(np.array(input_labels)).to(device)
-    input_boxes = None if input_boxes is None else torch.tensor(np.array(input_boxes)).to(device)
+    input_points = None if input_points is None else torch.tensor(np.array(input_points), dtype=torch.float32).to(device)
+    input_labels = None if input_labels is None else torch.tensor(np.array(input_labels), dtype=torch.float32).to(device)
+    input_boxes = None if input_boxes is None else torch.tensor(np.array(input_boxes), dtype=torch.float32).to(device)
 
     # Use multi-masking only if we have a single positive point without box
     multimasking = False
@@ -177,6 +177,7 @@ def _run_inference_with_prompts_for_image(
 def get_predictor(
     checkpoint_path: Union[str, os.PathLike],
     model_type: str,
+    device: Optional[str] = None,
     return_state: bool = False,
     is_custom_model: Optional[bool] = None,
 ) -> SamPredictor:
@@ -190,17 +191,19 @@ def get_predictor(
     Returns:
         The segment anything predictor.
     """
+    device = util._get_device(device)
+
     # By default we check if the model follows the torch_em checkpint naming scheme to check whether it is a
     # custom model or not. This can be over-ridden by passing True or False for is_custom_model.
     is_custom_model = checkpoint_path.split("/")[-1] == "best.pt" if is_custom_model is None else is_custom_model
 
     if is_custom_model:  # Finetuned SAM model
         predictor = util.get_custom_sam_model(
-            checkpoint_path=checkpoint_path, model_type=model_type, return_state=return_state
+            checkpoint_path=checkpoint_path, model_type=model_type, device=device, return_state=return_state
         )
     else:  # Vanilla SAM model
         assert not return_state
-        predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path)  # type: ignore
+        predictor = util.get_sam_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path)  # type: ignore
     return predictor
 
 
@@ -520,13 +523,14 @@ def run_inference_with_iterative_prompting(
     gt_paths: List[Union[str, os.PathLike]],
     prediction_root: Union[str, os.PathLike],
     use_boxes: bool,
+    device: Optional[str] = None,
     n_iterations: int = 8,
     batch_size: int = 32,
 ) -> None:
     """@private"""
     warnings.warn("The iterative prompting functionality is not working correctly yet.")
 
-    device = util._get_device()
+    device = util._get_device(device)
     model = get_trainable_sam_model(model_type, checkpoint_path)
 
     # create all prediction folders

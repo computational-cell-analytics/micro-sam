@@ -70,14 +70,13 @@ class TestTraining(unittest.TestCase):
         )
         return loader
 
-    def _train_model(self, model_type):
+    def _train_model(self, model_type, device):
         import micro_sam.training as sam_training
 
         batch_size = 1
         n_sub_iteration = 4
         patch_shape = (512, 512)
         n_objects_per_batch = 2
-        device = torch.device("cpu")
 
         # Get the dataloaders.
         train_loader = self._get_dataloader("train", patch_shape, batch_size)
@@ -144,9 +143,10 @@ class TestTraining(unittest.TestCase):
         import micro_sam.evaluation as evaluation
 
         model_type = "vit_t"
+        device = "cpu"
 
         # Fine-tune the model.
-        self._train_model(model_type)
+        self._train_model(model_type=model_type, device=device)
         checkpoint_path = os.path.join(self.tmp_folder, "checkpoints", "test", "best.pt")
         self.assertTrue(os.path.exists(checkpoint_path))
 
