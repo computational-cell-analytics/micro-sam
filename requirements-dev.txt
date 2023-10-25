@@ -1,4 +1,6 @@
+coverage
 line-profiler
+memray
 napari[all]
 pytest
 pytest-cov
