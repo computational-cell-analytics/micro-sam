@@ -66,13 +66,32 @@ def compute_platy_rois(root, sample_ids, ignore_label, file_template, label_key)
     return rois
 
 
+def _check_dataset_available_for_rois(path, patch_shape):
+    """This function checks whether or not all the expected datasets are available, else downloads them
+
+    We do this only for "platynereis", "cremi" and "mitoem" datasets - as we expect specific RoIs only from them
+    """
+    datasets.get_cremi_dataset(path=os.path.join(path, "cremi"), patch_shape=patch_shape, download=True)
+    datasets.get_mitoem_dataset(path=os.path.join(path, "mitoem"), patch_shape=patch_shape, download=True, splits="train")
+    datasets.get_platynereis_cell_dataset(path=os.path.join(path, "platynereis"), patch_shape=patch_shape, download=True)
+    datasets.get_platynereis_nuclei_dataset(path=os.path.join(path, "platynereis"), patch_shape=patch_shape, download=True)
+    datasets.get_platynereis_cilia_dataset(path=os.path.join(path, "platynereis"), patch_shape=patch_shape, download=True)
+    print("All the datasets are available")
+
+
 def get_concat_em_datasets(input_path, patch_shape):
-    # TODO: always do the sanity check for downloading the data and then checking RoIs, else datasets crash
+    _check_dataset_available_for_rois(path=input_path, patch_shape=patch_shape)
+    breakpoint()
+
     sampler = MinInstanceSampler()
 
     # cremi dataset parameters
     cremi_train_rois = {"A": np.s_[0:75, :, :], "B": np.s_[0:75, :, :], "C": np.s_[0:75, :, :]}
     cremi_val_rois = {"A": np.s_[75:100, :, :], "B": np.s_[75:100, :, :], "C": np.s_[75:100, :, :]}
+
+    # mitoem parameters
+    mitoem_train_rois = [np.s_[100:120, :, :], np.s_[100:120, :, :]]
+    mitoem_val_rois = [np.s_[0:20, :, :], np.s_[0:20, :, :]]
 
     # platynereis cell dataset parameters
     platy_root = os.path.join(input_path, "platynereis")
@@ -96,10 +115,6 @@ def get_concat_em_datasets(input_path, patch_shape):
     platy_cilia_val_samples = [3]
     platy_cilia_val_rois = compute_platy_rois(platy_root, platy_cilia_val_samples, ignore_label=-1,
                                               file_template=platy_cilia_template, label_key=platy_cilia_label_key)
-
-    # mitoem parameters
-    mitoem_train_rois = [np.s_[100:120, :, :], np.s_[100:120, :, :]]
-    mitoem_val_rois = [np.s_[0:20, :, :], np.s_[0:20, :, :]]
 
     # platynereis nuclei dataset parameters
     platy_nuclei_template = "nuclei/train_data_nuclei_%02i.h5"
