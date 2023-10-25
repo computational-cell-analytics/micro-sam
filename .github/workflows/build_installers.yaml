@@ -1,7 +1,10 @@
 name: build_installers
 
 on:
+  workflow_dispatch:
   push:
+    branches:
+      - "**"
     tags:
       - '**'
 
@@ -72,14 +75,13 @@ jobs:
         run: |
           cd deployment
           micromamba activate base
-          micromamba install -y -c conda-forge python=3.10
-          micromamba install -y -c conda-forge constructor
-          micromamba install -y -c conda-forge ruamel.yaml
           micromamba install -y -c conda-forge mamba
           mamba env create --file=env.yaml
-          python version_getter.py
-          mkdir ./${{ matrix.os }}_x86_64
-          constructor --conda-exe=$(which mamba) --output-dir ./${{ matrix.os }}_x86_64 .
+          micromamba activate __MICROSAM_BUILD_ENV__
+          mamba install -y -c conda-forge pyinstaller
+          source ./build_pyinstaller_app.sh
+          mv ./dist/annotator ./${{ matrix.os }}_x86_64
+
 
       - name: upload installer
         uses: actions/upload-artifact@v3
