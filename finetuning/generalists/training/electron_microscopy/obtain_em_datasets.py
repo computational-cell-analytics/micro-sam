@@ -76,12 +76,11 @@ def _check_dataset_available_for_rois(path, patch_shape):
     datasets.get_platynereis_cell_dataset(path=os.path.join(path, "platynereis"), patch_shape=patch_shape, download=True)
     datasets.get_platynereis_nuclei_dataset(path=os.path.join(path, "platynereis"), patch_shape=patch_shape, download=True)
     datasets.get_platynereis_cilia_dataset(path=os.path.join(path, "platynereis"), patch_shape=patch_shape, download=True)
-    print("All the datasets are available")
+    print("All the datasets are available for RoI splitting")
 
 
 def get_concat_em_datasets(input_path, patch_shape):
     _check_dataset_available_for_rois(path=input_path, patch_shape=patch_shape)
-    breakpoint()
 
     sampler = MinInstanceSampler()
 
