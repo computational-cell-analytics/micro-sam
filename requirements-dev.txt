@@ -1,0 +1,7 @@
+line-profiler
+napari[all]
+pytest
+pytest-cov
+pytest-qt
+snakeviz
+tabulate
