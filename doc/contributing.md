@@ -28,9 +28,11 @@ This allows you to ask questions, and have the current developers make suggestio
 
 We use [git](https://git-scm.com/) for version control.
 
+Clone the repository, and checkout the development branch:
 ```
 git clone https://github.com/computational-cell-analytics/micro-sam.git
 cd micro-sam
+git checkout dev
 ```
 
 ## Create your development environment
