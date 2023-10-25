@@ -1,6 +1,6 @@
 # How to contribute
 
-* []()
+* [Discuss your ideas](#discuss-your-ideas)
 * [Clone the repository](#clone-the-repository)
 * [Create your development environment](#create-your-development-environment)
 * [Make your changes](#make-your-changes)
