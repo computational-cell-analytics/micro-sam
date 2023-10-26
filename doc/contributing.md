@@ -56,7 +56,9 @@ git checkout dev
 git checkout -b my-new-feature
 ```
 
-You may also find it helpful to look at this [developer guide](development.md), which explains the organization of the micro-sam code.
+We use [google style python docstrings](https://sphinxcontrib-napoleon.readthedocs.io/en/latest/example_google.html) to create documentation for all new code.
+
+You may also find it helpful to look at this [developer guide](#for-developers), which explains the organization of the micro-sam code.
 
 ## Testing
 
@@ -101,6 +103,7 @@ Remember that typically changes to micro-sam are made branching off from the dev
 
 ## Optional: Build the documentation
 
+Building the documentation...
 
 ## Optional: Benchmark performance
 
