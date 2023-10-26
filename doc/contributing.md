@@ -103,7 +103,22 @@ Remember that typically changes to micro-sam are made branching off from the dev
 
 ## Optional: Build the documentation
 
-Building the documentation...
+We use [pdoc](https://pdoc.dev/docs/pdoc.html) to build the documentation.
+
+To build the documentation locally, run this command:
+```
+pdoc --docformat google --logo "https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/micro-sam-logo.png" -o docs/ micro_sam
+```
+
+This will output HTML files into a new directory named `docs`. This is different  than the `doc` directory containing the markdown files used to build the HTML documentaion.
+
+You can view the documentation by opening the file `docs/micro_sam.html` in your browser.
+
+You can add content to the documentation in two ways:
+1. By adding or updating [google style python docstrings](https://sphinxcontrib-napoleon.readthedocs.io/en/latest/example_google.html) in the micro-sam code.
+    * [pdoc](https://pdoc.dev/docs/pdoc.html) will automatically find and include docstrings in the documentation.
+2. By adding or editing markdown files in the micro-sam `doc` directory.
+    * If you add a new narkdown file to the documentation, you must tell [pdoc](https://pdoc.dev/docs/pdoc.html) that it exists by adding a line to the `micro_sam/__init__.py` module docstring (eg: `.. include:: ../doc/my_amazing_new_docs_page.md`). Otherwise it will not be included in the final documenation build!
 
 ## Optional: Benchmark performance
 
