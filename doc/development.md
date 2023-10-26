@@ -1,4 +1,4 @@
-## For Developers
+# For Developers
 
 This software consists of four different python (sub-)modules:
 - The top-level `micro_sam` module implements general purpose functionality for using Segment Anything for multi-dimension data.
@@ -6,7 +6,7 @@ This software consists of four different python (sub-)modules:
 - `micro_sam.traning` implements the training functionality to finetune Segment Anything on custom segmentation datasets.
 - `micro_sam.sam_annotator` implements the interactive annotation tools.
 
-### Annotation Tools
+## Annotation Tools
 
 The annotation tools are currently implemented as stand-alone napari applications. We are in the process of implementing them as napari plugins instead (see https://github.com/computational-cell-analytics/micro-sam/issues/167 for details), and the descriptions here refer to the planned architecture for the plugins.
 
