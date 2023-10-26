@@ -158,8 +158,8 @@ def get_sam_model(
     This location can be changed by setting the environment variable SAM_MODELS.
 
     Args:
-        device: The device for the model. If none is given will use GPU if available.
         model_type: The SegmentAnything model to use. Will use the standard vit_h model by default.
+        device: The device for the model. If none is given will use GPU if available.
         checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
         return_sam: Return the sam model object as well as the predictor.
 
