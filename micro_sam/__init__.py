@@ -4,6 +4,8 @@
 .. include:: ../doc/annotation_tools.md
 .. include:: ../doc/python_library.md
 .. include:: ../doc/finetuned_models.md
+.. include:: ../doc/contributing.md
+.. include:: ../doc/development.md
 """
 import os
 
