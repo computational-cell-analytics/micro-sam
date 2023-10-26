@@ -162,12 +162,20 @@ def benchmark_amg(image, predictor, n):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_type", "-m", default="vit_h")
-    parser.add_argument("--device", "-d")
-    parser.add_argument("--benchmark_embeddings", "-e", action="store_false")
-    parser.add_argument("--benchmark_prompts", "-p", action="store_false")
-    parser.add_argument("--benchmark_amg", "-a", action="store_false")
-    parser.add_argument("-n", "--n", type=int, default=None)
+    parser.add_argument("--device", "-d",
+                        choices=['cpu', 'cuda', 'mps'],
+                        help="Which PyTorch backend device to use (REQUIRED)")
+    parser.add_argument("--model_type", "-m", default="vit_h",
+                        choices=list(util._MODEL_URLS),
+                        help="Which deep learning model to use")
+    parser.add_argument("--benchmark_embeddings", "-e", action="store_false",
+                        help="Skip embedding benchmark test, do not run")
+    parser.add_argument("--benchmark_prompts", "-p", action="store_false",
+                        help="Skip prompt benchmark test, do not run")
+    parser.add_argument("--benchmark_amg", "-a", action="store_false",
+                        help="Skip automatic mask generation (amg) benchmark test, do not run")
+    parser.add_argument("-n", "--n", type=int, default=None,
+                        help="Number of times to repeat benchmark tests")
 
     args = parser.parse_args()
 
