@@ -109,12 +109,17 @@ We use [pdoc](https://pdoc.dev/docs/pdoc.html) to build the documentation.
 
 To build the documentation locally, run this command:
 ```
-pdoc --docformat google --logo "https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/micro-sam-logo.png" -o docs/ micro_sam
+python build_doc.py
 ```
 
-This will output HTML files into a new directory named `docs`. This is different  than the `doc` directory containing the markdown files used to build the HTML documentaion.
+This will start a local server and display the HTML documentation. Any changes you make to the documentation will be updated in real time (you may need to refresh your browser to see the changes).
 
-You can view the documentation by opening the file `docs/micro_sam.html` in your browser.
+If you want to save the HTML files, append `--out` to the command, like this:
+```
+python build_doc.py --out
+```
+
+This will save the HTML files into a new directory named `tmp`.
 
 You can add content to the documentation in two ways:
 1. By adding or updating [google style python docstrings](https://sphinxcontrib-napoleon.readthedocs.io/en/latest/example_google.html) in the micro-sam code.
