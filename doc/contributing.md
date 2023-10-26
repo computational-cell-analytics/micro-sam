@@ -23,6 +23,8 @@ First, discuss your idea by opening a [new issue](https://github.com/computation
 
 This allows you to ask questions, and have the current developers make suggestions about the best way to implement your ideas.
 
+You may also find it helpful to look at this [developer guide](#for-developers), which explains the organization of the micro-sam code.
+
 ## Clone the repository
 
 We use [git](https://git-scm.com/) for version control.
