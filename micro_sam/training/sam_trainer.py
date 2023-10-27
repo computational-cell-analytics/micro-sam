@@ -258,7 +258,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
     def _update_samples_for_gt_instances(self, y, n_samples):
         num_instances_gt = torch.amax(y, dim=(1, 2, 3))
-        num_instances_gt = num_instances_gt.numpy().astype(int)  # FIXME: remove this as this is already taken care of by em generalist pr
+        num_instances_gt = num_instances_gt.numpy()
         n_samples = min(num_instances_gt) if n_samples > min(num_instances_gt) else n_samples
         return n_samples
 

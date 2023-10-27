@@ -33,7 +33,7 @@ def finetune_hp_generalist(args):
     # this class creates all the training data for a batch (inputs, prompts and labels)
     convert_inputs = sam_training.ConvertToSamInputs()
 
-    checkpoint_name = "generalist-hp-sam"
+    checkpoint_name = f"generalist-hp-sam-{args.model_type}"
     # the trainer which performs training and validation (implemented using "torch_em")
     trainer = sam_training.SamTrainer(
         name=checkpoint_name,
