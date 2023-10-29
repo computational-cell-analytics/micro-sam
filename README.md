@@ -31,6 +31,11 @@ You can then start the `micro_sam` tools by running `$ micro_sam.annotator` in t
 For an introduction in how to use the napari based annotation tools check out [the video tutorials](https://www.youtube.com/watch?v=ket7bDUP9tI&list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO&pp=gAQBiAQB).
 Please check out [the documentation](https://computational-cell-analytics.github.io/micro-sam/) for more details on the installation and usage of `micro_sam`.
 
+## Contributing
+
+We welcome new contributions!
+
+If you are interested in contributing to micro-sam, please see the [contributing guide](docs/contributing.md) and [developer documentation](docs/development.md). The first step is to [discuss your idea in anew issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) with the current developers.
 
 ## Citation
 
@@ -93,13 +98,3 @@ Compared to these we support more applications (2d, 3d and tracking), and provid
 - We have added support for bounding box prompts, which provide better segmentation results than points in many cases.
 - Interactive tracking now uses a better heuristic to propagate masks across time, leading to better automatic tracking results.
 - And have fixed several small bugs.
-
-
-<!---
-## Contributing
-
-```
-micro_sam <- library with utility functionality for using SAM for microscopy data
-    /sam_annotator <- the napari plugins for annotation
-```
--->

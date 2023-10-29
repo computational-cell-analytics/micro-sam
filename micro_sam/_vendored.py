@@ -11,7 +11,15 @@ from typing import Any, Dict, List
 import numpy as np
 import torch
 
-from numba import njit
+try:
+    from numba import njit
+    HAVE_NUMBA = True
+except (ImportError, SystemError):
+    HAVE_NUMBA = False
+
+    def njit(func):
+        return func
+
 try:
     from nifty.tools import computeRLE as _compute_rle_nifty
 except ImportError:
@@ -99,7 +107,7 @@ def _compute_rle_numpy(mask):
     return counts
 
 
-def mask_to_rle_pytorch(tensor: torch.Tensor, rle_implementation: str = "numba") -> List[Dict[str, Any]]:
+def mask_to_rle_pytorch(tensor: torch.Tensor, rle_implementation: str = "default") -> List[Dict[str, Any]]:
     """Calculates the runlength encoding of binary input masks.
 
     This replaces the function in
@@ -115,13 +123,21 @@ def mask_to_rle_pytorch(tensor: torch.Tensor, rle_implementation: str = "numba")
     tensor = tensor.permute(0, 2, 1).flatten(1)
     tensor = tensor.detach().cpu().numpy()
 
+    if rle_implementation == "default":
+        rle_implementation = "numpy"
+        if _compute_rle_nifty is not None:
+            rle_implementation = "nifty"
+        elif HAVE_NUMBA:
+            rle_implementation = "numba"
+
     if rle_implementation == "numba":
+        assert HAVE_NUMBA
         rle_impl = _compute_rle_numba
     elif rle_implementation == "numpy":
         rle_impl = _compute_rle_numpy
     elif rle_implementation == "nifty":
-        rle_impl = _compute_rle_nifty
         assert _compute_rle_nifty is not None
+        rle_impl = _compute_rle_nifty
     else:
         raise ValueError(
             f"RLE implementation {rle_implementation} is not available. Has to be one of 'numpy', 'numba' or 'nifty'."
