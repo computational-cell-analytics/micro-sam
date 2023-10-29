@@ -74,8 +74,11 @@ def mask_data_to_segmentation(
     for mask in masks:
         if mask["area"] < min_object_size:
             continue
-        segmentation[mask["segmentation"]] = seg_id
-        seg_id += 1
+
+        this_seg_id = mask.get("seg_id", seg_id)
+        segmentation[mask["segmentation"]] = this_seg_id
+
+        seg_id = this_seg_id + 1
 
     if with_background:
         seg_ids, sizes = np.unique(segmentation, return_counts=True)

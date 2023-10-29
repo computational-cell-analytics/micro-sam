@@ -16,9 +16,9 @@ from skimage.segmentation import relabel_sequential
 from tqdm import tqdm
 
 from segment_anything import SamPredictor
-from segment_anything.utils.transforms import ResizeLongestSide
 
 from .. import util as util
+from ..inference import batched_inference
 from ..instance_segmentation import mask_data_to_segmentation
 from ..prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
 from ..training import get_trainable_sam_model, ConvertToSamInputs
@@ -72,7 +72,6 @@ def _get_batched_prompts(
     n_positives,
     n_negatives,
     dilation,
-    transform_function,
 ):
     # Initialize the prompt generator.
     prompt_generator = PointAndBoxPromptGenerator(
@@ -87,25 +86,21 @@ def _get_batched_prompts(
     bbox_coordinates = [bbox_coordinates[gt_id] for gt_id in gt_ids]
     masks = util.segmentation_to_one_hot(gt.astype("int64"), gt_ids)
 
-    input_points, input_labels, input_boxes, _ = prompt_generator(
+    points, point_labels, boxes, _ = prompt_generator(
         masks, bbox_coordinates, center_coordinates
     )
 
-    # apply the transforms to the points and boxes
-    if use_boxes:
-        input_boxes = torch.from_numpy(
-            transform_function.apply_boxes(input_boxes.numpy(), gt.shape)
-        )
-    if use_points:
-        input_points = torch.from_numpy(
-            transform_function.apply_coords(input_points.numpy(), gt.shape)
-        )
+    def to_numpy(x):
+        if x is None:
+            return x
+        return x.numpy()
 
-    return input_points, input_labels, input_boxes
+    return to_numpy(points), to_numpy(point_labels), to_numpy(boxes)
 
 
 def _run_inference_with_prompts_for_image(
     predictor,
+    image,
     gt,
     use_points,
     use_boxes,
@@ -114,62 +109,30 @@ def _run_inference_with_prompts_for_image(
     dilation,
     batch_size,
     cached_prompts,
+    embedding_path,
 ):
-    # We need the resize transformation for the expected model input size.
-    transform_function = ResizeLongestSide(1024)
     gt_ids = np.unique(gt)[1:]
-
     if cached_prompts is None:
-        input_points, input_labels, input_boxes = _get_batched_prompts(
-            gt, gt_ids, use_points, use_boxes, n_positives, n_negatives, dilation, transform_function,
+        points, point_labels, boxes = _get_batched_prompts(
+            gt, gt_ids, use_points, use_boxes, n_positives, n_negatives, dilation
         )
     else:
-        input_points, input_labels, input_boxes = cached_prompts
+        points, point_labels, boxes = cached_prompts
 
     # Make a copy of the point prompts to return them at the end.
-    prompts = deepcopy((input_points, input_labels, input_boxes))
-
-    # Transform the prompts into batches
-    device = predictor.device
-    input_points = None if input_points is None else torch.tensor(np.array(input_points), dtype=torch.float32).to(device)
-    input_labels = None if input_labels is None else torch.tensor(np.array(input_labels), dtype=torch.float32).to(device)
-    input_boxes = None if input_boxes is None else torch.tensor(np.array(input_boxes), dtype=torch.float32).to(device)
+    prompts = deepcopy((points, point_labels, boxes))
 
     # Use multi-masking only if we have a single positive point without box
     multimasking = False
     if not use_boxes and (n_positives == 1 and n_negatives == 0):
         multimasking = True
 
-    # Run the batched inference.
-    n_samples = input_boxes.shape[0] if input_points is None else input_points.shape[0]
-    n_batches = int(np.ceil(float(n_samples) / batch_size))
-    masks, ious = [], []
-    with torch.no_grad():
-        for batch_idx in range(n_batches):
-            batch_start = batch_idx * batch_size
-            batch_stop = min((batch_idx + 1) * batch_size, n_samples)
-
-            batch_points = None if input_points is None else input_points[batch_start:batch_stop]
-            batch_labels = None if input_labels is None else input_labels[batch_start:batch_stop]
-            batch_boxes = None if input_boxes is None else input_boxes[batch_start:batch_stop]
-
-            batch_masks, batch_ious, _ = predictor.predict_torch(
-                point_coords=batch_points, point_labels=batch_labels,
-                boxes=batch_boxes, multimask_output=multimasking
-            )
-            masks.append(batch_masks)
-            ious.append(batch_ious)
-    masks = torch.cat(masks)
-    ious = torch.cat(ious)
-    assert len(masks) == len(ious) == n_samples
-
-    # TODO we should actually use non-max suppression here
-    # I will implement it somewhere to have it refactored
-    instance_labels = np.zeros_like(gt, dtype=int)
-    for m, iou, gt_idx in zip(masks, ious, gt_ids):
-        best_idx = torch.argmax(iou)
-        best_mask = m[best_idx]
-        instance_labels[best_mask.detach().cpu().numpy()] = gt_idx
+    instance_labels = batched_inference(
+        predictor, image, batch_size,
+        boxes=boxes, points=points, point_labels=point_labels,
+        multimasking=multimasking, embedding_path=embedding_path,
+        return_instance_segmentation=True,
+    )
 
     return instance_labels, prompts
 
@@ -203,7 +166,9 @@ def get_predictor(
         )
     else:  # Vanilla SAM model
         assert not return_state
-        predictor = util.get_sam_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path)  # type: ignore
+        predictor = util.get_sam_model(
+            model_type=model_type, device=device, checkpoint_path=checkpoint_path
+        )  # type: ignore
     return predictor
 
 
@@ -228,7 +193,7 @@ def precompute_all_embeddings(
         util.precompute_image_embeddings(predictor, im, embedding_path, ndim=2)
 
 
-def _precompute_prompts(gt_path, use_points, use_boxes, n_positives, n_negatives, dilation, transform_function):
+def _precompute_prompts(gt_path, use_points, use_boxes, n_positives, n_negatives, dilation):
     name = os.path.basename(gt_path)
 
     gt = imageio.imread(gt_path).astype("uint32")
@@ -236,7 +201,7 @@ def _precompute_prompts(gt_path, use_points, use_boxes, n_positives, n_negatives
     gt_ids = np.unique(gt)[1:]
 
     input_point, input_label, input_box = _get_batched_prompts(
-        gt, gt_ids, use_points, use_boxes, n_positives, n_negatives, dilation, transform_function
+        gt, gt_ids, use_points, use_boxes, n_positives, n_negatives, dilation
     )
 
     if use_boxes and not use_points:
@@ -259,7 +224,6 @@ def precompute_all_prompts(
         prompt_settings: The settings for which the prompts will be computed.
     """
     os.makedirs(prompt_save_dir, exist_ok=True)
-    transform_function = ResizeLongestSide(1024)
 
     for settings in tqdm(prompt_settings, desc="Precompute prompts"):
 
@@ -284,7 +248,6 @@ def precompute_all_prompts(
                 n_positives=n_positives,
                 n_negatives=n_negatives,
                 dilation=dilation,
-                transform_function=transform_function,
             )
             results.append(prompts)
 
@@ -353,7 +316,7 @@ def run_inference_with_prompts(
         gt_paths: The ground-truth segmentation file paths.
         embedding_dir: The directory where the image embddings will be saved or are already saved.
         use_points: Whether to use point prompts.
-        use_boxes: Whetehr to use box prompts
+        use_boxes: Whether to use box prompts
         n_positives: The number of positive point prompts that will be sampled.
         n_negativess: The number of negative point prompts that will be sampled.
         dilation: The dilation factor for the radius around the ground-truth object
@@ -393,18 +356,16 @@ def run_inference_with_prompts(
         gt = relabel_sequential(gt)[0]
 
         embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
-        image_embeddings = util.precompute_image_embeddings(predictor, im, embedding_path, ndim=2)
-        util.set_precomputed(predictor, image_embeddings)
-
         this_prompts, cached_point_prompts, cached_box_prompts = _load_prompts(
             cached_point_prompts, save_point_prompts,
             cached_box_prompts, save_box_prompts,
             label_name
         )
         instances, this_prompts = _run_inference_with_prompts_for_image(
-            predictor, gt, n_positives=n_positives, n_negatives=n_negatives,
+            predictor, im, gt, n_positives=n_positives, n_negatives=n_negatives,
             dilation=dilation, use_points=use_points, use_boxes=use_boxes,
-            batch_size=batch_size, cached_prompts=this_prompts
+            batch_size=batch_size, cached_prompts=this_prompts,
+            embedding_path=embedding_path,
         )
 
         if save_point_prompts:
