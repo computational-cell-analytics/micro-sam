@@ -76,7 +76,7 @@ def mask_data_to_segmentation(
             continue
 
         this_seg_id = mask.get("seg_id", seg_id)
-        segmentation[mask["segmentation"]] = this_seg_id
+        segmentation[mask["segmentation"].cpu()] = this_seg_id
 
         seg_id = this_seg_id + 1
 
