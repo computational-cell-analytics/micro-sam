@@ -9,6 +9,7 @@ import torch
 import torch.utils.data as data_util
 
 import torch_em
+from torch_em.transform.raw import standardize
 from torch_em.data import datasets, MinInstanceSampler, ConcatDataset
 
 
@@ -45,13 +46,14 @@ class BCSSLabelTrafo:
         if self.do_connected_components:
             segmentation = measure.label(labels)
         else:
-            segmentation = label_padding_trafo(labels)
+            segmentation = label_consecutive_trafo(labels)
 
         return segmentation
 
 
 def raw_padding_trafo(raw, desired_shape=(3, 512, 512)):
     assert raw.shape[0] == 3, "The input shape isn't channels first, expected: (3, H, W)"
+    raw = standardize(raw)
     tmp_ddim = (desired_shape[1] - raw.shape[1], desired_shape[2] - raw.shape[2])
     ddim = (tmp_ddim[0] / 2, tmp_ddim[1] / 2)
     raw = np.pad(
