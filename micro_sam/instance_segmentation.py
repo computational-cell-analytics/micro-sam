@@ -70,13 +70,16 @@ def mask_data_to_segmentation(
     masks = sorted(masks, key=(lambda x: x["area"]), reverse=True)
     segmentation = np.zeros(shape[:2], dtype="uint32")
 
+    def require_numpy(mask):
+        return mask.cpu().numpy() if torch.is_tensor(mask) else mask
+
     seg_id = 1
     for mask in masks:
         if mask["area"] < min_object_size:
             continue
 
         this_seg_id = mask.get("seg_id", seg_id)
-        segmentation[mask["segmentation"].cpu()] = this_seg_id
+        segmentation[require_numpy(mask["segmentation"])] = this_seg_id
 
         seg_id = this_seg_id + 1
 
