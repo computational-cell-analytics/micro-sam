@@ -1,3 +1,8 @@
+"""Implements a singleton class for the state of the annotation tools.
+The singleton is implemented following the metaclass design described here:
+https://itnext.io/deciding-the-best-singleton-approach-in-python-65c61e90cdc4
+"""
+
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
