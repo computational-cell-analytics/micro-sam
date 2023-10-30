@@ -3,6 +3,8 @@ import numpy as np
 from math import ceil, floor
 from typing import Optional, List
 
+from skimage import measure
+
 import torch
 import torch.utils.data as data_util
 
@@ -16,11 +18,11 @@ from torch_em.data import datasets, MinInstanceSampler, ConcatDataset
     - bcss test samples (split intrinsically - in the new PR)
 
 length of individual loaders: @all (3 channel input images)
-    - lizard:  train - 359*2;  val - 179
-    - bcss:    train - 54*2;   val - 28
-    - monuseg: train - 15*2;   val - 7
-    - monusac: train - 84*2;   val - 41
-    - pannuke: train - 647*2;  val - 680
+    - lizard:  train - 718;  val - 179
+    - bcss:    train - 108;   val - 28
+    - monuseg: train - 30;   val - 7
+    - monusac: train - 168;   val - 41
+    - pannuke: train - 1294;  val - 680
 """
 
 
@@ -31,16 +33,20 @@ def _get_train_val_split(ds, val_fraction: float = 0.2):
 
 
 class BCSSLabelTrafo:
-    def __init__(self, label_choices: Optional[List[int]] = None):
+    def __init__(self, label_choices: Optional[List[int]] = None, do_connected_components: bool = False):
         self.label_choices = label_choices
+        self.do_connected_components = do_connected_components
 
     def __call__(self, labels: np.ndarray) -> np.ndarray:
         """Returns the transformed bcss data labels (use-case for SAM)"""
         if self.label_choices is not None:
             labels[~np.isin(labels, self.label_choices)] = 0
-            segmentation = label_padding_trafo(labels)
+
+        if self.do_connected_components:
+            segmentation = measure.label(labels)
         else:
             segmentation = label_padding_trafo(labels)
+
         return segmentation
 
 
@@ -92,11 +98,11 @@ def get_concat_hp_datasets(path, patch_shape):
     # get bcss internal splits
     bcss_train_ds = datasets.get_bcss_dataset(
         path=os.path.join(path, "bcss"), patch_shape=patch_shape, split="train", sampler=MinInstanceSampler(),
-        label_transform=BCSSLabelTrafo(), label_dtype=label_dtype
+        label_transform=BCSSLabelTrafo(do_connected_components=True), label_dtype=label_dtype
     )
     bcss_val_ds = datasets.get_bcss_dataset(
         path=os.path.join(path, "bcss"), patch_shape=patch_shape, split="val", sampler=MinInstanceSampler(),
-        label_transform=BCSSLabelTrafo(), label_dtype=label_dtype
+        label_transform=BCSSLabelTrafo(do_connected_components=True), label_dtype=label_dtype
     )
 
     # make monuseg train dataset splits into fractions
