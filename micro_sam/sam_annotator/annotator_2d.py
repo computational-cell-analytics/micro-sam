@@ -13,6 +13,7 @@ from ..precompute_state import cache_amg_state
 from ..visualization import project_embeddings_for_visualization
 from . import util as vutil
 from .gui_utils import show_wrong_file_warning
+from ._state import AnnotatorState
 
 
 @magicgui(call_button="Segment Object [S]")
@@ -23,14 +24,16 @@ def _segment_widget(v: Viewer, box_extension: float = 0.1) -> None:
     boxes, masks = vutil.shape_layer_to_prompts(v.layers["prompts"], shape)
     points, labels = vutil.point_layer_to_prompts(v.layers["point_prompts"], with_stop_annotation=False)
 
-    if IMAGE_EMBEDDINGS["original_size"] is None:  # tiled prediction
+    predictor = AnnotatorState().predictor
+    image_embeddings = AnnotatorState().image_embeddings
+    if image_embeddings["original_size"] is None:  # tiled prediction
         seg = vutil.prompt_segmentation(
-            PREDICTOR, points, labels, boxes, masks, shape, image_embeddings=IMAGE_EMBEDDINGS,
+            predictor, points, labels, boxes, masks, shape, image_embeddings=image_embeddings,
             multiple_box_prompts=True, box_extension=box_extension,
         )
     else:  # normal prediction and we have set the precomputed embeddings already
         seg = vutil.prompt_segmentation(
-            PREDICTOR, points, labels, boxes, masks, shape, multiple_box_prompts=True, box_extension=box_extension,
+            predictor, points, labels, boxes, masks, shape, multiple_box_prompts=True, box_extension=box_extension,
         )
 
     # no prompts were given or prompts were invalid, skip segmentation
@@ -62,17 +65,21 @@ def _autosegment_widget(
     min_object_size: int = 100,
     with_background: bool = True,
 ) -> None:
-    global AMG
-    is_tiled = IMAGE_EMBEDDINGS["input_size"] is None
-    if AMG is None:
-        AMG = instance_segmentation.get_amg(PREDICTOR, is_tiled)
+    state = AnnotatorState()
 
-    if not AMG.is_initialized:
-        AMG.initialize(v.layers["raw"].data, image_embeddings=IMAGE_EMBEDDINGS, verbose=True)
+    is_tiled = state.image_embeddings["input_size"] is None
+    if state.amg is None:
+        state.amg = instance_segmentation.get_amg(state.predictor, is_tiled)
 
-    seg = AMG.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
+    shape = state.image_shape
+    if not state.amg.is_initialized:
+        # we don't need to pass the actual image data here, since the embeddings are passed
+        # (the image data is only used by the amg to compute image embeddings, so not needed here)
+        dummy_image = np.zeros(shape, dtype="uint8")
+        state.amg.initialize(dummy_image, image_embeddings=state.image_embeddings, verbose=True)
 
-    shape = v.layers["raw"].data.shape[:2]
+    seg = state.amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
+
     seg = instance_segmentation.mask_data_to_segmentation(
         seg, shape, with_background=with_background, min_object_size=min_object_size
     )
@@ -112,7 +119,7 @@ def _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings):
 
     # show the PCA of the image embeddings
     if show_embeddings:
-        embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS)
+        embedding_vis, scale = project_embeddings_for_visualization(AnnotatorState().image_embeddings)
         v.add_image(embedding_vis, name="embeddings", scale=scale)
 
     labels = ["positive", "negative"]
@@ -224,26 +231,25 @@ def annotator_2d(
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
     """
-    # for access to the predictor and the image embeddings in the widgets
-    global PREDICTOR, IMAGE_EMBEDDINGS, AMG
-    AMG = None
+    state = AnnotatorState()
 
     if predictor is None:
-        PREDICTOR = util.get_sam_model(model_type=model_type)
+        state.predictor = util.get_sam_model(model_type=model_type)
     else:
-        PREDICTOR = predictor
+        state.predictor = predictor
+    state.image_shape = _get_shape(raw)
 
-    IMAGE_EMBEDDINGS = util.precompute_image_embeddings(
-        PREDICTOR, raw, save_path=embedding_path, ndim=2, tile_shape=tile_shape, halo=halo,
+    state.image_embeddings = util.precompute_image_embeddings(
+        state.predictor, raw, save_path=embedding_path, ndim=2, tile_shape=tile_shape, halo=halo,
         wrong_file_callback=show_wrong_file_warning
     )
     if precompute_amg_state and (embedding_path is not None):
-        AMG = cache_amg_state(PREDICTOR, raw, IMAGE_EMBEDDINGS, embedding_path)
+        state.amg = cache_amg_state(state.predictor, raw, state.image_embeddings, embedding_path)
 
     # we set the pre-computed image embeddings if we don't use tiling
     # (if we use tiling we cannot directly set it because the tile will be chosen dynamically)
     if tile_shape is None:
-        util.set_precomputed(PREDICTOR, IMAGE_EMBEDDINGS)
+        util.set_precomputed(state.predictor, state.image_embeddings)
 
     # viewer is freshly initialized
     if v is None:
