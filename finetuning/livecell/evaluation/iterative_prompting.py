@@ -1,8 +1,8 @@
 import os
 from glob import glob
 
-from micro_sam.evaluation.inference import run_inference_with_iterative_prompting
 from micro_sam.evaluation.evaluation import run_evaluation
+from micro_sam.evaluation.inference import run_inference_with_iterative_prompting
 
 from util import get_checkpoint, get_paths
 
@@ -11,15 +11,20 @@ LIVECELL_GT_ROOT = "/scratch-grete/projects/nim00007/data/LiveCELL/annotations_c
 PREDICTION_ROOT = "./pred_interactive_prompting"
 
 
-def run_interactive_prompting():
+def run_interactive_prompting(use_get_checkpoint=False):
     prediction_root = PREDICTION_ROOT
 
     checkpoint, model_type = get_checkpoint("vit_b")
     image_paths, gt_paths = get_paths()
 
     run_inference_with_iterative_prompting(
-        checkpoint, model_type, image_paths, gt_paths,
-        prediction_root, use_boxes=False, batch_size=16,
+        image_paths=image_paths,
+        gt_paths=gt_paths,
+        prediction_root=prediction_root,
+        use_boxes=False,
+        batch_size=16,
+        checkpoint_path=checkpoint if use_get_checkpoint else None,
+        model_type=model_type if use_get_checkpoint else "vit_b"
     )
 
 
@@ -44,8 +49,8 @@ def evaluate_interactive_prompting():
 
 
 def main():
-    # run_interactive_prompting()
-    evaluate_interactive_prompting()
+    run_interactive_prompting()
+    # evaluate_interactive_prompting()
 
 
 if __name__ == "__main__":

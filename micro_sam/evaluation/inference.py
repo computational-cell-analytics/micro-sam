@@ -4,24 +4,23 @@
 import os
 import pickle
 import warnings
-
+import numpy as np
+from tqdm import tqdm
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Union
 
 import imageio.v3 as imageio
-import numpy as np
-import torch
-
 from skimage.segmentation import relabel_sequential
-from tqdm import tqdm
+
+import torch
 
 from segment_anything import SamPredictor
 
 from .. import util as util
 from ..inference import batched_inference
 from ..instance_segmentation import mask_data_to_segmentation
-from ..prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
 from ..training import get_trainable_sam_model, ConvertToSamInputs
+from ..prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
 
 
 def _load_prompts(
@@ -398,15 +397,15 @@ def _save_segmentation(masks, prediction_path):
 @torch.no_grad()
 def _run_inference_with_iterative_prompting_for_image(
     model, image, gt, n_iterations, device, use_boxes, prediction_paths, batch_size
-):
+) -> None:
     assert len(prediction_paths) == n_iterations, f"{len(prediction_paths)}, {n_iterations}"
-    to_sam_inputs = ConvertToSamInputs()
+    convert_to_sam_inputs = ConvertToSamInputs()
 
     image = torch.from_numpy(image[None, None] if image.ndim == 2 else image[None])
     gt = torch.from_numpy(gt[None].astype("int32"))
 
     n_pos = 0 if use_boxes else 1
-    batched_inputs, sampled_ids = to_sam_inputs(image, gt, n_pos=n_pos, n_neg=0, get_boxes=use_boxes)
+    batched_inputs, sampled_ids = convert_to_sam_inputs(image, gt, n_pos=n_pos, n_neg=0, get_boxes=use_boxes)
 
     input_images = torch.stack([model.preprocess(x=x["image"].to(device)) for x in batched_inputs], dim=0)
     image_embeddings = model.image_embeddings_oft(input_images)
@@ -454,9 +453,8 @@ def _run_inference_with_iterative_prompting_for_image(
             masks = (masks > 0.5).to(torch.float32)
             final_masks.append(masks)
 
-            all_next_point_coords, all_next_point_labels = prompt_generator(sampled_binary_y, masks)
-            for next_coords, next_labels, _inputs, _logits in zip(all_next_point_coords, all_next_point_labels,
-                                                                  this_batched_inputs, logits_masks):
+            for _mask, _gt, _inputs, _logits in zip(masks, sampled_binary_y, this_batched_inputs, logits_masks):
+                next_coords, next_labels, _, _ = prompt_generator(_gt, _mask)
                 _inputs["point_coords"] = torch.cat([_inputs["point_coords"], next_coords], dim=1) \
                     if "point_coords" in _inputs.keys() else next_coords
                 _inputs["point_labels"] = torch.cat([_inputs["point_labels"], next_labels], dim=1) \
