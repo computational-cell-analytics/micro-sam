@@ -394,6 +394,17 @@ def _save_segmentation(masks, prediction_path):
     imageio.imwrite(prediction_path, segmentation)
 
 
+def extract_instances_from_batched_outputs(batched_outputs):
+    masks = [
+        torch.stack(
+            [torch.sigmoid(_m[torch.argmax(_iou)][None]) for _m, _iou in zip(m["masks"], m["iou_predictions"])]
+        ) for m in batched_outputs
+    ]
+    masks = torch.stack(masks)
+    masks = (masks > 0.5).to(torch.float32)
+    return masks
+
+
 @torch.no_grad()
 def _run_inference_with_iterative_prompting_for_image(
     model, image, gt, n_iterations, device, use_boxes, prediction_paths, batch_size
@@ -417,7 +428,7 @@ def _run_inference_with_iterative_prompting_for_image(
     n_batches = int(np.ceil(float(n_samples) / batch_size))
 
     for iteration in range(n_iterations):
-        final_masks = []
+        final_masks, all_sampled_binary_y = [], []
         for batch_idx in range(n_batches):
             batch_start = batch_idx * batch_size
             batch_stop = min((batch_idx + 1) * batch_size, n_samples)
@@ -438,31 +449,23 @@ def _run_inference_with_iterative_prompting_for_image(
                 image_embeddings=image_embeddings
             )
 
-            masks, logits_masks = [], []
-            for m in batched_outputs:
-                mask, l_mask = [], []
-                for _m, _l, _iou in zip(m["masks"], m["low_res_masks"], m["iou_predictions"]):
-                    best_iou_idx = torch.argmax(_iou)
-                    mask.append(torch.sigmoid(_m[best_iou_idx][None]))
-                    l_mask.append(_l[best_iou_idx][None])
-                mask, l_mask = torch.stack(mask), torch.stack(l_mask)
-                masks.append(mask)
-                logits_masks.append(l_mask)
-
-            masks, logits_masks = torch.stack(masks), torch.stack(logits_masks)
-            masks = (masks > 0.5).to(torch.float32)
+            masks = extract_instances_from_batched_outputs(batched_outputs)
             final_masks.append(masks)
+            all_sampled_binary_y.append(sampled_binary_y)
 
-            for _mask, _gt, _inputs, _logits in zip(masks, sampled_binary_y, this_batched_inputs, logits_masks):
-                next_coords, next_labels, _, _ = prompt_generator(_gt, _mask)
-                _inputs["point_coords"] = torch.cat([_inputs["point_coords"], next_coords], dim=1) \
-                    if "point_coords" in _inputs.keys() else next_coords
-                _inputs["point_labels"] = torch.cat([_inputs["point_labels"], next_labels], dim=1) \
-                    if "point_labels" in _inputs.keys() else next_labels
-                _inputs["mask_inputs"] = _logits
+        all_sampled_binary_y = torch.cat(all_sampled_binary_y, dim=1)
+        all_masks = torch.cat(final_masks, dim=1)
 
-        final_masks = torch.cat(final_masks, dim=1)
-        _save_segmentation(final_masks, prediction_paths[iteration])
+        assert all_sampled_binary_y.ndim == all_masks.ndim
+
+        for _mask, _gt, _inputs in zip(all_masks, all_sampled_binary_y, batched_inputs):
+            next_coords, next_labels, _, _ = prompt_generator(_gt, _mask)
+            _inputs["point_coords"] = torch.cat([_inputs["point_coords"], next_coords], dim=1) \
+                if "point_coords" in _inputs.keys() else next_coords
+            _inputs["point_labels"] = torch.cat([_inputs["point_labels"], next_labels], dim=1) \
+                if "point_labels" in _inputs.keys() else next_labels
+
+        _save_segmentation(all_masks, prediction_paths[iteration])
 
 
 def run_inference_with_iterative_prompting(

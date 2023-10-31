@@ -50,7 +50,7 @@ def evaluate_interactive_prompting():
 
 def main():
     run_interactive_prompting()
-    # evaluate_interactive_prompting()
+    evaluate_interactive_prompting()
 
 
 if __name__ == "__main__":
