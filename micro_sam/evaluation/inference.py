@@ -392,28 +392,12 @@ def _save_segmentation(masks, prediction_path):
     imageio.imwrite(prediction_path, segmentation, compression=5)
 
 
-def extract_instances_from_batched_outputs(batched_outputs):
-    masks = [m["segmentation"][None] for m in batched_outputs]
-    masks = torch.stack(masks)
-    masks = (masks > 0.5).to(torch.float32)
-    return masks
-
-
-def get_channelwise_gt_objects(gt, gt_ids, device=None):
-    device = util._get_device(device)
-    sampled_binary_gt = np.stack([(gt == idx)[None] for idx in gt_ids])
-    sampled_binary_gt = torch.from_numpy(sampled_binary_gt).to(torch.float32)
-    sampled_binary_gt = sampled_binary_gt.to(device)
-    return sampled_binary_gt
-
-
 @torch.no_grad()
 def _run_inference_with_iterative_prompting_for_image(
     predictor,
     image,
     gt,
-    use_points,
-    use_boxes,
+    start_with_box_prompt,
     dilation,
     batch_size,
     embedding_path,
@@ -423,22 +407,27 @@ def _run_inference_with_iterative_prompting_for_image(
     prompt_generator = IterativePromptGenerator()
 
     gt_ids = np.unique(gt)[1:]
-    n_positives = 1 if not use_boxes else 0
-    n_negatives = 0
+
+    # Use multi-masking only if we have a single positive point without box
+    if start_with_box_prompt:
+        use_boxes, use_points = True, False
+        n_positives = 0
+        multimasking = False
+    else:
+        use_boxes, use_points = False, True
+        n_positives = 1
+        multimasking = True
 
     points, point_labels, boxes = _get_batched_prompts(
-        gt, gt_ids, use_points, use_boxes,
+        gt, gt_ids,
+        use_points=use_points,
+        use_boxes=use_boxes,
         n_positives=n_positives,
-        n_negatives=n_negatives,
+        n_negatives=0,
         dilation=dilation
     )
 
-    sampled_binary_gt = get_channelwise_gt_objects(gt, gt_ids)
-
-    # Use multi-masking only if we have a single positive point without box
-    multimasking = False
-    if not use_boxes and (n_positives == 1 and n_negatives == 0):
-        multimasking = True
+    sampled_binary_gt = util.segmentation_to_one_hot(gt.astype("int64"), gt_ids)
 
     for iteration in range(n_iterations):
         batched_outputs = batched_inference(
@@ -447,7 +436,11 @@ def _run_inference_with_iterative_prompting_for_image(
             multimasking=multimasking, embedding_path=embedding_path,
             return_instance_segmentation=False
         )
-        masks = extract_instances_from_batched_outputs(batched_outputs)
+
+        # switching off multimasking after first iter, as next iters (with multiple prompts) don't expect multimasking
+        multimasking = False
+
+        masks = torch.stack([m["segmentation"][None] for m in batched_outputs]).to(torch.float32)
 
         next_coords, next_labels, _, _ = prompt_generator(sampled_binary_gt, masks)
         next_coords, next_labels = next_coords.detach().cpu().numpy(), next_labels.detach().cpu().numpy()
@@ -471,8 +464,7 @@ def run_inference_with_iterative_prompting(
     gt_paths: List[Union[str, os.PathLike]],
     embedding_dir: Union[str, os.PathLike],
     prediction_dir: Union[str, os.PathLike],
-    use_points: bool,
-    use_boxes: bool,
+    start_with_box_prompt: bool,
     dilation: int = 5,
     batch_size: int = 32,
     n_iterations: int = 8,
@@ -486,16 +478,12 @@ def run_inference_with_iterative_prompting(
         gt_paths: The ground-truth segmentation file paths.
         embedding_dir: The directory where the image embeddings will be saved or are already saved.
         prediction_dir: The directory where the predictions from SegmentAnything will be saved per iteration.
-        use_points: Whether to use the first prompt as 1 positive point
-        use_boxes: Whether to use the first prompt as bounding box
+        start_with_box_prompt: Whether to use the first prompt as bounding box or a single point
         dilation: The dilation factor for the radius around the ground-truth obkect
             around which points will not be sampled.
         batch_size: The batch size used for batched predictions.
         n_iterations: The number of iterations for iterative prompting.
     """
-    if not (use_points or use_boxes):
-        raise ValueError("You need to use at least one of point or box prompts")
-
     if len(image_paths) != len(gt_paths):
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
 
@@ -523,7 +511,7 @@ def run_inference_with_iterative_prompting(
         embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
 
         _run_inference_with_iterative_prompting_for_image(
-            predictor, image, gt, use_points=use_points, use_boxes=use_boxes,
+            predictor, image, gt, start_with_box_prompt=start_with_box_prompt,
             dilation=dilation, batch_size=batch_size, embedding_path=embedding_path,
             n_iterations=n_iterations, prediction_paths=prediction_paths
         )

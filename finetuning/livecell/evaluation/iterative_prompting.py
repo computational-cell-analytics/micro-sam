@@ -10,19 +10,16 @@ LIVECELL_GT_ROOT = "/scratch/projects/nim00007/data/LiveCELL/annotations_correct
 PREDICTION_ROOT = "/scratch/projects/nim00007/sam/iterative_evaluation"
 
 
-def get_prediction_root(use_points, use_boxes, model_type, root_dir=PREDICTION_ROOT):
-    assert use_points != use_boxes, "use_points and use_boxes cannot have same values. Use one feature at a time"
-    if use_boxes:
+def get_prediction_root(start_with_box_prompt, model_type, root_dir=PREDICTION_ROOT):
+    if start_with_box_prompt:
         prediction_root = os.path.join(root_dir, model_type, "start_with_box")
-    elif use_points:
-        prediction_root = os.path.join(root_dir, model_type, "start_with_point")
     else:
-        raise ValueError("You need to use only either of points or boxes as a first prompt")
+        prediction_root = os.path.join(root_dir, model_type, "start_with_point")
 
     return prediction_root
 
 
-def run_interactive_prompting(use_points, use_boxes, model_name, prediction_root, checkpoint=None):
+def run_interactive_prompting(start_with_box_prompt, model_name, prediction_root, checkpoint=None):
     if checkpoint is None:
         checkpoint, model_type = get_checkpoint(model_name)
     else:
@@ -38,12 +35,11 @@ def run_interactive_prompting(use_points, use_boxes, model_name, prediction_root
 
     inference.run_inference_with_iterative_prompting(
         predictor=predictor,
-        image_paths=image_paths,
-        gt_paths=gt_paths,
+        image_paths=image_paths[:10],
+        gt_paths=gt_paths[:10],
         embedding_dir=embedding_folder,
         prediction_dir=prediction_root,
-        use_points=use_points,
-        use_boxes=use_boxes
+        start_with_box_prompt=start_with_box_prompt
     )
 
 
@@ -69,15 +65,14 @@ def evaluate_interactive_prompting(prediction_root):
 
 
 def main():
-    use_points = True  # overwrite when you want the first iterations' input prompt to start as 1 point
-    use_boxes = False  # overwrite when you want the first iterations' input prompt to start as box
-    model_name = "vit_h"  # overwrite to specify the choice of vanilla / finetuned models
+    start_with_box_prompt = True  # overwrite when you want first iters' prompt to start as box instead of single point
+    model_name = "vit_h_generalist"  # overwrite to specify the choice of vanilla / finetuned models
     checkpoint = None  # overwrite to pass your expected model's checkpoint path
 
     # add the root prediction path where you would like to save the iterative prompting results
-    prediction_root = get_prediction_root(use_points, use_boxes, model_name)
+    prediction_root = get_prediction_root(start_with_box_prompt, model_name)
 
-    run_interactive_prompting(use_points, use_boxes, model_name, prediction_root, checkpoint=checkpoint)
+    run_interactive_prompting(start_with_box_prompt, model_name, prediction_root, checkpoint=checkpoint)
     evaluate_interactive_prompting(prediction_root)
 
 
