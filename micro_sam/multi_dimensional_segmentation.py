@@ -148,6 +148,7 @@ def segment_3d_from_slice(
     pred_iou_thresh: float = 0.88,
     stability_score_thresh: float = 0.95,
     min_object_size_z: int = 50,
+    max_object_size_z: Optional[int] = None,
     iou_threshold: float = 0.8,
     precompute_amg_state: bool = True,
 ):
@@ -173,7 +174,9 @@ def segment_3d_from_slice(
 
     seg_z = amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
     seg_z = mask_data_to_segmentation(
-        seg_z, shape=raw.shape[1:], with_background=True, min_object_size=min_object_size_z
+        seg_z, shape=raw.shape[1:], with_background=True,
+        min_object_size=min_object_size_z,
+        max_object_size=max_object_size_z,
     )
 
     seg_ids = np.unique(seg_z)[1:]
