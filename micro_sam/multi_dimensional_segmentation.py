@@ -1,13 +1,16 @@
-"""
-Multi-dimensional segmentation with segment anything.
+"""Multi-dimensional segmentation with segment anything.
 """
 
-from typing import Any, Optional
+import os
+from typing import Any, Optional, Union
 
 import numpy as np
 from segment_anything.predictor import SamPredictor
+from tqdm import tqdm
 
 from . import util
+from .instance_segmentation import AutomaticMaskGenerator, mask_data_to_segmentation
+from .precompute_state import cache_amg_state
 from .prompt_based_segmentation import segment_from_mask
 
 
@@ -21,7 +24,7 @@ def segment_mask_in_volume(
     iou_threshold: float,
     projection: str,
     progress_bar: Optional[Any] = None,
-    box_extension: int = 0,
+    box_extension: float = 0.0,
 ) -> np.ndarray:
     """Segment an object mask in in volumetric data.
 
@@ -130,5 +133,59 @@ def segment_mask_in_volume(
                         box_extension=box_extension
                     )
                     _update_progress()
+
+    return segmentation
+
+
+def segment_3d_from_slice(
+    predictor: SamPredictor,
+    raw: np.ndarray,
+    z: Optional[int] = None,
+    embedding_path: Optional[Union[str, os.PathLike]] = None,
+    projection: str = "mask",
+    box_extension: float = 0.0,
+    verbose: bool = True,
+    pred_iou_thresh: float = 0.88,
+    stability_score_thresh: float = 0.95,
+    min_object_size_z: int = 50,
+    iou_threshold: float = 0.8,
+    precompute_amg_state: bool = True,
+):
+    """
+
+    Args:
+        predictor:
+
+    Returns:
+        The
+    """
+    # Perform automatic instance segmentation.
+    image_embeddings = util.precompute_image_embeddings(predictor, raw, save_path=embedding_path, ndim=3)
+
+    if z is None:
+        z = raw.shape[0] // 2
+
+    if precompute_amg_state and (embedding_path is not None):
+        amg = cache_amg_state(predictor, raw[z], image_embeddings, embedding_path, verbose=verbose, i=z)
+    else:
+        amg = AutomaticMaskGenerator(predictor)
+        amg.initialize(raw[z], image_embeddings, i=z, verbose=verbose)
+
+    seg_z = amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
+    seg_z = mask_data_to_segmentation(
+        seg_z, shape=raw.shape[1:], with_background=True, min_object_size=min_object_size_z
+    )
+
+    seg_ids = np.unique(seg_z)[1:]
+    segmentation = np.zeros(raw.shape, dtype=seg_z.dtype)
+    for seg_id in tqdm(seg_ids, desc="Segment objects in 3d", disable=not verbose):
+        this_seg = np.zeros_like(segmentation)
+        this_seg[z][seg_z == seg_id] = 1
+        this_seg = segment_mask_in_volume(
+            this_seg, predictor, image_embeddings,
+            segmented_slices=np.array([z]), stop_lower=False, stop_upper=False,
+            iou_threshold=iou_threshold, projection=projection, box_extension=box_extension,
+        )
+        segmentation[this_seg > 0] = seg_id
 
     return segmentation

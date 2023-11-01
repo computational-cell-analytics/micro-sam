@@ -2,6 +2,7 @@ import imageio.v3 as imageio
 import napari
 
 from micro_sam import instance_segmentation, util
+from micro_sam.multi_dimensional_segmentation import segment_3d_from_slice
 
 
 def cell_segmentation():
@@ -124,9 +125,26 @@ def cell_segmentation_with_tiling():
     napari.run()
 
 
+def segmentation_in_3d():
+    """
+    """
+    from micro_sam.sample_data import synthetic_data
+
+    shape = (5, 512, 512)
+    data, _ = synthetic_data(shape)
+    predictor = util.get_sam_model(model_type="vit_t")
+    seg = segment_3d_from_slice(predictor, data, embedding_path="./tmp_embeddings.zarr", verbose=True)
+
+    v = napari.Viewer()
+    v.add_image(data)
+    v.add_labels(seg)
+    napari.run()
+
+
 def main():
-    cell_segmentation()
+    # cell_segmentation()
     # cell_segmentation_with_tiling()
+    segmentation_in_3d()
 
 
 if __name__ == "__main__":

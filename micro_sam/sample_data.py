@@ -322,12 +322,12 @@ def sample_data_segmentation():
     return [(data, add_image_kwargs)]
 
 
-def synthetic_data(shape):
+def synthetic_data(shape, seed=None):
     """Create synthetic image data and segmentation for training."""
     ndim = len(shape)
     assert ndim in (2, 3)
     image_shape = shape if ndim == 2 else shape[1:]
-    image = binary_blobs(length=image_shape[0], blob_size_fraction=0.05, volume_fraction=0.15)
+    image = binary_blobs(length=image_shape[0], blob_size_fraction=0.05, volume_fraction=0.15, seed=seed)
 
     if image_shape[1] != image_shape[0]:
         image = resize(image, image_shape, order=0, anti_aliasing=False, preserve_range=True).astype(image.dtype)
