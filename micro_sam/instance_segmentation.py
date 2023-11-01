@@ -80,7 +80,6 @@ def mask_data_to_segmentation(
 
         this_seg_id = mask.get("seg_id", seg_id)
         segmentation[require_numpy(mask["segmentation"])] = this_seg_id
-
         seg_id = this_seg_id + 1
 
     if with_background:
