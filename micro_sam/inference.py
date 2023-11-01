@@ -25,6 +25,7 @@ def batched_inference(
     embedding_path: Optional[Union[str, os.PathLike]] = None,
     return_instance_segmentation: bool = True,
     segmentation_ids: Optional[list] = None,
+    reduce_multimasking: bool = True
 ):
     """Run batched inference for input prompts.
 
@@ -44,6 +45,8 @@ def batched_inference(
             or the individual mask data.
         segmentation_ids: Fixed segmentation ids to assign to the masks
             derived from the prompts.
+        reduce_multimasking: Whether to choose the most likely masks with
+            highest ious from multimasking
 
     Returns:
         The predicted segmentation masks.
@@ -114,9 +117,9 @@ def batched_inference(
             boxes=batch_boxes, multimask_output=multimasking
         )
 
-        # If we return the merged instance segmentation and use multi-masking,
+        # If we expect to reduce the masks from multimasking and use multi-masking,
         # then we need to select the most likely mask (according to the predicted IOU) here.
-        if return_instance_segmentation and multimasking:
+        if reduce_multimasking and multimasking:
             _, max_index = batch_ious.max(axis=1)
             # How can this be vectorized???
             batch_masks = torch.cat([batch_masks[i, max_id][None] for i, max_id in enumerate(max_index)]).unsqueeze(1)
