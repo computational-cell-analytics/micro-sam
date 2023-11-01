@@ -24,7 +24,6 @@ def get_prediction_root(use_points, use_boxes, model_type, root_dir=PREDICTION_R
 
 def run_interactive_prompting(use_points, use_boxes, model_name, prediction_root, checkpoint=None):
     if checkpoint is None:
-        # TODO: required access to the paths coming from below
         checkpoint, model_type = get_checkpoint(model_name)
     else:
         model_type = model_name
@@ -39,8 +38,8 @@ def run_interactive_prompting(use_points, use_boxes, model_name, prediction_root
 
     inference.run_inference_with_iterative_prompting(
         predictor=predictor,
-        image_paths=image_paths[:10],
-        gt_paths=gt_paths[:10],
+        image_paths=image_paths,
+        gt_paths=gt_paths,
         embedding_dir=embedding_folder,
         prediction_dir=prediction_root,
         use_points=use_points,
