@@ -434,7 +434,7 @@ def _run_inference_with_iterative_prompting_for_image(
             batch_stop = min((batch_idx + 1) * batch_size, n_samples)
 
             this_batched_inputs = [{
-                k: v[batch_start:batch_stop] if k in ("point_coords", "point_labels") else v
+                k: v[batch_start:batch_stop] if k in ("point_coords", "point_labels", "boxes") else v
                 for k, v in batched_inputs[0].items()
             }]
 
