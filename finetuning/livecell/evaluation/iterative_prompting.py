@@ -1,36 +1,50 @@
 import os
 from glob import glob
 
+from micro_sam.evaluation import inference
 from micro_sam.evaluation.evaluation import run_evaluation
-from micro_sam.evaluation.inference import run_inference_with_iterative_prompting
 
 from util import get_checkpoint, get_paths
 
-LIVECELL_GT_ROOT = "/scratch-grete/projects/nim00007/data/LiveCELL/annotations_corrected/livecell_test_images"
-PREDICTION_ROOT = "/scratch-grete/projects/nim00007/sam/iterative_evaluation"
+LIVECELL_GT_ROOT = "/scratch/projects/nim00007/data/LiveCELL/annotations_corrected/livecell_test_images"
+PREDICTION_ROOT = "/scratch/projects/nim00007/sam/iterative_evaluation"
 
 
-def get_prediction_root(use_boxes, model_type, root_dir=PREDICTION_ROOT):
+def get_prediction_root(use_points, use_boxes, model_type, root_dir=PREDICTION_ROOT):
+    assert use_points != use_boxes, "use_points and use_boxes cannot have same values. Use one feature at a time"
     if use_boxes:
         prediction_root = os.path.join(root_dir, model_type, "start_with_box")
-    else:
+    elif use_points:
         prediction_root = os.path.join(root_dir, model_type, "start_with_point")
+    else:
+        raise ValueError("You need to use only either of points or boxes as a first prompt")
 
     return prediction_root
 
 
-def run_interactive_prompting(use_boxes, model_name, get_default_checkpoint_paths, prediction_root):
-    checkpoint, model_type = get_checkpoint(model_name)
+def run_interactive_prompting(use_points, use_boxes, model_name, prediction_root, checkpoint=None):
+    if checkpoint is None:
+        # TODO: required access to the paths coming from below
+        checkpoint, model_type = get_checkpoint(model_name)
+    else:
+        model_type = model_name
+
     image_paths, gt_paths = get_paths()
 
-    run_inference_with_iterative_prompting(
-        image_paths=image_paths,
-        gt_paths=gt_paths,
-        prediction_root=prediction_root,
-        use_boxes=use_boxes,
-        batch_size=16,
-        checkpoint_path=checkpoint if get_default_checkpoint_paths else None,
-        model_type=model_type
+    predictor = inference.get_predictor(checkpoint, model_type)
+
+    # we organize all the folders with data from this experiment below
+    embedding_folder = os.path.join(PREDICTION_ROOT, model_type, "embeddings")
+    os.makedirs(embedding_folder, exist_ok=True)
+
+    inference.run_inference_with_iterative_prompting(
+        predictor=predictor,
+        image_paths=image_paths[:10],
+        gt_paths=gt_paths[:10],
+        embedding_dir=embedding_folder,
+        prediction_dir=prediction_root,
+        use_points=use_points,
+        use_boxes=use_boxes
     )
 
 
@@ -56,15 +70,16 @@ def evaluate_interactive_prompting(prediction_root):
 
 
 def main():
-    use_boxes = True  # overwrite when you want the first iterations' input prompt to start as a box
-    model_name = "vit_b"  # overwrite to specify the choice of vanilla / finetuned models
-    get_default_checkpoint_paths = False  # use the default checkpoint paths or fetch from `~/.sam_models`
+    use_points = True  # overwrite when you want the first iterations' input prompt to start as 1 point
+    use_boxes = False  # overwrite when you want the first iterations' input prompt to start as box
+    model_name = "vit_h"  # overwrite to specify the choice of vanilla / finetuned models
+    checkpoint = None  # overwrite to pass your expected model's checkpoint path
 
     # add the root prediction path where you would like to save the iterative prompting results
-    prediction_root = get_prediction_root(use_boxes, model_name)
+    prediction_root = get_prediction_root(use_points, use_boxes, model_name)
 
-    run_interactive_prompting(use_boxes, model_name, get_default_checkpoint_paths, prediction_root)
-    # evaluate_interactive_prompting(prediction_root)
+    run_interactive_prompting(use_points, use_boxes, model_name, prediction_root, checkpoint=checkpoint)
+    evaluate_interactive_prompting(prediction_root)
 
 
 if __name__ == "__main__":

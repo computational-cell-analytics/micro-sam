@@ -3,7 +3,6 @@
 
 import os
 import pickle
-import warnings
 import numpy as np
 from tqdm import tqdm
 from copy import deepcopy
@@ -19,7 +18,6 @@ from segment_anything import SamPredictor
 from .. import util as util
 from ..inference import batched_inference
 from ..instance_segmentation import mask_data_to_segmentation
-from ..training import get_trainable_sam_model, ConvertToSamInputs
 from ..prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
 
 
@@ -391,123 +389,127 @@ def _save_segmentation(masks, prediction_path):
     shape = masks.shape[-2:]
     masks = [{"segmentation": mask, "area": mask.sum()} for mask in masks]
     segmentation = mask_data_to_segmentation(masks, shape, with_background=True)
-    imageio.imwrite(prediction_path, segmentation)
+    imageio.imwrite(prediction_path, segmentation, compression=5)
 
 
 def extract_instances_from_batched_outputs(batched_outputs):
-    masks = [
-        torch.stack(
-            [torch.sigmoid(_m[torch.argmax(_iou)][None]) for _m, _iou in zip(m["masks"], m["iou_predictions"])]
-        ) for m in batched_outputs
-    ]
+    masks = [m["segmentation"][None] for m in batched_outputs]
     masks = torch.stack(masks)
     masks = (masks > 0.5).to(torch.float32)
     return masks
 
 
+def get_channelwise_gt_objects(gt, gt_ids, device=None):
+    device = util._get_device(device)
+    sampled_binary_gt = np.stack([(gt == idx)[None] for idx in gt_ids])
+    sampled_binary_gt = torch.from_numpy(sampled_binary_gt).to(torch.float32)
+    sampled_binary_gt = sampled_binary_gt.to(device)
+    return sampled_binary_gt
+
+
 @torch.no_grad()
 def _run_inference_with_iterative_prompting_for_image(
-    model, image, gt, n_iterations, device, use_boxes, prediction_paths, batch_size
+    predictor,
+    image,
+    gt,
+    use_points,
+    use_boxes,
+    dilation,
+    batch_size,
+    embedding_path,
+    n_iterations,
+    prediction_paths
 ) -> None:
-    assert len(prediction_paths) == n_iterations, f"{len(prediction_paths)}, {n_iterations}"
-    convert_to_sam_inputs = ConvertToSamInputs()
-
-    image = torch.from_numpy(image[None, None] if image.ndim == 2 else image[None])
-    gt = torch.from_numpy(gt[None].astype("int32"))
-
-    n_pos = 0 if use_boxes else 1
-    batched_inputs, sampled_ids = convert_to_sam_inputs(image, gt, n_pos=n_pos, n_neg=0, get_boxes=use_boxes)
-
-    input_images = torch.stack([model.preprocess(x=x["image"].to(device)) for x in batched_inputs], dim=0)
-    image_embeddings = model.image_embeddings_oft(input_images)
-
-    multimasking = (n_pos == 1)
     prompt_generator = IterativePromptGenerator()
 
-    n_samples = len(sampled_ids[0])
-    n_batches = int(np.ceil(float(n_samples) / batch_size))
+    gt_ids = np.unique(gt)[1:]
+    n_positives = 1 if not use_boxes else 0
+    n_negatives = 0
+
+    points, point_labels, boxes = _get_batched_prompts(
+        gt, gt_ids, use_points, use_boxes,
+        n_positives=n_positives,
+        n_negatives=n_negatives,
+        dilation=dilation
+    )
+
+    sampled_binary_gt = get_channelwise_gt_objects(gt, gt_ids)
+
+    # Use multi-masking only if we have a single positive point without box
+    multimasking = False
+    if not use_boxes and (n_positives == 1 and n_negatives == 0):
+        multimasking = True
 
     for iteration in range(n_iterations):
-        final_masks, all_sampled_binary_y = [], []
-        for batch_idx in range(n_batches):
-            batch_start = batch_idx * batch_size
-            batch_stop = min((batch_idx + 1) * batch_size, n_samples)
+        batched_outputs = batched_inference(
+            predictor, image, batch_size,
+            boxes=boxes, points=points, point_labels=point_labels,
+            multimasking=multimasking, embedding_path=embedding_path,
+            return_instance_segmentation=False
+        )
+        masks = extract_instances_from_batched_outputs(batched_outputs)
 
-            this_batched_inputs = [{
-                k: v[batch_start:batch_stop] if k in ("point_coords", "point_labels", "boxes") else v
-                for k, v in batched_inputs[0].items()
-            }]
+        next_coords, next_labels, _, _ = prompt_generator(sampled_binary_gt, masks)
+        next_coords, next_labels = next_coords.detach().cpu().numpy(), next_labels.detach().cpu().numpy()
 
-            sampled_binary_y = torch.stack([
-                torch.stack([_gt == idx for idx in sampled[batch_start:batch_stop]])[:, None]
-                for _gt, sampled in zip(gt, sampled_ids)
-            ]).to(torch.float32)
+        if points is not None:
+            points = np.concatenate([points, next_coords], axis=1)
+        else:
+            points = next_coords
 
-            batched_outputs = model(
-                this_batched_inputs,
-                multimask_output=multimasking if iteration == 0 else False,
-                image_embeddings=image_embeddings
-            )
+        if point_labels is not None:
+            point_labels = np.concatenate([point_labels, next_labels], axis=1)
+        else:
+            point_labels = next_labels
 
-            masks = extract_instances_from_batched_outputs(batched_outputs)
-            final_masks.append(masks)
-            all_sampled_binary_y.append(sampled_binary_y)
-
-        all_sampled_binary_y = torch.cat(all_sampled_binary_y, dim=1)
-        all_masks = torch.cat(final_masks, dim=1)
-
-        assert all_sampled_binary_y.ndim == all_masks.ndim
-
-        for _mask, _gt, _inputs in zip(all_masks, all_sampled_binary_y, batched_inputs):
-            next_coords, next_labels, _, _ = prompt_generator(_gt, _mask)
-            _inputs["point_coords"] = torch.cat([_inputs["point_coords"], next_coords], dim=1) \
-                if "point_coords" in _inputs.keys() else next_coords
-            _inputs["point_labels"] = torch.cat([_inputs["point_labels"], next_labels], dim=1) \
-                if "point_labels" in _inputs.keys() else next_labels
-
-        _save_segmentation(all_masks, prediction_paths[iteration])
+        _save_segmentation(masks, prediction_paths[iteration])
 
 
 def run_inference_with_iterative_prompting(
+    predictor: SamPredictor,
     image_paths: List[Union[str, os.PathLike]],
     gt_paths: List[Union[str, os.PathLike]],
-    prediction_root: Union[str, os.PathLike],
+    embedding_dir: Union[str, os.PathLike],
+    prediction_dir: Union[str, os.PathLike],
+    use_points: bool,
     use_boxes: bool,
-    model_type: str = "vit_b",
-    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
-    device: Optional[str] = None,
-    n_iterations: int = 8,
+    dilation: int = 5,
     batch_size: int = 32,
+    n_iterations: int = 8,
 ) -> None:
     """Run segment anything inference for multiple images using prompts iteratively
         derived from model outputs and groundtruth
 
     Args:
-        image_paths: The image file paths
-        gt_paths: The ground-truth segmentation file paths
-        prediction_root: TODO
-        use_box: Whether to use box prompts
-        model_type: Name of the vision transformer to be used for sam inference
-        checkpoint_path: The path to SAM model checkpoints
-        device: The device specification to enable GPU usage
-        n_iterations: The number of iterations to perform for the iterative prompting strategy
-        batch_size: The batch size used for batched predictions
+        predictor: The SegmentAnything predictor.
+        image_paths: The image file paths.
+        gt_paths: The ground-truth segmentation file paths.
+        embedding_dir: The directory where the image embeddings will be saved or are already saved.
+        prediction_dir: The directory where the predictions from SegmentAnything will be saved per iteration.
+        use_points: Whether to use the first prompt as 1 positive point
+        use_boxes: Whether to use the first prompt as bounding box
+        dilation: The dilation factor for the radius around the ground-truth obkect
+            around which points will not be sampled.
+        batch_size: The batch size used for batched predictions.
+        n_iterations: The number of iterations for iterative prompting.
     """
-    warnings.warn("The iterative prompting functionality is not working correctly yet.")
+    if not (use_points or use_boxes):
+        raise ValueError("You need to use at least one of point or box prompts")
 
-    device = util._get_device(device)
-    model = get_trainable_sam_model(model_type, checkpoint_path)
+    if len(image_paths) != len(gt_paths):
+        raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
 
     # create all prediction folders for all intermediate iterations
     for i in range(n_iterations):
-        os.makedirs(os.path.join(prediction_root, f"iteration{i:02}"), exist_ok=True)
+        os.makedirs(os.path.join(prediction_dir, f"iteration{i:02}"), exist_ok=True)
 
     for image_path, gt_path in tqdm(
         zip(image_paths, gt_paths), total=len(image_paths), desc="Run inference with iterative prompting for all images"
     ):
         image_name = os.path.basename(image_path)
 
-        prediction_paths = [os.path.join(prediction_root, f"iteration{i:02}", image_name) for i in range(n_iterations)]
+        # We skip the images that already have been segmented
+        prediction_paths = [os.path.join(prediction_dir, f"iteration{i:02}", image_name) for i in range(n_iterations)]
         if all(os.path.exists(prediction_path) for prediction_path in prediction_paths):
             continue
 
@@ -515,9 +517,13 @@ def run_inference_with_iterative_prompting(
         assert os.path.exists(gt_path), gt_path
 
         image = imageio.imread(image_path)
-        gt = imageio.imread(gt_path)
+        gt = imageio.imread(gt_path).astype("uint32")
         gt = relabel_sequential(gt)[0]
 
+        embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
+
         _run_inference_with_iterative_prompting_for_image(
-            model, image, gt, n_iterations, device, use_boxes, prediction_paths, batch_size,
+            predictor, image, gt, use_points=use_points, use_boxes=use_boxes,
+            dilation=dilation, batch_size=batch_size, embedding_path=embedding_path,
+            n_iterations=n_iterations, prediction_paths=prediction_paths
         )
