@@ -29,7 +29,7 @@ def get_dataloaders(patch_shape, data_path):
         segmentation = label(labels)
         return segmentation
 
-    # training on a small subset of the dataset (~25% train and val dataset)
+    # training on a small subset of the dataset (~50% train and val dataset)
     train_rois = [np.s_[0:100, :, :], np.s_[0:100, :, :]]
     val_rois = [np.s_[0:50, :, :], np.s_[0:50, :, :]]
 
