@@ -337,3 +337,29 @@ def synthetic_data(shape, seed=None):
 
     segmentation = label(image)
     return image, segmentation
+
+
+def fetch_nucleus_3d_example_data(save_directory: Union[str, os.PathLike]) -> str:
+    """Download the sample data for 3d segmentation of nuclei.
+
+    This data contains a small crop from a volume from the publication
+    "Efficient automatic 3D segmentation of cell nuclei for high-content screening"
+    https://doi.org/10.1186/s12859-022-04737-4
+
+    Args:
+        save_directory: Root folder to save the downloaded data.
+    Returns:
+        The path of the downloaded image.
+    """
+    save_directory = Path(save_directory)
+    os.makedirs(save_directory, exist_ok=True)
+    print("Example data directory is:", save_directory.resolve())
+    fname = "3d-nucleus-data.tif"
+    pooch.retrieve(
+        url="https://owncloud.gwdg.de/index.php/s/eW0uNCo8gedzWU4/download",
+        known_hash="4946896f747dc1c3fc82fb2e1320226d92f99d22be88ea5f9c37e3ba4e281205",
+        fname=fname,
+        path=save_directory,
+        progressbar=True,
+    )
+    return os.path.join(save_directory, fname)
