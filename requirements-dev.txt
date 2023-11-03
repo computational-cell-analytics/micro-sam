@@ -1,0 +1,10 @@
+coverage
+line-profiler
+memray
+napari[all]
+pdoc
+pytest
+pytest-cov
+pytest-qt
+snakeviz
+tabulate

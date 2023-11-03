@@ -53,6 +53,7 @@ def mask_data_to_segmentation(
     shape: Tuple[int, ...],
     with_background: bool,
     min_object_size: int = 0,
+    max_object_size: Optional[int] = None,
 ) -> np.ndarray:
     """Convert the output of the automatic mask generation to an instance segmentation.
 
@@ -63,6 +64,7 @@ def mask_data_to_segmentation(
         with_background: Whether the segmentation has background. If yes this function assures that the largest
             object in the output will be mapped to zero (the background value).
         min_object_size: The minimal size of an object in pixels.
+        max_object_size: The maximal size of an object in pixels.
     Returns:
         The instance segmentation.
     """
@@ -70,12 +72,19 @@ def mask_data_to_segmentation(
     masks = sorted(masks, key=(lambda x: x["area"]), reverse=True)
     segmentation = np.zeros(shape[:2], dtype="uint32")
 
+    def require_numpy(mask):
+        return mask.cpu().numpy() if torch.is_tensor(mask) else mask
+
     seg_id = 1
     for mask in masks:
         if mask["area"] < min_object_size:
             continue
-        segmentation[mask["segmentation"]] = seg_id
-        seg_id += 1
+        if max_object_size is not None and mask["area"] > max_object_size:
+            continue
+
+        this_seg_id = mask.get("seg_id", seg_id)
+        segmentation[require_numpy(mask["segmentation"])] = this_seg_id
+        seg_id = this_seg_id + 1
 
     if with_background:
         seg_ids, sizes = np.unique(segmentation, return_counts=True)

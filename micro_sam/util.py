@@ -173,8 +173,8 @@ def _available_devices():
 
 
 def get_sam_model(
-    device: Optional[str] = None,
     model_type: str = _DEFAULT_MODEL,
+    device: Optional[str] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
 ) -> SamPredictor:
@@ -230,8 +230,8 @@ class _CustomUnpickler(pickle.Unpickler):
 
 def get_custom_sam_model(
     checkpoint_path: Union[str, os.PathLike],
-    device: Optional[str] = None,
     model_type: str = "vit_h",
+    device: Optional[str] = None,
     return_sam: bool = False,
     return_state: bool = False,
 ) -> SamPredictor:
