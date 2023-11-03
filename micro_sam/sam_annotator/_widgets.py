@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Optional
 from magicgui import magic_factory, widgets
 from napari.qt.threading import thread_worker
 
+from micro_sam.sam_annotator._state import AnnotatorState
 from micro_sam.util import (
     ImageEmbeddings,
     get_sam_model,
@@ -36,10 +37,9 @@ def embedding_widget(
     optional_custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
 ) -> ImageEmbeddings:
     """Image embedding widget."""
-    # for access to the predictor and the image embeddings in the widgets
-    global PREDICTOR
+    state = AnnotatorState()
     # Initialize the model
-    PREDICTOR = get_sam_model(device=device, model_type=model.name,
+    state.predictor  = get_sam_model(device=device, model_type=model.name,
                               checkpoint_path=optional_custom_weights)
     # Get image dimensions
     ndim = image.data.ndim
@@ -48,16 +48,15 @@ def embedding_widget(
 
     # Compute the image embeddings
     @thread_worker(connect={'started': pbar.show, 'returned': pbar.hide})
-    def _compute_image_embedding(PREDICTOR, image_data, save_path, ndim=None):
+    def _compute_image_embedding(state, image_data, save_path, ndim=None):
         if save_path is not None:
             save_path = str(save_path)
-        global IMAGE_EMBEDDINGS
-        IMAGE_EMBEDDINGS = precompute_image_embeddings(
-            predictor = PREDICTOR,
+        state.image_embeddings = precompute_image_embeddings(
+            predictor = state.predictor,
             input_ = image_data,
             save_path = save_path,
             ndim=ndim,
         )
-        return IMAGE_EMBEDDINGS  # returns napari._qt.qthreading.FunctionWorker
+        return state.image_embeddings  # returns napari._qt.qthreading.FunctionWorker
 
-    return _compute_image_embedding(PREDICTOR, image.data, save_path, ndim=ndim)
+    return _compute_image_embedding(state, image.data, save_path, ndim=ndim)
