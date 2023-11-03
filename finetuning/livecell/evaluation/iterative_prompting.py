@@ -70,9 +70,9 @@ def evaluate_interactive_prompting(prediction_root, start_with_box_prompt, model
     df.to_csv(csv_path)
 
 
-def main():
-    start_with_box_prompt = False  # overwrite when you want first iters' prompt to start as box instead of single point
-    model_description = "vit_h_generalist"  # overwrite to specify the choice of vanilla / finetuned models
+def main(args):
+    start_with_box_prompt = args.box  # overwrite to start first iters' prompt with box instead of single point
+    model_description = args.model  # overwrite to specify the choice of vanilla / finetuned models
 
     # add the root prediction path where you would like to save the iterative prompting results
     prediction_root = get_prediction_root(start_with_box_prompt, model_description)
@@ -87,4 +87,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--box", action="store_true", help="If passed, starts with first prompt as box")
+    parser.add_argument(
+        "-m", "--model", type=str,  # options: "vit_h", "vit_h_generalist", "vit_h_specialist"
+        help="Provide the model type to initialize the predictor"
+    )
+    args = parser.parse_args()
+    main(args)
