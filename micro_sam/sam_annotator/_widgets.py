@@ -1,4 +1,5 @@
 from enum import Enum
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -37,6 +38,19 @@ def embedding_widget(
     optional_custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
 ) -> ImageEmbeddings:
     """Image embedding widget."""
+    # Make sure save directory exists and is an empty directory
+    if save_path is not None:
+        if not save_path.exists():
+            os.makedirs(save_path)
+        if not save_path.is_dir():
+            raise NotADirectoryError(
+                f"The user selected 'save_path' is not a direcotry: {save_path}"
+            )
+        if len(os.listdir(save_path)) > 0:
+            raise RuntimeError(
+                f"The user selected 'save_path' is not empty: {save_path}"
+            )
+
     state = AnnotatorState()
     # Initialize the model
     state.predictor  = get_sam_model(device=device, model_type=model.name,
