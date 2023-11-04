@@ -285,7 +285,6 @@ def export_custom_sam_model(
     checkpoint_path: Union[str, os.PathLike],
     model_type: str,
     save_path: Union[str, os.PathLike],
-    device: str = None,
 ) -> None:
     """Export a finetuned segment anything model to the standard model format.
 
@@ -297,7 +296,7 @@ def export_custom_sam_model(
         save_path: Where to save the exported model.
     """
     _, state = get_custom_sam_model(
-        checkpoint_path, model_type=model_type, return_state=True, device=device,
+        checkpoint_path, model_type=model_type, return_state=True, device="cpu",
     )
     model_state = state["model_state"]
     prefix = "sam."

@@ -110,14 +110,13 @@ class TestTraining(unittest.TestCase):
         )
         trainer.fit(epochs=1)
 
-    def _export_model(self, checkpoint_path, export_path, model_type, device):
+    def _export_model(self, checkpoint_path, export_path, model_type):
         from micro_sam.util import export_custom_sam_model
 
         export_custom_sam_model(
             checkpoint_path=checkpoint_path,
             model_type=model_type,
             save_path=export_path,
-            device=device,
         )
 
     def _run_inference_and_check_results(
@@ -153,7 +152,7 @@ class TestTraining(unittest.TestCase):
 
         # Export the model.
         export_path = os.path.join(self.tmp_folder, "exported_model.pth")
-        self._export_model(checkpoint_path, export_path, model_type, device)
+        self._export_model(checkpoint_path, export_path, model_type)
         self.assertTrue(os.path.exists(export_path))
 
         # Check the model with inference with a single point prompt.
