@@ -42,7 +42,7 @@ def finetune_livecell(args):
     n_objects_per_batch = 25  # this is the number of objects per batch that will be sampled
 
     # get the trainable segment anything model
-    model = sam_training.get_trainable_sam_model(model_type, checkpoint_path, device=device)
+    model = sam_training.get_trainable_sam_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path)
 
     # all the stuff we need for training
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
@@ -72,7 +72,8 @@ def finetune_livecell(args):
         convert_inputs=convert_inputs,
         n_objects_per_batch=n_objects_per_batch,
         n_sub_iteration=8,
-        compile_model=False
+        compile_model=False,
+        use_masks=True  # overwrite if you want to use the input mask prompts for segmentation
     )
     trainer.fit(args.iterations)
     if args.export_path is not None:
@@ -89,7 +90,7 @@ def finetune_livecell(args):
 def main():
     parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LiveCELL dataset.")
     parser.add_argument(
-        "--input_path", "-i", default="",
+        "--input_path", "-i", default="/scratch/projects/nim00007/data/LiveCELL/",
         help="The filepath to the LiveCELL data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(

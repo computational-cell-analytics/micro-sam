@@ -39,6 +39,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         mse_loss: torch.nn.Module = torch.nn.MSELoss(),
         _sigmoid: torch.nn.Module = torch.nn.Sigmoid(),
         prompt_generator=IterativePromptGenerator(),
+        use_masks: bool = True,
         **kwargs
     ):
         super().__init__(**kwargs)
@@ -48,6 +49,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         self.n_objects_per_batch = n_objects_per_batch
         self.n_sub_iteration = n_sub_iteration
         self.prompt_generator = prompt_generator
+        self.use_masks = use_masks
         self._kwargs = kwargs
 
     def _get_prompt_and_multimasking_choices(self, current_iteration):
@@ -250,7 +252,8 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
             _inp["point_coords"] = updated_point_coords
             _inp["point_labels"] = updated_point_labels
-            _inp["mask_inputs"] = logits
+            if self.use_masks:
+                _inp["mask_inputs"] = logits
 
     #
     # Training Loop
