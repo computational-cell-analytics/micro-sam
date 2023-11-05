@@ -40,8 +40,7 @@ def embedding_widget(
     """Image embedding widget."""
     # Make sure save directory exists and is an empty directory
     if save_path is not None:
-        if not save_path.exists():
-            os.makedirs(save_path)
+        os.makedirs(save_path, exist_ok=True)
         if not save_path.is_dir():
             raise NotADirectoryError(
                 f"The user selected 'save_path' is not a direcotry: {save_path}"
