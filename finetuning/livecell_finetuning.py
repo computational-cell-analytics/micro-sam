@@ -73,7 +73,7 @@ def finetune_livecell(args):
         n_objects_per_batch=n_objects_per_batch,
         n_sub_iteration=8,
         compile_model=False,
-        use_masks=True  # overwrite if you want to use the input mask prompts for segmentation
+        use_masks=False  # overwrite if you want to use the input mask prompts for segmentation
     )
     trainer.fit(args.iterations)
     if args.export_path is not None:
