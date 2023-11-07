@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, Optional
 
 from magicgui import magic_factory, widgets
 from napari.qt.threading import thread_worker
+import zarr
+from zarr.errors import PathNotFoundError
 
 from micro_sam.sam_annotator._state import AnnotatorState
 from micro_sam.util import (
@@ -14,6 +16,7 @@ from micro_sam.util import (
     _MODEL_URLS,
     _DEFAULT_MODEL,
     _available_devices,
+    _compute_data_signature,
 )
 
 if TYPE_CHECKING:
@@ -38,38 +41,44 @@ def embedding_widget(
     optional_custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
 ) -> ImageEmbeddings:
     """Image embedding widget."""
-    # Make sure save directory exists and is an empty directory
-    if save_path is not None:
-        os.makedirs(save_path, exist_ok=True)
-        if not save_path.is_dir():
-            raise NotADirectoryError(
-                f"The user selected 'save_path' is not a direcotry: {save_path}"
-            )
-        if len(os.listdir(save_path)) > 0:
-            raise RuntimeError(
-                f"The user selected 'save_path' is not empty: {save_path}"
-            )
-
     state = AnnotatorState()
-    # Initialize the model
-    state.predictor  = get_sam_model(device=device, model_type=model.name,
-                              checkpoint_path=optional_custom_weights)
     # Get image dimensions
     ndim = image.data.ndim
     if image.rgb:
         ndim -= 1
 
-    # Compute the image embeddings
-    @thread_worker(connect={'started': pbar.show, 'returned': pbar.hide})
-    def _compute_image_embedding(state, image_data, save_path, ndim=None):
+    @thread_worker(connect={'started': pbar.show, 'finished': pbar.hide})
+    def _compute_image_embedding(state, image_data, save_path, ndim=None,
+                                 device="auto", model=Model.__getitem__(_DEFAULT_MODEL),
+                                 optional_custom_weights=None):
+        # Make sure save directory exists and is an empty directory
         if save_path is not None:
-            save_path = str(save_path)
+            os.makedirs(save_path, exist_ok=True)
+            if not save_path.is_dir():
+                raise NotADirectoryError(
+                    f"The user selected 'save_path' is not a direcotry: {save_path}"
+                )
+            if len(os.listdir(save_path)) > 0:
+                try:
+                    zarr.open(save_path, "r")
+                except PathNotFoundError:
+                    raise RuntimeError(
+                        "The user selected 'save_path' is not a zarr array "
+                        f"or empty directory: {save_path}"
+                    )
+        # Initialize the model
+        state.predictor  = get_sam_model(device=device, model_type=model.name,
+                                         checkpoint_path=optional_custom_weights)
+        # Compute the image embeddings
         state.image_embeddings = precompute_image_embeddings(
             predictor = state.predictor,
             input_ = image_data,
-            save_path = save_path,
+            save_path = str(save_path),
             ndim=ndim,
         )
-        return state.image_embeddings  # returns napari._qt.qthreading.FunctionWorker
+        data_signature = _compute_data_signature(image_data)
+        state.data_signature = data_signature
+        state.image_shape = image_data.shape
+        return state  # returns napari._qt.qthreading.FunctionWorker
 
-    return _compute_image_embedding(state, image.data, save_path, ndim=ndim)
+    return _compute_image_embedding(state, image.data, save_path, ndim=ndim, device=device, model=model, optional_custom_weights=optional_custom_weights)
