@@ -28,6 +28,7 @@ class AnnotatorState(metaclass=Singleton):
     image_embeddings: Optional[ImageEmbeddings] = None
     predictor: Optional[SamPredictor] = None
     image_shape: Optional[Tuple[int, int]] = None
+    data_signature: Optional[str] = None
 
     # amg: needs to be initialized for the automatic segmentation functionality.
     # amg_state: for storing the instance segmentation state for the 3d segmentation tool.
@@ -67,3 +68,14 @@ class AnnotatorState(metaclass=Singleton):
                 f"Invalid AnnotatorState: {init_sum} / 2 parts of the state "
                 "needed for tracking are initialized."
             )
+
+    def reset_state(self):
+        """Reset state, clear all attributes."""
+        self.image_embeddings = None
+        self.predictor = None
+        self.image_shape = None
+        self.data_signature = None
+        self.amg = None
+        self.amg_state = None
+        self.current_track_id = None
+        self.lineage = None

@@ -42,6 +42,7 @@ def embedding_widget(
 ) -> ImageEmbeddings:
     """Image embedding widget."""
     state = AnnotatorState()
+    state.reset_state()
     # Get image dimensions
     ndim = image.data.ndim
     if image.rgb:
