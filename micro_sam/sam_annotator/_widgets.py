@@ -43,9 +43,12 @@ def embedding_widget(
     state = AnnotatorState()
     state.reset_state()
     # Get image dimensions
-    ndim = image.data.ndim
     if image.rgb:
-        ndim -= 1
+        ndim = image.data.ndim - 1
+        state.image_shape = image.data.shape[:-1]
+    else:
+        ndim = image.data.ndim
+        state.image_shape = image.data.shape
 
     @thread_worker(connect={'started': pbar.show, 'finished': pbar.hide})
     def _compute_image_embedding(state, image_data, save_path, ndim=None,
@@ -76,7 +79,6 @@ def embedding_widget(
             save_path = str(save_path),
             ndim=ndim,
         )
-        state.image_shape = image_data.shape
         return state  # returns napari._qt.qthreading.FunctionWorker
 
     return _compute_image_embedding(state, image.data, save_path, ndim=ndim, device=device, model=model, optional_custom_weights=optional_custom_weights)
