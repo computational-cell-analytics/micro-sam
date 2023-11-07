@@ -28,7 +28,6 @@ class AnnotatorState(metaclass=Singleton):
     image_embeddings: Optional[ImageEmbeddings] = None
     predictor: Optional[SamPredictor] = None
     image_shape: Optional[Tuple[int, int]] = None
-    data_signature: Optional[str] = None
 
     # amg: needs to be initialized for the automatic segmentation functionality.
     # amg_state: for storing the instance segmentation state for the 3d segmentation tool.
@@ -74,7 +73,6 @@ class AnnotatorState(metaclass=Singleton):
         self.image_embeddings = None
         self.predictor = None
         self.image_shape = None
-        self.data_signature = None
         self.amg = None
         self.amg_state = None
         self.current_track_id = None

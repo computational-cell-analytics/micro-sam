@@ -16,7 +16,6 @@ from micro_sam.util import (
     _MODEL_URLS,
     _DEFAULT_MODEL,
     _available_devices,
-    _compute_data_signature,
 )
 
 if TYPE_CHECKING:
@@ -77,8 +76,6 @@ def embedding_widget(
             save_path = str(save_path),
             ndim=ndim,
         )
-        data_signature = _compute_data_signature(image_data)
-        state.data_signature = data_signature
         state.image_shape = image_data.shape
         return state  # returns napari._qt.qthreading.FunctionWorker
 
