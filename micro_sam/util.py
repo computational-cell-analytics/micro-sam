@@ -579,7 +579,7 @@ def precompute_image_embeddings(
                     continue
                 # check whether the key signature does not match or is not in the file
                 if key not in f.attrs or f.attrs[key] != val:
-                    warnings.warn(
+                    raise RuntimeError(
                         f"Embeddings file {save_path} is invalid due to unmatching {key}: "
                         f"{f.attrs.get(key)} != {val}.Please recompute embeddings in a new file."
                     )
