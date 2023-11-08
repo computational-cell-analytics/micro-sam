@@ -35,7 +35,7 @@ Please check out [the documentation](https://computational-cell-analytics.github
 
 We welcome new contributions!
 
-If you are interested in contributing to micro-sam, please see the [contributing guide](docs/contributing.md) and [developer documentation](docs/development.md). The first step is to [discuss your idea in anew issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) with the current developers.
+If you are interested in contributing to micro-sam, please see the [contributing guide](doc/contributing.md) and [developer documentation](doc/development.md). The first step is to [discuss your idea in anew issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) with the current developers.
 
 ## Citation
 
