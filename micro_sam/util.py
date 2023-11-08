@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 
 import imageio.v3 as imageio
 import numpy as np
+import pooch
 import requests
 import torch
 import vigra
@@ -47,7 +48,8 @@ _MODEL_URLS = {
     "vit_h_em": "https://zenodo.org/record/8250291/files/vit_h_em.pth?download=1",
     "vit_b_em": "https://zenodo.org/record/8250260/files/vit_b_em.pth?download=1",
 }
-_CHECKPOINT_FOLDER = os.environ.get("SAM_MODELS", os.path.expanduser("~/.sam_models"))
+_CACHE_DIR = os.environ.get('MICROSAM_CACHEDIR') or pooch.os_cache('micro_sam')
+_CHECKPOINT_FOLDER = os.path.join(_CACHE_DIR, 'models')
 _CHECKSUMS = {
     # the default segment anything models
     "vit_h": "a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e",
@@ -151,11 +153,19 @@ def get_sam_model(
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
 ) -> SamPredictor:
-    """Get the SegmentAnything Predictor.
+    r"""Get the SegmentAnything Predictor.
 
     This function will download the required model checkpoint or load it from file if it
-    was already downloaded. By default the models are downloaded to '~/.sam_models'.
-    This location can be changed by setting the environment variable SAM_MODELS.
+    was already downloaded.
+    This location can be changed by setting the environment variable: MICROSAM_CACHEDIR.
+
+    By default the models are downloaded to a folder named 'micro_sam/models'
+    inside your default cache directory, eg:
+    * Mac: ~/Library/Caches/<AppName>
+    * Unix: ~/.cache/<AppName> or the value of the XDG_CACHE_HOME environment variable, if defined.
+    * Windows: C:\Users\<user>\AppData\Local\<AppAuthor>\<AppName>\Cache
+    See the pooch.os_cache() documentation for more details:
+    https://www.fatiando.org/pooch/latest/api/generated/pooch.os_cache.html
 
     Args:
         device: The device for the model. If none is given will use GPU if available.
