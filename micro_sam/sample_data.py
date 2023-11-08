@@ -1,4 +1,4 @@
-"""
+r"""
 Sample microscopy data.
 
 You can change the download location for sample data and model weights
