@@ -127,10 +127,7 @@ def _get_checkpoint(model_type, checkpoint_path=None):
     return checkpoint_path
 
 
-def _get_device(device):
-    if device is not None:
-        return device
-
+def _get_default_device():
     # Use cuda enabled gpu if it's available.
     if torch.cuda.is_available():
         device = "cuda"
@@ -143,6 +140,36 @@ def _get_device(device):
     else:
         device = "cpu"
     return device
+
+
+def _get_device(device=None):
+    if device is None or device == "auto":
+        device = _get_default_device()
+    else:
+        if device.lower() == "cuda":
+            if not torch.cuda.is_available():
+                raise RuntimeError("PyTorch CUDA backend is not available.")
+        elif device.lower() == "mps":
+            if not (torch.backends.mps.is_available() and torch.backends.mps.is_built()):
+                raise RuntimeError("PyTorch MPS backend is not available or is not built correctly.")
+        elif device.lower() == "cpu":
+            pass  # cpu is always available
+        else:
+            raise RuntimeError(f"Unsupported device: {device}\n"
+                               "Please choose from 'cpu', 'cuda', or 'mps'.")
+    return device
+
+
+def _available_devices():
+    available_devices = []
+    for i in ["cuda", "mps", "cpu"]:
+        try:
+            device = _get_device(i)
+        except RuntimeError:
+            pass
+        else:
+            available_devices.append(device)
+    return available_devices
 
 
 def get_sam_model(
@@ -269,7 +296,7 @@ def export_custom_sam_model(
         save_path: Where to save the exported model.
     """
     _, state = get_custom_sam_model(
-        checkpoint_path, model_type=model_type, return_state=True, device=torch.device("cpu"),
+        checkpoint_path, model_type=model_type, return_state=True, device="cpu",
     )
     model_state = state["model_state"]
     prefix = "sam."
@@ -552,7 +579,7 @@ def precompute_image_embeddings(
                     continue
                 # check whether the key signature does not match or is not in the file
                 if key not in f.attrs or f.attrs[key] != val:
-                    warnings.warn(
+                    raise RuntimeError(
                         f"Embeddings file {save_path} is invalid due to unmatching {key}: "
                         f"{f.attrs.get(key)} != {val}.Please recompute embeddings in a new file."
                     )
