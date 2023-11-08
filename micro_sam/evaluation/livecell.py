@@ -226,7 +226,7 @@ def run_livecell_inference() -> None:
                         help="Pass the checkpoint-specific model name being used for inference.")
 
     # the experiment type:
-    # - default settings (p1-n0, p2-n4, box)
+    # - default settings (p1-n0, p2-n4, p4-n8, box)
     # - full experiment (ranges: p:1-16, n:0-16)
     # - automatic mask generation (auto)
     # if none of the two are active then the prompt setting arguments will be parsed
