@@ -27,7 +27,7 @@ from ._state import AnnotatorState
 
 
 @magicgui(call_button="Segment Slice [S]")
-def _segment_slice_wigdet(v: Viewer, box_extension: float = 0.1) -> None:
+def _segment_slice_widget(v: Viewer, box_extension: float = 0.1) -> None:
     shape = v.layers["current_object"].data.shape[1:]
     position = v.cursor.position
     z = int(position[0])
@@ -301,7 +301,7 @@ def annotator_3d(
     prompt_widget = vutil.create_prompt_menu(prompts, labels)
     v.window.add_dock_widget(prompt_widget)
 
-    v.window.add_dock_widget(_segment_slice_wigdet)
+    v.window.add_dock_widget(_segment_slice_widget)
     v.window.add_dock_widget(_autosegment_widget)
 
     v.window.add_dock_widget(_segment_volume_widget)
@@ -314,7 +314,7 @@ def annotator_3d(
 
     @v.bind_key("s")
     def _seg_slice(v):
-        _segment_slice_wigdet(v)
+        _segment_slice_widget(v)
 
     @v.bind_key("Shift-s")
     def _seg_volume(v):
