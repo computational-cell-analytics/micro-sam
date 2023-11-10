@@ -267,8 +267,13 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
             _inp["point_coords"] = updated_point_coords
             _inp["point_labels"] = updated_point_labels
+
             if self.get_mask_probability(self.use_mask_prob):
                 _inp["mask_inputs"] = logits
+            else:
+                # remove previously added mask inputs which already exist, so they aren't used in next sub-iteration
+                if "mask_inputs" in _inp.keys():
+                    _inp.pop("mask_inputs")
 
     #
     # Training Loop
