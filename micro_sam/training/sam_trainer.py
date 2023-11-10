@@ -233,7 +233,10 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             masks, logits_masks = torch.stack(masks), torch.stack(logits_masks)
             masks = (masks > 0.5).to(torch.float32)
 
+            if i == 0:
+                print(batched_inputs[0].keys())
             self._get_updated_points_per_mask_per_subiter(masks, sampled_binary_y, batched_inputs, logits_masks)
+            print(batched_inputs[0].keys())
 
         loss = loss / num_subiter
         mask_loss = mask_loss / num_subiter
