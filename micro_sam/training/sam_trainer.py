@@ -30,7 +30,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         mse_loss: The regression loss to compare the IoU predicted by the model with the true IoU.
         sigmoid: The activation function for normalizing the model output.
         prompt_generator: The iterative prompt generator which takes care of the iterative prompting logic for training
-        use_mask_prob: The probability of using the mask inputs in the iterative prompting (per `n_sub_iteration`)
+        mask_prob: The probability of using the mask inputs in the iterative prompting (per `n_sub_iteration`)
         **kwargs: The keyword arguments of the DefaultTrainer super class.
     """
 
@@ -42,7 +42,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         mse_loss: torch.nn.Module = torch.nn.MSELoss(),
         _sigmoid: torch.nn.Module = torch.nn.Sigmoid(),
         prompt_generator: PromptGeneratorBase = IterativePromptGenerator(),
-        use_mask_prob: float = 0.0,
+        mask_prob: float = 0.0,
         **kwargs
     ):
         super().__init__(**kwargs)
@@ -52,7 +52,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         self.n_objects_per_batch = n_objects_per_batch
         self.n_sub_iteration = n_sub_iteration
         self.prompt_generator = prompt_generator
-        self.use_mask_prob = use_mask_prob
+        self.mask_prob = mask_prob
         self._kwargs = kwargs
 
     def _get_prompt_and_multimasking_choices(self, current_iteration):
@@ -242,18 +242,6 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
         return loss, mask_loss, iou_regression_loss, mean_model_iou
 
-    def get_mask_probability(self, p):
-        """Use mask inputs (for iterative prompting while training) with a probability of *p* times
-
-        Arguments:
-            p: [float] - probabilitiy of using mask inputs
-                        (default - 0, i.e. we don't use mask inputs for iterative prompting)
-        Returns:
-            outcome: [bool] - whether or not to use the mask inputs for the current iteration
-        """
-        outcome = True if random.random() < p else False
-        return outcome
-
     def _get_updated_points_per_mask_per_subiter(self, masks, sampled_binary_y, batched_inputs, logits_masks):
         # here, we get the pair-per-batch of predicted and true elements (and also the "batched_inputs")
         for x1, x2, _inp, logits in zip(masks, sampled_binary_y, batched_inputs, logits_masks):
@@ -268,12 +256,13 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             _inp["point_coords"] = updated_point_coords
             _inp["point_labels"] = updated_point_labels
 
-            if self.get_mask_probability(self.use_mask_prob):
-                _inp["mask_inputs"] = logits
-            else:
-                # remove previously added mask inputs which already exist, so they aren't used in next sub-iteration
-                if "mask_inputs" in _inp.keys():
-                    _inp.pop("mask_inputs")
+            if self.mask_prob > 0:
+                # using mask inputs for iterative prompting while training, with a probability
+                use_mask_inputs = True if random.random() < self.mask_prob else False
+                if use_mask_inputs:
+                    _inp["mask_inputs"] = logits
+                else:  # remove  previously existing mask inputs to avoid using them in next sub-iteration
+                    _inp.pop("mask_inputs", None)
 
     #
     # Training Loop
