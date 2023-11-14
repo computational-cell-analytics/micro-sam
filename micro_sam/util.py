@@ -49,8 +49,9 @@ ImageEmbeddings = Dict[str, Any]
 #
 # Functionality for model download and export
 #
+_CACHE_DIR = os.environ.get('MICROSAM_CACHEDIR') or pooch.os_cache('micro_sam')
 MODELS = pooch.create(
-    path=pooch.os_cache(os.path.join("micro-sam", "models")),
+    path=pooch.os_cache(os.path.join(_CACHE_DIR, "models")),
     base_url="",
     registry={
         # the default segment anything models
@@ -130,7 +131,6 @@ def _available_devices():
 def get_sam_model(
     model_type: str = _DEFAULT_MODEL,
     device: Optional[str] = None,
-    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
 ) -> SamPredictor:
     r"""Get the SegmentAnything Predictor.
