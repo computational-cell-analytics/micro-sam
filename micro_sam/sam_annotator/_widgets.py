@@ -13,7 +13,7 @@ from micro_sam.util import (
     ImageEmbeddings,
     get_sam_model,
     precompute_image_embeddings,
-    _MODEL_URLS,
+    MODELS,
     _DEFAULT_MODEL,
     _available_devices,
 )
@@ -21,7 +21,7 @@ from micro_sam.util import (
 if TYPE_CHECKING:
     import napari
 
-Model = Enum("Model", _MODEL_URLS)
+Model = Enum("Model", MODELS.urls)
 available_devices_list = ["auto"] + _available_devices()
 
 

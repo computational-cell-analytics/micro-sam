@@ -35,42 +35,7 @@ try:
 except ImportError:
     from tqdm import tqdm
 
-_MODEL_URLS = {
-    # the default segment anything models
-    "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
-    "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
-    "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
-    # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
-    "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
-    # first version of finetuned models on zenodo
-    "vit_h_lm": "https://zenodo.org/record/8250299/files/vit_h_lm.pth?download=1",
-    "vit_b_lm": "https://zenodo.org/record/8250281/files/vit_b_lm.pth?download=1",
-    "vit_h_em": "https://zenodo.org/record/8250291/files/vit_h_em.pth?download=1",
-    "vit_b_em": "https://zenodo.org/record/8250260/files/vit_b_em.pth?download=1",
-}
-_CACHE_DIR = os.environ.get('MICROSAM_CACHEDIR') or pooch.os_cache('micro_sam')
-_CHECKPOINT_FOLDER = os.path.join(_CACHE_DIR, 'models')
-_CHECKSUMS = {
-    # the default segment anything models
-    "vit_h": "a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e",
-    "vit_l": "3adcc4315b642a4d2101128f611684e8734c41232a17c648ed1693702a49a622",
-    "vit_b": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
-    # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
-    "vit_t": "6dbb90523a35330fedd7f1d3dfc66f995213d81b29a5ca8108dbcdd4e37d6c2f",
-    # first version of finetuned models on zenodo
-    "vit_h_lm": "9a65ee0cddc05a98d60469a12a058859c89dc3ea3ba39fed9b90d786253fbf26",
-    "vit_b_lm": "5a59cc4064092d54cd4d92cd967e39168f3760905431e868e474d60fe5464ecd",
-    "vit_h_em": "ae3798a0646c8df1d4db147998a2d37e402ff57d3aa4e571792fbb911d8a979c",
-    "vit_b_em": "c04a714a4e14a110f0eec055a65f7409d54e6bf733164d2933a0ce556f7d6f81",
-}
-# this is required so that the downloaded file is not called 'download'
-_DOWNLOAD_NAMES = {
-    "vit_t": "vit_t_mobile_sam.pth",
-    "vit_h_lm": "vit_h_lm.pth",
-    "vit_b_lm": "vit_b_lm.pth",
-    "vit_h_em": "vit_h_em.pth",
-    "vit_b_em": "vit_b_em.pth",
-}
+
 # this is the default model used in micro_sam
 # currently set to the default vit_h
 _DEFAULT_MODEL = "vit_h"
@@ -84,49 +49,37 @@ ImageEmbeddings = Dict[str, Any]
 #
 # Functionality for model download and export
 #
-
-
-def _download(url, path, model_type):
-    with requests.get(url, stream=True, verify=True) as r:
-        if r.status_code != 200:
-            r.raise_for_status()
-            raise RuntimeError(f"Request to {url} returned status code {r.status_code}")
-        file_size = int(r.headers.get("Content-Length", 0))
-        desc = f"Download {url} to {path}"
-        if file_size == 0:
-            desc += " (unknown file size)"
-        with tqdm.wrapattr(r.raw, "read", total=file_size, desc=desc) as r_raw, open(path, "wb") as f:
-            copyfileobj(r_raw, f)
-
-    # validate the checksum
-    expected_checksum = _CHECKSUMS[model_type]
-    if expected_checksum is None:
-        return
-    with open(path, "rb") as f:
-        file_ = f.read()
-        checksum = hashlib.sha256(file_).hexdigest()
-    if checksum != expected_checksum:
-        raise RuntimeError(
-            "The checksum of the download does not match the expected checksum."
-            f"Expected: {expected_checksum}, got: {checksum}"
-        )
-    print("Download successful and checksums agree.")
-
-
-def _get_checkpoint(model_type, checkpoint_path=None):
-    if checkpoint_path is None:
-        checkpoint_url = _MODEL_URLS[model_type]
-        checkpoint_name = _DOWNLOAD_NAMES.get(model_type, checkpoint_url.split("/")[-1])
-        checkpoint_path = os.path.join(_CHECKPOINT_FOLDER, checkpoint_name)
-
-        # download the checkpoint if necessary
-        if not os.path.exists(checkpoint_path):
-            os.makedirs(_CHECKPOINT_FOLDER, exist_ok=True)
-            _download(checkpoint_url, checkpoint_path, model_type)
-    elif not os.path.exists(checkpoint_path):
-        raise ValueError(f"The checkpoint path {checkpoint_path} that was passed does not exist.")
-
-    return checkpoint_path
+MODELS = pooch.create(
+    path=pooch.os_cache(os.path.join("micro-sam", "models")),
+    base_url="",
+    registry={
+        # the default segment anything models
+        "vit_h": "a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e",
+        "vit_l": "3adcc4315b642a4d2101128f611684e8734c41232a17c648ed1693702a49a622",
+        "vit_b": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
+        # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
+        "vit_t": "6dbb90523a35330fedd7f1d3dfc66f995213d81b29a5ca8108dbcdd4e37d6c2f",
+        # first version of finetuned models on zenodo
+        "vit_h_lm": "9a65ee0cddc05a98d60469a12a058859c89dc3ea3ba39fed9b90d786253fbf26",
+        "vit_b_lm": "5a59cc4064092d54cd4d92cd967e39168f3760905431e868e474d60fe5464ecd",
+        "vit_h_em": "ae3798a0646c8df1d4db147998a2d37e402ff57d3aa4e571792fbb911d8a979c",
+        "vit_b_em": "c04a714a4e14a110f0eec055a65f7409d54e6bf733164d2933a0ce556f7d6f81",
+    },
+    # Now specify custom URLs for some of the files in the registry.
+    urls={
+        # the default segment anything models
+        "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
+        "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
+        "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
+        # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
+        "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
+        # first version of finetuned models on zenodo
+        "vit_h_lm": "https://zenodo.org/record/8250299/files/vit_h_lm.pth?download=1",
+        "vit_b_lm": "https://zenodo.org/record/8250281/files/vit_b_lm.pth?download=1",
+        "vit_h_em": "https://zenodo.org/record/8250291/files/vit_h_em.pth?download=1",
+        "vit_b_em": "https://zenodo.org/record/8250260/files/vit_b_em.pth?download=1",
+    },
+)
 
 
 def _get_default_device():
@@ -203,7 +156,7 @@ def get_sam_model(
     Returns:
         The segment anything predictor.
     """
-    checkpoint = _get_checkpoint(model_type, checkpoint_path)
+    checkpoint = MODELS.fetch(model_type)
     device = _get_device(device)
 
     # Our custom model types have a suffix "_...". This suffix needs to be stripped
