@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Optional
 
 from magicgui import magic_factory, widgets
 from napari.qt.threading import thread_worker
+import pooch
 import zarr
 from zarr.errors import PathNotFoundError
 
@@ -82,3 +83,19 @@ def embedding_widget(
         return state  # returns napari._qt.qthreading.FunctionWorker
 
     return _compute_image_embedding(state, image.data, save_path, ndim=ndim, device=device, model=model, optional_custom_weights=optional_custom_weights)
+
+
+@magic_factory(
+    call_button="Set cache directory",
+    cachedir={"mode": "d"},  # choose a directory
+)
+def cachedir_widget(
+    cachedir: Optional[Path] = None,
+):
+    """Allows users to set micro-sam cache directory."""
+    if cachedir is not None:
+        os.environ["MICROSAM_CACHEDIR"] = str(cachedir)
+        print(f"Setting micro-sam cache directory to: {cachedir}")
+    else:
+        os.environ.pop('MICROSAM_CACHEDIR', None)
+        print(f"Using default micro-sam cache directory: {pooch.os_cache('micro-sam')}")
