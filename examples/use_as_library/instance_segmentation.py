@@ -101,8 +101,7 @@ def segmentation_in_3d():
 
     # Load the SAM model for prediction.
     model_type = "vit_b"  # The model-type to use: vit_h, vit_l, vit_b etc.
-    checkpoint_path = None  # You can specifiy the path to a custom (fine-tuned) model here.
-    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path)
+    predictor = util.get_sam_model(model_type=model_type)
 
     # Run 3d segmentation for a given slice. Will segment all objects found in that slice
     # throughout the volume.

@@ -124,8 +124,6 @@ def precompute_state(
             it can be given to provide a glob pattern to subselect files from the folder.
         output_path: The output path were the embeddings and other state will be saved.
         model_type: The SegmentAnything model to use. Will use the standard vit_h model by default.
-        checkpoint_path: Path to a checkpoint for a custom model.
-        key: The key to the input file. This is needed for contaner files (e.g. hdf5 or zarr)
             and can be used to provide a glob pattern if the input is a folder with image files.
         ndim: The dimensionality of the data.
         tile_shape: Shape of tiles for tiled prediction. By default prediction is run without tiling.
@@ -133,7 +131,7 @@ def precompute_state(
         precompute_amg_state: Whether to precompute the state for automatic instance segmentation
             in addition to the image embeddings.
     """
-    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path)
+    predictor = util.get_sam_model(model_type=model_type)
     # check if we precompute the state for a single file or for a folder with image files
     if os.path.isdir(input_path) and Path(input_path).suffix not in (".n5", ".zarr"):
         pattern = "*" if key is None else key

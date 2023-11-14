@@ -21,7 +21,7 @@ def run_annotator_with_custom_model():
     # Adapt this if you finetune a different model type, e.g. vit_h.
 
     # Load the custom model.
-    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint)
+    predictor = util.get_custom_sam_model(model_type=model_type, checkpoint_path=checkpoint)
 
     # Run the 2d annotator with the custom model.
     annotator_2d(
