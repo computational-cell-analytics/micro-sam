@@ -5,7 +5,7 @@ from glob import glob
 from micro_sam.evaluation import inference
 from micro_sam.evaluation.evaluation import run_evaluation
 
-from util import get_paths, get_checkpoint
+from util import get_paths, get_checkpoint, MODELS
 
 LIVECELL_GT_ROOT = "/scratch/projects/nim00007/data/LiveCELL/annotations_corrected/livecell_test_images"
 PREDICTION_ROOT = "/scratch/projects/nim00007/sam/iterative_evaluation"
@@ -78,7 +78,11 @@ def main(args):
     prediction_root = get_prediction_root(start_with_box_prompt, model_description)
 
     # get the model checkpoints and desired model name to initialize the predictor
-    checkpoint, model_type = get_checkpoint(model_description)
+    if args.checkpoint is None and model_description in MODELS.keys():
+        checkpoint, model_type = get_checkpoint(model_description)
+    else:
+        checkpoint = args.checkpoint
+        model_type = model_description[:5]
     # get the predictor to perform inference
     predictor = inference.get_predictor(checkpoint, model_type)
 
@@ -94,5 +98,6 @@ if __name__ == "__main__":
         "-m", "--model", type=str,  # options: "vit_h", "vit_h_generalist", "vit_h_specialist"
         help="Provide the model type to initialize the predictor"
     )
+    parser.add_argument("-c", "--checkpoint", type=str, default=None)
     args = parser.parse_args()
     main(args)
