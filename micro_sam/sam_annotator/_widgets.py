@@ -17,6 +17,7 @@ from micro_sam.util import (
     _MODEL_URLS,
     _DEFAULT_MODEL,
     _available_devices,
+    get_cache_directory,
 )
 
 if TYPE_CHECKING:
@@ -86,16 +87,12 @@ def embedding_widget(
 
 
 @magic_factory(
-    call_button="Set cache directory",
-    cachedir={"mode": "d"},  # choose a directory
+    call_button="Update settings",
+    cache_directory={"mode": "d"},  # choose a directory
 )
-def cachedir_widget(
-    cachedir: Optional[Path] = None,
+def settings_widget(
+    cache_directory: Optional[Path] = get_cache_directory(),
 ):
-    """Allows users to set micro-sam cache directory."""
-    if cachedir is not None:
-        os.environ["MICROSAM_CACHEDIR"] = str(cachedir)
-        print(f"Setting micro-sam cache directory to: {cachedir}")
-    else:
-        os.environ.pop('MICROSAM_CACHEDIR', None)
-        print(f"Using default micro-sam cache directory: {pooch.os_cache('micro-sam')}")
+    """Update micro-sam settings."""
+    os.environ["MICROSAM_CACHEDIR"] = str(cache_directory)
+    print(f"micro-sam cache directory set to: {cache_directory}")
