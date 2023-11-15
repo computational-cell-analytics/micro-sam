@@ -258,7 +258,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
             if self.mask_prob > 0:
                 # using mask inputs for iterative prompting while training, with a probability
-                use_mask_inputs = True if random.random() < self.mask_prob else False
+                use_mask_inputs = (random.random() < self.mask_prob)
                 if use_mask_inputs:
                     _inp["mask_inputs"] = logits
                 else:  # remove  previously existing mask inputs to avoid using them in next sub-iteration
