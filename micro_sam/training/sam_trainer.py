@@ -42,7 +42,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         mse_loss: torch.nn.Module = torch.nn.MSELoss(),
         _sigmoid: torch.nn.Module = torch.nn.Sigmoid(),
         prompt_generator: PromptGeneratorBase = IterativePromptGenerator(),
-        mask_prob: float = 0.0,
+        mask_prob: float = 0.5,
         **kwargs
     ):
         super().__init__(**kwargs)
