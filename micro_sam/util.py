@@ -140,6 +140,10 @@ def _get_checkpoint(model_type, checkpoint_path=None):
 
 
 def _get_default_device():
+    # check that we're in CI and use the CPU if we are
+    # otherwise the tests may run out of memory on MAC if MPS is used.
+    if os.getenv("GITHUB_ACTIONS") == "true":
+        return "cpu"
     # Use cuda enabled gpu if it's available.
     if torch.cuda.is_available():
         device = "cuda"
@@ -152,7 +156,6 @@ def _get_default_device():
     else:
         device = "cpu"
     return device
-
 
 
 def _get_device(device=None):
@@ -183,16 +186,6 @@ def _available_devices():
         else:
             available_devices.append(device)
     return available_devices
-
-
-# make sure to use the cpu on github actions
-def _get_test_device(device):
-    if device is not None:
-        return device
-    if os.getenv("GITHUB_ACTIONS") == "true":
-        return "cpu"
-    else:
-        return _get_device(None)
 
 
 def get_sam_model(
