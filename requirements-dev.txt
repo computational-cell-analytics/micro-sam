@@ -1,6 +1,5 @@
 coverage
 line-profiler
-memray
 napari[all]
 pdoc
 pytest

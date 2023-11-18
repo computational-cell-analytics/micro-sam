@@ -140,6 +140,10 @@ def _get_checkpoint(model_type, checkpoint_path=None):
 
 
 def _get_default_device():
+    # check that we're in CI and use the CPU if we are
+    # otherwise the tests may run out of memory on MAC if MPS is used.
+    if os.getenv("GITHUB_ACTIONS") == "true":
+        return "cpu"
     # Use cuda enabled gpu if it's available.
     if torch.cuda.is_available():
         device = "cuda"

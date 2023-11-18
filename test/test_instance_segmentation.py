@@ -39,7 +39,7 @@ class TestInstanceSegmentation(unittest.TestCase):
 
     @staticmethod
     def _get_model(image, model_type):
-        predictor = util.get_sam_model(model_type=model_type)
+        predictor = util.get_sam_model(model_type=model_type, device=util._get_device(None))
         image_embeddings = util.precompute_image_embeddings(predictor, image)
         return predictor, image_embeddings
 
