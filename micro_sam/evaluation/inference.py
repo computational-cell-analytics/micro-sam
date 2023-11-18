@@ -151,7 +151,7 @@ def get_predictor(
     Returns:
         The segment anything predictor.
     """
-    device = util._get_device(device)
+    device = util.get_device(device)
 
     # By default we check if the model follows the torch_em checkpint naming scheme to check whether it is a
     # custom model or not. This can be over-ridden by passing True or False for is_custom_model.

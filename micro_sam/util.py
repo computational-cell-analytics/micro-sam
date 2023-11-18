@@ -158,7 +158,18 @@ def _get_default_device():
     return device
 
 
-def _get_device(device=None):
+def get_device(device=None) -> Union[str, torch.device]:
+    """Get the torch device.
+
+    If no device is passed the default device for your system is used.
+    Else it will be checked if the device you have passed is supported.
+
+    Args:
+        device: The input device.
+
+    Returns:
+        The device.
+    """
     if device is None or device == "auto":
         device = _get_default_device()
     else:
@@ -180,7 +191,7 @@ def _available_devices():
     available_devices = []
     for i in ["cuda", "mps", "cpu"]:
         try:
-            device = _get_device(i)
+            device = get_device(i)
         except RuntimeError:
             pass
         else:
@@ -190,7 +201,7 @@ def _available_devices():
 
 def get_sam_model(
     model_type: str = _DEFAULT_MODEL,
-    device: Optional[str] = None,
+    device: Optional[Union[str, torch.device]] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
 ) -> SamPredictor:
@@ -218,7 +229,7 @@ def get_sam_model(
         The segment anything predictor.
     """
     checkpoint = _get_checkpoint(model_type, checkpoint_path)
-    device = _get_device(device)
+    device = get_device(device)
 
     # Our custom model types have a suffix "_...". This suffix needs to be stripped
     # before calling sam_model_registry.
@@ -280,7 +291,7 @@ def get_custom_sam_model(
     custom_pickle = pickle
     custom_pickle.Unpickler = _CustomUnpickler
 
-    device = _get_device(device)
+    device = get_device(device)
     sam = sam_model_registry[model_type]()
 
     # load the model state, ignoring any attributes that can't be found by pickle

@@ -4,7 +4,7 @@ from typing import List, Optional, Union
 import numpy as np
 
 from ..prompt_generators import PointAndBoxPromptGenerator
-from ..util import get_centers_and_bounding_boxes, get_sam_model, segmentation_to_one_hot, _get_device
+from ..util import get_centers_and_bounding_boxes, get_sam_model, segmentation_to_one_hot, get_device
 from .trainable_sam import TrainableSAM
 
 
@@ -27,7 +27,7 @@ def get_trainable_sam_model(
         The trainable segment anything model.
     """
     # set the device here so that the correct one is passed to TrainableSAM below
-    device = _get_device(device)
+    device = get_device(device)
     _, sam = get_sam_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path, return_sam=True)
 
     # freeze components of the model if freeze was passed
