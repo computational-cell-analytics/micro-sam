@@ -67,3 +67,13 @@ class AnnotatorState(metaclass=Singleton):
                 f"Invalid AnnotatorState: {init_sum} / 2 parts of the state "
                 "needed for tracking are initialized."
             )
+
+    def reset_state(self):
+        """Reset state, clear all attributes."""
+        self.image_embeddings = None
+        self.predictor = None
+        self.image_shape = None
+        self.amg = None
+        self.amg_state = None
+        self.current_track_id = None
+        self.lineage = None

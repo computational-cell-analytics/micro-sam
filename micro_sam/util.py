@@ -4,6 +4,7 @@ Helper functions for downloading Segment Anything models and predicting image em
 
 import hashlib
 import os
+from pathlib import Path
 import pickle
 import warnings
 from collections import OrderedDict
@@ -12,6 +13,7 @@ from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 
 import imageio.v3 as imageio
 import numpy as np
+import pooch
 import requests
 import torch
 import vigra
@@ -47,7 +49,8 @@ _MODEL_URLS = {
     "vit_h_em": "https://zenodo.org/record/8250291/files/vit_h_em.pth?download=1",
     "vit_b_em": "https://zenodo.org/record/8250260/files/vit_b_em.pth?download=1",
 }
-_CHECKPOINT_FOLDER = os.environ.get("SAM_MODELS", os.path.expanduser("~/.sam_models"))
+_CACHE_DIR = os.environ.get('MICROSAM_CACHEDIR') or pooch.os_cache('micro_sam')
+_CHECKPOINT_FOLDER = os.path.join(_CACHE_DIR, 'models')
 _CHECKSUMS = {
     # the default segment anything models
     "vit_h": "a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e",
@@ -78,6 +81,15 @@ _DEFAULT_MODEL = "vit_h"
 ImageEmbeddings = Dict[str, Any]
 """@private"""
 
+
+def get_cache_directory():
+    """Get micro-sam cache directory location.
+
+    Users can set the MICROSAM_CACHEDIR environment variable for a custom cache directory.
+    """
+    default_cache_directory = os.path.expanduser(pooch.os_cache('micro-sam'))
+    cache_directory = Path(os.environ.get('MICROSAM_CACHEDIR', default_cache_directory))
+    return cache_directory
 
 #
 # Functionality for model download and export
@@ -127,10 +139,7 @@ def _get_checkpoint(model_type, checkpoint_path=None):
     return checkpoint_path
 
 
-def _get_device(device):
-    if device is not None:
-        return device
-
+def _get_default_device():
     # Use cuda enabled gpu if it's available.
     if torch.cuda.is_available():
         device = "cuda"
@@ -143,6 +152,37 @@ def _get_device(device):
     else:
         device = "cpu"
     return device
+
+
+
+def _get_device(device=None):
+    if device is None or device == "auto":
+        device = _get_default_device()
+    else:
+        if device.lower() == "cuda":
+            if not torch.cuda.is_available():
+                raise RuntimeError("PyTorch CUDA backend is not available.")
+        elif device.lower() == "mps":
+            if not (torch.backends.mps.is_available() and torch.backends.mps.is_built()):
+                raise RuntimeError("PyTorch MPS backend is not available or is not built correctly.")
+        elif device.lower() == "cpu":
+            pass  # cpu is always available
+        else:
+            raise RuntimeError(f"Unsupported device: {device}\n"
+                               "Please choose from 'cpu', 'cuda', or 'mps'.")
+    return device
+
+
+def _available_devices():
+    available_devices = []
+    for i in ["cuda", "mps", "cpu"]:
+        try:
+            device = _get_device(i)
+        except RuntimeError:
+            pass
+        else:
+            available_devices.append(device)
+    return available_devices
 
 
 # make sure to use the cpu on github actions
@@ -161,11 +201,19 @@ def get_sam_model(
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
 ) -> SamPredictor:
-    """Get the SegmentAnything Predictor.
+    r"""Get the SegmentAnything Predictor.
 
     This function will download the required model checkpoint or load it from file if it
-    was already downloaded. By default the models are downloaded to '~/.sam_models'.
-    This location can be changed by setting the environment variable SAM_MODELS.
+    was already downloaded.
+    This location can be changed by setting the environment variable: MICROSAM_CACHEDIR.
+
+    By default the models are downloaded to a folder named 'micro_sam/models'
+    inside your default cache directory, eg:
+    * Mac: ~/Library/Caches/<AppName>
+    * Unix: ~/.cache/<AppName> or the value of the XDG_CACHE_HOME environment variable, if defined.
+    * Windows: C:\Users\<user>\AppData\Local\<AppAuthor>\<AppName>\Cache
+    See the pooch.os_cache() documentation for more details:
+    https://www.fatiando.org/pooch/latest/api/generated/pooch.os_cache.html
 
     Args:
         device: The device for the model. If none is given will use GPU if available.
@@ -279,7 +327,7 @@ def export_custom_sam_model(
         save_path: Where to save the exported model.
     """
     _, state = get_custom_sam_model(
-        checkpoint_path, model_type=model_type, return_state=True, device=torch.device("cpu"),
+        checkpoint_path, model_type=model_type, return_state=True, device="cpu",
     )
     model_state = state["model_state"]
     prefix = "sam."
@@ -562,7 +610,7 @@ def precompute_image_embeddings(
                     continue
                 # check whether the key signature does not match or is not in the file
                 if key not in f.attrs or f.attrs[key] != val:
-                    warnings.warn(
+                    raise RuntimeError(
                         f"Embeddings file {save_path} is invalid due to unmatching {key}: "
                         f"{f.attrs.get(key)} != {val}.Please recompute embeddings in a new file."
                     )
