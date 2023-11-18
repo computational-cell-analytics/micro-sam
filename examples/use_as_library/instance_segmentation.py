@@ -2,6 +2,7 @@ import imageio.v3 as imageio
 import napari
 
 from micro_sam import instance_segmentation, util
+from micro_sam.multi_dimensional_segmentation import segment_3d_from_slice
 
 
 def cell_segmentation():
@@ -32,36 +33,15 @@ def cell_segmentation():
 
     # Generate the instance segmentation. You can call this again for different values of 'pred_iou_thresh'
     # without having to call initialize again.
-    instances_amg = amg.generate(pred_iou_thresh=0.88)
-    instances_amg = instance_segmentation.mask_data_to_segmentation(
-        instances_amg, shape=image.shape, with_background=True
-    )
-
-    # Use the mutex waterhsed based instance segmentation logic.
-    # Here, we generate initial segmentation masks from the image embeddings, using the mutex watershed algorithm.
-    # These initial masks are used as prompts for the actual instance segmentation.
-    # This class uses the same overall design as 'AutomaticMaskGenerator'.
-
-    # Create the automatic mask generator class.
-    amg_mws = instance_segmentation.EmbeddingMaskGenerator(predictor, min_initial_size=10)
-
-    # Initialize the mask generator with the image and the pre-computed embeddings.
-    amg_mws.initialize(image, embeddings, verbose=True)
-
-    # Generate the instance segmentation. You can call this again for different values of 'pred_iou_thresh'
-    # without having to call initialize again.
-    # NOTE: the main advantage of this method is that it's faster than the original implementation,
-    # however the quality is not as high as the original instance segmentation quality yet.
-    instances_mws = amg_mws.generate(pred_iou_thresh=0.88)
-    instances_mws = instance_segmentation.mask_data_to_segmentation(
-        instances_mws, shape=image.shape, with_background=True
+    instances = amg.generate(pred_iou_thresh=0.88)
+    instances = instance_segmentation.mask_data_to_segmentation(
+        instances, shape=image.shape, with_background=True
     )
 
     # Show the results.
     v = napari.Viewer()
     v.add_image(image)
-    v.add_labels(instances_amg)
-    v.add_labels(instances_mws)
+    v.add_labels(instances)
     napari.run()
 
 
@@ -94,39 +74,71 @@ def cell_segmentation_with_tiling():
 
     # Generate the instance segmentation. You can call this again for different values of 'pred_iou_thresh'
     # without having to call initialize again.
-    instances_amg = amg.generate(pred_iou_thresh=0.88)
-    instances_amg = instance_segmentation.mask_data_to_segmentation(
-        instances_amg, shape=image.shape, with_background=True
+    instances = amg.generate(pred_iou_thresh=0.88)
+    instances = instance_segmentation.mask_data_to_segmentation(
+        instances, shape=image.shape, with_background=True
     )
-
-    # Use the mutex waterhsed based instance segmentation logic.
-    # Here, we generate initial segmentation masks from the image embeddings, using the mutex watershed algorithm.
-    # These initial masks are used as prompts for the actual instance segmentation.
-    # This class uses the same overall design as 'AutomaticMaskGenerator'.
-
-    # Create the automatic mask generator class.
-    amg_mws = instance_segmentation.TiledEmbeddingMaskGenerator(predictor, min_initial_size=10)
-
-    # Initialize the mask generator with the image and the pre-computed embeddings.
-    amg_mws.initialize(image, embeddings, verbose=True)
-
-    # Generate the instance segmentation. You can call this again for different values of 'pred_iou_thresh'
-    # without having to call initialize again.
-    # NOTE: the main advantage of this method is that it's faster than the original implementation.
-    # however the quality is not as high as the original instance segmentation quality yet.
-    instances_mws = amg_mws.generate(pred_iou_thresh=0.88)
 
     # Show the results.
     v = napari.Viewer()
     v.add_image(image)
-    v.add_labels(instances_amg)
-    v.add_labels(instances_mws)
+    v.add_labels(instances)
+    v.add_labels(instances)
+    napari.run()
+
+
+def segmentation_in_3d():
+    """Run instance segmentation in 3d, for segmenting all objects that intersect
+    with a given slice. If you use a fine-tuned model for this then you should
+    first find good parameters for 2d segmentation.
+    """
+    import imageio.v3 as imageio
+    from micro_sam.sample_data import fetch_nucleus_3d_example_data
+
+    # Load the example image data: 3d nucleus segmentation.
+    path = fetch_nucleus_3d_example_data("./data")
+    data = imageio.imread(path)
+
+    # Load the SAM model for prediction.
+    model_type = "vit_b"  # The model-type to use: vit_h, vit_l, vit_b etc.
+    checkpoint_path = None  # You can specifiy the path to a custom (fine-tuned) model here.
+    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path)
+
+    # Run 3d segmentation for a given slice. Will segment all objects found in that slice
+    # throughout the volume.
+
+    # The slice that is used for segmentation in 2d. If you don't specify a slice
+    # then the middle slice is used.
+    z_slice = data.shape[0] // 2
+
+    # The threshold for filtering objects in the 2d segmentation based on the model's
+    # predicted iou score. If you use a custom model you should first find a good setting
+    # for this value, e.g. with the 2d annotation tool.
+    pred_iou_thresh = 0.88
+
+    # The threshold for filtering objects in the 2d segmentation based on the model's
+    # stability score for a given object. If you use a custom model you should first find a good setting
+    # for this value, e.g. with the 2d annotation tool.
+    stability_score_thresh = 0.95
+
+    instances = segment_3d_from_slice(
+        predictor, data, z=z_slice,
+        pred_iou_thresh=pred_iou_thresh,
+        stability_score_thresh=stability_score_thresh,
+        verbose=True
+    )
+
+    # Show the results.
+    v = napari.Viewer()
+    v.add_image(data)
+    v.add_labels(instances)
     napari.run()
 
 
 def main():
-    cell_segmentation()
+    # cell_segmentation()
     # cell_segmentation_with_tiling()
+    segmentation_in_3d()
 
 
 if __name__ == "__main__":

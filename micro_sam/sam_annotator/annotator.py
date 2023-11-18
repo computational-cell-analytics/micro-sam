@@ -7,7 +7,7 @@ import numpy as np
 import zarr
 from magicgui.widgets import Container, Label, LineEdit, SpinBox, ComboBox
 from magicgui.application import use_app
-from PyQt5.QtWidgets import QFileDialog, QMessageBox
+from qtpy.QtWidgets import QFileDialog, QMessageBox
 
 from ..util import load_image_data, get_model_names, _DEFAULT_MODEL
 from .annotator_2d import annotator_2d
