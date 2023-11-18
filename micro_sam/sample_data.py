@@ -24,6 +24,8 @@ from skimage.data import binary_blobs
 from skimage.measure import label
 from skimage.transform import resize
 
+from .util import get_cache_directory
+
 
 def fetch_image_series_example_data(save_directory: Union[str, os.PathLike]) -> str:
     """Download the sample images for the image series annotator.
@@ -66,9 +68,8 @@ def sample_data_image_series():
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    _CACHE_DIR = os.environ.get('MICROSAM_CACHEDIR') or pooch.os_cache('micro_sam')
-    default_base_data_dir = os.path.join(_CACHE_DIR, 'sample_data')
-    data_directory = fetch_image_series_example_data(default_base_data_dir)
+    base_data_directory = os.path.join(get_cache_directory(), 'sample_data')
+    data_directory = fetch_image_series_example_data(base_data_directory)
     fnames = os.listdir(data_directory)
     full_filenames = [os.path.join(data_directory, f) for f in fnames]
     full_filenames.sort()
@@ -108,9 +109,8 @@ def sample_data_wholeslide():
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    _CACHE_DIR = os.environ.get('MICROSAM_CACHEDIR') or pooch.os_cache('micro_sam')
-    default_base_data_dir = os.path.join(_CACHE_DIR, 'sample_data')
-    filename = fetch_wholeslide_example_data(default_base_data_dir)
+    base_data_directory = os.path.join(get_cache_directory(), 'sample_data')
+    filename = fetch_wholeslide_example_data(base_data_directory)
     data = imageio.imread(filename)
     add_image_kwargs = {"name": "wholeslide"}
     return [(data, add_image_kwargs)]
@@ -147,9 +147,8 @@ def sample_data_livecell():
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    _CACHE_DIR = os.environ.get('MICROSAM_CACHEDIR') or pooch.os_cache('micro_sam')
-    default_base_data_dir = os.path.join(_CACHE_DIR, 'sample_data')
-    filename = fetch_livecell_example_data(default_base_data_dir)
+    base_data_directory = os.path.join(get_cache_directory(), 'sample_data')
+    filename = fetch_livecell_example_data(base_data_directory)
     data = imageio.imread(filename)
     add_image_kwargs = {"name": "livecell"}
     return [(data, add_image_kwargs)]
@@ -186,9 +185,8 @@ def sample_data_hela_2d():
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    _CACHE_DIR = os.environ.get('MICROSAM_CACHEDIR') or pooch.os_cache('micro_sam')
-    default_base_data_dir = os.path.join(_CACHE_DIR, 'sample_data')
-    filename = fetch_hela_2d_example_data(default_base_data_dir)
+    base_data_directory = os.path.join(get_cache_directory(), 'sample_data')
+    filename = fetch_hela_2d_example_data(base_data_directory)
     data = imageio.imread(filename)
     add_image_kwargs = {"name": "hela_2d"}
     return [(data, add_image_kwargs)]
@@ -230,9 +228,8 @@ def sample_data_3d():
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    _CACHE_DIR = os.environ.get('MICROSAM_CACHEDIR') or pooch.os_cache('micro_sam')
-    default_base_data_dir = os.path.join(_CACHE_DIR, 'sample_data')
-    data_directory = fetch_3d_example_data(default_base_data_dir)
+    base_data_directory = os.path.join(get_cache_directory(), 'sample_data')
+    data_directory = fetch_3d_example_data(base_data_directory)
     fnames = os.listdir(data_directory)
     full_filenames = [os.path.join(data_directory, f) for f in fnames]
     full_filenames.sort()
@@ -281,9 +278,8 @@ def sample_data_tracking():
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    _CACHE_DIR = os.environ.get('MICROSAM_CACHEDIR') or pooch.os_cache('micro_sam')
-    default_base_data_dir = os.path.join(_CACHE_DIR, 'sample_data')
-    data_directory = fetch_tracking_example_data(default_base_data_dir)
+    base_data_directory = os.path.join(get_cache_directory(), 'sample_data')
+    data_directory = fetch_tracking_example_data(base_data_directory)
     fnames = os.listdir(data_directory)
     full_filenames = [os.path.join(data_directory, f) for f in fnames]
     full_filenames.sort()
@@ -328,9 +324,8 @@ def sample_data_segmentation():
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    _CACHE_DIR = os.environ.get('MICROSAM_CACHEDIR') or pooch.os_cache('micro_sam')
-    default_base_data_dir = os.path.join(_CACHE_DIR, 'sample_data')
-    data_directory = fetch_tracking_segmentation_data(default_base_data_dir)
+    base_data_directory = os.path.join(get_cache_directory(), 'sample_data')
+    data_directory = fetch_tracking_segmentation_data(base_data_directory)
     fnames = os.listdir(data_directory)
     full_filenames = [os.path.join(data_directory, f) for f in fnames]
     full_filenames.sort()

@@ -4,6 +4,7 @@ Helper functions for downloading Segment Anything models and predicting image em
 
 import hashlib
 import os
+from pathlib import Path
 import pickle
 import warnings
 from collections import OrderedDict
@@ -80,6 +81,15 @@ _DEFAULT_MODEL = "vit_h"
 ImageEmbeddings = Dict[str, Any]
 """@private"""
 
+
+def get_cache_directory():
+    """Get micro-sam cache directory location.
+
+    Users can set the MICROSAM_CACHEDIR environment variable for a custom cache directory.
+    """
+    default_cache_directory = os.path.expanduser(pooch.os_cache('micro-sam'))
+    cache_directory = Path(os.environ.get('MICROSAM_CACHEDIR', default_cache_directory))
+    return cache_directory
 
 #
 # Functionality for model download and export
