@@ -82,7 +82,7 @@ ImageEmbeddings = Dict[str, Any]
 """@private"""
 
 
-def get_cache_directory():
+def get_cache_directory() -> None:
     """Get micro-sam cache directory location.
 
     Users can set the MICROSAM_CACHEDIR environment variable for a custom cache directory.
@@ -158,7 +158,7 @@ def _get_default_device():
     return device
 
 
-def get_device(device=None) -> Union[str, torch.device]:
+def get_device(device: Optional[Union[str, torch.device]] = None) -> Union[str, torch.device]:
     """Get the torch device.
 
     If no device is passed the default device for your system is used.
