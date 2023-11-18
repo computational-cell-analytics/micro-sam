@@ -173,13 +173,14 @@ def get_device(device=None) -> Union[str, torch.device]:
     if device is None or device == "auto":
         device = _get_default_device()
     else:
-        if device.lower() == "cuda":
+        device_type = device if isinstance(device, str) else device.type
+        if device_type.lower() == "cuda":
             if not torch.cuda.is_available():
                 raise RuntimeError("PyTorch CUDA backend is not available.")
-        elif device.lower() == "mps":
+        elif device_type.lower() == "mps":
             if not (torch.backends.mps.is_available() and torch.backends.mps.is_built()):
                 raise RuntimeError("PyTorch MPS backend is not available or is not built correctly.")
-        elif device.lower() == "cpu":
+        elif device_type.lower() == "cpu":
             pass  # cpu is always available
         else:
             raise RuntimeError(f"Unsupported device: {device}\n"
