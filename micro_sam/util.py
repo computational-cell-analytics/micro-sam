@@ -145,6 +145,16 @@ def _get_device(device):
     return device
 
 
+# make sure to use the cpu on github actions
+def _get_test_device(device):
+    if device is not None:
+        return device
+    if os.getenv("GITHUB_ACTIONS") == "true":
+        return "cpu"
+    else:
+        return _get_device(None)
+
+
 def get_sam_model(
     model_type: str = _DEFAULT_MODEL,
     device: Optional[str] = None,
