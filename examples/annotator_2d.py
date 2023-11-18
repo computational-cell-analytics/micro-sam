@@ -6,7 +6,8 @@ from micro_sam.sample_data import fetch_hela_2d_example_data, fetch_livecell_exa
 from micro_sam.util import get_cache_directory
 
 DATA_CACHE = os.path.join(get_cache_directory(), "sample_data")
-EMBEDDING_CACHE = os.path.join(get_cache_directory, "embeddings")
+EMBEDDING_CACHE = os.path.join(get_cache_directory(), "embeddings")
+os.makedirs(EMBEDDING_CACHE, exist_ok=True)
 
 
 def livecell_annotator(use_finetuned_model):

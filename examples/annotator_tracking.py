@@ -6,7 +6,8 @@ from micro_sam.sample_data import fetch_tracking_example_data
 from micro_sam.util import get_cache_directory
 
 DATA_CACHE = os.path.join(get_cache_directory(), "sample_data")
-EMBEDDING_CACHE = os.path.join(get_cache_directory, "embeddings")
+EMBEDDING_CACHE = os.path.join(get_cache_directory(), "embeddings")
+os.makedirs(EMBEDDING_CACHE, exist_ok=True)
 
 
 def track_ctc_data(use_finetuned_model):
