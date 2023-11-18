@@ -1,0 +1,9 @@
+coverage
+line-profiler
+napari[all]
+pdoc
+pytest
+pytest-cov
+pytest-qt
+snakeviz
+tabulate

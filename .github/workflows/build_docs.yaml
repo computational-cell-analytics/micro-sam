@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Setup miniconda
         uses: conda-incubator/setup-miniconda@v2
@@ -43,11 +43,11 @@ jobs:
       # We use a custom build script for pdoc itself, ideally you just run `pdoc -o docs/ ...` here.
       - name: Run pdoc
         shell: bash -l {0}
-        run: pdoc --docformat google --logo "https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/micro-sam-logo.png" -o docs/ micro_sam
+        run: python build_doc.py --out
 
       - uses: actions/upload-pages-artifact@v1
         with:
-          path: docs/
+          path: tmp/
 
   # Deploy the artifact to GitHub pages.
   # This is a separate job so that only actions/deploy-pages has the necessary permissions.

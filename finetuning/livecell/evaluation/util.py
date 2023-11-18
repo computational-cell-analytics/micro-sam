@@ -5,14 +5,14 @@ from micro_sam.evaluation.livecell import _get_livecell_paths
 
 DATA_ROOT = "/scratch/projects/nim00007/data/LiveCELL"
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/livecell"
-PROMPT_FOLDER = "/scratch-grete/projects/nim00007/sam/experiments/prompts/livecell"
+PROMPT_FOLDER = "/scratch/projects/nim00007/sam/experiments/prompts/livecell"
 MODELS = {
-    "vit_b": "/scratch-grete/projects/nim00007/sam/vanilla/sam_vit_b_01ec64.pth",
-    "vit_h": "/scratch-grete/projects/nim00007/sam/vanilla/sam_vit_h_4b8939.pth",
-    "vit_b_specialist": "/scratch-grete/projects/nim00007/sam/LM/LiveCELL/vit_b/best.pt",
-    "vit_h_specialist": "/scratch-grete/projects/nim00007/sam/LM/LiveCELL/vit_h/best.pt",
-    "vit_b_generalist": "/scratch-grete/projects/nim00007/sam/LM/generalist/vit_b/best.pt",
-    "vit_h_generalist": "/scratch-grete/projects/nim00007/sam/LM/generalist/vit_h/best.pt",
+    "vit_b": "/scratch/projects/nim00007/sam/vanilla/sam_vit_b_01ec64.pth",
+    "vit_h": "/scratch/projects/nim00007/sam/vanilla/sam_vit_h_4b8939.pth",
+    "vit_b_specialist": "/scratch/projects/nim00007/sam/models/LM/LiveCELL/vit_b/best.pt",
+    "vit_h_specialist": "/scratch/projects/nim00007/sam/models/LM/LiveCELL/vit_h/best.pt",
+    "vit_b_generalist": "/scratch/projects/nim00007/sam/models/LM/generalist/v2/vit_b/best.pt",
+    "vit_h_generalist": "/scratch/projects/nim00007/sam/models/LM/generalist/v2/vit_h/best.pt",
 }
 
 

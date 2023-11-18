@@ -1,3 +1,5 @@
+import platform
+
 import numpy as np
 import pytest
 
@@ -20,6 +22,7 @@ def _check_layer_initialization(viewer):
 
 
 @pytest.mark.gui
+@pytest.mark.skipif(platform.system() == "Windows", reason="Gui test is not working on windows.")
 def test_annotator_2d(make_napari_viewer_proxy, tmp_path):
     """Integration test for annotator_2d widget with automatic mask generation.
 

@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.10"]
 
     steps:
@@ -34,18 +34,11 @@ jobs:
       # Setup Qt libraries for GUI testing
       - uses: tlambert03/setup-qt-libs@v1
 
-      - name: Install napari and pyqt for GUI tests
+      - name: Install additional dev requirements
         shell: bash -l {0}
-        run: pip install "napari[all]"
+        run: python -m pip install -r requirements-dev.txt
 
-      - name: Install pytest
-        shell: bash -l {0}
-        run: |
-          python -m pip install pytest
-          python -m pip install pytest-cov
-          python -m pip install pytest-qt
-
-      - name: Install package
+      - name: Install micro-sam
         shell: bash -l {0}
         run: pip install --no-deps -e .
 

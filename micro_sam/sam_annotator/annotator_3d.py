@@ -18,6 +18,7 @@ from ..multi_dimensional_segmentation import segment_mask_in_volume
 from ..visualization import project_embeddings_for_visualization
 from . import util as vutil
 from .gui_utils import show_wrong_file_warning
+from ._state import AnnotatorState
 
 
 #
@@ -26,7 +27,7 @@ from .gui_utils import show_wrong_file_warning
 
 
 @magicgui(call_button="Segment Slice [S]")
-def _segment_slice_wigdet(v: Viewer, box_extension: float = 0.1) -> None:
+def _segment_slice_widget(v: Viewer, box_extension: float = 0.1) -> None:
     shape = v.layers["current_object"].data.shape[1:]
     position = v.cursor.position
     z = int(position[0])
@@ -39,9 +40,10 @@ def _segment_slice_wigdet(v: Viewer, box_extension: float = 0.1) -> None:
     boxes, masks = vutil.shape_layer_to_prompts(v.layers["prompts"], shape, i=z)
     points, labels = point_prompts
 
+    state = AnnotatorState()
     seg = vutil.prompt_segmentation(
-        PREDICTOR, points, labels, boxes, masks, shape, multiple_box_prompts=False,
-        image_embeddings=IMAGE_EMBEDDINGS, i=z, box_extension=box_extension,
+        state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
+        image_embeddings=state.image_embeddings, i=z, box_extension=box_extension,
     )
 
     # no prompts were given or prompts were invalid, skip segmentation
@@ -54,19 +56,20 @@ def _segment_slice_wigdet(v: Viewer, box_extension: float = 0.1) -> None:
 
 
 def _segment_volume_for_current_object(v, projection, iou_threshold, box_extension):
-    shape = v.layers["raw"].data.shape
+    state = AnnotatorState()
+    shape = state.image_shape
 
     with progress(total=shape[0]) as progress_bar:
 
         # step 1: segment all slices with prompts
         seg, slices, stop_lower, stop_upper = vutil.segment_slices_with_prompts(
-            PREDICTOR, v.layers["point_prompts"], v.layers["prompts"], IMAGE_EMBEDDINGS, shape,
+            state.predictor, v.layers["point_prompts"], v.layers["prompts"], state.image_embeddings, shape,
             progress_bar=progress_bar,
         )
 
         # step 2: segment the rest of the volume based on smart prompting
         seg = segment_mask_in_volume(
-            seg, PREDICTOR, IMAGE_EMBEDDINGS, slices,
+            seg, state.predictor, state.image_embeddings, slices,
             stop_lower, stop_upper,
             iou_threshold=iou_threshold, projection=projection,
             progress_bar=progress_bar, box_extension=box_extension,
@@ -89,12 +92,13 @@ def _segment_volume_for_auto_segmentation(
     seg[:start_slice] = 0
     seg[(start_slice+1):]
 
+    state = AnnotatorState()
     for object_id in progress(object_ids):
         object_seg = seg == object_id
         segmented_slices = np.array([start_slice])
         object_seg = segment_mask_in_volume(
-            segmentation=object_seg, predictor=PREDICTOR,
-            image_embeddings=IMAGE_EMBEDDINGS, segmented_slices=segmented_slices,
+            segmentation=object_seg, predictor=state.predictor,
+            image_embeddings=state.image_embeddings, segmented_slices=segmented_slices,
             stop_lower=False, stop_upper=False, iou_threshold=iou_threshold,
             projection=projection, box_extension=box_extension,
         )
@@ -146,30 +150,36 @@ def _autosegment_widget(
     min_object_size: int = 100,
     with_background: bool = True,
 ) -> None:
-    global AMG, AMG_STATE
-    is_tiled = IMAGE_EMBEDDINGS["input_size"] is None
-    if AMG is None:
-        AMG = instance_segmentation.get_amg(PREDICTOR, is_tiled)
+    state = AnnotatorState()
+
+    is_tiled = state.image_embeddings["input_size"] is None
+    if state.amg is None:
+        state.amg = instance_segmentation.get_amg(state.predictor, is_tiled)
 
     i = int(v.cursor.position[0])
-    if i in AMG_STATE:
-        state = AMG_STATE[i]
-        AMG.set_state(state)
+    shape = state.image_shape[-2:]
+
+    if i in state.amg_state:
+        amg_state_i = state.amg_state[i]
+        state.amg.set_state(amg_state_i)
 
     else:
-        image_data = v.layers["raw"].data[i]
-        AMG.initialize(image_data, image_embeddings=IMAGE_EMBEDDINGS, verbose=True, i=i)
-        state = AMG.get_state()
+        # we don't need to pass the actual image data here, since the embeddings are passed
+        # (the image data is only used by the amg to compute image embeddings, so not needed here)
+        dummy_image = np.zeros(shape, dtype="uint8")
 
-        cache_folder = AMG_STATE["cache_folder"]
+        state.amg.initialize(dummy_image, image_embeddings=state.image_embeddings, verbose=True, i=i)
+        amg_state_i = state.amg.get_state()
+
+        state.amg_state[i] = amg_state_i
+        cache_folder = state.amg_state["cache_folder"]
         if cache_folder is not None:
             cache_path = os.path.join(cache_folder, f"state-{i}.pkl")
             with open(cache_path, "wb") as f:
-                pickle.dump(state, f)
+                pickle.dump(amg_state_i, f)
 
-    seg = AMG.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
+    seg = state.amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
 
-    shape = v.layers["raw"].data.shape[-2:]
     seg = instance_segmentation.mask_data_to_segmentation(
         seg, shape, with_background=with_background, min_object_size=min_object_size
     )
@@ -230,20 +240,19 @@ def annotator_3d(
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
     """
-    # for access to the predictor and the image embeddings in the widgets
-    global PREDICTOR, IMAGE_EMBEDDINGS, AMG, AMG_STATE
-    AMG = None
+    state = AnnotatorState()
 
     if predictor is None:
-        PREDICTOR = util.get_sam_model(model_type=model_type)
+        state.predictor = util.get_sam_model(model_type=model_type)
     else:
-        PREDICTOR = predictor
-    IMAGE_EMBEDDINGS = util.precompute_image_embeddings(
-        PREDICTOR, raw, save_path=embedding_path, tile_shape=tile_shape, halo=halo,
+        state.predictor = predictor
+    state.image_embeddings = util.precompute_image_embeddings(
+        state.predictor, raw, save_path=embedding_path, tile_shape=tile_shape, halo=halo,
         wrong_file_callback=show_wrong_file_warning,
     )
+    state.image_shape = raw.shape
 
-    AMG_STATE = _load_amg_state(embedding_path)
+    state.amg_state = _load_amg_state(embedding_path)
 
     #
     # initialize the viewer and add layers
@@ -263,7 +272,7 @@ def annotator_3d(
 
     # show the PCA of the image embeddings
     if show_embeddings:
-        embedding_vis, scale = project_embeddings_for_visualization(IMAGE_EMBEDDINGS)
+        embedding_vis, scale = project_embeddings_for_visualization(state.image_embeddings)
         v.add_image(embedding_vis, name="embeddings", scale=scale)
 
     labels = ["positive", "negative"]
@@ -292,7 +301,7 @@ def annotator_3d(
     prompt_widget = vutil.create_prompt_menu(prompts, labels)
     v.window.add_dock_widget(prompt_widget)
 
-    v.window.add_dock_widget(_segment_slice_wigdet)
+    v.window.add_dock_widget(_segment_slice_widget)
     v.window.add_dock_widget(_autosegment_widget)
 
     v.window.add_dock_widget(_segment_volume_widget)
@@ -305,7 +314,7 @@ def annotator_3d(
 
     @v.bind_key("s")
     def _seg_slice(v):
-        _segment_slice_wigdet(v)
+        _segment_slice_widget(v)
 
     @v.bind_key("Shift-s")
     def _seg_volume(v):
