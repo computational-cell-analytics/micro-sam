@@ -267,7 +267,7 @@ class _CustomUnpickler(pickle.Unpickler):
 def get_custom_sam_model(
     checkpoint_path: Union[str, os.PathLike],
     model_type: str = "vit_h",
-    device: Optional[str] = None,
+    device: Optional[Union[str, torch.device]] = None,
     return_sam: bool = False,
     return_state: bool = False,
 ) -> SamPredictor:
@@ -278,8 +278,8 @@ def get_custom_sam_model(
 
     Args:
         checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
-        device: The device for the model. If none is given will use GPU if available.
         model_type: The SegmentAnything model to use.
+        device: The device for the model. If none is given will use GPU if available.
         return_sam: Return the sam model object as well as the predictor.
         return_state: Return the full state of the checkpoint in addition to the predictor.
 

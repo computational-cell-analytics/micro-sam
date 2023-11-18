@@ -137,7 +137,7 @@ def _run_inference_with_prompts_for_image(
 def get_predictor(
     checkpoint_path: Union[str, os.PathLike],
     model_type: str,
-    device: Optional[str] = None,
+    device: Optional[Union[str, torch.device]] = None,
     return_state: bool = False,
     is_custom_model: Optional[bool] = None,
 ) -> SamPredictor:
@@ -146,6 +146,7 @@ def get_predictor(
     Args:
         checkpoint_path: The checkpoint filepath.
         model_type: The type of the model, either vit_h, vit_b or vit_l.
+        device: The device to use.
         return_state: Whether to return the complete state of the checkpoint in addtion to the predictor.
         is_custom_model: Whether this is a custom model or not.
     Returns:
