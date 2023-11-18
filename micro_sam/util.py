@@ -49,8 +49,7 @@ _MODEL_URLS = {
     "vit_h_em": "https://zenodo.org/record/8250291/files/vit_h_em.pth?download=1",
     "vit_b_em": "https://zenodo.org/record/8250260/files/vit_b_em.pth?download=1",
 }
-_CACHE_DIR = os.environ.get('MICROSAM_CACHEDIR') or pooch.os_cache('micro_sam')
-_CHECKPOINT_FOLDER = os.path.join(_CACHE_DIR, 'models')
+
 _CHECKSUMS = {
     # the default segment anything models
     "vit_h": "a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e",
@@ -87,7 +86,7 @@ def get_cache_directory() -> None:
 
     Users can set the MICROSAM_CACHEDIR environment variable for a custom cache directory.
     """
-    default_cache_directory = os.path.expanduser(pooch.os_cache('micro-sam'))
+    default_cache_directory = os.path.expanduser(pooch.os_cache('micro_sam'))
     cache_directory = Path(os.environ.get('MICROSAM_CACHEDIR', default_cache_directory))
     return cache_directory
 
@@ -127,11 +126,12 @@ def _get_checkpoint(model_type, checkpoint_path=None):
     if checkpoint_path is None:
         checkpoint_url = _MODEL_URLS[model_type]
         checkpoint_name = _DOWNLOAD_NAMES.get(model_type, checkpoint_url.split("/")[-1])
-        checkpoint_path = os.path.join(_CHECKPOINT_FOLDER, checkpoint_name)
+        checkpoint_folder = os.path.join(get_cache_directory(), "models")
+        checkpoint_path = os.path.join(checkpoint_folder, checkpoint_name)
 
         # download the checkpoint if necessary
         if not os.path.exists(checkpoint_path):
-            os.makedirs(_CHECKPOINT_FOLDER, exist_ok=True)
+            os.makedirs(checkpoint_folder, exist_ok=True)
             _download(checkpoint_url, checkpoint_path, model_type)
     elif not os.path.exists(checkpoint_path):
         raise ValueError(f"The checkpoint path {checkpoint_path} that was passed does not exist.")
