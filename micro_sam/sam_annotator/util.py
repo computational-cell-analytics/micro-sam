@@ -33,7 +33,7 @@ def clear_annotations(v: napari.Viewer, clear_segmentations=True) -> None:
         v.layers["current_track"].refresh()
 
 
-@magicgui(call_button="Clear Annotations [Shfit + C]")
+@magicgui(call_button="Clear Annotations [Shift + C]")
 def _clear_widget(v: napari.Viewer) -> None:
     clear_annotations(v)
 
