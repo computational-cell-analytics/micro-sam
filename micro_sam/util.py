@@ -99,7 +99,33 @@ def models():
             "vit_b_em": "https://zenodo.org/record/8250260/files/vit_b_em.pth?download=1",
         },
     )
+    # This extra dictionary is needed for _get_checkpoint to download weights from a specific checkpoint
+    models.download_names={
+            "vit_h": "vit_h.pth",
+            "vit_l": "vit_l.pth",
+            "vit_b": "vit_b.pth",
+            "vit_t": "vit_t_mobile_sam.pth",
+            "vit_h_lm": "vit_h_lm.pth",
+            "vit_b_lm": "vit_b_lm.pth",
+            "vit_h_em": "vit_h_em.pth",
+            "vit_b_em": "vit_b_em.pth",
+        }
     return models
+
+
+def _get_checkpoint(model_name, checkpoint_path):
+    if checkpoint_path is None:
+        checkpoint_url = models().urls[model_name]
+        checkpoint_name = models().download_names.get(model_name, checkpoint_url.split("/")[-1])
+        checkpoint_path = os.path.join(microsam_cachedir()/"models", checkpoint_name)
+
+        # download the checkpoint if necessary
+        if not os.path.exists(checkpoint_path):
+            os.makedirs(microsam_cachedir()/"models", exist_ok=True)
+            pooch.retrieve(url=checkpoint_url, known_hash=models().registry.get(model_name))
+    elif not os.path.exists(checkpoint_path):
+        raise ValueError(f"The checkpoint path {checkpoint_path} that was passed does not exist.")
+    return checkpoint_path
 
 
 def _get_default_device():
@@ -150,6 +176,7 @@ def _available_devices():
 def get_sam_model(
     model_type: str = _DEFAULT_MODEL,
     device: Optional[str] = None,
+    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
 ) -> SamPredictor:
     r"""Get the SegmentAnything Predictor.
@@ -175,14 +202,18 @@ def get_sam_model(
     Returns:
         The segment anything predictor.
     """
-    checkpoint = models().fetch(model_type)
     device = _get_device(device)
+
+    if checkpoint_path is None:
+        checkpoint = models().fetch(model_type)
+    else:
+        checkpoint = _get_checkpoint(model_type, checkpoint_path)
 
     # Our custom model types have a suffix "_...". This suffix needs to be stripped
     # before calling sam_model_registry.
     model_type_ = model_type[:5]
     assert model_type_ in ("vit_h", "vit_b", "vit_l", "vit_t")
-    if model_type == "vit_t" and not VIT_T_SUPPORT:
+    if model_type_ == "vit_t" and not VIT_T_SUPPORT:
         raise RuntimeError(
             "mobile_sam is required for the vit-tiny."
             "You can install it via 'pip install git+https://github.com/ChaoningZhang/MobileSAM.git'"

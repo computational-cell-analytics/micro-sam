@@ -20,21 +20,17 @@ from micro_sam.util import (
 if TYPE_CHECKING:
     import napari
 
-available_devices_list = ["auto"] + _available_devices()
-
 
 @magic_factory(
     pbar={'visible': False, 'max': 0, 'value': 0, 'label': 'working...'},
     call_button="Compute image embeddings",
-    # model={"choices": list(models().urls.keys())},
-    device = {"choices": available_devices_list},
     save_path={"mode": "d"},  # choose a directory
     )
 def embedding_widget(
     pbar: widgets.ProgressBar,
     image: "napari.layers.Image",
     model: Literal[tuple(models().urls.keys())] = _DEFAULT_MODEL,
-    device = "auto",
+    device: Literal[tuple(["auto"] + _available_devices())]= "auto",
     save_path: Optional[Path] = None,  # where embeddings for this image are cached (optional)
 ) -> ImageEmbeddings:
     """Image embedding widget."""
