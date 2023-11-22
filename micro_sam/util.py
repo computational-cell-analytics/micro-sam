@@ -228,7 +228,7 @@ def get_sam_model(
     Returns:
         The segment anything predictor.
     """
-    device = _get_device(device)
+    device = get_device(device)
 
     if checkpoint_path is None:
         checkpoint = models().fetch(model_type)

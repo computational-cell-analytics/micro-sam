@@ -14,7 +14,6 @@ def get_trainable_sam_model(
     device: Optional[Union[str, torch.device]] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     freeze: Optional[List[str]] = None,
-    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
 ) -> TrainableSAM:
     """Get the trainable sam model.
 

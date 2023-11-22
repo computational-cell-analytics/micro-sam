@@ -180,7 +180,7 @@ def main():
     args = parser.parse_args()
 
     model_type = args.model_type
-    device = util._get_device(args.device)
+    device = util.get_device(args.device)
     print("Running benchmarks for", model_type)
     print("with device:", device)
 
