@@ -8,7 +8,7 @@ import zarr
 
 from micro_sam.sam_annotator._state import AnnotatorState
 from micro_sam.sam_annotator._widgets import embedding_widget
-from micro_sam.util import _compute_data_signature, models
+from micro_sam.util import _compute_data_signature
 
 
 # make_napari_viewer is a pytest fixture that returns a napari viewer object
