@@ -1,7 +1,6 @@
-from enum import Enum
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Literal
 
 from magicgui import magic_factory, widgets
 from napari.qt.threading import thread_worker
@@ -13,7 +12,7 @@ from micro_sam.util import (
     ImageEmbeddings,
     get_sam_model,
     precompute_image_embeddings,
-    MODELS,
+    models,
     _DEFAULT_MODEL,
     _available_devices,
 )
@@ -21,20 +20,20 @@ from micro_sam.util import (
 if TYPE_CHECKING:
     import napari
 
-Model = Enum("Model", MODELS.urls)
 available_devices_list = ["auto"] + _available_devices()
 
 
 @magic_factory(
     pbar={'visible': False, 'max': 0, 'value': 0, 'label': 'working...'},
     call_button="Compute image embeddings",
+    # model={"choices": list(models().urls.keys())},
     device = {"choices": available_devices_list},
     save_path={"mode": "d"},  # choose a directory
     )
 def embedding_widget(
     pbar: widgets.ProgressBar,
     image: "napari.layers.Image",
-    model: Model = Model.__getitem__(_DEFAULT_MODEL),
+    model: Literal[tuple(models().urls.keys())] = _DEFAULT_MODEL,
     device = "auto",
     save_path: Optional[Path] = None,  # where embeddings for this image are cached (optional)
 ) -> ImageEmbeddings:
@@ -51,7 +50,7 @@ def embedding_widget(
 
     @thread_worker(connect={'started': pbar.show, 'finished': pbar.hide})
     def _compute_image_embedding(state, image_data, save_path, ndim=None,
-                                 device="auto", model=Model.__getitem__(_DEFAULT_MODEL),
+                                 device="auto", model=_DEFAULT_MODEL,
                                  ):
         # Make sure save directory exists and is an empty directory
         if save_path is not None:
@@ -68,13 +67,14 @@ def embedding_widget(
                         "The user selected 'save_path' is not a zarr array "
                         f"or empty directory: {save_path}"
                     )
+
         # Initialize the model
-        state.predictor  = get_sam_model(device=device, model_type=model.name)
+        state.predictor  = get_sam_model(device=device, model_type=model)
         # Compute the image embeddings
         state.image_embeddings = precompute_image_embeddings(
             predictor = state.predictor,
             input_ = image_data,
-            save_path = str(save_path),
+            save_path = save_path,
             ndim=ndim,
         )
         return state  # returns napari._qt.qthreading.FunctionWorker

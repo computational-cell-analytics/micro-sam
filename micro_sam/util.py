@@ -49,38 +49,57 @@ ImageEmbeddings = Dict[str, Any]
 #
 # Functionality for model download and export
 #
-_CACHE_DIR = os.environ.get('MICROSAM_CACHEDIR') or pooch.os_cache('micro_sam')
-MODELS = pooch.create(
-    path=pooch.os_cache(os.path.join(_CACHE_DIR, "models")),
-    base_url="",
-    registry={
-        # the default segment anything models
-        "vit_h": "a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e",
-        "vit_l": "3adcc4315b642a4d2101128f611684e8734c41232a17c648ed1693702a49a622",
-        "vit_b": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
-        # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
-        "vit_t": "6dbb90523a35330fedd7f1d3dfc66f995213d81b29a5ca8108dbcdd4e37d6c2f",
-        # first version of finetuned models on zenodo
-        "vit_h_lm": "9a65ee0cddc05a98d60469a12a058859c89dc3ea3ba39fed9b90d786253fbf26",
-        "vit_b_lm": "5a59cc4064092d54cd4d92cd967e39168f3760905431e868e474d60fe5464ecd",
-        "vit_h_em": "ae3798a0646c8df1d4db147998a2d37e402ff57d3aa4e571792fbb911d8a979c",
-        "vit_b_em": "c04a714a4e14a110f0eec055a65f7409d54e6bf733164d2933a0ce556f7d6f81",
-    },
-    # Now specify custom URLs for some of the files in the registry.
-    urls={
-        # the default segment anything models
-        "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
-        "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
-        "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
-        # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
-        "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
-        # first version of finetuned models on zenodo
-        "vit_h_lm": "https://zenodo.org/record/8250299/files/vit_h_lm.pth?download=1",
-        "vit_b_lm": "https://zenodo.org/record/8250281/files/vit_b_lm.pth?download=1",
-        "vit_h_em": "https://zenodo.org/record/8250291/files/vit_h_em.pth?download=1",
-        "vit_b_em": "https://zenodo.org/record/8250260/files/vit_b_em.pth?download=1",
-    },
-)
+def microsam_cachedir():
+    """Return the micro-sam cache directory.
+
+    Returns the top level cache directory for micro-sam models and sample data.
+
+    Every time this function is called, we check for any user updates made to
+    the MICROSAM_CACHEDIR os environment variable since the last time.
+    """
+    cache_directory = os.environ.get('MICROSAM_CACHEDIR') or pooch.os_cache('micro_sam')
+    return cache_directory
+
+
+def models():
+    """Return the segmentation models registry.
+
+    We recreate the model registry every time this function is called,
+    so any user changes to the default micro-sam cache directory location
+    are respected.
+    """
+    models = pooch.create(
+        path=pooch.os_cache(os.path.join(microsam_cachedir(), "models")),
+        base_url="",
+        registry={
+            # the default segment anything models
+            "vit_h": "a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e",
+            "vit_l": "3adcc4315b642a4d2101128f611684e8734c41232a17c648ed1693702a49a622",
+            "vit_b": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
+            # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
+            "vit_t": "6dbb90523a35330fedd7f1d3dfc66f995213d81b29a5ca8108dbcdd4e37d6c2f",
+            # first version of finetuned models on zenodo
+            "vit_h_lm": "9a65ee0cddc05a98d60469a12a058859c89dc3ea3ba39fed9b90d786253fbf26",
+            "vit_b_lm": "5a59cc4064092d54cd4d92cd967e39168f3760905431e868e474d60fe5464ecd",
+            "vit_h_em": "ae3798a0646c8df1d4db147998a2d37e402ff57d3aa4e571792fbb911d8a979c",
+            "vit_b_em": "c04a714a4e14a110f0eec055a65f7409d54e6bf733164d2933a0ce556f7d6f81",
+        },
+        # Now specify custom URLs for some of the files in the registry.
+        urls={
+            # the default segment anything models
+            "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
+            "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
+            "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
+            # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
+            "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
+            # first version of finetuned models on zenodo
+            "vit_h_lm": "https://zenodo.org/record/8250299/files/vit_h_lm.pth?download=1",
+            "vit_b_lm": "https://zenodo.org/record/8250281/files/vit_b_lm.pth?download=1",
+            "vit_h_em": "https://zenodo.org/record/8250291/files/vit_h_em.pth?download=1",
+            "vit_b_em": "https://zenodo.org/record/8250260/files/vit_b_em.pth?download=1",
+        },
+    )
+    return models
 
 
 def _get_default_device():
@@ -156,7 +175,7 @@ def get_sam_model(
     Returns:
         The segment anything predictor.
     """
-    checkpoint = MODELS.fetch(model_type)
+    checkpoint = models().fetch(model_type)
     device = _get_device(device)
 
     # Our custom model types have a suffix "_...". This suffix needs to be stripped
@@ -172,7 +191,7 @@ def get_sam_model(
     sam = sam_model_registry[model_type_](checkpoint=checkpoint)
     sam.to(device=device)
     predictor = SamPredictor(sam)
-    predictor.model_type = model_type
+    predictor.model_type = model_type_
     if return_sam:
         return predictor, sam
     return predictor
@@ -527,6 +546,7 @@ def precompute_image_embeddings(
         assert save_path is not None, "Tiled prediction is only supported when the embeddings are saved to file."
 
     if save_path is not None:
+        save_path = str(save_path)
         data_signature = _compute_data_signature(input_)
 
         f = zarr.open(save_path, "a")

@@ -1,3 +1,4 @@
+from enum import Enum
 import json
 import os
 
@@ -7,8 +8,8 @@ import torch
 import zarr
 
 from micro_sam.sam_annotator._state import AnnotatorState
-from micro_sam.sam_annotator._widgets import embedding_widget, Model
-from micro_sam.util import _compute_data_signature
+from micro_sam.sam_annotator._widgets import embedding_widget
+from micro_sam.util import _compute_data_signature, models
 
 
 # make_napari_viewer is a pytest fixture that returns a napari viewer object
@@ -22,7 +23,7 @@ def test_embedding_widget(make_napari_viewer, tmp_path):
     layer = viewer.open_sample('napari', 'camera')[0]
     my_widget = embedding_widget()
     # run image embedding widget
-    worker = my_widget(image=layer, model=Model.vit_t, device="cpu", save_path=tmp_path)
+    worker = my_widget(image=layer, model="vit_t", device="cpu", save_path=tmp_path)
     worker.await_workers()  # blocks until thread worker is finished the embedding
     # Check in-memory state - predictor
     assert isinstance(AnnotatorState().predictor, (SamPredictor, MobileSamPredictor))
