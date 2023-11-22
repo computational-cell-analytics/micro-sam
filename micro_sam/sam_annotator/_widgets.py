@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, Optional, Literal
 
 from magicgui import magic_factory, widgets
 from napari.qt.threading import thread_worker
-import pooch
 import zarr
 from zarr.errors import PathNotFoundError
 
@@ -32,7 +31,7 @@ def embedding_widget(
     pbar: widgets.ProgressBar,
     image: "napari.layers.Image",
     model: Literal[tuple(models().urls.keys())] = _DEFAULT_MODEL,
-    device: Literal[tuple(["auto"] + _available_devices())]= "auto",
+    device: Literal[tuple(["auto"] + _available_devices())] = "auto",
     save_path: Optional[Path] = None,  # where embeddings for this image are cached (optional)
     optional_custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
 ) -> ImageEmbeddings:
@@ -69,17 +68,20 @@ def embedding_widget(
                     )
 
         # Initialize the model
-        state.predictor  = get_sam_model(device=device, model_type=model, checkpoint_path=optional_custom_weights)
+        state.predictor = get_sam_model(device=device, model_name=model, checkpoint_path=optional_custom_weights)
         # Compute the image embeddings
         state.image_embeddings = precompute_image_embeddings(
-            predictor = state.predictor,
-            input_ = image_data,
-            save_path = save_path,
+            predictor=state.predictor,
+            input_=image_data,
+            save_path=save_path,
             ndim=ndim,
         )
         return state  # returns napari._qt.qthreading.FunctionWorker
 
-    return _compute_image_embedding(state, image.data, save_path, ndim=ndim, device=device, model=model, optional_custom_weights=optional_custom_weights)
+    return _compute_image_embedding(
+        state, image.data, save_path, ndim=ndim, device=device, model=model,
+        optional_custom_weights=optional_custom_weights
+    )
 
 
 @magic_factory(

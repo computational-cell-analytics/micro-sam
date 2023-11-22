@@ -96,8 +96,8 @@ def _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1,
 def generate_data_for_model_comparison(
     loader: torch.utils.data.DataLoader,
     output_folder: Union[str, os.PathLike],
-    model_type1: str,
-    model_type2: str,
+    model_name1: str,
+    model_name2: str,
     n_samples: int,
 ) -> None:
     """Generate samples for qualitative model comparison.
@@ -107,10 +107,10 @@ def generate_data_for_model_comparison(
     Args:
         loader: The torch dataloader from which samples are drawn.
         output_folder: The folder where the samples will be saved.
-        model_type1: The first model to use for comparison.
-            The value needs to be a valid model_type for `micro_sam.util.get_sam_model`.
-        model_type1: The second model to use for comparison.
-            The value needs to be a valid model_type for `micro_sam.util.get_sam_model`.
+        model_name1: The first model to use for comparison.
+            The value needs to be a valid model_name for `micro_sam.util.get_sam_model`.
+        model_name1: The second model to use for comparison.
+            The value needs to be a valid model_name for `micro_sam.util.get_sam_model`.
         n_samples: The number of samples to draw from the dataloader.
     """
     prompt_generator = PointAndBoxPromptGenerator(
@@ -120,8 +120,8 @@ def generate_data_for_model_comparison(
         get_point_prompts=True,
         get_box_prompts=True,
     )
-    predictor1 = util.get_sam_model(model_type=model_type1)
-    predictor2 = util.get_sam_model(model_type=model_type2)
+    predictor1 = util.get_sam_model(model_name=model_name1)
+    predictor2 = util.get_sam_model(model_name=model_name2)
     _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1, predictor2, output_folder)
 
 

@@ -21,13 +21,13 @@ def track_ctc_data(use_finetuned_model):
 
     if use_finetuned_model:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-ctc-vit_h_lm.zarr")
-        model_type = "vit_h_lm"
+        model_name = "vit_h_lm"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-ctc.zarr")
-        model_type = "vit_h"
+        model_name = "vit_h"
 
     # start the annotator with cached embeddings
-    annotator_tracking(timeseries, embedding_path=embedding_path, show_embeddings=False, model_type=model_type)
+    annotator_tracking(timeseries, embedding_path=embedding_path, show_embeddings=False, model_name=model_name)
 
 
 def main():

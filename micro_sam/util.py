@@ -8,13 +8,11 @@ from pathlib import Path
 import pickle
 import warnings
 from collections import OrderedDict
-from shutil import copyfileobj
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 
 import imageio.v3 as imageio
 import numpy as np
 import pooch
-import requests
 import torch
 import vigra
 import zarr
@@ -41,6 +39,10 @@ except ImportError:
 # currently set to the default vit_h
 _DEFAULT_MODEL = "vit_h"
 
+# The valid model types. Each type corresponds to the architecture of the
+# vision transformer used within SAM.
+_MODEL_TYPES = ("vit_h", "vit_b", "vit_l", "vit_t")
+
 
 # TODO define the proper type for image embeddings
 ImageEmbeddings = Dict[str, Any]
@@ -56,9 +58,11 @@ def get_cache_directory() -> None:
     cache_directory = Path(os.environ.get('MICROSAM_CACHEDIR', default_cache_directory))
     return cache_directory
 
+
 #
 # Functionality for model download and export
 #
+
 def microsam_cachedir():
     """Return the micro-sam cache directory.
 
@@ -109,33 +113,7 @@ def models():
             "vit_b_em": "https://zenodo.org/record/8250260/files/vit_b_em.pth?download=1",
         },
     )
-    # This extra dictionary is needed for _get_checkpoint to download weights from a specific checkpoint
-    models.download_names={
-            "vit_h": "vit_h.pth",
-            "vit_l": "vit_l.pth",
-            "vit_b": "vit_b.pth",
-            "vit_t": "vit_t_mobile_sam.pth",
-            "vit_h_lm": "vit_h_lm.pth",
-            "vit_b_lm": "vit_b_lm.pth",
-            "vit_h_em": "vit_h_em.pth",
-            "vit_b_em": "vit_b_em.pth",
-        }
     return models
-
-
-def _get_checkpoint(model_name, checkpoint_path):
-    if checkpoint_path is None:
-        checkpoint_url = models().urls[model_name]
-        checkpoint_name = models().download_names.get(model_name, checkpoint_url.split("/")[-1])
-        checkpoint_path = os.path.join(microsam_cachedir()/"models", checkpoint_name)
-
-        # download the checkpoint if necessary
-        if not os.path.exists(checkpoint_path):
-            os.makedirs(microsam_cachedir()/"models", exist_ok=True)
-            pooch.retrieve(url=checkpoint_url, known_hash=models().registry.get(model_name))
-    elif not os.path.exists(checkpoint_path):
-        raise ValueError(f"The checkpoint path {checkpoint_path} that was passed does not exist.")
-    return checkpoint_path
 
 
 def _get_default_device():
@@ -200,16 +178,23 @@ def _available_devices():
 
 
 def get_sam_model(
-    model_type: str = _DEFAULT_MODEL,
+    model_name: str = _DEFAULT_MODEL,
     device: Optional[Union[str, torch.device]] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
 ) -> SamPredictor:
     r"""Get the SegmentAnything Predictor.
 
-    This function will download the required model checkpoint or load it from file if it
-    was already downloaded.
-    This location can be changed by setting the environment variable: MICROSAM_CACHEDIR.
+    This function will download the required model or load it from the cached weight file.
+    This location of the cache can be changed by setting the environment variable: MICROSAM_CACHEDIR.
+    The name of the requested model can be set via `model_name`.
+    See https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models
+    for an overview of the available models
+
+    Alternatively this function can also load a model from weights stored in a local filepath.
+    The corresponding file path is given via `checkpoint_path`. In this case `model_name`
+    must be given as the matching encoder architecture, e.g. "vit_b" if the weights are for
+    a SAM model with vit_b encoder.
 
     By default the models are downloaded to a folder named 'micro_sam/models'
     inside your default cache directory, eg:
@@ -220,35 +205,53 @@ def get_sam_model(
     https://www.fatiando.org/pooch/latest/api/generated/pooch.os_cache.html
 
     Args:
-        model_type: The SegmentAnything model to use. Will use the standard vit_h model by default.
+        model_name: The SegmentAnything model to use. Will use the standard vit_h model by default.
+            To get a list of all available model names you can call `get_model_names`.
         device: The device for the model. If none is given will use GPU if available.
-        checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
+        checkpoint_path: The path to a file with weights that should be used instead of using the
+            weights corresponding to `model_name`. If given, `model_name` must match the architecture
+            corresponding to the weight file. E.g. if you use weights for SAM with vit_b encoder
+            then `model_name` must be given as "vit_b".
         return_sam: Return the sam model object as well as the predictor.
 
     Returns:
         The segment anything predictor.
     """
-    device = _get_device(device)
+    device = get_device(device)
 
+    # We support passing a local filepath to a checkpoint.
+    # In this case we do not download any weights but just use the local weight file,
+    # as it is, without copying it over anywhere or checking it's hashes.
+
+    # checkpoint_path has not been passed, we download a known model and derive the correct
+    # URL from the model_name. If the model_name is invalid pooch will raise an error.
     if checkpoint_path is None:
-        checkpoint = models().fetch(model_type)
+        model_registry = models()
+        checkpoint = model_registry.fetch(model_name)
+    # checkpoint_path has been passed, we use it instead of downloading a model.
     else:
-        checkpoint = _get_checkpoint(model_type, checkpoint_path)
+        # Check if the file exists and raise an error otherwise.
+        # We can't check any hashes here, and we don't check if the file is actually a valid weight file.
+        # (If it isn't the model creation will fail below.)
+        if not os.path.exists(checkpoint_path):
+            raise ValueError(f"Checkpoint at {checkpoint_path} could not be found.")
+        checkpoint = checkpoint_path
 
-    # Our custom model types have a suffix "_...". This suffix needs to be stripped
+    # Our fine-tuned model types have a suffix "_...". This suffix needs to be stripped
     # before calling sam_model_registry.
-    model_type_ = model_type[:5]
-    assert model_type_ in ("vit_h", "vit_b", "vit_l", "vit_t")
-    if model_type_ == "vit_t" and not VIT_T_SUPPORT:
+    model_type = model_name[:5]
+    if model_type not in _MODEL_TYPES:
+        raise ValueError(f"Invalid model_type: {model_type}. Expect one of {_MODEL_TYPES}")
+    if model_type == "vit_t" and not VIT_T_SUPPORT:
         raise RuntimeError(
             "mobile_sam is required for the vit-tiny."
             "You can install it via 'pip install git+https://github.com/ChaoningZhang/MobileSAM.git'"
         )
 
-    sam = sam_model_registry[model_type_](checkpoint=checkpoint)
+    sam = sam_model_registry[model_type](checkpoint=checkpoint)
     sam.to(device=device)
     predictor = SamPredictor(sam)
-    predictor.model_type = model_type_
+    predictor.model_type = model_type
     if return_sam:
         return predictor, sam
     return predictor
@@ -281,7 +284,7 @@ def get_custom_sam_model(
 
     Args:
         checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
-        model_type: The SegmentAnything model to use.
+        model_type: The SegmentAnything model_type for the given checkpoint.
         device: The device for the model. If none is given will use GPU if available.
         return_sam: Return the sam model object as well as the predictor.
         return_state: Return the full state of the checkpoint in addition to the predictor.
@@ -331,7 +334,7 @@ def export_custom_sam_model(
 
     Args:
         checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
-        model_type: The SegmentAnything model type to use (vit_h, vit_b or vit_l).
+        model_type: The SegmentAnything model type corresponding to the checkpoint (vit_h, vit_b, vit_l or vit_t).
         save_path: Where to save the exported model.
     """
     _, state = get_custom_sam_model(
@@ -346,7 +349,9 @@ def export_custom_sam_model(
 
 
 def get_model_names() -> Iterable:
-    return _MODEL_URLS.keys()
+    model_registry = models()
+    model_names = model_registry.registry.keys()
+    return model_names
 
 
 #

@@ -450,7 +450,7 @@ def _initialize_parser(description, with_segmentation_result=True, with_show_emb
             help="Visualize the embeddings computed by SegmentAnything. This can be helpful for debugging."
         )
     parser.add_argument(
-        "--model_type", default=util._DEFAULT_MODEL,
+        "--model_name", default=util._DEFAULT_MODEL,
         help=f"The segment anything model that will be used, one of {available_models}."
     )
     parser.add_argument(

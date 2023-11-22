@@ -10,16 +10,17 @@ from .trainable_sam import TrainableSAM
 
 
 def get_trainable_sam_model(
-    model_type: str = "vit_h",
+    model_name: str = "vit_h",
     device: Optional[Union[str, torch.device]] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     freeze: Optional[List[str]] = None,
-    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
 ) -> TrainableSAM:
     """Get the trainable sam model.
 
     Args:
-        model_type: The type of the segment anything model.
+        model_name: The segment anything model that should be finetuned.
+            The weights of this model will be used for initialization, unless a
+            custom weight file is passed via `checkpoint_path`.
         device: The device to use for training.
         checkpoint_path: Path to a custom checkpoint from which to load the model weights.
         freeze: Specify parts of the model that should be frozen, namely: image_encoder, prompt_encoder and mask_decoder
@@ -30,7 +31,7 @@ def get_trainable_sam_model(
     """
     # set the device here so that the correct one is passed to TrainableSAM below
     device = get_device(device)
-    _, sam = get_sam_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path, return_sam=True)
+    _, sam = get_sam_model(model_name=model_name, device=device, checkpoint_path=checkpoint_path, return_sam=True)
 
     # freeze components of the model if freeze was passed
     # ideally we would want to add components in such a way that:

@@ -34,7 +34,7 @@ class TestUtil(unittest.TestCase):
 
         # check predictor with checkpoint path (using the cached model)
         checkpoint_path = os.path.join(
-            get_cache_directory(), "models", "vit_t_mobile_sam.pth" if VIT_T_SUPPORT else "sam_vit_b_01ec64.pth"
+            get_cache_directory(), "models", "vit_t" if VIT_T_SUPPORT else "vit_b"
         )
         predictor = get_sam_model(model_type=self.model_type, checkpoint_path=checkpoint_path)
         check_predictor(predictor)

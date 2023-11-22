@@ -387,7 +387,7 @@ def annotator_tracking(
     embedding_path: Optional[str] = None,
     show_embeddings: bool = False,
     tracking_result: Optional[str] = None,
-    model_type: str = util._DEFAULT_MODEL,
+    model_name: str = util._DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
@@ -404,14 +404,14 @@ def annotator_tracking(
         tracking_result: An initial tracking result to load.
             This can be used to correct tracking with Segment Anything or to save and load progress.
             The segmentation will be loaded as the 'committed_tracks' layer.
-        model_type: The Segment Anything model to use. For details on the available models check out
+        model_name: The Segment Anything model to use. For details on the available models check out
             https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
         tile_shape: Shape of tiles for tiled embedding prediction.
             If `None` then the whole image is passed to Segment Anything.
         halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
         predictor: The Segment Anything model. Passing this enables using fully custom models.
-            If you pass `predictor` then `model_type` will be ignored.
+            If you pass `predictor` then `model_name` will be ignored.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -424,7 +424,7 @@ def annotator_tracking(
     state = AnnotatorState()
 
     if predictor is None:
-        state.predictor = util.get_sam_model(model_type=model_type)
+        state.predictor = util.get_sam_model(model_name=model_name)
     else:
         state.predictor = predictor
     state.image_embeddings = util.precompute_image_embeddings(
@@ -587,6 +587,6 @@ def main():
 
     annotator_tracking(
         raw, embedding_path=args.embedding_path, show_embeddings=args.show_embeddings,
-        tracking_result=tracking_result, model_type=args.model_type,
+        tracking_result=tracking_result, model_name=args.model_name,
         tile_shape=args.tile_shape, halo=args.halo,
     )

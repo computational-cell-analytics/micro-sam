@@ -20,12 +20,12 @@ def livecell_annotator(use_finetuned_model):
 
     if use_finetuned_model:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-livecell-vit_h_lm.zarr")
-        model_type = "vit_h_lm"
+        model_name = "vit_h_lm"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-livecell.zarr")
-        model_type = "vit_h"
+        model_name = "vit_h"
 
-    annotator_2d(image, embedding_path, show_embeddings=False, model_type=model_type)
+    annotator_2d(image, embedding_path, show_embeddings=False, model_name=model_name)
 
 
 def hela_2d_annotator(use_finetuned_model):
@@ -36,12 +36,12 @@ def hela_2d_annotator(use_finetuned_model):
 
     if use_finetuned_model:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-hela2d-vit_h_lm.zarr")
-        model_type = "vit_h_lm"
+        model_name = "vit_h_lm"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-hela2d.zarr")
-        model_type = "vit_h"
+        model_name = "vit_h"
 
-    annotator_2d(image, embedding_path, show_embeddings=False, model_type=model_type, precompute_amg_state=True)
+    annotator_2d(image, embedding_path, show_embeddings=False, model_name=model_name, precompute_amg_state=True)
 
 
 def wholeslide_annotator(use_finetuned_model):
@@ -55,12 +55,12 @@ def wholeslide_annotator(use_finetuned_model):
 
     if use_finetuned_model:
         embedding_path = os.path.join(EMBEDDING_CACHE, "whole-slide-embeddings-vit_h_lm.zarr")
-        model_type = "vit_h_lm"
+        model_name = "vit_h_lm"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "whole-slide-embeddings.zarr")
-        model_type = "vit_h"
+        model_name = "vit_h"
 
-    annotator_2d(image, embedding_path, tile_shape=(1024, 1024), halo=(256, 256), model_type=model_type)
+    annotator_2d(image, embedding_path, tile_shape=(1024, 1024), halo=(256, 256), model_name=model_name)
 
 
 def main():
