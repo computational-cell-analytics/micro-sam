@@ -124,9 +124,9 @@ def precompute_state(
             it can be given to provide a glob pattern to subselect files from the folder.
         output_path: The output path were the embeddings and other state will be saved.
         model_type: The SegmentAnything model to use. Will use the standard vit_h model by default.
-            and can be used to provide a glob pattern if the input is a folder with image files.
         checkpoint_path: Path to a checkpoint for a custom model.
         key: The key to the input file. This is needed for contaner files (e.g. hdf5 or zarr)
+            and can be used to provide a glob pattern if the input is a folder with image files.
         ndim: The dimensionality of the data.
         tile_shape: Shape of tiles for tiled prediction. By default prediction is run without tiling.
         halo: Overlap of the tiles for tiled prediction.
