@@ -20,7 +20,7 @@ class TestPromptBasedSegmentation(unittest.TestCase):
 
     @staticmethod
     def _get_model(image, model_type):
-        predictor = util.get_sam_model(model_type=model_type)
+        predictor = util.get_sam_model(model_type=model_type, device=util.get_device(None))
         image_embeddings = util.precompute_image_embeddings(predictor, image)
         util.set_precomputed(predictor, image_embeddings)
         return predictor

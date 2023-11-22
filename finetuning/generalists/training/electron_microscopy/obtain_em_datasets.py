@@ -7,6 +7,7 @@ from skimage.measure import label
 from skimage.segmentation import watershed
 
 from torch_em import get_data_loader
+from torch_em.transform.raw import standardize
 from torch_em.transform.label import label_consecutive
 from torch_em.data import ConcatDataset, MinInstanceSampler, datasets
 
@@ -20,8 +21,8 @@ def axondeepseg_label_trafo(labels):
     return seg
 
 
-def raw_trafo_for_padding(raw):
-    desired_shape = (512, 512)
+def raw_trafo_for_padding(raw, desired_shape=(512, 512)):
+    raw = standardize(raw)
     tmp_ddim = (desired_shape[0] - raw.shape[0], desired_shape[1] - raw.shape[1])
     ddim = (tmp_ddim[0] / 2, tmp_ddim[1] / 2)
     raw = np.pad(raw,
@@ -31,8 +32,7 @@ def raw_trafo_for_padding(raw):
     return raw
 
 
-def label_trafo_for_padding(labels):
-    desired_shape = (512, 512)
+def label_trafo_for_padding(labels, desired_shape=(512, 512)):
     labels = label(labels)
     labels = label_consecutive(labels)
     tmp_ddim = (desired_shape[0] - labels.shape[0], desired_shape[1] - labels.shape[1])

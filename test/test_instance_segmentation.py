@@ -39,7 +39,7 @@ class TestInstanceSegmentation(unittest.TestCase):
 
     @staticmethod
     def _get_model(image, model_type):
-        predictor = util.get_sam_model(model_type=model_type)
+        predictor = util.get_sam_model(model_type=model_type, device=util.get_device(None))
         image_embeddings = util.precompute_image_embeddings(predictor, image)
         return predictor, image_embeddings
 
@@ -91,7 +91,7 @@ class TestInstanceSegmentation(unittest.TestCase):
         from micro_sam.instance_segmentation import TiledAutomaticMaskGenerator, mask_data_to_segmentation
 
         # Release all unoccupied cached memory, tiling requires a lot of memory
-        device = util._get_device(None)
+        device = util.get_device(None)
         if device == "cuda":
             import torch.cuda
             torch.cuda.empty_cache()
@@ -158,7 +158,7 @@ class TestInstanceSegmentation(unittest.TestCase):
         from micro_sam.instance_segmentation import _TiledEmbeddingMaskGenerator
 
         # Release all unoccupied cached memory, tiling requires a lot of memory
-        device = util._get_device(None)
+        device = util.get_device(None)
         if device == "cuda":
             import torch.cuda
             torch.cuda.empty_cache()

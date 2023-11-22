@@ -9,6 +9,7 @@ from .automatic_mask_generation import (
 from .evaluation import run_evaluation
 from .inference import (
     get_predictor,
+    run_inference_with_iterative_prompting,
     run_inference_with_prompts,
     precompute_all_embeddings,
     precompute_all_prompts,

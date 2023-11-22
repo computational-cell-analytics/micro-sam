@@ -4,6 +4,7 @@ Helper functions for downloading Segment Anything models and predicting image em
 
 import hashlib
 import os
+from pathlib import Path
 import pickle
 import warnings
 from collections import OrderedDict
@@ -45,6 +46,15 @@ _DEFAULT_MODEL = "vit_h"
 ImageEmbeddings = Dict[str, Any]
 """@private"""
 
+
+def get_cache_directory() -> None:
+    """Get micro-sam cache directory location.
+
+    Users can set the MICROSAM_CACHEDIR environment variable for a custom cache directory.
+    """
+    default_cache_directory = os.path.expanduser(pooch.os_cache('micro_sam'))
+    cache_directory = Path(os.environ.get('MICROSAM_CACHEDIR', default_cache_directory))
+    return cache_directory
 
 #
 # Functionality for model download and export
@@ -129,6 +139,10 @@ def _get_checkpoint(model_name, checkpoint_path):
 
 
 def _get_default_device():
+    # check that we're in CI and use the CPU if we are
+    # otherwise the tests may run out of memory on MAC if MPS is used.
+    if os.getenv("GITHUB_ACTIONS") == "true":
+        return "cpu"
     # Use cuda enabled gpu if it's available.
     if torch.cuda.is_available():
         device = "cuda"
@@ -143,17 +157,29 @@ def _get_default_device():
     return device
 
 
-def _get_device(device=None):
+def get_device(device: Optional[Union[str, torch.device]] = None) -> Union[str, torch.device]:
+    """Get the torch device.
+
+    If no device is passed the default device for your system is used.
+    Else it will be checked if the device you have passed is supported.
+
+    Args:
+        device: The input device.
+
+    Returns:
+        The device.
+    """
     if device is None or device == "auto":
         device = _get_default_device()
     else:
-        if device.lower() == "cuda":
+        device_type = device if isinstance(device, str) else device.type
+        if device_type.lower() == "cuda":
             if not torch.cuda.is_available():
                 raise RuntimeError("PyTorch CUDA backend is not available.")
-        elif device.lower() == "mps":
+        elif device_type.lower() == "mps":
             if not (torch.backends.mps.is_available() and torch.backends.mps.is_built()):
                 raise RuntimeError("PyTorch MPS backend is not available or is not built correctly.")
-        elif device.lower() == "cpu":
+        elif device_type.lower() == "cpu":
             pass  # cpu is always available
         else:
             raise RuntimeError(f"Unsupported device: {device}\n"
@@ -165,7 +191,7 @@ def _available_devices():
     available_devices = []
     for i in ["cuda", "mps", "cpu"]:
         try:
-            device = _get_device(i)
+            device = get_device(i)
         except RuntimeError:
             pass
         else:
@@ -175,7 +201,7 @@ def _available_devices():
 
 def get_sam_model(
     model_type: str = _DEFAULT_MODEL,
-    device: Optional[str] = None,
+    device: Optional[Union[str, torch.device]] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
 ) -> SamPredictor:
@@ -194,8 +220,8 @@ def get_sam_model(
     https://www.fatiando.org/pooch/latest/api/generated/pooch.os_cache.html
 
     Args:
-        device: The device for the model. If none is given will use GPU if available.
         model_type: The SegmentAnything model to use. Will use the standard vit_h model by default.
+        device: The device for the model. If none is given will use GPU if available.
         checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
         return_sam: Return the sam model object as well as the predictor.
 
@@ -244,7 +270,7 @@ class _CustomUnpickler(pickle.Unpickler):
 def get_custom_sam_model(
     checkpoint_path: Union[str, os.PathLike],
     model_type: str = "vit_h",
-    device: Optional[str] = None,
+    device: Optional[Union[str, torch.device]] = None,
     return_sam: bool = False,
     return_state: bool = False,
 ) -> SamPredictor:
@@ -255,8 +281,8 @@ def get_custom_sam_model(
 
     Args:
         checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
-        device: The device for the model. If none is given will use GPU if available.
         model_type: The SegmentAnything model to use.
+        device: The device for the model. If none is given will use GPU if available.
         return_sam: Return the sam model object as well as the predictor.
         return_state: Return the full state of the checkpoint in addition to the predictor.
 
@@ -269,7 +295,7 @@ def get_custom_sam_model(
     custom_pickle = pickle
     custom_pickle.Unpickler = _CustomUnpickler
 
-    device = _get_device(device)
+    device = get_device(device)
     sam = sam_model_registry[model_type]()
 
     # load the model state, ignoring any attributes that can't be found by pickle

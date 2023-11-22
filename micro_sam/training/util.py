@@ -2,15 +2,17 @@ import os
 from typing import List, Optional, Union
 
 import numpy as np
+import torch
 
 from ..prompt_generators import PointAndBoxPromptGenerator
-from ..util import get_centers_and_bounding_boxes, get_sam_model, segmentation_to_one_hot, _get_device
+from ..util import get_centers_and_bounding_boxes, get_sam_model, segmentation_to_one_hot, get_device
 from .trainable_sam import TrainableSAM
 
 
 def get_trainable_sam_model(
     model_type: str = "vit_h",
-    device: Optional[str] = None,
+    device: Optional[Union[str, torch.device]] = None,
+    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     freeze: Optional[List[str]] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
 ) -> TrainableSAM:
@@ -18,16 +20,16 @@ def get_trainable_sam_model(
 
     Args:
         model_type: The type of the segment anything model.
+        device: The device to use for training.
         checkpoint_path: Path to a custom checkpoint from which to load the model weights.
         freeze: Specify parts of the model that should be frozen, namely: image_encoder, prompt_encoder and mask_decoder
             By default nothing is frozen and the full model is updated.
-        device: The device to use for training.
 
     Returns:
         The trainable segment anything model.
     """
     # set the device here so that the correct one is passed to TrainableSAM below
-    device = _get_device(device)
+    device = get_device(device)
     _, sam = get_sam_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path, return_sam=True)
 
     # freeze components of the model if freeze was passed
