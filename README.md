@@ -49,7 +49,7 @@ If you are using this repository in your research please cite
 
 There are a few other napari plugins build around Segment Anything:
 - https://github.com/MIC-DKFZ/napari-sam (2d and 3d support)
-- https://github.com/JoOkuma/napari-segment-anything (only 2d support)
+- https://github.com/royerlab/napari-segment-anything (only 2d support)
 - https://github.com/hiroalchem/napari-SAM4IS
 
 Compared to these we support more applications (2d, 3d and tracking), and provide finetuning methods and finetuned models for microscopy data.
