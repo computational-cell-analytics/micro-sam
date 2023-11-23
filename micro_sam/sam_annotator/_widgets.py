@@ -1,11 +1,9 @@
-from enum import Enum
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Literal
 
 from magicgui import magic_factory, widgets
 from napari.qt.threading import thread_worker
-import pooch
 import zarr
 from zarr.errors import PathNotFoundError
 
@@ -14,7 +12,7 @@ from micro_sam.util import (
     ImageEmbeddings,
     get_sam_model,
     precompute_image_embeddings,
-    _MODEL_URLS,
+    models,
     _DEFAULT_MODEL,
     _available_devices,
     get_cache_directory,
@@ -23,21 +21,17 @@ from micro_sam.util import (
 if TYPE_CHECKING:
     import napari
 
-Model = Enum("Model", _MODEL_URLS)
-available_devices_list = ["auto"] + _available_devices()
-
 
 @magic_factory(
     pbar={'visible': False, 'max': 0, 'value': 0, 'label': 'working...'},
     call_button="Compute image embeddings",
-    device = {"choices": available_devices_list},
     save_path={"mode": "d"},  # choose a directory
     )
 def embedding_widget(
     pbar: widgets.ProgressBar,
     image: "napari.layers.Image",
-    model: Model = Model.__getitem__(_DEFAULT_MODEL),
-    device = "auto",
+    model: Literal[tuple(models().urls.keys())] = _DEFAULT_MODEL,
+    device: Literal[tuple(["auto"] + _available_devices())] = "auto",
     save_path: Optional[Path] = None,  # where embeddings for this image are cached (optional)
     optional_custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
 ) -> ImageEmbeddings:
@@ -54,8 +48,9 @@ def embedding_widget(
 
     @thread_worker(connect={'started': pbar.show, 'finished': pbar.hide})
     def _compute_image_embedding(state, image_data, save_path, ndim=None,
-                                 device="auto", model=Model.__getitem__(_DEFAULT_MODEL),
-                                 optional_custom_weights=None):
+                                 device="auto", model=_DEFAULT_MODEL,
+                                 optional_custom_weights=None,
+                                 ):
         # Make sure save directory exists and is an empty directory
         if save_path is not None:
             os.makedirs(save_path, exist_ok=True)
@@ -71,19 +66,22 @@ def embedding_widget(
                         "The user selected 'save_path' is not a zarr array "
                         f"or empty directory: {save_path}"
                     )
+
         # Initialize the model
-        state.predictor  = get_sam_model(device=device, model_type=model.name,
-                                         checkpoint_path=optional_custom_weights)
+        state.predictor = get_sam_model(device=device, model_type=model, checkpoint_path=optional_custom_weights)
         # Compute the image embeddings
         state.image_embeddings = precompute_image_embeddings(
-            predictor = state.predictor,
-            input_ = image_data,
-            save_path = str(save_path),
+            predictor=state.predictor,
+            input_=image_data,
+            save_path=save_path,
             ndim=ndim,
         )
         return state  # returns napari._qt.qthreading.FunctionWorker
 
-    return _compute_image_embedding(state, image.data, save_path, ndim=ndim, device=device, model=model, optional_custom_weights=optional_custom_weights)
+    return _compute_image_embedding(
+        state, image.data, save_path, ndim=ndim, device=device, model=model,
+        optional_custom_weights=optional_custom_weights
+    )
 
 
 @magic_factory(
