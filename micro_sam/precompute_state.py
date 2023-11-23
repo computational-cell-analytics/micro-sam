@@ -107,7 +107,7 @@ def _precompute_state_for_files(
 def precompute_state(
     input_path: Union[os.PathLike, str],
     output_path: Union[os.PathLike, str],
-    model_name: str = util._DEFAULT_MODEL,
+    model_type: str = util._DEFAULT_MODEL,
     checkpoint_path: Optional[Union[os.PathLike, str]] = None,
     key: Optional[str] = None,
     ndim: Optional[int] = None,
@@ -123,7 +123,7 @@ def precompute_state(
             In case of a container file the argument `key` must be given. In case of a folder
             it can be given to provide a glob pattern to subselect files from the folder.
         output_path: The output path were the embeddings and other state will be saved.
-        model_name: The SegmentAnything model to use. Will use the standard vit_h model by default.
+        model_type: The SegmentAnything model to use. Will use the standard vit_h model by default.
         checkpoint_path: Path to a checkpoint for a custom model.
         key: The key to the input file. This is needed for contaner files (e.g. hdf5 or zarr)
             and can be used to provide a glob pattern if the input is a folder with image files.
@@ -133,7 +133,7 @@ def precompute_state(
         precompute_amg_state: Whether to precompute the state for automatic instance segmentation
             in addition to the image embeddings.
     """
-    predictor = util.get_sam_model(model_name=model_name, checkpoint_path=checkpoint_path)
+    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path)
     # check if we precompute the state for a single file or for a folder with image files
     if os.path.isdir(input_path) and Path(input_path).suffix not in (".n5", ".zarr"):
         pattern = "*" if key is None else key
@@ -158,7 +158,7 @@ def main():
     parser = argparse.ArgumentParser(description="Compute the embeddings for an image.")
     parser.add_argument("-i", "--input_path", required=True)
     parser.add_argument("-o", "--output_path", required=True)
-    parser.add_argument("-m", "--model_name", default=util._DEFAULT_MODEL)
+    parser.add_argument("-m", "--model_type", default=util._DEFAULT_MODEL)
     parser.add_argument("-c", "--checkpoint_path", default=None)
     parser.add_argument("-k", "--key")
     parser.add_argument(
@@ -172,7 +172,7 @@ def main():
 
     args = parser.parse_args()
     precompute_state(
-        args.input_path, args.output_path, args.model_name, args.checkpoint_path,
+        args.input_path, args.output_path, args.model_type, args.checkpoint_path,
         key=args.key, tile_shape=args.tile_shape, halo=args.halo, ndim=args.ndim,
         precompute_amg_state=args.precompute_amg_state,
     )

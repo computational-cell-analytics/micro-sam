@@ -15,15 +15,15 @@ def series_annotation(use_finetuned_model):
 
     if use_finetuned_model:
         embedding_path = os.path.join(EMBEDDING_CACHE, "series-embeddings-vit_h_lm")
-        model_name = "vit_h_lm"
+        model_type = "vit_h_lm"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "series-embeddings")
-        model_name = "vit_h"
+        model_type = "vit_h"
 
     example_data = fetch_image_series_example_data(DATA_CACHE)
     image_folder_annotator(
         example_data, "./series-segmentation-result", embedding_path=embedding_path,
-        pattern="*.tif", model_name=model_name,
+        pattern="*.tif", model_type=model_type,
         precompute_amg_state=True,
     )
 

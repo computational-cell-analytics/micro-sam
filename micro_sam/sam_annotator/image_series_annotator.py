@@ -45,7 +45,7 @@ def image_series_annotator(
     next_image_id = 0
 
     if predictor is None:
-        predictor = util.get_sam_model(model_name=kwargs.get("model_name", util._DEFAULT_MODEL))
+        predictor = util.get_sam_model(model_type=kwargs.get("model_type", util._DEFAULT_MODEL))
     if embedding_path is None:
         embedding_paths = None
     else:

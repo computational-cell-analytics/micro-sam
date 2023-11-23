@@ -178,7 +178,7 @@ def _available_devices():
 
 
 def get_sam_model(
-    model_name: str = _DEFAULT_MODEL,
+    model_type: str = _DEFAULT_MODEL,
     device: Optional[Union[str, torch.device]] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
@@ -187,12 +187,12 @@ def get_sam_model(
 
     This function will download the required model or load it from the cached weight file.
     This location of the cache can be changed by setting the environment variable: MICROSAM_CACHEDIR.
-    The name of the requested model can be set via `model_name`.
+    The name of the requested model can be set via `model_type`.
     See https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models
     for an overview of the available models
 
     Alternatively this function can also load a model from weights stored in a local filepath.
-    The corresponding file path is given via `checkpoint_path`. In this case `model_name`
+    The corresponding file path is given via `checkpoint_path`. In this case `model_type`
     must be given as the matching encoder architecture, e.g. "vit_b" if the weights are for
     a SAM model with vit_b encoder.
 
@@ -205,13 +205,13 @@ def get_sam_model(
     https://www.fatiando.org/pooch/latest/api/generated/pooch.os_cache.html
 
     Args:
-        model_name: The SegmentAnything model to use. Will use the standard vit_h model by default.
+        model_type: The SegmentAnything model to use. Will use the standard vit_h model by default.
             To get a list of all available model names you can call `get_model_names`.
         device: The device for the model. If none is given will use GPU if available.
         checkpoint_path: The path to a file with weights that should be used instead of using the
-            weights corresponding to `model_name`. If given, `model_name` must match the architecture
+            weights corresponding to `model_type`. If given, `model_type` must match the architecture
             corresponding to the weight file. E.g. if you use weights for SAM with vit_b encoder
-            then `model_name` must be given as "vit_b".
+            then `model_type` must be given as "vit_b".
         return_sam: Return the sam model object as well as the predictor.
 
     Returns:
@@ -224,10 +224,10 @@ def get_sam_model(
     # as it is, without copying it over anywhere or checking it's hashes.
 
     # checkpoint_path has not been passed, we download a known model and derive the correct
-    # URL from the model_name. If the model_name is invalid pooch will raise an error.
+    # URL from the model_type. If the model_type is invalid pooch will raise an error.
     if checkpoint_path is None:
         model_registry = models()
-        checkpoint = model_registry.fetch(model_name)
+        checkpoint = model_registry.fetch(model_type)
     # checkpoint_path has been passed, we use it instead of downloading a model.
     else:
         # Check if the file exists and raise an error otherwise.
@@ -239,19 +239,19 @@ def get_sam_model(
 
     # Our fine-tuned model types have a suffix "_...". This suffix needs to be stripped
     # before calling sam_model_registry.
-    model_type = model_name[:5]
-    if model_type not in _MODEL_TYPES:
-        raise ValueError(f"Invalid model_type: {model_type}. Expect one of {_MODEL_TYPES}")
-    if model_type == "vit_t" and not VIT_T_SUPPORT:
+    abbreviated_model_type = model_type[:5]
+    if abbreviated_model_type not in _MODEL_TYPES:
+        raise ValueError(f"Invalid model_type: {abbreviated_model_type}. Expect one of {_MODEL_TYPES}")
+    if abbreviated_model_type == "vit_t" and not VIT_T_SUPPORT:
         raise RuntimeError(
             "mobile_sam is required for the vit-tiny."
             "You can install it via 'pip install git+https://github.com/ChaoningZhang/MobileSAM.git'"
         )
 
-    sam = sam_model_registry[model_type](checkpoint=checkpoint)
+    sam = sam_model_registry[abbreviated_model_type](checkpoint=checkpoint)
     sam.to(device=device)
     predictor = SamPredictor(sam)
-    predictor.model_type = model_type
+    predictor.model_type = abbreviated_model_type
     if return_sam:
         return predictor, sam
     return predictor

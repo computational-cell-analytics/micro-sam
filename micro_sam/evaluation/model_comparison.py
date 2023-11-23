@@ -120,8 +120,8 @@ def generate_data_for_model_comparison(
         get_point_prompts=True,
         get_box_prompts=True,
     )
-    predictor1 = util.get_sam_model(model_name=model_name1)
-    predictor2 = util.get_sam_model(model_name=model_name2)
+    predictor1 = util.get_sam_model(model_type=model_name1)
+    predictor2 = util.get_sam_model(model_type=model_name2)
     _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1, predictor2, output_folder)
 
 

@@ -68,7 +68,7 @@ def embedding_widget(
                     )
 
         # Initialize the model
-        state.predictor = get_sam_model(device=device, model_name=model, checkpoint_path=optional_custom_weights)
+        state.predictor = get_sam_model(device=device, model_type=model, checkpoint_path=optional_custom_weights)
         # Compute the image embeddings
         state.image_embeddings = precompute_image_embeddings(
             predictor=state.predictor,

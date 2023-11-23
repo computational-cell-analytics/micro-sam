@@ -195,7 +195,7 @@ def annotator_2d(
     embedding_path: Optional[str] = None,
     show_embeddings: bool = False,
     segmentation_result: Optional[np.ndarray] = None,
-    model_name: str = util._DEFAULT_MODEL,
+    model_type: str = util._DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
@@ -214,7 +214,7 @@ def annotator_2d(
         segmentation_result: An initial segmentation to load.
             This can be used to correct segmentations with Segment Anything or to save and load progress.
             The segmentation will be loaded as the 'committed_objects' layer.
-        model_name: The Segment Anything model to use. For details on the available models check out
+        model_type: The Segment Anything model to use. For details on the available models check out
             https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
         tile_shape: Shape of tiles for tiled embedding prediction.
             If `None` then the whole image is passed to Segment Anything.
@@ -234,7 +234,7 @@ def annotator_2d(
     state = AnnotatorState()
 
     if predictor is None:
-        state.predictor = util.get_sam_model(model_name=model_name)
+        state.predictor = util.get_sam_model(model_type=model_type)
     else:
         state.predictor = predictor
     state.image_shape = _get_shape(raw)

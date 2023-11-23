@@ -20,13 +20,13 @@ def em_3d_annotator(use_finetuned_model):
 
     if use_finetuned_model:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-lucchi-vit_h_em.zarr")
-        model_name = "vit_h_em"
+        model_type = "vit_h_em"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-lucchi.zarr")
-        model_name = "vit_h"
+        model_type = "vit_h"
 
     # start the annotator, cache the embeddings
-    annotator_3d(raw, embedding_path, model_name=model_name, show_embeddings=False)
+    annotator_3d(raw, embedding_path, model_type=model_type, show_embeddings=False)
 
 
 def main():
