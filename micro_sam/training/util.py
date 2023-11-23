@@ -18,7 +18,9 @@ def get_trainable_sam_model(
     """Get the trainable sam model.
 
     Args:
-        model_type: The type of the segment anything model.
+        model_type: The segment anything model that should be finetuned.
+            The weights of this model will be used for initialization, unless a
+            custom weight file is passed via `checkpoint_path`.
         device: The device to use for training.
         checkpoint_path: Path to a custom checkpoint from which to load the model weights.
         freeze: Specify parts of the model that should be frozen, namely: image_encoder, prompt_encoder and mask_decoder
