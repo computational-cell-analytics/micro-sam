@@ -83,7 +83,7 @@ def models():
     are respected.
     """
     models = pooch.create(
-        path=pooch.os_cache(os.path.join(microsam_cachedir(), "models")),
+        path=os.path.join(microsam_cachedir(), "models"),
         base_url="",
         registry={
             # the default segment anything models
