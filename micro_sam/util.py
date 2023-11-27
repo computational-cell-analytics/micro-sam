@@ -30,6 +30,12 @@ except ImportError:
     VIT_T_SUPPORT = False
 
 try:
+    import xxhash
+    HAS_XXH128 = hasattr(xxhash, 'xxh128')
+except ImportError:
+    HAS_XXH128 = False
+
+try:
     from napari.utils import progress as tqdm
 except ImportError:
     from tqdm import tqdm
@@ -82,22 +88,47 @@ def models():
     so any user changes to the default micro-sam cache directory location
     are respected.
     """
+
+    # Provide hashes in both xxh128 (fast, but not cryptographically secure),
+    # and as sha256 (as a fallback) to validate if the file has been correctly
+    # downloaded.
+    # https://github.com/computational-cell-analytics/micro-sam/issues/283
+    # To generate the xxh128 hash
+    #
+    #     xxh128sum filename
+    #
+    # You may need to install xxhash with conda or your system package manager.
+    registry_sha256 = {
+        # the default segment anything models
+        "vit_h": "sha256:a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e",
+        "vit_l": "sha256:3adcc4315b642a4d2101128f611684e8734c41232a17c648ed1693702a49a622",
+        "vit_b": "sha256:ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
+        # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
+        "vit_t": "sha256:6dbb90523a35330fedd7f1d3dfc66f995213d81b29a5ca8108dbcdd4e37d6c2f",
+        # first version of finetuned models on zenodo
+        "vit_h_lm": "sha256:9a65ee0cddc05a98d60469a12a058859c89dc3ea3ba39fed9b90d786253fbf26",
+        "vit_b_lm": "sha256:5a59cc4064092d54cd4d92cd967e39168f3760905431e868e474d60fe5464ecd",
+        "vit_h_em": "sha256:ae3798a0646c8df1d4db147998a2d37e402ff57d3aa4e571792fbb911d8a979c",
+        "vit_b_em": "sha256:c04a714a4e14a110f0eec055a65f7409d54e6bf733164d2933a0ce556f7d6f81",
+    }
+    registry_xxh128 = {
+        # the default segment anything models
+        "vit_h": "xxh128:97698fac30bd929c2e6d8d8cc15933c2",
+        "vit_l": "xxh128:a82beb3c660661e3dd38d999cc860e9a",
+        "vit_b": "xxh128:6923c33df3637b6a922d7682bfc9a86b",
+        # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
+        "vit_t": "xxh128:8eadbc88aeb9d8c7e0b4b60c3db48bd0",
+        # first version of finetuned models on zenodo
+        "vit_h_lm": "xxh128:e113adac6a0a21514bb2d73de16b921b",
+        "vit_b_lm": "xxh128:5fc0851abf8a209dcbed4e95634d9e27",
+        "vit_h_em": "xxh128:64b6eb2d32ac9c5d9b022b1ac57f1cc6",
+        "vit_b_em": "xxh128:f50d499db5bf54dc9849c3dbd271d5c9",
+    }
+
     models = pooch.create(
         path=os.path.join(microsam_cachedir(), "models"),
         base_url="",
-        registry={
-            # the default segment anything models
-            "vit_h": "a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e",
-            "vit_l": "3adcc4315b642a4d2101128f611684e8734c41232a17c648ed1693702a49a622",
-            "vit_b": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
-            # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
-            "vit_t": "6dbb90523a35330fedd7f1d3dfc66f995213d81b29a5ca8108dbcdd4e37d6c2f",
-            # first version of finetuned models on zenodo
-            "vit_h_lm": "9a65ee0cddc05a98d60469a12a058859c89dc3ea3ba39fed9b90d786253fbf26",
-            "vit_b_lm": "5a59cc4064092d54cd4d92cd967e39168f3760905431e868e474d60fe5464ecd",
-            "vit_h_em": "ae3798a0646c8df1d4db147998a2d37e402ff57d3aa4e571792fbb911d8a979c",
-            "vit_b_em": "c04a714a4e14a110f0eec055a65f7409d54e6bf733164d2933a0ce556f7d6f81",
-        },
+        registry=registry_xxh128 if HAS_XXH128 else registry_sha256,
         # Now specify custom URLs for some of the files in the registry.
         urls={
             # the default segment anything models
