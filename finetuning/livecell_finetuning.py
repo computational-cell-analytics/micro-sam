@@ -21,7 +21,7 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
     Important: the ID 0 is reseved for background, and the IDs must be consecutive
     """
     label_transform = torch_em.transform.label.label_consecutive  # to ensure consecutive IDs
-    raw_transform = None  # the current workflow avoids rescaling the inputs to [-1, 1]
+    raw_transform = sam_training.identity  # the current workflow avoids rescaling the inputs to [-1, 1]
     train_loader = get_livecell_loader(path=data_path, patch_shape=patch_shape, split="train", batch_size=2,
                                        num_workers=16, cell_types=cell_type, download=True, shuffle=True,
                                        label_transform=label_transform, raw_transform=raw_transform)

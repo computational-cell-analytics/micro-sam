@@ -58,7 +58,7 @@ def get_dataloader(split, patch_shape, batch_size):
         patch_shape=patch_shape, batch_size=batch_size,
         ndim=2, is_seg_dataset=True, rois=roi,
         label_transform=torch_em.transform.label.connected_components,
-        num_workers=8, shuffle=True,
+        num_workers=8, shuffle=True, raw_transform=sam_training.identity,
     )
     return loader
 

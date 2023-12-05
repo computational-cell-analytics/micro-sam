@@ -1,6 +1,7 @@
 import os
 import time
 import random
+import warnings
 from typing import Optional
 
 import numpy as np
@@ -277,9 +278,28 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
     def _train_epoch_impl(self, progress, forward_context, backprop):
         self.model.train()
 
+        input_check_done = False
+
         n_iter = 0
         t_per_iter = time.time()
         for x, y in self.train_loader:
+
+            # The expected data range of the SAM model is 8bit (0-255).
+            # It can easily happen that data is normalized beforehand in training.
+            # For some reasons we don't fully understand this still works, but it
+            # should still be avoided and is very detrimental in some settings
+            # (e.g. when freezing the image encoder)
+            # We check once per epoch if the data seems to be normalized already and
+            # raise a warning if this is the case.
+            if not input_check_done:
+                data_min, data_max = x.min(), x.max()
+                if (data_min < 0) or (data_max < 1):
+                    warnings.warn(
+                        "It looks like you are normalizing the training data."
+                        "The SAM model takes care of normalization, so it is better to not do this."
+                        "We recommend to remove data normalization and input data in the range [0, 255]."
+                    )
+                input_check_done = True
 
             self.optimizer.zero_grad()
 

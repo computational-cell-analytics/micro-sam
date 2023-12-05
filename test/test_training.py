@@ -56,6 +56,8 @@ class TestTraining(unittest.TestCase):
             pass
 
     def _get_dataloader(self, split, patch_shape, batch_size):
+        import micro_sam.training as sam_training
+
         # Create the synthetic training data and get the corresponding folders.
         image_root = os.path.join(self.tmp_folder, "synthetic-data", "images", split)
         label_root = os.path.join(self.tmp_folder, "synthetic-data", "labels", split)
@@ -67,6 +69,7 @@ class TestTraining(unittest.TestCase):
             patch_shape=patch_shape, batch_size=batch_size,
             label_transform=torch_em.transform.label.connected_components,
             shuffle=True, num_workers=2, ndim=2, is_seg_dataset=False,
+            raw_transform=sam_training.identity,
         )
         return loader
 
