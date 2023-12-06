@@ -9,6 +9,16 @@ from ..util import get_centers_and_bounding_boxes, get_sam_model, segmentation_t
 from .trainable_sam import TrainableSAM
 
 
+def identity(x):
+    """Identity transformation.
+
+    This is a helper function to skip data normalization when finetuning SAM.
+    Data normalization is performed within the model and should thus be skipped as
+    a preprocessing step in training.
+    """
+    return x
+
+
 def get_trainable_sam_model(
     model_type: str = "vit_h",
     device: Optional[Union[str, torch.device]] = None,

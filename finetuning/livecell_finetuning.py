@@ -21,12 +21,14 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
     Important: the ID 0 is reseved for background, and the IDs must be consecutive
     """
     label_transform = torch_em.transform.label.label_consecutive  # to ensure consecutive IDs
+    raw_transform = sam_training.identity  # the current workflow avoids rescaling the inputs to [-1, 1]
     train_loader = get_livecell_loader(path=data_path, patch_shape=patch_shape, split="train", batch_size=2,
-                                       num_workers=16, cell_types=cell_type, download=True,
-                                       label_transform=label_transform, shuffle=True)
+                                       num_workers=16, cell_types=cell_type, download=True, shuffle=True,
+                                       label_transform=label_transform, raw_transform=raw_transform)
     val_loader = get_livecell_loader(path=data_path, patch_shape=patch_shape, split="val", batch_size=1,
-                                     num_workers=16, cell_types=cell_type, download=True,
-                                     label_transform=label_transform, shuffle=True)
+                                     num_workers=16, cell_types=cell_type, download=True, shuffle=True,
+                                     label_transform=label_transform, raw_transform=raw_transform)
+
     return train_loader, val_loader
 
 
@@ -40,9 +42,15 @@ def finetune_livecell(args):
     checkpoint_path = None  # override this to start training from a custom checkpoint
     patch_shape = (520, 704)  # the patch shape for training
     n_objects_per_batch = 25  # this is the number of objects per batch that will be sampled
+    freeze_parts = args.freeze  # override this to freeze different parts of the model
 
     # get the trainable segment anything model
-    model = sam_training.get_trainable_sam_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path)
+    model = sam_training.get_trainable_sam_model(
+        model_type=model_type,
+        device=device,
+        checkpoint_path=checkpoint_path,
+        freeze=freeze_parts
+    )
 
     # all the stuff we need for training
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
@@ -108,6 +116,10 @@ def main():
     parser.add_argument(
         "--export_path", "-e",
         help="Where to export the finetuned model to. The exported model can be used in the annotation tools."
+    )
+    parser.add_argument(
+        "--freeze", type=str, nargs="+", default=None,
+        help="Which parts of the model to freeze for finetuning."
     )
     args = parser.parse_args()
     finetune_livecell(args)

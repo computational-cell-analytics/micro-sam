@@ -339,7 +339,7 @@ def synthetic_data(shape, seed=None):
     ndim = len(shape)
     assert ndim in (2, 3)
     image_shape = shape if ndim == 2 else shape[1:]
-    image = binary_blobs(length=image_shape[0], blob_size_fraction=0.05, volume_fraction=0.15, seed=seed)
+    image = binary_blobs(length=image_shape[0], blob_size_fraction=0.05, volume_fraction=0.15, rng=seed)
 
     if image_shape[1] != image_shape[0]:
         image = resize(image, image_shape, order=0, anti_aliasing=False, preserve_range=True).astype(image.dtype)
@@ -348,6 +348,7 @@ def synthetic_data(shape, seed=None):
         image = np.stack([image] * nz)
 
     segmentation = label(image)
+    image = image.astype("uint8") * 255
     return image, segmentation
 
 
