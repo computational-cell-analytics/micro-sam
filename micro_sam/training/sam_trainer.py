@@ -345,7 +345,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
             with forward_context():
                 (loss, mask_loss, iou_regression_loss, model_iou,
-                 sampled_binary_y) = self._interactive_train_iteration(self, x, y, self._iteration)
+                 sampled_binary_y) = self._interactive_train_iteration(x, y, self._iteration)
 
             backprop(loss)
 
