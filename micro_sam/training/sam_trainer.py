@@ -274,16 +274,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         n_samples = min(num_instances_gt) if n_samples > min(num_instances_gt) else n_samples
         return n_samples
 
-    def _train_epoch_impl(self, progress, forward_context, backprop):
-        self.model.train()
-
-        n_iter = 0
-        t_per_iter = time.time()
-        for x, y in self.train_loader:
-
-            self.optimizer.zero_grad()
-
-            with forward_context():
+    def _interactive_train_iteration(self, ...):
                 n_samples = self._update_samples_for_gt_instances(y, self.n_objects_per_batch)
 
                 n_pos, n_neg, get_boxes, multimask_output = self._get_prompt_and_multimasking_choices(self._iteration)
@@ -317,6 +308,19 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
                                                                                      sampled_binary_y, sampled_ids,
                                                                                      num_subiter=self.n_sub_iteration,
                                                                                      multimask_output=multimask_output)
+
+    def _train_epoch_impl(self, progress, forward_context, backprop):
+        self.model.train()
+
+        n_iter = 0
+        t_per_iter = time.time()
+        for x, y in self.train_loader:
+
+            self.optimizer.zero_grad()
+
+            with forward_context():
+                # the change we would make in this trainer class
+                loss, mask_loss, ... = self._interactive_train_iteration(...)
 
             backprop(loss)
 
