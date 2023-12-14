@@ -78,7 +78,7 @@ class JointSamTrainer(SamTrainer):
         self.unetr = UNETRForJointTraining(
             img_size=self.model.img_size,
             backbone="sam",
-            encoder="vit_b",
+            encoder=self.model.encoder,
             out_channels=self.model.out_channels,
             use_sam_stats=True,
             final_activation="Sigmoid"
@@ -111,7 +111,7 @@ class JointSamTrainer(SamTrainer):
             backprop(loss)
 
             # let's get the unetr decoder for doing the instance segmentation
-            self.unetr.encoder = self.model.encoder  # TODO: revisit
+            # TODO: we need to ship the weights from the encoder of SAM to UNETR
 
             with forward_context():
                 # 2. train for the automatic instance segmentation
