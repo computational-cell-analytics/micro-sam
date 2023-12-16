@@ -51,9 +51,6 @@ class JointSamTrainer(SamTrainer):
 
             backprop(loss)
 
-            # let's get the unetr decoder for doing the instance segmentation
-            self.unetr.encoder = self.model.encoder
-
             with forward_context():
                 # 2. train for the automatic instance segmentation
                 instance_loss = self._instance_train_iteration(x, y)
