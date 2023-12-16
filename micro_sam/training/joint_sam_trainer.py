@@ -19,7 +19,7 @@ class JointSamTrainer(SamTrainer):
         dist_channels = 3
         self.unetr = UNETR(
             backbone="sam",
-            encoder=self.model.encoder,
+            encoder=self.model.image_encoder,
             out_channels=dist_channels,
             use_sam_stats=True,
             final_activation="Sigmoid",
