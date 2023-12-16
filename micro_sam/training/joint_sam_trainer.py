@@ -1,73 +1,14 @@
 import os
 import time
-from typing import Optional, Union
 
 import torch
-import torch.nn as nn
 from torchvision.utils import make_grid
 
 from .sam_trainer import SamTrainer
 
 from torch_em.model import UNETR
+from torch_em.loss import DiceBasedDistanceLoss
 from torch_em.trainer.logger_base import TorchEmLogger
-from torch_em.model.unet import Decoder, ConvBlock2d, Upsampler2d
-
-
-class CustomDecoder(Decoder):
-    "To make use of the `V-Net` level logic - as we can't make use of the skip connections"
-    def forward(self, x):
-        for block, sampler in zip(self.blocks, self.samplers):
-            x = sampler(x)
-            x = block(x)
-
-        return x
-
-
-class UNETRForJointTraining(UNETR):
-    def __init__(
-        self,
-        encoder: Optional[nn.Module] = None,
-        out_channels: int = 1,
-        final_activation: Optional[Union[str, nn.Module]] = None,
-        **kwargs
-    ) -> None:
-        super().__init__(encoder, out_channels, **kwargs)
-
-        self.encoder = encoder
-
-        # parameters for the decoder network
-        depth = 3
-        initial_features = 64
-        gain = 2
-        features_decoder = [initial_features * gain ** i for i in range(depth + 1)][::-1]
-        scale_factors = depth * [2]
-        self.out_channels = out_channels
-
-        self.decoder = Decoder(
-            features=features_decoder,
-            scale_factors=scale_factors[::-1],
-            conv_block_impl=ConvBlock2d,
-            sampler_impl=Upsampler2d
-        )
-
-        self.out_conv = nn.Conv2d(features_decoder[-1], out_channels, 1)
-        self.final_activation = self._get_activation(final_activation)
-
-    def forward(self, x):
-        org_shape = x.shape[-2:]
-
-        x = torch.stack([self.preprocess(e) for e in x], dim=0)
-
-        x = self.encoder(x)
-        x = self.decoder(x)
-
-        x = self.out_conv(x)
-        if self.final_activation is not None:
-            x = self.final_activation(x)
-
-        x = self.postprocess_masks(x, org_shape, org_shape)
-
-        return x
 
 
 class JointSamTrainer(SamTrainer):
@@ -75,21 +16,21 @@ class JointSamTrainer(SamTrainer):
             self, **kwargs
     ):
         super().__init__(**kwargs)
-        self.unetr = UNETRForJointTraining(
-            img_size=self.model.img_size,
+        dist_channels = 3
+        self.unetr = UNETR(
             backbone="sam",
             encoder=self.model.encoder,
-            out_channels=self.model.out_channels,
+            out_channels=dist_channels,
             use_sam_stats=True,
-            final_activation="Sigmoid"
+            final_activation="Sigmoid",
+            use_skip_connection=False
         )
 
     def _instance_train_iteration(self, x, y):
-        # we pass the inputs to the unetr model
-        # get the outputs, calculate the dice loss
-        # return the dice loss
-        instance_loss = ...
-        return instance_loss
+        outputs = self.unetr(x)
+        instance_loss = DiceBasedDistanceLoss(mask_distances_in_bg=True)
+        loss = instance_loss(outputs, y)
+        return loss
 
     def _train_epoch_impl(self, progress, forward_context, backprop):
         self.model.train()
@@ -111,13 +52,13 @@ class JointSamTrainer(SamTrainer):
             backprop(loss)
 
             # let's get the unetr decoder for doing the instance segmentation
-            # TODO: we need to ship the weights from the encoder of SAM to UNETR
+            self.unetr.encoder = self.model.encoder
 
             with forward_context():
                 # 2. train for the automatic instance segmentation
                 instance_loss = self._instance_train_iteration(x, y)
 
-            backprop(...)
+            backprop(instance_loss)
 
             if self.logger is not None:
                 lr = [pm["lr"] for pm in self.optimizer.param_groups][0]
