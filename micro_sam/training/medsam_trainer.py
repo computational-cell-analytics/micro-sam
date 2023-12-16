@@ -6,7 +6,19 @@ import torch_em
 from torch_em.trainer.logger_base import TorchEmLogger
 
 
-class MedSamTrainer(torch_em.trainer.DefaultTrainer):
+class MedSAMTrainer(torch_em.trainer.DefaultTrainer):
+    """Trainer class for replicating the training of MedSAM (https://arxiv.org/abs/2304.12306)
+    Reference: https://github.com/bowang-lab/MedSAM
+
+    This class is derived from `torch_em.trainer.DefaultTrainer`.
+    Check out https://github.com/constantinpape/torch-em/blob/main/torch_em/trainer/default_trainer.py
+    for details on its usage and implementation
+
+    Args:
+        convert_inputs: The class that converts outputs of the dataloader to the expected input format of SAM.
+            The class `micro_sam.training.util.ConvertToSamInputs` can be used here.
+        **kwargs: The keyword arguments of the DefaultTrainer super class.
+    """
     def __init__(
         self,
         convert_inputs,
