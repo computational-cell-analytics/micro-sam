@@ -1,35 +1,30 @@
 import os
 import time
+import numpy as np
 
 import torch
 from torchvision.utils import make_grid
 
 from .sam_trainer import SamTrainer
 
-from torch_em.model import UNETR
 from torch_em.loss import DiceBasedDistanceLoss
 from torch_em.trainer.logger_base import TorchEmLogger
+from torch_em.trainer.tensorboard_logger import normalize_im
 
 
 class JointSamTrainer(SamTrainer):
     def __init__(
-            self, **kwargs
+            self,
+            unetr: torch.nn.Module,
+            **kwargs
     ):
         super().__init__(**kwargs)
-        dist_channels = 3
-        self.unetr = UNETR(
-            backbone="sam",
-            encoder=self.model.image_encoder,
-            out_channels=dist_channels,
-            use_sam_stats=True,
-            final_activation="Sigmoid",
-            use_skip_connection=False
-        )
+        self.unetr = unetr
 
     def _instance_train_iteration(self, x, y):
-        outputs = self.unetr(x)
+        outputs = self.unetr(x.to(self.device))
         instance_loss = DiceBasedDistanceLoss(mask_distances_in_bg=True)
-        loss = instance_loss(outputs, y)
+        loss = instance_loss(outputs, y.to(self.device))
         return loss
 
     def _train_epoch_impl(self, progress, forward_context, backprop):
@@ -40,6 +35,9 @@ class JointSamTrainer(SamTrainer):
         n_iter = 0
         t_per_iter = time.time()
         for x, y in self.train_loader:
+            labels_instances = y[:, 0, ...].unsqueeze(1)
+            labels_for_unetr = y[:, 1:, ...]
+
             input_check_done = self._check_input_normalization(x, input_check_done)
 
             self.optimizer.zero_grad()
@@ -47,13 +45,15 @@ class JointSamTrainer(SamTrainer):
             with forward_context():
                 # 1. train for the interactive segmentation
                 (loss, mask_loss, iou_regression_loss, model_iou,
-                 sampled_binary_y) = self._interactive_train_iteration(x, y, self._iteration)
+                 sampled_binary_y) = self._interactive_train_iteration(x, labels_instances)
 
             backprop(loss)
 
+            self.optimizer.zero_grad()
+
             with forward_context():
                 # 2. train for the automatic instance segmentation
-                instance_loss = self._instance_train_iteration(x, y)
+                instance_loss = self._instance_train_iteration(x, labels_for_unetr)
 
             backprop(instance_loss)
 
@@ -61,7 +61,8 @@ class JointSamTrainer(SamTrainer):
                 lr = [pm["lr"] for pm in self.optimizer.param_groups][0]
                 samples = sampled_binary_y if self._iteration % self.log_image_interval == 0 else None
                 self.logger.log_train(
-                    self._iteration, loss, lr, x, y, samples, mask_loss, iou_regression_loss, model_iou, instance_loss
+                    self._iteration, loss, lr, x, labels_instances, samples,
+                    mask_loss, iou_regression_loss, model_iou, instance_loss
                 )
 
             self._iteration += 1
@@ -83,13 +84,19 @@ class JointSamTrainer(SamTrainer):
 
         with torch.no_grad():
             for x, y in self.val_loader:
+                labels_instances = y[:, 0, ...].unsqueeze(1)
+                labels_for_unetr = y[:, 1:, ...]
+
                 input_check_done = self._check_input_normalization(x, input_check_done)
 
                 with forward_context():
+                    # 1. validate for the interactive segmentation
                     (loss, mask_loss, iou_regression_loss, model_iou,
-                     sampled_binary_y, metric) = self._interactive_val_iteration(x, y, val_iteration)
+                     sampled_binary_y, metric) = self._interactive_val_iteration(x, labels_instances, val_iteration)
 
-                # TODO: instance segmentation for validation
+                with forward_context():
+                    # 2. validate for the automatic instance segmentation
+                    instance_loss = self._instance_train_iteration(x, labels_for_unetr)
 
                 loss_val += loss.item()
                 metric_val += metric.item()
@@ -99,12 +106,10 @@ class JointSamTrainer(SamTrainer):
         loss_val /= len(self.val_loader)
         metric_val /= len(self.val_loader)
         model_iou_val /= len(self.val_loader)
-        print()
-        print(...)  # provide a message for the respective metric score
 
         if self.logger is not None:
             self.logger.log_validation(
-                self._iteration, metric_val, loss_val, x, y, sampled_binary_y,
+                self._iteration, metric_val, loss_val, x, labels_instances, sampled_binary_y,
                 mask_loss, iou_regression_loss, model_iou_val, instance_loss
             )
 
@@ -123,8 +128,12 @@ class JointSamLogger(TorchEmLogger):
         self.log_image_interval = trainer.log_image_interval
 
     def add_image(self, x, y, samples, name, step):
-        self.tb.add_image(tag=f"{name}/input", img_tensor=x[0], global_step=step)
-        self.tb.add_image(tag=f"{name}/target", img_tensor=y[0], global_step=step)
+        selection = np.s_[0] if x.ndim == 4 else np.s_[0, :, x.shape[2] // 2]
+
+        image = normalize_im(x[selection].cpu())
+
+        self.tb.add_image(tag=f"{name}/input", img_tensor=image, global_step=step)
+        self.tb.add_image(tag=f"{name}/target", img_tensor=y[selection], global_step=step)
         sample_grid = make_grid([sample[0] for sample in samples], nrow=4, padding=4)
         self.tb.add_image(tag=f"{name}/samples", img_tensor=sample_grid, global_step=step)
 
