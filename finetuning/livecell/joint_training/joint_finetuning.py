@@ -5,6 +5,7 @@ import torch
 
 import torch_em
 from torch_em.model import UNETR
+from torch_em.loss import DiceBasedDistanceLoss
 from torch_em.data.datasets import get_livecell_loader
 from torch_em.transform.label import PerObjectDistanceTransform
 
@@ -27,12 +28,16 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
         distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=25
     )
     raw_transform = sam_training.identity  # the current workflow avoids rescaling the inputs to [-1, 1]
-    train_loader = get_livecell_loader(path=data_path, patch_shape=patch_shape, split="train", batch_size=2,
-                                       num_workers=16, cell_types=cell_type, download=True, shuffle=True,
-                                       label_transform=label_transform, raw_transform=raw_transform)
-    val_loader = get_livecell_loader(path=data_path, patch_shape=patch_shape, split="val", batch_size=1,
-                                     num_workers=16, cell_types=cell_type, download=True, shuffle=True,
-                                     label_transform=label_transform, raw_transform=raw_transform)
+    train_loader = get_livecell_loader(
+        path=data_path, patch_shape=patch_shape, split="train", batch_size=2, num_workers=16,
+        cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
+        raw_transform=raw_transform, label_dtype=torch.float32
+    )
+    val_loader = get_livecell_loader(
+        path=data_path, patch_shape=patch_shape, split="val", batch_size=1, num_workers=16,
+        cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
+        raw_transform=raw_transform, label_dtype=torch.float32
+    )
 
     return train_loader, val_loader
 
@@ -103,8 +108,8 @@ def finetune_livecell(args):
         n_sub_iteration=8,
         compile_model=False,
         mask_prob=0.5,  # (optional) overwrite to provide the probability of using mask inputs while training
-        unetr=unetr
-
+        unetr=unetr,
+        instance_loss=DiceBasedDistanceLoss(mask_distances_in_bg=True)
     )
     trainer.fit(args.iterations)
     if args.export_path is not None:

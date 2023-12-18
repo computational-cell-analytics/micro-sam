@@ -7,7 +7,6 @@ from torchvision.utils import make_grid
 
 from .sam_trainer import SamTrainer
 
-from torch_em.loss import DiceBasedDistanceLoss
 from torch_em.trainer.logger_base import TorchEmLogger
 from torch_em.trainer.tensorboard_logger import normalize_im
 
@@ -16,15 +15,16 @@ class JointSamTrainer(SamTrainer):
     def __init__(
             self,
             unetr: torch.nn.Module,
+            instance_loss: torch.nn.Module,
             **kwargs
     ):
         super().__init__(**kwargs)
         self.unetr = unetr
+        self.instance_loss = instance_loss
 
     def _instance_train_iteration(self, x, y):
         outputs = self.unetr(x.to(self.device))
-        instance_loss = DiceBasedDistanceLoss(mask_distances_in_bg=True)
-        loss = instance_loss(outputs, y.to(self.device))
+        loss = self.instance_loss(outputs, y.to(self.device))
         return loss
 
     def _train_epoch_impl(self, progress, forward_context, backprop):
@@ -53,16 +53,16 @@ class JointSamTrainer(SamTrainer):
 
             with forward_context():
                 # 2. train for the automatic instance segmentation
-                instance_loss = self._instance_train_iteration(x, labels_for_unetr)
+                unetr_loss = self._instance_train_iteration(x, labels_for_unetr)
 
-            backprop(instance_loss)
+            backprop(unetr_loss)
 
             if self.logger is not None:
                 lr = [pm["lr"] for pm in self.optimizer.param_groups][0]
                 samples = sampled_binary_y if self._iteration % self.log_image_interval == 0 else None
                 self.logger.log_train(
                     self._iteration, loss, lr, x, labels_instances, samples,
-                    mask_loss, iou_regression_loss, model_iou, instance_loss
+                    mask_loss, iou_regression_loss, model_iou, unetr_loss
                 )
 
             self._iteration += 1
@@ -96,7 +96,7 @@ class JointSamTrainer(SamTrainer):
 
                 with forward_context():
                     # 2. validate for the automatic instance segmentation
-                    instance_loss = self._instance_train_iteration(x, labels_for_unetr)
+                    unetr_loss = self._instance_train_iteration(x, labels_for_unetr)
 
                 loss_val += loss.item()
                 metric_val += metric.item()
@@ -110,7 +110,7 @@ class JointSamTrainer(SamTrainer):
         if self.logger is not None:
             self.logger.log_validation(
                 self._iteration, metric_val, loss_val, x, labels_instances, sampled_binary_y,
-                mask_loss, iou_regression_loss, model_iou_val, instance_loss
+                mask_loss, iou_regression_loss, model_iou_val, unetr_loss
             )
 
         return metric_val
