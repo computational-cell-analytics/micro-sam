@@ -22,6 +22,15 @@ class JointSamTrainer(SamTrainer):
         self.unetr = unetr
         self.instance_loss = instance_loss
 
+    def save_checkpoint(self, name, best_metric, **extra_save_dict):
+        super().save_checkpoint(name, best_metric, unetr_state=self.unetr.state_dict(), **extra_save_dict)
+
+    def load_checkpoint(self, checkpoint="best"):
+        save_dict = super().load_checkpoint(checkpoint)
+        self.unetr.load_state_dict(save_dict["unetr_state"])
+        self.unetr.to(self.device)
+        return save_dict
+
     def _instance_train_iteration(self, x, y):
         outputs = self.unetr(x.to(self.device))
         loss = self.instance_loss(outputs, y.to(self.device))
