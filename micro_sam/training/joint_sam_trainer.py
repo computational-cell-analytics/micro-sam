@@ -23,6 +23,7 @@ class JointSamTrainer(SamTrainer):
         self.instance_loss = instance_loss
 
     def save_checkpoint(self, name, best_metric, **extra_save_dict):
+        # FIXME: in case of unetr, save state dict only for the decoder
         super().save_checkpoint(name, best_metric, unetr_state=self.unetr.state_dict(), **extra_save_dict)
 
     def load_checkpoint(self, checkpoint="best"):
@@ -108,7 +109,7 @@ class JointSamTrainer(SamTrainer):
                     unetr_loss = self._instance_train_iteration(x, labels_for_unetr)
 
                 loss_val += loss.item()
-                metric_val += metric.item()
+                metric_val += metric.item()  # FIXME: update the metric to consider unetr metric as well
                 model_iou_val += model_iou.item()
                 val_iteration += 1
 
