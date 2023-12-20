@@ -7,6 +7,7 @@ from glob import glob
 from tqdm import tqdm
 from pathlib import Path
 import imageio.v3 as imageio
+from collections import OrderedDict
 
 import torch
 
@@ -33,6 +34,20 @@ def get_unetr_model(model_type, checkpoint, device):
         final_activation="Sigmoid",
         use_skip_connection=False
     )
+
+    """
+    sam_state = torch.load(checkpoint, map_location="cpu")["model_state"]
+    # let's get the vit parameters from sam
+    encoder_state = []
+    for k, v in sam_state.items():
+        if k.startswith("image_encoder"):
+            encoder_state.append((k, v))
+    encoder_state = OrderedDict(encoder_state)
+
+    decoder_state = torch.load(checkpoint, map_location="cpu")["unetr_state"]
+
+    unetr_state = OrderedDict(list(encoder_state.items()) + list(decoder_state.items()))
+    """
 
     # FIXME: ideally, we would like to merge the params of encoder from SAM and decoder from unetr state
     unetr_state = torch.load(checkpoint, map_location="cpu")["unetr_state"]

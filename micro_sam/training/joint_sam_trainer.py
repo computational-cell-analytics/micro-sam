@@ -1,6 +1,7 @@
 import os
 import time
 import numpy as np
+from collections import OrderedDict
 
 import torch
 from torchvision.utils import make_grid
@@ -25,6 +26,15 @@ class JointSamTrainer(SamTrainer):
         self.instance_metric = instance_metric
 
     def save_checkpoint(self, name, best_metric, **extra_save_dict):
+        """
+        current_unetr_state = self.unetr.state_dict()
+        decoder_state = []
+        for k, v in current_unetr_state.items():
+            if not k.startswith("encoder"):
+                decoder_state.append((k, v))
+        decoder_state = OrderedDict(decoder_state)
+        """
+
         # FIXME: in case of unetr, save state dict only for the decoder
         super().save_checkpoint(name, best_metric, unetr_state=self.unetr.state_dict(), **extra_save_dict)
 
