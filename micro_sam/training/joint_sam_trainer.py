@@ -41,9 +41,10 @@ class JointSamTrainer(SamTrainer):
         # let's get the image encoder params from sam
         sam_state = save_dict["model_state"]
         encoder_state = []
+        prune_prefix = "sam.image_"
         for k, v in sam_state.items():
-            if k.startswith("image_encoder"):
-                encoder_state.append((k, v))
+            if k.startswith(prune_prefix):
+                encoder_state.append((k[len(prune_prefix):], v))
         encoder_state = OrderedDict(encoder_state)
 
         # let's get the decoder params from unetr
