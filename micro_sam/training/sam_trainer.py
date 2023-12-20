@@ -275,6 +275,62 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         n_samples = min(num_instances_gt) if n_samples > min(num_instances_gt) else n_samples
         return n_samples
 
+    def _interactive_train_iteration(self, x, y):
+        n_samples = self._update_samples_for_gt_instances(y, self.n_objects_per_batch)
+
+        n_pos, n_neg, get_boxes, multimask_output = self._get_prompt_and_multimasking_choices(self._iteration)
+
+        batched_inputs, sampled_ids = self.convert_inputs(x, y, n_pos, n_neg, get_boxes, n_samples)
+
+        assert len(y) == len(sampled_ids)
+        sampled_binary_y = []
+        for i in range(len(y)):
+            _sampled = [torch.isin(y[i], torch.tensor(idx)) for idx in sampled_ids[i]]
+            sampled_binary_y.append(_sampled)
+
+        # the steps below are done for one reason in a gist:
+        # to handle images where there aren't enough instances as expected
+        # (e.g. where one image has only one instance)
+        obj_lengths = [len(s) for s in sampled_binary_y]
+        sampled_binary_y = [s[:min(obj_lengths)] for s in sampled_binary_y]
+        sampled_binary_y = [torch.stack(s).to(torch.float32) for s in sampled_binary_y]
+        sampled_binary_y = torch.stack(sampled_binary_y)
+
+        # gist for below - while we find the mismatch, we need to update the batched inputs
+        # else it would still generate masks using mismatching prompts, and it doesn't help us
+        # with the subiterations again. hence we clip the number of input points as well
+        f_objs = sampled_binary_y.shape[1]
+        batched_inputs = [
+            {k: (v[:f_objs] if k in ("point_coords", "point_labels", "boxes") else v) for k, v in inp.items()}
+            for inp in batched_inputs
+        ]
+
+        loss, mask_loss, iou_regression_loss, model_iou = self._update_masks(
+            batched_inputs, y, sampled_binary_y, sampled_ids,
+            num_subiter=self.n_sub_iteration, multimask_output=multimask_output
+        )
+        return loss, mask_loss, iou_regression_loss, model_iou, sampled_binary_y
+
+    def _check_input_normalization(self, x, input_check_done):
+        # The expected data range of the SAM model is 8bit (0-255).
+        # It can easily happen that data is normalized beforehand in training.
+        # For some reasons we don't fully understand this still works, but it
+        # should still be avoided and is very detrimental in some settings
+        # (e.g. when freezing the image encoder)
+        # We check once per epoch if the data seems to be normalized already and
+        # raise a warning if this is the case.
+        if not input_check_done:
+            data_min, data_max = x.min(), x.max()
+            if (data_min < 0) or (data_max < 1):
+                warnings.warn(
+                    "It looks like you are normalizing the training data."
+                    "The SAM model takes care of normalization, so it is better to not do this."
+                    "We recommend to remove data normalization and input data in the range [0, 255]."
+                )
+            input_check_done = True
+
+        return input_check_done
+
     def _train_epoch_impl(self, progress, forward_context, backprop):
         self.model.train()
 
@@ -283,60 +339,13 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         n_iter = 0
         t_per_iter = time.time()
         for x, y in self.train_loader:
-
-            # The expected data range of the SAM model is 8bit (0-255).
-            # It can easily happen that data is normalized beforehand in training.
-            # For some reasons we don't fully understand this still works, but it
-            # should still be avoided and is very detrimental in some settings
-            # (e.g. when freezing the image encoder)
-            # We check once per epoch if the data seems to be normalized already and
-            # raise a warning if this is the case.
-            if not input_check_done:
-                data_min, data_max = x.min(), x.max()
-                if (data_min < 0) or (data_max < 1):
-                    warnings.warn(
-                        "It looks like you are normalizing the training data."
-                        "The SAM model takes care of normalization, so it is better to not do this."
-                        "We recommend to remove data normalization and input data in the range [0, 255]."
-                    )
-                input_check_done = True
+            input_check_done = self._check_input_normalization(x, input_check_done)
 
             self.optimizer.zero_grad()
 
             with forward_context():
-                n_samples = self._update_samples_for_gt_instances(y, self.n_objects_per_batch)
-
-                n_pos, n_neg, get_boxes, multimask_output = self._get_prompt_and_multimasking_choices(self._iteration)
-
-                batched_inputs, sampled_ids = self.convert_inputs(x, y, n_pos, n_neg, get_boxes, n_samples)
-
-                assert len(y) == len(sampled_ids)
-                sampled_binary_y = []
-                for i in range(len(y)):
-                    _sampled = [torch.isin(y[i], torch.tensor(idx)) for idx in sampled_ids[i]]
-                    sampled_binary_y.append(_sampled)
-
-                # the steps below are done for one reason in a gist:
-                # to handle images where there aren't enough instances as expected
-                # (e.g. where one image has only one instance)
-                obj_lengths = [len(s) for s in sampled_binary_y]
-                sampled_binary_y = [s[:min(obj_lengths)] for s in sampled_binary_y]
-                sampled_binary_y = [torch.stack(s).to(torch.float32) for s in sampled_binary_y]
-                sampled_binary_y = torch.stack(sampled_binary_y)
-
-                # gist for below - while we find the mismatch, we need to update the batched inputs
-                # else it would still generate masks using mismatching prompts, and it doesn't help us
-                # with the subiterations again. hence we clip the number of input points as well
-                f_objs = sampled_binary_y.shape[1]
-                batched_inputs = [
-                    {k: (v[:f_objs] if k in ("point_coords", "point_labels", "boxes") else v) for k, v in inp.items()}
-                    for inp in batched_inputs
-                ]
-
-                loss, mask_loss, iou_regression_loss, model_iou = self._update_masks(batched_inputs, y,
-                                                                                     sampled_binary_y, sampled_ids,
-                                                                                     num_subiter=self.n_sub_iteration,
-                                                                                     multimask_output=multimask_output)
+                (loss, mask_loss, iou_regression_loss, model_iou,
+                 sampled_binary_y) = self._interactive_train_iteration(x, y)
 
             backprop(loss)
 
@@ -355,33 +364,43 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         t_per_iter = (time.time() - t_per_iter) / n_iter
         return t_per_iter
 
+    def _interactive_val_iteration(self, x, y, val_iteration):
+        n_samples = self._update_samples_for_gt_instances(y, self.n_objects_per_batch)
+
+        (n_pos, n_neg, get_boxes,
+            multimask_output) = self._get_prompt_and_multimasking_choices_for_val(val_iteration)
+
+        batched_inputs, sampled_ids = self.convert_inputs(x, y, n_pos, n_neg, get_boxes, n_samples)
+
+        batched_outputs = self.model(batched_inputs, multimask_output=multimask_output)
+
+        assert len(y) == len(sampled_ids)
+        sampled_binary_y = torch.stack(
+            [torch.isin(y[i], torch.tensor(sampled_ids[i])) for i in range(len(y))]
+        ).to(torch.float32)
+
+        loss, mask_loss, iou_regression_loss, model_iou = self._get_net_loss(batched_outputs,
+                                                                             y, sampled_ids)
+
+        metric = self._get_val_metric(batched_outputs, sampled_binary_y)
+
+        return loss, mask_loss, iou_regression_loss, model_iou, sampled_binary_y, metric
+
     def _validate_impl(self, forward_context):
         self.model.eval()
+
+        input_check_done = False
 
         val_iteration = 0
         metric_val, loss_val, model_iou_val = 0.0, 0.0, 0.0
 
         with torch.no_grad():
             for x, y in self.val_loader:
+                input_check_done = self._check_input_normalization(x, input_check_done)
+
                 with forward_context():
-                    n_samples = self._update_samples_for_gt_instances(y, self.n_objects_per_batch)
-
-                    (n_pos, n_neg,
-                     get_boxes, multimask_output) = self._get_prompt_and_multimasking_choices_for_val(val_iteration)
-
-                    batched_inputs, sampled_ids = self.convert_inputs(x, y, n_pos, n_neg, get_boxes, n_samples)
-
-                    batched_outputs = self.model(batched_inputs, multimask_output=multimask_output)
-
-                    assert len(y) == len(sampled_ids)
-                    sampled_binary_y = torch.stack(
-                        [torch.isin(y[i], torch.tensor(sampled_ids[i])) for i in range(len(y))]
-                    ).to(torch.float32)
-
-                    loss, mask_loss, iou_regression_loss, model_iou = self._get_net_loss(batched_outputs,
-                                                                                         y, sampled_ids)
-
-                    metric = self._get_val_metric(batched_outputs, sampled_binary_y)
+                    (loss, mask_loss, iou_regression_loss, model_iou,
+                     sampled_binary_y, metric) = self._interactive_val_iteration(x, y, val_iteration)
 
                 loss_val += loss.item()
                 metric_val += metric.item()
