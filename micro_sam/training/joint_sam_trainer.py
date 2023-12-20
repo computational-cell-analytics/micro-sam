@@ -34,10 +34,10 @@ class JointSamTrainer(SamTrainer):
         self.unetr.to(self.device)
         return save_dict
 
-    def _instance_iteration(self, x, y, metrc_for_val=False):
+    def _instance_iteration(self, x, y, metric_for_val=False):
         outputs = self.unetr(x.to(self.device))
         loss = self.instance_loss(outputs, y.to(self.device))
-        if metrc_for_val:
+        if metric_for_val:
             metric = self.instance_metric(outputs, y.to(self.device))
             return loss, metric
         else:
@@ -112,7 +112,7 @@ class JointSamTrainer(SamTrainer):
 
                 with forward_context():
                     # 2. validate for the automatic instance segmentation
-                    unetr_loss, unetr_metric = self._instance_iteration(x, labels_for_unetr, metrc_for_val=True)
+                    unetr_loss, unetr_metric = self._instance_iteration(x, labels_for_unetr, metric_for_val=True)
 
                 loss_val += loss.item()
                 metric_val += metric.item() + (unetr_metric.item() / 3)
