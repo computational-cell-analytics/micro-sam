@@ -38,9 +38,10 @@ def get_unetr_model(model_type, checkpoint, device):
     sam_state = torch.load(checkpoint, map_location="cpu")["model_state"]
     # let's get the vit parameters from sam
     encoder_state = []
+    prune_prefix = "sam.image_"
     for k, v in sam_state.items():
-        if k.startswith("image_encoder"):
-            encoder_state.append((k, v))
+        if k.startswith(prune_prefix):
+            encoder_state.append((k[len(prune_prefix):], v))
     encoder_state = OrderedDict(encoder_state)
 
     decoder_state = torch.load(checkpoint, map_location="cpu")["decoder_state"]
