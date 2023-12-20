@@ -16,11 +16,13 @@ class JointSamTrainer(SamTrainer):
             self,
             unetr: torch.nn.Module,
             instance_loss: torch.nn.Module,
+            instance_metric: torch.nn.Module,
             **kwargs
     ):
         super().__init__(**kwargs)
         self.unetr = unetr
         self.instance_loss = instance_loss
+        self.instance_metric = instance_metric
 
     def save_checkpoint(self, name, best_metric, **extra_save_dict):
         # FIXME: in case of unetr, save state dict only for the decoder
@@ -32,10 +34,14 @@ class JointSamTrainer(SamTrainer):
         self.unetr.to(self.device)
         return save_dict
 
-    def _instance_train_iteration(self, x, y):
+    def _instance_iteration(self, x, y, metrc_for_val=False):
         outputs = self.unetr(x.to(self.device))
         loss = self.instance_loss(outputs, y.to(self.device))
-        return loss
+        if metrc_for_val:
+            metric = self.instance_metric(outputs, y.to(self.device))
+            return loss, metric
+        else:
+            return loss
 
     def _train_epoch_impl(self, progress, forward_context, backprop):
         self.model.train()
@@ -63,7 +69,7 @@ class JointSamTrainer(SamTrainer):
 
             with forward_context():
                 # 2. train for the automatic instance segmentation
-                unetr_loss = self._instance_train_iteration(x, labels_for_unetr)
+                unetr_loss = self._instance_iteration(x, labels_for_unetr)
 
             backprop(unetr_loss)
 
@@ -106,10 +112,10 @@ class JointSamTrainer(SamTrainer):
 
                 with forward_context():
                     # 2. validate for the automatic instance segmentation
-                    unetr_loss = self._instance_train_iteration(x, labels_for_unetr)
+                    unetr_loss, unetr_metric = self._instance_iteration(x, labels_for_unetr, metrc_for_val=True)
 
                 loss_val += loss.item()
-                metric_val += metric.item()  # FIXME: update the metric to consider unetr metric as well
+                metric_val += metric.item() + (unetr_metric.item() / 3)
                 model_iou_val += model_iou.item()
                 val_iteration += 1
 

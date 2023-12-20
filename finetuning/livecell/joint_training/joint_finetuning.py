@@ -74,6 +74,7 @@ def finetune_livecell(args):
     )
     unetr.to(device)
 
+    # let's get the parameters for SAM and the decoder from UNETR
     joint_model_params = [params for params in model.parameters()]  # sam parameters
     for name, params in unetr.named_parameters():  # unetr's decoder parameters
         if not name.startswith("encoder"):
@@ -109,7 +110,8 @@ def finetune_livecell(args):
         compile_model=False,
         mask_prob=0.5,  # (optional) overwrite to provide the probability of using mask inputs while training
         unetr=unetr,
-        instance_loss=DiceBasedDistanceLoss(mask_distances_in_bg=True)
+        instance_loss=DiceBasedDistanceLoss(mask_distances_in_bg=True),
+        instance_metric=DiceBasedDistanceLoss(mask_distances_in_bg=True)
     )
     trainer.fit(args.iterations)
     if args.export_path is not None:
