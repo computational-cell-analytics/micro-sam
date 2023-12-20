@@ -26,21 +26,33 @@ class JointSamTrainer(SamTrainer):
         self.instance_metric = instance_metric
 
     def save_checkpoint(self, name, best_metric, **extra_save_dict):
-        """
         current_unetr_state = self.unetr.state_dict()
         decoder_state = []
         for k, v in current_unetr_state.items():
             if not k.startswith("encoder"):
                 decoder_state.append((k, v))
         decoder_state = OrderedDict(decoder_state)
-        """
 
-        # FIXME: in case of unetr, save state dict only for the decoder
-        super().save_checkpoint(name, best_metric, unetr_state=self.unetr.state_dict(), **extra_save_dict)
+        super().save_checkpoint(name, best_metric, decoder_state=decoder_state, **extra_save_dict)
 
     def load_checkpoint(self, checkpoint="best"):
         save_dict = super().load_checkpoint(checkpoint)
-        self.unetr.load_state_dict(save_dict["unetr_state"])
+
+        # let's get the image encoder params from sam
+        sam_state = save_dict["model_state"]
+        encoder_state = []
+        for k, v in sam_state.items():
+            if k.startswith("image_encoder"):
+                encoder_state.append((k, v))
+        encoder_state = OrderedDict(encoder_state)
+
+        # let's get the decoder params from unetr
+        decoder_state = save_dict["decoder_state"]
+
+        # now let's merge the two to get the params for the unetr
+        unetr_state = OrderedDict(list(encoder_state.items()) + list(decoder_state.items()))
+
+        self.unetr.load_state_dict(unetr_state)
         self.unetr.to(self.device)
         return save_dict
 
