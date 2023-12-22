@@ -89,6 +89,8 @@ def finetune_livecell(args):
     convert_inputs = sam_training.ConvertToSamInputs()
 
     checkpoint_name = f"{args.model_type}/livecell_sam"
+
+    # the trainer which performs the joint training and validation (implemented using "torch_em")
     trainer = sam_training.JointSamTrainer(
         name=checkpoint_name,
         save_root=args.save_root,
