@@ -1,6 +1,7 @@
 import numpy as np
 from math import ceil, floor
 
+from torch_em.transform.label import label_consecutive
 from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.transform.raw import normalize_percentile, normalize
 
@@ -56,3 +57,19 @@ class ResizeLabelTrafo:
         )
         assert labels.shape[1:] == self.desired_shape, labels.shape
         return labels
+
+
+def deepbacs_raw_trafo(raw):
+    raw = normalize(raw)
+    raw = raw * 255
+    return raw
+
+
+def deepbacs_label_trafo(labels):
+    labels = label_consecutive(labels)
+    distance_trafo = PerObjectDistanceTransform(
+        distances=True, boundary_distances=True, directed_distances=False,
+        foreground=True, instances=True, min_size=25
+    )
+    labels = distance_trafo(labels)
+    return labels
