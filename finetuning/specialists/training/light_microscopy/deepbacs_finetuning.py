@@ -28,7 +28,7 @@ def get_dataloaders(patch_shape, data_path):
     """
     raw_transform = deepbacs_raw_trafo
     label_transform = deepbacs_label_trafo
-    sampler = MinInstanceSampler()
+    sampler = MinInstanceSampler(min_num_instances=4)
     label_dtype = torch.float32
 
     train_loader = get_deepbacs_loader(
