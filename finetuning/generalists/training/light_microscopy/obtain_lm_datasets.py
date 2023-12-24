@@ -7,7 +7,10 @@ import torch_em
 import torch_em.data.datasets as datasets
 from torch_em.transform.label import label_consecutive
 from torch_em.data import MinInstanceSampler, ConcatDataset
+from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.transform.raw import normalize_percentile, normalize
+
+from micro_sam.training import identity
 
 
 def neurips_raw_trafo(raw):
@@ -23,6 +26,16 @@ def deepbacs_raw_trafo(raw):
     raw = normalize(raw)
     raw = raw * 255
     return raw
+
+
+def distance_label_trafo(labels):
+    labels = label_consecutive(labels)
+    distance_trafo = PerObjectDistanceTransform(
+        distances=True, boundary_distances=True, directed_distances=False,
+        foreground=True, instances=True, min_size=25
+    )
+    labels = distance_trafo(labels)
+    return labels
 
 
 class ResizeRawTrafo:
@@ -55,42 +68,47 @@ class ResizeLabelTrafo:
         self.padding = padding
 
     def __call__(self, labels):
-        labels = label_consecutive(labels)
+        distance_trafo = PerObjectDistanceTransform(
+            distances=True, boundary_distances=True, directed_distances=False,
+            foreground=True, instances=True, min_size=25
+        )
+        labels = distance_trafo(labels)
 
-        tmp_ddim = (self.desired_shape[0] - labels.shape[0], self.desired_shape[1] - labels.shape[1])
+        # choosing H and W from labels (4, H, W), from above dist trafo outputs
+        tmp_ddim = (self.desired_shape[0] - labels.shape[1], self.desired_shape[0] - labels.shape[2])
         ddim = (tmp_ddim[0] / 2, tmp_ddim[1] / 2)
         labels = np.pad(
             labels,
-            pad_width=((ceil(ddim[0]), floor(ddim[0])), (ceil(ddim[1]), floor(ddim[1]))),
+            pad_width=((0, 0), (ceil(ddim[0]), floor(ddim[0])), (ceil(ddim[1]), floor(ddim[1]))),
             mode=self.padding
         )
-        assert labels.shape == self.desired_shape
+        assert labels.shape[1:] == self.desired_shape, labels.shape
         return labels
 
 
 def get_concat_lm_datasets(input_path, patch_shape, split_choice):
     assert split_choice in ["train", "val"]
 
-    label_dtype = torch.int64
-    label_transform = label_consecutive
+    label_dtype = torch.float32
+    label_transform = distance_label_trafo
     sampler = MinInstanceSampler()
 
     generalist_dataset = ConcatDataset(
         datasets.get_tissuenet_dataset(
-            path=os.path.join(input_path, "tissuenet"), split=split_choice, download=True,
-            patch_shape=patch_shape, raw_channel="rgb", label_channel="cell",
+            path=os.path.join(input_path, "tissuenet"), split=split_choice, download=True, patch_shape=patch_shape,
+            raw_channel="rgb", label_channel="cell", sampler=sampler, label_dtype=label_dtype,
             raw_transform=ResizeRawTrafo(patch_shape), label_transform=ResizeLabelTrafo(patch_shape),
-            sampler=sampler, label_dtype=label_dtype, n_samples=1000 if split_choice == "train" else 100
+            n_samples=1000 if split_choice == "train" else 100
         ),
         datasets.get_livecell_dataset(
             path=os.path.join(input_path, "livecell"), split=split_choice, patch_shape=patch_shape,
-            label_transform=label_transform, sampler=sampler, label_dtype=label_dtype,
+            label_transform=label_transform, sampler=sampler, label_dtype=label_dtype, raw_transform=identity,
             n_samples=1000 if split_choice == "train" else 100, download=True
         ),
         datasets.get_deepbacs_dataset(
-            path=os.path.join(input_path, "deepbacs"), split=split_choice if split_choice == "train" else "test",
-            patch_shape=patch_shape, label_transform=label_transform, sampler=sampler, label_dtype=label_dtype,
-            download=True, raw_transform=deepbacs_raw_trafo
+            path=os.path.join(input_path, "deepbacs"), split=split_choice, patch_shape=patch_shape,
+            raw_transform=deepbacs_raw_trafo, label_transform=label_transform, label_dtype=label_dtype,
+            download=True, sampler=MinInstanceSampler(min_num_instances=4)
         ),
         datasets.get_neurips_cellseg_supervised_dataset(
             root=os.path.join(input_path, "neurips-cell-seg"), split=split_choice, patch_shape=patch_shape,
@@ -99,15 +117,14 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
         datasets.get_dsb_dataset(
             path=os.path.join(input_path, "dsb"), split=split_choice if split_choice == "train" else "test",
             patch_shape=(1, patch_shape[0], patch_shape[1]), label_transform=label_transform, sampler=sampler,
-            label_dtype=label_dtype, download=True
+            label_dtype=label_dtype, download=True, raw_transform=identity
         ),
         datasets.get_plantseg_dataset(
             path=os.path.join(input_path, "plantseg"), name="root", sampler=MinInstanceSampler(min_num_instances=10),
-            label_transform=ResizeLabelTrafo(patch_shape), ndim=2, split=split_choice, label_dtype=label_dtype,
-            raw_transform=ResizeRawTrafo(patch_shape, do_rescaling=False), patch_shape=(1, patch_shape[0], patch_shape[1]), download=True,
-            n_samples=1000 if split_choice == "train" else 100
+            patch_shape=(1, patch_shape[0], patch_shape[1]), download=True, split=split_choice,
+            raw_transform=ResizeRawTrafo(patch_shape, do_rescaling=False), ndim=2, label_dtype=label_dtype,
+            label_transform=ResizeLabelTrafo(patch_shape), n_samples=1000 if split_choice == "train" else 100
         )
-
     )
     generalist_dataset.datasets[3].max_sampling_attempts = 5000
 
