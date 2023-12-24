@@ -34,7 +34,7 @@ def get_dataloaders(patch_shape, data_path):
     train_loader = get_plantseg_loader(
         path=data_path, name="root", split="train", patch_shape=(1, *patch_shape), batch_size=2,
         download=True, ndim=2, sampler=sampler, raw_transform=raw_transform, label_transform=label_transform,
-        num_workers=16, shuffle=True, label_dtype=label_dtype
+        num_workers=16, shuffle=True, label_dtype=label_dtype, n_samples=5000  # training w. ~25% of the total train-set
     )
     val_loader = get_plantseg_loader(
         path=data_path, name="root", split="val", patch_shape=(1, *patch_shape), batch_size=1,
