@@ -1,32 +1,20 @@
+import argparse
 import os
-import pandas as pd
 from glob import glob
+
+import pandas as pd
 
 from micro_sam.evaluation import inference
 from micro_sam.evaluation.evaluation import run_evaluation
-
-from util import get_paths, get_checkpoint, MODELS
-
-LIVECELL_GT_ROOT = "/scratch/projects/nim00007/data/LiveCELL/annotations_corrected/livecell_test_images"
-PREDICTION_ROOT = "/scratch/projects/nim00007/sam/iterative_evaluation"
+from util import get_paths, get_experiment_folder, get_model, DATA_ROOT
 
 
-def get_prediction_root(start_with_box_prompt, model_description, root_dir=PREDICTION_ROOT):
-    if start_with_box_prompt:
-        prediction_root = os.path.join(root_dir, model_description, "start_with_box")
-    else:
-        prediction_root = os.path.join(root_dir, model_description, "start_with_point")
-
-    return prediction_root
-
-
-def run_interactive_prompting(predictor, start_with_box_prompt, model_description, prediction_root):
-    # we organize all the folders with data from this experiment below
-    embedding_folder = os.path.join(PREDICTION_ROOT, model_description, "embeddings")
-    os.makedirs(embedding_folder, exist_ok=True)
-
+def run_interactive_prompting(exp_folder, predictor, start_with_box_prompt):
+    prediction_root = os.path.join(
+        exp_folder, "start_with_box" if start_with_box_prompt else "start_with_point"
+    )
+    embedding_folder = os.path.join(exp_folder, "embeddings")
     image_paths, gt_paths = get_paths()
-
     inference.run_inference_with_iterative_prompting(
         predictor=predictor,
         image_paths=image_paths,
@@ -35,22 +23,24 @@ def run_interactive_prompting(predictor, start_with_box_prompt, model_descriptio
         prediction_dir=prediction_root,
         start_with_box_prompt=start_with_box_prompt
     )
+    return prediction_root
 
 
 def get_pg_paths(pred_folder):
     pred_paths = sorted(glob(os.path.join(pred_folder, "*.tif")))
     names = [os.path.split(path)[1] for path in pred_paths]
+    gt_root = os.path.join(DATA_ROOT, "annotations_corrected/livecell_test_images")
     gt_paths = [
-        os.path.join(LIVECELL_GT_ROOT, name.split("_")[0], name) for name in names
+        os.path.join(gt_root, name.split("_")[0], name) for name in names
     ]
     assert all(os.path.exists(pp) for pp in gt_paths)
     return pred_paths, gt_paths
 
 
-def evaluate_interactive_prompting(prediction_root, start_with_box_prompt, model_description):
+def evaluate_interactive_prompting(prediction_root, start_with_box_prompt, name):
     assert os.path.exists(prediction_root), prediction_root
 
-    csv_save_dir = f"./iterative_prompting_results/{model_description}"
+    csv_save_dir = f"./iterative_prompting_results/{name}"
     os.makedirs(csv_save_dir, exist_ok=True)
     csv_path = os.path.join(csv_save_dir, "start_with_box.csv" if start_with_box_prompt else "start_with_point.csv")
     if os.path.exists(csv_path):
@@ -69,35 +59,36 @@ def evaluate_interactive_prompting(prediction_root, start_with_box_prompt, model
     df = pd.concat(list_of_results, ignore_index=True)
     df.to_csv(csv_path)
 
-
-def main(args):
-    start_with_box_prompt = args.box  # overwrite to start first iters' prompt with box instead of single point
-    model_description = args.model  # overwrite to specify the choice of vanilla / finetuned models
-
-    # add the root prediction path where you would like to save the iterative prompting results
-    prediction_root = get_prediction_root(start_with_box_prompt, model_description)
-
-    # get the model checkpoints and desired model name to initialize the predictor
-    if args.checkpoint is None and model_description in MODELS.keys():
-        checkpoint, model_type = get_checkpoint(model_description)
-    else:
-        checkpoint = args.checkpoint
-        model_type = model_description[:5]
-    # get the predictor to perform inference
-    predictor = inference.get_predictor(checkpoint, model_type)
-
-    run_interactive_prompting(predictor, start_with_box_prompt, model_description, prediction_root)
-    evaluate_interactive_prompting(prediction_root, start_with_box_prompt, model_description)
+    # Also save the results in the experiment folder.
+    exp_folder = get_experiment_folder(name)
+    csv_path = os.path.join(
+        exp_folder, "iterative_prompts_start_box.csv" if start_with_box_prompt else "iterative_prompts_start_point.csv"
+    )
+    df.to_csv(csv_path)
 
 
-if __name__ == "__main__":
-    import argparse
+def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--box", action="store_true", help="If passed, starts with first prompt as box")
+
+    parser.add_argument("-n", "--name", required=True)
     parser.add_argument(
         "-m", "--model", type=str,  # options: "vit_h", "vit_h_generalist", "vit_h_specialist"
         help="Provide the model type to initialize the predictor"
     )
     parser.add_argument("-c", "--checkpoint", type=str, default=None)
+    parser.add_argument("--box", action="store_true", help="If passed, starts with first prompt as box")
     args = parser.parse_args()
-    main(args)
+
+    name = args.name
+    start_with_box_prompt = args.box  # overwrite to start first iters' prompt with box instead of single point
+
+    # get the predictor to perform inference
+    predictor = get_model(name, model_type=args.model, ckpt=args.checkpoint)
+
+    exp_folder = get_experiment_folder(name)
+    prediction_root = run_interactive_prompting(exp_folder, predictor, start_with_box_prompt)
+    evaluate_interactive_prompting(prediction_root, start_with_box_prompt, name)
+
+
+if __name__ == "__main__":
+    main()

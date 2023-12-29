@@ -6,6 +6,7 @@ from micro_sam.evaluation.livecell import _get_livecell_paths
 DATA_ROOT = "/scratch/projects/nim00007/data/LiveCELL"
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/livecell"
 PROMPT_FOLDER = "/scratch/projects/nim00007/sam/experiments/prompts/livecell"
+# TODO update the finetuned models
 MODELS = {
     "vit_b": "/scratch/projects/nim00007/sam/vanilla/sam_vit_b_01ec64.pth",
     "vit_h": "/scratch/projects/nim00007/sam/vanilla/sam_vit_h_4b8939.pth",
@@ -29,8 +30,10 @@ def get_checkpoint(name):
     return ckpt, model_type
 
 
-def get_model(name):
-    ckpt, model_type = get_checkpoint(name)
+def get_model(name, model_type=None, ckpt=None):
+    if ckpt is None:
+        ckpt, model_type = get_checkpoint(name)
+    assert (ckpt is not None) and (model_type is not None)
     predictor = get_predictor(ckpt, model_type)
     return predictor
 
