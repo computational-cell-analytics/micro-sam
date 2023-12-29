@@ -6,11 +6,6 @@ from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.transform.raw import normalize_percentile, normalize
 
 
-label_transform = PerObjectDistanceTransform(
-        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=25
-    )
-
-
 class ResizeRawTrafo:
     def __init__(self, desired_shape, do_rescaling=True, padding="constant"):
         self.desired_shape = desired_shape
