@@ -5,7 +5,6 @@ from math import ceil, floor
 import torch
 import torch_em
 import torch_em.data.datasets as datasets
-from torch_em.transform.label import label_consecutive
 from torch_em.data import MinInstanceSampler, ConcatDataset
 from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.transform.raw import normalize_percentile, normalize
@@ -26,16 +25,6 @@ def deepbacs_raw_trafo(raw):
     raw = normalize(raw)
     raw = raw * 255
     return raw
-
-
-def distance_label_trafo(labels):
-    labels = label_consecutive(labels)
-    distance_trafo = PerObjectDistanceTransform(
-        distances=True, boundary_distances=True, directed_distances=False,
-        foreground=True, instances=True, min_size=25
-    )
-    labels = distance_trafo(labels)
-    return labels
 
 
 class ResizeRawTrafo:
@@ -90,7 +79,9 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
     assert split_choice in ["train", "val"]
 
     label_dtype = torch.float32
-    label_transform = distance_label_trafo
+    label_transform = PerObjectDistanceTransform(
+        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=25
+    )
     sampler = MinInstanceSampler()
 
     generalist_dataset = ConcatDataset(
@@ -121,11 +112,12 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
         ),
         datasets.get_plantseg_dataset(
             path=os.path.join(input_path, "plantseg"), name="root", sampler=MinInstanceSampler(min_num_instances=10),
-            patch_shape=(1, patch_shape[0], patch_shape[1]), download=True, split=split_choice,
+            patch_shape=(1, *patch_shape), download=True, split=split_choice,
             raw_transform=ResizeRawTrafo(patch_shape, do_rescaling=False), ndim=2, label_dtype=label_dtype,
             label_transform=ResizeLabelTrafo(patch_shape), n_samples=1000 if split_choice == "train" else 100
         )
     )
+    # increasing the sampling attempts for the neurips cellseg dataset
     generalist_dataset.datasets[3].max_sampling_attempts = 5000
 
     return generalist_dataset
