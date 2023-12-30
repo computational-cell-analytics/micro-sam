@@ -4,12 +4,14 @@ The classes implemented here extend the automatic instance segmentation from Seg
 https://computational-cell-analytics.github.io/micro-sam/micro_sam.html
 """
 
+import os
 import multiprocessing as mp
 import warnings
 from abc import ABC
+from collections import OrderedDict
 from concurrent import futures
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -23,7 +25,11 @@ from nifty.tools import blocking
 from segment_anything.predictor import SamPredictor
 
 from skimage.transform import resize
+from skimage.measure import regionprops
 from torchvision.ops.boxes import batched_nms, box_area
+
+from torch_em.model import UNETR
+from torch_em.util.segmentation import watershed_from_center_and_boundary_distances
 
 try:
     from napari.utils import progress as tqdm
@@ -1131,3 +1137,257 @@ class _TiledEmbeddingMaskGenerator(_EmbeddingMaskGenerator):
         self._tile_shape = state["tile_shape"]
         self._halo = state["halo"]
         super().set_state(state)
+
+
+#
+# Instance segmentation functionality based on fine-tuned decoder
+#
+
+
+class DecoderAdapter(torch.nn.Module):
+    """Adapter to contain the UNETR decoder in a single module.
+
+    To apply the decoder on top of pre-computed embeddings for
+    the segmentation functionality.
+    See also: https://github.com/constantinpape/torch-em/blob/main/torch_em/model/unetr.py
+    """
+    def __init__(self, unetr):
+        super().__init__()
+
+        self.base = unetr.base
+        self.out_conv = unetr.out_conv
+        self.deconv_out = unetr.deconv_out
+        self.decoder_head = unetr.decoder_head
+        self.final_activation = unetr.final_activation
+        self.postprocess_masks = unetr.postprocess_masks
+
+        self.decoder = unetr.decoder
+        self.deconv1 = unetr.deconv1
+        self.deconv2 = unetr.deconv2
+        self.deconv3 = unetr.deconv3
+        self.deconv4 = unetr.deconv4
+
+    def forward(self, input_, input_shape, original_shape):
+        z12 = input_
+
+        z9 = self.deconv1(z12)
+        z6 = self.deconv2(z9)
+        z3 = self.deconv3(z6)
+        z0 = self.deconv4(z3)
+
+        updated_from_encoder = [z9, z6, z3]
+
+        x = self.base(z12)
+        x = self.decoder(x, encoder_inputs=updated_from_encoder)
+        x = self.deconv_out(x)
+
+        x = torch.cat([x, z0], dim=1)
+        x = self.decoder_head(x)
+
+        x = self.out_conv(x)
+        if self.final_activation is not None:
+            x = self.final_activation(x)
+
+        x = self.postprocess_masks(x, input_shape, original_shape)
+        return x
+
+
+def load_instance_segmentation_with_decoder_from_checkpoint(
+    checkpoint: Union[os.PathLike, str],
+    model_type: str,
+    device: Optional[Union[str, torch.device]] = None
+):
+    """Load `InstanceSegmentationWithDecoder` from a `training.JointSamTrainer` checkpoint.
+
+    Args:
+        checkpoint: The path to the checkpoint.
+        model_type: The type of the model, i.e. which image encoder type is used.
+        device: The device to use (cpu or cuda).
+
+    Returns:
+        InstanceSegmentationWithDecoder
+    """
+    device = util.get_device(device)
+    state = torch.load(checkpoint, map_location=device)
+
+    # Get the predictor.
+    model_state = state["model_state"]
+    sam_prefix = "sam."
+    model_state = OrderedDict(
+        [(k[len(sam_prefix):] if k.startswith(sam_prefix) else k, v) for k, v in model_state.items()]
+    )
+
+    sam = util.sam_model_registry[model_type]()
+    sam.to(device)
+    sam.load_state_dict(model_state)
+    predictor = SamPredictor(sam)
+    predictor.model_type = model_type
+
+    # Get the decoder.
+    # NOTE: we hard-code the UNETR settings for now.
+    # Eventually we may need to finds a way to be more flexible.
+    unetr = UNETR(
+        backbone="sam",
+        encoder=predictor.model.image_encoder,
+        out_channels=3,
+        use_sam_stats=True,
+        final_activation="Sigmoid",
+        use_skip_connection=False,
+        resize_input=True,
+    )
+
+    encoder_state = []
+    encoder_prefix = "image_"
+    encoder_state = OrderedDict(
+        (k[len(encoder_prefix):], v) for k, v in model_state.items() if k.startswith(encoder_prefix)
+    )
+
+    decoder_state = state["decoder_state"]
+    unetr_state = OrderedDict(list(encoder_state.items()) + list(decoder_state.items()))
+    unetr.load_state_dict(unetr_state)
+
+    decoder = DecoderAdapter(unetr)
+
+    # Instantiate the segmenter.
+    segmenter = InstanceSegmentationWithDecoder(predictor, decoder)
+    return segmenter
+
+
+class InstanceSegmentationWithDecoder:
+    """Generates an instance segmentation without prompts, using a decoder.
+
+    Implements the same interface as `AutomaticMaskGenerator`.
+
+    Use this class as follows:
+    ```python
+    segmenter = InstanceSegmentationWithDecoder(predictor, decoder)
+    segmenter.initialize(image)   # Predict the image embeddings and decoder outputs.
+    masks = segmenter.generate(center_distance_threshold=0.75)  # Generate the instance segmentation.
+    ```
+
+    Args:
+        predictor: The segment anything predictor.
+        decoder: The decoder to predict intermediate representations
+            for instance segmentation.
+    """
+    def __init__(
+        self,
+        predictor: SamPredictor,
+        decoder: torch.nn.Module,
+    ) -> None:
+        self._predictor = predictor
+        self._decoder = decoder
+
+        # The decoder outputs.
+        self._foreground = None
+        self._center_distances = None
+        self._boundary_distances = None
+
+        self._is_initialized = False
+
+    @property
+    def is_initialized(self):
+        """Whether the mask generator has already been initialized.
+        """
+        return self._is_initialized
+
+    @torch.no_grad()
+    def initialize(
+        self,
+        image: np.ndarray,
+        image_embeddings: Optional[util.ImageEmbeddings] = None,
+        i: Optional[int] = None,
+    ) -> None:
+        """Initialize image embeddings and decoder predictions for an image.
+
+        Args:
+            image: The input image, volume or timeseries.
+            image_embeddings: Optional precomputed image embeddings.
+                See `util.precompute_image_embeddings` for details.
+            i: Index for the image data. Required if `image` has three spatial dimensions
+                or a time dimension and two spatial dimensions.
+        """
+        if image_embeddings is None:
+            image_embeddings = util.precompute_image_embeddings(self._predictor, image)
+
+        # This could be made more versatile to also support other decoder inputs,
+        # e.g. the UNETR with skip connections.
+        embeddings = torch.from_numpy(image_embeddings["features"]).to(self._predictor.device)
+
+        input_shape = tuple(image_embeddings["input_size"])
+        original_shape = tuple(image_embeddings["original_size"])
+        output = self._decoder(
+            embeddings, input_shape, original_shape
+        ).cpu().numpy().squeeze(0)
+
+        assert output.shape[0] == 3, f"{output.shape}"
+
+        self._foreground = output[0]
+        self._center_distances = output[1]
+        self._boundary_distances = output[2]
+
+        self._is_initialized = True
+
+    def _to_masks(self, segmentation, output_mode):
+        if output_mode != "binary_mask":
+            raise NotImplementedError
+        props = regionprops(segmentation)
+        crop_box = [0, segmentation.shape[1], 0, segmentation.shape[0]]
+
+        # go from skimage bbox in format [y0, x0, y1, x1] to SAM format [x0, w, y0, h]
+        def to_bbox(bbox):
+            y0, x0 = bbox[0], bbox[1]
+            w = bbox[3] - x0
+            h = bbox[2] - y0
+            return [x0, w, y0, h]
+
+        masks = [
+            {
+                "segmentation": segmentation == prop.label,
+                "area": prop.area,
+                "bbox": to_bbox(prop.bbox),
+                "crop_box": crop_box,
+                "seg_id": prop.label,
+            } for prop in props
+        ]
+        return masks
+
+    # TODO find good default values (empirically)
+    def generate(
+        self,
+        center_distance_threshold: float = 0.5,
+        boundary_distance_threshold: float = 0.5,
+        foreground_threshold: float = 0.5,
+        distance_smoothing: float = 1.6,
+        min_size: int = 0,
+        output_mode: Optional[str] = "binary_mask",
+    ) -> List[Dict[str, Any]]:
+        """Generate instance segmentation for the currently initialized image.
+
+        Args:
+            center_distance_threshold: Center distance predictions below this value will be
+                used to find seeds (intersected with thresholded boundary distance predictions).
+            boundary_distance_threshold: Boundary distance predictions below this value will be
+                used to find seeds (intersected with thresholded center distance predictions).
+            foreground_threshold: Foreground predictions above this value will be used as foreground mask.
+            distance_smoothing: Sigma value for smoothing the distance predictions.
+            min_size: Minimal object size in the segmentation result.
+            output_mode: The form masks are returned in. Pass None to directly return the instance segmentation.
+
+        Returns:
+            The instance segmentation masks.
+        """
+        if not self.is_initialized:
+            raise RuntimeError("InstanceSegmentationWithDecoder has not been initialized. Call initialize first.")
+
+        segmentation = watershed_from_center_and_boundary_distances(
+            self._center_distances, self._boundary_distances, self._foreground,
+            center_distance_threshold=center_distance_threshold,
+            boundary_distance_threshold=boundary_distance_threshold,
+            foreground_threshold=foreground_threshold,
+            distance_smoothing=distance_smoothing,
+            min_size=min_size,
+        )
+        if output_mode is not None:
+            segmentation = self._to_masks(segmentation, output_mode)
+        return segmentation
