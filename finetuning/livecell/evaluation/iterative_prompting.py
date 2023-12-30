@@ -6,7 +6,7 @@ import pandas as pd
 
 from micro_sam.evaluation import inference
 from micro_sam.evaluation.evaluation import run_evaluation
-from util import get_paths, get_experiment_folder, get_model, DATA_ROOT
+from util import get_paths, get_experiment_folder, get_model, get_pred_and_gt_paths
 
 
 def run_interactive_prompting(exp_folder, predictor, start_with_box_prompt):
@@ -26,17 +26,6 @@ def run_interactive_prompting(exp_folder, predictor, start_with_box_prompt):
     return prediction_root
 
 
-def get_pg_paths(pred_folder):
-    pred_paths = sorted(glob(os.path.join(pred_folder, "*.tif")))
-    names = [os.path.split(path)[1] for path in pred_paths]
-    gt_root = os.path.join(DATA_ROOT, "annotations_corrected/livecell_test_images")
-    gt_paths = [
-        os.path.join(gt_root, name.split("_")[0], name) for name in names
-    ]
-    assert all(os.path.exists(pp) for pp in gt_paths)
-    return pred_paths, gt_paths
-
-
 def evaluate_interactive_prompting(prediction_root, start_with_box_prompt, name):
     assert os.path.exists(prediction_root), prediction_root
 
@@ -51,7 +40,7 @@ def evaluate_interactive_prompting(prediction_root, start_with_box_prompt, name)
     list_of_results = []
     for pred_folder in prediction_folders:
         print("Evaluating", pred_folder)
-        pred_paths, gt_paths = get_pg_paths(pred_folder)
+        pred_paths, gt_paths = get_pred_and_gt_paths(pred_folder)
         res = run_evaluation(gt_paths, pred_paths, save_path=None)
         list_of_results.append(res)
         print(res)
@@ -60,9 +49,11 @@ def evaluate_interactive_prompting(prediction_root, start_with_box_prompt, name)
     df.to_csv(csv_path)
 
     # Also save the results in the experiment folder.
-    exp_folder = get_experiment_folder(name)
+    result_folder = os.path.join(get_experiment_folder(name), "results")
+    os.makedirs(result_folder, exist_ok=True)
     csv_path = os.path.join(
-        exp_folder, "iterative_prompts_start_box.csv" if start_with_box_prompt else "iterative_prompts_start_point.csv"
+        result_folder,
+        "iterative_prompts_start_box.csv" if start_with_box_prompt else "iterative_prompts_start_point.csv"
     )
     df.to_csv(csv_path)
 

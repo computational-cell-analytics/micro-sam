@@ -1,4 +1,5 @@
 import os
+from glob import glob
 
 from micro_sam.evaluation import get_predictor
 from micro_sam.evaluation.livecell import _get_livecell_paths
@@ -45,6 +46,17 @@ def get_experiment_folder(name):
 def check_model(name):
     if name not in MODELS:
         raise ValueError(f"Invalid model {name}, expect one of {MODELS.keys()}")
+
+
+def get_pred_and_gt_paths(prediction_folder):
+    pred_paths = sorted(glob(os.path.join(prediction_folder, "*.tif")))
+    names = [os.path.split(path)[1] for path in pred_paths]
+    gt_root = os.path.join(DATA_ROOT, "annotations_corrected/livecell_test_images")
+    gt_paths = [
+        os.path.join(gt_root, name.split("_")[0], name) for name in names
+    ]
+    assert all(os.path.exists(pp) for pp in gt_paths)
+    return pred_paths, gt_paths
 
 
 def download_livecell():
