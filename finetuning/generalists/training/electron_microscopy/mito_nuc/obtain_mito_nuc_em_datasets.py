@@ -144,9 +144,9 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape, with_cem=False):
 
     # mitoem: train - 1280, val - 640
     # platy-nuclei: train - 424, val - 106
-    # mitolab: train - ..., val - ...
+    # mitolab: train - TODO, val - TODO
 
-    # overall loader: train - 1703, val - 746
+    # overall loader: train - 1703 + ..., val - 746 + ...
 
     return generalist_em_train_dataset, generalist_em_val_dataset
 
