@@ -1245,6 +1245,7 @@ def load_instance_segmentation_with_decoder_from_checkpoint(
     decoder_state = state["decoder_state"]
     unetr_state = OrderedDict(list(encoder_state.items()) + list(decoder_state.items()))
     unetr.load_state_dict(unetr_state)
+    unetr.to(device)
 
     decoder = DecoderAdapter(unetr)
 

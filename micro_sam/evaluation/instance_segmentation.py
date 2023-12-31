@@ -30,7 +30,7 @@ def _get_range_of_search_values(input_vals, step):
 def default_grid_search_values_amg(
     iou_thresh_values: Optional[List[float]] = None,
     stability_score_values: Optional[List[float]] = None,
-) -> Dict[List[float]]:
+) -> Dict[str, List[float]]:
     """Default grid-search parameter for AMG-based instance segmentation.
 
     Return grid search values for the two most important parameters:
@@ -56,11 +56,37 @@ def default_grid_search_values_amg(
     }
 
 
-# TODO
 # TODO document the function
+# TODO smaller default search range
 def default_grid_search_values_instance_segmentation_with_decoder(
-):
-    return {}
+    center_distance_threshold_values: Optional[List[float]] = None,
+    boundary_distance_threshold_values: Optional[List[float]] = None,
+    distance_smoothing_values: Optional[List[float]] = None,
+    min_size_values: Optional[List[float]] = None,
+
+) -> Dict[str, List[float]]:
+
+    if center_distance_threshold_values is None:
+        center_distance_threshold_values = _get_range_of_search_values(
+            [0.5, 0.9], step=0.1
+        )
+    if boundary_distance_threshold_values is None:
+        boundary_distance_threshold_values = _get_range_of_search_values(
+            [0.5, 0.9], step=0.1
+        )
+    if distance_smoothing_values is None:
+        distance_smoothing_values = _get_range_of_search_values(
+            [1.0, 2.0], step=0.1
+        )
+    if min_size_values is None:
+        min_size_values = [25, 50, 75, 100, 200]
+
+    return {
+        "center_distance_threshold": center_distance_threshold_values,
+        "boundary_distance_threshold": boundary_distance_threshold_values,
+        "distance_smoothing": distance_smoothing_values,
+        "min_size": min_size_values,
+    }
 
 
 def _grid_search(

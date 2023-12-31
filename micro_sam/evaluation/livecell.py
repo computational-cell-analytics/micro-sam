@@ -15,7 +15,7 @@ import pandas as pd
 from segment_anything import SamPredictor
 from tqdm import tqdm
 
-from ..instance_segmentation import AutomaticMaskGenerator
+from ..instance_segmentation import AutomaticMaskGenerator, load_instance_segmentation_with_decoder_from_checkpoint
 from . import instance_segmentation, inference, evaluation
 from .experiments import default_experiment_settings, full_experiment_settings
 
@@ -190,6 +190,56 @@ def run_livecell_amg(
 
     instance_segmentation.run_instance_segmentation_grid_search_and_inference(
         amg, grid_search_values,
+        val_image_paths, val_gt_paths, test_image_paths,
+        embedding_folder, prediction_folder, gs_result_folder,
+    )
+    return prediction_folder
+
+
+def run_livecell_instance_segmentation_with_decoder(
+    checkpoint: Union[str, os.PathLike],
+    input_folder: Union[str, os.PathLike],
+    model_type: str,
+    experiment_folder: Union[str, os.PathLike],
+    verbose_gs: bool = False,
+    n_val_per_cell_type: int = 25,
+) -> str:
+    """Run automatic mask generation grid-search and inference for livecell.
+
+    Args:
+        checkpoint: The segment anything model checkpoint.
+        input_folder: The folder with the livecell data.
+        model_type: The type of the segmenta anything model.
+        experiment_folder: The folder where to save all data associated with the experiment.
+        verbose_gs: Whether to run the gridsearch for individual images in a verbose mode.
+        n_val_per_cell_type: The number of validation images per cell type.
+
+    Returns:
+        The path where the predicted images are stored.
+    """
+    embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
+    os.makedirs(embedding_folder, exist_ok=True)
+
+    segmenter = load_instance_segmentation_with_decoder_from_checkpoint(
+        checkpoint, model_type,
+    )
+    seg_prefix = "instance_segmentation_with_decoder"
+
+    # where the predictions are saved
+    prediction_folder = os.path.join(experiment_folder, seg_prefix, "inference")
+    os.makedirs(prediction_folder, exist_ok=True)
+
+    # where the grid-search results are saved
+    gs_result_folder = os.path.join(experiment_folder, seg_prefix, "grid_search")
+    os.makedirs(gs_result_folder, exist_ok=True)
+
+    val_image_paths, val_gt_paths = _get_livecell_paths(input_folder, "val", n_val_per_cell_type=n_val_per_cell_type)
+    test_image_paths, _ = _get_livecell_paths(input_folder, "test")
+
+    grid_search_values = instance_segmentation.default_grid_search_values_instance_segmentation_with_decoder()
+
+    instance_segmentation.run_instance_segmentation_grid_search_and_inference(
+        segmenter, grid_search_values,
         val_image_paths, val_gt_paths, test_image_paths,
         embedding_folder, prediction_folder, gs_result_folder,
     )
