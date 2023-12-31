@@ -16,7 +16,7 @@ from segment_anything import SamPredictor
 from tqdm import tqdm
 
 from ..instance_segmentation import AutomaticMaskGenerator
-from . import automatic_mask_generation, inference, evaluation
+from . import instance_segmentation, inference, evaluation
 from .experiments import default_experiment_settings, full_experiment_settings
 
 CELL_TYPES = ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"]
@@ -168,7 +168,8 @@ def run_livecell_amg(
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
 
-    AMG = AutomaticMaskGenerator
+    predictor = inference.get_predictor(checkpoint, model_type)
+    amg = AutomaticMaskGenerator(predictor)
     amg_prefix = "amg"
 
     # where the predictions are saved
@@ -182,12 +183,15 @@ def run_livecell_amg(
     val_image_paths, val_gt_paths = _get_livecell_paths(input_folder, "val", n_val_per_cell_type=n_val_per_cell_type)
     test_image_paths, _ = _get_livecell_paths(input_folder, "test")
 
-    predictor = inference.get_predictor(checkpoint, model_type)
-    automatic_mask_generation.run_amg_grid_search_and_inference(
-        predictor, val_image_paths, val_gt_paths, test_image_paths,
+    grid_search_values = instance_segmentation.default_grid_search_values_amg(
+        iou_thresh_values=iou_thresh_values,
+        stability_score_values=stability_score_values,
+    )
+
+    instance_segmentation.run_instance_segmentation_grid_search_and_inference(
+        amg, grid_search_values,
+        val_image_paths, val_gt_paths, test_image_paths,
         embedding_folder, prediction_folder, gs_result_folder,
-        iou_thresh_values=iou_thresh_values, stability_score_values=stability_score_values,
-        AMG=AMG, verbose_gs=verbose_gs,
     )
     return prediction_folder
 
