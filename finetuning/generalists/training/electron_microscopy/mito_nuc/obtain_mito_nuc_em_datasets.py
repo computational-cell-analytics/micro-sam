@@ -131,12 +131,13 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape, with_cem=False):
     val_datasets = [mitoem_val_dataset, platy_nuclei_val_dataset]
 
     if with_cem:
-        train_datasets.append(
-            datasets.cem.get_mitolab_dataset(path=os.path.join(input_path, "mitolab"), split="train", val_fraction=0.1)
-        )
-        val_datasets.append(
-            datasets.cem.get_mitolab_dataset(path=os.path.join(input_path, "mitolab"), split="val", val_fraction=0.1)
-        )
+        def cem_dataset(split):
+            return datasets.cem.get_mitolab_dataset(
+                path=os.path.join(input_path, "mitolab"), split="train", val_fraction=0.1
+            )
+
+        train_datasets.append(cem_dataset("train"))
+        val_datasets.append(cem_dataset("val"))
 
     generalist_em_train_dataset = ConcatDataset(train_datasets)
     generalist_em_val_dataset = ConcatDataset(val_datasets)
