@@ -102,8 +102,9 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
             download=True, sampler=MinInstanceSampler(min_num_instances=4)
         ),
         datasets.get_neurips_cellseg_supervised_dataset(
-            root=os.path.join(input_path, "neurips-cell-seg"), split=split_choice, patch_shape=patch_shape,
-            raw_transform=neurips_raw_trafo, label_transform=label_transform, label_dtype=label_dtype, sampler=sampler
+            root=os.path.join(input_path, "neurips-cell-seg"), split=split_choice,
+            patch_shape=patch_shape, raw_transform=neurips_raw_trafo, label_transform=label_transform,
+            label_dtype=label_dtype, sampler=MinInstanceSampler(min_num_instances=3)
         ),
         datasets.get_dsb_dataset(
             path=os.path.join(input_path, "dsb"), split=split_choice if split_choice == "train" else "test",
