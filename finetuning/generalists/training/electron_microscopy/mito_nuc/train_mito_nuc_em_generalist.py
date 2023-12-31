@@ -53,7 +53,9 @@ def finetune_mito_nuc_em_generalist(args):
     # all the stuff we need for training
     optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10, verbose=True)
-    train_loader, val_loader = get_generalist_mito_nuc_loaders(input_path=args.input_path, patch_shape=patch_shape)
+    train_loader, val_loader = get_generalist_mito_nuc_loaders(
+        input_path=args.input_path, patch_shape=patch_shape, with_cem=args.with_cem
+    )
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
     convert_inputs = sam_training.ConvertToSamInputs()
@@ -122,6 +124,10 @@ def main():
     parser.add_argument(
         "--save_every_kth_epoch", type=int, default=None,
         help="To save every kth epoch while fine-tuning. Expects an integer value."
+    )
+    parser.add_argument(
+        "--with_cem", action="store_true",
+        help="To train the Mito-Nuc EM generalist using the MitoLab CEM dataset."
     )
     args = parser.parse_args()
     finetune_mito_nuc_em_generalist(args)
