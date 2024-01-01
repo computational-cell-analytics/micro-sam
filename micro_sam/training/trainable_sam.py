@@ -51,10 +51,17 @@ class TrainableSAM(nn.Module):
         x = F.pad(x, (0, padw, 0, padh))
         return x, input_size
 
-    def image_embeddings_oft(self, input_images):
-        """@private"""
+    def image_embeddings_oft(self, batched_inputs):
+        # Compute the input images.
+        input_images, input_size = self.preprocess(
+            torch.stack([x["image"] for x in batched_inputs], dim=0).to(self.device)
+        )
+        # Update the input size for each input in the batch.
+        for i in range(len(batched_inputs)):
+            batched_inputs[i]["input_size"] = input_size
+        # Compute the image embeddings.
         image_embeddings = self.sam.image_encoder(input_images)
-        return image_embeddings
+        return image_embeddings, batched_inputs
 
     # batched inputs follow the same syntax as the input to sam.forward
     def forward(
