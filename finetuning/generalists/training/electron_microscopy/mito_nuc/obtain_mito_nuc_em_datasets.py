@@ -139,8 +139,8 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape, with_cem=False):
         train_datasets.append(cem_dataset("train"))
         val_datasets.append(cem_dataset("val"))
 
-    generalist_em_train_dataset = ConcatDataset(train_datasets)
-    generalist_em_val_dataset = ConcatDataset(val_datasets)
+    generalist_em_train_dataset = ConcatDataset(*train_datasets)
+    generalist_em_val_dataset = ConcatDataset(*val_datasets)
 
     # mitoem: train - 1280, val - 640
     # platy-nuclei: train - 424, val - 106
@@ -163,6 +163,6 @@ def get_generalist_mito_nuc_loaders(input_path, patch_shape, with_cem=False):
     generalist_train_dataset, generalist_val_dataset = get_concat_mito_nuc_datasets(
         input_path, patch_shape, with_cem=with_cem
     )
-    train_loader = get_data_loader(generalist_train_dataset, batch_size=1, shuffle=True, num_workers=16)
+    train_loader = get_data_loader(generalist_train_dataset, batch_size=2, shuffle=True, num_workers=16)
     val_loader = get_data_loader(generalist_val_dataset, batch_size=1, shuffle=True, num_workers=16)
     return train_loader, val_loader
