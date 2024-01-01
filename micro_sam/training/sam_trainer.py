@@ -195,9 +195,15 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
     # Update Masks Iteratively while Training
     #
     def _update_masks(self, batched_inputs, y, sampled_binary_y, sampled_ids, num_subiter, multimask_output):
-        # estimating the image inputs to make the computations faster for the decoder
-        input_images = torch.stack([self.model.preprocess(x=x["image"].to(self.device)) for x in batched_inputs], dim=0)
+        # Precompute the image embeddings only once.
+        input_images, input_size = self.model.preprocess(
+            torch.stack([x["image"] for x in batched_inputs], dim=0).to(self.device)
+        )
         image_embeddings = self.model.image_embeddings_oft(input_images)
+
+        # Update the input size for each input in the batch.
+        for i in range(len(batched_inputs)):
+            batched_inputs[i]["input_size"] = input_size
 
         loss, mask_loss, iou_regression_loss, mean_model_iou = 0.0, 0.0, 0.0, 0.0
 
@@ -367,20 +373,32 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
     def _interactive_val_iteration(self, x, y, val_iteration):
         n_samples = self._update_samples_for_gt_instances(y, self.n_objects_per_batch)
 
-        (n_pos, n_neg, get_boxes,
-            multimask_output) = self._get_prompt_and_multimasking_choices_for_val(val_iteration)
-
+        n_pos, n_neg, get_boxes, multimask_output = self._get_prompt_and_multimasking_choices_for_val(val_iteration)
         batched_inputs, sampled_ids = self.convert_inputs(x, y, n_pos, n_neg, get_boxes, n_samples)
 
-        batched_outputs = self.model(batched_inputs, multimask_output=multimask_output)
+        input_images, input_size = self.model.preprocess(
+            torch.stack([x["image"] for x in batched_inputs], dim=0).to(self.device)
+        )
+        image_embeddings = self.model.image_embeddings_oft(input_images)
+
+        # Update the input size for each input in the batch.
+        for i in range(len(batched_inputs)):
+            batched_inputs[i]["input_size"] = input_size
+
+        batched_outputs = self.model(
+            batched_inputs,
+            image_embeddings=image_embeddings,
+            multimask_output=multimask_output,
+        )
 
         assert len(y) == len(sampled_ids)
         sampled_binary_y = torch.stack(
             [torch.isin(y[i], torch.tensor(sampled_ids[i])) for i in range(len(y))]
         ).to(torch.float32)
 
-        loss, mask_loss, iou_regression_loss, model_iou = self._get_net_loss(batched_outputs,
-                                                                             y, sampled_ids)
+        loss, mask_loss, iou_regression_loss, model_iou = self._get_net_loss(
+            batched_outputs, y, sampled_ids
+        )
 
         metric = self._get_val_metric(batched_outputs, sampled_binary_y)
 
