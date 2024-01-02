@@ -12,10 +12,9 @@ from micro_sam.training import identity
 
 
 class ResizeRawTrafo:
-    def __init__(self, desired_shape, do_rescaling=True, padding="constant"):
+    def __init__(self, desired_shape, padding="constant"):
         self.desired_shape = desired_shape
         self.padding = padding
-        self.do_rescaling = do_rescaling
 
     def __call__(self, raw):
         tmp_ddim = (self.desired_shape[0] - raw.shape[0], self.desired_shape[1] - raw.shape[1])
@@ -133,7 +132,7 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape, with_cem=False):
     if with_cem:
         def cem_dataset(split):
             return datasets.cem.get_mitolab_dataset(
-                path=os.path.join(input_path, "mitolab"), split="train", val_fraction=0.1
+                path=os.path.join(input_path, "mitolab"), split=split, val_fraction=0.1
             )
 
         train_datasets.append(cem_dataset("train"))
