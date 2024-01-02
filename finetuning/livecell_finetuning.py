@@ -71,7 +71,7 @@ def finetune_livecell(args):
         use_sam_stats=True,
         final_activation="Sigmoid",
         use_skip_connection=False,
-        resize_input=True
+        resize_input=True,
     )
     unetr.to(device)
 
