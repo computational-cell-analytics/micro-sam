@@ -15,7 +15,7 @@ import pandas as pd
 from segment_anything import SamPredictor
 from tqdm import tqdm
 
-from ..instance_segmentation import AutomaticMaskGenerator, _EmbeddingMaskGenerator
+from ..instance_segmentation import AutomaticMaskGenerator
 from . import automatic_mask_generation, inference, evaluation
 from .experiments import default_experiment_settings, full_experiment_settings
 
@@ -29,7 +29,7 @@ CELL_TYPES = ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"
 
 def _get_livecell_paths(input_folder, split="test", n_val_per_cell_type=None):
     assert split in ["val", "test"]
-    assert os.path.exists(input_folder), "Please download the LIVECell Dataset"
+    assert os.path.exists(input_folder), f"Data not found at {input_folder}. Please download the LIVECell Dataset"
 
     if split == "test":
 
@@ -147,8 +147,7 @@ def run_livecell_amg(
     stability_score_values: Optional[List[float]] = None,
     verbose_gs: bool = False,
     n_val_per_cell_type: int = 25,
-    use_mws: bool = False,
-) -> None:
+) -> str:
     """Run automatic mask generation grid-search and inference for livecell.
 
     Args:
@@ -162,17 +161,15 @@ def run_livecell_amg(
             By default values in the range from 0.6 to 0.9 with a stepsize of 0.025 will be used.
         verbose_gs: Whether to run the gridsearch for individual images in a verbose mode.
         n_val_per_cell_type: The number of validation images per cell type.
-        use_mws: Whether to use the mutex watershed based automatic mask generator approach.
+
+    Returns:
+        The path where the predicted images are stored.
     """
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
 
-    if use_mws:
-        amg_prefix = "amg_mws"
-        AMG = _EmbeddingMaskGenerator
-    else:
-        amg_prefix = "amg"
-        AMG = AutomaticMaskGenerator
+    AMG = AutomaticMaskGenerator
+    amg_prefix = "amg"
 
     # where the predictions are saved
     prediction_folder = os.path.join(experiment_folder, amg_prefix, "inference")
@@ -192,6 +189,7 @@ def run_livecell_amg(
         iou_thresh_values=iou_thresh_values, stability_score_values=stability_score_values,
         AMG=AMG, verbose_gs=verbose_gs,
     )
+    return prediction_folder
 
 
 def _run_multiple_prompt_settings(args, prompt_settings):
