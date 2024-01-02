@@ -201,6 +201,14 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
         loss, mask_loss, iou_regression_loss, mean_model_iou = 0.0, 0.0, 0.0, 0.0
 
+        # function to adjust the samples based on the longest side resizing
+        transform = ResizeLongestSide(self.model.sam.image_encoder.img_size)
+
+        # convert the gt to the expected resolution for iterative prompting
+        sampled_binary_y = torch.cat(
+            [transform.apply_image_torch(s).unsqueeze(0) for s in sampled_binary_y]
+        )
+
         # This loop takes care of the idea of sub-iterations, i.e. the number of times we iterate over each batch.
         for i in range(0, num_subiter):
             # We do multimasking only in the first sub-iteration as we then pass single prompt
@@ -234,6 +242,11 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             masks, logits_masks = torch.stack(masks), torch.stack(logits_masks)
             masks = (masks > 0.5).to(torch.float32)
 
+            # convert the predicted masks to the expected resolution for iterative prompting
+            masks = torch.cat(
+                [transform.apply_image_torch(m).unsqueeze(0) for m in masks]
+            )
+
             self._get_updated_points_per_mask_per_subiter(masks, sampled_binary_y, batched_inputs, logits_masks)
 
         loss = loss / num_subiter
@@ -244,15 +257,8 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         return loss, mask_loss, iou_regression_loss, mean_model_iou
 
     def _get_updated_points_per_mask_per_subiter(self, masks, sampled_binary_y, batched_inputs, logits_masks):
-        # function to adjust the prompts based on the longest side resizing
-        transform = ResizeLongestSide(self.model.sam.image_encoder.img_size)
-
         # here, we get the pair-per-batch of predicted and true elements (and also the "batched_inputs")
         for x1, x2, _inp, logits in zip(masks, sampled_binary_y, batched_inputs, logits_masks):
-            if transform is not None:  # convert the coordinates to the expected resolution for iterative prompting
-                x1 = transform.apply_image_torch(x1)
-                x2 = transform.apply_image_torch(x2)
-
             # here, we get each object in the pairs and do the point choices per-object
             net_coords, net_labels, _, _ = self.prompt_generator(x2, x1)
 
