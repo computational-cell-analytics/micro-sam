@@ -2,13 +2,13 @@ import os
 import time
 import random
 import warnings
-import numpy as np
 from typing import Optional
 
+import numpy as np
 import torch
-from torchvision.utils import make_grid
-
 import torch_em
+
+from torchvision.utils import make_grid
 from torch_em.trainer.logger_base import TorchEmLogger
 
 from ..prompt_generators import PromptGeneratorBase, IterativePromptGenerator

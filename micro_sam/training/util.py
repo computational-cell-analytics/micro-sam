@@ -79,7 +79,7 @@ class ConvertToSamInputs:
     def __init__(
         self,
         dilation_strength: int = 10,
-        box_distortion_factor: Optional[float] = None
+        box_distortion_factor: Optional[float] = None,
     ) -> None:
         self.dilation_strength = dilation_strength
         # TODO implement the box distortion logic
