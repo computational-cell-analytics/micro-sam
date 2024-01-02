@@ -8,6 +8,8 @@ from ..prompt_generators import PointAndBoxPromptGenerator
 from ..util import get_centers_and_bounding_boxes, get_sam_model, segmentation_to_one_hot, get_device
 from .trainable_sam import TrainableSAM
 
+from segment_anything.utils.transforms import ResizeLongestSide
+
 
 def identity(x):
     """Identity transformation.
@@ -78,8 +80,10 @@ class ConvertToSamInputs:
         self,
         dilation_strength: int = 10,
         box_distortion_factor: Optional[float] = None,
+        transform: Optional[ResizeLongestSide] = None
     ) -> None:
         self.dilation_strength = dilation_strength
+        self.transform = transform
         # TODO implement the box distortion logic
         if box_distortion_factor is not None:
             raise NotImplementedError
@@ -111,6 +115,9 @@ class ConvertToSamInputs:
     def __call__(self, x, y, n_pos, n_neg, get_boxes=False, n_samples=None):
         """Convert the outputs of dataloader and prompt settings to the batch format expected by SAM.
         """
+
+        if self.transform is not None:  # resizing the masks a/c to the longest side to get the prompts
+            y = self.transform.apply_image_torch(y)
 
         # condition to see if we get point prompts, then we (ofc) use point-prompting
         # else we don't use point prompting
@@ -155,3 +162,34 @@ class ConvertToSamInputs:
             batched_inputs.append(batched_input)
 
         return batched_inputs, batched_sampled_cell_ids_list
+
+
+def visualize_iterative_prompting(x1, x2, updated_point_coords, updated_point_labels):
+    # napari debugging
+    try:
+        import napari
+    except ModuleNotFoundError:
+        napari = None
+
+    assert napari is not None, "The visualization is supported only with napari. Please install `napari`."
+
+    tmp_net_coords = [torch.flip(n1, dims=(-1,)) for n1 in updated_point_coords]
+
+    for x1_, x2_, coords_, labels_ in zip(x1, x2, tmp_net_coords, updated_point_labels):
+        v = napari.Viewer()
+        v.add_image(x1_.squeeze().detach().cpu().numpy(), name="Predicted")
+        v.add_labels(x2_.squeeze().detach().cpu().numpy().astype("int32"), name="GT")
+        prompts = v.add_points(
+            data=np.array(coords_),
+            name="prompts",
+            properties={"label": labels_},
+            edge_color="label",
+            edge_color_cycle=["#00FF00", "#FF0000"],
+            symbol="o",
+            face_color="transparent",
+            edge_width=0.5,
+            size=5,
+            ndim=2
+        )
+        prompts.edge_color_mode = "cycle"
+        napari.run()

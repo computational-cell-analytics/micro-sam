@@ -2,16 +2,18 @@ import os
 import time
 import random
 import warnings
+import numpy as np
 from typing import Optional
 
-import numpy as np
 import torch
-import torch_em
-
 from torchvision.utils import make_grid
+
+import torch_em
 from torch_em.trainer.logger_base import TorchEmLogger
 
 from ..prompt_generators import PromptGeneratorBase, IterativePromptGenerator
+
+from segment_anything.utils.transforms import ResizeLongestSide
 
 
 class SamTrainer(torch_em.trainer.DefaultTrainer):
@@ -242,10 +244,16 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         return loss, mask_loss, iou_regression_loss, mean_model_iou
 
     def _get_updated_points_per_mask_per_subiter(self, masks, sampled_binary_y, batched_inputs, logits_masks):
+        # function to adjust the prompts based on the longest side resizing
+        transform = ResizeLongestSide(self.model.sam.image_encoder.img_size)
+
         # here, we get the pair-per-batch of predicted and true elements (and also the "batched_inputs")
         for x1, x2, _inp, logits in zip(masks, sampled_binary_y, batched_inputs, logits_masks):
             # here, we get each object in the pairs and do the point choices per-object
             net_coords, net_labels, _, _ = self.prompt_generator(x2, x1)
+
+            if transform is not None:  # convert the coordinates to the expected resolution for iterative prompting
+                net_coords = transform.apply_coords_torch(net_coords, sampled_binary_y.shape[-2:])
 
             updated_point_coords = torch.cat([_inp["point_coords"], net_coords], dim=1) \
                 if "point_coords" in _inp.keys() else net_coords
@@ -263,30 +271,11 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
                 else:  # remove  previously existing mask inputs to avoid using them in next sub-iteration
                     _inp.pop("mask_inputs", None)
 
-            debug = False
+            # HACK: to visualize iterative prompting in napari
+            debug = True
             if debug:
-                # HACK: napari debugging
-                tmp_net_coords = [torch.flip(n1, dims=(-1,)) for n1 in updated_point_coords]
-
-                for x1_, x2_, coords_, labels_ in zip(x1, x2, tmp_net_coords, updated_point_labels):
-                    import napari
-                    v = napari.Viewer()
-                    v.add_image(x1_.squeeze().detach().cpu().numpy(), name="Predicted")
-                    v.add_labels(x2_.squeeze().detach().cpu().numpy().astype("int32"), name="GT")
-                    prompts = v.add_points(
-                        data=np.array(coords_),
-                        name="prompts",
-                        properties={"label": labels_},
-                        edge_color="label",
-                        edge_color_cycle=["#00FF00", "#FF0000"],
-                        symbol="o",
-                        face_color="transparent",
-                        edge_width=0.5,
-                        size=5,
-                        ndim=2
-                    )
-                    prompts.edge_color_mode = "cycle"
-                    napari.run()
+                from .util import visualize_iterative_prompting
+                visualize_iterative_prompting(x1, x2, updated_point_coords, updated_point_labels)
 
     #
     # Training Loop
