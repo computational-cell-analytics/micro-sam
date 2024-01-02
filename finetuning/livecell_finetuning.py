@@ -12,8 +12,6 @@ from torch_em.transform.label import PerObjectDistanceTransform
 import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
 
-from segment_anything.utils.transforms import ResizeLongestSide
-
 
 def get_dataloaders(patch_shape, data_path, cell_type=None):
     """This returns the livecell data loaders implemented in torch_em:
@@ -89,9 +87,7 @@ def finetune_livecell(args):
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
-    convert_inputs = sam_training.ConvertToSamInputs(
-        transform=ResizeLongestSide(model.sam.image_encoder.img_size)
-    )
+    convert_inputs = sam_training.ConvertToSamInputs()
 
     checkpoint_name = f"{args.model_type}/livecell_sam"
 

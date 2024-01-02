@@ -79,11 +79,9 @@ class ConvertToSamInputs:
     def __init__(
         self,
         dilation_strength: int = 10,
-        box_distortion_factor: Optional[float] = None,
-        transform: Optional[ResizeLongestSide] = None
+        box_distortion_factor: Optional[float] = None
     ) -> None:
         self.dilation_strength = dilation_strength
-        self.transform = transform
         # TODO implement the box distortion logic
         if box_distortion_factor is not None:
             raise NotImplementedError
@@ -115,9 +113,8 @@ class ConvertToSamInputs:
     def __call__(self, x, y, n_pos, n_neg, get_boxes=False, n_samples=None):
         """Convert the outputs of dataloader and prompt settings to the batch format expected by SAM.
         """
-
-        if self.transform is not None:  # resizing the masks a/c to the longest side to get the prompts
-            y = self.transform.apply_image_torch(y)
+        # function to apply resizing for the input prompts
+        transform = ResizeLongestSide(1024)
 
         # condition to see if we get point prompts, then we (ofc) use point-prompting
         # else we don't use point prompting
@@ -154,9 +151,9 @@ class ConvertToSamInputs:
 
             batched_input = {"image": image, "original_size": image.shape[1:]}
             if get_boxes:
-                batched_input["boxes"] = box_prompts
+                batched_input["boxes"] = transform.apply_boxes_torch(box_prompts, original_size=gt.shape[-2:])
             if get_points:
-                batched_input["point_coords"] = point_prompts
+                batched_input["point_coords"] = transform.apply_coords_torch(point_prompts, original_size=gt.shape[-2:])
                 batched_input["point_labels"] = point_label_prompts
 
             batched_inputs.append(batched_input)
