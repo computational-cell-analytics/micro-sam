@@ -170,6 +170,7 @@ def get_predictor(
     return predictor
 
 
+# TODO batch this computation
 def precompute_all_embeddings(
     predictor: SamPredictor,
     image_paths: List[Union[str, os.PathLike]],

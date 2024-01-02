@@ -47,6 +47,7 @@ class _FakeInput:
         return np.zeros(block_shape, dtype="float32")
 
 
+# FIXME remove the shape argument
 def mask_data_to_segmentation(
     masks: List[Dict[str, Any]],
     shape: Tuple[int, ...],
@@ -69,7 +70,9 @@ def mask_data_to_segmentation(
     """
 
     masks = sorted(masks, key=(lambda x: x["area"]), reverse=True)
-    segmentation = np.zeros(shape[:2], dtype="uint32")
+    # we could also get the shape from the crop box
+    shape = next(iter(masks))["segmentation"].shape
+    segmentation = np.zeros(shape, dtype="uint32")
 
     def require_numpy(mask):
         return mask.cpu().numpy() if torch.is_tensor(mask) else mask
@@ -872,16 +875,32 @@ class InstanceSegmentationWithDecoder:
     def _to_masks(self, segmentation, output_mode):
         if output_mode != "binary_mask":
             raise NotImplementedError
+
         props = regionprops(segmentation)
-        crop_box = [0, segmentation.shape[1], 0, segmentation.shape[0]]
+        ndim = segmentation.ndim
+        assert ndim in (2, 3)
+
+        shape = segmentation.shape
+        if ndim == 2:
+            crop_box = [0, shape[1], 0, shape[0]]
+        else:
+            crop_box = [0, shape[2], 0, shape[1], 0, shape[0]]
 
         # go from skimage bbox in format [y0, x0, y1, x1] to SAM format [x0, w, y0, h]
-        def to_bbox(bbox):
+        def to_bbox_2d(bbox):
             y0, x0 = bbox[0], bbox[1]
             w = bbox[3] - x0
             h = bbox[2] - y0
             return [x0, w, y0, h]
 
+        def to_bbox_3d(bbox):
+            z0, y0, x0 = bbox[0], bbox[1], bbox[2]
+            w = bbox[5] - x0
+            h = bbox[4] - y0
+            d = bbox[3] - y0
+            return [x0, w, y0, h, z0, d]
+
+        to_bbox = to_bbox_2d if ndim == 2 else to_bbox_3d
         masks = [
             {
                 "segmentation": segmentation == prop.label,
