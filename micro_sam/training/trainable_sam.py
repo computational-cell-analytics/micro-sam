@@ -111,6 +111,10 @@ class TrainableSAM(nn.Module):
                 multimask_output=multimask_output,
             )
 
+            breakpoint()
+
+            # need to pay close attention to the input size attribute, let's see
+
             masks = self.sam.postprocess_masks(
                 low_res_masks,
                 input_size=image_record["input_size"],

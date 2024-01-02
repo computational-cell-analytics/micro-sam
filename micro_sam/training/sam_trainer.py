@@ -263,29 +263,30 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
                 else:  # remove  previously existing mask inputs to avoid using them in next sub-iteration
                     _inp.pop("mask_inputs", None)
 
-            # napari debugging
-            tmp_net_coords = [torch.flip(n1, dims=(-1,)) for n1 in updated_point_coords]
+            debug = False
+            if debug:
+                # HACK: napari debugging
+                tmp_net_coords = [torch.flip(n1, dims=(-1,)) for n1 in updated_point_coords]
 
-            for x1_, x2_, coords_, labels_ in zip(x1, x2, tmp_net_coords, updated_point_labels):
-                breakpoint()
-                import napari
-                v = napari.Viewer()
-                v.add_image(x1_.squeeze().detach().cpu().numpy())
-                v.add_labels(x2_.squeeze().detach().cpu().numpy().astype("int32"))
-                prompts = v.add_points(
-                    data=np.array(coords_),
-                    name="prompts",
-                    properties={"label": labels_},
-                    edge_color="label",
-                    edge_color_cycle=["#00FF00", "#FF0000"],
-                    symbol="o",
-                    face_color="transparent",
-                    edge_width=0.5,
-                    size=5,
-                    ndim=2
-                )
-                prompts.edge_color_mode = "cycle"
-                napari.run()
+                for x1_, x2_, coords_, labels_ in zip(x1, x2, tmp_net_coords, updated_point_labels):
+                    import napari
+                    v = napari.Viewer()
+                    v.add_image(x1_.squeeze().detach().cpu().numpy(), name="Predicted")
+                    v.add_labels(x2_.squeeze().detach().cpu().numpy().astype("int32"), name="GT")
+                    prompts = v.add_points(
+                        data=np.array(coords_),
+                        name="prompts",
+                        properties={"label": labels_},
+                        edge_color="label",
+                        edge_color_cycle=["#00FF00", "#FF0000"],
+                        symbol="o",
+                        face_color="transparent",
+                        edge_width=0.5,
+                        size=5,
+                        ndim=2
+                    )
+                    prompts.edge_color_mode = "cycle"
+                    napari.run()
 
     #
     # Training Loop
