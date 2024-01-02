@@ -14,11 +14,11 @@ from torch_em.trainer.tensorboard_logger import normalize_im
 
 class JointSamTrainer(SamTrainer):
     def __init__(
-            self,
-            unetr: torch.nn.Module,
-            instance_loss: torch.nn.Module,
-            instance_metric: torch.nn.Module,
-            **kwargs
+        self,
+        unetr: torch.nn.Module,
+        instance_loss: torch.nn.Module,
+        instance_metric: torch.nn.Module,
+        **kwargs
     ):
         super().__init__(**kwargs)
         self.unetr = unetr

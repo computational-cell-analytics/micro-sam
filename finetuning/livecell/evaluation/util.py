@@ -4,6 +4,7 @@ from glob import glob
 from micro_sam.evaluation import get_predictor
 from micro_sam.evaluation.livecell import _get_livecell_paths
 
+# FIXME make sure this uses the corrected ground-truth!!!
 DATA_ROOT = "/scratch/projects/nim00007/data/LiveCELL"
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/livecell"
 PROMPT_FOLDER = "/scratch/projects/nim00007/sam/experiments/prompts/livecell"

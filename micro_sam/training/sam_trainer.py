@@ -195,19 +195,17 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
     # Update Masks Iteratively while Training
     #
     def _update_masks(self, batched_inputs, y, sampled_binary_y, sampled_ids, num_subiter, multimask_output):
-        # estimating the image inputs to make the computations faster for the decoder
-        input_images = torch.stack([self.model.preprocess(x=x["image"].to(self.device)) for x in batched_inputs], dim=0)
-        image_embeddings = self.model.image_embeddings_oft(input_images)
+        image_embeddings, batched_inputs = self.model.image_embeddings_oft(batched_inputs)
 
         loss, mask_loss, iou_regression_loss, mean_model_iou = 0.0, 0.0, 0.0, 0.0
 
-        # this loop takes care of the idea of sub-iterations, i.e. the number of times we iterate over each batch
+        # This loop takes care of the idea of sub-iterations, i.e. the number of times we iterate over each batch.
         for i in range(0, num_subiter):
-            # we do multimasking only in the first sub-iteration as we then pass single prompt
-            # after the first sub-iteration, we don't do multimasking because we get multiple prompts
+            # We do multimasking only in the first sub-iteration as we then pass single prompt
+            # after the first sub-iteration, we don't do multimasking because we get multiple prompts.
             batched_outputs = self.model(batched_inputs,
-                                         multimask_output=multimask_output if i == 0 else False,
-                                         image_embeddings=image_embeddings)
+                                         image_embeddings=image_embeddings,
+                                         multimask_output=multimask_output if i == 0 else False)
 
             # we want to average the loss and then backprop over the net sub-iterations
             net_loss, net_mask_loss, net_iou_regression_loss, net_mean_model_iou = self._get_net_loss(batched_outputs,
@@ -367,20 +365,25 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
     def _interactive_val_iteration(self, x, y, val_iteration):
         n_samples = self._update_samples_for_gt_instances(y, self.n_objects_per_batch)
 
-        (n_pos, n_neg, get_boxes,
-            multimask_output) = self._get_prompt_and_multimasking_choices_for_val(val_iteration)
-
+        n_pos, n_neg, get_boxes, multimask_output = self._get_prompt_and_multimasking_choices_for_val(val_iteration)
         batched_inputs, sampled_ids = self.convert_inputs(x, y, n_pos, n_neg, get_boxes, n_samples)
 
-        batched_outputs = self.model(batched_inputs, multimask_output=multimask_output)
+        image_embeddings, batched_inputs = self.model.image_embeddings_oft(batched_inputs)
+
+        batched_outputs = self.model(
+            batched_inputs,
+            image_embeddings=image_embeddings,
+            multimask_output=multimask_output,
+        )
 
         assert len(y) == len(sampled_ids)
         sampled_binary_y = torch.stack(
             [torch.isin(y[i], torch.tensor(sampled_ids[i])) for i in range(len(y))]
         ).to(torch.float32)
 
-        loss, mask_loss, iou_regression_loss, model_iou = self._get_net_loss(batched_outputs,
-                                                                             y, sampled_ids)
+        loss, mask_loss, iou_regression_loss, model_iou = self._get_net_loss(
+            batched_outputs, y, sampled_ids
+        )
 
         metric = self._get_val_metric(batched_outputs, sampled_binary_y)
 
