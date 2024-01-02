@@ -273,7 +273,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
                     _inp.pop("mask_inputs", None)
 
             # HACK: to visualize iterative prompting in napari
-            debug = True
+            debug = False
             if debug:
                 from .util import visualize_iterative_prompting
                 visualize_iterative_prompting(x1, x2, updated_point_coords, updated_point_labels)
