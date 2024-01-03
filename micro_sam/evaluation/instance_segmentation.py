@@ -116,9 +116,7 @@ def _grid_search_iteration(
         masks = segmenter.generate(**generate_kwargs)
 
         min_object_size = generate_kwargs.get("min_mask_region_area", 0)
-        instance_labels = mask_data_to_segmentation(
-            masks, gt.shape, with_background=True, min_object_size=min_object_size,
-        )
+        instance_labels = mask_data_to_segmentation(masks, with_background=True, min_object_size=min_object_size)
         m_sas, sas = mean_segmentation_accuracy(instance_labels, gt, return_accuracies=True)  # type: ignore
 
         result_dict = {"image_name": image_name, "mSA": m_sas, "SA50": sas[0], "SA75": sas[5]}
@@ -275,9 +273,7 @@ def run_instance_segmentation_inference(
 
         segmenter.initialize(image, image_embeddings)
         masks = segmenter.generate(**generate_kwargs)
-        instances = mask_data_to_segmentation(
-            masks, image.shape, with_background=True, min_object_size=min_object_size,
-        )
+        instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=min_object_size)
 
         # It's important to compress here, otherwise the predictions would take up a lot of space.
         imageio.imwrite(prediction_path, instances, compression=5)

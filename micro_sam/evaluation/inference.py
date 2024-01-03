@@ -170,7 +170,6 @@ def get_predictor(
     return predictor
 
 
-# TODO batch this computation
 def precompute_all_embeddings(
     predictor: SamPredictor,
     image_paths: List[Union[str, os.PathLike]],
@@ -388,9 +387,8 @@ def run_inference_with_prompts(
 def _save_segmentation(masks, prediction_path):
     # masks to segmentation
     masks = masks.cpu().numpy().squeeze().astype("bool")
-    shape = masks.shape[-2:]
     masks = [{"segmentation": mask, "area": mask.sum()} for mask in masks]
-    segmentation = mask_data_to_segmentation(masks, shape, with_background=True)
+    segmentation = mask_data_to_segmentation(masks, with_background=True)
     imageio.imwrite(prediction_path, segmentation, compression=5)
 
 
