@@ -57,7 +57,6 @@ def default_grid_search_values_amg(
     }
 
 
-# TODO document the function
 # TODO smaller default search range
 def default_grid_search_values_instance_segmentation_with_decoder(
     center_distance_threshold_values: Optional[List[float]] = None,
@@ -65,7 +64,21 @@ def default_grid_search_values_instance_segmentation_with_decoder(
     distance_smoothing_values: Optional[List[float]] = None,
     min_size_values: Optional[List[float]] = None,
 ) -> Dict[str, List[float]]:
+    """Default grid-search parameter for decoder-based instance segmentation.
 
+    Args:
+        center_distance_threshold_values: The values for `center_distance_threshold` used in the gridsearch.
+            By default values in the range from 0.5 to 0.9 with a stepsize of 0.1 will be used.
+        boundary_distance_threshold_values: The values for `boundary_distance_threshold` used in the gridsearch.
+            By default values in the range from 0.5 to 0.9 with a stepsize of 0.1 will be used.
+        distance_smoothing_values: The values for `distance_smoothing` used in the gridsearch.
+            By default values in the range from 1.0 to 2.0 with a stepsize of 0.1 will be used.
+        min_size_values: The values for `min_size` used in the gridsearch.
+            By default the values 25, 50, 75, 100 and 200  are used.
+
+    Returns:
+        The values for grid search.
+    """
     if center_distance_threshold_values is None:
         center_distance_threshold_values = _get_range_of_search_values(
             [0.5, 0.9], step=0.1
@@ -80,7 +93,6 @@ def default_grid_search_values_instance_segmentation_with_decoder(
         )
     if min_size_values is None:
         min_size_values = [25, 50, 75, 100, 200]
-
     return {
         "center_distance_threshold": center_distance_threshold_values,
         "boundary_distance_threshold": boundary_distance_threshold_values,
@@ -89,18 +101,15 @@ def default_grid_search_values_instance_segmentation_with_decoder(
     }
 
 
-# TODO update all arguments and description
-def grid_search_iteration(
-    segmenter,
-    gs_combinations,
+def _grid_search_iteration(
+    segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
+    gs_combinations: List[Dict],
     gt: np.ndarray,
     image_name: str,
-    fixed_generate_kwargs,
+    fixed_generate_kwargs: Dict[str, Any],
     result_path: Optional[Union[str, os.PathLike]],
     verbose: bool = False,
 ) -> pd.DataFrame:
-    """
-    """
     net_list = []
     for gs_kwargs in tqdm(gs_combinations, disable=not verbose):
         generate_kwargs = gs_kwargs | fixed_generate_kwargs
@@ -223,7 +232,7 @@ def run_instance_segmentation_grid_search(
             image_embeddings = util.precompute_image_embeddings(predictor, image, embedding_path, ndim=2)
             segmenter.initialize(image, image_embeddings)
 
-        grid_search_iteration(
+        _grid_search_iteration(
             segmenter, gs_combinations, gt, image_name,
             fixed_generate_kwargs=fixed_generate_kwargs, result_path=result_path, verbose=verbose_gs,
         )
