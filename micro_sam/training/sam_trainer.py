@@ -252,6 +252,12 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             # here, we get each object in the pairs and do the point choices per-object
             net_coords, net_labels, _, _ = self.prompt_generator(x2, x1)
 
+            # convert the point coordinates to the expected resolution for iterative prompting
+            # NOTE:
+            #   - "only" need to transform the point prompts from the iterative prompting
+            #   - the `logits` are the low res masks (256, 256), hence do not need the transform
+            net_coords = self.model.transform.apply_coords_torch(net_coords, sampled_binary_y.shape[-2:])
+
             updated_point_coords = torch.cat([_inp["point_coords"], net_coords], dim=1) \
                 if "point_coords" in _inp.keys() else net_coords
             updated_point_labels = torch.cat([_inp["point_labels"], net_labels], dim=1) \
