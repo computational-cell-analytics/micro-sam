@@ -853,7 +853,10 @@ class InstanceSegmentationWithDecoder:
 
         # This could be made more versatile to also support other decoder inputs,
         # e.g. the UNETR with skip connections.
-        embeddings = torch.from_numpy(image_embeddings["features"]).to(self._predictor.device)
+        if isinstance(image_embeddings["features"], torch.Tensor):
+            embeddings = image_embeddings["features"].to(self._predictor.device)
+        else:
+            embeddings = torch.from_numpy(image_embeddings["features"]).to(self._predictor.device)
 
         input_shape = tuple(image_embeddings["input_size"])
         original_shape = tuple(image_embeddings["original_size"])
