@@ -8,8 +8,6 @@ from ..prompt_generators import PointAndBoxPromptGenerator
 from ..util import get_centers_and_bounding_boxes, get_sam_model, segmentation_to_one_hot, get_device
 from .trainable_sam import TrainableSAM
 
-from segment_anything.utils.transforms import ResizeLongestSide
-
 
 def identity(x):
     """Identity transformation.
@@ -79,9 +77,11 @@ class ConvertToSamInputs:
     def __init__(
         self,
         dilation_strength: int = 10,
+        transform=None,
         box_distortion_factor: Optional[float] = None,
     ) -> None:
         self.dilation_strength = dilation_strength
+        self.transform = transform
         # TODO implement the box distortion logic
         if box_distortion_factor is not None:
             raise NotImplementedError
@@ -113,9 +113,6 @@ class ConvertToSamInputs:
     def __call__(self, x, y, n_pos, n_neg, get_boxes=False, n_samples=None):
         """Convert the outputs of dataloader and prompt settings to the batch format expected by SAM.
         """
-        # function to apply resizing for the input prompts
-        transform = ResizeLongestSide(1024)
-
         # condition to see if we get point prompts, then we (ofc) use point-prompting
         # else we don't use point prompting
         if n_pos == 0 and n_neg == 0:
@@ -151,9 +148,13 @@ class ConvertToSamInputs:
 
             batched_input = {"image": image, "original_size": image.shape[1:]}
             if get_boxes:
-                batched_input["boxes"] = transform.apply_boxes_torch(box_prompts, original_size=gt.shape[-2:])
+                batched_input["boxes"] = self.transform.apply_boxes_torch(
+                    box_prompts, original_size=gt.shape[-2:]
+                ) if self.transform is not None else box_prompts
             if get_points:
-                batched_input["point_coords"] = transform.apply_coords_torch(point_prompts, original_size=gt.shape[-2:])
+                batched_input["point_coords"] = self.transform.apply_coords_torch(
+                    point_prompts, original_size=gt.shape[-2:]
+                ) if self.transform is not None else point_prompts
                 batched_input["point_labels"] = point_label_prompts
 
             batched_inputs.append(batched_input)
