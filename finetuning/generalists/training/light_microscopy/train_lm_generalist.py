@@ -40,7 +40,8 @@ def finetune_lm_generalist(args):
         out_channels=3,
         use_sam_stats=True,
         final_activation="Sigmoid",
-        use_skip_connection=False
+        use_skip_connection=False,
+        resize_input=True
     )
     unetr.to(device)
 

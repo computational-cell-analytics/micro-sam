@@ -6,13 +6,13 @@ import torch
 import torch_em
 from torch_em.model import UNETR
 from torch_em.data import MinInstanceSampler
+from torch_em.transform.raw import normalize
 from torch_em.loss import DiceBasedDistanceLoss
 from torch_em.data.datasets import get_deepbacs_loader
+from torch_em.transform.label import PerObjectDistanceTransform
 
 import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
-
-from common import deepbacs_raw_trafo, deepbacs_label_trafo
 
 
 def get_dataloaders(patch_shape, data_path):
@@ -26,8 +26,16 @@ def get_dataloaders(patch_shape, data_path):
     I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
     Important: the ID 0 is reseved for background, and the IDs must be consecutive
     """
+    def deepbacs_raw_trafo(raw):
+        raw = normalize(raw)
+        raw = raw * 255
+        return raw
+
     raw_transform = deepbacs_raw_trafo
-    label_transform = deepbacs_label_trafo
+    label_transform = PerObjectDistanceTransform(
+        distances=True, boundary_distances=True, directed_distances=False,
+        foreground=True, instances=True, min_size=25
+    )
     sampler = MinInstanceSampler(min_num_instances=4)
     label_dtype = torch.float32
 
@@ -73,7 +81,8 @@ def finetune_deepbacs(args):
         out_channels=3,
         use_sam_stats=True,
         final_activation="Sigmoid",
-        use_skip_connection=False
+        use_skip_connection=False,
+        resize_input=True
     )
     unetr.to(device)
 

@@ -11,8 +11,7 @@ from torch_em.data.datasets import get_tissuenet_loader
 
 import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
-
-from common import ResizeRawTrafo, ResizeLabelTrafo
+from micro_sam.training.util import ResizeRawTrafo, ResizeLabelTrafo
 
 
 def get_dataloaders(patch_shape, data_path):
@@ -73,7 +72,8 @@ def finetune_tissuenet(args):
         out_channels=3,
         use_sam_stats=True,
         final_activation="Sigmoid",
-        use_skip_connection=False
+        use_skip_connection=False,
+        resize_input=True
     )
     unetr.to(device)
 
