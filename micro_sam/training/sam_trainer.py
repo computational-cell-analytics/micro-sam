@@ -14,9 +14,6 @@ from torch_em.trainer.logger_base import TorchEmLogger
 from ..prompt_generators import PromptGeneratorBase, IterativePromptGenerator
 
 
-# TODO training clean up
-# - consider hard-coding the dice loss to make sure the reduction is set correctly.
-# - don't need a metric class since we re-use loss calculation
 class SamTrainer(torch_em.trainer.DefaultTrainer):
     """Trainer class for training the Segment Anything model.
 
@@ -32,7 +29,6 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         n_objects_per_batch: If not given, we compute the loss for all objects in a sample.
             Otherwise the loss computation is limited to n_objects_per_batch, and the objects are randomly sampled.
         mse_loss: The regression loss to compare the IoU predicted by the model with the true IoU.
-        sigmoid: The activation function for normalizing the model output.
         prompt_generator: The iterative prompt generator which takes care of the iterative prompting logic for training
         mask_prob: The probability of using the mask inputs in the iterative prompting (per `n_sub_iteration`)
         **kwargs: The keyword arguments of the DefaultTrainer super class.
@@ -48,7 +44,10 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         mask_prob: float = 0.5,
         **kwargs
     ):
-        super().__init__(**kwargs)
+        # We have to use the Dice Loss with reduce channel set to None.
+        # Hence we hard-code it here to avoid issues by passsing wrong options for the loss.
+        dice_loss = torch_em.loss.DiceLoss(reduce_channel=None)
+        super().__init__(loss=dice_loss, metric=dice_loss, **kwargs)
         self.convert_inputs = convert_inputs
         self.mse_loss = mse_loss
         self.n_objects_per_batch = n_objects_per_batch
@@ -277,6 +276,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         # number of objects across the batch.
         n_objects = min(len(ids) for ids in sampled_ids)
 
+        y = y.to(self.device)
         # Compute the one hot targets for the seg-id.
         y_one_hot = torch.stack([
             torch.stack([target == seg_id for seg_id in ids[:n_objects]])

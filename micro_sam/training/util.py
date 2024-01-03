@@ -76,7 +76,6 @@ class ConvertToSamInputs:
             It determines a "safety" border from which prompts are not sampled to avoid ambiguous prompts
             due to imprecise groundtruth masks.
         box_distortion_factor: Factor for distorting the box annotations derived from the groundtruth masks.
-            Not yet implemented.
     """
     def __init__(
         self,
@@ -86,9 +85,20 @@ class ConvertToSamInputs:
     ) -> None:
         self.dilation_strength = dilation_strength
         self.transform = identity if transform is None else transform
-        # TODO implement the box distortion logic
-        if box_distortion_factor is not None:
-            raise NotImplementedError
+        self.box_distortion_factor = box_distortion_factor
+
+    def _distort_boxes(self, bbox_coordinates, shape):
+        distorted_boxes = []
+        for bbox in bbox_coordinates:
+            # The bounding box is parametrized by y0, x0, y1, x1.
+            y0, x0, y1, x1 = bbox
+            ly, lx = y1 - y0, x1 - x0
+            y0 = int(round(max(0, y0 - np.random.uniform(0, self.box_distortion_factor) * ly)))
+            y1 = int(round(min(shape[0], y1 + np.random.uniform(0, self.box_distortion_factor) * ly)))
+            x0 = int(round(max(0, x0 - np.random.uniform(0, self.box_distortion_factor) * lx)))
+            x1 = int(round(min(shape[1], x1 + np.random.uniform(0, self.box_distortion_factor) * lx)))
+            distorted_boxes.append([y0, x0, y1, x1])
+        return distorted_boxes
 
     def _get_prompt_lists(self, gt, n_samples, prompt_generator):
         """Returns a list of "expected" prompts subjected to the random input attributes for prompting."""
@@ -106,6 +116,8 @@ class ConvertToSamInputs:
 
         # only keep the bounding boxes for sampled cell ids
         bbox_coordinates = [bbox_coordinates[sampled_id] for sampled_id in sampled_cell_ids]
+        if self.box_distortion_factor is not None:
+            bbox_coordinates = self._distort_boxes(bbox_coordinates, shape=gt.shape[-2:])
 
         # convert the gt to the one-hot-encoded masks for the sampled cell ids
         object_masks = segmentation_to_one_hot(gt, None if n_samples is None else sampled_cell_ids)
