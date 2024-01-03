@@ -4,6 +4,8 @@ from typing import List, Optional, Union
 import numpy as np
 import torch
 
+from segment_anything.utils.transforms import ResizeLongestSide
+
 from ..prompt_generators import PointAndBoxPromptGenerator
 from ..util import get_centers_and_bounding_boxes, get_sam_model, segmentation_to_one_hot, get_device
 from .trainable_sam import TrainableSAM
@@ -68,6 +70,8 @@ class ConvertToSamInputs:
     """Convert outputs of data loader to the expected batched inputs of the SegmentAnything model.
 
     Args:
+        transform: The transformation to resize the prompts. Should be the same transform used in the
+            model to resize the inputs. If `None` the prompts will not be resized.
         dilation_strength: The dilation factor.
             It determines a "safety" border from which prompts are not sampled to avoid ambiguous prompts
             due to imprecise groundtruth masks.
@@ -76,12 +80,12 @@ class ConvertToSamInputs:
     """
     def __init__(
         self,
+        transform: Optional[ResizeLongestSide],
         dilation_strength: int = 10,
-        transform=None,
         box_distortion_factor: Optional[float] = None,
     ) -> None:
         self.dilation_strength = dilation_strength
-        self.transform = transform
+        self.transform = identity if transform is None else transform
         # TODO implement the box distortion logic
         if box_distortion_factor is not None:
             raise NotImplementedError
