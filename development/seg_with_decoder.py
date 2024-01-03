@@ -21,7 +21,7 @@ image_embeddings = precompute_image_embeddings(
 print("Start segmentation ...")
 segmenter.initialize(image, image_embeddings)
 masks = segmenter.generate(output_mode="binary_mask")
-segmentation = mask_data_to_segmentation(masks, image.shape, with_background=True)
+segmentation = mask_data_to_segmentation(masks, with_background=True)
 print("Segmentation done")
 
 v = napari.Viewer()

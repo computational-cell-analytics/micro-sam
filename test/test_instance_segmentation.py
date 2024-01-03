@@ -71,12 +71,12 @@ class TestInstanceSegmentation(unittest.TestCase):
         amg.initialize(image, image_embeddings=image_embeddings, verbose=False)
 
         predicted = amg.generate()
-        predicted = mask_data_to_segmentation(predicted, image.shape, with_background=True)
+        predicted = mask_data_to_segmentation(predicted, with_background=True)
         self.assertGreater(matching(predicted, mask, threshold=0.75)["segmentation_accuracy"], 0.99)
 
         # check that regenerating the segmentation works
         predicted2 = amg.generate()
-        predicted2 = mask_data_to_segmentation(predicted2, image.shape, with_background=True)
+        predicted2 = mask_data_to_segmentation(predicted2, with_background=True)
         self.assertTrue(np.array_equal(predicted, predicted2))
 
         # check that serializing and reserializing the state works
@@ -84,7 +84,7 @@ class TestInstanceSegmentation(unittest.TestCase):
         amg = AutomaticMaskGenerator(predictor, points_per_side=10, points_per_batch=16)
         amg.set_state(state)
         predicted3 = amg.generate()
-        predicted3 = mask_data_to_segmentation(predicted3, image.shape, with_background=True)
+        predicted3 = mask_data_to_segmentation(predicted3, with_background=True)
         self.assertTrue(np.array_equal(predicted, predicted3))
 
     def test_tiled_automatic_mask_generator(self):
@@ -107,11 +107,11 @@ class TestInstanceSegmentation(unittest.TestCase):
         amg = TiledAutomaticMaskGenerator(predictor, points_per_side=8)
         amg.initialize(image, image_embeddings=image_embeddings, verbose=False)
         predicted = amg.generate(pred_iou_thresh=pred_iou_thresh)
-        predicted = mask_data_to_segmentation(predicted, image.shape, with_background=True)
+        predicted = mask_data_to_segmentation(predicted, with_background=True)
         self.assertGreater(matching(predicted, mask, threshold=0.75)["segmentation_accuracy"], 0.99)
 
         predicted2 = amg.generate(pred_iou_thresh=pred_iou_thresh)
-        predicted2 = mask_data_to_segmentation(predicted2, image.shape, with_background=True)
+        predicted2 = mask_data_to_segmentation(predicted2, with_background=True)
         self.assertTrue(np.array_equal(predicted, predicted2))
 
         # check that serializing and reserializing the state works
@@ -119,7 +119,7 @@ class TestInstanceSegmentation(unittest.TestCase):
         amg = TiledAutomaticMaskGenerator(predictor)
         amg.set_state(state)
         predicted3 = amg.generate(pred_iou_thresh=pred_iou_thresh)
-        predicted3 = mask_data_to_segmentation(predicted3, image.shape, with_background=True)
+        predicted3 = mask_data_to_segmentation(predicted3, with_background=True)
         self.assertTrue(np.array_equal(predicted, predicted3))
 
 
