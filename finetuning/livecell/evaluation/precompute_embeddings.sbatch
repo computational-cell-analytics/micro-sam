@@ -6,5 +6,5 @@
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
 
-source activate sam
-python precompute_embeddings.py -n $1 
+mamba activate main
+python precompute_embeddings.py $@ 

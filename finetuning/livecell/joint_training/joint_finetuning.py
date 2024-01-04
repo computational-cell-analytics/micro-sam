@@ -3,7 +3,6 @@ import argparse
 
 import torch
 
-import torch_em
 from torch_em.model import UNETR
 from torch_em.loss import DiceBasedDistanceLoss
 from torch_em.data.datasets import get_livecell_loader
@@ -31,12 +30,12 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
     train_loader = get_livecell_loader(
         path=data_path, patch_shape=patch_shape, split="train", batch_size=2, num_workers=16,
         cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform, label_dtype=torch.float32
+        raw_transform=raw_transform, label_dtype=torch.float32,
     )
     val_loader = get_livecell_loader(
-        path=data_path, patch_shape=patch_shape, split="val", batch_size=1, num_workers=16,
+        path=data_path, patch_shape=patch_shape, split="val", batch_size=4, num_workers=16,
         cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform, label_dtype=torch.float32
+        raw_transform=raw_transform, label_dtype=torch.float32,
     )
 
     return train_loader, val_loader
@@ -70,7 +69,8 @@ def finetune_livecell(args):
         out_channels=3,
         use_sam_stats=True,
         final_activation="Sigmoid",
-        use_skip_connection=False
+        use_skip_connection=False,
+        resize_input=True,
     )
     unetr.to(device)
 
@@ -86,7 +86,7 @@ def finetune_livecell(args):
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
-    convert_inputs = sam_training.ConvertToSamInputs()
+    convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.05)
 
     checkpoint_name = "livecell_sam"
     trainer = sam_training.JointSamTrainer(
@@ -96,9 +96,6 @@ def finetune_livecell(args):
         val_loader=val_loader,
         model=model,
         optimizer=optimizer,
-        # currently we compute loss batch-wise, else we pass channelwise True
-        loss=torch_em.loss.DiceLoss(channelwise=False),
-        metric=torch_em.loss.DiceLoss(),
         device=device,
         lr_scheduler=scheduler,
         logger=sam_training.JointSamLogger,

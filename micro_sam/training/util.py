@@ -5,6 +5,8 @@ from typing import List, Optional, Union
 import numpy as np
 import torch
 
+from segment_anything.utils.transforms import ResizeLongestSide
+
 from ..prompt_generators import PointAndBoxPromptGenerator
 from ..util import get_centers_and_bounding_boxes, get_sam_model, segmentation_to_one_hot, get_device
 from .trainable_sam import TrainableSAM
@@ -72,21 +74,35 @@ class ConvertToSamInputs:
     """Convert outputs of data loader to the expected batched inputs of the SegmentAnything model.
 
     Args:
+        transform: The transformation to resize the prompts. Should be the same transform used in the
+            model to resize the inputs. If `None` the prompts will not be resized.
         dilation_strength: The dilation factor.
             It determines a "safety" border from which prompts are not sampled to avoid ambiguous prompts
             due to imprecise groundtruth masks.
         box_distortion_factor: Factor for distorting the box annotations derived from the groundtruth masks.
-            Not yet implemented.
     """
     def __init__(
         self,
+        transform: Optional[ResizeLongestSide],
         dilation_strength: int = 10,
         box_distortion_factor: Optional[float] = None,
     ) -> None:
         self.dilation_strength = dilation_strength
-        # TODO implement the box distortion logic
-        if box_distortion_factor is not None:
-            raise NotImplementedError
+        self.transform = identity if transform is None else transform
+        self.box_distortion_factor = box_distortion_factor
+
+    def _distort_boxes(self, bbox_coordinates, shape):
+        distorted_boxes = []
+        for bbox in bbox_coordinates:
+            # The bounding box is parametrized by y0, x0, y1, x1.
+            y0, x0, y1, x1 = bbox
+            ly, lx = y1 - y0, x1 - x0
+            y0 = int(round(max(0, y0 - np.random.uniform(0, self.box_distortion_factor) * ly)))
+            y1 = int(round(min(shape[0], y1 + np.random.uniform(0, self.box_distortion_factor) * ly)))
+            x0 = int(round(max(0, x0 - np.random.uniform(0, self.box_distortion_factor) * lx)))
+            x1 = int(round(min(shape[1], x1 + np.random.uniform(0, self.box_distortion_factor) * lx)))
+            distorted_boxes.append([y0, x0, y1, x1])
+        return distorted_boxes
 
     def _get_prompt_lists(self, gt, n_samples, prompt_generator):
         """Returns a list of "expected" prompts subjected to the random input attributes for prompting."""
@@ -104,6 +120,8 @@ class ConvertToSamInputs:
 
         # only keep the bounding boxes for sampled cell ids
         bbox_coordinates = [bbox_coordinates[sampled_id] for sampled_id in sampled_cell_ids]
+        if self.box_distortion_factor is not None:
+            bbox_coordinates = self._distort_boxes(bbox_coordinates, shape=gt.shape[-2:])
 
         # convert the gt to the one-hot-encoded masks for the sampled cell ids
         object_masks = segmentation_to_one_hot(gt, None if n_samples is None else sampled_cell_ids)
@@ -115,7 +133,6 @@ class ConvertToSamInputs:
     def __call__(self, x, y, n_pos, n_neg, get_boxes=False, n_samples=None):
         """Convert the outputs of dataloader and prompt settings to the batch format expected by SAM.
         """
-
         # condition to see if we get point prompts, then we (ofc) use point-prompting
         # else we don't use point prompting
         if n_pos == 0 and n_neg == 0:
@@ -151,9 +168,13 @@ class ConvertToSamInputs:
 
             batched_input = {"image": image, "original_size": image.shape[1:]}
             if get_boxes:
-                batched_input["boxes"] = box_prompts
+                batched_input["boxes"] = self.transform.apply_boxes_torch(
+                    box_prompts, original_size=gt.shape[-2:]
+                ) if self.transform is not None else box_prompts
             if get_points:
-                batched_input["point_coords"] = point_prompts
+                batched_input["point_coords"] = self.transform.apply_coords_torch(
+                    point_prompts, original_size=gt.shape[-2:]
+                ) if self.transform is not None else point_prompts
                 batched_input["point_labels"] = point_label_prompts
 
             batched_inputs.append(batched_input)

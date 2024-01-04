@@ -204,7 +204,6 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
 
         return all_coords, all_labels
 
-    # TODO make compatible with exact same input shape
     def __call__(
         self,
         segmentation: torch.Tensor,
@@ -220,7 +219,7 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
         """Generate the prompts for one object in the segmentation.
 
         Args:
-            segmentation: Instance segmentation masks .
+            The groundtruth segmentation. Expects a float tensor of shape NUM_OBJECTS x 1 x H x W.
             bbox_coordinates: The precomputed bounding boxes of particular object in the segmentation.
             center_coordinates: The precomputed center coordinates of particular object in the segmentation.
                 If passed, these coordinates will be used as the first positive point prompt.

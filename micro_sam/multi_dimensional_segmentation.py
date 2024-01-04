@@ -192,7 +192,7 @@ def segment_3d_from_slice(
 
     seg_z = amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
     seg_z = mask_data_to_segmentation(
-        seg_z, shape=raw.shape[1:], with_background=True,
+        seg_z, with_background=True,
         min_object_size=min_object_size_z,
         max_object_size=max_object_size_z,
     )
