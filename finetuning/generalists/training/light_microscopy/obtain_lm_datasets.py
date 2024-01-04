@@ -60,7 +60,7 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
         ),
         datasets.get_dsb_dataset(
             path=os.path.join(input_path, "dsb"), split=split_choice if split_choice == "train" else "test",
-            patch_shape=(1, patch_shape[0], patch_shape[1]), label_transform=label_transform, sampler=sampler,
+            patch_shape=patch_shape, label_transform=label_transform, sampler=sampler,
             label_dtype=label_dtype, download=True, raw_transform=identity
         ),
         datasets.get_plantseg_dataset(

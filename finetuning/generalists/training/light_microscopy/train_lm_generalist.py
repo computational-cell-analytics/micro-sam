@@ -4,7 +4,7 @@ import argparse
 import torch
 
 from torch_em.model import UNETR
-from torch_em.loss import DiceLoss, DiceBasedDistanceLoss
+from torch_em.loss import DiceBasedDistanceLoss
 
 import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
@@ -57,7 +57,7 @@ def finetune_lm_generalist(args):
     train_loader, val_loader = get_generalist_lm_loaders(input_path=args.input_path, patch_shape=patch_shape)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
-    convert_inputs = sam_training.ConvertToSamInputs()
+    convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
 
     checkpoint_name = f"{args.model_type}/lm_generalist_sam"
 
@@ -69,9 +69,6 @@ def finetune_lm_generalist(args):
         val_loader=val_loader,
         model=model,
         optimizer=optimizer,
-        # currently we compute loss batch-wise, else we pass channelwise True
-        loss=DiceLoss(channelwise=False),
-        metric=DiceLoss(),
         device=device,
         lr_scheduler=scheduler,
         logger=sam_training.JointSamLogger,
