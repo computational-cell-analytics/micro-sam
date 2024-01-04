@@ -3,7 +3,6 @@ import argparse
 
 import torch
 
-import torch_em
 from torch_em.model import UNETR
 from torch_em.data import MinInstanceSampler
 from torch_em.transform.raw import normalize
@@ -13,6 +12,12 @@ from torch_em.transform.label import PerObjectDistanceTransform
 
 import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
+
+
+def deepbacs_raw_trafo(raw):
+    raw = normalize(raw)
+    raw = raw * 255
+    return raw
 
 
 def get_dataloaders(patch_shape, data_path):
@@ -26,15 +31,9 @@ def get_dataloaders(patch_shape, data_path):
     I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
     Important: the ID 0 is reseved for background, and the IDs must be consecutive
     """
-    def deepbacs_raw_trafo(raw):
-        raw = normalize(raw)
-        raw = raw * 255
-        return raw
-
     raw_transform = deepbacs_raw_trafo
     label_transform = PerObjectDistanceTransform(
-        distances=True, boundary_distances=True, directed_distances=False,
-        foreground=True, instances=True, min_size=25
+        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=25
     )
     sampler = MinInstanceSampler(min_num_instances=4)
     label_dtype = torch.float32
@@ -94,11 +93,15 @@ def finetune_deepbacs(args):
 
     # all the stuff we need for training
     optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=50, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", factor=0.9, patience=100, verbose=True
+    )
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
-    convert_inputs = sam_training.ConvertToSamInputs()
+    convert_inputs = sam_training.ConvertToSamInputs(
+        transform=model.transform, box_distortion_factor=0.025
+    )
 
     checkpoint_name = f"{args.model_type}/deepbacs_sam"
 
@@ -110,9 +113,6 @@ def finetune_deepbacs(args):
         val_loader=val_loader,
         model=model,
         optimizer=optimizer,
-        # currently we compute loss batch-wise, else we pass channelwise True
-        loss=torch_em.loss.DiceLoss(channelwise=False),
-        metric=torch_em.loss.DiceLoss(),
         device=device,
         lr_scheduler=scheduler,
         logger=sam_training.JointSamLogger,
