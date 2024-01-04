@@ -86,7 +86,7 @@ def finetune_livecell(args):
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
-    convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.10)
+    convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.05)
 
     checkpoint_name = "livecell_sam"
     trainer = sam_training.JointSamTrainer(
