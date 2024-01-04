@@ -3,7 +3,6 @@ import argparse
 
 import torch
 
-import torch_em
 from torch_em.model import UNETR
 from torch_em.data import MinInstanceSampler
 from torch_em.loss import DiceBasedDistanceLoss
@@ -89,7 +88,9 @@ def finetune_tissuenet(args):
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
-    convert_inputs = sam_training.ConvertToSamInputs()
+    convert_inputs = sam_training.ConvertToSamInputs(
+        transform=model.transform, box_distortion_factor=0.025
+    )
 
     checkpoint_name = f"{args.model_type}/tissuenet_sam"
 
@@ -101,9 +102,6 @@ def finetune_tissuenet(args):
         val_loader=val_loader,
         model=model,
         optimizer=optimizer,
-        # currently we compute loss batch-wise, else we pass channelwise True
-        loss=torch_em.loss.DiceLoss(channelwise=False),
-        metric=torch_em.loss.DiceLoss(),
         device=device,
         lr_scheduler=scheduler,
         logger=sam_training.JointSamLogger,
