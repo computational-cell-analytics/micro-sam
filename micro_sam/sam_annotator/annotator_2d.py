@@ -7,6 +7,7 @@ from segment_anything import SamPredictor
 
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
+from ._widgets import segment_widget
 from .. import util
 
 
@@ -22,7 +23,12 @@ class Annotator2d(_AnnotatorBase):
         viewer: "napari.viewer.Viewer",
         segmentation_result: Optional[np.ndarray] = None,
     ) -> None:
-        super().__init__(viewer=viewer, ndim=2, segmentation_result=segmentation_result)
+        super().__init__(
+            viewer=viewer,
+            ndim=2,
+            segment_widget=segment_widget,
+            segmentation_result=segmentation_result
+        )
         # TODO do extra stuff for 2d annotator
 
 

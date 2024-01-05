@@ -26,7 +26,7 @@ def em_3d_annotator(use_finetuned_model):
         model_type = "vit_h"
 
     # start the annotator, cache the embeddings
-    annotator_3d(raw, embedding_path, model_type=model_type, show_embeddings=False)
+    annotator_3d(raw, embedding_path, model_type=model_type)
 
 
 def main():

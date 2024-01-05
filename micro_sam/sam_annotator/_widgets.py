@@ -146,16 +146,25 @@ def settings_widget(
     print(f"micro-sam cache directory set to: {cache_directory}")
 
 
-# TODO make this into a class so that the different settings for the annotators are supported
-# TODO fail more gracefully if image embeddings have not been initialized
+# TODO fail more gracefully in all widgets if image embeddings have not been initialized
+
+#
+# Segmentation widgets:
+# - segment_widget: for the 2d annotation tool
+# - segment_slice_widget: segmenting a single slice for the 3d annoation tool
+# - TODO add other segmentation widgets
+#
+
+
 # TODO support extra mode for one point per object
+# TODO rethink the default values for box extension
 @magic_factory(call_button="Segment Object [S]")
-def segment_widget(v: "napari.viewer.Viewer", box_extension: float = 0.1) -> None:
-    shape = v.layers["current_object"].data.shape
+def segment_widget(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) -> None:
+    shape = viewer.layers["current_object"].data.shape
 
     # get the current box and point prompts
-    boxes, masks = vutil.shape_layer_to_prompts(v.layers["prompts"], shape)
-    points, labels = vutil.point_layer_to_prompts(v.layers["point_prompts"], with_stop_annotation=False)
+    boxes, masks = vutil.shape_layer_to_prompts(viewer.layers["prompts"], shape)
+    points, labels = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], with_stop_annotation=False)
 
     predictor = AnnotatorState().predictor
     image_embeddings = AnnotatorState().image_embeddings
@@ -174,5 +183,34 @@ def segment_widget(v: "napari.viewer.Viewer", box_extension: float = 0.1) -> Non
         print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
         return
 
-    v.layers["current_object"].data = seg
-    v.layers["current_object"].refresh()
+    viewer.layers["current_object"].data = seg
+    viewer.layers["current_object"].refresh()
+
+
+@magic_factory(call_button="Segment Slice [S]")
+def segment_slice_widget(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) -> None:
+    shape = viewer.layers["current_object"].data.shape[1:]
+    position = viewer.cursor.position
+    z = int(position[0])
+
+    point_prompts = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], z)
+    # this is a stop prompt, we do nothing
+    if not point_prompts:
+        return
+
+    boxes, masks = vutil.shape_layer_to_prompts(viewer.layers["prompts"], shape, i=z)
+    points, labels = point_prompts
+
+    state = AnnotatorState()
+    seg = vutil.prompt_segmentation(
+        state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
+        image_embeddings=state.image_embeddings, i=z, box_extension=box_extension,
+    )
+
+    # no prompts were given or prompts were invalid, skip segmentation
+    if seg is None:
+        print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
+        return
+
+    viewer.layers["current_object"].data[z] = seg
+    viewer.layers["current_object"].refresh()

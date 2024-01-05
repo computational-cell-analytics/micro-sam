@@ -54,14 +54,14 @@ class _AnnotatorBase(Container):
         # Randomize colors so it is easy to see when object committed.
         self._viewer.layers["committed_objects"].new_colormap()
 
-    def _create_common_widgets(self):
+    def _create_common_widgets(self, segment_widget):
         self._embedding_widget = widgets.embedding_widget()
         # Connect the call button of the embedding widget with a function
         # that updates all relevant layers when the image changes.
         self._embedding_widget.call_button.changed.connect(self._update_image)
 
         self._prompt_widget = widgets.create_prompt_menu(self._point_prompt_layer, self._point_labels)
-        self._segment_widget = widgets.segment_widget()
+        self._segment_widget = segment_widget()
         self._commit_segmentation_widget = widgets.commit_segmentation_widget()
 
         # TODO autosegment widget
@@ -100,6 +100,7 @@ class _AnnotatorBase(Container):
         self,
         viewer: "napari.viewer.Viewer",
         ndim: int,
+        segment_widget,  # TODO what is the type annotation?
         segmentation_result: Optional[np.ndarray] = None,
     ) -> None:
         super().__init__()
@@ -113,7 +114,7 @@ class _AnnotatorBase(Container):
         self._create_common_layers(segmentation_result)
 
         # Add the widgets in common between all annotators.
-        self._create_common_widgets()
+        self._create_common_widgets(segment_widget)
 
         # Add the key bindings in common between all annotators.
         self._create_common_keybindings()
