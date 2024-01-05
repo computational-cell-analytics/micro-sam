@@ -4,11 +4,12 @@ https://itnext.io/deciding-the-best-singleton-approach-in-python-65c61e90cdc4
 """
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from micro_sam.instance_segmentation import AMGBase
 from micro_sam.util import ImageEmbeddings
 from segment_anything import SamPredictor
+from magicgui.widgets import Container
 
 
 class Singleton(type):
@@ -34,10 +35,25 @@ class AnnotatorState(metaclass=Singleton):
     amg: Optional[AMGBase] = None
     amg_state: Optional[Dict] = None
 
-    # current_track_id, lineage:
+    # current_track_id, lineage, committed_lineages, tracking_widget:
     # State for the tracking annotator to keep track of lineage information.
     current_track_id: Optional[int] = None
     lineage: Optional[Dict] = None
+    committed_lineages: Optional[List[Dict]] = None
+    tracking_widget: Optional[Container] = None
+
+    # TODO
+    # TODO precompute amg state?
+    def initialize_predictor(
+        self,
+        image,
+        model_type,
+        device=None,
+        predictor=None,
+        tile_shape=None,
+        halo=None,
+    ):
+        pass
 
     def initialized_for_interactive_segmentation(self):
         have_image_embeddings = self.image_embeddings is not None
@@ -57,14 +73,16 @@ class AnnotatorState(metaclass=Singleton):
     def initialized_for_tracking(self):
         have_current_track_id = self.current_track_id is not None
         have_lineage = self.lineage is not None
-        init_sum = sum((have_current_track_id, have_lineage))
-        if init_sum == 2:
+        have_committed_lineages = self.committed_lineages is not None
+        have_tracking_widget = self.tracking_widget is not None
+        init_sum = sum((have_current_track_id, have_lineage, have_committed_lineages, have_tracking_widget))
+        if init_sum == 4:
             return True
         elif init_sum == 0:
             return False
         else:
             raise RuntimeError(
-                f"Invalid AnnotatorState: {init_sum} / 2 parts of the state "
+                f"Invalid AnnotatorState: {init_sum} / 4 parts of the state "
                 "needed for tracking are initialized."
             )
 
@@ -77,3 +95,4 @@ class AnnotatorState(metaclass=Singleton):
         self.amg_state = None
         self.current_track_id = None
         self.lineage = None
+        self.committed_lineages = None

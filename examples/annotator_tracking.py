@@ -27,7 +27,7 @@ def track_ctc_data(use_finetuned_model):
         model_type = "vit_h"
 
     # start the annotator with cached embeddings
-    annotator_tracking(timeseries, embedding_path=embedding_path, show_embeddings=False, model_type=model_type)
+    annotator_tracking(timeseries, embedding_path=embedding_path, model_type=model_type)
 
 
 def main():

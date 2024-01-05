@@ -6,8 +6,6 @@ from . import _widgets as widgets
 from . import util as vutil
 from ._state import AnnotatorState
 
-# TODO: I don't really understand the reason behind this,
-# we need napari anyways, why don't we just import it?
 from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     import napari
@@ -16,10 +14,11 @@ if TYPE_CHECKING:
 class _AnnotatorBase(Container):
     """Base class for micro_sam annotation plugins.
 
-    Implements all common base functionality.
+    Implements the logic for the 2d, 3d and tracking annotator.
+    The annotators differ in their data dimensionality and the widgets.
     """
 
-    def _create_common_layers(self, segmentation_result):
+    def _create_layers(self, segmentation_result):
         # Add the point layer for point prompts.
         self._point_labels = ["positive", "negative"]
         # We need to add dummy data to initialize the point properties correctly.
@@ -41,7 +40,7 @@ class _AnnotatorBase(Container):
 
         # Add the shape layer for box and other shape prompts.
         self._viewer.add_shapes(
-            face_color="transparent", edge_color="green", edge_width=4, name="prompts"
+            face_color="transparent", edge_color="green", edge_width=4, name="prompts", ndim=self._ndim,
         )
 
         # Add the label layers for the current object, the automatic segmentation and the committed segmentation.
@@ -54,7 +53,7 @@ class _AnnotatorBase(Container):
         # Randomize colors so it is easy to see when object committed.
         self._viewer.layers["committed_objects"].new_colormap()
 
-    def _create_common_widgets(self, segment_widget):
+    def _create_widgets(self, segment_widget, segment_nd_widget, autosegment_widget, commit_widget, clear_widget):
         self._embedding_widget = widgets.embedding_widget()
         # Connect the call button of the embedding widget with a function
         # that updates all relevant layers when the image changes.
@@ -62,28 +61,31 @@ class _AnnotatorBase(Container):
 
         self._prompt_widget = widgets.create_prompt_menu(self._point_prompt_layer, self._point_labels)
         self._segment_widget = segment_widget()
-        self._commit_segmentation_widget = widgets.commit_segmentation_widget()
+        widget_list = [self._embedding_widget, self._prompt_widget, self._segment_widget]
 
-        # TODO autosegment widget
+        if segment_nd_widget is not None:
+            self._segment_nd_widget = segment_nd_widget()
+            widget_list.append(self._segment_nd_widget)
+
+        if autosegment_widget is not None:
+            self._autosegment_widget = autosegment_widget()
+            widget_list.append(self._autosegment_widget)
+
+        self._commit_widget = commit_widget()
+        self._clear_widget = clear_widget()
+        widget_list.extend([self._commit_widget, self._clear_widget])
 
         # Add the widgets to the container.
-        self.extend(
-            [
-                self._embedding_widget,
-                self._prompt_widget,
-                self._segment_widget,
-                self._commit_segmentation_widget,
-            ]
-        )
+        self.extend(widget_list)
 
-    def _create_common_keybindings(self):
+    def _create_keybindings(self):
         @self._viewer.bind_key("s")
         def _segmet(viewer):
             self._segment_widget(viewer)
 
         @self._viewer.bind_key("c")
         def _commit(viewer):
-            self._commit_segmentation_widget(viewer)
+            self._commit_widget(viewer)
 
         @self._viewer.bind_key("t")
         def _toggle_label(event=None):
@@ -91,7 +93,12 @@ class _AnnotatorBase(Container):
 
         @self._viewer.bind_key("Shift-C")
         def _clear_annotations(viewer):
-            vutil.clear_annotations(viewer)
+            self._clear_widget(viewer)
+
+        if hasattr(self, "_segment_nd_widget"):
+            @self._viewer.bind_key("Shift-S")
+            def _seg_nd(viewer):
+                self._segment_nd_widget(viewer)
 
     # TODO more clever way to integrate segmentation result so
     # that we can also choose an active layer?
@@ -100,9 +107,25 @@ class _AnnotatorBase(Container):
         self,
         viewer: "napari.viewer.Viewer",
         ndim: int,
-        segment_widget,  # TODO what is the type annotation?
+        # TODO what are the type annotations for widgets?
+        segment_widget,
+        segment_nd_widget=None,
+        autosegment_widget=None,
+        commit_widget=widgets.commit_segmentation_widget,
+        clear_widget=widgets.clear_widget,
         segmentation_result: Optional[np.ndarray] = None,
     ) -> None:
+        """
+        Args:
+            viewer:
+            ndim:
+            segment_widget:
+            segment_nd_widget:
+            autosegment_widget:
+            commit_widget:
+            clear_widget:
+            segmentation_result:
+        """
         super().__init__()
         self._viewer = viewer
 
@@ -111,13 +134,15 @@ class _AnnotatorBase(Container):
         # correct shape once an image is set.
         self._ndim = ndim
         self._shape = (256, 256) if ndim == 2 else (16, 256, 256)
-        self._create_common_layers(segmentation_result)
+        self._create_layers(segmentation_result)
 
         # Add the widgets in common between all annotators.
-        self._create_common_widgets(segment_widget)
+        self._create_widgets(
+            segment_widget, segment_nd_widget, autosegment_widget, commit_widget, clear_widget,
+        )
 
         # Add the key bindings in common between all annotators.
-        self._create_common_keybindings()
+        self._create_keybindings()
 
         # Clear the annotations to remove dummy prompts necessary for init.
         vutil.clear_annotations(self._viewer, clear_segmentations=False)

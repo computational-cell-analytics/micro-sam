@@ -2,6 +2,7 @@ import unittest
 import micro_sam.util as util
 
 from skimage.data import binary_blobs
+from magicgui.widgets import Container
 
 
 class TestState(unittest.TestCase):
@@ -25,6 +26,8 @@ class TestState(unittest.TestCase):
         state = AnnotatorState()
         state.current_track_id = 1
         state.lineage = {1: {}}
+        state.committed_lineages = []
+        state.tracking_widget = Container()
         self.assertTrue(state.initialized_for_tracking())
 
 

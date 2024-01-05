@@ -1,6 +1,7 @@
 """Implements the widgets used in the annotation plugins.
 """
 
+import json
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Literal
@@ -11,11 +12,13 @@ import zarr
 from magicgui import magic_factory, widgets
 from magicgui.widgets import ComboBox, Container
 from napari.qt.threading import thread_worker
+from napari.utils import progress
 from zarr.errors import PathNotFoundError
 
 from ._state import AnnotatorState
 from . import util as vutil
 from .. import util
+from ..multi_dimensional_segmentation import segment_mask_in_volume
 
 if TYPE_CHECKING:
     import napari
@@ -24,6 +27,13 @@ if TYPE_CHECKING:
 @magic_factory(call_button="Clear Annotations [Shift + C]")
 def clear_widget(viewer: "napari.viewer.Viewer") -> None:
     """Widget for clearing the current annotations."""
+    vutil.clear_annotations(viewer)
+
+
+@magic_factory(call_button="Clear Annotations [Shift + C]")
+def clear_tracking_widget(viewer: "napari.viewer.Viewer") -> None:
+    """Widget for clearing all tracking annotations and state."""
+    vutil._reset_tracking_state()
     vutil.clear_annotations(viewer)
 
 
@@ -44,6 +54,39 @@ def commit_segmentation_widget(viewer: "napari.viewer.Viewer", layer: str = "cur
 
     if layer == "current_object":
         vutil.clear_annotations(viewer)
+
+
+@magic_factory(call_button="Commit [C]", layer={"choices": ["current_object"]})
+def commit_tracking_widget(viewer: "napari.viewer.Viewer", layer: str = "current_object") -> None:
+    state = AnnotatorState()
+
+    seg = viewer.layers[layer].data
+
+    id_offset = int(viewer.layers["committed_objects"].data.max())
+    mask = seg != 0
+
+    viewer.layers["committed_objects"].data[mask] = (seg[mask] + id_offset)
+    viewer.layers["committed_objects"].refresh()
+
+    shape = state.image_shape
+    viewer.layers[layer].data = np.zeros(shape, dtype="uint32")
+    viewer.layers[layer].refresh()
+
+    updated_lineage = {
+        parent + id_offset: [child + id_offset for child in children] for parent, children in state.lineage.items()
+    }
+    state.committed_lineages.append(updated_lineage)
+
+    vutil._reset_tracking_state()
+    vutil.clear_annotations(viewer, clear_segmentations=False)
+
+
+@magic_factory(call_button="Save Lineage")
+def save_lineage_widget(viewer: "napari.viewer.Viewer", path: Path) -> None:
+    state = AnnotatorState()
+    path = path.with_suffix(".json")
+    with open(path, "w") as f:
+        json.dump(state.committed_lineages, f)
 
 
 def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="label"):
@@ -147,12 +190,13 @@ def settings_widget(
 
 
 # TODO fail more gracefully in all widgets if image embeddings have not been initialized
-
 #
-# Segmentation widgets:
+# Widgets for interactive segmentation:
 # - segment_widget: for the 2d annotation tool
-# - segment_slice_widget: segmenting a single slice for the 3d annoation tool
-# - TODO add other segmentation widgets
+# - segment_slice_widget: segment object a single slice for the 3d annotation tool
+# - segment_volume_widget: segment object in 3d for the 3d annotation tool
+# - segment_frame_widget: segment object in frame for the tracking annotation tool
+# - track_object_widget: track object over time for the tracking annotation tool
 #
 
 
@@ -213,4 +257,126 @@ def segment_slice_widget(viewer: "napari.viewer.Viewer", box_extension: float = 
         return
 
     viewer.layers["current_object"].data[z] = seg
+    viewer.layers["current_object"].refresh()
+
+
+# TODO should probably be wrappred in a thread worker
+@magic_factory(
+    call_button="Segment All Slices [Shift-S]",
+    projection={"choices": ["default", "bounding_box", "mask", "points"]},
+)
+def segment_object_widget(
+    viewer: "napari.viewer.Viewer",
+    iou_threshold: float = 0.8,
+    projection: str = "default",
+    box_extension: float = 0.05,
+) -> None:
+
+    # we have the following projection modes:
+    # bounding_box: uses only the bounding box as prompt
+    # mask: uses the bounding box and the mask
+    # points: uses the bounding box, mask and points derived from the mask
+    # by default we choose mask, which qualitatively seems to work the best
+    projection = "mask" if projection == "default" else projection
+
+    state = AnnotatorState()
+    shape = state.image_shape
+
+    with progress(total=shape[0]) as progress_bar:
+
+        # step 1: segment all slices with prompts
+        seg, slices, stop_lower, stop_upper = vutil.segment_slices_with_prompts(
+            state.predictor, viewer.layers["point_prompts"], viewer.layers["prompts"],
+            state.image_embeddings, shape,
+            progress_bar=progress_bar,
+        )
+
+        # step 2: segment the rest of the volume based on smart prompting
+        seg = segment_mask_in_volume(
+            seg, state.predictor, state.image_embeddings, slices,
+            stop_lower, stop_upper,
+            iou_threshold=iou_threshold, projection=projection,
+            progress_bar=progress_bar, box_extension=box_extension,
+        )
+
+    viewer.layers["current_object"].data = seg
+    viewer.layers["current_object"].refresh()
+
+
+@magic_factory(call_button="Segment Frame [S]")
+def segment_frame_widget(viewer: "napari.viewer.Viewer") -> None:
+    state = AnnotatorState()
+    shape = state.image_shape[1:]
+    position = viewer.cursor.position
+    t = int(position[0])
+
+    point_prompts = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], i=t, track_id=state.current_track_id)
+    # this is a stop prompt, we do nothing
+    if not point_prompts:
+        return
+
+    boxes, masks = vutil.shape_layer_to_prompts(viewer.layers["prompts"], shape, i=t, track_id=state.current_track_id)
+    points, labels = point_prompts
+
+    seg = vutil.prompt_segmentation(
+        state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
+        image_embeddings=state.image_embeddings, i=t
+    )
+
+    # no prompts were given or prompts were invalid, skip segmentation
+    if seg is None:
+        print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
+        return
+
+    # clear the old segmentation for this track_id
+    old_mask = viewer.layers["current_object"].data[t] == state.current_track_id
+    viewer.layers["current_object"].data[t][old_mask] = 0
+    # set the new segmentation
+    new_mask = seg.squeeze() == 1
+    viewer.layers["current_object"].data[t][new_mask] = state.current_track_id
+    viewer.layers["current_object"].refresh()
+
+
+# TODO should probably be wrappred in a thread worker
+@magic_factory(call_button="Track Object [Shift-S]", projection={"choices": ["default", "bounding_box", "mask"]})
+def track_object_widget(
+    viewer: "napari.viewer.Viewer",
+    iou_threshold: float = 0.5,
+    projection: str = "default",
+    motion_smoothing: float = 0.5,
+    box_extension: float = 0.1,
+) -> None:
+    state = AnnotatorState()
+    shape = state.image_shape
+
+    # we use the bounding box projection method as default which generally seems to work better for larger changes
+    # between frames (which is pretty tyipical for tracking compared to 3d segmentation)
+    projection_ = "mask" if projection == "default" else projection
+
+    with progress(total=shape[0]) as progress_bar:
+        # step 1: segment all slices with prompts
+        seg, slices, _, stop_upper = vutil.segment_slices_with_prompts(
+            state.predictor, viewer.layers["point_prompts"], viewer.layers["prompts"],
+            state.image_embeddings, shape,
+            progress_bar=progress_bar, track_id=state.current_track_id
+        )
+
+        # step 2: track the object starting from the lowest annotated slice
+        seg, has_division = vutil._track_from_prompts(
+            viewer.layers["point_prompts"], viewer.layers["prompts"], seg,
+            state.predictor, slices, state.image_embeddings, stop_upper,
+            threshold=iou_threshold, projection=projection_,
+            progress_bar=progress_bar, motion_smoothing=motion_smoothing,
+            box_extension=box_extension,
+        )
+
+    # If a division has occurred and it's the first time it occurred for this track
+    # then we need to create the two daughter tracks and update the lineage.
+    if has_division and (len(state.lineage[state.current_track_id]) == 0):
+        vutil._update_lineage()
+
+    # clear the old track mask
+    viewer.layers["current_object"].data[viewer.layers["current_object"].data == state.current_track_id] = 0
+    # set the new object mask
+    viewer.layers["current_object"].data[seg == 1] = state.current_track_id
     viewer.layers["current_object"].refresh()

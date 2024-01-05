@@ -11,12 +11,6 @@ from ._widgets import segment_widget
 from .. import util
 
 
-# # TODO: I don't really understand the reason behind this,
-# # we need napari anyways, why don't we just import it?
-# from typing import TYPE_CHECKING
-# if TYPE_CHECKING:
-#     import napari
-
 class Annotator2d(_AnnotatorBase):
     def __init__(
         self,
@@ -29,7 +23,6 @@ class Annotator2d(_AnnotatorBase):
             segment_widget=segment_widget,
             segmentation_result=segmentation_result
         )
-        # TODO do extra stuff for 2d annotator
 
 
 def annotator_2d(
@@ -45,11 +38,6 @@ def annotator_2d(
     # precompute_amg_state: bool = False,
 ) -> Optional["napari.viewer.Viewer"]:
     """TODO update description."""
-    if viewer is None:
-        viewer = napari.Viewer()
-
-    viewer.add_image(image, name="image")
-    annotator = Annotator2d(viewer, segmentation_result=segmentation_result)
 
     # TODO AMG State
     # Initialize the predictor state.
@@ -66,6 +54,12 @@ def annotator_2d(
     )
     util.set_precomputed(state.predictor, state.image_embeddings)
     state.image_shape = image.shape[:-1] if image.ndim == 3 else image.shape
+
+    if viewer is None:
+        viewer = napari.Viewer()
+
+    viewer.add_image(image, name="image")
+    annotator = Annotator2d(viewer, segmentation_result=segmentation_result)
 
     # Trigger layer update of the annotator so that layers have the correct shape.
     annotator._update_image()

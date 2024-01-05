@@ -7,15 +7,9 @@ from segment_anything import SamPredictor
 
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
-from ._widgets import segment_slice_widget
+from ._widgets import segment_slice_widget, segment_object_widget
 from .. import util
 
-
-# # TODO: I don't really understand the reason behind this,
-# # we need napari anyways, why don't we just import it?
-# from typing import TYPE_CHECKING
-# if TYPE_CHECKING:
-#     import napari
 
 class Annotator3d(_AnnotatorBase):
     def __init__(
@@ -27,9 +21,9 @@ class Annotator3d(_AnnotatorBase):
             viewer=viewer,
             ndim=3,
             segment_widget=segment_slice_widget,
-            segmentation_result=segmentation_result
+            segment_nd_widget=segment_object_widget,
+            segmentation_result=segmentation_result,
         )
-        # TODO do extra stuff for 3d annotator
 
 
 def annotator_3d(
@@ -45,12 +39,6 @@ def annotator_3d(
     # precompute_amg_state: bool = False,
 ) -> Optional["napari.viewer.Viewer"]:
     """TODO update description."""
-    if viewer is None:
-        viewer = napari.Viewer()
-
-    viewer.add_image(image, name="image")
-    annotator = Annotator3d(viewer, segmentation_result=segmentation_result)
-
     # TODO AMG State
     # Initialize the predictor state.
     state = AnnotatorState()
@@ -65,6 +53,12 @@ def annotator_3d(
         ndim=3,
     )
     state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
+
+    if viewer is None:
+        viewer = napari.Viewer()
+
+    viewer.add_image(image, name="image")
+    annotator = Annotator3d(viewer, segmentation_result=segmentation_result)
 
     # Trigger layer update of the annotator so that layers have the correct shape.
     annotator._update_image()
