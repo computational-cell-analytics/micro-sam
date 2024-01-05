@@ -1,28 +1,75 @@
+"""Implements the widgets used in the annotation plugins.
+"""
+
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Literal
 
-from magicgui import magic_factory, widgets
-from napari.qt.threading import thread_worker
+import numpy as np
 import zarr
+
+from magicgui import magic_factory, widgets
+from magicgui.widgets import ComboBox, Container
+from napari.qt.threading import thread_worker
 from zarr.errors import PathNotFoundError
 
-from micro_sam.sam_annotator._state import AnnotatorState
-from micro_sam.util import (
-    ImageEmbeddings,
-    get_sam_model,
-    precompute_image_embeddings,
-    models,
-    _DEFAULT_MODEL,
-    _available_devices,
-    get_cache_directory,
-)
+from ._state import AnnotatorState
 from . import util as vutil
+from .. import util
 
 if TYPE_CHECKING:
     import napari
 
 
+@magic_factory(call_button="Clear Annotations [Shift + C]")
+def clear_widget(viewer: "napari.viewer.Viewer") -> None:
+    """Widget for clearing the current annotations."""
+    vutil.clear_annotations(viewer)
+
+
+@magic_factory(call_button="Commit [C]", layer={"choices": ["current_object", "auto_segmentation"]})
+def commit_segmentation_widget(viewer: "napari.viewer.Viewer", layer: str = "current_object") -> None:
+    """Widget for committing the segmented objects from automatic or interactive segmentation."""
+    seg = viewer.layers[layer].data
+    shape = seg.shape
+
+    id_offset = int(viewer.layers["committed_objects"].data.max())
+    mask = seg != 0
+
+    viewer.layers["committed_objects"].data[mask] = (seg[mask] + id_offset)
+    viewer.layers["committed_objects"].refresh()
+
+    viewer.layers[layer].data = np.zeros(shape, dtype="uint32")
+    viewer.layers[layer].refresh()
+
+    if layer == "current_object":
+        vutil.clear_annotations(viewer)
+
+
+def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="label"):
+    """Create the menu for toggling point prompt labels."""
+    label_menu = ComboBox(label=menu_name, choices=labels)
+    label_widget = Container(widgets=[label_menu])
+
+    def update_label_menu(event):
+        new_label = str(points_layer.current_properties[label_name][0])
+        if new_label != label_menu.value:
+            label_menu.value = new_label
+
+    points_layer.events.current_properties.connect(update_label_menu)
+
+    def label_changed(new_label):
+        current_properties = points_layer.current_properties
+        current_properties[label_name] = np.array([new_label])
+        points_layer.current_properties = current_properties
+        points_layer.refresh_colors()
+
+    label_menu.changed.connect(label_changed)
+
+    return label_widget
+
+
+# TODO add options for tiling
 @magic_factory(
     pbar={'visible': False, 'max': 0, 'value': 0, 'label': 'working...'},
     call_button="Compute image embeddings",
@@ -31,12 +78,12 @@ if TYPE_CHECKING:
 def embedding_widget(
     pbar: widgets.ProgressBar,
     image: "napari.layers.Image",
-    model: Literal[tuple(models().urls.keys())] = _DEFAULT_MODEL,
-    device: Literal[tuple(["auto"] + _available_devices())] = "auto",
+    model: Literal[tuple(util.models().urls.keys())] = util._DEFAULT_MODEL,
+    device: Literal[tuple(["auto"] + util._available_devices())] = "auto",
     save_path: Optional[Path] = None,  # where embeddings for this image are cached (optional)
     optional_custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
-) -> ImageEmbeddings:
-    """Image embedding widget."""
+) -> util.ImageEmbeddings:
+    """Widget to compute the embeddings for a napari image layer."""
     state = AnnotatorState()
     state.reset_state()
     # Get image dimensions
@@ -49,7 +96,7 @@ def embedding_widget(
 
     @thread_worker(connect={'started': pbar.show, 'finished': pbar.hide})
     def _compute_image_embedding(state, image_data, save_path, ndim=None,
-                                 device="auto", model=_DEFAULT_MODEL,
+                                 device="auto", model=util._DEFAULT_MODEL,
                                  optional_custom_weights=None,
                                  ):
         # Make sure save directory exists and is an empty directory
@@ -69,9 +116,11 @@ def embedding_widget(
                     )
 
         # Initialize the model
-        state.predictor = get_sam_model(device=device, model_type=model, checkpoint_path=optional_custom_weights)
+        state.predictor = util.get_sam_model(
+            device=device, model_type=model, checkpoint_path=optional_custom_weights
+        )
         # Compute the image embeddings
-        state.image_embeddings = precompute_image_embeddings(
+        state.image_embeddings = util.precompute_image_embeddings(
             predictor=state.predictor,
             input_=image_data,
             save_path=save_path,
@@ -90,15 +139,16 @@ def embedding_widget(
     cache_directory={"mode": "d"},  # choose a directory
 )
 def settings_widget(
-    cache_directory: Optional[Path] = get_cache_directory(),
-):
-    """Update micro-sam settings."""
+    cache_directory: Optional[Path] = util.get_cache_directory(),
+) -> None:
+    """Widget to update global micro_sam settings."""
     os.environ["MICROSAM_CACHEDIR"] = str(cache_directory)
     print(f"micro-sam cache directory set to: {cache_directory}")
 
 
-# TODO: don't pass the viewer but just the appropriate layers
-# TODO: fail more gracefully if image embeddings have not been initialized
+# TODO make this into a class so that the different settings for the annotators are supported
+# TODO fail more gracefully if image embeddings have not been initialized
+# TODO support extra mode for one point per object
 @magic_factory(call_button="Segment Object [S]")
 def segment_widget(v: "napari.viewer.Viewer", box_extension: float = 0.1) -> None:
     shape = v.layers["current_object"].data.shape

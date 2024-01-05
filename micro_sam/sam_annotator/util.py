@@ -5,8 +5,6 @@ from typing import List, Optional, Tuple
 import napari
 import numpy as np
 
-from magicgui import magicgui
-from magicgui.widgets import ComboBox, Container
 from skimage import draw
 
 from .. import prompt_based_segmentation, util
@@ -31,52 +29,6 @@ def clear_annotations(v: napari.Viewer, clear_segmentations=True) -> None:
     if "current_track" in v.layers:
         v.layers["current_track"].data = np.zeros(v.layers["current_track"].data.shape, dtype="uint32")
         v.layers["current_track"].refresh()
-
-
-@magicgui(call_button="Clear Annotations [Shift + C]")
-def _clear_widget(v: napari.Viewer) -> None:
-    clear_annotations(v)
-
-
-@magicgui(call_button="Commit [C]", layer={"choices": ["current_object", "auto_segmentation"]})
-def _commit_segmentation_widget(v: napari.Viewer, layer: str = "current_object") -> None:
-    seg = v.layers[layer].data
-    shape = seg.shape
-
-    id_offset = int(v.layers["committed_objects"].data.max())
-    mask = seg != 0
-
-    v.layers["committed_objects"].data[mask] = (seg[mask] + id_offset)
-    v.layers["committed_objects"].refresh()
-
-    v.layers[layer].data = np.zeros(shape, dtype="uint32")
-    v.layers[layer].refresh()
-
-    if layer == "current_object":
-        clear_annotations(v)
-
-
-def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="label"):
-    """@private"""
-    label_menu = ComboBox(label=menu_name, choices=labels)
-    label_widget = Container(widgets=[label_menu])
-
-    def update_label_menu(event):
-        new_label = str(points_layer.current_properties[label_name][0])
-        if new_label != label_menu.value:
-            label_menu.value = new_label
-
-    points_layer.events.current_properties.connect(update_label_menu)
-
-    def label_changed(new_label):
-        current_properties = points_layer.current_properties
-        current_properties[label_name] = np.array([new_label])
-        points_layer.current_properties = current_properties
-        points_layer.refresh_colors()
-
-    label_menu.changed.connect(label_changed)
-
-    return label_widget
 
 
 def point_layer_to_prompts(
