@@ -6,8 +6,8 @@ https://itnext.io/deciding-the-best-singleton-approach-in-python-65c61e90cdc4
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
+import micro_sam.util as util
 from micro_sam.instance_segmentation import AMGBase
-from micro_sam.util import ImageEmbeddings
 from segment_anything import SamPredictor
 from magicgui.widgets import Container
 
@@ -26,7 +26,7 @@ class AnnotatorState(metaclass=Singleton):
 
     # predictor, image_embeddings and image_shape:
     # This needs to be initialized for the interactive segmentation fucntionality.
-    image_embeddings: Optional[ImageEmbeddings] = None
+    image_embeddings: Optional[util.ImageEmbeddings] = None
     predictor: Optional[SamPredictor] = None
     image_shape: Optional[Tuple[int, int]] = None
 
@@ -42,18 +42,40 @@ class AnnotatorState(metaclass=Singleton):
     committed_lineages: Optional[List[Dict]] = None
     tracking_widget: Optional[Container] = None
 
-    # TODO
-    # TODO precompute amg state?
     def initialize_predictor(
         self,
-        image,
+        image_data,
         model_type,
+        save_path=None,
+        ndim=None,
         device=None,
         predictor=None,
+        checkpoint_path=None,
         tile_shape=None,
         halo=None,
+        precompute_amg_state=False,
     ):
-        pass
+        # Initialize the model if necessary.
+        if predictor is None:
+            self.predictor = util.get_sam_model(
+                device=device, model_type=model_type, checkpoint_path=checkpoint_path,
+            )
+        else:
+            self.predictor = predictor
+
+        # Compute the image embeddings.
+        self.image_embeddings = util.precompute_image_embeddings(
+            predictor=self.predictor,
+            input_=image_data,
+            save_path=save_path,
+            ndim=ndim,
+            tile_shape=tile_shape,
+            halo=halo,
+        )
+
+        # TODO
+        if precompute_amg_state:
+            raise NotImplementedError
 
     def initialized_for_interactive_segmentation(self):
         have_image_embeddings = self.image_embeddings is not None

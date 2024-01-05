@@ -129,7 +129,8 @@ def embedding_widget(
     """Widget to compute the embeddings for a napari image layer."""
     state = AnnotatorState()
     state.reset_state()
-    # Get image dimensions
+
+    # Get image dimensions.
     if image.rgb:
         ndim = image.data.ndim - 1
         state.image_shape = image.data.shape[:-1]
@@ -158,16 +159,9 @@ def embedding_widget(
                         f"or empty directory: {save_path}"
                     )
 
-        # Initialize the model
-        state.predictor = util.get_sam_model(
-            device=device, model_type=model, checkpoint_path=optional_custom_weights
-        )
-        # Compute the image embeddings
-        state.image_embeddings = util.precompute_image_embeddings(
-            predictor=state.predictor,
-            input_=image_data,
-            save_path=save_path,
-            ndim=ndim,
+        state.initialize_predictor(
+            image_data, model_type=model, save_path=save_path, ndim=ndim, device=device,
+            checkpoint_path=optional_custom_weights,
         )
         return state  # returns napari._qt.qthreading.FunctionWorker
 

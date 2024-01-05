@@ -200,18 +200,12 @@ def annotator_tracking(
     viewer: Optional["napari.viewer.Viewer"] = None,
     predictor: Optional[SamPredictor] = None,
 ) -> Optional["napari.viewer.Viewer"]:
-    # TODO AMG State
+
     # Initialize the predictor state.
     state = AnnotatorState()
-    if predictor is None:
-        state.predictor = util.get_sam_model(model_type=model_type)
-    state.image_embeddings = util.precompute_image_embeddings(
-        predictor=state.predictor,
-        input_=image,
-        save_path=embedding_path,
-        tile_shape=tile_shape,
-        halo=halo,
-        ndim=3,
+    state.initialize_predictor(
+        image, model_type=model_type, save_path=embedding_path,
+        halo=halo, tile_shape=tile_shape,
     )
     state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
 
