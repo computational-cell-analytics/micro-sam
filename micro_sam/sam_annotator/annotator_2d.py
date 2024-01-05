@@ -24,14 +24,6 @@ class Annotator2d(_AnnotatorBase):
             segmentation_result=segmentation_result
         )
 
-    # We need to make sure that the pre-computed embeddings are being
-    # correctly set in the case of the 2d annotator.
-    # (This is not necessary for the other annotators.)
-    def _update_image(self):
-        super()._update_image()
-        state = AnnotatorState()
-        util.set_precomputed(state.predictor, state.image_embeddings)
-
 
 def annotator_2d(
     image: np.ndarray,
@@ -48,11 +40,11 @@ def annotator_2d(
     """TODO update description."""
 
     state = AnnotatorState()
+    state.image_shape = image.shape[:-1] if image.ndim == 3 else image.shape
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path, predictor=predictor,
         halo=halo, tile_shape=tile_shape, precompute_amg_state=precompute_amg_state,
     )
-    state.image_shape = image.shape[:-1] if image.ndim == 3 else image.shape
 
     if viewer is None:
         viewer = napari.Viewer()

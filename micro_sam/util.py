@@ -503,9 +503,12 @@ def _precompute_2d(input_, predictor, save_path, tile_shape, halo):
     f = zarr.open(save_path, "a")
 
     use_tiled_prediction = tile_shape is not None
+    set_embeddings = False
+
     if "input_size" in f.attrs:  # the embeddings have already been precomputed
         features = f["features"][:] if tile_shape is None else f["features"]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
+        set_embeddings = True
 
     elif use_tiled_prediction:  # the embeddings have not been computed yet and we use tiled prediction
         features = _precompute_tiled_2d(predictor, input_, tile_shape, halo, f)
@@ -523,6 +526,11 @@ def _precompute_2d(input_, predictor, save_path, tile_shape, halo):
     image_embeddings = {
         "features": features, "input_size": input_size, "original_size": original_size,
     }
+
+    # Make sure that the embeddings are set if we load normal 2d embeddings.
+    if set_embeddings:
+        set_precomputed(predictor, image_embeddings)
+
     return image_embeddings
 
 

@@ -166,9 +166,7 @@ class AnnotatorTracking(_AnnotatorBase):
 
         # Initialize the state for tracking.
         state = AnnotatorState()
-        state.current_track_id = 1
-        state.lineage = {1: []}
-        state.committed_lineages = []
+        self._init_track_state(state)
 
         # Create the tracking state menu.
         self._tracking_widget = create_tracking_menu(
@@ -187,6 +185,17 @@ class AnnotatorTracking(_AnnotatorBase):
 
         # Go to t=0.
         self._viewer.dims.current_step = (0, 0, 0) + tuple(sh // 2 for sh in self._shape[1:])
+
+    def _init_track_state(self, state):
+        state.current_track_id = 1
+        state.lineage = {1: []}
+        state.committed_lineages = []
+
+    def _update_image(self):
+        super()._update_image()
+        # Reset the state for tracking.
+        state = AnnotatorState()
+        self._init_track_state(state)
 
 
 def annotator_tracking(

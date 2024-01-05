@@ -153,8 +153,9 @@ class _AnnotatorBase(Container):
         # Update the image shape if it has changed.
         if state.image_shape != self._shape:
             if len(state.image_shape) != self._ndim:
-                # TODO good error message that makes clear that dims don't match
-                raise RuntimeError("")
+                raise RuntimeError(
+                    f"The dimensionality of the annotator {self._ndim} does not match the image data of shape {state.image_shape}."
+                )
             self._shape = state.image_shape
 
         # Reset all layers.
