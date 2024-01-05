@@ -22,9 +22,11 @@ def series_annotation(use_finetuned_model):
 
     example_data = fetch_image_series_example_data(DATA_CACHE)
     image_folder_annotator(
-        example_data, "./series-segmentation-result", embedding_path=embedding_path,
-        pattern="*.tif", model_type=model_type,
-        precompute_amg_state=True,
+        example_data, "./series-segmentation-result",
+        pattern="*.tif",
+        embedding_path=embedding_path,
+        model_type=model_type,
+        precompute_amg_state=False,
     )
 
 

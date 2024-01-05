@@ -3,7 +3,7 @@ import warnings
 
 from glob import glob
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Tuple
 
 import imageio.v3 as imageio
 import napari
@@ -13,15 +13,39 @@ from segment_anything import SamPredictor
 
 from .. import util
 from ..precompute_state import _precompute_state_for_files
-from .annotator_2d import annotator_2d
+from .annotator_2d import Annotator2d
+from ._state import AnnotatorState
+
+
+def _precompute(image_files, model_type, predictor, embedding_path, tile_shape, halo, precompute_amg_state):
+    if predictor is None:
+        predictor = util.get_sam_model(model_type=model_type)
+
+    if embedding_path is None:
+        embedding_paths = [None] * len(image_files)
+    else:
+        _precompute_state_for_files(
+            predictor, image_files, embedding_path, ndim=2,
+            tile_shape=tile_shape, halo=halo,
+            precompute_amg_state=precompute_amg_state,
+        )
+        embedding_paths = [
+            os.path.join(embedding_path, f"{Path(path).stem}.zarr") for path in image_files
+        ]
+        assert all(os.path.exists(emb_path) for emb_path in embedding_paths)
+
+    return predictor, embedding_paths
 
 
 def image_series_annotator(
     image_files: List[Union[os.PathLike, str]],
     output_folder: str,
+    model_type: str = util._DEFAULT_MODEL,
     embedding_path: Optional[str] = None,
     predictor: Optional[SamPredictor] = None,
-    **kwargs
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
+    precompute_amg_state: bool = False,
 ) -> None:
     """Run the 2d annotation tool for a series of images.
 
@@ -33,32 +57,34 @@ def image_series_annotator(
         embedding_path: Filepath where to save the embeddings.
         predictor: The Segment Anything model. Passing this enables using fully custom models.
             If you pass `predictor` then `model_type` will be ignored.
-        kwargs: The keywored arguments for `micro_sam.sam_annotator.annotator_2d`.
     """
-    # make sure we don't set incompatible kwargs
-    assert kwargs.get("show_embeddings", False) is False
-    assert kwargs.get("segmentation_results", None) is None
-    assert "return_viewer" not in kwargs
-    assert "v" not in kwargs
 
     os.makedirs(output_folder, exist_ok=True)
     next_image_id = 0
 
-    if predictor is None:
-        predictor = util.get_sam_model(model_type=kwargs.get("model_type", util._DEFAULT_MODEL))
-    if embedding_path is None:
-        embedding_paths = None
-    else:
-        _precompute_state_for_files(
-            predictor, image_files, embedding_path, ndim=2,
-            tile_shape=kwargs.get("tile_shape", None),
-            halo=kwargs.get("halo", None),
-            precompute_amg_state=kwargs.get("precompute_amg_state", False),
-        )
-        embedding_paths = [
-            os.path.join(embedding_path, f"{Path(path).stem}.zarr") for path in image_files
-        ]
-        assert all(os.path.exists(emb_path) for emb_path in embedding_paths)
+    # Precompute embeddings and amg state (if corresponding options set).
+    predictor, embedding_paths = _precompute(
+        image_files, model_type, predictor, embedding_path, tile_shape, halo, precompute_amg_state
+    )
+
+    # Load the first image and intialize the viewer, annotator and state.
+    image = imageio.imread(image_files[next_image_id])
+    image_embedding_path = embedding_paths[next_image_id]
+
+    viewer = napari.Viewer()
+    viewer.add_image(image, name="image")
+
+    state = AnnotatorState()
+    state.initialize_predictor(
+        image, model_type=model_type, save_path=image_embedding_path,
+        halo=halo, tile_shape=tile_shape, predictor=predictor,
+    )
+    state.image_shape = image.shape[:-1] if image.ndim == 3 else image.shape
+
+    annotator = Annotator2d(viewer)
+    annotator._update_image()
+
+    viewer.window.add_dock_widget(annotator)
 
     def _save_segmentation(image_path, segmentation):
         fname = os.path.basename(image_path)
@@ -66,39 +92,46 @@ def image_series_annotator(
         out_path = os.path.join(output_folder, fname)
         imageio.imwrite(out_path, segmentation)
 
-    image = imageio.imread(image_files[next_image_id])
-    image_embedding_path = None if embedding_paths is None else embedding_paths[next_image_id]
-    v = annotator_2d(image, embedding_path=image_embedding_path, return_viewer=True, predictor=predictor, **kwargs)
-
+    # Add functionality for going to the next image.
     @magicgui(call_button="Next Image [N]")
     def next_image(*args):
         nonlocal next_image_id
 
-        segmentation = v.layers["committed_objects"].data
+        segmentation = viewer.layers["committed_objects"].data
         if segmentation.sum() == 0:
-            print("Nothing is segmented yet, skipping next image.")
+            print("Nothing is segmented yet. Not advancing to next image.")
             return
 
-        # save the current segmentation
+        # Save the current segmentation.
         _save_segmentation(image_files[next_image_id], segmentation)
 
-        # load the next image
+        # Load the next image.
         next_image_id += 1
         if next_image_id == len(image_files):
             print("You have annotated the last image.")
-            v.close()
+            viewer.close()
             return
 
         print("Loading next image from:", image_files[next_image_id])
         image = imageio.imread(image_files[next_image_id])
-        image_embedding_path = None if embedding_paths is None else embedding_paths[next_image_id]
-        annotator_2d(image, embedding_path=image_embedding_path, v=v, return_viewer=True, predictor=predictor, **kwargs)
+        image_embedding_path = embedding_paths[next_image_id]
 
-    v.window.add_dock_widget(next_image)
+        # Set the new image in the viewer, state and annotator.
+        viewer.layers["image"].data = image
 
-    @v.bind_key("n")
-    def _next_image(v):
-        next_image(v)
+        state.initialize_predictor(
+            image, model_type=model_type, save_path=image_embedding_path,
+            halo=halo, tile_shape=tile_shape, predictor=predictor,
+        )
+        state.image_shape = image.shape[:-1] if image.ndim == 3 else image.shape
+
+        annotator._update_image()
+
+    viewer.window.add_dock_widget(next_image)
+
+    @viewer.bind_key("n")
+    def _next_image(viewer):
+        next_image(viewer)
 
     napari.run()
 
@@ -121,10 +154,12 @@ def image_folder_annotator(
         embedding_path: Filepath where to save the embeddings.
         predictor: The Segment Anything model. Passing this enables using fully custom models.
             If you pass `predictor` then `model_type` will be ignored.
-        kwargs: The keywored arguments for `micro_sam.sam_annotator.annotator_2d`.
+        kwargs: The keywored arguments for `micro_sam.sam_annotator.image_series_annotator`.
     """
     image_files = sorted(glob(os.path.join(input_folder, pattern)))
-    image_series_annotator(image_files, output_folder, embedding_path, predictor, **kwargs)
+    image_series_annotator(
+        image_files, output_folder, embedding_path=embedding_path, predictor=predictor, **kwargs
+    )
 
 
 def main():

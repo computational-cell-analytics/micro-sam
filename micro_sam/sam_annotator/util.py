@@ -16,17 +16,17 @@ LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
 """@private"""
 
 
-def clear_annotations(v: napari.Viewer, clear_segmentations=True) -> None:
+def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:
     """@private"""
-    v.layers["point_prompts"].data = []
-    v.layers["point_prompts"].refresh()
-    if "prompts" in v.layers:
-        v.layers["prompts"].data = []
-        v.layers["prompts"].refresh()
+    viewer.layers["point_prompts"].data = []
+    viewer.layers["point_prompts"].refresh()
+    if "prompts" in viewer.layers:
+        viewer.layers["prompts"].data = []
+        viewer.layers["prompts"].refresh()
     if not clear_segmentations:
         return
-    v.layers["current_object"].data = np.zeros(v.layers["current_object"].data.shape, dtype="uint32")
-    v.layers["current_object"].refresh()
+    viewer.layers["current_object"].data = np.zeros(viewer.layers["current_object"].data.shape, dtype="uint32")
+    viewer.layers["current_object"].refresh()
 
 
 def point_layer_to_prompts(

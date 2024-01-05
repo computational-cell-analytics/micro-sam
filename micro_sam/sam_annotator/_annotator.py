@@ -150,14 +150,16 @@ class _AnnotatorBase(Container):
     def _update_image(self):
         state = AnnotatorState()
 
+        # Update the image shape if it has changed.
         if state.image_shape != self._shape:
             if len(state.image_shape) != self._ndim:
                 # TODO good error message that makes clear that dims don't match
                 raise RuntimeError("")
             self._shape = state.image_shape
 
-            self._viewer.layers["current_object"].data = np.zeros(self._shape, dtype="uint32")
-            self._viewer.layers["committed_objects"].data = np.zeros(self._shape, dtype="uint32")
-            self._viewer.layers["auto_segmentation"].data = np.zeros(self._shape, dtype="uint32")
+        # Reset all layers.
+        self._viewer.layers["current_object"].data = np.zeros(self._shape, dtype="uint32")
+        self._viewer.layers["committed_objects"].data = np.zeros(self._shape, dtype="uint32")
+        self._viewer.layers["auto_segmentation"].data = np.zeros(self._shape, dtype="uint32")
 
-        vutil.clear_annotations(self._viewer, clear_segmentations=True)
+        vutil.clear_annotations(self._viewer, clear_segmentations=False)
