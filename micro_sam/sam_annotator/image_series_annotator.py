@@ -52,11 +52,15 @@ def image_series_annotator(
     Args:
         input_files: List of the file paths for the images to be annotated.
         output_folder: The folder where the segmentation results are saved.
-        pattern: The glob patter for loading files from `input_folder`.
-            By default all files will be loaded.
         embedding_path: Filepath where to save the embeddings.
         predictor: The Segment Anything model. Passing this enables using fully custom models.
             If you pass `predictor` then `model_type` will be ignored.
+        tile_shape: Shape of tiles for tiled embedding prediction.
+            If `None` then the whole image is passed to Segment Anything.
+        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
+        precompute_amg_state: Whether to precompute the state for automatic mask generation.
+            This will take more time when precomputing embeddings, but will then make
+            automatic mask generation much faster.
     """
 
     os.makedirs(output_folder, exist_ok=True)

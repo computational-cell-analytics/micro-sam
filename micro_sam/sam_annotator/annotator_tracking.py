@@ -210,6 +210,25 @@ def annotator_tracking(
     viewer: Optional["napari.viewer.Viewer"] = None,
     predictor: Optional[SamPredictor] = None,
 ) -> Optional["napari.viewer.Viewer"]:
+    """Start the tracking annotation tool fora given timeseries.
+
+    Args:
+        raw: The image data.
+        embedding_path: Filepath for saving the precomputed embeddings.
+        model_type: The Segment Anything model to use. For details on the available models check out
+            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
+        tile_shape: Shape of tiles for tiled embedding prediction.
+            If `None` then the whole image is passed to Segment Anything.
+        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
+        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
+        viewer: The viewer to which the SegmentAnything functionality should be added.
+            This enables using a pre-initialized viewer.
+        predictor: The Segment Anything model. Passing this enables using fully custom models.
+            If you pass `predictor` then `model_type` will be ignored.
+
+    Returns:
+        The napari viewer, only returned if `return_viewer=True`.
+    """
 
     # Initialize the predictor state.
     state = AnnotatorState()

@@ -39,7 +39,31 @@ def annotator_2d(
     predictor: Optional["SamPredictor"] = None,
     precompute_amg_state: bool = False,
 ) -> Optional["napari.viewer.Viewer"]:
-    """TODO update description."""
+    """Start the 2d annotation tool for a given image.
+
+    Args:
+        image: The image data.
+        embedding_path: Filepath where to save the embeddings.
+        segmentation_result: An initial segmentation to load.
+            This can be used to correct segmentations with Segment Anything or to save and load progress.
+            The segmentation will be loaded as the 'committed_objects' layer.
+        model_type: The Segment Anything model to use. For details on the available models check out
+            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
+        tile_shape: Shape of tiles for tiled embedding prediction.
+            If `None` then the whole image is passed to Segment Anything.
+        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
+        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
+        viewer: The viewer to which the SegmentAnything functionality should be added.
+            This enables using a pre-initialized viewer.
+        predictor: The Segment Anything model. Passing this enables using fully custom models.
+            If you pass `predictor` then `model_type` will be ignored.
+        precompute_amg_state: Whether to precompute the state for automatic mask generation.
+            This will take more time when precomputing embeddings, but will then make
+            automatic mask generation much faster.
+
+    Returns:
+        The napari viewer, only returned if `return_viewer=True`.
+    """
 
     state = AnnotatorState()
     state.image_shape = image.shape[:-1] if image.ndim == 3 else image.shape
