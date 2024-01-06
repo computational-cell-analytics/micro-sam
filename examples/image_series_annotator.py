@@ -37,5 +37,8 @@ def main():
     series_annotation(use_finetuned_model)
 
 
+# The corresponding CLI call for track_ctc_data:
+# (replace with cache directory on your machine)
+# $ micro_sam.image_series_annotator -i /home/pape/.cache/micro_sam/sample_data/image-series.zip.unzip/series/ -e /home/pape/.cache/micro_sam/embeddings/series-embeddings/ -o segmentation_results
 if __name__ == "__main__":
     main()

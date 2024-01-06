@@ -78,5 +78,8 @@ def main():
     # wholeslide_annotator(use_finetuned_model)
 
 
+# The corresponding CLI call for hela_2d_annotator:
+# (replace with cache directory on your machine)
+# $ micro_sam.annotator_2d -i /home/pape/.cache/micro_sam/sample_data/hela-2d-image.png -e /home/pape/.cache/micro_sam/embeddings/embeddings-hela2d.zarr
 if __name__ == "__main__":
     main()

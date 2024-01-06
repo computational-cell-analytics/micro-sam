@@ -1,3 +1,4 @@
+import warnings
 from typing import Optional, Tuple
 
 import napari
@@ -234,3 +235,35 @@ def annotator_tracking(
         return viewer
 
     napari.run()
+
+
+def main():
+    """@private"""
+    parser = vutil._initialize_parser(
+        description="Run interactive segmentation for an image volume.",
+        with_segmentation_result=False,
+    )
+
+    # Tracking result is not yet supported, we need to also deserialize the lineage.
+    # parser.add_argument(
+    #     "-t", "--tracking_result",
+    #     help="Optional filepath to a precomputed tracking result. If passed this will be used to initialize the "
+    #     "'committed_tracks' layer. This can be useful if you want to correct an existing tracking result or if you "
+    #     "have saved intermediate results from the annotator and want to continue. "
+    #     "Supports the same file formats as 'input'."
+    # )
+    # parser.add_argument(
+    #     "-tk", "--tracking_key",
+    #     help="The key for opening the tracking result. Same rules as for 'key' apply."
+    # )
+
+    args = parser.parse_args()
+    image = util.load_image_data(args.input, key=args.key)
+
+    if args.embedding_path is None:
+        warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
+
+    annotator_tracking(
+        image, embedding_path=args.embedding_path, model_type=args.model_type,
+        tile_shape=args.tile_shape, halo=args.halo,
+    )

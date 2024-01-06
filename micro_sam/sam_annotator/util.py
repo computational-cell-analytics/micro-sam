@@ -394,11 +394,6 @@ def _initialize_parser(description, with_segmentation_result=True, with_show_emb
             help="The key for opening the segmentation data. Same rules as for 'key' apply."
         )
 
-    if with_show_embeddings:
-        parser.add_argument(
-            "--show_embeddings", action="store_true",
-            help="Visualize the embeddings computed by SegmentAnything. This can be helpful for debugging."
-        )
     parser.add_argument(
         "--model_type", default=util._DEFAULT_MODEL,
         help=f"The segment anything model that will be used, one of {available_models}."

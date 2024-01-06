@@ -1,3 +1,4 @@
+import warnings
 from typing import Optional, Tuple
 
 import napari
@@ -8,6 +9,7 @@ from segment_anything import SamPredictor
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
 from ._widgets import segment_slice_widget, segment_object_widget
+from .util import _initialize_parser
 from .. import util
 
 
@@ -64,3 +66,24 @@ def annotator_3d(
         return viewer
 
     napari.run()
+
+
+def main():
+    """@private"""
+    parser = _initialize_parser(description="Run interactive segmentation for an image volume.")
+    args = parser.parse_args()
+    image = util.load_image_data(args.input, key=args.key)
+
+    if args.segmentation_result is None:
+        segmentation_result = None
+    else:
+        segmentation_result = util.load_image_data(args.segmentation_result, key=args.segmentation_key)
+
+    if args.embedding_path is None:
+        warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
+
+    annotator_3d(
+        image, embedding_path=args.embedding_path,
+        segmentation_result=segmentation_result,
+        model_type=args.model_type, tile_shape=args.tile_shape, halo=args.halo,
+    )
