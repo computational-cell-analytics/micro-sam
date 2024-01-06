@@ -8,7 +8,7 @@ from segment_anything import SamPredictor
 
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
-from ._widgets import segment_widget
+from ._widgets import segment_widget, amg_widget_2d
 from .util import _initialize_parser
 from .. import util
 
@@ -23,6 +23,7 @@ class Annotator2d(_AnnotatorBase):
             viewer=viewer,
             ndim=2,
             segment_widget=segment_widget,
+            autosegment_widget=amg_widget_2d,
             segmentation_result=segmentation_result
         )
 

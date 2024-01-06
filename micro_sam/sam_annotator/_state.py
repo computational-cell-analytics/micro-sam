@@ -8,6 +8,8 @@ from typing import Dict, List, Optional, Tuple
 
 import micro_sam.util as util
 from micro_sam.instance_segmentation import AMGBase
+from micro_sam.precompute_state import cache_amg_state
+
 from segment_anything import SamPredictor
 from magicgui.widgets import Container
 
@@ -29,6 +31,7 @@ class AnnotatorState(metaclass=Singleton):
     image_embeddings: Optional[util.ImageEmbeddings] = None
     predictor: Optional[SamPredictor] = None
     image_shape: Optional[Tuple[int, int]] = None
+    embedding_path: Optional[str] = None
 
     # amg: needs to be initialized for the automatic segmentation functionality.
     # amg_state: for storing the instance segmentation state for the 3d segmentation tool.
@@ -72,10 +75,11 @@ class AnnotatorState(metaclass=Singleton):
             tile_shape=tile_shape,
             halo=halo,
         )
+        self.embedding_path = save_path
 
-        # TODO
-        if precompute_amg_state:
-            raise NotImplementedError
+        # Precompute the amg state (if specified).
+        if precompute_amg_state and (save_path is not None):
+            self.amg = cache_amg_state(self.predictor, image_data, self.image_embeddings, save_path)
 
     def initialized_for_interactive_segmentation(self):
         have_image_embeddings = self.image_embeddings is not None
