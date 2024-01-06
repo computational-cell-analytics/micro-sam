@@ -6,6 +6,7 @@ https://itnext.io/deciding-the-best-singleton-approach-in-python-65c61e90cdc4
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
+import torch.nn as nn
 import micro_sam.util as util
 from micro_sam.instance_segmentation import AMGBase
 from micro_sam.precompute_state import cache_amg_state
@@ -35,8 +36,10 @@ class AnnotatorState(metaclass=Singleton):
 
     # amg: needs to be initialized for the automatic segmentation functionality.
     # amg_state: for storing the instance segmentation state for the 3d segmentation tool.
+    # decoder: for direct prediction of instance segmentation
     amg: Optional[AMGBase] = None
     amg_state: Optional[Dict] = None
+    decoder: Optional[nn.Module] = None
 
     # current_track_id, lineage, committed_lineages, tracking_widget:
     # State for the tracking annotator to keep track of lineage information.
@@ -122,3 +125,4 @@ class AnnotatorState(metaclass=Singleton):
         self.current_track_id = None
         self.lineage = None
         self.committed_lineages = None
+        self.decoder = None

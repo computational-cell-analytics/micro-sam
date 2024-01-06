@@ -380,6 +380,7 @@ def track_object_widget(
 #
 # Widgets for automatic segmentation:
 # - amg_widget_2d: AMG widget for the 2d annotation tool
+# - instace_seg_widget_2d: Widget for instance segmentation with decoder (2d)
 # - amg_widget_3d: AMG widget for the 3d annotation tool
 #
 
@@ -410,6 +411,42 @@ def amg_widget_2d(
         state.amg.initialize(dummy_image, image_embeddings=state.image_embeddings, verbose=True)
 
     seg = state.amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
+
+    seg = instance_segmentation.mask_data_to_segmentation(
+        seg, with_background=with_background, min_object_size=min_object_size
+    )
+    assert isinstance(seg, np.ndarray)
+
+    viewer.layers["auto_segmentation"].data = seg
+    viewer.layers["auto_segmentation"].refresh()
+
+
+# TODO should be wrapped in a threadworker
+# TODO more parameters
+@magic_factory(
+    call_button="Automatic Segmentation",
+    min_object_size={"min": 0, "max": 10000},
+)
+def instance_seg_widget_2d(
+    viewer: "napari.viewer.Viewer",
+    min_object_size: int = 100,
+    with_background: bool = True,
+) -> None:
+    state = AnnotatorState()
+
+    is_tiled = state.image_embeddings["input_size"] is None
+    if state.amg is None:
+        state.amg = instance_segmentation.get_amg(state.predictor, is_tiled, decoder=state.decoder)
+
+    shape = state.image_shape
+    if not state.amg.is_initialized:
+        # We don't need to pass the actual image data here, since the embeddings are passed.
+        # (The image data is only used by the amg to compute image embeddings, so not needed here.)
+        dummy_image = np.zeros(shape, dtype="uint8")
+        state.amg.initialize(dummy_image, image_embeddings=state.image_embeddings)
+
+    # TODO more parameters
+    seg = state.amg.generate(min_size=min_object_size)
 
     seg = instance_segmentation.mask_data_to_segmentation(
         seg, with_background=with_background, min_object_size=min_object_size

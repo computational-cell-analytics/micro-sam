@@ -659,26 +659,6 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         self._crop_boxes = crop_boxes
 
 
-def get_amg(
-    predictor: SamPredictor,
-    is_tiled: bool,
-    **kwargs,
-) -> AMGBase:
-    """Get the automatic mask generator class.
-
-    Args:
-        predictor: The segment anything predictor.
-        is_tiled: Whether tiled embeddings are used.
-        kwargs: The keyword arguments for the amg class.
-
-    Returns:
-        The automatic mask generator.
-    """
-    amg = TiledAutomaticMaskGenerator(predictor, **kwargs) if is_tiled else\
-        AutomaticMaskGenerator(predictor, **kwargs)
-    return amg
-
-
 #
 # Instance segmentation functionality based on fine-tuned decoder
 #
@@ -732,20 +712,13 @@ class DecoderAdapter(torch.nn.Module):
         return x
 
 
-def load_instance_segmentation_with_decoder_from_checkpoint(
+# TODO refactor this once the exact layout for the new model architecture is clear
+def get_custom_sam_model_with_decoder(
     checkpoint: Union[os.PathLike, str],
     model_type: str,
-    device: Optional[Union[str, torch.device]] = None
+    device: Optional[Union[str, torch.device]] = None,
 ):
-    """Load `InstanceSegmentationWithDecoder` from a `training.JointSamTrainer` checkpoint.
-
-    Args:
-        checkpoint: The path to the checkpoint.
-        model_type: The type of the model, i.e. which image encoder type is used.
-        device: The device to use (cpu or cuda).
-
-    Returns:
-        InstanceSegmentationWithDecoder
+    """
     """
     device = util.get_device(device)
     state = torch.load(checkpoint, map_location=device)
@@ -789,9 +762,7 @@ def load_instance_segmentation_with_decoder_from_checkpoint(
 
     decoder = DecoderAdapter(unetr)
 
-    # Instantiate the segmenter.
-    segmenter = InstanceSegmentationWithDecoder(predictor, decoder)
-    return segmenter
+    return predictor, decoder
 
 
 class InstanceSegmentationWithDecoder:
@@ -951,3 +922,30 @@ class InstanceSegmentationWithDecoder:
         if output_mode is not None:
             segmentation = self._to_masks(segmentation, output_mode)
         return segmentation
+
+
+def get_amg(
+    predictor: SamPredictor,
+    is_tiled: bool,
+    decoder: Optional[torch.nn.Module] = None,
+    **kwargs,
+) -> Union[AMGBase, InstanceSegmentationWithDecoder]:
+    """Get the automatic mask generator class.
+
+    Args:
+        predictor: The segment anything predictor.
+        is_tiled: Whether tiled embeddings are used.
+        decoder: Decoder to predict instacne segmmentation.
+        kwargs: The keyword arguments for the amg class.
+
+    Returns:
+        The automatic mask generator.
+    """
+    if decoder is None:
+        segmenter = TiledAutomaticMaskGenerator(predictor, **kwargs) if is_tiled else\
+            AutomaticMaskGenerator(predictor, **kwargs)
+    else:
+        if is_tiled:
+            raise NotImplementedError
+        segmenter = InstanceSegmentationWithDecoder(predictor, decoder, **kwargs)
+    return segmenter
