@@ -1,6 +1,6 @@
 import numpy as np
 
-from magicgui.widgets import Container
+from magicgui.widgets import Container, Widget
 
 from . import _widgets as widgets
 from . import util as vutil
@@ -107,12 +107,11 @@ class _AnnotatorBase(Container):
         self,
         viewer: "napari.viewer.Viewer",
         ndim: int,
-        # TODO what are the type annotations for widgets?
-        segment_widget,
-        segment_nd_widget=None,
-        autosegment_widget=None,
-        commit_widget=widgets.commit_segmentation_widget,
-        clear_widget=widgets.clear_widget,
+        segment_widget: Widget,
+        segment_nd_widget: Optional[Widget] = None,
+        autosegment_widget: Optional[Widget] = None,
+        commit_widget: Widget = widgets.commit_segmentation_widget,
+        clear_widget: Widget = widgets.clear_widget,
         segmentation_result: Optional[np.ndarray] = None,
     ) -> None:
         """
@@ -154,7 +153,7 @@ class _AnnotatorBase(Container):
         if state.image_shape != self._shape:
             if len(state.image_shape) != self._ndim:
                 raise RuntimeError(
-                    f"The dimensionality of the annotator {self._ndim} does not match the image data of shape {state.image_shape}."
+                    f"The dim of the annotator {self._ndim} does not match the image data of shape {state.image_shape}."
                 )
             self._shape = state.image_shape
 
