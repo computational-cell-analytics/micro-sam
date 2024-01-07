@@ -81,7 +81,7 @@ def _autosegment_widget(
     seg = state.amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
 
     seg = instance_segmentation.mask_data_to_segmentation(
-        seg, shape, with_background=with_background, min_object_size=min_object_size
+        seg, with_background=with_background, min_object_size=min_object_size
     )
     assert isinstance(seg, np.ndarray)
 
