@@ -212,14 +212,15 @@ class ResizeRawTrafo:
 
 
 class ResizeLabelTrafo:
-    def __init__(self, desired_shape, padding="constant"):
+    def __init__(self, desired_shape, padding="constant", min_size=25):
         self.desired_shape = desired_shape
         self.padding = padding
+        self.min_size = min_size
 
     def __call__(self, labels):
         distance_trafo = PerObjectDistanceTransform(
             distances=True, boundary_distances=True, directed_distances=False,
-            foreground=True, instances=True, min_size=25
+            foreground=True, instances=True, min_size=self.min_size
         )
         labels = distance_trafo(labels)
 

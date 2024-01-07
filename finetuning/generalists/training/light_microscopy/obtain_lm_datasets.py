@@ -32,7 +32,7 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
 
     label_dtype = torch.float32
     label_transform = PerObjectDistanceTransform(
-        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=25
+        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=0
     )
     sampler = MinInstanceSampler()
 
@@ -40,7 +40,7 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
         datasets.get_tissuenet_dataset(
             path=os.path.join(input_path, "tissuenet"), split=split_choice, download=True, patch_shape=patch_shape,
             raw_channel="rgb", label_channel="cell", sampler=sampler, label_dtype=label_dtype,
-            raw_transform=ResizeRawTrafo(patch_shape), label_transform=ResizeLabelTrafo(patch_shape),
+            raw_transform=ResizeRawTrafo(patch_shape), label_transform=ResizeLabelTrafo(patch_shape, min_size=0),
             n_samples=1000 if split_choice == "train" else 100
         ),
         datasets.get_livecell_dataset(
@@ -65,9 +65,10 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
         ),
         datasets.get_plantseg_dataset(
             path=os.path.join(input_path, "plantseg"), name="root", sampler=MinInstanceSampler(min_num_instances=10),
-            patch_shape=(1, *patch_shape), download=True, split=split_choice,
-            raw_transform=ResizeRawTrafo(patch_shape, do_rescaling=False), ndim=2, label_dtype=label_dtype,
-            label_transform=ResizeLabelTrafo(patch_shape), n_samples=1000 if split_choice == "train" else 100
+            patch_shape=(1, *patch_shape), download=True, split=split_choice, ndim=2, label_dtype=label_dtype,
+            raw_transform=ResizeRawTrafo(patch_shape, do_rescaling=False),
+            label_transform=ResizeLabelTrafo(patch_shape, min_size=0),
+            n_samples=1000 if split_choice == "train" else 100
         )
     )
     # increasing the sampling attempts for the neurips cellseg dataset
