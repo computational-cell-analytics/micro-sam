@@ -56,15 +56,6 @@ def finetune_lm_generalist(args):
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10, verbose=True)
     train_loader, val_loader = get_generalist_lm_loaders(input_path=args.input_path, patch_shape=patch_shape)
 
-    # HACK: here for debugging purpose
-    from tqdm import tqdm
-    for _ in tqdm(range(100)):
-        for x, y in tqdm(train_loader):  # for reproducing: train loader batch size - 2
-            # let's check on sample-per-batch level
-            for sample in y[:, 0, ...]:
-                if len(torch.unique(sample)) < 2:
-                    breakpoint()
-
     # this class creates all the training data for a batch (inputs, prompts and labels)
     convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
 
