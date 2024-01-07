@@ -43,7 +43,7 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape, with_cem=False):
 
     sampler = MinInstanceSampler()
     standard_label_trafo = PerObjectDistanceTransform(
-        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=25
+        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=0
     )
 
     # mitoem parameters
