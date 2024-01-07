@@ -102,7 +102,7 @@ def finetune_mito_nuc_em_generalist(args):
 def main():
     parser = argparse.ArgumentParser(description="Finetune Segment Anything for the Mito. & Nuclei EM datasets.")
     parser.add_argument(
-        "--input_path", "-i", default="/scratch/usr/nimanwai/data/",
+        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/",
         help="The filepath to all the respective EM datasets. If the data does not exist yet it will be downloaded"
     )
     parser.add_argument(
