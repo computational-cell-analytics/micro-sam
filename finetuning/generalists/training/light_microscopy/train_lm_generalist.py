@@ -56,6 +56,7 @@ def finetune_lm_generalist(args):
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10, verbose=True)
     train_loader, val_loader = get_generalist_lm_loaders(input_path=args.input_path, patch_shape=patch_shape)
 
+    # HACK: here for debugging purpose
     from tqdm import tqdm
     for _ in tqdm(range(100)):
         for x, y in tqdm(train_loader):  # for reproducing: train loader batch size - 2
@@ -106,7 +107,7 @@ def finetune_lm_generalist(args):
 def main():
     parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LM datasets.")
     parser.add_argument(
-        "--input_path", "-i", default="/scratch/usr/nimanwai/data/",
+        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/",
         help="The filepath to all the respective LM datasets. If the data does not exist yet it will be downloaded"
     )
     parser.add_argument(
