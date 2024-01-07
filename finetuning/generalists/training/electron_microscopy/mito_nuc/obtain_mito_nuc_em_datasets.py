@@ -1,6 +1,5 @@
 import os
 import numpy as np
-from math import ceil, floor
 
 from elf.io import open_file
 
@@ -9,47 +8,7 @@ from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.data import ConcatDataset, MinInstanceSampler, datasets
 
 from micro_sam.training import identity
-
-
-class ResizeRawTrafo:
-    def __init__(self, desired_shape, padding="constant"):
-        self.desired_shape = desired_shape
-        self.padding = padding
-
-    def __call__(self, raw):
-        tmp_ddim = (self.desired_shape[0] - raw.shape[0], self.desired_shape[1] - raw.shape[1])
-        ddim = (tmp_ddim[0] / 2, tmp_ddim[1] / 2)
-        raw = np.pad(
-            raw,
-            pad_width=((ceil(ddim[0]), floor(ddim[0])), (ceil(ddim[1]), floor(ddim[1]))),
-            mode=self.padding
-        )
-        assert raw.shape == self.desired_shape
-        return raw
-
-
-class ResizeLabelTrafo:
-    def __init__(self, desired_shape, padding="constant"):
-        self.desired_shape = desired_shape
-        self.padding = padding
-
-    def __call__(self, labels):
-        distance_trafo = PerObjectDistanceTransform(
-            distances=True, boundary_distances=True, directed_distances=False,
-            foreground=True, instances=True, min_size=25
-        )
-        labels = distance_trafo(labels)
-
-        # choosing H and W from labels (4, H, W), from above dist trafo outputs
-        tmp_ddim = (self.desired_shape[0] - labels.shape[1], self.desired_shape[0] - labels.shape[2])
-        ddim = (tmp_ddim[0] / 2, tmp_ddim[1] / 2)
-        labels = np.pad(
-            labels,
-            pad_width=((0, 0), (ceil(ddim[0]), floor(ddim[0])), (ceil(ddim[1]), floor(ddim[1]))),
-            mode=self.padding
-        )
-        assert labels.shape[1:] == self.desired_shape, labels.shape
-        return labels
+from micro_sam.training.util import ResizeRawTrafo, ResizeLabelTrafo
 
 
 def compute_platy_rois(root, sample_ids, ignore_label, file_template, label_key):
@@ -84,8 +43,7 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape, with_cem=False):
 
     sampler = MinInstanceSampler()
     standard_label_trafo = PerObjectDistanceTransform(
-        distances=True, boundary_distances=True, directed_distances=False,
-        foreground=True, instances=True, min_size=25
+        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=25
     )
 
     # mitoem parameters
@@ -120,7 +78,7 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape, with_cem=False):
         return datasets.get_platynereis_nuclei_dataset(
             path=platy_root, patch_shape=patch_shape, download=True, sampler=sampler, ndim=2,
             label_transform=ResizeLabelTrafo(patch_shape[1:]), rois=roi_choice,
-            raw_transform=ResizeRawTrafo(patch_shape[1:]), sample_ids=sample_ids
+            raw_transform=ResizeRawTrafo(patch_shape[1:], do_rescaling=False), sample_ids=sample_ids
         )
 
     platy_nuclei_train_dataset = platy_nuclei_dataset(platy_nuclei_train_rois, sample_ids=platy_nuclei_train_samples)
@@ -131,21 +89,25 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape, with_cem=False):
 
     if with_cem:
         def cem_dataset(split):
+            # 10% of the total training set, 1/3 of the total val set
+            n_samples = 1620 if split == "train" else 600
             return datasets.cem.get_mitolab_dataset(
-                path=os.path.join(input_path, "mitolab"), split=split, val_fraction=0.1
+                path=os.path.join(input_path, "mitolab"), split=split, val_fraction=0.1, sampler=sampler,
+                raw_transform=ResizeRawTrafo(patch_shape[1:], do_rescaling=False),
+                label_transform=ResizeLabelTrafo(patch_shape[1:]), n_samples=n_samples
             )
 
         train_datasets.append(cem_dataset("train"))
         val_datasets.append(cem_dataset("val"))
 
+    for train_dataset in train_datasets:
+        train_dataset.max_sampling_attempts = 5000
+
+    for val_dataset in val_datasets:
+        val_dataset.max_sampling_attempts = 5000
+
     generalist_em_train_dataset = ConcatDataset(*train_datasets)
     generalist_em_val_dataset = ConcatDataset(*val_datasets)
-
-    # mitoem: train - 1280, val - 640
-    # platy-nuclei: train - 424, val - 106
-    # mitolab: train - TODO, val - TODO
-
-    # overall loader: train - 1703 + ..., val - 746 + ...
 
     return generalist_em_train_dataset, generalist_em_val_dataset
 

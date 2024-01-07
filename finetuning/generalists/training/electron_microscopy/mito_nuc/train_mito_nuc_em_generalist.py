@@ -4,7 +4,7 @@ import argparse
 import torch
 
 from torch_em.model import UNETR
-from torch_em.loss import DiceLoss, DiceBasedDistanceLoss
+from torch_em.loss import DiceBasedDistanceLoss
 
 import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
@@ -59,9 +59,11 @@ def finetune_mito_nuc_em_generalist(args):
     )
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
-    convert_inputs = sam_training.ConvertToSamInputs()
+    convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
 
-    checkpoint_name = f"{args.model_type}/mito_nuc_em_generalist_sam"
+    checkpoint_name = f"{args.model_type}/"
+    checkpoint_name += "with_cem/" if args.with_cem else "without_cem/"
+    checkpoint_name += "mito_nuc_em_generalist_sam"
 
     # the trainer which performs the joint training and validation (implemented using "torch_em")
     trainer = sam_training.JointSamTrainer(
@@ -71,9 +73,6 @@ def finetune_mito_nuc_em_generalist(args):
         val_loader=val_loader,
         model=model,
         optimizer=optimizer,
-        # currently we compute loss batch-wise, else we pass channelwise True
-        loss=DiceLoss(channelwise=False),
-        metric=DiceLoss(),
         device=device,
         lr_scheduler=scheduler,
         logger=sam_training.JointSamLogger,
