@@ -212,7 +212,7 @@ class ResizeRawTrafo:
 
 
 class ResizeLabelTrafo:
-    def __init__(self, desired_shape, padding="constant", min_size=25):
+    def __init__(self, desired_shape, padding="constant", min_size=0):
         self.desired_shape = desired_shape
         self.padding = padding
         self.min_size = min_size
