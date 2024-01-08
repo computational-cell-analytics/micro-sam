@@ -241,7 +241,8 @@ def run_livecell_instance_segmentation_with_decoder(
     instance_segmentation.run_instance_segmentation_grid_search_and_inference(
         segmenter, grid_search_values,
         val_image_paths, val_gt_paths, test_image_paths,
-        embedding_folder, prediction_folder, gs_result_folder,
+        embedding_dir=embedding_folder, prediction_dir=prediction_folder,
+        result_dir=gs_result_folder,
     )
     return prediction_folder
 

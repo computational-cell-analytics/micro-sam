@@ -1,12 +1,11 @@
 #! /bin/bash
-#SBATCH -N 1
-#SBATCH -c 4
+#SBATCH -c 8
 #SBATCH --mem 64G
-#SBATCH -t 120
+#SBATCH -t 6:00:00
 #SBATCH -p grete:shared
-#SBATCH -A nim00007
 #SBATCH -G A100:1
+#SBATCH -A nim00007
 
 source ~/.bashrc
 micromamba activate main
-python precompute_embeddings.py $@ 
+python evaluate_instance_segmentation.py $@
