@@ -93,7 +93,7 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape, with_cem=False):
             n_samples = 1620 if split == "train" else 600
             return datasets.cem.get_mitolab_dataset(
                 path=os.path.join(input_path, "mitolab"), split=split, val_fraction=0.1, sampler=sampler,
-                raw_transform=ResizeRawTrafo(patch_shape[1:], do_rescaling=False),
+                raw_transform=ResizeRawTrafo(patch_shape[1:], do_rescaling=False), patch_shape=patch_shape[1:],
                 label_transform=ResizeLabelTrafo(patch_shape[1:]), n_samples=n_samples
             )
 
