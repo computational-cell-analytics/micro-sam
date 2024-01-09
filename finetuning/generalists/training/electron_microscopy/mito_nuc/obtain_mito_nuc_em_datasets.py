@@ -50,10 +50,8 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape, with_cem=False):
     mitoem_train_rois = [np.s_[100:110, :, :], np.s_[100:110, :, :]]
     mitoem_val_rois = [np.s_[0:5, :, :], np.s_[0:5, :, :]]
 
-    # platynereis cell dataset parameters
-    platy_root = os.path.join(input_path, "platynereis")
-
     # platynereis nuclei dataset parameters
+    platy_root = os.path.join(input_path, "platynereis")
     platy_nuclei_template = "nuclei/train_data_nuclei_%02i.h5"
     platy_nuclei_label_key = "volumes/labels/nucleus_instance_labels"
 
