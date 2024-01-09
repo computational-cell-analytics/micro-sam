@@ -80,7 +80,7 @@ def get_concat_boundaries_datasets(input_path, patch_shape):
     def cremi_dataset(rois):
         return datasets.get_cremi_dataset(
             path=os.path.join(input_path, "cremi"), patch_shape=patch_shape, label_transform=standard_label_trafo,
-            rois=rois, sampler=sampler, ndim=2, defect_augmentation_kwargs=None, download=True
+            rois=rois, sampler=sampler, ndim=2, defect_augmentation_kwargs=None, download=True, raw_transform=identity
         )
 
     cremi_train_dataset = cremi_dataset(cremi_train_rois)
@@ -89,8 +89,8 @@ def get_concat_boundaries_datasets(input_path, patch_shape):
     def platy_cell_dataset(rois, sample_ids):
         return datasets.get_platynereis_cell_dataset(
             path=platy_root, sample_ids=sample_ids, patch_shape=patch_shape, download=True, sampler=sampler,
-            ndim=2, rois=rois, raw_transform=ResizeRawTrafo(patch_shape, do_rescaling=False),
-            label_transfor=ResizeLabelTrafo(patch_shape)
+            ndim=2, rois=rois, raw_transform=ResizeRawTrafo(patch_shape[1:], do_rescaling=False),
+            label_transform=ResizeLabelTrafo(patch_shape[1:])
         )
 
     platy_cell_train_dataset = platy_cell_dataset(platy_cell_train_rois, platy_cell_train_samples)
@@ -98,8 +98,9 @@ def get_concat_boundaries_datasets(input_path, patch_shape):
 
     def axondeepseg_dataset(split, data_fraction):
         return datasets.get_axondeepseg_dataset(
-            path=os.path.join(input_path, "axondeepseg"), name=["sem"], patch_shape=patch_shape[1:], download=True,
-            label_transform=axondeepseg_label_trafo, sampler=sampler, data_fraction=data_fraction, split=split
+            path=os.path.join(input_path, "axondeepseg"), name=["sem"], patch_shape=patch_shape[1:],
+            label_transform=axondeepseg_label_trafo, sampler=sampler, data_fraction=data_fraction,
+            raw_transform=identity, split=split, download=True
         )
 
     axondeepseg_train_dataset = axondeepseg_dataset("train", 0.9)
