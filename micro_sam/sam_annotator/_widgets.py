@@ -25,6 +25,22 @@ if TYPE_CHECKING:
     import napari
 
 
+def _reset_tracking_state():
+    """Reset the tracking state.
+
+    This helper function is needed by clear_tracking_widget and by commit_tracking_widget.
+    """
+    state = AnnotatorState()
+
+    # reset the lineage and track id
+    state.current_track_id = 1
+    state.lineage = {1: []}
+
+    # reset the choices in the track_id menu
+    track_ids = list(map(str, state.lineage.keys()))
+    state.tracking_widget[1].choices = track_ids
+
+
 @magic_factory(call_button="Clear Annotations [Shift + C]")
 def clear_widget(viewer: "napari.viewer.Viewer") -> None:
     """Widget for clearing the current annotations."""
@@ -34,7 +50,7 @@ def clear_widget(viewer: "napari.viewer.Viewer") -> None:
 @magic_factory(call_button="Clear Annotations [Shift + C]")
 def clear_tracking_widget(viewer: "napari.viewer.Viewer") -> None:
     """Widget for clearing all tracking annotations and state."""
-    vutil._reset_tracking_state()
+    _reset_tracking_state()
     vutil.clear_annotations(viewer)
 
 
@@ -78,7 +94,7 @@ def commit_tracking_widget(viewer: "napari.viewer.Viewer", layer: str = "current
     }
     state.committed_lineages.append(updated_lineage)
 
-    vutil._reset_tracking_state()
+    _reset_tracking_state()
     vutil.clear_annotations(viewer, clear_segmentations=False)
 
 
@@ -298,6 +314,27 @@ def segment_object_widget(
     viewer.layers["current_object"].refresh()
 
 
+def _update_lineage():
+    """Updated the lineage after recording a division event.
+    This helper function is needed by 'track_object_widget'.
+    """
+    state = AnnotatorState()
+    tracking_widget = state.tracking_widget
+
+    mother = state.current_track_id
+    assert mother in state.lineage
+    assert len(state.lineage[mother]) == 0
+
+    daughter1, daughter2 = state.current_track_id + 1, state.current_track_id + 2
+    state.lineage[mother] = [daughter1, daughter2]
+    state.lineage[daughter1] = []
+    state.lineage[daughter2] = []
+
+    # Update the choices in the track_id menu so that it contains the new track ids.
+    track_ids = list(map(str, state.lineage.keys()))
+    tracking_widget[1].choices = track_ids
+
+
 @magic_factory(call_button="Segment Frame [S]")
 def segment_frame_widget(viewer: "napari.viewer.Viewer") -> None:
     state = AnnotatorState()
@@ -357,7 +394,7 @@ def track_object_widget(
         )
 
         # step 2: track the object starting from the lowest annotated slice
-        seg, has_division = vutil._track_from_prompts(
+        seg, has_division = vutil.track_from_prompts(
             viewer.layers["point_prompts"], viewer.layers["prompts"], seg,
             state.predictor, slices, state.image_embeddings, stop_upper,
             threshold=iou_threshold, projection=projection_,
@@ -368,7 +405,7 @@ def track_object_widget(
     # If a division has occurred and it's the first time it occurred for this track
     # then we need to create the two daughter tracks and update the lineage.
     if has_division and (len(state.lineage[state.current_track_id]) == 0):
-        vutil._update_lineage()
+        _update_lineage()
 
     # clear the old track mask
     viewer.layers["current_object"].data[viewer.layers["current_object"].data == state.current_track_id] = 0
