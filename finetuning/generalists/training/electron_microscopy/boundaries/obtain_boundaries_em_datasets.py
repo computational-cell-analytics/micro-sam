@@ -7,7 +7,6 @@ from skimage.measure import label
 from skimage.segmentation import watershed
 
 from torch_em import get_data_loader
-from torch_em.transform.label import label_consecutive
 from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.data import ConcatDataset, MinInstanceSampler, datasets
 
@@ -34,7 +33,6 @@ def axondeepseg_label_trafo(labels):
     foreground_seeds = label((labels == 2))
     boundary_prediction = (labels == 1)
     seg = watershed(boundary_prediction, markers=foreground_seeds, mask=(foreground_seeds + boundary_prediction) > 0)
-    seg = label_consecutive(seg)
     dist_trafo = PerObjectDistanceTransform(
         distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=0
     )
