@@ -24,5 +24,9 @@ EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/"
 PROMPT_FOLDER = "/scratch/projects/nim00007/sam/experiments/prompts/livecell"
 
 
+# we need to create tiff for val images, val gt and test gt out of the h5 or zarr file storage formats
+# note: compress the files (zlib), do not store empty label files
+
+
 def get_experiment_folder(domain, name, model_type):
     return os.path.join(EXPERIMENT_ROOT, domain, name, model_type)
