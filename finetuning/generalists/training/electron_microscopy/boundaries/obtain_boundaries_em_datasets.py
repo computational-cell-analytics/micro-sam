@@ -94,15 +94,15 @@ def get_concat_boundaries_datasets(input_path, patch_shape):
     platy_cell_train_dataset = platy_cell_dataset(platy_cell_train_rois, platy_cell_train_samples)
     platy_cell_val_dataset = platy_cell_dataset(platy_cell_val_rois, platy_cell_val_samples)
 
-    def axondeepseg_dataset(split, data_fraction):
+    def axondeepseg_dataset(split):
         return datasets.get_axondeepseg_dataset(
             path=os.path.join(input_path, "axondeepseg"), name=["sem"], patch_shape=patch_shape[1:],
-            label_transform=axondeepseg_label_trafo, sampler=sampler, data_fraction=data_fraction,
-            raw_transform=identity, split=split, download=True
+            label_transform=axondeepseg_label_trafo, sampler=sampler, split=split,
+            raw_transform=identity, download=True, val_fraction=0.1
         )
 
-    axondeepseg_train_dataset = axondeepseg_dataset("train", 0.9)
-    axondeepseg_val_dataset = axondeepseg_dataset("val", 0.1)
+    axondeepseg_train_dataset = axondeepseg_dataset("train")
+    axondeepseg_val_dataset = axondeepseg_dataset("val")
 
     train_datasets = [cremi_train_dataset, platy_cell_train_dataset, axondeepseg_train_dataset]
     val_datasets = [cremi_val_dataset, platy_cell_val_dataset, axondeepseg_val_dataset]
