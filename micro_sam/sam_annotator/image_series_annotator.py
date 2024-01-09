@@ -42,25 +42,33 @@ def image_series_annotator(
     output_folder: str,
     model_type: str = util._DEFAULT_MODEL,
     embedding_path: Optional[str] = None,
-    predictor: Optional[SamPredictor] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
+    viewer: Optional["napari.viewer.Viewer"] = None,
+    return_viewer: bool = False,
+    predictor: Optional[SamPredictor] = None,
     precompute_amg_state: bool = False,
-) -> None:
+) -> Optional["napari.viewer.Viewer"]:
     """Run the 2d annotation tool for a series of images.
 
     Args:
         input_files: List of the file paths for the images to be annotated.
         output_folder: The folder where the segmentation results are saved.
         embedding_path: Filepath where to save the embeddings.
-        predictor: The Segment Anything model. Passing this enables using fully custom models.
-            If you pass `predictor` then `model_type` will be ignored.
         tile_shape: Shape of tiles for tiled embedding prediction.
             If `None` then the whole image is passed to Segment Anything.
         halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
+        viewer: The viewer to which the SegmentAnything functionality should be added.
+            This enables using a pre-initialized viewer.
+        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
+        predictor: The Segment Anything model. Passing this enables using fully custom models.
+            If you pass `predictor` then `model_type` will be ignored.
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster.
+
+    Returns:
+        The napari viewer, only returned if `return_viewer=True`.
     """
 
     os.makedirs(output_folder, exist_ok=True)
@@ -75,7 +83,8 @@ def image_series_annotator(
     image = imageio.imread(image_files[next_image_id])
     image_embedding_path = embedding_paths[next_image_id]
 
-    viewer = napari.Viewer()
+    if viewer is None:
+        viewer = napari.Viewer()
     viewer.add_image(image, name="image")
 
     state = AnnotatorState()
@@ -137,6 +146,8 @@ def image_series_annotator(
     def _next_image(viewer):
         next_image(viewer)
 
+    if return_viewer:
+        return viewer
     napari.run()
 
 
@@ -144,10 +155,10 @@ def image_folder_annotator(
     input_folder: str,
     output_folder: str,
     pattern: str = "*",
-    embedding_path: Optional[str] = None,
-    predictor: Optional[SamPredictor] = None,
+    viewer: Optional["napari.viewer.Viewer"] = None,
+    return_viewer: bool = False,
     **kwargs
-) -> None:
+) -> Optional["napari.viewer.Viewer"]:
     """Run the 2d annotation tool for a series of images in a folder.
 
     Args:
@@ -155,14 +166,17 @@ def image_folder_annotator(
         output_folder: The folder where the segmentation results are saved.
         pattern: The glob patter for loading files from `input_folder`.
             By default all files will be loaded.
-        embedding_path: Filepath where to save the embeddings.
-        predictor: The Segment Anything model. Passing this enables using fully custom models.
-            If you pass `predictor` then `model_type` will be ignored.
-        kwargs: The keywored arguments for `micro_sam.sam_annotator.image_series_annotator`.
+        viewer: The viewer to which the SegmentAnything functionality should be added.
+            This enables using a pre-initialized viewer.
+        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
+        kwargs: The keyword arguments for `micro_sam.sam_annotator.image_series_annotator`.
+
+    Returns:
+        The napari viewer, only returned if `return_viewer=True`.
     """
     image_files = sorted(glob(os.path.join(input_folder, pattern)))
-    image_series_annotator(
-        image_files, output_folder, embedding_path=embedding_path, predictor=predictor, **kwargs
+    return image_series_annotator(
+        image_files, output_folder, viewer=viewer, return_viewer=return_viewer, **kwargs
     )
 
 

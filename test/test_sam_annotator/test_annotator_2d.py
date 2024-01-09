@@ -1,41 +1,17 @@
 import platform
 
-import numpy as np
 import pytest
 from skimage.data import binary_blobs
 
 import micro_sam.util as util
+from micro_sam._test_util import check_layer_initialization
 from micro_sam.sam_annotator import annotator_2d
-
-
-def _check_layer_initialization(viewer, expected_shape):
-    """Utility function to check the initial layer setup is correct."""
-
-    assert len(viewer.layers) == 6
-    expected_layer_names = [
-        "image", "auto_segmentation", "committed_objects", "current_object", "point_prompts", "prompts"
-    ]
-
-    for layer_name in expected_layer_names:
-        assert layer_name in viewer.layers
-
-    # Check prompt layers
-    assert viewer.layers["prompts"].data == []  # shape data is list, not numpy array
-    np.testing.assert_equal(viewer.layers["point_prompts"].data, 0)
-
-    # Check segmentation layers.
-    for layer_name in ["auto_segmentation", "committed_objects", "current_object"]:
-        assert viewer.layers[layer_name].data.shape == expected_shape
-        np.testing.assert_equal(viewer.layers[layer_name].data, 0)
 
 
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() == "Windows", reason="Gui test is not working on windows.")
 def test_annotator_2d(make_napari_viewer_proxy):
-    """Integration test for annotator_2d widget with automatic mask generation.
-
-    * Creates 2D image embedding
-    * Opens annotator_2d widget in napari
+    """Integration test for annotator_2d.
     """
 
     image = binary_blobs(512)
@@ -47,8 +23,8 @@ def test_annotator_2d(make_napari_viewer_proxy):
         image,
         model_type=model_type,
         viewer=viewer,
-        return_viewer=True
+        return_viewer=True,
     )
 
-    _check_layer_initialization(viewer, image.shape)
+    check_layer_initialization(viewer, image.shape)
     viewer.close()  # must close the viewer at the end of tests
