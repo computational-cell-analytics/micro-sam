@@ -115,7 +115,7 @@ def main():
     )
     parser.add_argument(
         "--iterations", type=int, default=int(25e4),
-        help="For how many iterations should the model be trained? By default 100k."
+        help="For how many iterations should the model be trained? By default 250k."
     )
     parser.add_argument(
         "--export_path", "-e",
