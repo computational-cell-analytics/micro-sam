@@ -80,7 +80,7 @@ class _AnnotatorBase(Container):
 
     def _create_keybindings(self):
         @self._viewer.bind_key("s")
-        def _segmet(viewer):
+        def _segment(viewer):
             self._segment_widget(viewer)
 
         @self._viewer.bind_key("c")
