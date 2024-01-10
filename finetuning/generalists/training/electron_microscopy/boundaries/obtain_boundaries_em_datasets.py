@@ -7,8 +7,6 @@ from skimage.measure import label
 from skimage.segmentation import watershed
 from scipy.ndimage import distance_transform_edt
 
-from torch.utils.data import WeightedRandomSampler
-
 from torch_em import get_data_loader
 from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.data import ConcatDataset, MinInstanceSampler, datasets
