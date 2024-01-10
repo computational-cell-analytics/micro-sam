@@ -5,6 +5,7 @@ from elf.io import open_file
 
 from skimage.measure import label
 from skimage.segmentation import watershed
+from scipy.ndimage import distance_transform_edt
 
 from torch_em import get_data_loader
 from torch_em.transform.label import PerObjectDistanceTransform
@@ -32,29 +33,17 @@ def axondeepseg_label_trafo(labels):
     # after checking, labels look like this : 0 is bg, 1 is myelins and 2 is axons
     foreground_seeds = label((labels == 2))
     boundary_prediction = (labels == 1)
-    # seg = watershed(boundary_prediction, markers=foreground_seeds, mask=(foreground_seeds + boundary_prediction) > 0)
 
-    from scipy.ndimage import distance_transform_edt
-    from skimage.feature import peak_local_max
+    # use the distance to the myelinated axons as height map to assign pixels to nearest (myelinated axon)
+    hmap = distance_transform_edt(labels == 0)
+    seg = watershed(image=hmap, markers=foreground_seeds, mask=(foreground_seeds + boundary_prediction) > 0)
 
-    # use the distance to the axons as height map to assign pixels to nearest axon
-    hmap = distance_transform_edt(labels != 1)
-    # max_coords = peak_local_max(hmap, min_distance=1, exclude_border=False)
-    # local_maxima = np.zeros_like(labels)
-    # local_maxima[max_coords[:, 0], max_coords[:, 1]] = 1
-    # markers = label(local_maxima)
-
-    # import napari
-    # v = napari.Viewer()
-    # v.add_image(hmap)
-    # v.add_labels(labels)
-    # napari.run()
-
-    seg = watershed(
-        image=hmap,
-        markers=foreground_seeds,
-        mask=(foreground_seeds + boundary_prediction) > 0
-    )
+    import napari
+    v = napari.Viewer()
+    v.add_image(hmap)
+    v.add_labels(labels)
+    v.add_labels(seg)
+    napari.run()
 
     dist_trafo = PerObjectDistanceTransform(
         distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=0
