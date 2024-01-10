@@ -32,7 +32,30 @@ def axondeepseg_label_trafo(labels):
     # after checking, labels look like this : 0 is bg, 1 is myelins and 2 is axons
     foreground_seeds = label((labels == 2))
     boundary_prediction = (labels == 1)
-    seg = watershed(boundary_prediction, markers=foreground_seeds, mask=(foreground_seeds + boundary_prediction) > 0)
+    # seg = watershed(boundary_prediction, markers=foreground_seeds, mask=(foreground_seeds + boundary_prediction) > 0)
+
+    from scipy.ndimage import distance_transform_edt
+    from skimage.feature import peak_local_max
+
+    # use the distance to the axons as height map to assign pixels to nearest axon
+    hmap = distance_transform_edt(labels != 1)
+    # max_coords = peak_local_max(hmap, min_distance=1, exclude_border=False)
+    # local_maxima = np.zeros_like(labels)
+    # local_maxima[max_coords[:, 0], max_coords[:, 1]] = 1
+    # markers = label(local_maxima)
+
+    # import napari
+    # v = napari.Viewer()
+    # v.add_image(hmap)
+    # v.add_labels(labels)
+    # napari.run()
+
+    seg = watershed(
+        image=hmap,
+        markers=foreground_seeds,
+        mask=(foreground_seeds + boundary_prediction) > 0
+    )
+
     dist_trafo = PerObjectDistanceTransform(
         distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=0
     )
@@ -104,8 +127,12 @@ def get_concat_boundaries_datasets(input_path, patch_shape):
     axondeepseg_train_dataset = axondeepseg_dataset("train")
     axondeepseg_val_dataset = axondeepseg_dataset("val")
 
-    train_datasets = [cremi_train_dataset, platy_cell_train_dataset, axondeepseg_train_dataset]
-    val_datasets = [cremi_val_dataset, platy_cell_val_dataset, axondeepseg_val_dataset]
+    # train_datasets = [cremi_train_dataset, platy_cell_train_dataset, axondeepseg_train_dataset]
+    # val_datasets = [cremi_val_dataset, platy_cell_val_dataset, axondeepseg_val_dataset]
+
+    # FIXME:
+    train_datasets = [axondeepseg_train_dataset]
+    val_datasets = [axondeepseg_val_dataset]
 
     generalist_em_train_dataset = ConcatDataset(*train_datasets)
     generalist_em_val_dataset = ConcatDataset(*val_datasets)
