@@ -82,14 +82,15 @@ def get_concat_boundaries_datasets(input_path, patch_shape):
     platy_cell_val_rois = compute_platy_rois(platy_root, platy_cell_val_samples, ignore_label=0,
                                              file_template=platy_cell_template, label_key=platy_cell_label_key)
 
-    def cremi_dataset(rois):
+    def cremi_dataset(rois, n_samples):
         return datasets.get_cremi_dataset(
             path=os.path.join(input_path, "cremi"), patch_shape=patch_shape, label_transform=standard_label_trafo,
-            rois=rois, sampler=sampler, ndim=2, defect_augmentation_kwargs=None, download=True, raw_transform=identity
+            n_samples=n_samples, rois=rois, sampler=sampler, ndim=2, defect_augmentation_kwargs=None,
+            download=True, raw_transform=identity
         )
 
-    cremi_train_dataset = cremi_dataset(cremi_train_rois)
-    cremi_val_dataset = cremi_dataset(cremi_val_rois)
+    cremi_train_dataset = cremi_dataset(cremi_train_rois, n_samples=750)  # taking ~50% of all training samples
+    cremi_val_dataset = cremi_dataset(cremi_val_rois, n_samples=250)  # # taking ~50% of all val samples
 
     def platy_cell_dataset(rois, sample_ids):
         return datasets.get_platynereis_cell_dataset(
@@ -102,10 +103,12 @@ def get_concat_boundaries_datasets(input_path, patch_shape):
     platy_cell_val_dataset = platy_cell_dataset(platy_cell_val_rois, platy_cell_val_samples)
 
     def axondeepseg_dataset(split):
+        # train is oversampled by ~10 times and val by ~15 times
+        n_samples = 500 if split == "train" else 100
         return datasets.get_axondeepseg_dataset(
             path=os.path.join(input_path, "axondeepseg"), name=["sem"], patch_shape=patch_shape[1:],
             label_transform=axondeepseg_label_trafo, sampler=sampler, split=split,
-            raw_transform=identity, download=True, val_fraction=0.1
+            raw_transform=identity, download=True, val_fraction=0.1, n_samples=n_samples
         )
 
     axondeepseg_train_dataset = axondeepseg_dataset("train")
@@ -117,18 +120,7 @@ def get_concat_boundaries_datasets(input_path, patch_shape):
     generalist_em_train_dataset = ConcatDataset(*train_datasets)
     generalist_em_val_dataset = ConcatDataset(*val_datasets)
 
-    # creating weights for each concatenated dataset
-    train_weights = np.concatenate(
-        tuple([np.linspace(1, 3, len(_dataset)) for _dataset in train_datasets])
-    )
-    val_weights = np.concatenate(
-        tuple([np.linspace(1, 3, len(_dataset)) for _dataset in val_datasets])
-    )
-
-    train_sampler = WeightedRandomSampler(train_weights, len(generalist_em_train_dataset))
-    val_sampler = WeightedRandomSampler(val_weights, len(generalist_em_val_dataset))
-
-    return generalist_em_train_dataset, generalist_em_val_dataset, train_sampler, val_sampler
+    return generalist_em_train_dataset, generalist_em_val_dataset
 
 
 def get_generalist_boundaries_loaders(input_path, patch_shape):
@@ -140,8 +132,7 @@ def get_generalist_boundaries_loaders(input_path, patch_shape):
     i.e. the tensors (inputs & masks) should be of same spatial shape, with each object in the mask having it's own ID.
     IMPORTANT: the ID 0 is reserved for background, and the IDs must be consecutive.
     """
-    (generalist_train_dataset, generalist_val_dataset,
-     train_sampler, val_sampler) = get_concat_boundaries_datasets(input_path, patch_shape)
-    train_loader = get_data_loader(generalist_train_dataset, batch_size=2, num_workers=16, sampler=train_sampler)
-    val_loader = get_data_loader(generalist_val_dataset, batch_size=1, num_workers=16, sampler=val_sampler)
+    generalist_train_dataset, generalist_val_dataset = get_concat_boundaries_datasets(input_path, patch_shape)
+    train_loader = get_data_loader(generalist_train_dataset, batch_size=2, num_workers=16, shuffle=True)
+    val_loader = get_data_loader(generalist_val_dataset, batch_size=1, num_workers=16, shuffle=True)
     return train_loader, val_loader
