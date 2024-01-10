@@ -7,6 +7,8 @@ from skimage.measure import label
 from skimage.segmentation import watershed
 from scipy.ndimage import distance_transform_edt
 
+from torch.utils.data import WeightedRandomSampler
+
 from torch_em import get_data_loader
 from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.data import ConcatDataset, MinInstanceSampler, datasets
@@ -34,16 +36,9 @@ def axondeepseg_label_trafo(labels):
     foreground_seeds = label((labels == 2))
     boundary_prediction = (labels == 1)
 
-    # use the distance to the myelinated axons as height map to assign pixels to nearest myelinated axon
+    # use the distance to the axons as height map to assign pixels to nearest myelinated axon
     hmap = distance_transform_edt(labels == 0)
     seg = watershed(image=hmap, markers=foreground_seeds, mask=(foreground_seeds + boundary_prediction) > 0)
-
-    # import napari
-    # v = napari.Viewer()
-    # v.add_image(hmap)
-    # v.add_labels(labels)
-    # v.add_labels(seg)
-    # napari.run()
 
     dist_trafo = PerObjectDistanceTransform(
         distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=0
@@ -116,17 +111,24 @@ def get_concat_boundaries_datasets(input_path, patch_shape):
     axondeepseg_train_dataset = axondeepseg_dataset("train")
     axondeepseg_val_dataset = axondeepseg_dataset("val")
 
-    # train_datasets = [cremi_train_dataset, platy_cell_train_dataset, axondeepseg_train_dataset]
-    # val_datasets = [cremi_val_dataset, platy_cell_val_dataset, axondeepseg_val_dataset]
-
-    # FIXME:
-    train_datasets = [axondeepseg_train_dataset]
-    val_datasets = [axondeepseg_val_dataset]
+    train_datasets = [cremi_train_dataset, platy_cell_train_dataset, axondeepseg_train_dataset]
+    val_datasets = [cremi_val_dataset, platy_cell_val_dataset, axondeepseg_val_dataset]
 
     generalist_em_train_dataset = ConcatDataset(*train_datasets)
     generalist_em_val_dataset = ConcatDataset(*val_datasets)
 
-    return generalist_em_train_dataset, generalist_em_val_dataset
+    # creating weights for each concatenated dataset
+    train_weights = np.concatenate(
+        tuple([np.linspace(1, 3, len(_dataset)) for _dataset in train_datasets])
+    )
+    val_weights = np.concatenate(
+        tuple([np.linspace(1, 3, len(_dataset)) for _dataset in val_datasets])
+    )
+
+    train_sampler = WeightedRandomSampler(train_weights, len(generalist_em_train_dataset))
+    val_sampler = WeightedRandomSampler(val_weights, len(generalist_em_val_dataset))
+
+    return generalist_em_train_dataset, generalist_em_val_dataset, train_sampler, val_sampler
 
 
 def get_generalist_boundaries_loaders(input_path, patch_shape):
@@ -138,7 +140,8 @@ def get_generalist_boundaries_loaders(input_path, patch_shape):
     i.e. the tensors (inputs & masks) should be of same spatial shape, with each object in the mask having it's own ID.
     IMPORTANT: the ID 0 is reserved for background, and the IDs must be consecutive.
     """
-    generalist_train_dataset, generalist_val_dataset = get_concat_boundaries_datasets(input_path, patch_shape)
-    train_loader = get_data_loader(generalist_train_dataset, batch_size=2, shuffle=True, num_workers=16)
-    val_loader = get_data_loader(generalist_val_dataset, batch_size=1, shuffle=True, num_workers=16)
+    (generalist_train_dataset, generalist_val_dataset,
+     train_sampler, val_sampler) = get_concat_boundaries_datasets(input_path, patch_shape)
+    train_loader = get_data_loader(generalist_train_dataset, batch_size=2, num_workers=16, sampler=train_sampler)
+    val_loader = get_data_loader(generalist_val_dataset, batch_size=1, num_workers=16, sampler=val_sampler)
     return train_loader, val_loader

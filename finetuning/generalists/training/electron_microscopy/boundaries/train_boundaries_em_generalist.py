@@ -57,9 +57,10 @@ def finetune_boundaries_em_generalist(args):
     train_loader, val_loader = get_generalist_boundaries_loaders(input_path=args.input_path, patch_shape=patch_shape)
 
     from torch_em.util.debug import check_loader
-    check_loader(train_loader, 8)
-    check_loader(val_loader, 8)
-    breakpoint()
+    for _ in range(100):
+        check_loader(train_loader, 8, plt=True, save_path="train_loader.png")
+        check_loader(val_loader, 8, plt=True, save_path="val_loader.png")
+        breakpoint()
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
     convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
