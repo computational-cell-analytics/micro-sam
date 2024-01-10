@@ -35,7 +35,7 @@ def axondeepseg_label_trafo(labels):
     boundary_prediction = (labels == 1)
 
     # use the distance to the myelinated axons as height map to assign pixels to nearest myelinated axon
-    hmap = distance_transform_edt(labels == 0)
+    hmap = distance_transform_edt(labels != 2)
     seg = watershed(image=hmap, markers=foreground_seeds, mask=(foreground_seeds + boundary_prediction) > 0)
 
     # import napari
