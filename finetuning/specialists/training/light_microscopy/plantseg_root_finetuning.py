@@ -131,7 +131,7 @@ def finetune_plantseg_root(args):
 def main():
     parser = argparse.ArgumentParser(description="Finetune Segment Anything for the PlantSeg dataset.")
     parser.add_argument(
-        "--input_path", "-i", default=" /scratch/projects/nim00007/sam/data/plantseg/",
+        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/plantseg/",
         help="The filepath to the PlantSeg (root) data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(

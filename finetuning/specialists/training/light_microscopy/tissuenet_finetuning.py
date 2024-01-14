@@ -131,7 +131,7 @@ def finetune_tissuenet(args):
 def main():
     parser = argparse.ArgumentParser(description="Finetune Segment Anything for the TissueNet dataset.")
     parser.add_argument(
-        "--input_path", "-i", default=" /scratch/projects/nim00007/sam/data/tissuenet/",
+        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/tissuenet/",
         help="The filepath to the TissueNet data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(
