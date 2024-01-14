@@ -32,7 +32,7 @@ def get_checkpoint(name):
     return ckpt, model_type
 
 
-def get_model(name, model_type=None, ckpt=None):
+def get_model(name=None, model_type=None, ckpt=None):
     if ckpt is None:
         ckpt, model_type = get_checkpoint(name)
     assert (ckpt is not None) and (model_type is not None)
