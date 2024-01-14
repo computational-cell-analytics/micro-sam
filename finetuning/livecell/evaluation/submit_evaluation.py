@@ -6,7 +6,7 @@ from datetime import datetime
 
 
 def write_batch_script(out_path, inference_setup, checkpoint, model_type, experiment_folder):
-    """Writing scripts with different fold-trainings for nnUNetv2
+    """Writing scripts with different fold-trainings for micro-sam evaluation
     """
     batch_script = f"""#!/bin/bash
 #SBATCH -c 8
