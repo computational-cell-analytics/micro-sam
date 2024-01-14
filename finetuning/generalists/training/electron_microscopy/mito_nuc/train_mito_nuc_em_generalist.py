@@ -107,7 +107,7 @@ def main():
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
-        help="The model type to use for fine-tuning. Either vit_h, vit_b or vit_l."
+        help="The model type to use for fine-tuning. Either vit_b, vit_l or vit_h."
     )
     parser.add_argument(
         "--save_root", "-s",
