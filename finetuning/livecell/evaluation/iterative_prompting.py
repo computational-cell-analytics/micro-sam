@@ -61,12 +61,13 @@ def evaluate_interactive_prompting(prediction_root, start_with_box_prompt, name)
 def main():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("-n", "--name", required=True)
+    parser.add_argument("-n", "--name", default=None)
     parser.add_argument(
-        "-m", "--model", type=str,  # options: "vit_h", "vit_h_generalist", "vit_h_specialist"
+        "-m", "--model", type=str,
         help="Provide the model type to initialize the predictor"
     )
     parser.add_argument("-c", "--checkpoint", type=str, default=None)
+    parser.add_argument("-e", "--experiment_folder", type=str, default=None)
     parser.add_argument("--box", action="store_true", help="If passed, starts with first prompt as box")
     args = parser.parse_args()
 
@@ -76,7 +77,10 @@ def main():
     # get the predictor to perform inference
     predictor = get_model(name, model_type=args.model, ckpt=args.checkpoint)
 
-    exp_folder = get_experiment_folder(name)
+    exp_folder = args.experiment_folder
+    if exp_folder is None:
+        exp_folder = get_experiment_folder(name)
+
     prediction_root = run_interactive_prompting(exp_folder, predictor, start_with_box_prompt)
     evaluate_interactive_prompting(prediction_root, start_with_box_prompt, name)
 
