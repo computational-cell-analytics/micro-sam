@@ -5,7 +5,7 @@ from glob import glob
 from datetime import datetime
 
 
-def write_batch_script(out_path, inference_setup, checkpoint, model_type, experiment_folder):
+def write_batch_script(env_name, out_path, inference_setup, checkpoint, model_type, experiment_folder):
     """Writing scripts with different fold-trainings for micro-sam evaluation
     """
     batch_script = f"""#!/bin/bash
@@ -17,7 +17,8 @@ def write_batch_script(out_path, inference_setup, checkpoint, model_type, experi
 #SBATCH -A nim00007
 #SBATCH --job-name={inference_setup}
 
-source activate sam
+source ~/.bashrc 
+mamba activate {env_name}
 python {inference_setup}.py """
 
     _op = out_path[:-3] + f"_{inference_setup}.sh"
@@ -54,6 +55,7 @@ def submit_slurm():
     tmp_folder = "./gpu_jobs"
 
     # parameters to run the inference scripts
+    env_name = "sam"
     checkpoint = "/scratch/usr/nimanwai/micro-sam/checkpoints/vit_h/livecell_sam/best.pt"
     model_type = "vit_h"
     experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/specialists/livecell/vit_h/"
@@ -61,6 +63,7 @@ def submit_slurm():
     all_setups = ["evaluate_amg", "evaluate_instance_segmentation", "iterative_prompting"]
     for current_setup in all_setups:
         write_batch_script(
+            env_name=env_name,
             out_path=get_batch_script_names(tmp_folder),
             inference_setup=current_setup,
             checkpoint=checkpoint,
