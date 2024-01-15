@@ -19,8 +19,8 @@ MODELS = {
 }
 
 
-def get_paths():
-    return _get_livecell_paths(DATA_ROOT)
+def get_paths(split="test"):
+    return _get_livecell_paths(DATA_ROOT, split=split)
 
 
 def get_checkpoint(name):
