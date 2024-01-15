@@ -5,7 +5,7 @@ from glob import glob
 from datetime import datetime
 
 
-def write_batch_script(env_name, out_path, inference_setup, checkpoint, model_type, experiment_folder):
+def write_batch_script(env_name, out_path, inference_setup, checkpoint, model_type, experiment_folder, delay=True):
     """Writing scripts with different fold-trainings for micro-sam evaluation
     """
     batch_script = f"""#!/bin/bash
@@ -19,6 +19,9 @@ def write_batch_script(env_name, out_path, inference_setup, checkpoint, model_ty
 
 source ~/.bashrc
 mamba activate {env_name} \n"""
+
+    if delay:
+        batch_script += "sleep 10m \n"
 
     # python script
     python_script = f"python {inference_setup}.py "
@@ -37,16 +40,16 @@ mamba activate {env_name} \n"""
     # let's add the python script to the bash script
     batch_script += python_script
 
-    # we run the first prompt for iterative once starting with point, and then starting with box
-    if inference_setup == "iterative_prompting":
-        batch_script += "\n" + python_script + "--box "
-
-    print(batch_script)
-    print()
-    breakpoint()
-
     with open(_op, "w") as f:
         f.write(batch_script)
+
+    # we run the first prompt for iterative once starting with point, and then starting with box (below)
+    if inference_setup == "iterative_prompting":
+        batch_script += "--box "
+
+        new_path = out_path[:-3] + f"_{inference_setup}_box.sh"
+        with open(new_path, "w") as f:
+            f.write(batch_script)
 
 
 def get_batch_script_names(tmp_folder):
@@ -69,11 +72,11 @@ def submit_slurm():
 
     # parameters to run the inference scripts
     env_name = "sam"
-    checkpoint = "/scratch/usr/nimanwai/micro-sam/checkpoints/vit_h/livecell_sam/best.pt"
-    model_type = "vit_h"
-    experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/specialists/livecell/vit_h/"
+    model_type = "vit_b"
+    checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/lm_generalist_sam/best.pt"
+    experiment_folder = f"/scratch/projects/nim00007/sam/experiments/new_models/generalists/livecell/{model_type}/"
 
-    all_setups = ["evaluate_amg", "evaluate_instance_segmentation", "iterative_prompting"]
+    all_setups = ["precompute_embeddings", "evaluate_amg", "evaluate_instance_segmentation", "iterative_prompting"]
     for current_setup in all_setups:
         write_batch_script(
             env_name=env_name,
@@ -82,9 +85,8 @@ def submit_slurm():
             checkpoint=checkpoint,
             model_type=model_type,
             experiment_folder=experiment_folder,
+            delay=False if current_setup == "precompute_embeddings" else True
             )
-
-    quit()
 
     for my_script in glob(tmp_folder + "/*"):
         cmd = ["sbatch", my_script]
