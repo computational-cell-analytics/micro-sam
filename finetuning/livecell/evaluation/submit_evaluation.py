@@ -17,20 +17,33 @@ def write_batch_script(env_name, out_path, inference_setup, checkpoint, model_ty
 #SBATCH -A nim00007
 #SBATCH --job-name={inference_setup}
 
-source ~/.bashrc 
-mamba activate {env_name}
-python {inference_setup}.py """
+source ~/.bashrc
+mamba activate {env_name} \n"""
+
+    # python script
+    python_script = f"python {inference_setup}.py "
 
     _op = out_path[:-3] + f"_{inference_setup}.sh"
 
     # add the finetuned checkpoint
-    batch_script += f"-c {checkpoint} "
+    python_script += f"-c {checkpoint} "
 
     # name of the model configuration
-    batch_script += f"-m {model_type} "
+    python_script += f"-m {model_type} "
 
     # experiment folder
-    batch_script += f"-e {experiment_folder} "
+    python_script += f"-e {experiment_folder} "
+
+    # let's add the python script to the bash script
+    batch_script += python_script
+
+    # we run the first prompt for iterative once starting with point, and then starting with box
+    if inference_setup == "iterative_prompting":
+        batch_script += "\n" + python_script + "--box "
+
+    print(batch_script)
+    print()
+    breakpoint()
 
     with open(_op, "w") as f:
         f.write(batch_script)
@@ -70,6 +83,8 @@ def submit_slurm():
             model_type=model_type,
             experiment_folder=experiment_folder,
             )
+
+    quit()
 
     for my_script in glob(tmp_folder + "/*"):
         cmd = ["sbatch", my_script]

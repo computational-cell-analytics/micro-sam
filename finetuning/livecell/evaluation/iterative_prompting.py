@@ -66,7 +66,7 @@ def main():
     predictor = get_model(model_type=args.model, ckpt=args.checkpoint)
 
     prediction_root = run_interactive_prompting(args.experiment_folder, predictor, start_with_box_prompt)
-    evaluate_interactive_prompting(prediction_root, start_with_box_prompt)
+    evaluate_interactive_prompting(prediction_root, start_with_box_prompt, args.experiment_folder)
 
 
 if __name__ == "__main__":
