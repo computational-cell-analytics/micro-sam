@@ -5,6 +5,7 @@ https://computational-cell-analytics.github.io/micro-sam/micro_sam.html
 """
 
 import os
+import pickle
 import warnings
 from abc import ABC
 from collections import OrderedDict
@@ -748,7 +749,12 @@ def load_instance_segmentation_with_decoder_from_checkpoint(
         InstanceSegmentationWithDecoder
     """
     device = util.get_device(device)
-    state = torch.load(checkpoint, map_location=device)
+
+    # over-ride the unpickler with our custom one
+    custom_pickle = pickle
+    custom_pickle.Unpickler = util._CustomUnpickler
+
+    state = torch.load(checkpoint, map_location=device, pickle_module=custom_pickle)
 
     # Get the predictor.
     model_state = state["model_state"]
