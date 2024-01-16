@@ -78,14 +78,26 @@ def submit_slurm():
     # parameters to run the inference scripts
     env_name = "sam"
     model_type = "vit_b"
-    checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/lm_generalist_sam/best.pt"
-
-    # there are two experiments - `mito_nuc` and `boundaries`
-    em_name = "mito_nuc"
-    experiment_folder = f"/scratch/projects/nim00007/sam/experiments/new_models/generalists/{em_name}/{model_type}/"
 
     # name of the dataset in lower-case
     dataset_name = "lucchi"
+
+    with_cem = True
+    if with_cem:
+        em_name = "with_cem/"
+    else:
+        em_name = "without_cem/"
+
+    checkpoint = "/scratch/usr/nimanwai/micro-sam/checkpoints/"
+    checkpoint += f"{model_type}/{em_name}/mito_nuc_em_generalist_sam/best.pt"
+
+    experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/"
+    experiment_folder += f"generalists/em/{dataset_name}/mito_nuc_em_generalist_sam/{em_name}/{model_type}/"
+
+    print(checkpoint)
+    print(experiment_folder)
+
+    quit()
 
     all_setups = ["precompute_embeddings", "evaluate_amg", "evaluate_instance_segmentation", "iterative_prompting"]
     for current_setup in all_setups:
