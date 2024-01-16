@@ -4,7 +4,9 @@ from typing import Union, List, Optional
 
 from micro_sam.evaluation import get_predictor
 from micro_sam import instance_segmentation, inference
-from micro_sam.instance_segmentation import AutomaticMaskGenerator
+from micro_sam.instance_segmentation import (AutomaticMaskGenerator,
+                                             load_instance_segmentation_with_decoder_from_checkpoint)
+from micro_sam.evaluation.instance_segmentation import default_grid_search_values_instance_segmentation_with_decoder
 
 
 DATASETS = {
@@ -89,5 +91,45 @@ def run_amg(
         amg, grid_search_values,
         val_image_paths, val_gt_paths, test_image_paths,
         embedding_folder, prediction_folder, gs_result_folder,
+    )
+    return prediction_folder
+
+
+#
+# INSTANCE SEGMENTATION FUNCTION (will move this to `micro_sam.evaluation.util` after testing)
+#
+
+
+def run_instance_segmentation_with_decoder(
+    checkpoint: Union[str, os.PathLike],
+    model_type: str,
+    experiment_folder: Union[str, os.PathLike],
+    val_image_paths: List[Union[str, os.PathLike]],
+    val_gt_paths: List[Union[str, os.PathLike]],
+    test_image_paths: List[Union[str, os.PathLike]],
+) -> str:
+    embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
+    os.makedirs(embedding_folder, exist_ok=True)
+
+    segmenter = load_instance_segmentation_with_decoder_from_checkpoint(
+        checkpoint, model_type,
+    )
+    seg_prefix = "instance_segmentation_with_decoder"
+
+    # where the predictions are saved
+    prediction_folder = os.path.join(experiment_folder, seg_prefix, "inference")
+    os.makedirs(prediction_folder, exist_ok=True)
+
+    # where the grid-search results are saved
+    gs_result_folder = os.path.join(experiment_folder, seg_prefix, "grid_search")
+    os.makedirs(gs_result_folder, exist_ok=True)
+
+    grid_search_values = default_grid_search_values_instance_segmentation_with_decoder()
+
+    instance_segmentation.run_instance_segmentation_grid_search_and_inference(
+        segmenter, grid_search_values,
+        val_image_paths, val_gt_paths, test_image_paths,
+        embedding_dir=embedding_folder, prediction_dir=prediction_folder,
+        result_dir=gs_result_folder,
     )
     return prediction_folder

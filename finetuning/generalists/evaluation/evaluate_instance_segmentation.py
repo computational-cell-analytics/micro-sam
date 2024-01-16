@@ -1,19 +1,21 @@
-import argparse
 import os
+import argparse
 
 from micro_sam.evaluation.evaluation import run_evaluation
-from micro_sam.evaluation.livecell import run_livecell_instance_segmentation_with_decoder
-from util import DATA_ROOT, get_pred_paths
+
+from util import get_pred_paths, get_paths, run_instance_segmentation_with_decoder
 
 
-def run_instance_segmentation_with_decoder(dataset_name, model_type, checkpoint, experiment_folder):
-    input_folder = DATA_ROOT
-    prediction_folder = run_livecell_instance_segmentation_with_decoder(
+def run_em_instance_segmentation_with_decoder(dataset_name, model_type, checkpoint, experiment_folder):
+    val_image_paths, val_gt_paths = get_paths(dataset_name, split="val")
+    test_image_paths, _ = get_paths(dataset_name, split="test")
+    prediction_folder = run_instance_segmentation_with_decoder(
         checkpoint,
-        input_folder,
         model_type,
         experiment_folder,
-        n_val_per_cell_type=25,
+        val_image_paths,
+        val_gt_paths,
+        test_image_paths
     )
     return prediction_folder
 
@@ -38,7 +40,7 @@ def main():
     parser.add_argument("-d", "--dataset", type=str, required=True)
     args = parser.parse_args()
 
-    prediction_folder = run_instance_segmentation_with_decoder(
+    prediction_folder = run_em_instance_segmentation_with_decoder(
         args.dataset, args.model, args.checkpoint, args.experiment_folder
     )
     eval_instance_segmentation_with_decoder(args.dataset, prediction_folder, args.experiment_folder)
