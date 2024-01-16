@@ -77,25 +77,36 @@ def submit_slurm():
 
     # parameters to run the inference scripts
     env_name = "sam"
-    model_type = "vit_b"
+    model_type = "vit_h"
 
     # name of the dataset in lower-case
     dataset_name = "lucchi"
 
     with_cem = True
     if with_cem:
-        em_name = "with_cem/"
+        em_name = "with_cem"
     else:
-        em_name = "without_cem/"
+        em_name = "without_cem"
 
-    checkpoint = "/scratch/usr/nimanwai/micro-sam/checkpoints/"
-    checkpoint += f"{model_type}/{em_name}/mito_nuc_em_generalist_sam/best.pt"
+    # let's set the experiment type - either using the generalists or just using vanilla model
+    experiment_set = "generalists"
+    if experiment_set == "generalists":
+        checkpoint = "/scratch/usr/nimanwai/micro-sam/checkpoints/"
+        checkpoint += f"{model_type}/{em_name}/mito_nuc_em_generalist_sam/best.pt"
+    elif experiment_set == "vanilla":
+        checkpoint = None
+    else:
+        raise ValueError("Choose from generalists/vanilla")
 
     experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/"
-    experiment_folder += f"generalists/em/{dataset_name}/mito_nuc_em_generalist_sam/{em_name}/{model_type}/"
+    experiment_folder += f"{experiment_set}/em/{dataset_name}/mito_nuc_em_generalist_sam/"
+    if experiment_set == "generalists":
+        experiment_folder += f"{em_name}/"
+    experiment_folder += f"{model_type}/"
 
     print(checkpoint)
     print(experiment_folder)
+    print()
 
     quit()
 

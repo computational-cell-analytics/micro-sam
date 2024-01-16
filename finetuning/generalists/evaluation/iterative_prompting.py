@@ -56,7 +56,7 @@ def main():
     parser.add_argument(
         "-m", "--model", type=str, required=True, help="Provide the model type to initialize the predictor"
     )
-    parser.add_argument("-c", "--checkpoint", type=str, required=True)
+    parser.add_argument("-c", "--checkpoint", type=str, default=None)
     parser.add_argument("-e", "--experiment_folder", type=str, required=True)
     parser.add_argument("-d", "--dataset", type=str, required=True)
     parser.add_argument("--box", action="store_true", help="If passed, starts with first prompt as box")

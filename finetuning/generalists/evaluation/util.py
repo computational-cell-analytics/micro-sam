@@ -4,11 +4,9 @@ from typing import Union, List, Optional
 
 from torch_em.data import datasets
 
-from micro_sam.evaluation import get_predictor
-from micro_sam import instance_segmentation, inference
+from micro_sam.evaluation import get_predictor, instance_segmentation
 from micro_sam.instance_segmentation import (AutomaticMaskGenerator,
                                              load_instance_segmentation_with_decoder_from_checkpoint)
-from micro_sam.evaluation.instance_segmentation import default_grid_search_values_instance_segmentation_with_decoder
 
 ROOT = "/scratch/projects/nim00007/sam/data/"
 
@@ -27,10 +25,9 @@ DATASETS = {
 
 
 VANILLA_MODELS = {
-    "vit_t": "",
-    "vit_b": "",
-    "vit_l": "",
-    "vit_h": ""
+    "vit_b": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/sam_vit_b_01ec64.pth",
+    "vit_l": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/sam_vit_l_0b3195.pth",
+    "vit_h": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/sam_vit_h_4b8939.pth"
 }
 
 
@@ -77,7 +74,7 @@ def run_amg(
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
 
-    predictor = inference.get_predictor(checkpoint, model_type)
+    predictor = get_predictor(checkpoint, model_type)
     amg = AutomaticMaskGenerator(predictor)
     amg_prefix = "amg"
 
@@ -131,7 +128,7 @@ def run_instance_segmentation_with_decoder(
     gs_result_folder = os.path.join(experiment_folder, seg_prefix, "grid_search")
     os.makedirs(gs_result_folder, exist_ok=True)
 
-    grid_search_values = default_grid_search_values_instance_segmentation_with_decoder()
+    grid_search_values = instance_segmentation.default_grid_search_values_instance_segmentation_with_decoder()
 
     instance_segmentation.run_instance_segmentation_grid_search_and_inference(
         segmenter, grid_search_values,
