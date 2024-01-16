@@ -15,7 +15,17 @@ DATASETS = {
 }
 
 
-def get_model(model_type, ckpt):
+VANILLA_MODELS = {
+    "vit_t": "",
+    "vit_b": "",
+    "vit_l": "",
+    "vit_h": ""
+}
+
+
+def get_model(model_type, ckpt=None):
+    if ckpt is None:
+        ckpt = VANILLA_MODELS[model_type]
     predictor = get_predictor(ckpt, model_type)
     return predictor
 
