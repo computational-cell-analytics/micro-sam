@@ -2,17 +2,26 @@ import os
 from glob import glob
 from typing import Union, List, Optional
 
+from torch_em.data import datasets
+
 from micro_sam.evaluation import get_predictor
 from micro_sam import instance_segmentation, inference
 from micro_sam.instance_segmentation import (AutomaticMaskGenerator,
                                              load_instance_segmentation_with_decoder_from_checkpoint)
 from micro_sam.evaluation.instance_segmentation import default_grid_search_values_instance_segmentation_with_decoder
 
+ROOT = "/scratch/projects/nim00007/sam/data/"
 
 DATASETS = {
     "lucchi": {
-        "val": [None, None],
-        "test": [None, None]
+        "val": [
+            os.path.join(ROOT, "lucchi", "slices", "raw", "lucchi_train_*"),
+            os.path.join(ROOT, "lucchi", "slices", "labels", "lucchi_train_*")
+        ],
+        "test": [
+            os.path.join(ROOT, "lucchi", "slices", "raw", "lucchi_test_*"),
+            os.path.join(ROOT, "lucchi", "slices", "labels", "lucchi_test_*")
+        ]
     }
 }
 
@@ -35,8 +44,8 @@ def get_model(model_type, ckpt=None):
 def get_paths(dataset_name, split="test"):
     assert dataset_name in DATASETS
     image_dir, gt_dir = DATASETS[dataset_name][split]
-    image_paths = glob(os.path.join(image_dir, "*.tif"))
-    gt_paths = glob(os.path.join(gt_dir, "*.tif"))
+    image_paths = sorted(glob(os.path.join(image_dir)))
+    gt_paths = sorted(glob(os.path.join(gt_dir)))
     return image_paths, gt_paths
 
 
@@ -45,11 +54,9 @@ def get_pred_paths(prediction_folder):
     return pred_paths
 
 
-def download_em_dataset(dataset_name):
-    assert dataset_name in DATASETS
-
-    # TODO: downloading the dataset using the dataloaders (for all splits - especially val and test split)
-    raise NotImplementedError
+def download_em_dataset(path):
+    datasets.get_lucchi_dataset(os.path.join(path, "lucchi"), split="train", patch_shape=(1, 512, 512), download=True)
+    datasets.get_lucchi_dataset(os.path.join(path, "lucchi"), split="test", patch_shape=(1, 512, 512), download=True)
 
 
 #
