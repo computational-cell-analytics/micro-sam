@@ -58,6 +58,13 @@ Compared to these we support more applications (2d, 3d and tracking), and provid
 
 ## Release Overview
 
+**New in version 0.4.0**
+
+- Significantly improved model finetuning
+- Update the finetuned models for microscopy, see [details](TODO)
+- Training decoder for direct instance segmentation (not available via the GUI yet)
+- Refactored model download functionality using [pooch](https://pypi.org/project/pooch/)
+
 **New in version 0.3.0**
 
 - Support for ellipse and polygon prompts
