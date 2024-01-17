@@ -22,6 +22,16 @@ DATASETS = {
             os.path.join(ROOT, "lucchi", "slices", "raw", "lucchi_test_*"),
             os.path.join(ROOT, "lucchi", "slices", "labels", "lucchi_test_*")
         ]
+    },
+    "snemi": {
+        "val": [
+            os.path.join(ROOT, "snemi", "slices", "val", "raw", "*"),
+            os.path.join(ROOT, "snemi", "slices", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "snemi", "slices", "test", "raw", "*"),
+            os.path.join(ROOT, "snemi", "slices", "test", "labels", "*")
+        ]
     }
 }
 

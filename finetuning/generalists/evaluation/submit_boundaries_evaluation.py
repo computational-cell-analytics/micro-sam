@@ -17,13 +17,14 @@ def write_batch_script(
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
 #SBATCH -A gzz0001
+#SBATCH -x ggpu212
 #SBATCH --job-name={inference_setup}
 
 source ~/.bashrc
 mamba activate {env_name} \n"""
 
     if delay:
-        batch_script += "sleep 10m \n"
+        batch_script += "sleep 5m \n"
 
     # python script
     python_script = f"python {inference_setup}.py "
@@ -78,8 +79,8 @@ def submit_slurm():
     # parameters to run the inference scripts
     dataset_name = "snemi"  # name of the dataset in lower-case
     env_name = "sam"
-    model_type = "vit_h"
-    experiment_set = "generalists"  # infer using generalists or vanilla models
+    model_type = "vit_b"
+    experiment_set = "vanilla"  # infer using generalists or vanilla models
 
     # let's set the experiment type - either using the generalists or just using vanilla model
     if experiment_set == "generalists":
@@ -93,12 +94,6 @@ def submit_slurm():
     if experiment_set == "generalists":
         experiment_folder += "boundaries_em_generalist_sam/"
     experiment_folder += f"{model_type}/"
-
-    print(checkpoint)
-    print(experiment_folder)
-    print()
-
-    quit()
 
     # now let's run the experiments
     if experiment_set == "vanilla":
