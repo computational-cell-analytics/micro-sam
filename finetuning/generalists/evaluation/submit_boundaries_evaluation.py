@@ -76,36 +76,34 @@ def submit_slurm():
     tmp_folder = "./gpu_jobs"
 
     # parameters to run the inference scripts
-    dataset_name = "lucchi"  # name of the dataset in lower-case
-    model_type = "vit_b"
-    with_cem = False  # use the models trained with mitolab
-    experiment_set = "vanilla"  # infer using generalists or vanilla models
+    env_name = "sam"
+    model_type = "vit_h"
 
-    if with_cem:
-        em_name = "with_cem"
-    else:
-        em_name = "without_cem"
+    # name of the dataset in lower-case
+    dataset_name = "snemi"
 
     # let's set the experiment type - either using the generalists or just using vanilla model
+    experiment_set = "generalists"
     if experiment_set == "generalists":
-        checkpoint = "/scratch/usr/nimanwai/micro-sam/checkpoints/"
-        checkpoint += f"{model_type}/{em_name}/mito_nuc_em_generalist_sam/best.pt"
+        checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/boundaries_em_generalist_sam/best.pt"
     elif experiment_set == "vanilla":
         checkpoint = None
     else:
         raise ValueError("Choose from generalists/vanilla")
 
     experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/"
-    experiment_folder += f"{experiment_set}/em/{dataset_name}/mito_nuc_em_generalist_sam/"
-    if experiment_set == "generalists":
-        experiment_folder += f"{em_name}/"
-    experiment_folder += f"{model_type}/"
+    experiment_folder += f"{experiment_set}/em/{dataset_name}/mito_nuc_em_generalist_sam/{model_type}/"
 
-    # now let's run the experiments
+    print(checkpoint)
+    print(experiment_folder)
+    print()
+
+    quit()
+
     all_setups = ["precompute_embeddings", "evaluate_amg", "evaluate_instance_segmentation", "iterative_prompting"]
     for current_setup in all_setups:
         write_batch_script(
-            env_name="sam",
+            env_name=env_name,
             out_path=get_batch_script_names(tmp_folder),
             inference_setup=current_setup,
             checkpoint=checkpoint,

@@ -2,7 +2,7 @@ import argparse
 import os
 
 from micro_sam.evaluation import precompute_all_embeddings
-from util import get_paths, get_model
+from util import get_paths, get_model, VANILLA_MODELS
 
 
 def main():
@@ -13,7 +13,12 @@ def main():
     parser.add_argument("-d", "--dataset", type=str, required=True)
     args = parser.parse_args()
 
-    predictor = get_model(model_type=args.model, ckpt=args.checkpoint)
+    if args.checkpoint is None:
+        ckpt = VANILLA_MODELS[args.model]
+    else:
+        ckpt = args.checkpoint
+
+    predictor = get_model(model_type=args.model, ckpt=ckpt)
     embedding_dir = os.path.join(args.experiment_folder, "embeddings")
     os.makedirs(embedding_dir, exist_ok=True)
 
