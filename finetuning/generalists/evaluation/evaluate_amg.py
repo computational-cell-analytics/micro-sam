@@ -30,7 +30,12 @@ def eval_amg(dataset_name, prediction_folder, experiment_folder):
 
 def main():
     args = get_default_arguments()
-    prediction_folder = run_em_amg(args.dataset, args.model, args.checkpoint, args.experiment_folder)
+    if args.checkpoint is None:
+        ckpt = VANILLA_MODELS[args.model]
+    else:
+        ckpt = args.checkpoint
+
+    prediction_folder = run_em_amg(args.dataset, args.model, ckpt, args.experiment_folder)
     eval_amg(args.dataset, prediction_folder, args.experiment_folder)
 
 
