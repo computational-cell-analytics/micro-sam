@@ -158,7 +158,7 @@ def main():
     parser = argparse.ArgumentParser(description="Compute the embeddings for an image.")
     parser.add_argument("-i", "--input_path", required=True)
     parser.add_argument("-o", "--output_path", required=True)
-    parser.add_argument("-m", "--model_type", default="vit_h")
+    parser.add_argument("-m", "--model_type", default=util._DEFAULT_MODEL)
     parser.add_argument("-c", "--checkpoint_path", default=None)
     parser.add_argument("-k", "--key")
     parser.add_argument(

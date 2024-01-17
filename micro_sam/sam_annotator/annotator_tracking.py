@@ -369,7 +369,7 @@ def _commit_tracking_widget(v: Viewer, layer: str = "current_track") -> None:
     vutil.clear_annotations(v, clear_segmentations=False)
 
 
-@magicgui(call_button="Clear Annotations [Shfit + C]")
+@magicgui(call_button="Clear Annotations [Shift + C]")
 def _clear_widget_tracking(v: Viewer) -> None:
     _reset_tracking_state()
     vutil.clear_annotations(v)

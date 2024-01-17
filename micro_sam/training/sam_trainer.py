@@ -1,6 +1,7 @@
 import os
 import time
 import random
+import warnings
 from typing import Optional
 
 import numpy as np
@@ -28,7 +29,6 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         n_objects_per_batch: If not given, we compute the loss for all objects in a sample.
             Otherwise the loss computation is limited to n_objects_per_batch, and the objects are randomly sampled.
         mse_loss: The regression loss to compare the IoU predicted by the model with the true IoU.
-        sigmoid: The activation function for normalizing the model output.
         prompt_generator: The iterative prompt generator which takes care of the iterative prompting logic for training
         mask_prob: The probability of using the mask inputs in the iterative prompting (per `n_sub_iteration`)
         **kwargs: The keyword arguments of the DefaultTrainer super class.
@@ -40,15 +40,16 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         n_sub_iteration: int,
         n_objects_per_batch: Optional[int] = None,
         mse_loss: torch.nn.Module = torch.nn.MSELoss(),
-        _sigmoid: torch.nn.Module = torch.nn.Sigmoid(),
         prompt_generator: PromptGeneratorBase = IterativePromptGenerator(),
         mask_prob: float = 0.5,
         **kwargs
     ):
-        super().__init__(**kwargs)
+        # We have to use the Dice Loss with reduce channel set to None.
+        # Hence we hard-code it here to avoid issues by passsing wrong options for the loss.
+        dice_loss = torch_em.loss.DiceLoss(reduce_channel=None)
+        super().__init__(loss=dice_loss, metric=dice_loss, **kwargs)
         self.convert_inputs = convert_inputs
         self.mse_loss = mse_loss
-        self._sigmoid = _sigmoid
         self.n_objects_per_batch = n_objects_per_batch
         self.n_sub_iteration = n_sub_iteration
         self.prompt_generator = prompt_generator
@@ -107,133 +108,120 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
         return n_pos, n_neg, get_boxes, multimask_output
 
-    def _get_dice(self, input_, target):
-        """Using the default "DiceLoss" called by the trainer from "torch_em"
-        """
-        dice_loss = self.loss(input_, target)
-        return dice_loss
-
-    def _get_iou(self, pred, true, eps=1e-7):
-        """Getting the IoU score for the predicted and true labels
+    def _compute_iou(self, pred, true, eps=1e-7):
+        """Compute the IoU score between the prediction and target.
         """
         pred_mask = pred > 0.5  # binarizing the output predictions
-        overlap = pred_mask.logical_and(true).sum()
-        union = pred_mask.logical_or(true).sum()
+        overlap = pred_mask.logical_and(true).sum(dim=(1, 2, 3))
+        union = pred_mask.logical_or(true).sum(dim=(1, 2, 3))
         iou = overlap / (union + eps)
         return iou
 
-    def _get_net_loss(self, batched_outputs, y, sampled_ids):
-        """What do we do here? two **separate** things
-        1. compute the mask loss: loss between the predicted and ground-truth masks
-            for this we just use the dice of the prediction vs. the gt (binary) mask
-        2. compute the mask for the "IOU Regression Head": so we want the iou output from the decoder to
-            match the actual IOU between predicted and (binary) ground-truth mask. And we use L2Loss / MSE for this.
+    def _compute_loss(self, batched_outputs, y_one_hot):
+        """Compute the loss for one iteration. The loss is made up of two components:
+        - The mask loss: dice score between the predicted masks and targets.
+        - The IOU loss: L2 loss between the predicted IOU and the actual IOU of prediction and target.
         """
-        masks = [m["masks"] for m in batched_outputs]
-        predicted_iou_values = [m["iou_predictions"] for m in batched_outputs]
-        with torch.no_grad():
-            mean_model_iou = torch.mean(torch.stack([p.mean() for p in predicted_iou_values]))
+        mask_loss, iou_regression_loss = 0.0, 0.0
 
-        mask_loss = 0.0  # this is the loss term for 1.
-        iou_regression_loss = 0.0  # this is the loss term for 2.
+        # Loop over the batch.
+        for batch_output, targets in zip(batched_outputs, y_one_hot):
 
-        # outer loop is over the batch (different image/patch predictions)
-        for m_, y_, ids_, predicted_iou_ in zip(masks, y, sampled_ids, predicted_iou_values):
-            per_object_dice_scores, per_object_iou_scores = [], []
+            predicted_objects = torch.sigmoid(batch_output["masks"])
+            # Compute the dice scores for the 1 or 3 predicted masks per true object (outer loop).
+            # We swap the axes that go into the dice loss so that the object axis
+            # corresponds to the channel axes. This ensures that the dice is computed
+            # independetly per channel. We do not reduce the channel axis in the dice,
+            # so that we can take the minimum (best score) of the 1/3 predicted masks per object.
+            dice_scores = torch.stack([
+                self.loss(predicted_objects[:, i:i+1].swapaxes(0, 1), targets.swapaxes(0, 1))
+                for i in range(predicted_objects.shape[1])
+            ])
+            dice_scores, _ = torch.min(dice_scores, dim=0)
 
-            # inner loop is over the channels, this corresponds to the different predicted objects
-            for i, (predicted_obj, predicted_iou) in enumerate(zip(m_, predicted_iou_)):
-                predicted_obj = self._sigmoid(predicted_obj).to(self.device)
-                true_obj = (y_ == ids_[i]).to(self.device)
+            # Compute the actual IOU between the predicted and true objects.
+            # The outer loop is for the 1 or 3 predicted masks per true object.
+            with torch.no_grad():
+                true_iou = torch.stack([
+                    self._compute_iou(predicted_objects[:, i:i+1], targets) for i in range(predicted_objects.shape[1])
+                ])
+            # Compute the L2 loss between true and predicted IOU. We need to swap the axes so that
+            # the object axis is back in the first dimension.
+            iou_score = self.mse_loss(true_iou.swapaxes(0, 1), batch_output["iou_predictions"])
 
-                # this is computing the LOSS for 1.)
-                _dice_score = min([self._get_dice(p[None], true_obj) for p in predicted_obj])
-                per_object_dice_scores.append(_dice_score)
-
-                # now we need to compute the loss for 2.)
-                with torch.no_grad():
-                    true_iou = torch.stack([self._get_iou(p[None], true_obj) for p in predicted_obj])
-                _iou_score = self.mse_loss(true_iou, predicted_iou)
-                per_object_iou_scores.append(_iou_score)
-
-            mask_loss = mask_loss + torch.mean(torch.stack(per_object_dice_scores))
-            iou_regression_loss = iou_regression_loss + torch.mean(torch.stack(per_object_iou_scores))
+            mask_loss = mask_loss + torch.mean(dice_scores)
+            iou_regression_loss = iou_regression_loss + iou_score
 
         loss = mask_loss + iou_regression_loss
 
-        return loss, mask_loss, iou_regression_loss, mean_model_iou
-
-    def _postprocess_outputs(self, masks):
-        """ "masks" look like -> (B, 1, X, Y)
-        where, B is the number of objects, (X, Y) is the input image shape
-        """
-        instance_labels = []
-        for m in masks:
-            instance_list = [self._sigmoid(_val) for _val in m.squeeze(1)]
-            instance_label = torch.stack(instance_list, dim=0).sum(dim=0).clip(0, 1)
-            instance_labels.append(instance_label)
-        instance_labels = torch.stack(instance_labels).unsqueeze(1)
-        return instance_labels
-
-    def _get_val_metric(self, batched_outputs, sampled_binary_y):
-        """ Tracking the validation metric based on the DiceLoss
-        """
-        masks = [m["masks"] for m in batched_outputs]
-        pred_labels = self._postprocess_outputs(masks)
-
-        # we do the condition below to adapt w.r.t. the multimask output to select the "objectively" best response
-        if pred_labels.dim() == 5:
-            metric = min([self.metric(pred_labels[:, :, i, :, :], sampled_binary_y.to(self.device))
-                          for i in range(pred_labels.shape[2])])
-        else:
-            metric = self.metric(pred_labels, sampled_binary_y.to(self.device))
-
-        return metric
+        return loss, mask_loss, iou_regression_loss
 
     #
-    # Update Masks Iteratively while Training
+    # Functionality for iterative prompting loss
     #
-    def _update_masks(self, batched_inputs, y, sampled_binary_y, sampled_ids, num_subiter, multimask_output):
-        # estimating the image inputs to make the computations faster for the decoder
-        input_images = torch.stack([self.model.preprocess(x=x["image"].to(self.device)) for x in batched_inputs], dim=0)
-        image_embeddings = self.model.image_embeddings_oft(input_images)
+
+    def _get_best_masks(self, batched_outputs, batched_iou_predictions):
+        # Batched mask and logit (low-res mask) predictions.
+        masks = torch.stack([m["masks"] for m in batched_outputs])
+        logits = torch.stack([m["low_res_masks"] for m in batched_outputs])
+
+        # Determine the best IOU across the multi-object prediction axis
+        # and turn this into a mask we can use for indexing.
+        # See https://stackoverflow.com/questions/72628000/pytorch-indexing-by-argmax
+        # for details on the indexing logic.
+        best_iou_idx = torch.argmax(batched_iou_predictions, dim=2, keepdim=True)
+        best_iou_idx = torch.zeros_like(batched_iou_predictions).scatter(2, best_iou_idx, value=1).bool()
+
+        # Index the mask and logits with the best iou indices.
+        # Note that we squash the first two axes (batch x objects) into one when indexing.
+        # That's why we need to reshape bax into (batch x objects) using a view.
+        # We also keep the multi object axis as a singleton, that's why the view has (batch_size, n_objects, 1, ...)
+        batch_size, n_objects = masks.shape[:2]
+        h, w = masks.shape[-2:]
+        masks = masks[best_iou_idx].view(batch_size, n_objects, 1, h, w)
+
+        h, w = logits.shape[-2:]
+        logits = logits[best_iou_idx].view(batch_size, n_objects, 1, h, w)
+
+        # Binarize the mask. Note that the mask here also contains logits, so we use 0.0
+        # as threshold instead of using 0.5. (Hence we don't need to apply a sigmoid)
+        masks = (masks > 0.0).float()
+        return masks, logits
+
+    def _compute_iterative_loss(self, batched_inputs, y_one_hot, num_subiter, multimask_output):
+        """Compute the loss for several (sub-)iterations of iterative prompting.
+        In each iterations the prompts are updated based on the previous predictions.
+        """
+        image_embeddings, batched_inputs = self.model.image_embeddings_oft(batched_inputs)
 
         loss, mask_loss, iou_regression_loss, mean_model_iou = 0.0, 0.0, 0.0, 0.0
 
-        # this loop takes care of the idea of sub-iterations, i.e. the number of times we iterate over each batch
         for i in range(0, num_subiter):
-            # we do multimasking only in the first sub-iteration as we then pass single prompt
-            # after the first sub-iteration, we don't do multimasking because we get multiple prompts
+            # We do multimasking only in the first sub-iteration as we then pass single prompt
+            # after the first sub-iteration, we don't do multimasking because we get multiple prompts.
             batched_outputs = self.model(batched_inputs,
-                                         multimask_output=multimask_output if i == 0 else False,
-                                         image_embeddings=image_embeddings)
+                                         image_embeddings=image_embeddings,
+                                         multimask_output=multimask_output if i == 0 else False)
 
-            # we want to average the loss and then backprop over the net sub-iterations
-            net_loss, net_mask_loss, net_iou_regression_loss, net_mean_model_iou = self._get_net_loss(batched_outputs,
-                                                                                                      y, sampled_ids)
+            # Compute loss for tis sub-iteration.
+            net_loss, net_mask_loss, net_iou_regression_loss = self._compute_loss(batched_outputs, y_one_hot)
+
+            # Compute the mean IOU predicted by the model. We keep track of this in the logger.
+            batched_iou_predictions = torch.stack([m["iou_predictions"] for m in batched_outputs])
+            with torch.no_grad():
+                net_mean_model_iou = torch.mean(batched_iou_predictions)
+
             loss += net_loss
             mask_loss += net_mask_loss
             iou_regression_loss += net_iou_regression_loss
             mean_model_iou += net_mean_model_iou
 
-            masks, logits_masks = [], []
-            # the loop below gets us the masks and logits from the batch-level outputs
-            for m in batched_outputs:
-                mask, l_mask = [], []
-                for _m, _l, _iou in zip(m["masks"], m["low_res_masks"], m["iou_predictions"]):
-                    best_iou_idx = torch.argmax(_iou)
-                    best_mask, best_logits = _m[best_iou_idx][None], _l[best_iou_idx][None]
-                    mask.append(self._sigmoid(best_mask))
-                    l_mask.append(best_logits)
-
-                mask, l_mask = torch.stack(mask), torch.stack(l_mask)
-                masks.append(mask)
-                logits_masks.append(l_mask)
-
-            masks, logits_masks = torch.stack(masks), torch.stack(logits_masks)
-            masks = (masks > 0.5).to(torch.float32)
-
-            self._get_updated_points_per_mask_per_subiter(masks, sampled_binary_y, batched_inputs, logits_masks)
+            # Determine the next prompts based on current predictions.
+            with torch.no_grad():
+                # Get the mask and logit predictions corresponding to the predicted object
+                # (per actual object) with the best IOU.
+                masks, logits = self._get_best_masks(batched_outputs, batched_iou_predictions)
+                batched_inputs = self._update_prompts(batched_inputs, y_one_hot, masks, logits)
 
         loss = loss / num_subiter
         mask_loss = mask_loss / num_subiter
@@ -242,11 +230,17 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
         return loss, mask_loss, iou_regression_loss, mean_model_iou
 
-    def _get_updated_points_per_mask_per_subiter(self, masks, sampled_binary_y, batched_inputs, logits_masks):
+    def _update_prompts(self, batched_inputs, y_one_hot, masks, logits_masks):
         # here, we get the pair-per-batch of predicted and true elements (and also the "batched_inputs")
-        for x1, x2, _inp, logits in zip(masks, sampled_binary_y, batched_inputs, logits_masks):
+        for x1, x2, _inp, logits in zip(masks, y_one_hot, batched_inputs, logits_masks):
             # here, we get each object in the pairs and do the point choices per-object
             net_coords, net_labels, _, _ = self.prompt_generator(x2, x1)
+
+            # convert the point coordinates to the expected resolution for iterative prompting
+            # NOTE:
+            #   - "only" need to transform the point prompts from the iterative prompting
+            #   - the `logits` are the low res masks (256, 256), hence do not need the transform
+            net_coords = self.model.transform.apply_coords_torch(net_coords, y_one_hot.shape[-2:])
 
             updated_point_coords = torch.cat([_inp["point_coords"], net_coords], dim=1) \
                 if "point_coords" in _inp.keys() else net_coords
@@ -264,59 +258,85 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
                 else:  # remove  previously existing mask inputs to avoid using them in next sub-iteration
                     _inp.pop("mask_inputs", None)
 
+        return batched_inputs
+
     #
     # Training Loop
     #
 
-    def _update_samples_for_gt_instances(self, y, n_samples):
-        num_instances_gt = torch.amax(y, dim=(1, 2, 3))
-        num_instances_gt = num_instances_gt.numpy().astype(int)
-        n_samples = min(num_instances_gt) if n_samples > min(num_instances_gt) else n_samples
-        return n_samples
+    def _preprocess_batch(self, batched_inputs, y, sampled_ids):
+        """Compute one hot target (one mask per channel) for the sampled ids
+        and restrict the number of sampled objects to the minimal number in the batch.
+        """
+        assert len(y) == len(sampled_ids)
+
+        # Get the minimal number of objects in this batch.
+        # The number of objects in a patch might be < n_objects_per_batch.
+        # This is why we need to restrict it here to ensure the same
+        # number of objects across the batch.
+        n_objects = min(len(ids) for ids in sampled_ids)
+
+        y = y.to(self.device)
+        # Compute the one hot targets for the seg-id.
+        y_one_hot = torch.stack([
+            torch.stack([target == seg_id for seg_id in ids[:n_objects]])
+            for target, ids in zip(y, sampled_ids)
+        ]).float()
+
+        # Also restrict the prompts to the number of objects.
+        batched_inputs = [
+            {k: (v[:n_objects] if k in ("point_coords", "point_labels", "boxes") else v) for k, v in inp.items()}
+            for inp in batched_inputs
+        ]
+        return batched_inputs, y_one_hot
+
+    def _interactive_train_iteration(self, x, y):
+        n_pos, n_neg, get_boxes, multimask_output = self._get_prompt_and_multimasking_choices(self._iteration)
+
+        batched_inputs, sampled_ids = self.convert_inputs(x, y, n_pos, n_neg, get_boxes, self.n_objects_per_batch)
+        batched_inputs, y_one_hot = self._preprocess_batch(batched_inputs, y, sampled_ids)
+
+        loss, mask_loss, iou_regression_loss, model_iou = self._compute_iterative_loss(
+            batched_inputs, y_one_hot,
+            num_subiter=self.n_sub_iteration, multimask_output=multimask_output
+        )
+        return loss, mask_loss, iou_regression_loss, model_iou, y_one_hot
+
+    def _check_input_normalization(self, x, input_check_done):
+        # The expected data range of the SAM model is 8bit (0-255).
+        # It can easily happen that data is normalized beforehand in training.
+        # For some reasons we don't fully understand this still works, but it
+        # should still be avoided and is very detrimental in some settings
+        # (e.g. when freezing the image encoder)
+        # We check once per epoch if the data seems to be normalized already and
+        # raise a warning if this is the case.
+        if not input_check_done:
+            data_min, data_max = x.min(), x.max()
+            if (data_min < 0) or (data_max < 1):
+                warnings.warn(
+                    "It looks like you are normalizing the training data."
+                    "The SAM model takes care of normalization, so it is better to not do this."
+                    "We recommend to remove data normalization and input data in the range [0, 255]."
+                )
+            input_check_done = True
+
+        return input_check_done
 
     def _train_epoch_impl(self, progress, forward_context, backprop):
         self.model.train()
 
+        input_check_done = False
+
         n_iter = 0
         t_per_iter = time.time()
         for x, y in self.train_loader:
+            input_check_done = self._check_input_normalization(x, input_check_done)
 
             self.optimizer.zero_grad()
 
             with forward_context():
-                n_samples = self._update_samples_for_gt_instances(y, self.n_objects_per_batch)
-
-                n_pos, n_neg, get_boxes, multimask_output = self._get_prompt_and_multimasking_choices(self._iteration)
-
-                batched_inputs, sampled_ids = self.convert_inputs(x, y, n_pos, n_neg, get_boxes, n_samples)
-
-                assert len(y) == len(sampled_ids)
-                sampled_binary_y = []
-                for i in range(len(y)):
-                    _sampled = [torch.isin(y[i], torch.tensor(idx)) for idx in sampled_ids[i]]
-                    sampled_binary_y.append(_sampled)
-
-                # the steps below are done for one reason in a gist:
-                # to handle images where there aren't enough instances as expected
-                # (e.g. where one image has only one instance)
-                obj_lengths = [len(s) for s in sampled_binary_y]
-                sampled_binary_y = [s[:min(obj_lengths)] for s in sampled_binary_y]
-                sampled_binary_y = [torch.stack(s).to(torch.float32) for s in sampled_binary_y]
-                sampled_binary_y = torch.stack(sampled_binary_y)
-
-                # gist for below - while we find the mismatch, we need to update the batched inputs
-                # else it would still generate masks using mismatching prompts, and it doesn't help us
-                # with the subiterations again. hence we clip the number of input points as well
-                f_objs = sampled_binary_y.shape[1]
-                batched_inputs = [
-                    {k: (v[:f_objs] if k in ("point_coords", "point_labels", "boxes") else v) for k, v in inp.items()}
-                    for inp in batched_inputs
-                ]
-
-                loss, mask_loss, iou_regression_loss, model_iou = self._update_masks(batched_inputs, y,
-                                                                                     sampled_binary_y, sampled_ids,
-                                                                                     num_subiter=self.n_sub_iteration,
-                                                                                     multimask_output=multimask_output)
+                (loss, mask_loss, iou_regression_loss, model_iou,
+                 sampled_binary_y) = self._interactive_train_iteration(x, y)
 
             backprop(loss)
 
@@ -335,33 +355,42 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         t_per_iter = (time.time() - t_per_iter) / n_iter
         return t_per_iter
 
+    def _interactive_val_iteration(self, x, y, val_iteration):
+        n_pos, n_neg, get_boxes, multimask_output = self._get_prompt_and_multimasking_choices_for_val(val_iteration)
+
+        batched_inputs, sampled_ids = self.convert_inputs(x, y, n_pos, n_neg, get_boxes, self.n_objects_per_batch)
+        batched_inputs, y_one_hot = self._preprocess_batch(batched_inputs, y, sampled_ids)
+
+        image_embeddings, batched_inputs = self.model.image_embeddings_oft(batched_inputs)
+
+        batched_outputs = self.model(
+            batched_inputs,
+            image_embeddings=image_embeddings,
+            multimask_output=multimask_output,
+        )
+
+        loss, mask_loss, iou_regression_loss = self._compute_loss(batched_outputs, y_one_hot)
+        # We use the dice loss over the masks as metric.
+        metric = mask_loss
+        model_iou = torch.mean(torch.stack([m["iou_predictions"] for m in batched_outputs]))
+
+        return loss, mask_loss, iou_regression_loss, model_iou, y_one_hot, metric
+
     def _validate_impl(self, forward_context):
         self.model.eval()
+
+        input_check_done = False
 
         val_iteration = 0
         metric_val, loss_val, model_iou_val = 0.0, 0.0, 0.0
 
         with torch.no_grad():
             for x, y in self.val_loader:
+                input_check_done = self._check_input_normalization(x, input_check_done)
+
                 with forward_context():
-                    n_samples = self._update_samples_for_gt_instances(y, self.n_objects_per_batch)
-
-                    (n_pos, n_neg,
-                     get_boxes, multimask_output) = self._get_prompt_and_multimasking_choices_for_val(val_iteration)
-
-                    batched_inputs, sampled_ids = self.convert_inputs(x, y, n_pos, n_neg, get_boxes, n_samples)
-
-                    batched_outputs = self.model(batched_inputs, multimask_output=multimask_output)
-
-                    assert len(y) == len(sampled_ids)
-                    sampled_binary_y = torch.stack(
-                        [torch.isin(y[i], torch.tensor(sampled_ids[i])) for i in range(len(y))]
-                    ).to(torch.float32)
-
-                    loss, mask_loss, iou_regression_loss, model_iou = self._get_net_loss(batched_outputs,
-                                                                                         y, sampled_ids)
-
-                    metric = self._get_val_metric(batched_outputs, sampled_binary_y)
+                    (loss, mask_loss, iou_regression_loss, model_iou,
+                     sampled_binary_y, metric) = self._interactive_val_iteration(x, y, val_iteration)
 
                 loss_val += loss.item()
                 metric_val += metric.item()

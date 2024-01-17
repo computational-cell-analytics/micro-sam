@@ -8,13 +8,13 @@ dependencies:
     - napari
     - pip
     - pooch
+    - python-xxhash
     - python-elf >=0.4.8
     - pytorch
     - segment-anything
     - torchvision
-    - torch_em >=0.5.1
+    - torch_em >=0.6.0
     - tqdm
     - timm
     - pip:
         - git+https://github.com/ChaoningZhang/MobileSAM.git
-    #   - git+https://github.com/facebookresearch/segment-anything.git

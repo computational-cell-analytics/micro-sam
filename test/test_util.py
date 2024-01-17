@@ -3,13 +3,16 @@ import unittest
 from shutil import rmtree
 
 import numpy as np
+import torch
 import zarr
 
 from skimage.data import binary_blobs
 from skimage.measure import label
+from micro_sam.util import VIT_T_SUPPORT, SamPredictor, get_cache_directory
 
 
 class TestUtil(unittest.TestCase):
+    model_type = "vit_t" if VIT_T_SUPPORT else "vit_b"
     tmp_folder = "tmp-files"
 
     def setUp(self):
@@ -17,6 +20,24 @@ class TestUtil(unittest.TestCase):
 
     def tearDown(self):
         rmtree(self.tmp_folder)
+
+    def test_get_sam_model(self):
+        from micro_sam.util import get_sam_model
+
+        def check_predictor(predictor):
+            self.assertTrue(isinstance(predictor, SamPredictor))
+            self.assertEqual(predictor.model_type, self.model_type)
+
+        # check predictor with download
+        predictor = get_sam_model(model_type=self.model_type)
+        check_predictor(predictor)
+
+        # check predictor with checkpoint path (using the cached model)
+        checkpoint_path = os.path.join(
+            get_cache_directory(), "models", "vit_t" if VIT_T_SUPPORT else "vit_b"
+        )
+        predictor = get_sam_model(model_type=self.model_type, checkpoint_path=checkpoint_path)
+        check_predictor(predictor)
 
     def test_compute_iou(self):
         from micro_sam.util import compute_iou
@@ -62,6 +83,21 @@ class TestUtil(unittest.TestCase):
         self.assertEqual(expected_mask.shape, mask.shape)
 
         self.assertTrue(np.allclose(mask, expected_mask))
+
+    def test_get_device(self):
+        from micro_sam.util import get_device
+
+        # check that device without argument works
+        get_device()
+
+        # check passing device as string
+        device = get_device("cpu")
+        self.assertEqual(device, "cpu")
+
+        # check passing device as torch.device works
+        device = get_device(torch.device("cpu"))
+        self.assertTrue(isinstance(device, torch.device))
+        self.assertEqual(device.type, "cpu")
 
 
 if __name__ == "__main__":

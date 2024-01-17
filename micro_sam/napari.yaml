@@ -26,6 +26,9 @@ contributions:
     - id: micro-sam.embedding_widget
       python_name: micro_sam.sam_annotator._widgets:embedding_widget
       title: Embedding widget
+    - id: micro-sam.cachedir_widget
+      python_name: micro_sam.sam_annotator._widgets:cachedir_widget
+      title: Set cache directory
   sample_data:
     - command: micro-sam.sample_data_image_series
       display_name: Image series example data
@@ -51,3 +54,5 @@ contributions:
   widgets:
     - command: micro-sam.embedding_widget
       display_name: Embedding widget
+    - command: micro-sam.cachedir_widget
+      display_name: Set cache directory

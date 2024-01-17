@@ -8,14 +8,14 @@ dependencies:
     - napari
     - pip
     - pooch
+    - python-xxhash
     - python-elf >=0.4.8
     - pytorch
     - pytorch-cuda>=11.7  # you may need to update the cuda version to match your system
     - segment-anything
     - torchvision
-    - torch_em >=0.5.1
+    - torch_em >=0.6.0
     - tqdm
     - timm
     - pip:
         - git+https://github.com/ChaoningZhang/MobileSAM.git
-    #   - git+https://github.com/facebookresearch/segment-anything.git

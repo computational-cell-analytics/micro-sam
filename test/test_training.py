@@ -9,7 +9,7 @@ import torch
 import torch_em
 
 from micro_sam.sample_data import synthetic_data
-from micro_sam.util import VIT_T_SUPPORT
+from micro_sam.util import VIT_T_SUPPORT, get_custom_sam_model, SamPredictor
 
 
 @unittest.skipUnless(VIT_T_SUPPORT, "Integration test is only run with vit_t support, otherwise it takes too long.")
@@ -56,6 +56,8 @@ class TestTraining(unittest.TestCase):
             pass
 
     def _get_dataloader(self, split, patch_shape, batch_size):
+        import micro_sam.training as sam_training
+
         # Create the synthetic training data and get the corresponding folders.
         image_root = os.path.join(self.tmp_folder, "synthetic-data", "images", split)
         label_root = os.path.join(self.tmp_folder, "synthetic-data", "labels", split)
@@ -67,6 +69,7 @@ class TestTraining(unittest.TestCase):
             patch_shape=patch_shape, batch_size=batch_size,
             label_transform=torch_em.transform.label.connected_components,
             shuffle=True, num_workers=2, ndim=2, is_seg_dataset=False,
+            raw_transform=sam_training.identity,
         )
         return loader
 
@@ -74,7 +77,7 @@ class TestTraining(unittest.TestCase):
         import micro_sam.training as sam_training
 
         batch_size = 1
-        n_sub_iteration = 4
+        n_sub_iteration = 3
         patch_shape = (512, 512)
         n_objects_per_batch = 2
 
@@ -83,7 +86,7 @@ class TestTraining(unittest.TestCase):
         val_loader = self._get_dataloader("val", patch_shape, batch_size)
 
         model = sam_training.get_trainable_sam_model(model_type=model_type, device=device)
-        convert_inputs = sam_training.ConvertToSamInputs()
+        convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.05)
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode="min", factor=0.9, patience=10, verbose=True
@@ -94,8 +97,6 @@ class TestTraining(unittest.TestCase):
             train_loader=train_loader,
             val_loader=val_loader,
             model=model,
-            loss=torch_em.loss.DiceLoss(),
-            metric=torch_em.loss.DiceLoss(),
             optimizer=optimizer,
             lr_scheduler=scheduler,
             device=device,
@@ -133,6 +134,9 @@ class TestTraining(unittest.TestCase):
         inference_function(predictor, image_paths, label_paths, embedding_dir, prediction_dir)
 
         pred_paths = sorted(glob(os.path.join(prediction_dir, "*.tif")))
+        if len(pred_paths) == 0:  # we need to go to subfolder for iterative inference
+            pred_paths = sorted(glob(os.path.join(prediction_dir, "iteration02", "*.tif")))
+
         self.assertEqual(len(pred_paths), len(label_paths))
         eval_res = evaluation.run_evaluation(label_paths, pred_paths, verbose=False)
         result = eval_res["sa50"].values.item()
@@ -150,6 +154,10 @@ class TestTraining(unittest.TestCase):
         checkpoint_path = os.path.join(self.tmp_folder, "checkpoints", "test", "best.pt")
         self.assertTrue(os.path.exists(checkpoint_path))
 
+        # Check that the model can be loaded from a custom checkpoint.
+        predictor = get_custom_sam_model(checkpoint_path, model_type=model_type, device=device)
+        self.assertTrue(isinstance(predictor, SamPredictor))
+
         # Export the model.
         export_path = os.path.join(self.tmp_folder, "exported_model.pth")
         self._export_model(checkpoint_path, export_path, model_type)
@@ -157,7 +165,7 @@ class TestTraining(unittest.TestCase):
 
         # Check the model with inference with a single point prompt.
         prediction_dir = os.path.join(self.tmp_folder, "predictions-points")
-        normal_inference = partial(
+        point_inference = partial(
             evaluation.run_inference_with_prompts,
             use_points=True, use_boxes=False,
             n_positives=1, n_negatives=0,
@@ -165,12 +173,12 @@ class TestTraining(unittest.TestCase):
         )
         self._run_inference_and_check_results(
             export_path, model_type, prediction_dir=prediction_dir,
-            inference_function=normal_inference, expected_sa=0.9
+            inference_function=point_inference, expected_sa=0.9
         )
 
         # Check the model with inference with a box point prompt.
         prediction_dir = os.path.join(self.tmp_folder, "predictions-boxes")
-        normal_inference = partial(
+        box_inference = partial(
             evaluation.run_inference_with_prompts,
             use_points=False, use_boxes=True,
             n_positives=1, n_negatives=0,
@@ -178,11 +186,20 @@ class TestTraining(unittest.TestCase):
         )
         self._run_inference_and_check_results(
             export_path, model_type, prediction_dir=prediction_dir,
-            inference_function=normal_inference, expected_sa=0.95,
+            inference_function=box_inference, expected_sa=0.95,
         )
 
-        # Check the model with interactive inference
-        # TODO
+        # Check the model with interactive inference.
+        prediction_dir = os.path.join(self.tmp_folder, "predictions-iterative")
+        iterative_inference = partial(
+            evaluation.run_inference_with_iterative_prompting,
+            start_with_box_prompt=False,
+            n_iterations=3,
+        )
+        self._run_inference_and_check_results(
+            export_path, model_type, prediction_dir=prediction_dir,
+            inference_function=iterative_inference, expected_sa=0.95,
+        )
 
 
 if __name__ == "__main__":
