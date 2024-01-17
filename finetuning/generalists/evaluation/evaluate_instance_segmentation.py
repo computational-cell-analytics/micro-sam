@@ -1,9 +1,8 @@
 import os
-import argparse
 
 from micro_sam.evaluation.evaluation import run_evaluation
 
-from util import get_pred_paths, get_paths, run_instance_segmentation_with_decoder
+from util import get_pred_paths, get_paths, run_instance_segmentation_with_decoder, get_default_arguments
 
 
 def run_em_instance_segmentation_with_decoder(dataset_name, model_type, checkpoint, experiment_folder):
@@ -30,15 +29,7 @@ def eval_instance_segmentation_with_decoder(dataset_name, prediction_folder, exp
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "-m", "--model", type=str, required=True,
-        help="Provide the model type to initialize the predictor"
-    )
-    parser.add_argument("-c", "--checkpoint", type=str, required=True,)
-    parser.add_argument("-e", "--experiment_folder", type=str, required=True)
-    parser.add_argument("-d", "--dataset", type=str, required=True)
-    args = parser.parse_args()
+    args = get_default_arguments()
 
     prediction_folder = run_em_instance_segmentation_with_decoder(
         args.dataset, args.model, args.checkpoint, args.experiment_folder

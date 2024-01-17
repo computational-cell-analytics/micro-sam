@@ -1,4 +1,5 @@
 import os
+import argparse
 from glob import glob
 from typing import Union, List, Optional
 
@@ -31,7 +32,7 @@ VANILLA_MODELS = {
 }
 
 
-def get_model(model_type, ckpt=None):
+def get_model(model_type, ckpt):
     if ckpt is None:
         ckpt = VANILLA_MODELS[model_type]
     predictor = get_predictor(ckpt, model_type)
@@ -137,3 +138,26 @@ def run_instance_segmentation_with_decoder(
         result_dir=gs_result_folder,
     )
     return prediction_folder
+
+
+# PARSER FOR ALL THE REQUIRED ARGUMENTS
+
+
+def get_default_arguments():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-m", "--model", type=str, required=True,
+        help="Provide the model type to initialize the predictor"
+    )
+    parser.add_argument("-c", "--checkpoint", type=none_or_str, required=True, default=None)
+    parser.add_argument("-e", "--experiment_folder", type=str, required=True)
+    parser.add_argument("-d", "--dataset", type=str, required=True)
+    parser.add_argument("--box", action="store_true", help="If passed, starts with first prompt as box")
+    args = parser.parse_args()
+    return args
+
+
+def none_or_str(value):
+    if value == 'None':
+        return None
+    return value
