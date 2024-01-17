@@ -2,7 +2,7 @@ import os
 
 from micro_sam.evaluation.evaluation import run_evaluation
 
-from util import get_pred_paths, run_amg, get_paths, get_default_arguments
+from util import get_pred_paths, run_amg, get_paths, get_default_arguments, VANILLA_MODELS
 
 
 def run_em_amg(dataset_name, model_type, checkpoint, experiment_folder):
