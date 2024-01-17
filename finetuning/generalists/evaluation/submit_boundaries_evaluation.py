@@ -76,14 +76,12 @@ def submit_slurm():
     tmp_folder = "./gpu_jobs"
 
     # parameters to run the inference scripts
+    dataset_name = "snemi"  # name of the dataset in lower-case
     env_name = "sam"
     model_type = "vit_h"
-
-    # name of the dataset in lower-case
-    dataset_name = "snemi"
+    experiment_set = "generalists"  # infer using generalists or vanilla models
 
     # let's set the experiment type - either using the generalists or just using vanilla model
-    experiment_set = "generalists"
     if experiment_set == "generalists":
         checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/boundaries_em_generalist_sam/best.pt"
     elif experiment_set == "vanilla":
@@ -91,8 +89,10 @@ def submit_slurm():
     else:
         raise ValueError("Choose from generalists/vanilla")
 
-    experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/"
-    experiment_folder += f"{experiment_set}/em/{dataset_name}/mito_nuc_em_generalist_sam/{model_type}/"
+    experiment_folder = f"/scratch/projects/nim00007/sam/experiments/new_models/{experiment_set}/em/{dataset_name}/"
+    if experiment_set == "generalists":
+        experiment_folder += "boundaries_em_generalist_sam/"
+    experiment_folder += f"{model_type}/"
 
     print(checkpoint)
     print(experiment_folder)
@@ -100,7 +100,11 @@ def submit_slurm():
 
     quit()
 
-    all_setups = ["precompute_embeddings", "evaluate_amg", "evaluate_instance_segmentation", "iterative_prompting"]
+    # now let's run the experiments
+    if experiment_set == "vanilla":
+        all_setups = ["precompute_embeddings", "evaluate_amg", "iterative_prompting"]
+    else:
+        all_setups = ["precompute_embeddings", "evaluate_amg", "evaluate_instance_segmentation", "iterative_prompting"]
     for current_setup in all_setups:
         write_batch_script(
             env_name=env_name,

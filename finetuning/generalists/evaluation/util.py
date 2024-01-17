@@ -1,5 +1,6 @@
 import os
 import argparse
+import warnings
 from glob import glob
 from typing import Union, List, Optional
 
@@ -53,8 +54,15 @@ def get_pred_paths(prediction_folder):
 
 
 def download_em_dataset(path):
+    # lucchi
     datasets.get_lucchi_dataset(os.path.join(path, "lucchi"), split="train", patch_shape=(1, 512, 512), download=True)
     datasets.get_lucchi_dataset(os.path.join(path, "lucchi"), split="test", patch_shape=(1, 512, 512), download=True)
+    # snemi
+    datasets.get_snemi_dataset(os.path.join(path, "snemi"), patch_shape=(1, 512, 512), sample="train", download=True)
+    try:
+        datasets.get_snemi_dataset(os.path.join(path, "snemi"), patch_shape=(1, 512, 512), sample="test", download=True)
+    except KeyError:
+        warnings.warn("SNEMI's test set does not have labels. We download it in one place anyways.")
 
 
 #
