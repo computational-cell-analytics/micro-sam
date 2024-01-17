@@ -19,8 +19,8 @@ def livecell_annotator(use_finetuned_model):
     image = imageio.imread(example_data)
 
     if use_finetuned_model:
-        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-livecell-vit_h_lm.zarr")
-        model_type = "vit_h_lm"
+        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-livecell-vit_b_lm.zarr")
+        model_type = "vit_b_lm"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-livecell.zarr")
         model_type = "vit_h"
@@ -35,8 +35,8 @@ def hela_2d_annotator(use_finetuned_model):
     image = imageio.imread(example_data)
 
     if use_finetuned_model:
-        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-hela2d-vit_h_lm.zarr")
-        model_type = "vit_h_lm"
+        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-hela2d-vit_b_lm.zarr")
+        model_type = "vit_b_lm"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-hela2d.zarr")
         model_type = "vit_h"
@@ -54,8 +54,8 @@ def wholeslide_annotator(use_finetuned_model):
     image = imageio.imread(example_data)
 
     if use_finetuned_model:
-        embedding_path = os.path.join(EMBEDDING_CACHE, "whole-slide-embeddings-vit_h_lm.zarr")
-        model_type = "vit_h_lm"
+        embedding_path = os.path.join(EMBEDDING_CACHE, "whole-slide-embeddings-vit_b_lm.zarr")
+        model_type = "vit_b_lm"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "whole-slide-embeddings.zarr")
         model_type = "vit_h"
@@ -64,15 +64,14 @@ def wholeslide_annotator(use_finetuned_model):
 
 
 def main():
-    # whether to use the fine-tuned SAM model
-    # this feature is still experimental!
-    use_finetuned_model = False
+    # Whether to use the fine-tuned SAM model for light microscopy data.
+    use_finetuned_model = True
 
     # 2d annotator for livecell data
-    # livecell_annotator(use_finetuned_model)
+    livecell_annotator(use_finetuned_model)
 
     # 2d annotator for cell tracking challenge hela data
-    hela_2d_annotator(use_finetuned_model)
+    # hela_2d_annotator(use_finetuned_model)
 
     # 2d annotator for a whole slide image
     # wholeslide_annotator(use_finetuned_model)
