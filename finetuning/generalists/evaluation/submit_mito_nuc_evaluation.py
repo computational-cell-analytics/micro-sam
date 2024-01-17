@@ -23,7 +23,7 @@ source ~/.bashrc
 mamba activate {env_name} \n"""
 
     if delay:
-        batch_script += "sleep 10m \n"
+        batch_script += "sleep 10s \n"
 
     # python script
     python_script = f"python {inference_setup}.py "
@@ -77,7 +77,7 @@ def submit_slurm():
 
     # parameters to run the inference scripts
     dataset_name = "lucchi"  # name of the dataset in lower-case
-    model_type = "vit_b"
+    model_type = "vit_h"
     with_cem = False  # use the models trained with mitolab
     experiment_set = "vanilla"  # infer using generalists or vanilla models
 
@@ -102,7 +102,10 @@ def submit_slurm():
     experiment_folder += f"{model_type}/"
 
     # now let's run the experiments
-    all_setups = ["precompute_embeddings", "evaluate_amg", "evaluate_instance_segmentation", "iterative_prompting"]
+    if experiment_set == "vanilla":
+        all_setups = ["precompute_embeddings", "evaluate_amg", "iterative_prompting"]
+    else:
+        all_setups = ["precompute_embeddings", "evaluate_amg", "evaluate_instance_segmentation", "iterative_prompting"]
     for current_setup in all_setups:
         write_batch_script(
             env_name="sam",
