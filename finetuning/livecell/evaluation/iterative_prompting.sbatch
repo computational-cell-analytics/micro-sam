@@ -9,4 +9,4 @@
 source activate sam
 python iterative_prompting.py -c /scratch/usr/nimanwai/micro-sam/checkpoints/vit_h/livecell_sam/best.pt \
                               -m vit_h \
-                              -e /scratch/projects/nim00007/sam/experiments/new_models/specialists/livecell/vit_h/
+                              -e /scratch/projects/nim00007/sam/experiments/new_models/specialists/lm/livecell/vit_h/
