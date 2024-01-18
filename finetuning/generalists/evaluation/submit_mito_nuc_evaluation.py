@@ -6,7 +6,8 @@ from datetime import datetime
 
 
 def write_batch_script(
-    env_name, out_path, inference_setup, checkpoint, model_type, experiment_folder, dataset_name, delay=True
+    env_name, out_path, inference_setup, checkpoint, model_type,
+    experiment_folder, dataset_name, species=None, delay=None
 ):
     """Writing scripts with different fold-trainings for micro-sam evaluation
     """
@@ -22,8 +23,8 @@ def write_batch_script(
 source ~/.bashrc
 mamba activate {env_name} \n"""
 
-    if delay:
-        batch_script += "sleep 5m \n"
+    if delay is not None:
+        batch_script += f"sleep {delay} \n"
 
     # python script
     python_script = f"python {inference_setup}.py "
@@ -41,6 +42,9 @@ mamba activate {env_name} \n"""
 
     # IMPORTANT: choice of the dataset
     python_script += f"-d {dataset_name} "
+
+    if species is not None:  # relevant for nuc-mm only
+        python_script += f"--species {species} "
 
     # let's add the python script to the bash script
     batch_script += python_script
@@ -76,29 +80,30 @@ def submit_slurm():
     tmp_folder = "./gpu_jobs"
 
     # parameters to run the inference scripts
-    dataset_name = "lucchi"  # name of the dataset in lower-case
+    dataset_name = "nuc_mm"  # name of the dataset in lower-case
+    species = "zebrafish"  # relevant for multiple species-related datasets
     model_type = "vit_b"
-    with_cem = False  # use the models trained with mitolab
-    experiment_set = "vanilla"  # infer using generalists or vanilla models
-
-    if with_cem:
-        em_name = "with_cem"
-    else:
-        em_name = "without_cem"
+    experiment_set = "generalists"  # infer using generalists or vanilla models
+    make_delay = "10m"  # wait for precomputing the embeddings and later run inference scripts
 
     # let's set the experiment type - either using the generalists or just using vanilla model
     if experiment_set == "generalists":
         checkpoint = "/scratch/usr/nimanwai/micro-sam/checkpoints/"
-        checkpoint += f"{model_type}/{em_name}/mito_nuc_em_generalist_sam/best.pt"
+        checkpoint += f"{model_type}/with_cem/mito_nuc_em_generalist_sam/best.pt"
     elif experiment_set == "vanilla":
         checkpoint = None
     else:
         raise ValueError("Choose from generalists/vanilla")
 
     experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/"
-    experiment_folder += f"{experiment_set}/em/{dataset_name}/mito_nuc_em_generalist_sam/"
+    experiment_folder += f"{experiment_set}/em/{dataset_name}/"
+
+    if species is not None:
+        experiment_folder += f"{species}/"
+
     if experiment_set == "generalists":
-        experiment_folder += f"{em_name}/"
+        experiment_folder += "mito_nuc_em_generalist_sam/"
+
     experiment_folder += f"{model_type}/"
 
     # now let's run the experiments
@@ -115,7 +120,8 @@ def submit_slurm():
             model_type=model_type,
             experiment_folder=experiment_folder,
             dataset_name=dataset_name,
-            delay=False if current_setup == "precompute_embeddings" else True
+            species=species,
+            delay=None if current_setup == "precompute_embeddings" else make_delay
             )
 
     for my_script in glob(tmp_folder + "/*"):

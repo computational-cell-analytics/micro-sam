@@ -67,17 +67,44 @@ def for_snemi(save_dir):
                 imageio.imwrite(label_path, instances, compression="zlib")
 
 
+def for_nuc_mm(save_dir):
+    species = ["mouse", "zebrafish"]
+    for one_spec in species:
+        nuc_mm_vol_paths = glob(os.path.join(ROOT, "nuc_mm", one_spec, "*", "*"))
+        print(f"Preprocessing {one_spec}")
+
+        i = 0
+        for _one_vol_path in nuc_mm_vol_paths:
+            _config = _one_vol_path.split("/")[-2]
+            os.makedirs(os.path.join(save_dir, one_spec, "raw"), exist_ok=True)
+            os.makedirs(os.path.join(save_dir, one_spec, "labels"), exist_ok=True)
+
+            with h5py.File(_one_vol_path, "r") as _file:
+                raw = _file["raw"][:]
+                labels = _file["labels"][:]
+
+                for _raw, _label in tqdm(zip(raw, labels), total=raw.shape[0], desc=f"{_one_vol_path}"):
+                    # we only save labels with foreground
+                    if has_foreground(_label):
+                        instances = label(_label)
+                        raw_path = os.path.join(save_dir, one_spec, "raw", f"nuc_mm_{_config}_{i+1:05}.tif")
+                        label_path = os.path.join(save_dir, one_spec, "labels", f"nuc_mm_{_config}_{i+1:05}.tif")
+                        imageio.imwrite(raw_path, _raw, compression="zlib")
+                        imageio.imwrite(label_path, instances, compression="zlib")
+                        i += 1
+
+
 def main():
     # let's ensure all the data is downloaded
     download_em_dataset(ROOT)
 
-    dataset_name = "snemi"
+    dataset_name = "nuc_mm"
 
     # paths to save the raw and label slices
     save_dir = os.path.join(ROOT, dataset_name, "slices")
 
     # now let's save the slices as tif
-    for_snemi(save_dir)
+    for_nuc_mm(save_dir)
 
 
 if __name__ == "__main__":

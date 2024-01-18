@@ -17,7 +17,10 @@ from segment_anything import SamPredictor
 
 from .. import util as util
 from ..inference import batched_inference
-from ..instance_segmentation import mask_data_to_segmentation
+from ..instance_segmentation import (
+    mask_data_to_segmentation, AutomaticMaskGenerator, load_instance_segmentation_with_decoder_from_checkpoint
+)
+from . import instance_segmentation
 from ..prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
 
 
@@ -515,3 +518,86 @@ def run_inference_with_iterative_prompting(
             dilation=dilation, batch_size=batch_size, embedding_path=embedding_path,
             n_iterations=n_iterations, prediction_paths=prediction_paths
         )
+
+
+#
+# AMG FUNCTION
+#
+
+
+def run_amg(
+    checkpoint: Union[str, os.PathLike],
+    model_type: str,
+    experiment_folder: Union[str, os.PathLike],
+    val_image_paths: List[Union[str, os.PathLike]],
+    val_gt_paths: List[Union[str, os.PathLike]],
+    test_image_paths: List[Union[str, os.PathLike]],
+    iou_thresh_values: Optional[List[float]] = None,
+    stability_score_values: Optional[List[float]] = None,
+) -> str:
+    embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
+    os.makedirs(embedding_folder, exist_ok=True)
+
+    predictor = get_predictor(checkpoint, model_type)
+    amg = AutomaticMaskGenerator(predictor)
+    amg_prefix = "amg"
+
+    # where the predictions are saved
+    prediction_folder = os.path.join(experiment_folder, amg_prefix, "inference")
+    os.makedirs(prediction_folder, exist_ok=True)
+
+    # where the grid-search results are saved
+    gs_result_folder = os.path.join(experiment_folder, amg_prefix, "grid_search")
+    os.makedirs(gs_result_folder, exist_ok=True)
+
+    grid_search_values = instance_segmentation.default_grid_search_values_amg(
+        iou_thresh_values=iou_thresh_values,
+        stability_score_values=stability_score_values,
+    )
+
+    instance_segmentation.run_instance_segmentation_grid_search_and_inference(
+        amg, grid_search_values,
+        val_image_paths, val_gt_paths, test_image_paths,
+        embedding_folder, prediction_folder, gs_result_folder,
+    )
+    return prediction_folder
+
+
+#
+# INSTANCE SEGMENTATION FUNCTION
+#
+
+
+def run_instance_segmentation_with_decoder(
+    checkpoint: Union[str, os.PathLike],
+    model_type: str,
+    experiment_folder: Union[str, os.PathLike],
+    val_image_paths: List[Union[str, os.PathLike]],
+    val_gt_paths: List[Union[str, os.PathLike]],
+    test_image_paths: List[Union[str, os.PathLike]],
+) -> str:
+    embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
+    os.makedirs(embedding_folder, exist_ok=True)
+
+    segmenter = load_instance_segmentation_with_decoder_from_checkpoint(
+        checkpoint, model_type,
+    )
+    seg_prefix = "instance_segmentation_with_decoder"
+
+    # where the predictions are saved
+    prediction_folder = os.path.join(experiment_folder, seg_prefix, "inference")
+    os.makedirs(prediction_folder, exist_ok=True)
+
+    # where the grid-search results are saved
+    gs_result_folder = os.path.join(experiment_folder, seg_prefix, "grid_search")
+    os.makedirs(gs_result_folder, exist_ok=True)
+
+    grid_search_values = instance_segmentation.default_grid_search_values_instance_segmentation_with_decoder()
+
+    instance_segmentation.run_instance_segmentation_grid_search_and_inference(
+        segmenter, grid_search_values,
+        val_image_paths, val_gt_paths, test_image_paths,
+        embedding_dir=embedding_folder, prediction_dir=prediction_folder,
+        result_dir=gs_result_folder,
+    )
+    return prediction_folder

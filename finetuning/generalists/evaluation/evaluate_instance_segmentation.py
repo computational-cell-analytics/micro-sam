@@ -1,13 +1,14 @@
 import os
 
 from micro_sam.evaluation.evaluation import run_evaluation
+from micro_sam.evaluation.inference import run_instance_segmentation_with_decoder
 
-from util import get_pred_paths, get_paths, run_instance_segmentation_with_decoder, get_default_arguments
+from util import get_pred_paths, get_paths, get_default_arguments
 
 
-def run_em_instance_segmentation_with_decoder(dataset_name, model_type, checkpoint, experiment_folder):
-    val_image_paths, val_gt_paths = get_paths(dataset_name, split="val")
-    test_image_paths, _ = get_paths(dataset_name, split="test")
+def run_em_instance_segmentation_with_decoder(dataset_name, model_type, checkpoint, experiment_folder, species=None):
+    val_image_paths, val_gt_paths = get_paths(dataset_name, split="val", species=species)
+    test_image_paths, _ = get_paths(dataset_name, split="test", species=species)
     prediction_folder = run_instance_segmentation_with_decoder(
         checkpoint,
         model_type,
@@ -19,9 +20,9 @@ def run_em_instance_segmentation_with_decoder(dataset_name, model_type, checkpoi
     return prediction_folder
 
 
-def eval_instance_segmentation_with_decoder(dataset_name, prediction_folder, experiment_folder):
+def eval_instance_segmentation_with_decoder(dataset_name, prediction_folder, experiment_folder, species=None):
     print("Evaluating", prediction_folder)
-    _, gt_paths = get_paths(dataset_name)
+    _, gt_paths = get_paths(dataset_name, split="test", species=species)
     pred_paths = get_pred_paths(prediction_folder)
     save_path = os.path.join(experiment_folder, "results", "instance_segmentation_with_decoder.csv")
     res = run_evaluation(gt_paths, pred_paths, save_path=save_path)
@@ -32,9 +33,9 @@ def main():
     args = get_default_arguments()
 
     prediction_folder = run_em_instance_segmentation_with_decoder(
-        args.dataset, args.model, args.checkpoint, args.experiment_folder
+        args.dataset, args.model, args.checkpoint, args.experiment_folder, args.species
     )
-    eval_instance_segmentation_with_decoder(args.dataset, prediction_folder, args.experiment_folder)
+    eval_instance_segmentation_with_decoder(args.dataset, prediction_folder, args.experiment_folder, args.species)
 
 
 if __name__ == "__main__":

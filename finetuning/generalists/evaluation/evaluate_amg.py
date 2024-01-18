@@ -1,13 +1,14 @@
 import os
 
 from micro_sam.evaluation.evaluation import run_evaluation
+from micro_sam.evaluation.inference import run_amg
 
-from util import get_pred_paths, run_amg, get_paths, get_default_arguments, VANILLA_MODELS
+from util import get_pred_paths, get_paths, get_default_arguments, VANILLA_MODELS
 
 
-def run_em_amg(dataset_name, model_type, checkpoint, experiment_folder):
-    val_image_paths, val_gt_paths = get_paths(dataset_name, split="val")
-    test_image_paths, _ = get_paths(dataset_name, split="test")
+def run_em_amg(dataset_name, model_type, checkpoint, experiment_folder, species=None):
+    val_image_paths, val_gt_paths = get_paths(dataset_name, split="val", species=species)
+    test_image_paths, _ = get_paths(dataset_name, split="test", species=species)
     prediction_folder = run_amg(
         checkpoint,
         model_type,
@@ -19,9 +20,9 @@ def run_em_amg(dataset_name, model_type, checkpoint, experiment_folder):
     return prediction_folder
 
 
-def eval_amg(dataset_name, prediction_folder, experiment_folder):
+def eval_amg(dataset_name, prediction_folder, experiment_folder, species=None):
     print("Evaluating", prediction_folder)
-    _, gt_paths = get_paths(dataset_name)
+    _, gt_paths = get_paths(dataset_name, split="test", species=species)
     pred_paths = get_pred_paths(prediction_folder)
     save_path = os.path.join(experiment_folder, "results", "amg.csv")
     res = run_evaluation(gt_paths, pred_paths, save_path=save_path)
@@ -36,7 +37,7 @@ def main():
         ckpt = args.checkpoint
 
     prediction_folder = run_em_amg(args.dataset, args.model, ckpt, args.experiment_folder)
-    eval_amg(args.dataset, prediction_folder, args.experiment_folder)
+    eval_amg(args.dataset, prediction_folder, args.experiment_folder, args.species)
 
 
 if __name__ == "__main__":
