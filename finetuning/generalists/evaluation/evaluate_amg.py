@@ -36,7 +36,7 @@ def main():
     else:
         ckpt = args.checkpoint
 
-    prediction_folder = run_em_amg(args.dataset, args.model, ckpt, args.experiment_folder)
+    prediction_folder = run_em_amg(args.dataset, args.model, ckpt, args.experiment_folder, args.species)
     eval_amg(args.dataset, prediction_folder, args.experiment_folder, args.species)
 
 
