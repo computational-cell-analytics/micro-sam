@@ -132,9 +132,9 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
     return label_widget
 
 
-# TODO add options for tiling
+# TODO add options for tiling, see https://github.com/computational-cell-analytics/micro-sam/issues/331
 @magic_factory(
-    pbar={'visible': False, 'max': 0, 'value': 0, 'label': 'working...'},
+    pbar={"visible": False, "max": 0, "value": 0, "label": "working..."},
     call_button="Compute image embeddings",
     save_path={"mode": "d"},  # choose a directory
 )
@@ -204,6 +204,7 @@ def settings_widget(
 
 
 # TODO fail more gracefully in all widgets if image embeddings have not been initialized
+# See https://github.com/computational-cell-analytics/micro-sam/issues/332
 #
 # Widgets for interactive segmentation:
 # - segment_widget: for the 2d annotation tool
@@ -215,7 +216,7 @@ def settings_widget(
 
 
 # TODO support extra mode for one point per object
-# TODO rethink the default values for box extension
+# See https://github.com/computational-cell-analytics/micro-sam/issues/333
 @magic_factory(call_button="Segment Object [S]")
 def segment_widget(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) -> None:
     shape = viewer.layers["current_object"].data.shape
@@ -275,6 +276,7 @@ def segment_slice_widget(viewer: "napari.viewer.Viewer", box_extension: float = 
 
 
 # TODO should probably be wrappred in a thread worker
+# See https://github.com/computational-cell-analytics/micro-sam/issues/334
 @magic_factory(
     call_button="Segment All Slices [Shift-S]",
     projection={"choices": ["default", "bounding_box", "mask", "points"]},

@@ -96,9 +96,11 @@ class _AnnotatorBase(Container):
             def _seg_nd(viewer):
                 self._segment_nd_widget(viewer)
 
-    # TODO more clever way to integrate segmentation result so
-    # that we can also choose an active layer?
-    # We could allow also passing a label layer and then use it.
+    # TODO
+    # We could implement a better way of initializing the segmentation result,
+    # so that instead of just passing a numpy array an existing layer from the napari
+    # viewer can be chosen.
+    # See https://github.com/computational-cell-analytics/micro-sam/issues/335
     def __init__(
         self,
         viewer: "napari.viewer.Viewer",
