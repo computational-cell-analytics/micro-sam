@@ -80,7 +80,7 @@ $ pip install -e .
 
 ## From installer
 
-We also provide installers for Linuxand Windows:
+We also provide installers for Linux and Windows:
 - [Linux](https://owncloud.gwdg.de/index.php/s/hM1bQ108YmcwyDn)
 - [Windows](https://owncloud.gwdg.de/index.php/s/T1weJclOiYUUULE)
 <!---
