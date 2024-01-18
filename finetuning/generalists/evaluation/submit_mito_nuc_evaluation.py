@@ -1,3 +1,4 @@
+import re
 import os
 import shutil
 import subprocess
@@ -81,10 +82,10 @@ def submit_slurm():
 
     # parameters to run the inference scripts
     dataset_name = "nuc_mm"  # name of the dataset in lower-case
-    species = "zebrafish"  # relevant for multiple species-related datasets
+    species = "mouse"  # relevant for multiple species-related datasets
     model_type = "vit_b"
-    experiment_set = "generalists"  # infer using generalists or vanilla models
-    make_delay = "10m"  # wait for precomputing the embeddings and later run inference scripts
+    experiment_set = "vanilla"  # infer using generalists or vanilla models
+    make_delay = "1m"  # wait for precomputing the embeddings and later run inference scripts
 
     # let's set the experiment type - either using the generalists or just using vanilla model
     if experiment_set == "generalists":
@@ -124,15 +125,29 @@ def submit_slurm():
             delay=None if current_setup == "precompute_embeddings" else make_delay
             )
 
-    for my_script in glob(tmp_folder + "/*"):
+    # the logic below automates the process of first running the precomputation of embeddings, and only then inference.
+    job_id = []
+    for i, my_script in enumerate(sorted(glob(tmp_folder + "/*"))):
         cmd = ["sbatch", my_script]
-        subprocess.run(cmd)
+
+        if i > 0:
+            cmd.insert(1, f"--dependency=afterany:{job_id[0]}")
+
+        cmd_out = subprocess.run(cmd, capture_output=True, text=True)
+        print(cmd_out.stdout if len(cmd_out.stdout) > 1 else cmd_out.stderr)
+
+        if i == 0:
+            job_id.append(re.findall(r'\d+', cmd_out.stdout)[0])
 
 
-if __name__ == "__main__":
+def main():
     try:
         shutil.rmtree("./gpu_jobs")
     except FileNotFoundError:
         pass
 
     submit_slurm()
+
+
+if __name__ == "__main__":
+    main()
