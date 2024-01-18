@@ -46,7 +46,7 @@ def get_dataloader(split, patch_shape, batch_size):
     # raw_key, label_key= None, None
 
     # The 'roi' argument can be used to subselect parts of the data.
-    # Here, we use it to select the first 70 frames fro the test split and the other frames for the val split.
+    # Here, we use it to select the first 70 frames for the train split and the other frames for the val split.
     if split == "train":
         roi = np.s_[:70, :, :]
     else:

@@ -35,7 +35,7 @@ Please check out [the documentation](https://computational-cell-analytics.github
 
 We welcome new contributions!
 
-If you are interested in contributing to micro-sam, please see the [contributing guide](doc/contributing.md) and [developer documentation](doc/development.md). The first step is to [discuss your idea in anew issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) with the current developers.
+If you are interested in contributing to micro-sam, please see the [contributing guide](doc/contributing.md) and [developer documentation](doc/development.md). The first step is to [discuss your idea in a new issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) with the current developers.
 
 ## Citation
 
@@ -49,7 +49,7 @@ If you are using this repository in your research please cite
 
 There are a few other napari plugins build around Segment Anything:
 - https://github.com/MIC-DKFZ/napari-sam (2d and 3d support)
-- https://github.com/JoOkuma/napari-segment-anything (only 2d support)
+- https://github.com/royerlab/napari-segment-anything (only 2d support)
 - https://github.com/hiroalchem/napari-SAM4IS
 
 Compared to these we support more applications (2d, 3d and tracking), and provide finetuning methods and finetuned models for microscopy data.
@@ -57,6 +57,13 @@ Compared to these we support more applications (2d, 3d and tracking), and provid
 
 
 ## Release Overview
+
+**New in version 0.4.0**
+
+- Significantly improved model finetuning
+- Update the finetuned models for microscopy, see [details in the doc](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models)
+- Training decoder for direct instance segmentation (not available via the GUI yet)
+- Refactored model download functionality using [pooch](https://pypi.org/project/pooch/)
 
 **New in version 0.3.0**
 

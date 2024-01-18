@@ -74,7 +74,7 @@ def submit_slurm():
     env_name = "sam"
     model_type = "vit_b"
     checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/lm_generalist_sam/best.pt"
-    experiment_folder = f"/scratch/projects/nim00007/sam/experiments/new_models/generalists/livecell/{model_type}/"
+    experiment_folder = f"/scratch/projects/nim00007/sam/experiments/new_models/generalists/lm/livecell/{model_type}/"
 
     all_setups = ["precompute_embeddings", "evaluate_amg", "evaluate_instance_segmentation", "iterative_prompting"]
     for current_setup in all_setups:
