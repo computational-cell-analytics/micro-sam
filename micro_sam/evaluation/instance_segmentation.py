@@ -275,7 +275,11 @@ def run_instance_segmentation_inference(
 
         segmenter.initialize(image, image_embeddings)
         masks = segmenter.generate(**generate_kwargs)
-        instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=min_object_size)
+
+        if len(masks) == 0:  # the instance segmentation can have no masks, hence we just save empty labels
+            instances = np.zeros_like(image)
+        else:
+            instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=min_object_size)
 
         # It's important to compress here, otherwise the predictions would take up a lot of space.
         imageio.imwrite(prediction_path, instances, compression=5)
