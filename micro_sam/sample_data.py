@@ -260,7 +260,7 @@ def fetch_tracking_example_data(save_directory: Union[str, os.PathLike]) -> str:
     fname = "DIC-C2DH-HeLa.zip"
     pooch.retrieve(
         url="http://data.celltrackingchallenge.net/training-datasets/DIC-C2DH-HeLa.zip",  # 37 MB
-        known_hash="fac24746fa0ad5ddf6f27044c785edef36bfa39f7917da4ad79730a7748787af",
+        known_hash="832fed2d05bb7488cf9c51a2994b75f8f3f53b3c3098856211f2d39023c34e1a",
         fname=fname,
         path=save_directory,
         progressbar=True,
