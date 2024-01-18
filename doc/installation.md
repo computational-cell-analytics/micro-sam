@@ -1,41 +1,43 @@
 # Installation
 
 We provide three different ways of installing `micro_sam`:
-- [From conda](#from-conda) is the recommended way if you want to use all functionality.
-- [From source](#from-source) for setting up a development environment to change and potentially contribute to our software.
+- [From mamba](#from-mamba) is the recommended way if you want to use all functionality.
+- [From source](#from-source) for setting up a development environment to use the latest version and be able to change and contribute to our software.
 - [From installer](#from-installer) to install without having to use conda. This mode of installation is still experimental! It only provides the annotation tools and does not enable model finetuning.
 
 Our software requires the following dependencies:
 - [PyTorch](https://pytorch.org/get-started/locally/)
 - [SegmentAnything](https://github.com/facebookresearch/segment-anything#installation)
 - [elf](https://github.com/constantinpape/elf)
+- [torch_em](https://github.com/constantinpape/torch-em)
 - [napari](https://napari.org/stable/) (for the interactive annotation tools)
-- [torch_em](https://github.com/constantinpape/torch-em) (for the training functionality)
 
-## From conda
 
-`micro_sam` is available as a conda package and can be installed via
-```
-$ conda install -c conda-forge micro_sam
-```
+## From mamba
 
-This command will not install the required dependencies for the annotation tools and for training / finetuning.
-To use the annotation functionality you also need to install `napari`:
+[mamba](https://mamba.readthedocs.io/en/latest/) is a drop-in replacement for conda, but is much faster than it.
+While the steps below may also work with `conda`, we highly recommend using `mamba`.
+You can follow the instrutions [here](https://mamba.readthedocs.io/en/latest/installation/mamba-installation.html) to install `mamba`.
+
+`micro_sam` can then be installed in an existing environment via
 ```
-$ conda install -c conda-forge napari pyqt
+$ mamba install -c conda-forge micro_sam
 ```
-And to use the training functionality `torch_em`:
+or you can create a new environment (here called `micro-sam`) via
 ```
-$ conda install -c conda-forge torch_em
+$ mamba create -c conda-forge -n micro-sam micro_sam
 ```
 
-In case the installation via conda takes too long consider using [mamba](https://mamba.readthedocs.io/en/latest/).
-Once you have it installed you can simply replace the `conda` commands with `mamba`.
+You also need to install napari to use the annotation tool:
+```
+$ mamba install -c conda-forge napari pyqt
+```
+(We don't include napari in the default installation dependencies to keep the choice of rendering backend flexible.)
 
 
 ## From source
 
-To install `micro_sam` from source, we recommend to first set up a conda environment with the necessary requirements:
+To install `micro_sam` from source, we recommend to first set up an environment with the necessary requirements:
 - [environment_gpu.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/master/environment_gpu.yaml): sets up an environment with GPU support.
 - [environment_cpu.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/master/environment_cpu.yaml): sets up an environment with CPU support.
 
@@ -52,11 +54,11 @@ $ cd micro_sam
 3. Create the GPU or CPU environment:
 
 ```
-$ conda env create -f <ENV_FILE>.yaml
+$ mamba env create -f <ENV_FILE>.yaml
 ```
 4. Activate the environment:
 ```
-$ conda activate sam
+$ mamba activate sam
 ```
 5. Install `micro_sam`:
 ```
@@ -65,7 +67,6 @@ $ pip install -e .
 
 **Troubleshooting:**
 
-- On some systems `conda` is extremely slow and cannot resolve the environment in the step `conda env create ...`. You can use `mamba` instead, which is a faster re-implementation of `conda`. It can resolve the environment in less than a minute on any system we tried. Check out [this link](https://mamba.readthedocs.io/en/latest/installation.html) for how to install `mamba`. Once you have installed it, run `mamba env create -f <ENV_FILE>.yaml` to create the env.
 - Installation on MAC with a M1 or M2 processor:
     - The pytorch installation from `environment_cpu.yaml` does not work with a MAC that has an M1 or M2 processor. Instead you need to:
         - Create a new environment: `mamba create -c conda-forge python pip -n sam`
@@ -80,7 +81,7 @@ $ pip install -e .
 
 ## From installer
 
-We also provide installers for Linuxand Windows:
+We also provide installers for Linux and Windows:
 - [Linux](https://owncloud.gwdg.de/index.php/s/hM1bQ108YmcwyDn)
 - [Windows](https://owncloud.gwdg.de/index.php/s/T1weJclOiYUUULE)
 <!---
@@ -89,7 +90,7 @@ We also provide installers for Linuxand Windows:
 
 **The installers are stil experimental and not fully tested.** Mac is not supported yet, but we are working on also providing an installer for it.
 
-If you encounter problems with them then please consider installing `micro_sam` via [conda](#from-conda) instead.
+If you encounter problems with them then please consider installing `micro_sam` via [mamba](#from-mamba) instead.
 
 **Linux Installer:**
 
