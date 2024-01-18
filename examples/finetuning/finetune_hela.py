@@ -13,7 +13,7 @@ from micro_sam.util import export_custom_sam_model
 from micro_sam.sample_data import fetch_tracking_example_data, fetch_tracking_segmentation_data
 
 
-DATA_FOLDER = "/scratch/usr/nimanwai/data/hela/"
+DATA_FOLDER = "data"
 
 
 def get_dataloader(split, patch_shape, batch_size, train_instance_segmentation):
