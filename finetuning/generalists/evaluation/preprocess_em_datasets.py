@@ -255,6 +255,18 @@ def for_mitoem(save_dir, desired_shape=(768, 768)):
     make_custom_splits(val_samples=10, save_dir=save_dir)
 
 
+def for_mitolab(save_dir):
+    raise NotImplementedError
+
+
+def for_uro_cell(save_dir):
+    raise NotImplementedError
+
+
+def for_sponge_em(save_dir):
+    raise NotImplementedError
+
+
 def main():
     # let's ensure all the data is downloaded
     download_em_dataset(ROOT)

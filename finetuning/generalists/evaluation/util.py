@@ -9,6 +9,8 @@ from micro_sam.evaluation import get_predictor
 
 ROOT = "/scratch/projects/nim00007/sam/data/"
 
+# TODO: need to update this all with the new path convention
+
 DATASETS = {
     "lucchi": {
         "val": [
