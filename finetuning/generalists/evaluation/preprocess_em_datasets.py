@@ -5,6 +5,7 @@ from tqdm import tqdm
 from pathlib import Path
 
 import h5py
+import z5py
 import imageio.v3 as imageio
 
 from skimage.measure import label
@@ -29,9 +30,9 @@ def for_lucchi(save_dir):
         # using the split name to save the slices
         _split = Path(vol_path).stem.split("_")[-1]
 
-        with h5py.File(vol_path, "r") as _file:
-            raw = _file["raw"][:]
-            labels = _file["labels"][:]
+        with h5py.File(vol_path, "r") as f:
+            raw = f["raw"][:]
+            labels = f["labels"][:]
 
             for i, (_raw, _label) in tqdm(enumerate(zip(raw, labels)), total=raw.shape[0]):
                 # we only save labels with foreground
@@ -51,9 +52,9 @@ def for_snemi(save_dir):
         for sample_type in ["raw", "labels"]:
             os.makedirs(os.path.join(save_dir, _split, sample_type), exist_ok=True)
 
-    with h5py.File(snemi_vol_path, "r") as _file:
-        raw = _file["volumes"]["raw"][:]
-        labels = _file["volumes"]["labels"]["neuron_ids"][:]
+    with h5py.File(snemi_vol_path, "r") as f:
+        raw = f["volumes"]["raw"][:]
+        labels = f["volumes"]["labels"]["neuron_ids"][:]
 
         for i, (_raw, _label) in tqdm(enumerate(zip(raw, labels)), total=raw.shape[0]):
             val_choice = int(raw.shape[0] * 0.2)  # making a 20% val split, rest is test
@@ -79,9 +80,9 @@ def for_nuc_mm(save_dir):
             os.makedirs(os.path.join(save_dir, one_spec, "raw"), exist_ok=True)
             os.makedirs(os.path.join(save_dir, one_spec, "labels"), exist_ok=True)
 
-            with h5py.File(_one_vol_path, "r") as _file:
-                raw = _file["raw"][:]
-                labels = _file["labels"][:]
+            with h5py.File(_one_vol_path, "r") as f:
+                raw = f["raw"][:]
+                labels = f["labels"][:]
 
                 for _raw, _label in tqdm(zip(raw, labels), total=raw.shape[0], desc=f"{_one_vol_path}"):
                     # we only save labels with foreground
@@ -104,35 +105,70 @@ def for_platy_cilia(save_dir):
         vol_id = os.path.split(vol_path)[-1].split(".")[0][-1]
         split = "val" if vol_id == "3" else "test"  # volumes 01 and 02 are for test, 03 for val
 
-        with h5py.File(vol_path, "r") as _file:
-            raw = _file["volumes"]["raw"][:]
-            labels = _file["volumes"]["labels"]["segmentation"][:]
+        with h5py.File(vol_path, "r") as f:
+            raw = f["volumes"]["raw"][:]
+            labels = f["volumes"]["labels"]["segmentation"][:]
 
             for i, (_raw, _label) in tqdm(enumerate(zip(raw, labels)), total=raw.shape[0]):
                 # we only save labels with foreground
                 if has_foreground(_label):
                     instances = label(_label)
-                    raw_path = os.path.join(save_dir, "raw", f"platy_cilia_{split}_{i+1:05}.tif")
-                    label_path = os.path.join(save_dir, "labels", f"platy_cilia_{split}_{i+1:05}.tif")
+                    raw_path = os.path.join(save_dir, "cilia", "raw", f"platy_cilia_{split}_{i+1:05}.tif")
+                    label_path = os.path.join(save_dir, "cilia", "labels", f"platy_cilia_{split}_{i+1:05}.tif")
                     imageio.imwrite(raw_path, _raw, compression="zlib")
                     imageio.imwrite(label_path, instances, compression="zlib")
 
 
-def for_uro_cell(save_dir):
-    raise NotImplementedError
+def make_center_crop(image, desired_shape):
+    center_coords = (int(image.shape[0] / 2), int(image.shape[1] / 2))
+    tolerances = (int(desired_shape[0] / 2), int(desired_shape[1] / 2))
+
+    # let's take the center crop from the image
+    cropped_image = image[
+        center_coords[0] - tolerances[0]: center_coords[0] + tolerances[0],
+        center_coords[1] - tolerances[1]: center_coords[1] + tolerances[1]
+    ]
+    return cropped_image
+
+
+def for_mitoem(save_dir, desired_shape=(768, 768)):
+    val_vol_paths = sorted(glob(os.path.join(ROOT, "mitoem", "*_val.n5")))
+
+    os.makedirs(os.path.join(save_dir, "raw"), exist_ok=True)
+    os.makedirs(os.path.join(save_dir, "labels"), exist_ok=True)
+
+    for vol_path in val_vol_paths:
+        species = os.path.split(vol_path)[-1].split("_")[0]
+
+        with z5py.File(vol_path, "r") as f:
+            raw = f["raw"][:]
+            labels = f["labels"][:]
+            for i, (_raw, _label) in tqdm(enumerate(zip(raw, labels)), total=raw.shape[0]):
+                split = "val" if i < 10 else "test"
+
+                _raw = make_center_crop(_raw, desired_shape)
+                _label = make_center_crop(_label, desired_shape)
+
+                # we only save labels with foreground
+                if has_foreground(_label):
+                    instances = label(_label)
+                    raw_path = os.path.join(save_dir, "raw", f"mitoem_{species}_{split}_{i+1:05}.tif")
+                    label_path = os.path.join(save_dir, "labels", f"mitoem_{species}_{split}_{i+1:05}.tif")
+                    imageio.imwrite(raw_path, _raw, compression="zlib")
+                    imageio.imwrite(label_path, instances, compression="zlib")
 
 
 def main():
     # let's ensure all the data is downloaded
     download_em_dataset(ROOT)
 
-    dataset_name = "platynereis"
+    dataset_name = "mitoem"
 
     # paths to save the raw and label slices
     save_dir = os.path.join(ROOT, dataset_name, "slices")
 
     # now let's save the slices as tif
-    for_platy_cilia(save_dir)
+    for_mitoem(save_dir)
 
 
 if __name__ == "__main__":

@@ -51,6 +51,22 @@ DATASETS = {
                 os.path.join(ROOT, "nuc_mm", "slices", "zebrafish", "labels", "nuc_mm_train_*")
             ]
         }
+    },
+    "platynereis": {
+        "cilia": {
+            "val": [
+                os.path.join(ROOT, "platynereis", "slices", "cilia", "raw", "platy_cilia_val_*"),
+                os.path.join(ROOT, "platynereis", "slices", "cilia", "labels", "platy_cilia_val_*")
+            ],
+            "test": [
+                os.path.join(ROOT, "platynereis", "slices", "cilia", "raw", "platy_cilia_test_*"),
+                os.path.join(ROOT, "platynereis", "slices", "cilia", "labels", "platy_cilia_test_*")
+            ]
+        },
+        "nuclei": {
+            "val": None,
+            "test": None
+        }
 
     }
 }
@@ -109,6 +125,11 @@ def download_em_dataset(path):
 
     # platy-cilia
     datasets.get_platynereis_cilia_dataset(os.path.join(path, "platynereis"), patch_shape=(1, 512, 512), download=True)
+
+    # mitoem
+    datasets.get_mitoem_dataset(
+        os.path.join(path, "mitoem"), splits="val", patch_shape=(1, 512, 512), download=True
+    )
 
     # TODO:
     # in-domain
