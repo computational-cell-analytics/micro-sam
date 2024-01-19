@@ -24,6 +24,11 @@ So a good strategy is to annotate a few images with one of the provided models u
 TODO: provide link to the paper with results on how much data is needed
 -->
 
-The training logic is implemented in `micro_sam.training` and is based on [torch-em](https://github.com/constantinpape/torch-em). Please check out [examples/finetuning](https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/finetuning) to see how you can finetune on your own data with it. The script `finetune_hela.py` contains an example for finetuning on a small custom microscopy dataset and `use_finetuned_model.py` shows how this model can then be used in the interactive annotatin tools.
+The training logic is implemented in `micro_sam.training` and is based on [torch-em](https://github.com/constantinpape/torch-em). Please check out [examples/finetuning](https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/finetuning) to see how you can finetune on your own data with it. The script `finetune_hela.py` contains an example for finetuning on a small custom microscopy dataset and `use_finetuned_model.py` shows how this model can then be used in the interactive annotation tools.
+
+Since release v0.4.0 we also support training an additional decoder for automatic instance segmentation. This yields better results than the automatic mask generation of segment anything and is significantly faster.
+You can enable training of the decoder by setting `train_instance_segmentation = True` [here](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/finetuning/finetune_hela.py#L165).
+The script `instance_segmentation_with_finetuned_model.py` shows how to use it for automatic instance segmentation.
+We will fully integrate this functionality with the annotation tool in the next release.
 
 More advanced examples, including quantitative and qualitative evaluation, of finetuned models can be found in [finetuning](https://github.com/computational-cell-analytics/micro-sam/tree/master/finetuning), which contains the code for training and evaluating our microscopy models.

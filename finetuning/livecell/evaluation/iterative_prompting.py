@@ -6,7 +6,7 @@ import pandas as pd
 
 from micro_sam.evaluation import inference
 from micro_sam.evaluation.evaluation import run_evaluation
-from util import get_paths, get_experiment_folder, get_model, get_pred_and_gt_paths
+from util import get_paths, get_model, get_pred_and_gt_paths
 
 
 def run_interactive_prompting(exp_folder, predictor, start_with_box_prompt):
@@ -26,15 +26,8 @@ def run_interactive_prompting(exp_folder, predictor, start_with_box_prompt):
     return prediction_root
 
 
-def evaluate_interactive_prompting(prediction_root, start_with_box_prompt, name):
+def evaluate_interactive_prompting(prediction_root, start_with_box_prompt, exp_folder):
     assert os.path.exists(prediction_root), prediction_root
-
-    csv_save_dir = f"./iterative_prompting_results/{name}"
-    os.makedirs(csv_save_dir, exist_ok=True)
-    csv_path = os.path.join(csv_save_dir, "start_with_box.csv" if start_with_box_prompt else "start_with_point.csv")
-    if os.path.exists(csv_path):
-        print("The evaluated results for the expected setting already exist here:", csv_path)
-        return
 
     prediction_folders = sorted(glob(os.path.join(prediction_root, "iteration*")))
     list_of_results = []
@@ -46,10 +39,9 @@ def evaluate_interactive_prompting(prediction_root, start_with_box_prompt, name)
         print(res)
 
     df = pd.concat(list_of_results, ignore_index=True)
-    df.to_csv(csv_path)
 
-    # Also save the results in the experiment folder.
-    result_folder = os.path.join(get_experiment_folder(name), "results")
+    # Save the results in the experiment folder.
+    result_folder = os.path.join(exp_folder, "results")
     os.makedirs(result_folder, exist_ok=True)
     csv_path = os.path.join(
         result_folder,
@@ -60,25 +52,21 @@ def evaluate_interactive_prompting(prediction_root, start_with_box_prompt, name)
 
 def main():
     parser = argparse.ArgumentParser()
-
-    parser.add_argument("-n", "--name", required=True)
     parser.add_argument(
-        "-m", "--model", type=str,  # options: "vit_h", "vit_h_generalist", "vit_h_specialist"
-        help="Provide the model type to initialize the predictor"
+        "-m", "--model", type=str, required=True, help="Provide the model type to initialize the predictor"
     )
-    parser.add_argument("-c", "--checkpoint", type=str, default=None)
+    parser.add_argument("-c", "--checkpoint", type=str, required=True)
+    parser.add_argument("-e", "--experiment_folder", type=str, required=True)
     parser.add_argument("--box", action="store_true", help="If passed, starts with first prompt as box")
     args = parser.parse_args()
 
-    name = args.name
     start_with_box_prompt = args.box  # overwrite to start first iters' prompt with box instead of single point
 
     # get the predictor to perform inference
-    predictor = get_model(name, model_type=args.model, ckpt=args.checkpoint)
+    predictor = get_model(model_type=args.model, ckpt=args.checkpoint)
 
-    exp_folder = get_experiment_folder(name)
-    prediction_root = run_interactive_prompting(exp_folder, predictor, start_with_box_prompt)
-    evaluate_interactive_prompting(prediction_root, start_with_box_prompt, name)
+    prediction_root = run_interactive_prompting(args.experiment_folder, predictor, start_with_box_prompt)
+    evaluate_interactive_prompting(prediction_root, start_with_box_prompt, args.experiment_folder)
 
 
 if __name__ == "__main__":

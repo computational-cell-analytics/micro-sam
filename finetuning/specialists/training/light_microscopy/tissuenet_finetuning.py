@@ -131,20 +131,20 @@ def finetune_tissuenet(args):
 def main():
     parser = argparse.ArgumentParser(description="Finetune Segment Anything for the TissueNet dataset.")
     parser.add_argument(
-        "--input_path", "-i", default="/scratch/usr/nimanwai/data/tissuenet/",
+        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/tissuenet/",
         help="The filepath to the TissueNet data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
-        help="The model type to use for fine-tuning. Either vit_h, vit_b or vit_l."
+        help="The model type to use for fine-tuning. Either vit_b, vit_l or vit_h."
     )
     parser.add_argument(
         "--save_root", "-s",
         help="Where to save the checkpoint and logs. By default they will be saved where this script is run."
     )
     parser.add_argument(
-        "--iterations", type=int, default=int(1e5),
-        help="For how many iterations should the model be trained? By default 100k."
+        "--iterations", type=int, default=int(25e4),
+        help="For how many iterations should the model be trained? By default 250k."
     )
     parser.add_argument(
         "--export_path", "-e",

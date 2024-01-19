@@ -6,6 +6,7 @@
 #SBATCH -G A100:1
 #SBATCH -A nim00007
 
-source ~/.bashrc
-micromamba activate main
-python evaluate_instance_segmentation.py $@
+source activate sam
+python evaluate_instance_segmentation.py -c /scratch/usr/nimanwai/micro-sam/checkpoints/vit_h/livecell_sam/best.pt \
+                                         -m vit_h \
+                                         -e /scratch/projects/nim00007/sam/experiments/new_models/specialists/lm/livecell/vit_h/

@@ -2,6 +2,8 @@ name: micro-sam
 display_name: SegmentAnything for Microscopy
 contributions:
   commands:
+
+    # Commands for sample data.
     - id: micro-sam.sample_data_image_series
       python_name: micro_sam.sample_data:sample_data_image_series
       title: Load image series sample data from micro-sam plugin
@@ -23,12 +25,21 @@ contributions:
     - id: micro-sam.sample_data_segmentation
       python_name: micro_sam.sample_data:sample_data_segmentation
       title: Load segmentation sample data from micro-sam plugin
-    - id: micro-sam.embedding_widget
-      python_name: micro_sam.sam_annotator._widgets:embedding_widget
-      title: Embedding widget
-    - id: micro-sam.cachedir_widget
-      python_name: micro_sam.sam_annotator._widgets:cachedir_widget
+
+    # Commands for plugins.
+    - id: micro-sam.annotator_2d
+      python_name: micro_sam.sam_annotator.annotator_2d:Annotator2d
+      title: Start the 2d annotator
+    - id: micro-sam.annotator_3d
+      python_name: micro_sam.sam_annotator.annotator_3d:Annotator3d
+      title: Start the 3d annotator
+    - id: micro-sam.annotator_tracking
+      python_name: micro_sam.sam_annotator.annotator_tracking:AnnotatorTracking
+      title: Start the tracking annotator
+    - id: micro-sam.settings
+      python_name: micro_sam.sam_annotator._widgets:settings_widget
       title: Set cache directory
+
   sample_data:
     - command: micro-sam.sample_data_image_series
       display_name: Image series example data
@@ -51,8 +62,13 @@ contributions:
     - command: micro-sam.sample_data_segmentation
       display_name: Segmentation sample dataset
       key: micro-sam-segmentation
+
   widgets:
-    - command: micro-sam.embedding_widget
-      display_name: Embedding widget
-    - command: micro-sam.cachedir_widget
-      display_name: Set cache directory
+    - command: micro-sam.annotator_2d
+      display_name: Annotator 2d
+    - command: micro-sam.annotator_3d
+      display_name: Annotator 3d
+    - command: micro-sam.annotator_tracking
+      display_name: Annotator Tracking
+    - command: micro-sam.settings
+      display_name: Settings
