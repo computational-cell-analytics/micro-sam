@@ -13,7 +13,7 @@ def write_batch_script(
     batch_script = f"""#!/bin/bash
 #SBATCH -c 8
 #SBATCH --mem 128G
-#SBATCH -t 12:00:00
+#SBATCH -t 2-00:00:00
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
 #SBATCH -A gzz0001

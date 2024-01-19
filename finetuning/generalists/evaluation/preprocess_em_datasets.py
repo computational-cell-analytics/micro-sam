@@ -94,17 +94,45 @@ def for_nuc_mm(save_dir):
                         i += 1
 
 
+def for_platy_cilia(save_dir):
+    vol_paths = sorted(glob(os.path.join(ROOT, "platynereis", "cilia", "train_*")))
+
+    os.makedirs(os.path.join(save_dir, "raw"), exist_ok=True)
+    os.makedirs(os.path.join(save_dir, "labels"), exist_ok=True)
+
+    for vol_path in vol_paths:
+        vol_id = os.path.split(vol_path)[-1].split(".")[0][-1]
+        split = "val" if vol_id == "3" else "test"  # volumes 01 and 02 are for test, 03 for val
+
+        with h5py.File(vol_path, "r") as _file:
+            raw = _file["volumes"]["raw"][:]
+            labels = _file["volumes"]["labels"]["segmentation"][:]
+
+            for i, (_raw, _label) in tqdm(enumerate(zip(raw, labels)), total=raw.shape[0]):
+                # we only save labels with foreground
+                if has_foreground(_label):
+                    instances = label(_label)
+                    raw_path = os.path.join(save_dir, "raw", f"platy_cilia_{split}_{i+1:05}.tif")
+                    label_path = os.path.join(save_dir, "labels", f"platy_cilia_{split}_{i+1:05}.tif")
+                    imageio.imwrite(raw_path, _raw, compression="zlib")
+                    imageio.imwrite(label_path, instances, compression="zlib")
+
+
+def for_uro_cell(save_dir):
+    raise NotImplementedError
+
+
 def main():
     # let's ensure all the data is downloaded
     download_em_dataset(ROOT)
 
-    dataset_name = "nuc_mm"
+    dataset_name = "platynereis"
 
     # paths to save the raw and label slices
     save_dir = os.path.join(ROOT, dataset_name, "slices")
 
     # now let's save the slices as tif
-    for_nuc_mm(save_dir)
+    for_platy_cilia(save_dir)
 
 
 if __name__ == "__main__":

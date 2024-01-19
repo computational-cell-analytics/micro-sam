@@ -107,6 +107,17 @@ def download_em_dataset(path):
         os.path.join(path, "nuc_mm"), sample="zebrafish", split="train", patch_shape=(1, 64, 64), download=True
     )
 
+    # platy-cilia
+    datasets.get_platynereis_cilia_dataset(os.path.join(path, "platynereis"), patch_shape=(1, 512, 512), download=True)
+
+    # TODO:
+    # in-domain
+    # mitoem (center crop (768, 768), valid sample) (all slices)
+    # (platy-nuclei)
+
+    # mitolab datasets (7 in total)
+    # (uro-cell, sponge-em)
+
 #
 # PARSER FOR ALL THE REQUIRED ARGUMENTS
 #

@@ -15,7 +15,7 @@ def write_batch_script(
     batch_script = f"""#!/bin/bash
 #SBATCH -c 8
 #SBATCH --mem 128G
-#SBATCH -t 12:00:00
+#SBATCH -t 2-00:00:00
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
 #SBATCH -A gzz0001
@@ -84,7 +84,7 @@ def submit_slurm():
     dataset_name = "nuc_mm"  # name of the dataset in lower-case
     species = "mouse"  # relevant for multiple species-related datasets
     model_type = "vit_b"
-    experiment_set = "vanilla"  # infer using generalists or vanilla models
+    experiment_set = "generalists"  # infer using generalists or vanilla models
     make_delay = "1m"  # wait for precomputing the embeddings and later run inference scripts
 
     # let's set the experiment type - either using the generalists or just using vanilla model
