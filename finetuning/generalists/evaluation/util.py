@@ -141,10 +141,6 @@ def download_em_dataset(path):
     )
 
     # TODO:
-    # in-domain
-    # mitoem (center crop (768, 768), valid sample) (all slices)
-    # (platy-nuclei)
-
     # mitolab datasets (7 in total)
     # (uro-cell, sponge-em)
 
