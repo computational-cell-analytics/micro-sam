@@ -21,6 +21,10 @@ def has_foreground(label):
 
 
 def for_lucchi(save_dir):
+    """
+    for val: we take the train volume
+    for test: we take the test volume
+    """
     lucchi_paths = glob(os.path.join(ROOT, "lucchi", "*.h5"))
 
     os.makedirs(os.path.join(save_dir, "raw"), exist_ok=True)
@@ -45,6 +49,10 @@ def for_lucchi(save_dir):
 
 
 def for_snemi(save_dir):
+    """
+    for validation: we make a 20% split, and take the first 20% slices from the train volume
+    for testing: we take the rest 80% slices from the train volume
+    """
     snemi_vol_path = os.path.join(ROOT, "snemi", "snemi_train.h5")
 
     # creating the sub-directories
@@ -69,6 +77,11 @@ def for_snemi(save_dir):
 
 
 def for_nuc_mm(save_dir):
+    """
+    (for both mouse and zebrafish)
+    for validation: we use the `val` volumes for validation
+    for test: we use the `train` volumes for testing
+    """
     species = ["mouse", "zebrafish"]
     for one_spec in species:
         nuc_mm_vol_paths = glob(os.path.join(ROOT, "nuc_mm", one_spec, "*", "*"))
@@ -96,6 +109,11 @@ def for_nuc_mm(save_dir):
 
 
 def for_platy_cilia(save_dir):
+    """
+    the training volumes have labels only
+    for validation: we take volume 03
+    for test: we take volume 01 and 02
+    """
     vol_paths = sorted(glob(os.path.join(ROOT, "platynereis", "cilia", "train_*")))
 
     os.makedirs(os.path.join(save_dir, "raw"), exist_ok=True)
@@ -132,6 +150,11 @@ def make_center_crop(image, desired_shape):
 
 
 def for_mitoem(save_dir, desired_shape=(768, 768)):
+    """
+    (for both rat and human)
+    for validation: we take the first 10 slices (while training, we only use the first 5 slices)
+    for test: we take the next 90 slices in the `val` volume
+    """
     val_vol_paths = sorted(glob(os.path.join(ROOT, "mitoem", "*_val.n5")))
 
     os.makedirs(os.path.join(save_dir, "raw"), exist_ok=True)
