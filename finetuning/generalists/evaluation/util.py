@@ -142,9 +142,18 @@ def download_em_dataset(path):
         os.path.join(path, "mitoem"), splits="val", patch_shape=(1, 512, 512), download=True
     )
 
-    # TODO:
-    # mitolab datasets (7 in total)
-    # (uro-cell, sponge-em)
+    # mitolab
+    print("MitoLab benchmark datasets need to downloaded separately. See `datasets.cem.get_benchmark_datasets`")
+
+    # uro-cell
+    datasets.get_uro_cell_dataset(
+        os.path.join(path, "uro_cell"), target="mito", patch_shape=(1, 512, 512), download=True
+    )
+
+    # sponge-em
+    datasets.get_sponge_em_dataset(
+        os.path.join(path, "sponge_em"), mode="instances", patch_shape=(1, 512, 512), download=True
+    )
 
 #
 # PARSER FOR ALL THE REQUIRED ARGUMENTS

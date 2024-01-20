@@ -34,43 +34,38 @@ def make_center_crop(image, desired_shape):
 
 
 def make_custom_splits(val_samples, save_dir):
-    # make an external splitting logic
+    def move_samples(split, all_raw_files, all_label_files):
+        for raw_path, label_path in (zip(all_raw_files, all_label_files)):
+            # let's move the raw slice
+            slice_id = os.path.split(raw_path)[-1]
+            dst = os.path.join(save_dir, split, "raw", slice_id)
+            shutil.move(raw_path, dst)
+
+            # let's move the label slice
+            slice_id = os.path.split(label_path)[-1]
+            dst = os.path.join(save_dir, split, "labels", slice_id)
+            shutil.move(label_path, dst)
+
+    # make a custom splitting logic
     # 1. move to val dir
     os.makedirs(os.path.join(save_dir, "val", "raw"), exist_ok=True)
     os.makedirs(os.path.join(save_dir, "val", "labels"), exist_ok=True)
 
-    for raw_path, label_path in (
-        zip(
-            sorted(glob(os.path.join(save_dir, "raw", "*")))[:val_samples],
-            sorted(glob(os.path.join(save_dir, "labels", "*")))[:val_samples]
-        )
-    ):
-        # let's move the raw slice
-        slice_id = os.path.split(raw_path)[-1]
-        dst = os.path.join(save_dir, "val", "raw", slice_id)
-        shutil.move(raw_path, dst)
-
-        # let's move the label slice
-        slice_id = os.path.split(label_path)[-1]
-        dst = os.path.join(save_dir, "val", "labels", slice_id)
-        shutil.move(label_path, dst)
+    move_samples(
+        split="val",
+        all_raw_files=sorted(glob(os.path.join(save_dir, "raw", "*")))[:val_samples],
+        all_label_files=sorted(glob(os.path.join(save_dir, "labels", "*")))[:val_samples]
+    )
 
     # 2. move to test dir
     os.makedirs(os.path.join(save_dir, "test", "raw"), exist_ok=True)
     os.makedirs(os.path.join(save_dir, "test", "labels"), exist_ok=True)
 
-    for raw_path, label_path in (
-        zip(sorted(glob(os.path.join(save_dir, "raw", "*"))), sorted(glob(os.path.join(save_dir, "labels", "*"))))
-    ):
-        # let's move the raw slice
-        slice_id = os.path.split(raw_path)[-1]
-        dst = os.path.join(save_dir, "test", "raw", slice_id)
-        shutil.move(raw_path, dst)
-
-        # let's move the label slice
-        slice_id = os.path.split(label_path)[-1]
-        dst = os.path.join(save_dir, "test", "labels", slice_id)
-        shutil.move(label_path, dst)
+    move_samples(
+        split="test",
+        all_raw_files=sorted(glob(os.path.join(save_dir, "raw", "*"))),
+        all_label_files=sorted(glob(os.path.join(save_dir, "labels", "*")))
+    )
 
     # let's remove the left-overs
     shutil.rmtree(os.path.join(save_dir, "raw"))
@@ -85,7 +80,7 @@ def from_h5_to_tif(
         raw = f[raw_key][:]
         labels = f[labels_key][:]
 
-        for i, (_raw, _label) in tqdm(enumerate(zip(raw, labels)), total=raw.shape[0]):
+        for i, (_raw, _label) in tqdm(enumerate(zip(raw, labels)), total=raw.shape[0], desc=h5_vol_path):
             if crop_shape is not None:
                 _raw = make_center_crop(_raw, crop_shape)
                 _label = make_center_crop(_label, crop_shape)
@@ -256,28 +251,133 @@ def for_mitoem(save_dir, desired_shape=(768, 768)):
 
 
 def for_mitolab(save_dir):
-    raise NotImplementedError
+    """
+    NOTE: we do not reduce the resolution for the benchmark samples to make a fair comparison with empanada
+    for all 7 benckmarks (6 vEM mito datasets, 1 TEM dataset)
+    *we get 10% of all samples into val
+    - c_elegans (256, 256, 256)
+    - fly_brain (256, 255, 255)
+    - glycotic_muscle (302, 383, 765)
+    - hela_cell (256, 256, 256)
+    - lucchi_pp (165, 768, 1024)
+    - salivary gland (1260, 1081, 1200) (TODO: take a closer look later)
+    - tem:
+    """
+    all_dataset_ids = []
+
+    # first, we look at the 6 vEM mito datasets
+    _roi_vol_paths = sorted(glob(os.path.join(ROOT, "mitolab", "10982", "data", "mito_benchmarks", "*")))
+    assert len(_roi_vol_paths) == 6, "The mito datasets have not been downloaded correctly. Please redownload them."
+
+    for vol_path in _roi_vol_paths:
+        # let's take a closer look at per dataset
+        dataset_id = os.path.split(vol_path)[-1]
+        all_dataset_ids.append(dataset_id)
+
+        os.makedirs(os.path.join(save_dir, dataset_id, "raw"), exist_ok=True)
+        os.makedirs(os.path.join(save_dir, dataset_id, "labels"), exist_ok=True)
+
+        em_path = glob(os.path.join(vol_path, "*_em.tif"))[0]
+        mito_path = glob(os.path.join(vol_path, "*_mito.tif"))[0]
+
+        vem = imageio.imread(em_path)
+        vmito = imageio.imread(mito_path)
+
+        for i, (slice_em, slice_mito) in tqdm(
+            enumerate(zip(vem, vmito)), total=vem.shape[0], desc=f"Processing {dataset_id}"
+        ):
+            if has_foreground(slice_mito):
+                instances = label(slice_mito)
+
+                raw_path = os.path.join(save_dir, dataset_id, "raw", f"{dataset_id}_{i+1:05}.tif")
+                labels_path = os.path.join(save_dir, dataset_id, "labels", f"{dataset_id}_{i+1:05}.tif")
+
+                imageio.imwrite(raw_path, slice_em, compression="zlib")
+                imageio.imwrite(labels_path, instances, compression="zlib")
+
+    # now, let's work on the tem dataset
+    image_paths = sorted(glob(os.path.join(ROOT, "mitolab", "10982", "data", "tem_benchmark", "images", "*")))
+    mask_paths = sorted(glob(os.path.join(ROOT, "mitolab", "10982", "data", "tem_benchmark", "masks", "*")))
+
+    os.makedirs(os.path.join(save_dir, "tem", "raw"), exist_ok=True)
+    os.makedirs(os.path.join(save_dir, "tem", "labels"), exist_ok=True)
+
+    # let's move the tem data to slices
+    for image_path, mask_path in tqdm(zip(image_paths, mask_paths), desc="Preprocessimg tem", total=len(image_paths)):
+        sample_id = os.path.split(image_path)[-1]
+        image_dst = os.path.join(save_dir, "tem", "raw", sample_id)
+        mask_dst = os.path.join(save_dir, "tem", "labels", sample_id)
+
+        shutil.copy(image_path, image_dst)
+        shutil.copy(mask_path, mask_dst)
+
+    all_dataset_ids.append("tem")
+
+    for dataset_id in all_dataset_ids:
+        make_custom_splits(val_samples=10, save_dir=os.path.join(save_dir, dataset_id))
 
 
 def for_uro_cell(save_dir):
-    raise NotImplementedError
+    """
+    """
+    os.makedirs(os.path.join(save_dir, "raw"), exist_ok=True)
+    os.makedirs(os.path.join(save_dir, "labels"), exist_ok=True)
+
+    # only the 4 volumes below have mito labels
+    all_vol_with_labels = ["fib1-0-0-0.h5", "fib1-1-0-3.h5", "fib1-3-2-1.h5", "fib1-3-3-0.h5", "fib1-4-3-0.h5"]
+
+    for one_vol_with_labels in all_vol_with_labels:
+        vol_path = os.path.join(ROOT, "uro_cell", one_vol_with_labels)
+        vol_id = Path(vol_path).stem
+
+        from_h5_to_tif(
+            h5_vol_path=vol_path,
+            raw_key="raw",
+            raw_dir=os.path.join(save_dir, "raw"),
+            labels_key="labels/mito",
+            labels_dir=os.path.join(save_dir, "labels"),
+            slice_prefix_name=f"uro_cell_{vol_id}"
+        )
+
+    make_custom_splits(val_samples=100, save_dir=save_dir)
 
 
 def for_sponge_em(save_dir):
-    raise NotImplementedError
+    """
+    using all train volumes
+    we take only 10 samples for validation, rest for test
+    """
+    vol_paths = sorted(glob(os.path.join(ROOT, "sponge_em", "*.h5")))
+
+    os.makedirs(os.path.join(save_dir, "raw"), exist_ok=True)
+    os.makedirs(os.path.join(save_dir, "labels"), exist_ok=True)
+
+    for vol_path in vol_paths:
+        vol_id = Path(vol_path).stem
+
+        from_h5_to_tif(
+            h5_vol_path=vol_path,
+            raw_key="volumes/raw",
+            raw_dir=os.path.join(save_dir, "raw"),
+            labels_key="volumes/labels/instances",
+            labels_dir=os.path.join(save_dir, "labels"),
+            slice_prefix_name=f"sponge_em_{vol_id}"
+        )
+
+    make_custom_splits(val_samples=10, save_dir=save_dir)
 
 
 def main():
     # let's ensure all the data is downloaded
     download_em_dataset(ROOT)
 
-    dataset_name = "nuc_mm"
+    dataset_name = "sponge_em"
 
     # paths to save the raw and label slices
     save_dir = os.path.join(ROOT, dataset_name, "slices")
 
     # now let's save the slices as tif
-    for_nuc_mm(save_dir)
+    for_sponge_em(save_dir)
 
 
 if __name__ == "__main__":
