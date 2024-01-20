@@ -7,8 +7,6 @@ from micro_sam.evaluation.livecell import _get_livecell_paths
 
 # FIXME make sure this uses the corrected ground-truth!!!
 DATA_ROOT = "/scratch/projects/nim00007/data/LiveCELL"
-EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/livecell"
-PROMPT_FOLDER = "/scratch/projects/nim00007/sam/experiments/prompts/livecell"
 
 VANILLA_MODELS = {
     "vit_b": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/sam_vit_b_01ec64.pth",
@@ -26,10 +24,6 @@ def get_model(model_type=None, ckpt=None):
         ckpt = VANILLA_MODELS[model_type]
     predictor = get_predictor(ckpt, model_type)
     return predictor
-
-
-def get_experiment_folder(name):
-    return os.path.join(EXPERIMENT_ROOT, name)
 
 
 def get_pred_and_gt_paths(prediction_folder):
