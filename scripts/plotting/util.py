@@ -37,18 +37,17 @@ def standard_plot(
 """
 
 
-def _add_line(ax, y_val, name):
-    bounds = ax.get_xbound()
-    ax.hlines(y_val, xmin=bounds[0], xmax=bounds[1], label=name)
-
-
 # TODO create ax if not given
 def plot_iterative_prompting(
-    data_points, data_boxes, data_instance_segmentation=None, fontsize=16, score_name="msa", ax=None, show=True
+    data_points, data_boxes, extra_data=None, fontsize=16, score_name="msa", ax=None, show=True
 ):
     """Plot evaluation for iterative prompting results.
     """
     plt.rcParams.update({"font.size": fontsize})
+
+    palette_name = None
+    sns.set_palette(palette_name)
+    palette = sns.color_palette(palette_name)
 
     hue_column = "Start Prompt"
     data_points[hue_column] = "point"
@@ -61,8 +60,15 @@ def plot_iterative_prompting(
     data.sort_values(hue_column)
 
     lp = sns.barplot(data, x="iteration", y=score_name, hue=hue_column, ax=ax)
-    if data_instance_segmentation is not None:
-        _add_line(ax, data_instance_segmentation[score_name], name="instance-seg")
+    if extra_data is not None:
+        bounds = ax.get_xbound()
+        for i, (name, data) in enumerate(extra_data.items(), 2):
+            color = palette[i]
+            ax.hlines(data[score_name], xmin=bounds[0], xmax=bounds[1], label=name, colors=color)
+
+    # Make sure everything is in the legend.
+    handles, labels = ax.get_legend_handles_labels()
+    ax.legend(handles, labels)
 
     if show:
         plt.show()
@@ -73,6 +79,7 @@ def plot_iterative_prompting(
 def plot_grid_2d(
     data_points, data_boxes, grid_column1, grid_column2, data_instance_segmentation=None, fontsize=16, score_name="msa",
 ):
+
     grid_columns = [grid_column1, grid_column2]
     grid_values = data_points[grid_columns].groupby(grid_columns).size().reset_index()[grid_columns]
 
