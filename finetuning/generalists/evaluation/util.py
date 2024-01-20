@@ -72,12 +72,12 @@ DATASETS = {
     },
     "mitoem": {
         "val": [
-            os.path.join(ROOT, "mitoem", "slices", "raw", "mitoem_*_val_*"),
-            os.path.join(ROOT, "mitoem", "slices", "labels", "mitoem_*_val_*")
+            os.path.join(ROOT, "mitoem", "slices", "*", "val", "raw", "*"),
+            os.path.join(ROOT, "mitoem", "slices", "*", "val", "labels", "*")
         ],
         "test": [
-            os.path.join(ROOT, "mitoem", "slices", "raw", "mitoem_*_test_*"),
-            os.path.join(ROOT, "mitoem", "slices", "labels", "mitoem_*_test_*")
+            os.path.join(ROOT, "mitoem", "slices", "*", "test", "raw", "*"),
+            os.path.join(ROOT, "mitoem", "slices", "*", "test", "labels", "*")
         ]
     }
 }

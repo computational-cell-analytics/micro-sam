@@ -81,11 +81,11 @@ def submit_slurm():
     tmp_folder = "./gpu_jobs"
 
     # parameters to run the inference scripts
-    dataset_name = "nuc_mm"  # name of the dataset in lower-case
-    species = "mouse"  # relevant for multiple species-related datasets
+    dataset_name = "mitoem"  # name of the dataset in lower-case
+    species = None  # relevant for multiple species-related datasets
     model_type = "vit_b"
-    experiment_set = "generalists"  # infer using generalists or vanilla models
-    make_delay = "1m"  # wait for precomputing the embeddings and later run inference scripts
+    experiment_set = "vanilla"  # infer using generalists or vanilla models
+    make_delay = "10s"  # wait for precomputing the embeddings and later run inference scripts
 
     # let's set the experiment type - either using the generalists or just using vanilla model
     if experiment_set == "generalists":

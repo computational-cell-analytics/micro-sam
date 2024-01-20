@@ -230,24 +230,24 @@ def for_mitoem(save_dir, desired_shape=(768, 768)):
     """
     val_vol_paths = sorted(glob(os.path.join(ROOT, "mitoem", "*_val.n5")))
 
-    os.makedirs(os.path.join(save_dir, "raw"), exist_ok=True)
-    os.makedirs(os.path.join(save_dir, "labels"), exist_ok=True)
-
     for vol_path in val_vol_paths:
         species = os.path.split(vol_path)[-1].split("_")[0]
+
+        os.makedirs(os.path.join(save_dir, species, "raw"), exist_ok=True)
+        os.makedirs(os.path.join(save_dir, species, "labels"), exist_ok=True)
 
         from_h5_to_tif(
             h5_vol_path=vol_path,
             raw_key="raw",
-            raw_dir=os.path.join(save_dir, "raw"),
+            raw_dir=os.path.join(save_dir, species, "raw"),
             labels_key="labels",
-            labels_dir=os.path.join(save_dir, "labels"),
+            labels_dir=os.path.join(save_dir, species, "labels"),
             slice_prefix_name=f"mitoem_{species}",
             interface=z5py,
             crop_shape=desired_shape
         )
 
-    make_custom_splits(val_samples=10, save_dir=save_dir)
+        make_custom_splits(val_samples=5, save_dir=os.path.join(save_dir, species))
 
 
 def for_mitolab(save_dir):
@@ -371,13 +371,13 @@ def main():
     # let's ensure all the data is downloaded
     download_em_dataset(ROOT)
 
-    dataset_name = "sponge_em"
+    dataset_name = "mitoem"
 
     # paths to save the raw and label slices
     save_dir = os.path.join(ROOT, dataset_name, "slices")
 
     # now let's save the slices as tif
-    for_sponge_em(save_dir)
+    for_mitoem(save_dir)
 
 
 if __name__ == "__main__":
