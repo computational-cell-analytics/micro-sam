@@ -4,7 +4,7 @@ import micro_sam.util as util
 from micro_sam.sam_annotator import annotator_2d
 
 
-def run_annotator_with_custom_model():
+def run_annotator_with_finetuned_model():
     """Run the 2d anntator with a custom (finetuned) model.
 
     Here, we use the model that is produced by `finetuned_hela.py` and apply it
@@ -30,4 +30,4 @@ def run_annotator_with_custom_model():
 
 
 if __name__ == "__main__":
-    run_annotator_with_custom_model()
+    run_annotator_with_finetuned_model()

@@ -20,22 +20,24 @@ def track_ctc_data(use_finetuned_model):
         timeseries = f["*.tif"]
 
     if use_finetuned_model:
-        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-ctc-vit_h_lm.zarr")
-        model_type = "vit_h_lm"
+        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-ctc-vit_b_lm.zarr")
+        model_type = "vit_b_lm"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-ctc.zarr")
         model_type = "vit_h"
 
     # start the annotator with cached embeddings
-    annotator_tracking(timeseries, embedding_path=embedding_path, show_embeddings=False, model_type=model_type)
+    annotator_tracking(timeseries, embedding_path=embedding_path, model_type=model_type)
 
 
 def main():
-    # whether to use the fine-tuned SAM model
-    # this feature is still experimental!
-    use_finetuned_model = False
+    # Whether to use the fine-tuned SAM model.
+    use_finetuned_model = True
     track_ctc_data(use_finetuned_model)
 
 
+# The corresponding CLI call for track_ctc_data:
+# (replace with cache directory on your machine)
+# $ micro_sam.annotator_tracking -i /home/pape/.cache/micro_sam/sample_data/DIC-C2DH-HeLa.zip.unzip/DIC-C2DH-HeLa/01 -k *.tif -e /home/pape/.cache/micro_sam/embeddings/embeddings-ctc.zarr
 if __name__ == "__main__":
     main()

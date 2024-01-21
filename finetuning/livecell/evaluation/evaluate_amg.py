@@ -3,13 +3,10 @@ import os
 
 from micro_sam.evaluation.evaluation import run_evaluation
 from micro_sam.evaluation.livecell import run_livecell_amg
-from util import DATA_ROOT, get_checkpoint, get_experiment_folder, get_pred_and_gt_paths
+from util import DATA_ROOT, get_pred_and_gt_paths
 
 
-def run_amg(name, model_type, checkpoint):
-    if checkpoint is None:
-        checkpoint, model_type = get_checkpoint(name)
-    experiment_folder = get_experiment_folder(name)
+def run_amg(model_type, checkpoint, experiment_folder):
     input_folder = DATA_ROOT
     prediction_folder = run_livecell_amg(
         checkpoint,
@@ -21,28 +18,26 @@ def run_amg(name, model_type, checkpoint):
     return prediction_folder
 
 
-def eval_amg(name, prediction_folder):
+def eval_amg(prediction_folder, experiment_folder):
     print("Evaluating", prediction_folder)
     pred_paths, gt_paths = get_pred_and_gt_paths(prediction_folder)
-    save_path = os.path.join(get_experiment_folder(name), "results", "amg.csv")
+    save_path = os.path.join(experiment_folder, "results", "amg.csv")
     res = run_evaluation(gt_paths, pred_paths, save_path=save_path)
     print(res)
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-n", "--name", required=True)
     parser.add_argument(
-        "-m", "--model", type=str,  # options: "vit_h", "vit_h_generalist", "vit_h_specialist"
+        "-m", "--model", type=str, required=True,
         help="Provide the model type to initialize the predictor"
     )
-    parser.add_argument("-c", "--checkpoint", type=str, default=None)
+    parser.add_argument("-c", "--checkpoint", type=str, required=True)
+    parser.add_argument("-e", "--experiment_folder", type=str, required=True)
     args = parser.parse_args()
 
-    name = args.name
-
-    prediction_folder = run_amg(name, args.model, args.checkpoint)
-    eval_amg(name, prediction_folder)
+    prediction_folder = run_amg(args.model, args.checkpoint, args.experiment_folder)
+    eval_amg(prediction_folder, args.experiment_folder)
 
 
 if __name__ == "__main__":

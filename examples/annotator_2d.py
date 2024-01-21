@@ -19,13 +19,13 @@ def livecell_annotator(use_finetuned_model):
     image = imageio.imread(example_data)
 
     if use_finetuned_model:
-        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-livecell-vit_h_lm.zarr")
-        model_type = "vit_h_lm"
+        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-livecell-vit_b_lm.zarr")
+        model_type = "vit_b_lm"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-livecell.zarr")
         model_type = "vit_h"
 
-    annotator_2d(image, embedding_path, show_embeddings=False, model_type=model_type)
+    annotator_2d(image, embedding_path, model_type=model_type)
 
 
 def hela_2d_annotator(use_finetuned_model):
@@ -35,13 +35,13 @@ def hela_2d_annotator(use_finetuned_model):
     image = imageio.imread(example_data)
 
     if use_finetuned_model:
-        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-hela2d-vit_h_lm.zarr")
-        model_type = "vit_h_lm"
+        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-hela2d-vit_b_lm.zarr")
+        model_type = "vit_b_lm"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-hela2d.zarr")
         model_type = "vit_h"
 
-    annotator_2d(image, embedding_path, show_embeddings=False, model_type=model_type, precompute_amg_state=True)
+    annotator_2d(image, embedding_path, model_type=model_type)
 
 
 def wholeslide_annotator(use_finetuned_model):
@@ -54,8 +54,8 @@ def wholeslide_annotator(use_finetuned_model):
     image = imageio.imread(example_data)
 
     if use_finetuned_model:
-        embedding_path = os.path.join(EMBEDDING_CACHE, "whole-slide-embeddings-vit_h_lm.zarr")
-        model_type = "vit_h_lm"
+        embedding_path = os.path.join(EMBEDDING_CACHE, "whole-slide-embeddings-vit_b_lm.zarr")
+        model_type = "vit_b_lm"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "whole-slide-embeddings.zarr")
         model_type = "vit_h"
@@ -64,19 +64,21 @@ def wholeslide_annotator(use_finetuned_model):
 
 
 def main():
-    # whether to use the fine-tuned SAM model
-    # this feature is still experimental!
-    use_finetuned_model = False
+    # Whether to use the fine-tuned SAM model for light microscopy data.
+    use_finetuned_model = True
 
     # 2d annotator for livecell data
-    # livecell_annotator(use_finetuned_model)
+    livecell_annotator(use_finetuned_model)
 
     # 2d annotator for cell tracking challenge hela data
-    hela_2d_annotator(use_finetuned_model)
+    # hela_2d_annotator(use_finetuned_model)
 
     # 2d annotator for a whole slide image
     # wholeslide_annotator(use_finetuned_model)
 
 
+# The corresponding CLI call for hela_2d_annotator:
+# (replace with cache directory on your machine)
+# $ micro_sam.annotator_2d -i /home/pape/.cache/micro_sam/sample_data/hela-2d-image.png -e /home/pape/.cache/micro_sam/embeddings/embeddings-hela2d.zarr
 if __name__ == "__main__":
     main()
