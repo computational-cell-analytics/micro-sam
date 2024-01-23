@@ -230,7 +230,11 @@ def merge_instance_segmentation_3d(
 
     Args:
         slice_segmentation: The stacked segmentation across the slices.
-        beta:
+            We assume that the segmentation is labeled consecutive across z.
+        beta: The bias term for the multicut. Higher values lead to a larger
+            degree of over-segmentation and vice versa.
+        with_background: Whether this is a segmentation problem with background.
+            In that case all edges connecting to the background are set to be repulsive.
     """
 
     # Extract the overlap between slices.
