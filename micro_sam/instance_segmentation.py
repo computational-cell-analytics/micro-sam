@@ -946,8 +946,11 @@ class InstanceSegmentationWithDecoder:
         if not self.is_initialized:
             raise RuntimeError("InstanceSegmentationWithDecoder has not been initialized. Call initialize first.")
 
+        # TODO: expose as parameter?
+        # There are checkerboard artifacts in the prediction
+        foreground = vigra.filters.gaussianSmoothing(self._foreground, 1.0)
         segmentation = watershed_from_center_and_boundary_distances(
-            self._center_distances, self._boundary_distances, self._foreground,
+            self._center_distances, self._boundary_distances, foreground,
             center_distance_threshold=center_distance_threshold,
             boundary_distance_threshold=boundary_distance_threshold,
             foreground_threshold=foreground_threshold,
