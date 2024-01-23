@@ -11,7 +11,7 @@ def _load_sam_results(root):
     box = pd.read_csv(os.path.join(root, "iterative_prompts_start_box.csv"))
     box = box.rename(columns={"Unnamed: 0": "iteration"})
 
-    cellpose_path = "results/benchmarking/cellpose/livecell/results/cellpose_lcell.csv"
+    cellpose_path = "results/benchmarking/cellpose/covid_if/results/cellpose_cyto.csv"
     extra = {
         "cellpose": pd.read_csv(cellpose_path),
         "amg": pd.read_csv(os.path.join(root, "amg.csv")),
@@ -22,32 +22,30 @@ def _load_sam_results(root):
     return point, box, extra
 
 
-def plot_livecell():
+def plot_covid_if():
     fig, axes = plt.subplots(2, 2, sharey=True)
 
-    van_point_b, van_box_b, van_extra_b = _load_sam_results("./results/vanilla/lm/livecell/vit_b/results")
-    spec_point_b, spec_box_b, spec_extra_b = _load_sam_results("./results/specialists/lm/livecell/vit_b")
+    van_point_b, van_box_b, van_extra_b = _load_sam_results("results/vanilla/lm/covid_if/vit_b/results")
+    gen_point_b, gen_box_b, gen_extra_b = _load_sam_results("results/generalists/lm/covid_if/vit_b/results")
 
-    van_point_h, van_box_h, van_extra_h = _load_sam_results("./results/vanilla/lm/livecell/vit_h/results")
-    spec_point_h, spec_box_h, spec_extra_h = _load_sam_results("./results/specialists/lm/livecell/vit_h")
+    van_point_h, van_box_h, van_extra_h = _load_sam_results("results/vanilla/lm/covid_if/vit_h/results")
+    gen_point_h, gen_box_h, gen_extra_h = _load_sam_results("results/generalists/lm/covid_if/vit_h/results")
 
     plot_iterative_prompting(van_point_b, van_box_b, van_extra_b, ax=axes[0, 0], show=False)
     axes[0, 0].set_title("VIT-B")
-    plot_iterative_prompting(spec_point_b, spec_box_b, spec_extra_b, ax=axes[0, 1], show=False)
+    plot_iterative_prompting(gen_point_b, gen_box_b, gen_extra_b, ax=axes[0, 1], show=False)
     axes[0, 1].set_title("VIT-B-LM")
 
     plot_iterative_prompting(van_point_h, van_box_h, van_extra_h, ax=axes[1, 0], show=False)
     axes[1, 0].set_title("VIT-H")
-    plot_iterative_prompting(spec_point_h, spec_box_h, spec_extra_h, ax=axes[1, 1], show=False)
+    plot_iterative_prompting(gen_point_h, gen_box_h, gen_extra_h, ax=axes[1, 1], show=False)
     axes[1, 1].set_title("VIT-H-LM")
-
-    # TODO add generalist plots
 
     plt.show()
 
 
 def main():
-    plot_livecell()
+    plot_covid_if()
 
 
 if __name__ == "__main__":
