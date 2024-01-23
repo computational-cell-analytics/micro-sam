@@ -11,7 +11,7 @@ def _load_sam_results(root):
     box = pd.read_csv(os.path.join(root, "iterative_prompts_start_box.csv"))
     box = box.rename(columns={"Unnamed: 0": "iteration"})
 
-    cellpose_path = "results/benchmarking/cellpose/livecell/results/cellpose_lcell.csv"
+    cellpose_path = "results/benchmarking/cellpose/livecell/livecell_cellpose.csv"
     extra = {
         "cellpose": pd.read_csv(cellpose_path),
         "amg": pd.read_csv(os.path.join(root, "amg.csv")),
