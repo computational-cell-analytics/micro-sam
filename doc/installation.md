@@ -49,7 +49,7 @@ $ git clone https://github.com/computational-cell-analytics/micro-sam
 ```
 2. Enter it:
 ```
-$ cd micro_sam
+$ cd micro-sam
 ```
 3. Create the GPU or CPU environment:
 
