@@ -57,7 +57,6 @@ def default_grid_search_values_amg(
     }
 
 
-# TODO smaller default search range
 def default_grid_search_values_instance_segmentation_with_decoder(
     center_distance_threshold_values: Optional[List[float]] = None,
     boundary_distance_threshold_values: Optional[List[float]] = None,
@@ -81,18 +80,18 @@ def default_grid_search_values_instance_segmentation_with_decoder(
     """
     if center_distance_threshold_values is None:
         center_distance_threshold_values = _get_range_of_search_values(
-            [0.5, 0.9], step=0.1
+            [0.3, 0.7], step=0.1
         )
     if boundary_distance_threshold_values is None:
         boundary_distance_threshold_values = _get_range_of_search_values(
-            [0.5, 0.9], step=0.1
+            [0.3, 0.7], step=0.1
         )
     if distance_smoothing_values is None:
         distance_smoothing_values = _get_range_of_search_values(
-            [1.0, 2.0], step=0.1
+            [1.0, 2.0], step=0.2
         )
     if min_size_values is None:
-        min_size_values = [25, 50, 75, 100, 200]
+        min_size_values = [50, 100, 200]
     return {
         "center_distance_threshold": center_distance_threshold_values,
         "boundary_distance_threshold": boundary_distance_threshold_values,
@@ -116,7 +115,10 @@ def _grid_search_iteration(
         masks = segmenter.generate(**generate_kwargs)
 
         min_object_size = generate_kwargs.get("min_mask_region_area", 0)
-        instance_labels = mask_data_to_segmentation(masks, with_background=True, min_object_size=min_object_size)
+        if len(masks) == 0:
+            instance_labels = np.zeros(gt.shape, dtype="uint32")
+        else:
+            instance_labels = mask_data_to_segmentation(masks, with_background=True, min_object_size=min_object_size)
         m_sas, sas = mean_segmentation_accuracy(instance_labels, gt, return_accuracies=True)  # type: ignore
 
         result_dict = {"image_name": image_name, "mSA": m_sas, "SA50": sas[0], "SA75": sas[5]}
@@ -273,7 +275,11 @@ def run_instance_segmentation_inference(
 
         segmenter.initialize(image, image_embeddings)
         masks = segmenter.generate(**generate_kwargs)
-        instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=min_object_size)
+
+        if len(masks) == 0:  # the instance segmentation can have no masks, hence we just save empty labels
+            instances = np.zeros(image.shape[-2:], dtype="uint32")
+        else:
+            instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=min_object_size)
 
         # It's important to compress here, otherwise the predictions would take up a lot of space.
         imageio.imwrite(prediction_path, instances, compression=5)
@@ -296,21 +302,22 @@ def evaluate_instance_segmentation_grid_search(
         The evaluation score for the best setting.
     """
 
-    # load all the grid search results
+    # Load all the grid search results.
     gs_files = glob(os.path.join(result_dir, "*.csv"))
     gs_result = pd.concat([pd.read_csv(gs_file) for gs_file in gs_files])
 
     # Retrieve only the relevant columns and group by the gridsearch columns.
-    gs_result = gs_result[grid_search_parameters + [criterion]]
+    gs_result = gs_result[grid_search_parameters + [criterion]].reset_index()
 
-    # compute the mean over the grouped columns
-    grouped_result = gs_result.groupby(grid_search_parameters).mean()
+    # Compute the mean over the grouped columns.
+    grouped_result = gs_result.groupby(grid_search_parameters).mean().reset_index()
 
-    # find the best grouped result and return the corresponding thresholds
-    best_score = grouped_result.max().values[0]
-    best_result = grouped_result.idxmax()
-    best_params = best_result.values[0]
+    # Find the best score and corresponding parameters.
+    best_score, best_idx = grouped_result[criterion].max(), grouped_result[criterion].idxmax()
+    best_params = grouped_result.iloc[best_idx]
+    assert np.isclose(best_params[criterion], best_score)
     best_kwargs = {k: v for k, v in zip(grid_search_parameters, best_params)}
+
     return best_kwargs, best_score
 
 
@@ -344,7 +351,8 @@ def run_instance_segmentation_grid_search_and_inference(
         verbose_gs: Whether to run the gridsearch for individual images in a verbose mode.
     """
     run_instance_segmentation_grid_search(
-        segmenter, grid_search_values, val_image_paths, val_gt_paths, embedding_dir, result_dir,
+        segmenter, grid_search_values, val_image_paths, val_gt_paths,
+        result_dir=result_dir, embedding_dir=embedding_dir,
         fixed_generate_kwargs=fixed_generate_kwargs, verbose_gs=verbose_gs,
     )
 

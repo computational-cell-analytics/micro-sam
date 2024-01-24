@@ -80,17 +80,30 @@ def finetune_livecell(args):
         if not name.startswith("encoder"):
             joint_model_params.append(params)
 
-    # all the stuff we need for training
-    optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10, verbose=True)
+    # Optimizer and learning rate.
+    if args.use_adamw:
+        print("Use AdamW with lr", args.lr)
+        optimizer = torch.optim.AdamW(joint_model_params, lr=args.lr)
+    else:
+        print("Use Adam with lr", args.lr)
+        optimizer = torch.optim.Adam(joint_model_params, lr=args.lr)
+
+    # Two different schedulers depending on how long we train.
+    if args.iterations > 25000:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", factor=0.9, patience=10, verbose=True
+        )
+    else:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", factor=0.5, patience=2, verbose=True
+        )
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
-    convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.05)
+    convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
 
-    checkpoint_name = "livecell_sam"
     trainer = sam_training.JointSamTrainer(
-        name=checkpoint_name,
+        name=args.name,
         save_root=args.save_root,
         train_loader=train_loader,
         val_loader=val_loader,
@@ -113,7 +126,7 @@ def finetune_livecell(args):
     trainer.fit(args.iterations)
     if args.export_path is not None:
         checkpoint_path = os.path.join(
-            "" if args.save_root is None else args.save_root, "checkpoints", checkpoint_name, "best.pt"
+            "" if args.save_root is None else args.save_root, "checkpoints", args.name, "best.pt"
         )
         export_custom_sam_model(
             checkpoint_path=checkpoint_path,
@@ -148,6 +161,10 @@ def main():
         "--freeze", type=str, nargs="+", default=None,
         help="Which parts of the model to freeze for finetuning."
     )
+    # Parameter for training grid search
+    parser.add_argument("--name", default="livecell_sam")
+    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--use_adamw", action="store_true")
     args = parser.parse_args()
     finetune_livecell(args)
 

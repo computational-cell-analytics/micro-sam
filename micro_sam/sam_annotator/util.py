@@ -16,6 +16,75 @@ LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
 """@private"""
 
 
+#
+# Misc helper functions
+#
+
+
+def toggle_label(prompts):
+    """@private"""
+    # get the currently selected label
+    current_properties = prompts.current_properties
+    current_label = current_properties["label"][0]
+    new_label = "negative" if current_label == "positive" else "positive"
+    current_properties["label"] = np.array([new_label])
+    prompts.current_properties = current_properties
+    prompts.refresh()
+    prompts.refresh_colors()
+
+
+def _initialize_parser(description, with_segmentation_result=True, with_show_embeddings=True):
+
+    available_models = list(util.get_model_names())
+    available_models = ", ".join(available_models)
+
+    parser = argparse.ArgumentParser(description=description)
+
+    parser.add_argument(
+        "-i", "--input", required=True,
+        help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
+        "or elf.io.open_file (e.g. hdf5, zarr, mrc) For the latter you also need to pass the 'key' parameter."
+    )
+    parser.add_argument(
+        "-k", "--key",
+        help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
+        "for a image series it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
+    )
+
+    parser.add_argument(
+        "-e", "--embedding_path",
+        help="The filepath for saving/loading the pre-computed image embeddings. "
+        "NOTE: It is recommended to pass this argument and store the embeddings, "
+        "otherwise they will be recomputed every time (which can take a long time)."
+    )
+
+    if with_segmentation_result:
+        parser.add_argument(
+            "-s", "--segmentation_result",
+            help="Optional filepath to a precomputed segmentation. If passed this will be used to initialize the "
+            "'committed_objects' layer. This can be useful if you want to correct an existing segmentation or if you "
+            "have saved intermediate results from the annotator and want to continue with your annotations. "
+            "Supports the same file formats as 'input'."
+        )
+        parser.add_argument(
+            "-sk", "--segmentation_key",
+            help="The key for opening the segmentation data. Same rules as for 'key' apply."
+        )
+
+    parser.add_argument(
+        "--model_type", default=util._DEFAULT_MODEL,
+        help=f"The segment anything model that will be used, one of {available_models}."
+    )
+    parser.add_argument(
+        "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
+    )
+    parser.add_argument(
+        "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
+    )
+
+    return parser
+
+
 def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:
     """@private"""
     viewer.layers["point_prompts"].data = []
@@ -27,6 +96,11 @@ def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:
         return
     viewer.layers["current_object"].data = np.zeros(viewer.layers["current_object"].data.shape, dtype="uint32")
     viewer.layers["current_object"].refresh()
+
+
+#
+# Helper functions to extract prompts from napari layers.
+#
 
 
 def point_layer_to_prompts(
@@ -219,6 +293,11 @@ def prompt_layers_to_state(
         return "track"
 
 
+#
+# Helper functions to run (multi-dimensional) segmentation on napari layers.
+#
+
+
 def segment_slices_with_prompts(
     predictor, point_prompts, box_prompts, image_embeddings, shape, progress_bar=None, track_id=None
 ):
@@ -344,105 +423,6 @@ def prompt_segmentation(
     return seg
 
 
-def toggle_label(prompts):
-    """@private"""
-    # get the currently selected label
-    current_properties = prompts.current_properties
-    current_label = current_properties["label"][0]
-    new_label = "negative" if current_label == "positive" else "positive"
-    current_properties["label"] = np.array([new_label])
-    prompts.current_properties = current_properties
-    prompts.refresh()
-    prompts.refresh_colors()
-
-
-def _initialize_parser(description, with_segmentation_result=True, with_show_embeddings=True):
-
-    available_models = list(util.get_model_names())
-    available_models = ", ".join(available_models)
-
-    parser = argparse.ArgumentParser(description=description)
-
-    parser.add_argument(
-        "-i", "--input", required=True,
-        help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
-        "or elf.io.open_file (e.g. hdf5, zarr, mrc) For the latter you also need to pass the 'key' parameter."
-    )
-    parser.add_argument(
-        "-k", "--key",
-        help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
-        "for a image series it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
-    )
-
-    parser.add_argument(
-        "-e", "--embedding_path",
-        help="The filepath for saving/loading the pre-computed image embeddings. "
-        "NOTE: It is recommended to pass this argument and store the embeddings, "
-        "otherwise they will be recomputed every time (which can take a long time)."
-    )
-
-    if with_segmentation_result:
-        parser.add_argument(
-            "-s", "--segmentation_result",
-            help="Optional filepath to a precomputed segmentation. If passed this will be used to initialize the "
-            "'committed_objects' layer. This can be useful if you want to correct an existing segmentation or if you "
-            "have saved intermediate results from the annotator and want to continue with your annotations. "
-            "Supports the same file formats as 'input'."
-        )
-        parser.add_argument(
-            "-sk", "--segmentation_key",
-            help="The key for opening the segmentation data. Same rules as for 'key' apply."
-        )
-
-    parser.add_argument(
-        "--model_type", default=util._DEFAULT_MODEL,
-        help=f"The segment anything model that will be used, one of {available_models}."
-    )
-    parser.add_argument(
-        "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
-    )
-    parser.add_argument(
-        "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
-    )
-
-    return parser
-
-
-#
-# Helper functions for tracking annotator
-#
-
-def _update_lineage():
-    state = AnnotatorState()
-    tracking_widget = state.tracking_widget
-
-    mother = state.current_track_id
-    assert mother in state.lineage
-    assert len(state.lineage[mother]) == 0
-
-    daughter1, daughter2 = state.current_track_id + 1, state.current_track_id + 2
-    state.lineage[mother] = [daughter1, daughter2]
-    state.lineage[daughter1] = []
-    state.lineage[daughter2] = []
-
-    # Update the choices in the track_id menu so that it contains the new track ids.
-    track_ids = list(map(str, state.lineage.keys()))
-    tracking_widget[1].choices = track_ids
-
-
-def _reset_tracking_state():
-    state = AnnotatorState()
-    tracking_widget = state.tracking_widget
-
-    # reset the lineage and track id
-    state.current_track_id = 1
-    state.lineage = {1: []}
-
-    # reset the choices in the track_id menu
-    track_ids = list(map(str, state.lineage.keys()))
-    tracking_widget[1].choices = track_ids
-
-
 def _compute_movement(seg, t0, t1):
 
     def compute_center(t):
@@ -464,11 +444,13 @@ def _shift_object(mask, motion_model):
     return mask_shifted
 
 
-def _track_from_prompts(
+def track_from_prompts(
     point_prompts, box_prompts, seg, predictor, slices, image_embeddings,
     stop_upper, threshold, projection,
     progress_bar=None, motion_smoothing=0.5, box_extension=0,
 ):
+    """@private
+    """
     assert projection in ("mask", "bounding_box")
     if projection == "mask":
         use_mask, use_box = True, True

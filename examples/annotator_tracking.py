@@ -20,8 +20,8 @@ def track_ctc_data(use_finetuned_model):
         timeseries = f["*.tif"]
 
     if use_finetuned_model:
-        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-ctc-vit_h_lm.zarr")
-        model_type = "vit_h_lm"
+        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-ctc-vit_b_lm.zarr")
+        model_type = "vit_b_lm"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-ctc.zarr")
         model_type = "vit_h"
@@ -31,9 +31,8 @@ def track_ctc_data(use_finetuned_model):
 
 
 def main():
-    # whether to use the fine-tuned SAM model
-    # this feature is still experimental!
-    use_finetuned_model = False
+    # Whether to use the fine-tuned SAM model.
+    use_finetuned_model = True
     track_ctc_data(use_finetuned_model)
 
 

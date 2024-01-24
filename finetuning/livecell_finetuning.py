@@ -50,7 +50,7 @@ def finetune_livecell(args):
     model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
     patch_shape = (520, 704)  # the patch shape for training
-    n_objects_per_batch = 25  # this is the number of objects per batch that will be sampled
+    n_objects_per_batch = args.n_objects  # the number of objects per batch that will be sampled (default: 25)
     freeze_parts = args.freeze  # override this to freeze different parts of the model
 
     # get the trainable segment anything model
@@ -129,20 +129,20 @@ def finetune_livecell(args):
 def main():
     parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LiveCELL dataset.")
     parser.add_argument(
-        "--input_path", "-i", default="/scratch/usr/nimanwai/data/livecell/",
+        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/livecell/",
         help="The filepath to the LiveCELL data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
-        help="The model type to use for fine-tuning. Either vit_h, vit_b or vit_l."
+        help="The model type to use for fine-tuning. Either vit_b, vit_l or vit_h."
     )
     parser.add_argument(
         "--save_root", "-s",
         help="Where to save the checkpoint and logs. By default they will be saved where this script is run."
     )
     parser.add_argument(
-        "--iterations", type=int, default=int(1e5),
-        help="For how many iterations should the model be trained? By default 100k."
+        "--iterations", type=int, default=int(25e4),
+        help="For how many iterations should the model be trained? By default 250k."
     )
     parser.add_argument(
         "--export_path", "-e",
@@ -155,6 +155,9 @@ def main():
     parser.add_argument(
         "--save_every_kth_epoch", type=int, default=None,
         help="To save every kth epoch while fine-tuning. Expects an integer value."
+    )
+    parser.add_argument(
+        "--n_objects", type=int, default=25, help="The number of instances (objects) per batch used for finetuning."
     )
     args = parser.parse_args()
     finetune_livecell(args)

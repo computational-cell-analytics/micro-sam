@@ -14,8 +14,8 @@ def series_annotation(use_finetuned_model):
     """
 
     if use_finetuned_model:
-        embedding_path = os.path.join(EMBEDDING_CACHE, "series-embeddings-vit_h_lm")
-        model_type = "vit_h_lm"
+        embedding_path = os.path.join(EMBEDDING_CACHE, "series-embeddings-vit_b_lm")
+        model_type = "vit_b_lm"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "series-embeddings")
         model_type = "vit_h"
@@ -31,8 +31,7 @@ def series_annotation(use_finetuned_model):
 
 
 def main():
-    # whether to use the fine-tuned SAM model
-    # this feature is still experimental!
+    # Whether to use the fine-tuned SAM model.
     use_finetuned_model = False
     series_annotation(use_finetuned_model)
 

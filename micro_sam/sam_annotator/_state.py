@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import torch.nn as nn
+
 import micro_sam.util as util
 from micro_sam.instance_segmentation import AMGBase
 from micro_sam.precompute_state import cache_amg_state
@@ -94,9 +95,16 @@ class AnnotatorState(metaclass=Singleton):
         elif init_sum == 0:
             return False
         else:
+            miss_vars = [
+                name for name, have_name in zip(
+                    ["image_embeddings", "predictor", "image_shape"],
+                    [have_image_embeddings, have_predictor, have_image_shape]
+                )
+                if not have_name
+            ]
+            miss_vars = ", ".join(miss_vars)
             raise RuntimeError(
-                f"Invalid AnnotatorState: {init_sum} / 3 parts of the state "
-                "needed for interactive segmentation are initialized."
+                f"Invalid state: the variables {miss_vars} have to be initialized for interactive segmentation."
             )
 
     def initialized_for_tracking(self):
@@ -110,10 +118,15 @@ class AnnotatorState(metaclass=Singleton):
         elif init_sum == 0:
             return False
         else:
-            raise RuntimeError(
-                f"Invalid AnnotatorState: {init_sum} / 4 parts of the state "
-                "needed for tracking are initialized."
-            )
+            miss_vars = [
+                name for name, have_name in zip(
+                    ["current_track_id", "lineage", "committed_lineages", "tracking_widget"],
+                    [have_current_track_id, have_lineage, have_committed_lineages, have_tracking_widget]
+                )
+                if not have_name
+            ]
+            miss_vars = ", ".join(miss_vars)
+            raise RuntimeError(f"Invalid state: the variables {miss_vars} have to be initialized for tracking.")
 
     def reset_state(self):
         """Reset state, clear all attributes."""

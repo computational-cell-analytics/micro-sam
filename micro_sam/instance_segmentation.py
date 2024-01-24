@@ -5,6 +5,7 @@ https://computational-cell-analytics.github.io/micro-sam/micro_sam.html
 """
 
 import os
+import pickle
 import warnings
 from abc import ABC
 from collections import OrderedDict
@@ -721,7 +722,12 @@ def get_custom_sam_model_with_decoder(
     """
     """
     device = util.get_device(device)
-    state = torch.load(checkpoint, map_location=device)
+
+    # over-ride the unpickler with our custom one
+    custom_pickle = pickle
+    custom_pickle.Unpickler = util._CustomUnpickler
+
+    state = torch.load(checkpoint, map_location=device, pickle_module=custom_pickle)
 
     # Get the predictor.
     model_state = state["model_state"]
@@ -911,8 +917,11 @@ class InstanceSegmentationWithDecoder:
         if not self.is_initialized:
             raise RuntimeError("InstanceSegmentationWithDecoder has not been initialized. Call initialize first.")
 
+        # TODO: expose as parameter?
+        # There are checkerboard artifacts in the prediction
+        foreground = vigra.filters.gaussianSmoothing(self._foreground, 1.0)
         segmentation = watershed_from_center_and_boundary_distances(
-            self._center_distances, self._boundary_distances, self._foreground,
+            self._center_distances, self._boundary_distances, foreground,
             center_distance_threshold=center_distance_threshold,
             boundary_distance_threshold=boundary_distance_threshold,
             foreground_threshold=foreground_threshold,

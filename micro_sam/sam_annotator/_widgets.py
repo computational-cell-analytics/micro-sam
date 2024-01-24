@@ -25,6 +25,25 @@ if TYPE_CHECKING:
     import napari
 
 
+def _reset_tracking_state(viewer):
+    """Reset the tracking state.
+
+    This helper function is needed by clear_tracking_widget and by commit_tracking_widget.
+    """
+    state = AnnotatorState()
+
+    # Reset the lineage and track id.
+    state.current_track_id = 1
+    state.lineage = {1: []}
+
+    # Reset the choices in the track_id menu.
+    track_ids = list(map(str, state.lineage.keys()))
+    state.tracking_widget[1].choices = track_ids
+
+    viewer.layers["point_prompts"].property_choices["track_id"] = ["1"]
+    viewer.layers["prompts"].property_choices["track_id"] = ["1"]
+
+
 @magic_factory(call_button="Clear Annotations [Shift + C]")
 def clear_widget(viewer: "napari.viewer.Viewer") -> None:
     """Widget for clearing the current annotations."""
@@ -34,7 +53,7 @@ def clear_widget(viewer: "napari.viewer.Viewer") -> None:
 @magic_factory(call_button="Clear Annotations [Shift + C]")
 def clear_tracking_widget(viewer: "napari.viewer.Viewer") -> None:
     """Widget for clearing all tracking annotations and state."""
-    vutil._reset_tracking_state()
+    _reset_tracking_state(viewer)
     vutil.clear_annotations(viewer)
 
 
@@ -78,7 +97,7 @@ def commit_tracking_widget(viewer: "napari.viewer.Viewer", layer: str = "current
     }
     state.committed_lineages.append(updated_lineage)
 
-    vutil._reset_tracking_state()
+    _reset_tracking_state(viewer)
     vutil.clear_annotations(viewer, clear_segmentations=False)
 
 
@@ -113,9 +132,9 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
     return label_widget
 
 
-# TODO add options for tiling
+# TODO add options for tiling, see https://github.com/computational-cell-analytics/micro-sam/issues/331
 @magic_factory(
-    pbar={'visible': False, 'max': 0, 'value': 0, 'label': 'working...'},
+    pbar={"visible": False, "max": 0, "value": 0, "label": "working..."},
     call_button="Compute image embeddings",
     save_path={"mode": "d"},  # choose a directory
 )
@@ -185,6 +204,7 @@ def settings_widget(
 
 
 # TODO fail more gracefully in all widgets if image embeddings have not been initialized
+# See https://github.com/computational-cell-analytics/micro-sam/issues/332
 #
 # Widgets for interactive segmentation:
 # - segment_widget: for the 2d annotation tool
@@ -196,7 +216,7 @@ def settings_widget(
 
 
 # TODO support extra mode for one point per object
-# TODO rethink the default values for box extension
+# See https://github.com/computational-cell-analytics/micro-sam/issues/333
 @magic_factory(call_button="Segment Object [S]")
 def segment_widget(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) -> None:
     shape = viewer.layers["current_object"].data.shape
@@ -256,6 +276,7 @@ def segment_slice_widget(viewer: "napari.viewer.Viewer", box_extension: float = 
 
 
 # TODO should probably be wrappred in a thread worker
+# See https://github.com/computational-cell-analytics/micro-sam/issues/334
 @magic_factory(
     call_button="Segment All Slices [Shift-S]",
     projection={"choices": ["default", "bounding_box", "mask", "points"]},
@@ -296,6 +317,30 @@ def segment_object_widget(
 
     viewer.layers["current_object"].data = seg
     viewer.layers["current_object"].refresh()
+
+
+def _update_lineage(viewer):
+    """Updated the lineage after recording a division event.
+    This helper function is needed by 'track_object_widget'.
+    """
+    state = AnnotatorState()
+    tracking_widget = state.tracking_widget
+
+    mother = state.current_track_id
+    assert mother in state.lineage
+    assert len(state.lineage[mother]) == 0
+
+    daughter1, daughter2 = state.current_track_id + 1, state.current_track_id + 2
+    state.lineage[mother] = [daughter1, daughter2]
+    state.lineage[daughter1] = []
+    state.lineage[daughter2] = []
+
+    # Update the choices in the track_id menu so that it contains the new track ids.
+    track_ids = list(map(str, state.lineage.keys()))
+    tracking_widget[1].choices = track_ids
+
+    viewer.layers["point_prompts"].property_choices["track_id"] = [str(track_id) for track_id in track_ids]
+    viewer.layers["prompts"].property_choices["track_id"] = [str(track_id) for track_id in track_ids]
 
 
 @magic_factory(call_button="Segment Frame [S]")
@@ -357,7 +402,7 @@ def track_object_widget(
         )
 
         # step 2: track the object starting from the lowest annotated slice
-        seg, has_division = vutil._track_from_prompts(
+        seg, has_division = vutil.track_from_prompts(
             viewer.layers["point_prompts"], viewer.layers["prompts"], seg,
             state.predictor, slices, state.image_embeddings, stop_upper,
             threshold=iou_threshold, projection=projection_,
@@ -368,7 +413,7 @@ def track_object_widget(
     # If a division has occurred and it's the first time it occurred for this track
     # then we need to create the two daughter tracks and update the lineage.
     if has_division and (len(state.lineage[state.current_track_id]) == 0):
-        vutil._update_lineage()
+        _update_lineage(viewer)
 
     # clear the old track mask
     viewer.layers["current_object"].data[viewer.layers["current_object"].data == state.current_track_id] = 0

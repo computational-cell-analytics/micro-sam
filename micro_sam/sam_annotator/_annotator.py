@@ -21,13 +21,9 @@ class _AnnotatorBase(Container):
     def _create_layers(self, segmentation_result):
         # Add the point layer for point prompts.
         self._point_labels = ["positive", "negative"]
-        # We need to add dummy data to initialize the point properties correctly.
-        # The two points will be cleared at the end.
-        dummy_data = 2 * [[0.0] * self._ndim]
         self._point_prompt_layer = self._viewer.add_points(
-            data=dummy_data,
             name="point_prompts",
-            properties={"label": self._point_labels},
+            property_choices={"label": self._point_labels},
             edge_color="label",
             edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
             symbol="o",
@@ -80,7 +76,7 @@ class _AnnotatorBase(Container):
 
     def _create_keybindings(self):
         @self._viewer.bind_key("s")
-        def _segmet(viewer):
+        def _segment(viewer):
             self._segment_widget(viewer)
 
         @self._viewer.bind_key("c")
@@ -100,9 +96,11 @@ class _AnnotatorBase(Container):
             def _seg_nd(viewer):
                 self._segment_nd_widget(viewer)
 
-    # TODO more clever way to integrate segmentation result so
-    # that we can also choose an active layer?
-    # We could allow also passing a label layer and then use it.
+    # TODO
+    # We could implement a better way of initializing the segmentation result,
+    # so that instead of just passing a numpy array an existing layer from the napari
+    # viewer can be chosen.
+    # See https://github.com/computational-cell-analytics/micro-sam/issues/335
     def __init__(
         self,
         viewer: "napari.viewer.Viewer",
@@ -142,9 +140,6 @@ class _AnnotatorBase(Container):
 
         # Add the key bindings in common between all annotators.
         self._create_keybindings()
-
-        # Clear the annotations to remove dummy prompts necessary for init.
-        vutil.clear_annotations(self._viewer, clear_segmentations=False)
 
     def _update_image(self):
         state = AnnotatorState()

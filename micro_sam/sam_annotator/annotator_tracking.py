@@ -96,16 +96,12 @@ class AnnotatorTracking(_AnnotatorBase):
         self._point_labels = ["positive", "negative"]
         self._track_state_labels = ["track", "division"]
 
-        # We need to add dummy data to initialize the point properties correctly.
-        # The two points will be cleared at the end.
-        dummy_data = 2 * [[0.0] * self._ndim]
         self._point_prompt_layer = self._viewer.add_points(
-            data=dummy_data,
             name="point_prompts",
-            properties={
+            property_choices={
                 "label": self._point_labels,
                 "state": self._track_state_labels,
-                "track_id": ["1", "1"],  # we use string to avoid pandas warning
+                "track_id": ["1"],  # we use string to avoid pandas warning
             },
             edge_color="label",
             edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
@@ -121,21 +117,15 @@ class AnnotatorTracking(_AnnotatorBase):
 
         # Using the box layer to set divisions currently doesn't work.
         # That's why some of the code below is commented out.
-        # Setting new track ids also doesn't work, but keeping track of them in the properties is working.
-        dummy_data = [
-            np.array([[0, 0, 0], [0, 0, 10], [0, 10, 0], [0, 10, 10]]),
-            np.array([[0, 0, 0], [0, 0, 11], [0, 11, 0], [0, 11, 11]]),
-        ]
         self._box_prompt_layer = self._viewer.add_shapes(
-            data=dummy_data,
             shape_type="rectangle",
             edge_width=4,
             ndim=self._ndim,
             face_color="transparent",
             name="prompts",
             edge_color="green",
-            properties={"track_id": ["1", "1"]},
-            # properties={"track_id": ["1", "1"], "state": state_labels},
+            property_choices={"track_id": ["1"]},
+            # property_choces={"track_id": ["1"], "state": self._track_state_labels},
             # edge_color_cycle=STATE_COLOR_CYCLE,
         )
         # self._box_prompt_layer.edge_color_mode = "cycle"
