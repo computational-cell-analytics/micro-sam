@@ -12,7 +12,7 @@ def write_batch_script(env_name, out_path, inference_setup, checkpoint, model_ty
     """
     batch_script = f"""#!/bin/bash
 #SBATCH -c 8
-#SBATCH --mem 128G
+#SBATCH --mem 64G
 #SBATCH -t 2-00:00:00
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
@@ -73,7 +73,7 @@ def submit_slurm(model_type, checkpoint, experiment_folder):
     tmp_folder = "./gpu_jobs"
 
     # parameters to run the inference scripts
-    environment_name = "mobilesam"
+    environment_name = "sam"
     make_delay = "1m"  # wait for precomputing the embeddings and later run inference scripts
 
     assert os.path.exists(checkpoint), checkpoint
