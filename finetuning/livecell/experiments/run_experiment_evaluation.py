@@ -49,7 +49,7 @@ def for_n_objects(max_objects=45):
 
 
 def for_freezing_backbones():
-    ckpt_root = os.path.join(ROOT, "experiments", "micro-sam")
+    ckpt_root = os.path.join(ROOT, "experiments", "micro-sam", "partial-finetuning")
     exp_root = os.path.join(EXPERIMENT_ROOT, "partial-finetuning")
 
     # let's get all combinations need for the freezing backbone experiments
