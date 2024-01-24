@@ -1,12 +1,15 @@
-import os
 import re
+import os
 import shutil
 import subprocess
 from glob import glob
 from datetime import datetime
 
 
-def write_batch_script(env_name, out_path, inference_setup, checkpoint, model_type, experiment_folder, delay=None):
+def write_batch_script(
+    env_name, out_path, inference_setup, checkpoint, model_type,
+    experiment_folder, dataset_name, species=None, delay=None
+):
     """Writing scripts with different fold-trainings for micro-sam evaluation
     """
     batch_script = f"""#!/bin/bash
@@ -15,7 +18,7 @@ def write_batch_script(env_name, out_path, inference_setup, checkpoint, model_ty
 #SBATCH -t 2-00:00:00
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
-#SBATCH -A nim00007
+#SBATCH -A gzz0001
 #SBATCH --job-name={inference_setup}
 
 source ~/.bashrc
@@ -38,6 +41,12 @@ mamba activate {env_name} \n"""
     # experiment folder
     python_script += f"-e {experiment_folder} "
 
+    # IMPORTANT: choice of the dataset
+    python_script += f"-d {dataset_name} "
+
+    if species is not None:  # relevant for nuc-mm only
+        python_script += f"--species {species} "
+
     # let's add the python script to the bash script
     batch_script += python_script
 
@@ -57,7 +66,7 @@ def get_batch_script_names(tmp_folder):
     tmp_folder = os.path.expanduser(tmp_folder)
     os.makedirs(tmp_folder, exist_ok=True)
 
-    script_name = "livecell-inference"
+    script_name = "em-inference"
 
     dt = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
     tmp_name = script_name + dt
@@ -72,26 +81,29 @@ def submit_slurm():
     tmp_folder = "./gpu_jobs"
 
     # parameters to run the inference scripts
-    environment_name = "sam"
+    dataset_name = "mitoem"  # name of the dataset in lower-case
+    species = None  # relevant for multiple species-related datasets
     model_type = "vit_b"
-    experiment_set = "vanilla"  # infer using specialists / generalists / vanilla models
-    make_delay = "1m"  # wait for precomputing the embeddings and later run inference scripts
+    experiment_set = "vanilla"  # infer using generalists or vanilla models
+    make_delay = "10s"  # wait for precomputing the embeddings and later run inference scripts
 
-    # let's set the experiment type - either using the specialists or generalists or just using vanilla model
+    # let's set the experiment type - either using the generalists or just using vanilla model
     if experiment_set == "generalists":
-        checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/lm_generalist_sam/best.pt"
-        experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/generalists/lm/livecell/"
-
-    elif experiment_set == "specialists":
-        checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/livecell_sam/best.pt"
-        experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/specialists/lm/livecell/"
-
+        checkpoint = "/scratch/usr/nimanwai/micro-sam/checkpoints/"
+        checkpoint += f"{model_type}/with_cem/mito_nuc_em_generalist_sam/best.pt"
     elif experiment_set == "vanilla":
         checkpoint = None
-        experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/vanilla/lm/livecell/"
-
     else:
-        raise ValueError("Choose from specialists / generalists / vanilla")
+        raise ValueError("Choose from generalists/vanilla")
+
+    experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/"
+    experiment_folder += f"{experiment_set}/em/{dataset_name}/"
+
+    if species is not None:
+        experiment_folder += f"{species}/"
+
+    if experiment_set == "generalists":
+        experiment_folder += "mito_nuc_em_generalist_sam/"
 
     experiment_folder += f"{model_type}/"
 
@@ -102,12 +114,14 @@ def submit_slurm():
         all_setups = ["precompute_embeddings", "evaluate_amg", "evaluate_instance_segmentation", "iterative_prompting"]
     for current_setup in all_setups:
         write_batch_script(
-            env_name=environment_name,
+            env_name="sam",
             out_path=get_batch_script_names(tmp_folder),
             inference_setup=current_setup,
             checkpoint=checkpoint,
             model_type=model_type,
             experiment_folder=experiment_folder,
+            dataset_name=dataset_name,
+            species=species,
             delay=None if current_setup == "precompute_embeddings" else make_delay
             )
 
@@ -126,10 +140,14 @@ def submit_slurm():
             job_id.append(re.findall(r'\d+', cmd_out.stdout)[0])
 
 
-if __name__ == "__main__":
+def main():
     try:
         shutil.rmtree("./gpu_jobs")
     except FileNotFoundError:
         pass
 
     submit_slurm()
+
+
+if __name__ == "__main__":
+    main()

@@ -11,12 +11,12 @@ def main():
     embedding_dir = os.path.join(args.experiment_folder, "embeddings")
     os.makedirs(embedding_dir, exist_ok=True)
 
-    # getting the embeddings for the test set
-    image_paths, _ = get_paths("test")
+    # getting the embeddings for the val set
+    image_paths, _ = get_paths(args.dataset, "val", args.species)
     precompute_all_embeddings(predictor, image_paths, embedding_dir)
 
-    # getting the embeddings for the val set
-    image_paths, _ = get_paths("val")
+    # getting the embeddings for the test set
+    image_paths, _ = get_paths(args.dataset, "test", args.species)
     precompute_all_embeddings(predictor, image_paths, embedding_dir)
 
 
