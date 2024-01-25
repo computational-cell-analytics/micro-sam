@@ -815,6 +815,7 @@ class InstanceSegmentationWithDecoder:
         image: np.ndarray,
         image_embeddings: Optional[util.ImageEmbeddings] = None,
         i: Optional[int] = None,
+        verbose: bool = False,
     ) -> None:
         """Initialize image embeddings and decoder predictions for an image.
 
@@ -824,6 +825,7 @@ class InstanceSegmentationWithDecoder:
                 See `util.precompute_image_embeddings` for details.
             i: Index for the image data. Required if `image` has three spatial dimensions
                 or a time dimension and two spatial dimensions.
+            verbose: Dummy input to be compatible with other function signatures.
         """
         if image_embeddings is None:
             image_embeddings = util.precompute_image_embeddings(self._predictor, image)
@@ -831,9 +833,13 @@ class InstanceSegmentationWithDecoder:
         # This could be made more versatile to also support other decoder inputs,
         # e.g. the UNETR with skip connections.
         if isinstance(image_embeddings["features"], torch.Tensor):
-            embeddings = image_embeddings["features"].to(self._predictor.device)
+            embeddings = image_embeddings["features"]
         else:
-            embeddings = torch.from_numpy(image_embeddings["features"]).to(self._predictor.device)
+            embeddings = torch.from_numpy(image_embeddings["features"])
+
+        if i is not None:
+            embeddings = embeddings[i]
+        embeddings = embeddings.to(self._predictor.device)
 
         input_shape = tuple(image_embeddings["input_size"])
         original_shape = tuple(image_embeddings["original_size"])
@@ -931,6 +937,32 @@ class InstanceSegmentationWithDecoder:
         if output_mode is not None:
             segmentation = self._to_masks(segmentation, output_mode)
         return segmentation
+
+    def get_state(self) -> Dict[str, Any]:
+        """Get the initialized state of the instance segmenter.
+
+        Returns:
+            Instance segmentation state.
+        """
+        if not self.is_initialized:
+            raise RuntimeError("The state has not been computed yet. Call initialize first.")
+
+        return {
+            "foreground": self._foreground,
+            "center_distances": self._center_distances,
+            "boundary_distances": self._boundary_distances,
+        }
+
+    def set_state(self, state: Dict[str, Any]) -> None:
+        """Set the state of the instance segmenter.
+
+        Args:
+            state: The instance segmentation state
+        """
+        self._foreground = state["foreground"]
+        self._center_distances = state["center_distances"]
+        self._boundary_distances = state["boundary_distances"]
+        self._is_initialized = True
 
 
 def get_amg(

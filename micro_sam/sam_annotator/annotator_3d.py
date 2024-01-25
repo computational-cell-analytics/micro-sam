@@ -7,12 +7,13 @@ from typing import Optional, Tuple
 
 import napari
 import numpy as np
+import torch.nn as nn
 
 from segment_anything import SamPredictor
 
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
-from ._widgets import segment_slice_widget, segment_object_widget, amg_widget_3d
+from ._widgets import segment_slice_widget, segment_object_widget, amg_widget_3d, instance_seg_widget_3d
 from .util import _initialize_parser
 from .. import util
 
@@ -40,12 +41,14 @@ class Annotator3d(_AnnotatorBase):
         viewer: "napari.viewer.Viewer",
         segmentation_result: Optional[np.ndarray] = None,
     ) -> None:
+        self._with_decoder = AnnotatorState().decoder is not None
+        autosegment_widget = instance_seg_widget_3d if self._with_decoder else amg_widget_3d
         super().__init__(
             viewer=viewer,
             ndim=3,
             segment_widget=segment_slice_widget,
             segment_nd_widget=segment_object_widget,
-            autosegment_widget=amg_widget_3d,
+            autosegment_widget=autosegment_widget,
             segmentation_result=segmentation_result,
         )
 
@@ -53,7 +56,7 @@ class Annotator3d(_AnnotatorBase):
         super()._update_image()
         # Load the amg state from the embedding path.
         state = AnnotatorState()
-        state.amg_state = _load_amg_state(state.embedding_path)
+        state.amg_state = {} if self._with_decoder else _load_amg_state(state.embedding_path)
 
 
 def annotator_3d(
@@ -66,6 +69,7 @@ def annotator_3d(
     return_viewer: bool = False,
     viewer: Optional["napari.viewer.Viewer"] = None,
     predictor: Optional["SamPredictor"] = None,
+    decoder: Optional["nn.Module"] = None,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the 3d annotation tool for a given image volume.
 
@@ -85,6 +89,7 @@ def annotator_3d(
             This enables using a pre-initialized viewer.
         predictor: The Segment Anything model. Passing this enables using fully custom models.
             If you pass `predictor` then `model_type` will be ignored.
+        decoder: The instance segmentation decoder.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -92,11 +97,12 @@ def annotator_3d(
 
     # Initialize the predictor state.
     state = AnnotatorState()
+    state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path, predictor=predictor,
         halo=halo, tile_shape=tile_shape
     )
-    state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
+    state.decoder = decoder
 
     if viewer is None:
         viewer = napari.Viewer()

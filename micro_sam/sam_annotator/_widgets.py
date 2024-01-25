@@ -427,7 +427,58 @@ def track_object_widget(
 # - amg_widget_2d: AMG widget for the 2d annotation tool
 # - instace_seg_widget_2d: Widget for instance segmentation with decoder (2d)
 # - amg_widget_3d: AMG widget for the 3d annotation tool
+# - instace_seg_widget_3d: Widget for instance segmentation with decoder (3d)
 #
+
+
+def _instance_segmentation_impl(viewer, with_background, min_object_size, i=None, **kwargs):
+    state = AnnotatorState()
+
+    if state.amg is None:
+        is_tiled = state.image_embeddings["input_size"] is None
+        state.amg = instance_segmentation.get_amg(state.predictor, is_tiled, decoder=state.decoder)
+
+    shape = state.image_shape
+
+    # For 3D segmentation we have the amg state (a dict) that stores the state.
+    if state.amg_state is not None:
+        assert i is not None
+        if i in state.amg_state:
+            amg_state_i = state.amg_state[i]
+            state.amg.set_state(amg_state_i)
+
+        else:
+            dummy_image = np.zeros(shape[-2:], dtype="uint8")
+            state.amg.initialize(dummy_image, image_embeddings=state.image_embeddings, verbose=True, i=i)
+            amg_state_i = state.amg.get_state()
+            state.amg_state[i] = amg_state_i
+
+            cache_folder = state.amg_state.get("cache_folder", None)
+            if cache_folder is not None:
+                cache_path = os.path.join(cache_folder, f"state-{i}.pkl")
+                with open(cache_path, "wb") as f:
+                    pickle.dump(amg_state_i, f)
+
+    # For 2D segmentation we just check if the amg is initialized or not.
+    elif not state.amg.is_initialized:
+        assert i is None
+        # We don't need to pass the actual image data here, since the embeddings are passed.
+        # (The image data is only used by the amg to compute image embeddings, so not needed here.)
+        dummy_image = np.zeros(shape, dtype="uint8")
+        state.amg.initialize(dummy_image, image_embeddings=state.image_embeddings, verbose=True)
+
+    seg = state.amg.generate(**kwargs)
+
+    seg = instance_segmentation.mask_data_to_segmentation(
+        seg, with_background=with_background, min_object_size=min_object_size
+    )
+    assert isinstance(seg, np.ndarray)
+
+    if i is None:
+        viewer.layers["auto_segmentation"].data = seg
+    else:
+        viewer.layers["auto_segmentation"].data[i] = seg
+    viewer.layers["auto_segmentation"].refresh()
 
 
 # TODO should be wrapped in a threadworker
@@ -442,28 +493,10 @@ def amg_widget_2d(
     min_object_size: int = 100,
     with_background: bool = True,
 ) -> None:
-    state = AnnotatorState()
-
-    is_tiled = state.image_embeddings["input_size"] is None
-    if state.amg is None:
-        state.amg = instance_segmentation.get_amg(state.predictor, is_tiled)
-
-    shape = state.image_shape
-    if not state.amg.is_initialized:
-        # We don't need to pass the actual image data here, since the embeddings are passed.
-        # (The image data is only used by the amg to compute image embeddings, so not needed here.)
-        dummy_image = np.zeros(shape, dtype="uint8")
-        state.amg.initialize(dummy_image, image_embeddings=state.image_embeddings, verbose=True)
-
-    seg = state.amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
-
-    seg = instance_segmentation.mask_data_to_segmentation(
-        seg, with_background=with_background, min_object_size=min_object_size
+    _instance_segmentation_impl(
+        viewer, with_background, min_object_size,
+        pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh
     )
-    assert isinstance(seg, np.ndarray)
-
-    viewer.layers["auto_segmentation"].data = seg
-    viewer.layers["auto_segmentation"].refresh()
 
 
 # TODO should be wrapped in a threadworker
@@ -477,29 +510,11 @@ def instance_seg_widget_2d(
     min_object_size: int = 100,
     with_background: bool = True,
 ) -> None:
-    state = AnnotatorState()
-
-    is_tiled = state.image_embeddings["input_size"] is None
-    if state.amg is None:
-        state.amg = instance_segmentation.get_amg(state.predictor, is_tiled, decoder=state.decoder)
-
-    shape = state.image_shape
-    if not state.amg.is_initialized:
-        # We don't need to pass the actual image data here, since the embeddings are passed.
-        # (The image data is only used by the amg to compute image embeddings, so not needed here.)
-        dummy_image = np.zeros(shape, dtype="uint8")
-        state.amg.initialize(dummy_image, image_embeddings=state.image_embeddings)
-
     # TODO more parameters
-    seg = state.amg.generate(min_size=min_object_size)
-
-    seg = instance_segmentation.mask_data_to_segmentation(
-        seg, with_background=with_background, min_object_size=min_object_size
+    _instance_segmentation_impl(
+        viewer, with_background, min_object_size,
+        decoder=AnnotatorState().decoder, min_size=min_object_size,
     )
-    assert isinstance(seg, np.ndarray)
-
-    viewer.layers["auto_segmentation"].data = seg
-    viewer.layers["auto_segmentation"].refresh()
 
 
 # TODO should be wrapped in a threadworker
@@ -514,40 +529,28 @@ def amg_widget_3d(
     min_object_size: int = 100,
     with_background: bool = True,
 ) -> None:
-    state = AnnotatorState()
-
-    is_tiled = state.image_embeddings["input_size"] is None
-    if state.amg is None:
-        state.amg = instance_segmentation.get_amg(state.predictor, is_tiled)
-
     i = int(viewer.cursor.position[0])
-    shape = state.image_shape[-2:]
-
-    if i in state.amg_state:
-        amg_state_i = state.amg_state[i]
-        state.amg.set_state(amg_state_i)
-
-    else:
-        # we don't need to pass the actual image data here, since the embeddings are passed
-        # (the image data is only used by the amg to compute image embeddings, so not needed here)
-        dummy_image = np.zeros(shape, dtype="uint8")
-
-        state.amg.initialize(dummy_image, image_embeddings=state.image_embeddings, verbose=True, i=i)
-        amg_state_i = state.amg.get_state()
-
-        state.amg_state[i] = amg_state_i
-        cache_folder = state.amg_state["cache_folder"]
-        if cache_folder is not None:
-            cache_path = os.path.join(cache_folder, f"state-{i}.pkl")
-            with open(cache_path, "wb") as f:
-                pickle.dump(amg_state_i, f)
-
-    seg = state.amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
-
-    seg = instance_segmentation.mask_data_to_segmentation(
-        seg, with_background=with_background, min_object_size=min_object_size
+    _instance_segmentation_impl(
+        viewer, with_background, min_object_size, i=i,
+        pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh
     )
-    assert isinstance(seg, np.ndarray)
 
-    viewer.layers["auto_segmentation"].data[i] = seg
-    viewer.layers["auto_segmentation"].refresh()
+
+# TODO enable switching between 2d and 3d segmentation
+# TODO should be wrapped in a threadworker
+# TODO more parameters
+@magic_factory(
+    call_button="Automatic Segmentation",
+    min_object_size={"min": 0, "max": 10000},
+)
+def instance_seg_widget_3d(
+    viewer: "napari.viewer.Viewer",
+    min_object_size: int = 100,
+    with_background: bool = True,
+) -> None:
+    i = int(viewer.cursor.position[0])
+    # TODO more parameters
+    _instance_segmentation_impl(
+        viewer, with_background, min_object_size, i=i,
+        min_size=min_object_size,
+    )
