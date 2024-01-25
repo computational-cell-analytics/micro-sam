@@ -53,6 +53,7 @@ def get_partial_finetuning_plots():
     ax = sns.barplot(x="name", y="results", hue="type", data=res_df)
     ax.set(xlabel="Finetuned Parts", ylabel="Segmentation Quality")
     plt.legend(title="Settings", bbox_to_anchor=(1, 1))
+    plt.title("Partial Finetuning")
 
     save_path = "partial_finetuning.png"
     plt.savefig(save_path)
@@ -78,7 +79,7 @@ def get_partial_finetuning_combinations():
 def get_n_objects_plots(max_objects=45):
     exp_root = os.path.join(EXPERIMENT_ROOT, "n_objects_per_batch")
 
-    amg_list, ais_list, _1p_list, _box_list, _itp_p_last_list, _ipt_b_last_list = [], [], [], [], [], []
+    amg_list, ais_list, _1p_list, _box_list, _itp_p_last_list, _itp_b_last_list = [], [], [], [], [], []
     all_n_objects = [*range(1, max_objects+1)]
     for i in all_n_objects:
         experiment_folder = os.path.join(exp_root, f"{i}", "results")
@@ -93,22 +94,26 @@ def get_n_objects_plots(max_objects=45):
         _1p_list.append(itp_p.iloc[0]["msa"])
         _box_list.append(itp_b.iloc[0]["msa"])
         _itp_p_last_list.append(itp_p.iloc[-1]["msa"])
-        _ipt_b_last_list.append(itp_b.iloc[-1]["msa"])
+        _itp_b_last_list.append(itp_b.iloc[-1]["msa"])
 
     plt.figure(figsize=(10, 10))
 
-    plt.plot(all_n_objects, amg_list, label="amg")
-    plt.plot(all_n_objects, ais_list, label="ais")
-    plt.plot(all_n_objects, _1p_list, label="1pn0")
-    plt.plot(all_n_objects, _box_list, label="box")
-    plt.plot(all_n_objects, _itp_p_last_list, label="ip")
-    plt.plot(all_n_objects, _ipt_b_last_list, label="ib")
+    res = {
+        "name": list(range(1, len(amg_list) + 1)),
+        "amg": amg_list,
+        "ais": ais_list,
+        "1pn0": _1p_list,
+        "box": _box_list,
+        "ip": _itp_p_last_list,
+        "ib": _itp_b_last_list
+    }
 
-    plt.legend(bbox_to_anchor=(1, 1))
-    plt.xticks(range(0, len(all_n_objects) + 1, 5))
+    res_df = pd.DataFrame.from_dict(res)
 
-    plt.xlabel("n_objects")
-    plt.ylabel("Segmentation Quality")
+    ax = sns.lineplot(x="name", y="value", hue="variable", data=pd.melt(res_df, ["name"]))
+    ax.set(xlabel="n_objects", ylabel="Segmentation Quality")
+
+    plt.legend(title="Settings", bbox_to_anchor=(1, 1))
     plt.title("Number of Objects for Finetuning")
 
     save_path = "n_objects.png"
