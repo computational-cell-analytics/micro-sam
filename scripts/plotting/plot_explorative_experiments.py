@@ -29,18 +29,18 @@ def get_partial_finetuning_plots():
 
         experiment_folder = os.path.join(experiment_folder, "results")
 
-        # amg = pd.read_csv(os.path.join(experiment_folder, "amg.csv"))
+        amg = pd.read_csv(os.path.join(experiment_folder, "amg.csv"))
         ais = pd.read_csv(os.path.join(experiment_folder, "instance_segmentation_with_decoder.csv"))
         itp_p = pd.read_csv(os.path.join(experiment_folder, "iterative_prompts_start_point.csv"))
         itp_b = pd.read_csv(os.path.join(experiment_folder, "iterative_prompts_start_box.csv"))
 
         res = [
-            # {"name": _plot_object, "type": "amg", "results": amg.iloc[0]["msa"]},
+            {"name": _plot_object, "type": "amg", "results": amg.iloc[0]["msa"]},
             {"name": _plot_object, "type": "ais", "results": ais.iloc[0]["msa"]},
             {"name": _plot_object, "type": "1pn0", "results": itp_p.iloc[0]["msa"]},
             {"name": _plot_object, "type": "box", "results": itp_b.iloc[0]["msa"]},
-            {"name": _plot_object, "type": "ip", "results": itp_p.iloc[-1]["msa"]},
-            {"name": _plot_object, "type": "ib", "results": itp_b.iloc[-1]["msa"]}
+            {"name": _plot_object, "type": r"i$_{p}$", "results": itp_p.iloc[-1]["msa"]},
+            {"name": _plot_object, "type": r"i$_{b}$", "results": itp_b.iloc[-1]["msa"]}
         ]
         res = [pd.DataFrame(_res, index=[i]) for i, _res in enumerate(res)]
         res = pd.concat(res, ignore_index=True)
@@ -104,8 +104,8 @@ def get_n_objects_plots(max_objects=45):
         "ais": ais_list,
         "1pn0": _1p_list,
         "box": _box_list,
-        "ip": _itp_p_last_list,
-        "ib": _itp_b_last_list
+        r"i$_{p}$": _itp_p_last_list,
+        r"i$_{b}$": _itp_b_last_list
     }
 
     res_df = pd.DataFrame.from_dict(res)
