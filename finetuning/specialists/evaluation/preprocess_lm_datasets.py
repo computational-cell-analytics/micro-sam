@@ -127,6 +127,39 @@ def for_covid_if(save_dir):
     make_custom_splits(val_samples=5, save_dir=save_dir)
 
 
+def for_tissuenet(save_dir):
+    pass
+
+
+def for_deepbacs(save_dir):
+    pass
+
+
+def for_plantseg_root(save_dir):
+    pass
+
+
+def for_hpa(save_dir):
+    pass
+
+
+def for_lizard(save_dir):
+    pass
+
+
+def for_mouse_embryo(save_dir):
+    pass
+
+
+def plantseg_ovules(save_dir):
+    pass
+
+
+# TODO:
+# checkout CTC datasets (HeLa and potentially others as well)
+# checkout NeurIPS CellSeg val set
+
+
 def main():
     # let's ensure all the data is downloaded
     download_lm_dataset(ROOT)
