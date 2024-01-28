@@ -80,7 +80,7 @@ def finetune_mito_nuc_em_generalist(args):
         n_objects_per_batch=n_objects_per_batch,
         n_sub_iteration=8,
         compile_model=False,
-        mask_prob=args.mask_prob,  # (optional) overwrite to provide the probability of using mask inputs while training
+        mask_prob=args.mask_prob,  # (default: 0.5) provides the probability of using mask inputs while training
         unetr=unetr,
         instance_loss=DiceBasedDistanceLoss(mask_distances_in_bg=True),
         instance_metric=DiceBasedDistanceLoss(mask_distances_in_bg=True)
