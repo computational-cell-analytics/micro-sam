@@ -61,8 +61,6 @@ def finetune_mito_nuc_em_generalist(args):
 
     checkpoint_name = f"{args.model_type}/mito_nuc_em_generalist_sam"
 
-    print(args.mask_prob)
-
     # the trainer which performs the joint training and validation (implemented using "torch_em")
     trainer = sam_training.JointSamTrainer(
         name=checkpoint_name,
@@ -118,6 +116,10 @@ def main():
     parser.add_argument(
         "--export_path", "-e",
         help="Where to export the finetuned model to. The exported model can be used in the annotation tools."
+    )
+    parser.add_argument(
+        "--freeze", type=str, nargs="+", default=None,
+        help="Which parts of the model to freeze for finetuning."
     )
     parser.add_argument(
         "--save_every_kth_epoch", type=int, default=None,
