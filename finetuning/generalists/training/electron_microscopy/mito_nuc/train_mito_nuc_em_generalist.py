@@ -54,16 +54,14 @@ def finetune_mito_nuc_em_generalist(args):
     # all the stuff we need for training
     optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=15, verbose=True)
-    train_loader, val_loader = get_generalist_mito_nuc_loaders(
-        input_path=args.input_path, patch_shape=patch_shape, with_cem=args.with_cem
-    )
+    train_loader, val_loader = get_generalist_mito_nuc_loaders(input_path=args.input_path, patch_shape=patch_shape)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
     convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
 
-    checkpoint_name = f"{args.model_type}/"
-    checkpoint_name += "with_cem/" if args.with_cem else "without_cem/"
-    checkpoint_name += "mito_nuc_em_generalist_sam"
+    checkpoint_name = f"{args.model_type}/mito_nuc_em_generalist_sam"
+
+    print(args.mask_prob)
 
     # the trainer which performs the joint training and validation (implemented using "torch_em")
     trainer = sam_training.JointSamTrainer(
@@ -82,7 +80,7 @@ def finetune_mito_nuc_em_generalist(args):
         n_objects_per_batch=n_objects_per_batch,
         n_sub_iteration=8,
         compile_model=False,
-        mask_prob=0.5,  # (optional) overwrite to provide the probability of using mask inputs while training
+        mask_prob=args.mask_prob,  # (optional) overwrite to provide the probability of using mask inputs while training
         unetr=unetr,
         instance_loss=DiceBasedDistanceLoss(mask_distances_in_bg=True),
         instance_metric=DiceBasedDistanceLoss(mask_distances_in_bg=True)
@@ -126,8 +124,7 @@ def main():
         help="To save every kth epoch while fine-tuning. Expects an integer value."
     )
     parser.add_argument(
-        "--with_cem", action="store_true",
-        help="To train the Mito-Nuc EM generalist using the MitoLab CEM dataset."
+        "--mask_prob", type=float, default=0.5, help="The probability of using mask inputs for iterative training."
     )
     args = parser.parse_args()
     finetune_mito_nuc_em_generalist(args)
