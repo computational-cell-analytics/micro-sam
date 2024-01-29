@@ -205,6 +205,13 @@ You can follow the instrutions <a href="https://mamba.readthedocs.io/en/latest/i
 <pre><code>$ mamba create -c conda-forge -n micro-sam micro_sam
 </code></pre>
 
+<p>if you want to use the GPU you need to install PyTorch from the <code>pytorch</code> channel instead of <code>conda-forge</code>. For example:</p>
+
+<pre><code>$ mamba create -c pytorch -c nvidia -c conda-forge micro_sam pytorch pytorch-cuda=12.1
+</code></pre>
+
+<p>You may need to change this command to install the correct CUDA version for your computer, see <a href="https://pytorch.org/">https://pytorch.org/</a> for details.</p>
+
 <p>You also need to install napari to use the annotation tool:</p>
 
 <pre><code>$ mamba install -c conda-forge napari pyqt
@@ -234,7 +241,7 @@ You can follow the instrutions <a href="https://mamba.readthedocs.io/en/latest/i
 <li>Enter it:</li>
 </ol>
 
-<pre><code>$ cd micro_sam
+<pre><code>$ cd micro-sam
 </code></pre>
 
 <ol start="3">
@@ -485,7 +492,7 @@ You can activate tiling by passing the parameters <code>tile_shape</code>, which
 <li>Note that prediction with tiling only works when the embeddings are cached to file, so you must specify an <code>embedding_path</code> (<code>-e</code> in the CLI).</li>
 <li>You should choose the <code>halo</code> such that it is larger than half of the maximal radius of the objects your segmenting.</li>
 </ul></li>
-<li>The applications pre-compute the image embeddings produced by SegmentAnything and (optionally) store them on disc. If you are using a CPU this step can take a while for 3d data or timeseries (you will see a progress bar with a time estimate). If you have access to a GPU without graphical interface (e.g. via a local computer cluster or a cloud provider), you can also pre-compute the embeddings there and then copy them to your laptop / local machine to speed this up. You can use the command <code><a href="micro_sam/precompute_state.html">micro_sam.precompute_state</a></code> for this (it is installed with the rest of the applications). You can specify the location of the precomputed embeddings via the <code>embedding_path</code> argument.</li>
+<li>The applications pre-compute the image embeddings produced by SegmentAnything and (optionally) store them on disc. If you are using a CPU this step can take a while for 3d data or timeseries (you will see a progress bar with a time estimate). If you have access to a GPU without graphical interface (e.g. via a local computer cluster or a cloud provider), you can also pre-compute the embeddings there and then copy them to your laptop / local machine to speed this up. You can use the command <code>micro_sam.precompute_embeddings</code> for this (it is installed with the rest of the applications). You can specify the location of the precomputed embeddings via the <code>embedding_path</code> argument.</li>
 <li>Most other processing steps are very fast even on a CPU, so interactive annotation is possible. An exception is the automatic segmentation step (2d segmentation), which takes several minutes without a GPU (depending on the image size). For large volumes and timeseries segmenting an object in 3d / tracking across time can take a couple settings with a CPU (it is very fast with a GPU).</li>
 <li>You can also try using a smaller version of the SegmentAnything model to speed up the computations. For this you can pass the <code>model_type</code> argument and either set it to <code>vit_b</code> or to <code>vit_l</code> (default is <code>vit_h</code>). However, this may lead to worse results.</li>
 <li>You can save and load the results from the <code>committed_objects</code> / <code>committed_tracks</code> layer to correct segmentations you obtained from another tool (e.g. CellPose) or to save intermediate annotation results. The results can be saved via <code>File -&gt; Save Selected Layer(s) ...</code> in the napari menu (see the tutorial videos for details). They can be loaded again by specifying the corresponding location via the <code>segmentation_result</code> (2d and 3d segmentation) or <code>tracking_result</code> (tracking) argument.</li>
@@ -516,6 +523,15 @@ You can activate tiling by passing the parameters <code>tile_shape</code>, which
 <li>implements training functionality that can be used for finetuning on your own data in <code><a href="micro_sam/training.html">micro_sam.training</a></code>.</li>
 <li>provides functionality for quantitative and qualitative evaluation of Segment Anything models in <code><a href="micro_sam/evaluation.html">micro_sam.evaluation</a></code>.</li>
 </ul>
+
+<p>You can import these sub-modules via</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code><span class="kn">import</span> <span class="nn"><a href="micro_sam/prompt_based_segmentation.html">micro_sam.prompt_based_segmentation</a></span>
+<span class="kn">import</span> <span class="nn"><a href="micro_sam/instance_segmentation.html">micro_sam.instance_segmentation</a></span>
+<span class="c1"># etc.</span>
+</code></pre>
+</div>
 
 <p>This functionality is used to implement the interactive annotation tools and can also be used as a standalone python library.
 Some preliminary examples for how to use the python library can be found <a href="https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/use_as_library">here</a>. Check out the <code>Submodules</code> documentation for more details.</p>
