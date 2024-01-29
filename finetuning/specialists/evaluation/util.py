@@ -8,6 +8,7 @@ from micro_sam.evaluation import get_predictor
 
 
 ROOT = "/scratch/projects/nim00007/sam/data/"
+
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/new_models"
 
 VANILLA_MODELS = {
@@ -26,7 +27,27 @@ DATASETS = {
             os.path.join(ROOT, "covid_if", "slices", "test", "raw", "*"),
             os.path.join(ROOT, "covid_if", "slices", "test", "labels", "*")
         ]
-    }
+    },
+    "tissuenet": {
+        "val": [
+            os.path.join(ROOT, "tissuenet", "slices", "val", "raw", "*"),
+            os.path.join(ROOT, "tissuenet", "slices", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "tissuenet", "slices", "test", "raw", "*"),
+            os.path.join(ROOT, "tissuenet", "slices", "test", "labels", "*")
+        ]
+    },
+    "deepbacs": {
+        "val": [
+            os.path.join(ROOT, "deepbacs", "mixed", "val", "source", "*"),
+            os.path.join(ROOT, "deepbacs", "mixed", "val", "target", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "deepbacs", "mixed", "test", "source", "*"),
+            os.path.join(ROOT, "deepbacs", "mixed", "test", "target", "*")
+        ]
+    },
 }
 
 
@@ -53,6 +74,53 @@ def get_pred_paths(prediction_folder):
 def download_lm_dataset(path):
     # covid-if
     datasets.get_covid_if_dataset(os.path.join(path, "covid_if"), patch_shape=(1, 512, 512), download=True)
+
+    # tissuenet: data cannot be downloaded automatically. please download from here - https://datasets.deepcell.org/data
+
+    # deepbacs
+    datasets.get_deepbacs_dataset(os.path.join(path, "deepbacs"), split="train", patch_shape=(256, 256), download=True)
+    datasets.get_deepbacs_dataset(os.path.join(path, "deepbacs"), split="val", patch_shape=(256, 256), download=True)
+    datasets.get_deepbacs_dataset(os.path.join(path, "deepbacs"), split="test", patch_shape=(256, 256), download=True)
+
+    # plantseg root
+    datasets.get_plantseg_dataset(
+        os.path.join(path, "plantseg"), name="root", split="train", patch_shape=(1, 512, 512), download=True
+    )
+    datasets.get_plantseg_dataset(
+        os.path.join(path, "plantseg"), name="root", split="val", patch_shape=(1, 512, 512), download=True
+    )
+    datasets.get_plantseg_dataset(
+        os.path.join(path, "plantseg"), name="root", split="test", patch_shape=(1, 512, 512), download=True
+    )
+
+    # hpa
+    datasets.get_hpa_segmentation_dataset(
+        os.path.join(path, "hpa"), split="train", patch_shape=(512, 512), download=True
+    )
+    datasets.get_hpa_segmentation_dataset(
+        os.path.join(path, "hpa"), split="val", patch_shape=(512, 512), download=True
+    )
+
+    # lizard: see `torch_em.data.datasets.get_lizard_dataset` for details to download the dataset
+
+    # mouse embryo
+    datasets.get_mouse_embryo_dataset(
+        os.path.join(path, "mouse-embryo"), name="nuclei", split="train", patch_shape=(1, 512, 512), download=True
+    )
+    datasets.get_mouse_embryo_dataset(
+        os.path.join(path, "mouse-embryo"), name="nuclei", split="val", patch_shape=(1, 512, 512), download=True
+    )
+
+    # plantseg ovules
+    datasets.get_plantseg_dataset(
+        os.path.join(path, "plantseg"), name="ovules", split="train", patch_shape=(1, 512, 512), download=True
+    )
+    datasets.get_plantseg_dataset(
+        os.path.join(path, "plantseg"), name="ovules", split="val", patch_shape=(1, 512, 512), download=True
+    )
+    datasets.get_plantseg_dataset(
+        os.path.join(path, "plantseg"), name="ovules", split="test", patch_shape=(1, 512, 512), download=True
+    )
 
 
 #
