@@ -286,9 +286,52 @@ def for_mouse_embryo(save_dir):
     save_slices_per_split(mouse_embryo_test_vols, "test")
 
 
-# TODO:
-# checkout CTC datasets (HeLa and potentially others as well)
-# checkout NeurIPS CellSeg val set
+def for_ctc(save_dir):
+    """
+    We only infer on DIC-HeLa for now.
+    for validation: first 10 slices from `train`
+    for testing: rest slices from `train`
+
+    TODO: add all datasets later for inference, ideally get dataloaders in torch-em for all of them.
+    """
+    all_hela_image_paths = sorted(
+        glob(os.path.join(ROOT, "ctc", "hela_samples", "DIC-C2DH-HeLa.zip.unzip", "DIC-C2DH-HeLa", "01/", "*"))
+    )
+    all_hela_label_paths = sorted(
+        glob(os.path.join(ROOT, "ctc", "hela_samples", "hela-ctc-01-gt.zip.unzip", "masks", "*"))
+    )
+
+    os.makedirs(os.path.join(save_dir, "raw"), exist_ok=True)
+    os.makedirs(os.path.join(save_dir, "labels"), exist_ok=True)
+
+    for image_path, label_path in tqdm(
+        zip(all_hela_image_paths, all_hela_label_paths), total=len(all_hela_image_paths)
+    ):
+        image_id = os.path.split(image_path)[-1]
+        label_id = os.path.split(label_path)[-1]
+
+        dst_image_path = os.path.join(save_dir, "raw", image_id)
+        dst_label_path = os.path.join(save_dir, "labels", label_id)
+
+        shutil.copy(image_path, dst_image_path)
+        shutil.copy(label_path, dst_label_path)
+
+    make_custom_splits(10, save_dir)
+
+
+def for_neurips_cellseg(save_dir):
+    """
+    we infer on the `TuningSet` - the data for open-evaluation on grand-challenge
+
+    val set info is here: /home/nimanwai/torch-em/torch_em/data/datasets/split_0.1.json
+
+    for validation: use the true val set used
+    for testing: use the `TuningSet` and `TestforSam`
+    """
+    all_image_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "new", "Tuning", "images", "*")))
+    all_label_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "new", "Tuning", "labels", "*")))
+
+    raise NotImplementedError
 
 
 def main():
@@ -296,13 +339,10 @@ def main():
     download_lm_dataset(ROOT)
 
     # name of the dataset - to get the volumes and save the slices
-    dataset_name = "plantseg"
-
-    # paths to save the raw and label slices
-    save_dir = os.path.join(ROOT, dataset_name, "slices")
+    dataset_name = "neurps-cell-seg/new/"
 
     # now let's save the slices as tif
-    for_plantseg(save_dir)
+    for_neurips_cellseg(os.path.join(ROOT, dataset_name, "slices"))
 
 
 if __name__ == "__main__":
