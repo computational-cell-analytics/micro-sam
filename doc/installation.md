@@ -27,6 +27,11 @@ or you can create a new environment (here called `micro-sam`) via
 ```
 $ mamba create -c conda-forge -n micro-sam micro_sam
 ```
+if you want to use the GPU you need to install PyTorch from the `pytorch` channel instead of `conda-forge`. For example:
+```
+$ mamba create -c pytorch -c nvidia -c conda-forge micro_sam pytorch pytorch-cuda=12.1
+```
+You may need to change this command to install the correct CUDA version for your computer, see [https://pytorch.org/](https://pytorch.org/) for details.
 
 You also need to install napari to use the annotation tool:
 ```
