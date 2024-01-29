@@ -468,10 +468,12 @@ def _instance_segmentation_impl(viewer, with_background, min_object_size, i=None
         state.amg.initialize(dummy_image, image_embeddings=state.image_embeddings, verbose=True)
 
     seg = state.amg.generate(**kwargs)
-
-    seg = instance_segmentation.mask_data_to_segmentation(
-        seg, with_background=with_background, min_object_size=min_object_size
-    )
+    if len(seg) == 0:
+        seg = np.zeros(shape[-2:], dtype=viewer.layers["auto_segmentation"].data.dtype)
+    else:
+        seg = instance_segmentation.mask_data_to_segmentation(
+            seg, with_background=with_background, min_object_size=min_object_size
+        )
     assert isinstance(seg, np.ndarray)
 
     if i is None:
