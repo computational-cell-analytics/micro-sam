@@ -75,24 +75,24 @@ class _AnnotatorBase(Container):
         self.extend(widget_list)
 
     def _create_keybindings(self):
-        @self._viewer.bind_key("s")
+        @self._viewer.bind_key("s", overwrite=True)
         def _segment(viewer):
             self._segment_widget(viewer)
 
-        @self._viewer.bind_key("c")
+        @self._viewer.bind_key("c", overwrite=True)
         def _commit(viewer):
             self._commit_widget(viewer)
 
-        @self._viewer.bind_key("t")
+        @self._viewer.bind_key("t", overwrite=True)
         def _toggle_label(event=None):
             vutil.toggle_label(self._point_prompt_layer)
 
-        @self._viewer.bind_key("Shift-C")
+        @self._viewer.bind_key("Shift-C", overwrite=True)
         def _clear_annotations(viewer):
             self._clear_widget(viewer)
 
         if hasattr(self, "_segment_nd_widget"):
-            @self._viewer.bind_key("Shift-S")
+            @self._viewer.bind_key("Shift-S", overwrite=True)
             def _seg_nd(viewer):
                 self._segment_nd_widget(viewer)
 
