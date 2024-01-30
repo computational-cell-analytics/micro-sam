@@ -15,7 +15,7 @@ def run_eval_process(cmd):
 
 
 def run_specific_experiment(dataset_name, model_type, experiment_set):
-    cmd = CMD + f"-d {dataset_name} " + f"-m {model_type} " + f"-e {experiment_set} "
+    cmd = CMD + f"-d {dataset_name} " + f"-m {model_type} " + f"-e {experiment_set}"
     print(f"Running the command: {cmd} \n")
 
     _cmd = re.split(r"\s", cmd)
