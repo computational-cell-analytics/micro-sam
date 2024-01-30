@@ -367,6 +367,10 @@ def for_sponge_em(save_dir):
     make_custom_splits(val_samples=10, save_dir=save_dir)
 
 
+# TODO:
+# CREMI, ISBI, AxonDeepSeg?, Platy Cells, VNC?
+
+
 def main():
     # let's ensure all the data is downloaded
     download_em_dataset(ROOT)

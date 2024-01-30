@@ -32,43 +32,39 @@ DATASETS = {
             os.path.join(ROOT, "snemi", "slices", "test", "labels", "*")
         ]
     },
-    "nuc_mm": {
-        "mouse": {
-            "val": [
-                os.path.join(ROOT, "nuc_mm", "slices", "mouse", "raw", "nuc_mm_val_*"),
-                os.path.join(ROOT, "nuc_mm", "slices", "mouse", "labels", "nuc_mm_val_*")
-            ],
-            "test": [
-                os.path.join(ROOT, "nuc_mm", "slices", "mouse", "raw", "nuc_mm_train_*"),
-                os.path.join(ROOT, "nuc_mm", "slices", "mouse", "labels", "nuc_mm_train_*")
-            ]
-        },
-        "zebrafish": {
-            "val": [
-                os.path.join(ROOT, "nuc_mm", "slices", "zebrafish", "raw", "nuc_mm_val_*"),
-                os.path.join(ROOT, "nuc_mm", "slices", "zebrafish", "labels", "nuc_mm_val_*")
-            ],
-            "test": [
-                os.path.join(ROOT, "nuc_mm", "slices", "zebrafish", "raw", "nuc_mm_train_*"),
-                os.path.join(ROOT, "nuc_mm", "slices", "zebrafish", "labels", "nuc_mm_train_*")
-            ]
-        }
+    "nuc-mm-m": {
+        "val": [
+            os.path.join(ROOT, "nuc_mm", "slices", "mouse", "raw", "nuc_mm_val_*"),
+            os.path.join(ROOT, "nuc_mm", "slices", "mouse", "labels", "nuc_mm_val_*")
+        ],
+        "test": [
+            os.path.join(ROOT, "nuc_mm", "slices", "mouse", "raw", "nuc_mm_train_*"),
+            os.path.join(ROOT, "nuc_mm", "slices", "mouse", "labels", "nuc_mm_train_*")
+        ]
     },
-    "platynereis": {
-        "cilia": {
-            "val": [
-                os.path.join(ROOT, "platynereis", "slices", "cilia", "raw", "platy_cilia_val_*"),
-                os.path.join(ROOT, "platynereis", "slices", "cilia", "labels", "platy_cilia_val_*")
-            ],
-            "test": [
-                os.path.join(ROOT, "platynereis", "slices", "cilia", "raw", "platy_cilia_test_*"),
-                os.path.join(ROOT, "platynereis", "slices", "cilia", "labels", "platy_cilia_test_*")
-            ]
-        },
-        "nuclei": {
-            "val": None,
-            "test": None
-        }
+    "nuc-mm-z": {
+        "val": [
+            os.path.join(ROOT, "nuc_mm", "slices", "zebrafish", "raw", "nuc_mm_val_*"),
+            os.path.join(ROOT, "nuc_mm", "slices", "zebrafish", "labels", "nuc_mm_val_*")
+        ],
+        "test": [
+            os.path.join(ROOT, "nuc_mm", "slices", "zebrafish", "raw", "nuc_mm_train_*"),
+            os.path.join(ROOT, "nuc_mm", "slices", "zebrafish", "labels", "nuc_mm_train_*")
+        ]
+    },
+    "platy-cilia": {
+        "val": [
+            os.path.join(ROOT, "platynereis", "slices", "cilia", "raw", "platy_cilia_val_*"),
+            os.path.join(ROOT, "platynereis", "slices", "cilia", "labels", "platy_cilia_val_*")
+        ],
+        "test": [
+            os.path.join(ROOT, "platynereis", "slices", "cilia", "raw", "platy_cilia_test_*"),
+            os.path.join(ROOT, "platynereis", "slices", "cilia", "labels", "platy_cilia_test_*")
+        ]
+    },
+    "platy-nuclei": {
+        "val": None,
+        "test": None
     },
     "mitoem": {
         "val": [
@@ -97,13 +93,9 @@ def get_model(model_type, ckpt):
     return predictor
 
 
-def get_paths(dataset_name, split="test", species=None):
+def get_paths(dataset_name, split):
     assert dataset_name in DATASETS
-    if species is None:
-        image_dir, gt_dir = DATASETS[dataset_name][split]
-    else:
-        image_dir, gt_dir = DATASETS[dataset_name][species][split]
-
+    image_dir, gt_dir = DATASETS[dataset_name][split]
     image_paths = sorted(glob(os.path.join(image_dir)))
     gt_paths = sorted(glob(os.path.join(gt_dir)))
     return image_paths, gt_paths
@@ -169,7 +161,6 @@ def get_default_arguments():
     parser.add_argument("-c", "--checkpoint", type=none_or_str, required=True, default=None)
     parser.add_argument("-e", "--experiment_folder", type=str, required=True)
     parser.add_argument("-d", "--dataset", type=str, required=True)
-    parser.add_argument("--species", type=str, default=None)
     parser.add_argument("--box", action="store_true", help="If passed, starts with first prompt as box")
     args = parser.parse_args()
     return args
