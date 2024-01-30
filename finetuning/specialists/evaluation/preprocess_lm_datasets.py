@@ -396,13 +396,13 @@ def main():
     download_lm_dataset(ROOT)
 
     # now let's save the slices as tif
-    # for_covid_if(os.path.join(ROOT, "covid_if", "slices"))
-    # for_tissuenet(os.path.join(ROOT, "tissuenet", "slices"))
-    # for_plantseg((os.path.join(ROOT, "plantseg", "slices")))
-    # for_hpa(os.path.join(ROOT, "hpa", "slices"))
-    # for_lizard(os.path.join(ROOT, "lizard", "slices"))
-    # for_mouse_embryo(os.path.join(ROOT, "mouse-embryo", "slices"))
-    # for_ctc((os.path.join(ROOT, "ctc/hela_samples", "slices")))
+    for_covid_if(os.path.join(ROOT, "covid_if", "slices"))
+    for_tissuenet(os.path.join(ROOT, "tissuenet", "slices"))
+    for_plantseg((os.path.join(ROOT, "plantseg", "slices")))
+    for_hpa(os.path.join(ROOT, "hpa", "slices"))
+    for_lizard(os.path.join(ROOT, "lizard", "slices"))
+    for_mouse_embryo(os.path.join(ROOT, "mouse-embryo", "slices"))
+    for_ctc((os.path.join(ROOT, "ctc/hela_samples", "slices")))
     for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"))
 
 
