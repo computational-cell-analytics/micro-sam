@@ -46,7 +46,7 @@ def for_all_lm():
 
 
 def main():
-    pass
+    for_all_lm()
 
 
 if __name__ == "__main__":
