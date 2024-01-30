@@ -10,6 +10,7 @@ from pathlib import Path
 import imageio.v3 as imageio
 from skimage.measure import label
 
+from torch_em.data import datasets
 from torch_em.transform.raw import normalize, normalize_percentile
 
 from util import ROOT, download_lm_dataset
@@ -135,6 +136,9 @@ def from_h5_to_tif(
         elif raw.ndim == 3 and labels.ndim == 2:  # when we have a multi-channel input (rgb)
             if raw.shape[0] == 4:  # hpa has 4 channel inputs (0: microtubules, 1: protein, 2: nuclei, 3: er)
                 raw = raw[1:]
+
+            # making channels last (to make use of 3-channel inputs)
+            raw = raw.transpose(1, 2, 0)
 
             save_to_tif(0, raw, labels, crop_shape, raw_dir, labels_dir, do_connected_components, slice_prefix_name)
 
@@ -331,6 +335,17 @@ def for_neurips_cellseg(save_dir, use_tuning_set=False):
     for validation: use the true val set used
     for testing: use the `TuningSet` and `TestForSam`
     """
+    def neurips_raw_trafo(raw):
+        if raw.ndim == 3 and raw.shape[-1] == 3:  # make channels first
+            raw = raw.transpose(2, 0, 1)
+
+        raw = datasets.neurips_cell_seg.to_rgb(raw)  # ensures 3 channels for the neurips data
+        raw = normalize_percentile(raw)
+        raw = np.mean(raw, axis=0)
+        raw = normalize(raw)
+        raw = raw * 255
+        return raw
+
     # let's get the val slices
     from torch_em.data.datasets.neurips_cell_seg import _get_image_and_label_paths
     val_image_paths, val_label_paths = _get_image_and_label_paths(
@@ -342,12 +357,12 @@ def for_neurips_cellseg(save_dir, use_tuning_set=False):
 
     for image_path, label_path in tqdm(zip(val_label_paths, val_label_paths), total=len(val_image_paths)):
         image_id = os.path.split(image_path)[-1]
-        label_id = os.path.split(label_path)[-1]
-
         dst_image_path = os.path.join(save_dir, "val", "raw", image_id)
-        dst_label_path = os.path.join(save_dir, "val", "labels", label_id)
+        # converting all images to one channel image - same as generalist training logic
+        imageio.imwrite(dst_image_path, neurips_raw_trafo(imageio.imread(image_path)))
 
-        shutil.copy(image_path, dst_image_path)
+        label_id = os.path.split(label_path)[-1]
+        dst_label_path = os.path.join(save_dir, "val", "labels", label_id)
         shutil.copy(label_path, dst_label_path)
 
     # now, let's get the test slices
@@ -363,16 +378,16 @@ def for_neurips_cellseg(save_dir, use_tuning_set=False):
         )
 
     os.makedirs(os.path.join(save_dir, "test", "raw"), exist_ok=True)
-    os.makedirs(os.path.join(save_dir, "test", "lanels"), exist_ok=True)
+    os.makedirs(os.path.join(save_dir, "test", "labels"), exist_ok=True)
 
     for image_path, label_path in tqdm(zip(test_image_paths, test_label_paths), total=len(test_image_paths)):
-        image_id = os.path.split(image_path)[-1]
+        image_id = Path(image_path).stem
+        dst_image_path = os.path.join(save_dir, "test", "raw", f"{image_id}.tif")
+        # converting all images to one channel image - same as generalist training logic
+        imageio.imwrite(dst_image_path, neurips_raw_trafo(imageio.imread(image_path)))
+
         label_id = os.path.split(label_path)[-1]
-
-        dst_image_path = os.path.join(save_dir, "val", "raw", image_id)
-        dst_label_path = os.path.join(save_dir, "val", "labels", label_id)
-
-        shutil.copy(image_path, dst_image_path)
+        dst_label_path = os.path.join(save_dir, "test", "labels", label_id)
         shutil.copy(label_path, dst_label_path)
 
 
@@ -380,11 +395,15 @@ def main():
     # let's ensure all the data is downloaded
     download_lm_dataset(ROOT)
 
-    # name of the dataset - to get the volumes and save the slices
-    dataset_name = "neurips-cell-seg"
-
     # now let's save the slices as tif
-    for_neurips_cellseg(os.path.join(ROOT, dataset_name, "slices"))
+    # for_covid_if(os.path.join(ROOT, "covid_if", "slices"))
+    # for_tissuenet(os.path.join(ROOT, "tissuenet", "slices"))
+    # for_plantseg((os.path.join(ROOT, "plantseg", "slices")))
+    # for_hpa(os.path.join(ROOT, "hpa", "slices"))
+    # for_lizard(os.path.join(ROOT, "lizard", "slices"))
+    # for_mouse_embryo(os.path.join(ROOT, "mouse-embryo", "slices"))
+    # for_ctc((os.path.join(ROOT, "ctc/hela_samples", "slices")))
+    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"))
 
 
 if __name__ == "__main__":

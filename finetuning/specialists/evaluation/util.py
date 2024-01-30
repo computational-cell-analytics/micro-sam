@@ -48,6 +48,76 @@ DATASETS = {
             os.path.join(ROOT, "deepbacs", "mixed", "test", "target", "*")
         ]
     },
+    "plantseg_root": {
+        "val": [
+            os.path.join(ROOT, "plantseg", "slices", "root", "val", "raw", "*"),
+            os.path.join(ROOT, "plantseg", "slices", "root", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "plantseg", "slices", "root", "test", "raw", "*"),
+            os.path.join(ROOT, "plantseg", "slices", "root", "test", "labels", "*")
+        ]
+    },
+    "plantseg_ovules": {
+        "val": [
+            os.path.join(ROOT, "plantseg", "slices", "ovules", "val", "raw", "*"),
+            os.path.join(ROOT, "plantseg", "slices", "ovules", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "plantseg", "slices", "ovules", "test", "raw", "*"),
+            os.path.join(ROOT, "plantseg", "slices", "ovules", "test", "labels", "*")
+        ]
+    },
+    "hpa": {
+        "val": [
+            os.path.join(ROOT, "hpa", "slices", "val", "raw", "*"),
+            os.path.join(ROOT, "hpa", "slices", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "hpa", "slices", "test", "raw", "*"),
+            os.path.join(ROOT, "hpa", "slices", "test", "labels", "*")
+        ]
+    },
+    "lizard": {
+        "val": [
+            os.path.join(ROOT, "lizard", "slices", "val", "raw", "*"),
+            os.path.join(ROOT, "lizard", "slices", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "lizard", "slices", "test", "raw", "*"),
+            os.path.join(ROOT, "lizard", "slices", "test", "labels", "*")
+        ]
+    },
+    "mouse-embryo": {
+        "val": [
+            os.path.join(ROOT, "mouse-embryo", "slices", "val", "raw", "*"),
+            os.path.join(ROOT, "mouse-embryo", "slices", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "mouse-embryo", "slices", "test", "raw", "*"),
+            os.path.join(ROOT, "mouse-embryo", "slices", "test", "labels", "*")
+        ]
+    },
+    "ctc": {
+        "val": [
+            os.path.join(ROOT, "ctc", "hela_samples", "slices", "val", "raw", "*"),
+            os.path.join(ROOT, "ctc", "hela_samples", "slices", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "ctc", "hela_samples", "slices", "test", "raw", "*"),
+            os.path.join(ROOT, "ctc", "hela_samples", "slices", "test", "labels", "*")
+        ]
+    },
+    "neurips-cell-seg": {
+        "val": [
+            os.path.join(ROOT, "neurips-cell-seg", "slices", "val", "raw", "*"),
+            os.path.join(ROOT, "neurips-cell-seg", "slices", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "neurips-cell-seg", "slices", "test", "raw", "*"),
+            os.path.join(ROOT, "neurips-cell-seg", "slices", "test", "labels", "*")
+        ]
+    },
 }
 
 
