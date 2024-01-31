@@ -1,3 +1,4 @@
+import re
 import os
 import shutil
 import subprocess
@@ -6,25 +7,24 @@ from datetime import datetime
 
 
 def write_batch_script(
-    env_name, out_path, inference_setup, checkpoint, model_type, experiment_folder, dataset_name, delay=True
+    env_name, out_path, inference_setup, checkpoint, model_type, experiment_folder, dataset_name, delay=None
 ):
     """Writing scripts with different fold-trainings for micro-sam evaluation
     """
     batch_script = f"""#!/bin/bash
 #SBATCH -c 8
-#SBATCH --mem 128G
+#SBATCH --mem 64G
 #SBATCH -t 2-00:00:00
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
 #SBATCH -A gzz0001
-#SBATCH -x ggpu212
 #SBATCH --job-name={inference_setup}
 
 source ~/.bashrc
 mamba activate {env_name} \n"""
 
-    if delay:
-        batch_script += "sleep 5m \n"
+    if delay is not None:
+        batch_script += f"sleep {delay} \n"
 
     # python script
     python_script = f"python {inference_setup}.py "
@@ -71,29 +71,36 @@ def get_batch_script_names(tmp_folder):
     return batch_script
 
 
-def submit_slurm():
+def submit_slurm(args):
     """Submit python script that needs gpus with given inputs on a slurm node.
     """
     tmp_folder = "./gpu_jobs"
 
     # parameters to run the inference scripts
-    dataset_name = "snemi"  # name of the dataset in lower-case
-    env_name = "sam"
-    model_type = "vit_b"
-    experiment_set = "vanilla"  # infer using generalists or vanilla models
+    dataset_name = args.dataset_name  # name of the dataset in lower-case
+    model_type = args.model_type
+    experiment_set = args.experiment_set  # infer using generalist or vanilla models
+    region = args.roi  # use the organelles model or boundaries model
+    make_delay = "10s"  # wait for precomputing the embeddings and later run inference scripts
 
-    # let's set the experiment type - either using the generalists or just using vanilla model
-    if experiment_set == "generalists":
-        checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/boundaries_em_generalist_sam/best.pt"
+    # let's set the experiment type - either using the generalist or just using vanilla model
+    if experiment_set == "generalist":
+        checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/"
+        if region == "organelles":
+            checkpoint += "with_cem/mito_nuc_em_generalist_sam/best.pt"
+        elif region == "boundaries":
+            checkpoint += "boundaries_em_generalist_sam/best.pt"
+        else:
+            raise ValueError("Choose `region` from organelles / boundaries")
+
     elif experiment_set == "vanilla":
         checkpoint = None
-    else:
-        raise ValueError("Choose from generalists/vanilla")
 
-    experiment_folder = f"/scratch/projects/nim00007/sam/experiments/new_models/{experiment_set}/em/{dataset_name}/"
-    if experiment_set == "generalists":
-        experiment_folder += "boundaries_em_generalist_sam/"
-    experiment_folder += f"{model_type}/"
+    else:
+        raise ValueError("Choose from generalist / vanilla")
+
+    experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/"
+    experiment_folder += f"{experiment_set}/em/{dataset_name}/{model_type}/"
 
     # now let's run the experiments
     if experiment_set == "vanilla":
@@ -102,25 +109,46 @@ def submit_slurm():
         all_setups = ["precompute_embeddings", "evaluate_amg", "evaluate_instance_segmentation", "iterative_prompting"]
     for current_setup in all_setups:
         write_batch_script(
-            env_name=env_name,
+            env_name="sam",
             out_path=get_batch_script_names(tmp_folder),
             inference_setup=current_setup,
             checkpoint=checkpoint,
             model_type=model_type,
             experiment_folder=experiment_folder,
             dataset_name=dataset_name,
-            delay=False if current_setup == "precompute_embeddings" else True
+            delay=None if current_setup == "precompute_embeddings" else make_delay
             )
 
-    for my_script in glob(tmp_folder + "/*"):
+    # the logic below automates the process of first running the precomputation of embeddings, and only then inference.
+    job_id = []
+    for i, my_script in enumerate(sorted(glob(tmp_folder + "/*"))):
         cmd = ["sbatch", my_script]
-        subprocess.run(cmd)
+
+        if i > 0:
+            cmd.insert(1, f"--dependency=afterany:{job_id[0]}")
+
+        cmd_out = subprocess.run(cmd, capture_output=True, text=True)
+        print(cmd_out.stdout if len(cmd_out.stdout) > 1 else cmd_out.stderr)
+
+        if i == 0:
+            job_id.append(re.findall(r'\d+', cmd_out.stdout)[0])
 
 
-if __name__ == "__main__":
+def main(args):
     try:
         shutil.rmtree("./gpu_jobs")
     except FileNotFoundError:
         pass
 
-    submit_slurm()
+    submit_slurm(args)
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-d", "--dataset_name", type=str, required=True)
+    parser.add_argument("-m", "--model_type", type=str, required=True)
+    parser.add_argument("-e", "--experiment_set", type=str, required=True)
+    parser.add_argument("-r", "--roi", type=str, required=True)
+    args = parser.parse_args()
+    main(args)
