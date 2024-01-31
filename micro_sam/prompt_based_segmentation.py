@@ -6,6 +6,7 @@ import warnings
 from typing import Optional, Tuple
 
 import numpy as np
+import torch
 from nifty.tools import blocking
 from skimage.feature import peak_local_max
 from skimage.filters import gaussian
@@ -87,12 +88,14 @@ def _compute_logits_from_mask(mask, eps=1e-3):
 
     elif logits.shape[0] == logits.shape[1]:  # shape is square
         trafo = ResizeLongestSide(expected_shape[0])
-        logits = trafo.apply_image(logits[..., None])
+        logits = trafo.apply_image_torch(torch.from_numpy(logits[None, None]))
+        logits = logits.numpy().squeeze()
 
     else:  # shape is not square
         # resize the longest side to expected shape
         trafo = ResizeLongestSide(expected_shape[0])
-        logits = trafo.apply_image(logits[..., None])
+        logits = trafo.apply_image_torch(torch.from_numpy(logits[None, None]))
+        logits = logits.numpy().squeeze()
 
         # pad the other side
         h, w = logits.shape
