@@ -71,7 +71,7 @@ def get_batch_script_names(tmp_folder):
     return batch_script
 
 
-def submit_slurm():
+def submit_slurm(args):
     """Submit python script that needs gpus with given inputs on a slurm node.
     """
     tmp_folder = "./gpu_jobs"
@@ -134,13 +134,13 @@ def submit_slurm():
             job_id.append(re.findall(r'\d+', cmd_out.stdout)[0])
 
 
-def main():
+def main(args):
     try:
         shutil.rmtree("./gpu_jobs")
     except FileNotFoundError:
         pass
 
-    submit_slurm()
+    submit_slurm(args)
 
 
 if __name__ == "__main__":
