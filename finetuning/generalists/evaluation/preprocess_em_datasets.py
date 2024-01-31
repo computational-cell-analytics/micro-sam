@@ -11,6 +11,8 @@ import imageio.v3 as imageio
 
 from skimage.measure import label
 
+from elf.wrapper import RoiWrapper
+
 from util import download_em_dataset, ROOT
 
 
@@ -73,12 +75,22 @@ def make_custom_splits(val_samples, save_dir):
 
 
 def from_h5_to_tif(
-    h5_vol_path, raw_key, raw_dir, labels_key, labels_dir,
-    slice_prefix_name, do_connected_components=True, interface=h5py, crop_shape=None
+    h5_vol_path, raw_key, raw_dir, labels_key, labels_dir, slice_prefix_name,
+    do_connected_components=True, interface=h5py, crop_shape=None, roi_slices=None
 ):
+    os.makedirs(raw_dir, exist_ok=True)
+    os.makedirs(labels_dir, exist_ok=True)
+
     with interface.File(h5_vol_path, "r") as f:
         raw = f[raw_key][:]
         labels = f[labels_key][:]
+
+        if roi_slices is not None:  # for cremi
+            raw = RoiWrapper(raw, roi_slices)[:]
+            labels = RoiWrapper(labels, roi_slices)[:]
+
+        if raw.ndim == 2 and labels.ndim == 2:  # for axondeepseg tem modality
+            raw, labels = raw[None], labels[None]
 
         for i, (_raw, _label) in tqdm(enumerate(zip(raw, labels)), total=raw.shape[0], desc=h5_vol_path):
             if crop_shape is not None:
@@ -182,40 +194,51 @@ def for_platynereis(save_dir, choice):
     for nuclei:
         for validation: we take volume 01
         for testing: we take volume [02-12]
+    for cells (membrane):
+        for validation: we take volume 07 and 08
+        for testing: we take volume 09
     """
-    os.makedirs(os.path.join(save_dir, choice, "raw"), exist_ok=True)
-    os.makedirs(os.path.join(save_dir, choice, "labels"), exist_ok=True)
-
     if choice == "cilia":
         vol_paths = sorted(glob(os.path.join(ROOT, "platynereis", "cilia", "train_*")))
-
         for vol_path in vol_paths:
             vol_id = os.path.split(vol_path)[-1].split(".")[0][-2:]
             split = "val" if vol_id == "03" else "test"  # volumes 01 and 02 are for test, 03 for val
-
             from_h5_to_tif(
                 h5_vol_path=vol_path,
                 raw_key="volumes/raw",
-                raw_dir=os.path.join(save_dir, "cilia", "raw"),
+                raw_dir=os.path.join(save_dir, choice, "raw"),
                 labels_key="volumes/labels/segmentation",
-                labels_dir=os.path.join(save_dir, "cilia", "labels"),
-                slice_prefix_name=f"platy_cilia_{vol_id}_{split}"
+                labels_dir=os.path.join(save_dir, choice, "labels"),
+                slice_prefix_name=f"platy_{choice}_{split}_{vol_id}"
             )
 
     elif choice == "nuclei":
         vol_paths = sorted(glob(os.path.join(ROOT, "platynereis", "nuclei", "*")))
-
         for vol_path in vol_paths:
             vol_id = os.path.split(vol_path)[-1].split(".")[0][-2:]
             split = "val" if vol_id == "01" else "test"  # volumes 01 for val, rest for test
-
             from_h5_to_tif(
                 h5_vol_path=vol_path,
                 raw_key="volumes/raw",
-                raw_dir=os.path.join(save_dir, "nuclei", "raw"),
+                raw_dir=os.path.join(save_dir, choice, "raw"),
                 labels_key="volumes/labels/nucleus_instance_labels",
-                labels_dir=os.path.join(save_dir, "nuclei", "labels"),
-                slice_prefix_name=f"platy_nuclei_{vol_id}_{split}"
+                labels_dir=os.path.join(save_dir, choice, "labels"),
+                slice_prefix_name=f"platy_{choice}_{split}_{vol_id}"
+            )
+
+    elif choice == "cells":
+        vol_paths = sorted(glob(os.path.join(ROOT, "platynereis", "membrane", "*")))[-3:]
+        for vol_path in vol_paths:
+            vol_id = os.path.split(vol_path)[-1].split(".")[0][-2:]
+            split = "test" if vol_id == "09" else "val"  # volume 09 for test, 07 & 08 for val
+            from_h5_to_tif(
+                h5_vol_path=vol_path,
+                raw_key="volumes/raw/s1",
+                raw_dir=os.path.join(save_dir, choice, "raw"),
+                labels_key="volumes/labels/segmentation/s1",
+                labels_dir=os.path.join(save_dir, choice, "labels"),
+                slice_prefix_name=f"platy_{choice}_{split}_{vol_id}",
+                interface=z5py
             )
 
     else:
@@ -232,9 +255,6 @@ def for_mitoem(save_dir, desired_shape=(768, 768)):
 
     for vol_path in val_vol_paths:
         species = os.path.split(vol_path)[-1].split("_")[0]
-
-        os.makedirs(os.path.join(save_dir, species, "raw"), exist_ok=True)
-        os.makedirs(os.path.join(save_dir, species, "labels"), exist_ok=True)
 
         from_h5_to_tif(
             h5_vol_path=vol_path,
@@ -319,10 +339,9 @@ def for_mitolab(save_dir):
 
 def for_uro_cell(save_dir):
     """
+    for validation: first volumes' 100 slices
+    for testing: rest all
     """
-    os.makedirs(os.path.join(save_dir, "raw"), exist_ok=True)
-    os.makedirs(os.path.join(save_dir, "labels"), exist_ok=True)
-
     # only the 4 volumes below have mito labels
     all_vol_with_labels = ["fib1-0-0-0.h5", "fib1-1-0-3.h5", "fib1-3-2-1.h5", "fib1-3-3-0.h5", "fib1-4-3-0.h5"]
 
@@ -349,9 +368,6 @@ def for_sponge_em(save_dir):
     """
     vol_paths = sorted(glob(os.path.join(ROOT, "sponge_em", "*.h5")))
 
-    os.makedirs(os.path.join(save_dir, "raw"), exist_ok=True)
-    os.makedirs(os.path.join(save_dir, "labels"), exist_ok=True)
-
     for vol_path in vol_paths:
         vol_id = Path(vol_path).stem
 
@@ -367,17 +383,92 @@ def for_sponge_em(save_dir):
     make_custom_splits(val_samples=10, save_dir=save_dir)
 
 
+def for_cremi(save_dir):
+    """
+    """
+    vol_paths = sorted(glob(os.path.join(ROOT, "cremi", "sample*.h5")))
+
+    all_roi_slices = {
+        "val": np.s_[75:100, :, :],
+        "test": np.s_[100:, :, :]
+    }
+
+    for vol_path in vol_paths:
+        vol_id = Path(vol_path).stem
+
+        for split_name, roi_slice in all_roi_slices.items():
+            from_h5_to_tif(
+                h5_vol_path=vol_path,
+                raw_key="volumes/raw",
+                raw_dir=os.path.join(save_dir, "raw"),
+                labels_key="volumes/labels/neuron_ids",
+                labels_dir=os.path.join(save_dir, "labels"),
+                slice_prefix_name=f"cremi_{split_name}_{vol_id}",
+                roi_slices=roi_slice,
+                crop_shape=(768, 768)
+            )
+
+
+def for_isbi(save_dir):
+    """
+    (we only have 1 volume with 30 slices)
+    for validation: first 5/30 slices
+    for testing: rest 25/30 slices
+    """
+    from_h5_to_tif(
+        h5_vol_path=os.path.join(ROOT, "isbi", "isbi.h5"),
+        raw_key="raw",
+        raw_dir=os.path.join(save_dir, "raw"),
+        labels_key="labels/gt_segmentation",
+        labels_dir=os.path.join(save_dir, "labels"),
+        slice_prefix_name="isbi"
+    )
+
+    make_custom_splits(5, save_dir)
+
+
+def for_axondeepseg(save_dir):
+    """
+    (we use the tem modality)
+    for validation: first 10 slices
+    for testing: rest all
+    """
+    vol_paths = sorted(glob(os.path.join(ROOT, "axondeepseg", "tem", "*.h5")))
+
+    for vol_path in vol_paths:
+        vol_id = Path(vol_path).stem
+
+        from_h5_to_tif(
+            h5_vol_path=vol_path,
+            raw_key="raw",
+            raw_dir=os.path.join(save_dir, "raw"),
+            labels_key="labels",
+            labels_dir=os.path.join(save_dir, "labels"),
+            slice_prefix_name=f"axondeepseg_{vol_id}",
+            crop_shape=(768, 768)
+        )
+
+    make_custom_splits(15, save_dir)
+
+
 def main():
     # let's ensure all the data is downloaded
     download_em_dataset(ROOT)
 
-    dataset_name = "mitoem"
-
-    # paths to save the raw and label slices
-    save_dir = os.path.join(ROOT, dataset_name, "slices")
-
     # now let's save the slices as tif
-    for_mitoem(save_dir)
+    for_lucchi(os.path.join(ROOT, "lucchi", "slices"))
+    for_snemi(os.path.join(ROOT, "snemi", "slices"))
+    for_nuc_mm(os.path.join(ROOT, "nuc_mm", "slices"))
+    for_platynereis(os.path.join(ROOT, "platynereis", "slices"), choice="nuclei")
+    for_platynereis(os.path.join(ROOT, "platynereis", "slices"), choice="cilia")
+    for_platynereis(os.path.join(ROOT, "platynereis", "slices"), choice="cells")
+    for_mitoem(os.path.join(ROOT, "mitoem", "slices"))
+    for_mitolab(os.path.join(ROOT, "mitolab", "slices"))
+    for_uro_cell(os.path.join(ROOT, "uro_cell", "slices"))
+    for_sponge_em(os.path.join(ROOT, "sponge_em", "slices"))
+    for_isbi(os.path.join(ROOT, "isbi", "slices"))
+    for_axondeepseg(os.path.join(ROOT, "axondeepseg", "slices"))
+    for_cremi(os.path.join(ROOT, "cremi", "slices"))
 
 
 if __name__ == "__main__":
