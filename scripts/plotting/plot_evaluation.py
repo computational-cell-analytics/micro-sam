@@ -64,7 +64,7 @@ def plot_evaluation_for_datasets(dataset_name, modality, all_models=["vit_b", "v
 
         res_df_per_dataset = pd.concat(res_df_per_model)
         container = sns.barplot(
-            x="name", y="results", hue="type", data=res_df_per_dataset, ax=ax[idx], palette=palette, zorder=5
+            x="name", y="results", hue="type", data=res_df_per_dataset, ax=ax[idx], palette=palette
         )
         ax[idx].set(xlabel="Model Size", ylabel="Segmentation Quality")
         ax[idx].legend(title="Settings", bbox_to_anchor=(1, 1))
