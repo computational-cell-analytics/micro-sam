@@ -24,7 +24,7 @@ def has_foreground(label):
 
 
 def make_center_crop(image, desired_shape):
-    if image.shape > desired_shape:
+    if image.shape < desired_shape:
         return image
 
     center_coords = (int(image.shape[0] / 2), int(image.shape[1] / 2))
@@ -262,7 +262,8 @@ def for_lizard(save_dir):
             raw_dir=os.path.join(save_dir, "raw"),
             labels_key="labels/segmentation",
             labels_dir=os.path.join(save_dir, "labels"),
-            slice_prefix_name=f"lizard_{vol_id}"
+            slice_prefix_name=f"lizard_{vol_id}",
+            crop_shape=(768, 768)
         )
 
     make_custom_splits(10, save_dir)
