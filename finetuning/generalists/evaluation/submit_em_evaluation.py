@@ -13,7 +13,7 @@ def write_batch_script(
     """
     batch_script = f"""#!/bin/bash
 #SBATCH -c 8
-#SBATCH --mem 128G
+#SBATCH --mem 64G
 #SBATCH -t 2-00:00:00
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
@@ -79,12 +79,12 @@ def submit_slurm():
     # parameters to run the inference scripts
     dataset_name = args.dataset_name  # name of the dataset in lower-case
     model_type = args.model_type
-    experiment_set = args.experiment_set  # infer using generalists or vanilla models
+    experiment_set = args.experiment_set  # infer using generalist or vanilla models
     region = args.roi  # use the organelles model or boundaries model
     make_delay = "10s"  # wait for precomputing the embeddings and later run inference scripts
 
-    # let's set the experiment type - either using the generalists or just using vanilla model
-    if experiment_set == "generalists":
+    # let's set the experiment type - either using the generalist or just using vanilla model
+    if experiment_set == "generalist":
         checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/"
         if region == "organelles":
             checkpoint += "with_cem/mito_nuc_em_generalist_sam/best.pt"
@@ -97,14 +97,10 @@ def submit_slurm():
         checkpoint = None
 
     else:
-        raise ValueError("Choose from generalists/vanilla")
+        raise ValueError("Choose from generalist / vanilla")
 
-    experiment_folder = f"/scratch/projects/nim00007/sam/experiments/new_models/{experiment_set}/em/{dataset_name}/"
-
-    if experiment_set == "generalists":
-        experiment_folder += "mito_nuc_em_generalist_sam/"
-
-    experiment_folder += f"{model_type}/"
+    experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/"
+    experiment_folder += f"{experiment_set}/em/{dataset_name}/{model_type}/"
 
     # now let's run the experiments
     if experiment_set == "vanilla":

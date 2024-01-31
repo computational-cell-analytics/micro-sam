@@ -32,7 +32,11 @@ def for_all_em():
 
     # let's run for organelles
     run_one_setup(
-        all_dataset_list=["tissuenet", "deepbacs", "plantseg_root"],
+        all_dataset_list=[
+            "mitoem/rat", "mitoem/human", "platynereis/nuclei", "mitolab/c_elegans", "mitolab/fly_brain",
+            "mitolab/glycolytic_muscle", "mitolab/hela_cell", "mitolab/lucchi_pp", "mitolab/salivary_gland",
+            "mitolab/tem", "lucchi", "nuc-mm/mouse", "nuc-mm/zebrafish", "uro_cell", "sponge_em", "platynereis/cilia",
+        ],
         all_model_list=["vit_b", "vit_h"],
         all_experiment_set_list=["vanilla", "generalist"],
         roi="organelles"
@@ -40,7 +44,9 @@ def for_all_em():
 
     # next, let's run for boundaries
     run_one_setup(
-        all_dataset_list=["covid_if", "plantseg_ovules", "hpa", "lizard", "mouse-embryo", "ctc", "neurips-cell-seg"],
+        all_dataset_list=[
+            "cremi", "platynereis/cells", "axondeepseg", "snemi", "isbi"
+        ],
         all_model_list=["vit_b", "vit_h"],
         all_experiment_set_list=["vanilla", "generalist"],
         roi="boundaries"

@@ -9,7 +9,6 @@ from micro_sam.evaluation import get_predictor
 
 ROOT = "/scratch/projects/nim00007/sam/data/"
 
-# TODO: need to update this all with the new path convention
 
 DATASETS = {
     "lucchi": {
@@ -32,7 +31,7 @@ DATASETS = {
             os.path.join(ROOT, "snemi", "slices", "test", "labels", "*")
         ]
     },
-    "nuc-mm-m": {
+    "nuc-mm/mouse": {
         "val": [
             os.path.join(ROOT, "nuc_mm", "slices", "mouse", "raw", "nuc_mm_val_*"),
             os.path.join(ROOT, "nuc_mm", "slices", "mouse", "labels", "nuc_mm_val_*")
@@ -42,7 +41,7 @@ DATASETS = {
             os.path.join(ROOT, "nuc_mm", "slices", "mouse", "labels", "nuc_mm_train_*")
         ]
     },
-    "nuc-mm-z": {
+    "nuc-mm/zebrafish": {
         "val": [
             os.path.join(ROOT, "nuc_mm", "slices", "zebrafish", "raw", "nuc_mm_val_*"),
             os.path.join(ROOT, "nuc_mm", "slices", "zebrafish", "labels", "nuc_mm_val_*")
@@ -52,7 +51,7 @@ DATASETS = {
             os.path.join(ROOT, "nuc_mm", "slices", "zebrafish", "labels", "nuc_mm_train_*")
         ]
     },
-    "platy-cilia": {
+    "platynereis/cilia": {
         "val": [
             os.path.join(ROOT, "platynereis", "slices", "cilia", "raw", "platy_cilia_val_*"),
             os.path.join(ROOT, "platynereis", "slices", "cilia", "labels", "platy_cilia_val_*")
@@ -62,18 +61,164 @@ DATASETS = {
             os.path.join(ROOT, "platynereis", "slices", "cilia", "labels", "platy_cilia_test_*")
         ]
     },
-    "platy-nuclei": {
-        "val": None,
-        "test": None
-    },
-    "mitoem": {
+    "platynereis/nuclei": {
         "val": [
-            os.path.join(ROOT, "mitoem", "slices", "*", "val", "raw", "*"),
-            os.path.join(ROOT, "mitoem", "slices", "*", "val", "labels", "*")
+            os.path.join(ROOT, "platynereis", "slices", "nuclei", "raw", "platy_nuclei_val_*"),
+            os.path.join(ROOT, "platynereis", "slices", "nuclei", "labels", "platy_nuclei_val_*")
         ],
         "test": [
-            os.path.join(ROOT, "mitoem", "slices", "*", "test", "raw", "*"),
-            os.path.join(ROOT, "mitoem", "slices", "*", "test", "labels", "*")
+            os.path.join(ROOT, "platynereis", "slices", "nuclei", "raw", "platy_nuclei_test_*"),
+            os.path.join(ROOT, "platynereis", "slices", "nuclei", "labels", "platy_nuclei_test_*")
+        ]
+    },
+    "platynereis/cells": {
+        "val": [
+            os.path.join(ROOT, "platynereis", "slices", "cells", "raw", "platy_cells_val_*"),
+            os.path.join(ROOT, "platynereis", "slices", "cells", "labels", "platy_cells_val_*")
+        ],
+        "test": [
+            os.path.join(ROOT, "platynereis", "slices", "cells", "raw", "platy_cells_test_*"),
+            os.path.join(ROOT, "platynereis", "slices", "cells", "labels", "platy_cells_test_*")
+        ]
+    },
+    "mitoem/rat": {
+        "val": [
+            os.path.join(ROOT, "mitoem", "slices", "rat", "val", "raw", "*"),
+            os.path.join(ROOT, "mitoem", "slices", "rat", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "mitoem", "slices", "rat", "test", "raw", "*"),
+            os.path.join(ROOT, "mitoem", "slices", "rat", "test", "labels", "*")
+        ]
+    },
+    "mitoem/human": {
+        "val": [
+            os.path.join(ROOT, "mitoem", "slices", "human", "val", "raw", "*"),
+            os.path.join(ROOT, "mitoem", "slices", "human", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "mitoem", "slices", "human", "test", "raw", "*"),
+            os.path.join(ROOT, "mitoem", "slices", "human", "test", "labels", "*")
+        ]
+    },
+    "mitolab/c_elegans": {
+        "val": [
+            os.path.join(ROOT, "mitolab", "slices", "c_elegans", "val", "raw", "*"),
+            os.path.join(ROOT, "mitolab", "slices", "c_elegans", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "mitolab", "slices", "c_elegans", "test", "raw", "*"),
+            os.path.join(ROOT, "mitolab", "slices", "c_elegans", "test", "labels", "*")
+        ]
+    },
+    "mitolab/fly_brain": {
+        "val": [
+            os.path.join(ROOT, "mitolab", "slices", "fly_brain", "val", "raw", "*"),
+            os.path.join(ROOT, "mitolab", "slices", "fly_brain", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "mitolab", "slices", "fly_brain", "test", "raw", "*"),
+            os.path.join(ROOT, "mitolab", "slices", "fly_brain", "test", "labels", "*")
+        ]
+    },
+    "mitolab/glycolytic_muscle": {
+        "val": [
+            os.path.join(ROOT, "mitolab", "slices", "glycolytic_muscle", "val", "raw", "*"),
+            os.path.join(ROOT, "mitolab", "slices", "glycolytic_muscle", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "mitolab", "slices", "glycolytic_muscle", "test", "raw", "*"),
+            os.path.join(ROOT, "mitolab", "slices", "glycolytic_muscle", "test", "labels", "*")
+        ]
+    },
+    "mitolab/hela_cell": {
+        "val": [
+            os.path.join(ROOT, "mitolab", "slices", "hela_cell", "val", "raw", "*"),
+            os.path.join(ROOT, "mitolab", "slices", "hela_cell", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "mitolab", "slices", "hela_cell", "test", "raw", "*"),
+            os.path.join(ROOT, "mitolab", "slices", "hela_cell", "test", "labels", "*")
+        ]
+    },
+    "mitolab/lucchi_pp": {
+        "val": [
+            os.path.join(ROOT, "mitolab", "slices", "lucchi_pp", "val", "raw", "*"),
+            os.path.join(ROOT, "mitolab", "slices", "lucchi_pp", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "mitolab", "slices", "lucchi_pp", "test", "raw", "*"),
+            os.path.join(ROOT, "mitolab", "slices", "lucchi_pp", "test", "labels", "*")
+        ]
+    },
+    "mitolab/salivary_gland": {
+        "val": [
+            os.path.join(ROOT, "mitolab", "slices", "salivary_gland", "val", "raw", "*"),
+            os.path.join(ROOT, "mitolab", "slices", "salivary_gland", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "mitolab", "slices", "salivary_gland", "test", "raw", "*"),
+            os.path.join(ROOT, "mitolab", "slices", "salivary_gland", "test", "labels", "*")
+        ]
+    },
+    "mitolab/tem": {
+        "val": [
+            os.path.join(ROOT, "mitolab", "slices", "tem", "val", "raw", "*"),
+            os.path.join(ROOT, "mitolab", "slices", "tem", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "mitolab", "slices", "tem", "test", "raw", "*"),
+            os.path.join(ROOT, "mitolab", "slices", "tem", "test", "labels", "*")
+        ]
+    },
+    "axondeepseg": {
+        "val": [
+            os.path.join(ROOT, "axondeepseg", "slices", "val", "raw", "*"),
+            os.path.join(ROOT, "axondeepseg", "slices", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "axondeepseg", "slices", "test", "raw", "*"),
+            os.path.join(ROOT, "axondeepseg", "slices", "test", "labels", "*")
+        ]
+    },
+    "cremi": {
+        "val": [
+            os.path.join(ROOT, "cremi", "slices", "raw", "cremi_val_*"),
+            os.path.join(ROOT, "cremi", "slices", "labels", "cremi_val*")
+        ],
+        "test": [
+            os.path.join(ROOT, "cremi", "slices", "raw", "cremi_test_*"),
+            os.path.join(ROOT, "cremi", "slices", "labels", "cremi_test_*")
+        ]
+    },
+    "uro_cell": {
+        "val": [
+            os.path.join(ROOT, "uro_cell", "slices", "val", "raw", "*"),
+            os.path.join(ROOT, "uro_cell", "slices", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "uro_cell", "slices", "test", "raw", "*"),
+            os.path.join(ROOT, "uro_cell", "slices", "test", "labels", "*")
+        ]
+    },
+    "sponge_em": {
+        "val": [
+            os.path.join(ROOT, "sponge_em", "slices", "val", "raw", "*"),
+            os.path.join(ROOT, "sponge_em", "slices", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "sponge_em", "slices", "test", "raw", "*"),
+            os.path.join(ROOT, "sponge_em", "slices", "test", "labels", "*")
+        ]
+    },
+    "isbi": {
+        "val": [
+            os.path.join(ROOT, "isbi", "slices", "val", "raw", "*"),
+            os.path.join(ROOT, "isbi", "slices", "val", "labels", "*")
+        ],
+        "test": [
+            os.path.join(ROOT, "isbi", "slices", "test", "raw", "*"),
+            os.path.join(ROOT, "isbi", "slices", "test", "labels", "*")
         ]
     }
 }
@@ -128,6 +273,8 @@ def download_em_dataset(path):
 
     # platy-cilia
     datasets.get_platynereis_cilia_dataset(os.path.join(path, "platynereis"), patch_shape=(1, 512, 512), download=True)
+    datasets.get_platynereis_nuclei_dataset(os.path.join(path, "platynereis"), patch_shape=(1, 512, 512), download=True)
+    datasets.get_platynereis_cell_dataset(os.path.join(path, "platynereis"), patch_shape=(1, 512, 512), download=True)
 
     # mitoem
     datasets.get_mitoem_dataset(
@@ -146,6 +293,17 @@ def download_em_dataset(path):
     datasets.get_sponge_em_dataset(
         os.path.join(path, "sponge_em"), mode="instances", patch_shape=(1, 512, 512), download=True
     )
+
+    # isbi
+    datasets.get_isbi_dataset(os.path.join(path, "isbi"), patch_shape=(1, 512, 512), download=True)
+
+    # axondeepseg
+    datasets.get_axondeepseg_dataset(
+        os.path.join(path, "axondeepseg"), name="tem", patch_shape=(1, 512, 512), download=True
+    )
+
+    # cremi
+    datasets.get_cremi_dataset(os.path.join(path, "cremi"), patch_shape=(1, 512, 512), download=True)
 
 #
 # PARSER FOR ALL THE REQUIRED ARGUMENTS
