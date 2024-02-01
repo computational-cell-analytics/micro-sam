@@ -6,7 +6,7 @@ from micro_sam.evaluation.inference import run_amg
 from util import get_pred_paths, get_paths, get_default_arguments, VANILLA_MODELS
 
 
-def run_em_amg(dataset_name, model_type, checkpoint, experiment_folder):
+def run_amg_inference(dataset_name, model_type, checkpoint, experiment_folder):
     val_image_paths, val_gt_paths = get_paths(dataset_name, split="val")
     test_image_paths, _ = get_paths(dataset_name, split="test")
     prediction_folder = run_amg(
@@ -36,7 +36,7 @@ def main():
     else:
         ckpt = args.checkpoint
 
-    prediction_folder = run_em_amg(args.dataset, args.model, ckpt, args.experiment_folder)
+    prediction_folder = run_amg_inference(args.dataset, args.model, ckpt, args.experiment_folder)
     eval_amg(args.dataset, prediction_folder, args.experiment_folder)
 
 
