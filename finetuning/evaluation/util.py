@@ -6,10 +6,10 @@ from glob import glob
 from torch_em.data import datasets
 
 from micro_sam.evaluation import get_predictor
+from micro_sam.evaluation.livecell import _get_livecell_paths
+
 
 ROOT = "/scratch/projects/nim00007/sam/data/"
-
-EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/new_models"
 
 VANILLA_MODELS = {
     "vit_b": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/sam_vit_b_01ec64.pth",
@@ -70,8 +70,8 @@ def get_dataset_paths(dataset_name, split_choice):
     if is_explicit_split:
         dataset_name.append(split_choice)
 
-    raw_dir = os.path.join(EXPERIMENT_ROOT, *dataset_name, "raw", file_search_specs)
-    labels_dir = os.path.join(EXPERIMENT_ROOT, *dataset_name, "labels", file_search_specs)
+    raw_dir = os.path.join(ROOT, *dataset_name, "raw", file_search_specs)
+    labels_dir = os.path.join(ROOT, *dataset_name, "labels", file_search_specs)
 
     return raw_dir, labels_dir
 
@@ -85,6 +85,10 @@ def get_model(model_type, ckpt):
 
 def get_paths(dataset_name, split):
     assert dataset_name in DATASETS
+
+    if dataset_name == "livecell":
+        return _get_livecell_paths(input_folder=os.path.join(ROOT, "livecell"), split=split)
+
     image_dir, gt_dir = get_dataset_paths(dataset_name, split)
     image_paths = sorted(glob(os.path.join(image_dir)))
     gt_paths = sorted(glob(os.path.join(gt_dir)))
