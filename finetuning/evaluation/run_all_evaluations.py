@@ -31,7 +31,7 @@ def run_one_setup(all_dataset_list, all_model_list, all_experiment_set_list, roi
 def for_all_lm():
     # let's run for in-domain
     run_one_setup(
-        all_dataset_list=["tissuenet", "deepbacs", "plantseg_root"],
+        all_dataset_list=["tissuenet", "deepbacs", "plantseg_root", "livecell"],
         all_model_list=["vit_b", "vit_h"],
         all_experiment_set_list=["vanilla", "generalist", "specialist"],
         roi="lm"

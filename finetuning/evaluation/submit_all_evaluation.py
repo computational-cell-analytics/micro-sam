@@ -61,7 +61,7 @@ def get_batch_script_names(tmp_folder):
     tmp_folder = os.path.expanduser(tmp_folder)
     os.makedirs(tmp_folder, exist_ok=True)
 
-    script_name = "em-inference"
+    script_name = "micro-sam-inference"
 
     dt = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
     tmp_name = script_name + dt
@@ -116,8 +116,10 @@ def submit_slurm(args):
 
     checkpoint = get_checkpoint_path(experiment_set, dataset_name, model_type, region)
 
+    modality = region if region == "lm" else "em"
+
     experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/"
-    experiment_folder += f"{experiment_set}/em/{dataset_name}/{model_type}/"
+    experiment_folder += f"{experiment_set}/{modality}/{dataset_name}/{model_type}/"
 
     # now let's run the experiments
     if experiment_set == "vanilla":
