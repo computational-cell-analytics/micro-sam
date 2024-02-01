@@ -7,8 +7,7 @@ from datetime import datetime
 
 
 def write_batch_script(
-    env_name, out_path, inference_setup, checkpoint, model_type,
-    experiment_folder, dataset_name, species=None, delay=None
+    env_name, out_path, inference_setup, checkpoint, model_type, experiment_folder, dataset_name, delay=None
 ):
     """Writing scripts with different fold-trainings for micro-sam evaluation
     """
@@ -44,9 +43,6 @@ mamba activate {env_name} \n"""
     # IMPORTANT: choice of the dataset
     python_script += f"-d {dataset_name} "
 
-    if species is not None:  # relevant for nuc-mm only
-        python_script += f"--species {species} "
-
     # let's add the python script to the bash script
     batch_script += python_script
 
@@ -66,7 +62,7 @@ def get_batch_script_names(tmp_folder):
     tmp_folder = os.path.expanduser(tmp_folder)
     os.makedirs(tmp_folder, exist_ok=True)
 
-    script_name = "em-inference"
+    script_name = "lm-inference"
 
     dt = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
     tmp_name = script_name + dt
@@ -75,37 +71,32 @@ def get_batch_script_names(tmp_folder):
     return batch_script
 
 
-def submit_slurm():
+def submit_slurm(args):
     """Submit python script that needs gpus with given inputs on a slurm node.
     """
     tmp_folder = "./gpu_jobs"
 
     # parameters to run the inference scripts
-    dataset_name = "mitoem"  # name of the dataset in lower-case
-    species = None  # relevant for multiple species-related datasets
-    model_type = "vit_b"
-    experiment_set = "vanilla"  # infer using generalists or vanilla models
+    dataset_name = args.dataset_name  # name of the dataset in lower-case
+    model_type = args.model_type
+    experiment_set = args.experiment_set  # infer using specialist or generalist or vanilla models
     make_delay = "10s"  # wait for precomputing the embeddings and later run inference scripts
 
-    # let's set the experiment type - either using the generalists or just using vanilla model
-    if experiment_set == "generalists":
-        checkpoint = "/scratch/usr/nimanwai/micro-sam/checkpoints/"
-        checkpoint += f"{model_type}/with_cem/mito_nuc_em_generalist_sam/best.pt"
+    # let's set the experiment type - either using the specialist or generalist or just using vanilla model
+    if experiment_set == "generalist":
+        checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/lm_generalist_sam/best.pt"
+    elif experiment_set == "specialist":
+        checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/{dataset_name}_sam/best.pt"
     elif experiment_set == "vanilla":
         checkpoint = None
     else:
-        raise ValueError("Choose from generalists/vanilla")
+        raise ValueError("Choose from specialist / generalist / vanilla")
 
-    experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/"
-    experiment_folder += f"{experiment_set}/em/{dataset_name}/"
-
-    if species is not None:
-        experiment_folder += f"{species}/"
-
-    if experiment_set == "generalists":
-        experiment_folder += "mito_nuc_em_generalist_sam/"
-
+    experiment_folder = f"/scratch/projects/nim00007/sam/experiments/new_models/{experiment_set}/lm/{dataset_name}/"
     experiment_folder += f"{model_type}/"
+
+    if checkpoint is not None:
+        assert os.path.exists(checkpoint)
 
     # now let's run the experiments
     if experiment_set == "vanilla":
@@ -121,9 +112,8 @@ def submit_slurm():
             model_type=model_type,
             experiment_folder=experiment_folder,
             dataset_name=dataset_name,
-            species=species,
             delay=None if current_setup == "precompute_embeddings" else make_delay
-            )
+        )
 
     # the logic below automates the process of first running the precomputation of embeddings, and only then inference.
     job_id = []
@@ -140,14 +130,20 @@ def submit_slurm():
             job_id.append(re.findall(r'\d+', cmd_out.stdout)[0])
 
 
-def main():
+def main(args):
     try:
         shutil.rmtree("./gpu_jobs")
     except FileNotFoundError:
         pass
 
-    submit_slurm()
+    submit_slurm(args)
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-d", "--dataset_name", type=str, required=True)
+    parser.add_argument("-m", "--model_type", type=str, required=True)
+    parser.add_argument("-e", "--experiment_set", type=str, required=True)
+    args = parser.parse_args()
+    main(args)
