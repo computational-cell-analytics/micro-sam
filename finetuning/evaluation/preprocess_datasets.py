@@ -749,6 +749,26 @@ def for_neurips_cellseg(save_dir, use_tuning_set=False):
         shutil.copy(label_path, dst_label_path)
 
 
+def for_deepbacs(save_dir):
+    "Move the datasets from the internal split (provided by default in deepbacs) to our `slices` logic"
+    for split in ["val", "test"]:
+        image_paths = os.path.join(ROOT, "deepbacs", "mixed", split, "source", "*")
+        label_paths = os.path.join(ROOT, "deepbacs", "mixed", split, "target", "*")
+
+        os.makedirs(os.path.join(save_dir, split, "raw"), exist_ok=True)
+        os.makedirs(os.path.join(save_dir, split, "labels"), exist_ok=True)
+
+        for src_image_path, src_label_path in tqdm(zip(image_paths, label_paths), total=len(image_paths)):
+            image_id = os.path.split(src_image_path)[-1]
+            label_id = os.path.split(src_label_path)[-1]
+
+            dst_image_path = os.path.join(save_dir, split, "raw", image_id)
+            dst_label_path = os.path.join(save_dir, split, "labels", label_id)
+
+            shutil.copy(src_image_path, dst_image_path)
+            shutil.copy(src_label_path, dst_label_path)
+
+
 def preprocess_lm_datasets():
     for_covid_if(os.path.join(ROOT, "covid_if", "slices"))
     for_tissuenet(os.path.join(ROOT, "tissuenet", "slices"))
@@ -758,6 +778,7 @@ def preprocess_lm_datasets():
     for_mouse_embryo(os.path.join(ROOT, "mouse-embryo", "slices"))
     for_ctc((os.path.join(ROOT, "ctc/hela_samples", "slices")))
     for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"))
+    for_deepbacs(os.path.join(ROOT, "deepbacs", "slices"))
 
 
 def preprocess_em_datasets():
