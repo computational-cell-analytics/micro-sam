@@ -20,6 +20,7 @@ def explore_differences(
     metric_choice="msa"
 ):
     image_paths, gt_paths = get_paths(dataset_name, split="test")
+    image_paths, gt_paths = image_paths[:10], gt_paths[:10]
 
     assert len(compare_experiments) == 2, "You should provide only two experiment names to compare."
     assert metric_choice in ["msa", "sa50"], "The metric choice is limited to `msa` / `sa50`."
@@ -81,6 +82,15 @@ def plot_samples(name, modality, dataset_name, model_type, all_settings, experim
 
     image_paths, gt_paths = get_paths(dataset_name, split="test")
 
+    # generate random colors for instances
+    from matplotlib import colors
+
+    def get_random_colors(labels):
+        n_labels = len(np.unique(labels)) - 1
+        cmap = [[0, 0, 0]] + np.random.rand(n_labels, 3).tolist()
+        cmap = colors.ListedColormap(cmap)
+        return cmap
+
     # let's create a directory structure to save results
     for setting in all_settings:
         setting_split = setting.split("/")
@@ -109,15 +119,15 @@ def plot_samples(name, modality, dataset_name, model_type, all_settings, experim
             axes[0, 0].title.set_text("Image")
             axes[0, 0].axis("off")
 
-            axes[0, 1].imshow(gt)  # gt
+            axes[0, 1].imshow(gt, cmap=get_random_colors(gt), interpolation="nearest")  # gt
             axes[0, 1].title.set_text("Labels")
             axes[0, 1].axis("off")
 
-            axes[1, 0].imshow(sample1)  # comparison point 1
+            axes[1, 0].imshow(sample1, cmap=get_random_colors(sample1), interpolation="nearest")  # comparison point 1
             axes[1, 0].title.set_text(compare1)
             axes[1, 0].axis("off")
 
-            axes[1, 1].imshow(sample2)  # comparision point 2
+            axes[1, 1].imshow(sample2, cmap=get_random_colors(sample2), interpolation="nearest")  # comparision point 2
             axes[1, 1].title.set_text(compare2)
             axes[1, 1].axis("off")
 
@@ -138,7 +148,7 @@ def main():
     # the two experiments we compare between
     compare_experiments = ["generalist", "specialist"]
     n_images = 10
-    dataset_name = "tissuenet"
+    dataset_name = "livecell"
     modality = "lm"
     model_type = "vit_h"
     metric_choice = "msa"
