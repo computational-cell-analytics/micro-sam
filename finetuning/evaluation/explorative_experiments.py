@@ -17,10 +17,10 @@ def explore_differences(
     compare_experiments,
     all_settings,
     n_images,
-    metric_choice="msa"
+    metric_choice="msa",
+    sort_decreasing=True
 ):
     image_paths, gt_paths = get_paths(dataset_name, split="test")
-    image_paths, gt_paths = image_paths[:10], gt_paths[:10]
 
     assert len(compare_experiments) == 2, "You should provide only two experiment names to compare."
     assert metric_choice in ["msa", "sa50"], "The metric choice is limited to `msa` / `sa50`."
@@ -43,7 +43,6 @@ def explore_differences(
 
                 prediction_path = os.path.join(experiment_dir, setting, image_id)
 
-                image = imageio.imread(image_path)
                 prediction = imageio.imread(prediction_path)
                 gt = imageio.imread(gt_path)
 
@@ -65,18 +64,26 @@ def explore_differences(
             for (res_k1, res_v1), (res_k2, res_v2) in zip(v1.items(), v2.items()):
                 assert res_k1 == res_k2
                 res = np.subtract(res_v1, res_v2)
-                setting_res[f"{res_k1}"] = abs(res).tolist()
+                setting_res[f"{res_k1}"] = list(zip(abs(res).tolist(), res_v1, res_v2))
             experiment_res[name] = setting_res
 
     image_ids = [os.path.split(image_path)[-1] for image_path in image_paths]
-    plot_samples(name, modality, dataset_name, model_type, all_settings, experiment_res, image_ids, n_images)
+    plot_samples(
+        name, modality, dataset_name, model_type, all_settings,
+        experiment_res, image_ids, n_images, metric_choice, sort_decreasing
+    )
 
 
-def plot_samples(name, modality, dataset_name, model_type, all_settings, experiment_res, image_ids, n_images):
+def plot_samples(
+    name, modality, dataset_name, model_type, all_settings,
+    experiment_res, image_ids, n_images, metric_choice, sort_decreasing
+):
     check_samples = {}
     for experiment_name, experiment_value in experiment_res[name].items():
-        desired_ids = [x for y, x in sorted(zip(experiment_value, image_ids), reverse=True)][:n_images]
-        check_samples[experiment_name] = desired_ids
+        desired_results = [
+            (x, y[1], y[2]) for y, x in sorted(zip(experiment_value, image_ids), reverse=sort_decreasing)
+        ][:n_images]
+        check_samples[experiment_name] = desired_results
 
     compare1, compare2 = name.split("-")
 
@@ -99,7 +106,7 @@ def plot_samples(name, modality, dataset_name, model_type, all_settings, experim
         save_dir = os.path.join("figures", modality, dataset_name, model_type, name, setting_name)
         os.makedirs(save_dir, exist_ok=True)
 
-        for image_id in check_samples[setting_name]:
+        for image_id, metric1, metric2 in check_samples[setting_name]:
             sample1 = imageio.imread(
                 os.path.join(EXPERIMENT_ROOT, compare1, modality, dataset_name, model_type, setting, image_id)
             )
@@ -124,11 +131,11 @@ def plot_samples(name, modality, dataset_name, model_type, all_settings, experim
             axes[0, 1].axis("off")
 
             axes[1, 0].imshow(sample1, cmap=get_random_colors(sample1), interpolation="nearest")  # comparison point 1
-            axes[1, 0].title.set_text(compare1)
+            axes[1, 0].title.set_text(f"{compare1}; {metric_choice} - {round(metric1, 3)}")
             axes[1, 0].axis("off")
 
             axes[1, 1].imshow(sample2, cmap=get_random_colors(sample2), interpolation="nearest")  # comparision point 2
-            axes[1, 1].title.set_text(compare2)
+            axes[1, 1].title.set_text(f"{compare2}; {metric_choice} - {round(metric2, 3)}")
             axes[1, 1].axis("off")
 
             save_path = os.path.join(save_dir, image_id.split(".")[0] + ".png")
@@ -160,7 +167,8 @@ def main():
         all_settings=all_settings,
         compare_experiments=compare_experiments,
         n_images=n_images,
-        metric_choice=metric_choice
+        metric_choice=metric_choice,
+        sort_decreasing=True  # i.e. while true, largest gap to smallest gao (and vice-versa)
     )
 
 
