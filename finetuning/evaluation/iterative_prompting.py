@@ -9,7 +9,9 @@ from util import get_model, get_paths, get_pred_paths, get_default_arguments
 
 
 def run_interactive_prompting(dataset_name, exp_folder, predictor, start_with_box_prompt):
-    prediction_root = os.path.join(exp_folder, "start_with_box" if start_with_box_prompt else "start_with_point")
+    prediction_root = os.path.join(
+        exp_folder, "start_with_box" if start_with_box_prompt else "start_with_point"
+    )
     embedding_folder = os.path.join(exp_folder, "embeddings")
     image_paths, gt_paths = get_paths(dataset_name, split="test")
     inference.run_inference_with_iterative_prompting(

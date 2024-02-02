@@ -9,11 +9,10 @@ from datetime import datetime
 def write_batch_script(
     env_name, out_path, inference_setup, checkpoint, model_type, experiment_folder, dataset_name, delay=None
 ):
-    """Writing scripts with different fold-trainings for micro-sam evaluation
-    """
+    "Writing scripts with different fold-trainings for micro-sam evaluation"
     batch_script = f"""#!/bin/bash
 #SBATCH -c 8
-#SBATCH --mem 128G
+#SBATCH --mem 64G
 #SBATCH -t 2-00:00:00
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
@@ -62,7 +61,7 @@ def get_batch_script_names(tmp_folder):
     tmp_folder = os.path.expanduser(tmp_folder)
     os.makedirs(tmp_folder, exist_ok=True)
 
-    script_name = "lm-inference"
+    script_name = "micro-sam-inference"
 
     dt = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
     tmp_name = script_name + dt
@@ -71,32 +70,56 @@ def get_batch_script_names(tmp_folder):
     return batch_script
 
 
+def get_checkpoint_path(experiment_set, dataset_name, model_type, region):
+    # let's set the experiment type - either using the generalist or just using vanilla model
+    if experiment_set == "generalist":
+        checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/"
+
+        if region == "organelles":
+            checkpoint += "with_cem/mito_nuc_em_generalist_sam/best.pt"
+        elif region == "boundaries":
+            checkpoint += "boundaries_em_generalist_sam/best.pt"
+        elif region == "lm":
+            checkpoint += "lm_generalist_sam/best.pt"
+        else:
+            raise ValueError("Choose `region` from lm / organelles / boundaries")
+
+    elif experiment_set == "specialist":
+        if dataset_name.split("/") > 1:
+            # it's the case for plantseg/root, we catch it and convert it to the expected format
+            dataset_name = f"{dataset_name[0]}_{dataset_name[1]}"
+
+        checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/{dataset_name}_sam/best.pt"
+
+    elif experiment_set == "vanilla":
+        checkpoint = None
+
+    else:
+        raise ValueError("Choose from generalist / vanilla")
+
+    if checkpoint is not None:
+        assert os.path.exists(checkpoint)
+
+    return checkpoint
+
+
 def submit_slurm(args):
-    """Submit python script that needs gpus with given inputs on a slurm node.
-    """
+    "Submit python script that needs gpus with given inputs on a slurm node."
     tmp_folder = "./gpu_jobs"
 
     # parameters to run the inference scripts
     dataset_name = args.dataset_name  # name of the dataset in lower-case
     model_type = args.model_type
-    experiment_set = args.experiment_set  # infer using specialist or generalist or vanilla models
+    experiment_set = args.experiment_set  # infer using generalist or vanilla models
+    region = args.roi  # use the organelles model or boundaries model
     make_delay = "10s"  # wait for precomputing the embeddings and later run inference scripts
 
-    # let's set the experiment type - either using the specialist or generalist or just using vanilla model
-    if experiment_set == "generalist":
-        checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/lm_generalist_sam/best.pt"
-    elif experiment_set == "specialist":
-        checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/{dataset_name}_sam/best.pt"
-    elif experiment_set == "vanilla":
-        checkpoint = None
-    else:
-        raise ValueError("Choose from specialist / generalist / vanilla")
+    checkpoint = get_checkpoint_path(experiment_set, dataset_name, model_type, region)
 
-    experiment_folder = f"/scratch/projects/nim00007/sam/experiments/new_models/{experiment_set}/lm/{dataset_name}/"
-    experiment_folder += f"{model_type}/"
+    modality = region if region == "lm" else "em"
 
-    if checkpoint is not None:
-        assert os.path.exists(checkpoint)
+    experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/"
+    experiment_folder += f"{experiment_set}/{modality}/{dataset_name}/{model_type}/"
 
     # now let's run the experiments
     if experiment_set == "vanilla":
@@ -113,7 +136,7 @@ def submit_slurm(args):
             experiment_folder=experiment_folder,
             dataset_name=dataset_name,
             delay=None if current_setup == "precompute_embeddings" else make_delay
-        )
+            )
 
     # the logic below automates the process of first running the precomputation of embeddings, and only then inference.
     job_id = []
@@ -145,5 +168,6 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--dataset_name", type=str, required=True)
     parser.add_argument("-m", "--model_type", type=str, required=True)
     parser.add_argument("-e", "--experiment_set", type=str, required=True)
+    parser.add_argument("-r", "--roi", type=str, required=True)
     args = parser.parse_args()
     main(args)
