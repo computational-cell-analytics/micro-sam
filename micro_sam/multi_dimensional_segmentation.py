@@ -5,6 +5,10 @@ import os
 from typing import Any, Optional, Union
 
 import numpy as np
+import nifty
+import elf.tracking.tracking_utils as track_utils
+import elf.segmentation as seg_utils
+
 from segment_anything.predictor import SamPredictor
 from tqdm import tqdm
 
@@ -192,7 +196,7 @@ def segment_3d_from_slice(
 
     seg_z = amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
     seg_z = mask_data_to_segmentation(
-        seg_z, shape=raw.shape[1:], with_background=True,
+        seg_z, with_background=True,
         min_object_size=min_object_size_z,
         max_object_size=max_object_size_z,
     )
@@ -210,4 +214,46 @@ def segment_3d_from_slice(
         )
         segmentation[this_seg > 0] = seg_id
 
+    return segmentation
+
+
+# TODO do we need to add a repulsive term between touching objects in the same slice??
+# TODO extend this to allow for gaps in the segmentation and then interpolate the gaps
+def merge_instance_segmentation_3d(
+    slice_segmentation: np.ndarray,
+    beta: float = 0.5,
+    with_background: bool = True,
+):
+    """Merge stacked 2d instance segmentations into a consistent 3d segmentation.
+
+    Solves a multicut problem based on the overlap of objects to merge across z.
+
+    Args:
+        slice_segmentation: The stacked segmentation across the slices.
+            We assume that the segmentation is labeled consecutive across z.
+        beta: The bias term for the multicut. Higher values lead to a larger
+            degree of over-segmentation and vice versa.
+        with_background: Whether this is a segmentation problem with background.
+            In that case all edges connecting to the background are set to be repulsive.
+    """
+
+    # Extract the overlap between slices.
+    edges = track_utils.compute_edges_from_overlap(slice_segmentation, verbose=False)
+
+    uv_ids = np.array([[edge["source"], edge["target"]] for edge in edges])
+    overlaps = np.array([edge["score"] for edge in edges])
+
+    n_nodes = int(slice_segmentation[-1].max() + 1)
+    graph = nifty.graph.undirectedGraph(n_nodes)
+    graph.insertEdges(uv_ids)
+
+    costs = seg_utils.multicut.compute_edge_costs(overlaps)
+    # set background weights to be maximally repulsive
+    if with_background:
+        bg_edges = (uv_ids == 0).any(axis=1)
+        costs[bg_edges] = -8.0
+
+    node_labels = seg_utils.multicut.multicut_decomposition(graph, 1.0 - costs, beta=beta)
+
+    segmentation = nifty.tools.take(node_labels, slice_segmentation)
     return segmentation

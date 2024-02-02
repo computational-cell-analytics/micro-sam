@@ -1,21 +1,19 @@
 import unittest
-import micro_sam.util as util
 
 from skimage.data import binary_blobs
+from magicgui.widgets import Container
+from micro_sam.util import VIT_T_SUPPORT
 
 
 class TestState(unittest.TestCase):
-    model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"
+    model_type = "vit_t" if VIT_T_SUPPORT else "vit_b"
 
     def test_state_for_interactive_segmentation(self):
         from micro_sam.sam_annotator._state import AnnotatorState
         image = binary_blobs(512)
-        predictor = util.get_sam_model(model_type=self.model_type)
-        image_embeddings = util.precompute_image_embeddings(predictor, image)
 
         state = AnnotatorState()
-        state.image_embeddings = image_embeddings
-        state.predictor = predictor
+        state.initialize_predictor(image, self.model_type)
         state.image_shape = image.shape
         self.assertTrue(state.initialized_for_interactive_segmentation())
 
@@ -25,6 +23,8 @@ class TestState(unittest.TestCase):
         state = AnnotatorState()
         state.current_track_id = 1
         state.lineage = {1: {}}
+        state.committed_lineages = []
+        state.tracking_widget = Container()
         self.assertTrue(state.initialized_for_tracking())
 
 
