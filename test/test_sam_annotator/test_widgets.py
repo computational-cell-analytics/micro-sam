@@ -1,5 +1,6 @@
 import json
 import os
+import platform
 
 from mobile_sam.predictor import SamPredictor as MobileSamPredictor
 from segment_anything.predictor import SamPredictor
