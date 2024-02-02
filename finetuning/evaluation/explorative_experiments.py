@@ -124,23 +124,33 @@ def plot_samples(name, modality, dataset_name, model_type, all_settings, experim
             save_path = os.path.join(save_dir, image_id.split(".")[0] + ".png")
             plt.savefig(save_path)
 
+            plt.close()
+
 
 def main():
+    # the inference settings we want to check for
     all_settings = [
-        "amg/inference", "instance_segmentation_with_decoder/inference",
-        "start_with_box/iteration00", "start_with_point/iteration07"
+        "amg/inference",
+        "instance_segmentation_with_decoder/inference",
+        "start_with_box/iteration00",
+        "start_with_point/iteration07"
     ]
+    # the two experiments we compare between
     compare_experiments = ["generalist", "specialist"]
     n_images = 10
+    dataset_name = "tissuenet"
+    modality = "lm"
+    model_type = "vit_h"
+    metric_choice = "msa"
 
     explore_differences(
-        dataset_name="livecell",
-        modality="lm",
-        model_type="vit_h",
+        dataset_name=dataset_name,
+        modality=modality,
+        model_type=model_type,
         all_settings=all_settings,
         compare_experiments=compare_experiments,
         n_images=n_images,
-        metric_choice="msa"
+        metric_choice=metric_choice
     )
 
 

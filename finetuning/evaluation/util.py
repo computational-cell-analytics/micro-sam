@@ -62,8 +62,8 @@ def get_dataset_paths(dataset_name, split_choice):
 
     # if the datasets have different modalities/species, let's make use of it
     split_names = dataset_name.split("/")
-    if split_names > 1:
-        assert split_names <= 2
+    if len(split_names) > 1:
+        assert len(split_names) <= 2
         dataset_name = [split_names[0], "slices", split_names[1]]
     else:
         dataset_name = [*split_names, "slices"]
