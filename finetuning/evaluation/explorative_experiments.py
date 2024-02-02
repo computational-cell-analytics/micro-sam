@@ -30,8 +30,9 @@ def explore_differences(
     all_settings = sorted(all_settings)
     for experiment in compare_experiments:
         experiment_dir = os.path.join(EXPERIMENT_ROOT, experiment, modality, dataset_name, model_type)
-        assert os.path.exists(experiment_dir), f"The experiment does not exist for {dataset_name}"
+        assert os.path.exists(experiment_dir), f"The experiment `{experiment}` does not exist for {dataset_name}"
 
+        print(f"Running experiments for {experiment}...")
         per_setting_res = {}
         for setting in all_settings:
             setting_split = setting.split("/")
@@ -113,12 +114,8 @@ def plot_samples(
             sample2 = imageio.imread(
                 os.path.join(EXPERIMENT_ROOT, compare2, modality, dataset_name, model_type, setting, image_id)
             )
-            image = imageio.imread(
-                *[image_path for image_path in image_paths if image_id in image_path]
-            )
-            gt = imageio.imread(
-                *[gt_path for gt_path in gt_paths if image_id in gt_path]
-            )
+            image = imageio.imread(*[image_path for image_path in image_paths if image_id in image_path])
+            gt = imageio.imread(*[gt_path for gt_path in gt_paths if image_id in gt_path])
 
             plt.title(image_id)
             fig, axes = plt.subplots(2, 2, figsize=(10, 10))
@@ -147,10 +144,9 @@ def plot_samples(
 def main():
     # the inference settings we want to check for
     all_settings = [
-        "amg/inference",
-        "instance_segmentation_with_decoder/inference",
-        "start_with_box/iteration00",
-        "start_with_point/iteration07"
+        "amg/inference", "instance_segmentation_with_decoder/inference",
+        "start_with_box/iteration00", "start_with_box/iteration07",
+        "start_with_point/iteration00", "start_with_point/iteration07"
     ]
     # the two experiments we compare between
     compare_experiments = ["generalist", "specialist"]
@@ -168,7 +164,7 @@ def main():
         compare_experiments=compare_experiments,
         n_images=n_images,
         metric_choice=metric_choice,
-        sort_decreasing=True  # i.e. while true, largest gap to smallest gao (and vice-versa)
+        sort_decreasing=True  # i.e. when `True`, largest gap to smallest gap (and vice-versa)
     )
 
 
