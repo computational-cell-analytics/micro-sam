@@ -1,16 +1,11 @@
-import argparse
 import os
 
 from micro_sam.evaluation import precompute_all_embeddings
-from util import get_paths, get_model
+from util import get_paths, get_model, get_default_arguments
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-m", "--model", type=str, required=True)
-    parser.add_argument("-c", "--checkpoint", type=str, required=True)
-    parser.add_argument("-e", "--experiment_folder", type=str, required=True)
-    args = parser.parse_args()
+    args = get_default_arguments()
 
     predictor = get_model(model_type=args.model, ckpt=args.checkpoint)
     embedding_dir = os.path.join(args.experiment_folder, "embeddings")
