@@ -1,7 +1,9 @@
 import os
+import numpy as np
 from tqdm import tqdm
 
 import imageio.v3 as imageio
+import matplotlib.pyplot as plt
 
 from elf.evaluation import mean_segmentation_accuracy
 
@@ -14,14 +16,17 @@ def explore_differences(
     model_type,
     compare_experiments,
     all_settings,
+    n_images,
     metric_choice="msa"
 ):
     image_paths, gt_paths = get_paths(dataset_name, split="test")
-    image_paths, gt_paths = image_paths[:5], gt_paths[:5]
 
     assert len(compare_experiments) == 2, "You should provide only two experiment names to compare."
+    assert metric_choice in ["msa", "sa50"], "The metric choice is limited to `msa` / `sa50`."
 
     per_experiment_res = []
+    compare_experiments = sorted(compare_experiments)
+    all_settings = sorted(all_settings)
     for experiment in compare_experiments:
         experiment_dir = os.path.join(EXPERIMENT_ROOT, experiment, modality, dataset_name, model_type)
         assert os.path.exists(experiment_dir), f"The experiment does not exist for {dataset_name}"
@@ -51,16 +56,73 @@ def explore_differences(
     experiment1, experiment2 = per_experiment_res
 
     # now let's calculate the difference between experiments and identify the ones with biggest diff.
+    name = f"{compare_experiments[0]}-{compare_experiments[1]}"
+    experiment_res = {}
     for (k1, v1), (k2, v2) in zip(experiment1.items(), experiment2.items()):
         if k1 == k2 == "results":
-            per_setting_res = {}
-            for (res_k1, res_v1), (res_k2, res_v2) in zip(v1.values(), v2.values()):
+            setting_res = {}
+            for (res_k1, res_v1), (res_k2, res_v2) in zip(v1.items(), v2.items()):
                 assert res_k1 == res_k2
-                res = list(set(res_v1) - set(res_v2))
-                per_setting_res[f"{res_k1}_difference"] = res
+                res = np.subtract(res_v1, res_v2)
+                setting_res[f"{res_k1}"] = abs(res).tolist()
+            experiment_res[name] = setting_res
 
-            name = f"{compare_experiments[0]}-{compare_experiments[1]}"
-            per_experiment_res[name] = per_setting_res
+    image_ids = [os.path.split(image_path)[-1] for image_path in image_paths]
+    plot_samples(name, modality, dataset_name, model_type, all_settings, experiment_res, image_ids, n_images)
+
+
+def plot_samples(name, modality, dataset_name, model_type, all_settings, experiment_res, image_ids, n_images):
+    check_samples = {}
+    for experiment_name, experiment_value in experiment_res[name].items():
+        desired_ids = [x for y, x in sorted(zip(experiment_value, image_ids), reverse=True)][:n_images]
+        check_samples[experiment_name] = desired_ids
+
+    compare1, compare2 = name.split("-")
+
+    image_paths, gt_paths = get_paths(dataset_name, split="test")
+
+    # let's create a directory structure to save results
+    for setting in all_settings:
+        setting_split = setting.split("/")
+        setting_name = setting_split[0] + "_" + setting_split[1]
+
+        save_dir = os.path.join("figures", modality, dataset_name, model_type, name, setting_name)
+        os.makedirs(save_dir, exist_ok=True)
+
+        for image_id in check_samples[setting_name]:
+            sample1 = imageio.imread(
+                os.path.join(EXPERIMENT_ROOT, compare1, modality, dataset_name, model_type, setting, image_id)
+            )
+            sample2 = imageio.imread(
+                os.path.join(EXPERIMENT_ROOT, compare2, modality, dataset_name, model_type, setting, image_id)
+            )
+            image = imageio.imread(
+                *[image_path for image_path in image_paths if image_id in image_path]
+            )
+            gt = imageio.imread(
+                *[gt_path for gt_path in gt_paths if image_id in gt_path]
+            )
+
+            plt.title(image_id)
+            fig, axes = plt.subplots(2, 2, figsize=(10, 10))
+            axes[0, 0].imshow(image, cmap="gray")  # image
+            axes[0, 0].title.set_text("Image")
+            axes[0, 0].axis("off")
+
+            axes[0, 1].imshow(gt)  # gt
+            axes[0, 1].title.set_text("Labels")
+            axes[0, 1].axis("off")
+
+            axes[1, 0].imshow(sample1)  # comparison point 1
+            axes[1, 0].title.set_text(compare1)
+            axes[1, 0].axis("off")
+
+            axes[1, 1].imshow(sample2)  # comparision point 2
+            axes[1, 1].title.set_text(compare2)
+            axes[1, 1].axis("off")
+
+            save_path = os.path.join(save_dir, image_id.split(".")[0] + ".png")
+            plt.savefig(save_path)
 
 
 def main():
@@ -69,6 +131,7 @@ def main():
         "start_with_box/iteration00", "start_with_point/iteration07"
     ]
     compare_experiments = ["generalist", "specialist"]
+    n_images = 10
 
     explore_differences(
         dataset_name="livecell",
@@ -76,6 +139,7 @@ def main():
         model_type="vit_h",
         all_settings=all_settings,
         compare_experiments=compare_experiments,
+        n_images=n_images,
         metric_choice="msa"
     )
 
