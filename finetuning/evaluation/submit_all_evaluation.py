@@ -125,8 +125,6 @@ def submit_slurm(args):
         checkpoint = args.checkpoint_path
         experiment_folder = args.experiment_path
 
-    breakpoint()
-
     # now let's run the experiments
     if experiment_set == "vanilla":
         all_setups = ["precompute_embeddings", "evaluate_amg", "iterative_prompting"]
