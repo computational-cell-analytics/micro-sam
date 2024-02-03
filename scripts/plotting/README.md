@@ -1,10 +1,6 @@
 # Plotting Scripts
 
-- `plot_em_organelles.py` - The script for plotting all the results* from Electron Microscopy Mitochondria - Nuclei datasets (MitoNet, vanilla Segment Anything models, generalist models)
-
-- `plot_livecell.py` - The script for plotting all the results* from LiveCELL dataset (CellPose, vanilla Segment Anything models, specialist models, generalist models)
-
-- `plot_lm.py` - The script for plotting all the results* from Light Microscopy datasets (CellPose, vanilla Segment Anything models, generalists)
+- `plot_evaluation.py` - The script for plotting all the results* from Light Microscopy datasets (CellPose, vanilla Segment Anything models) and Electron Microscopy (Mitochondria-Nuclei & Boundaries) datasets (benchmarks (~MitoNet for Mito-Nuc), vanilla Segment Anything models, generalist models)
 
 - `plot_train_grid_search.py` - The script for plotting grid search experiment results* from LiveCELL specialists.
 
