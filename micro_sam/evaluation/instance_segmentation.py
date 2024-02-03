@@ -330,9 +330,11 @@ def save_grid_search_best_params(best_kwargs, best_msa, grid_search_result_dir=N
     path_name = "grid_search_params_amg.csv" if "pred_iou_thresh" and "stability_score_thresh" in best_kwargs \
         else "grid_search_params_instance_segmentation_with_decoder.csv"
 
-    res_path = os.path.join(
-        grid_search_result_dir, "results", path_name
-    ) if grid_search_result_dir is not None else path_name
+    if grid_search_result_dir is not None:
+        os.makedirs(os.path.join(grid_search_result_dir, "results"), exist_ok=True)
+        res_path = os.path.join(grid_search_result_dir, "results", path_name)
+    else:
+        res_path = path_name
 
     best_param_df.to_csv(res_path)
 
