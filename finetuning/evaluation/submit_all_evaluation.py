@@ -114,12 +114,16 @@ def submit_slurm(args):
     region = args.roi  # use the organelles model or boundaries model
     make_delay = "10s"  # wait for precomputing the embeddings and later run inference scripts
 
-    checkpoint = get_checkpoint_path(experiment_set, dataset_name, model_type, region)
+    if args.checkpoint_path is None and args.experiment_path is None:
+        checkpoint = get_checkpoint_path(experiment_set, dataset_name, model_type, region)
 
-    modality = region if region == "lm" else "em"
+        modality = region if region == "lm" else "em"
 
-    experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/"
-    experiment_folder += f"{experiment_set}/{modality}/{dataset_name}/{model_type}/"
+        experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/"
+        experiment_folder += f"{experiment_set}/{modality}/{dataset_name}/{model_type}/"
+    else:
+        checkpoint = args.checkpoint_path
+        experiment_folder = args.experiment_path
 
     # now let's run the experiments
     if experiment_set == "vanilla":
@@ -165,9 +169,16 @@ def main(args):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
+    # the parameters to use the default models
     parser.add_argument("-d", "--dataset_name", type=str, required=True)
     parser.add_argument("-m", "--model_type", type=str, required=True)
     parser.add_argument("-e", "--experiment_set", type=str, required=True)
-    parser.add_argument("-r", "--roi", type=str, required=True)
+    # optional argument to specify for the experiment root folder automatically
+    parser.add_argument("-r", "--roi", type=str)
+
+    # overwrite the checkpoint path and experiment root to use this flexibly
+    parser.add_argument("--checkpoint_path", type=str, default=None)
+    parser.add_argument("--experiment_path", type=str, default=None)
+
     args = parser.parse_args()
     main(args)
