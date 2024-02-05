@@ -38,6 +38,7 @@ def run_one_setup(all_dataset_list, all_model_list, setup):
     for dataset_name in all_dataset_list:
         for model_type in all_model_list:
             run_specific_experiment(dataset_name=dataset_name, model_type=model_type, setup=setup)
+            breakpoint()
 
 
 def for_all_lm(setup):
