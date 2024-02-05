@@ -31,7 +31,7 @@ def run_one_setup(all_dataset_list, all_model_list, all_experiment_set_list, roi
 def for_all_lm():
     # let's run for in-domain
     run_one_setup(
-        all_dataset_list=["tissuenet", "deepbacs", "plantseg_root", "livecell"],
+        all_dataset_list=["tissuenet", "deepbacs", "plantseg/root", "livecell"],
         all_model_list=["vit_b", "vit_h"],
         all_experiment_set_list=["vanilla", "generalist", "specialist"],
         roi="lm"
@@ -39,7 +39,7 @@ def for_all_lm():
 
     # next, let's run for out-of-domain
     run_one_setup(
-        all_dataset_list=["covid_if", "plantseg_ovules", "hpa", "lizard", "mouse-embryo", "ctc", "neurips-cell-seg"],
+        all_dataset_list=["covid_if", "plantseg/ovules", "hpa", "lizard", "mouse-embryo", "ctc", "neurips-cell-seg"],
         all_model_list=["vit_b", "vit_h"],
         all_experiment_set_list=["vanilla", "generalist"],
         roi="lm"

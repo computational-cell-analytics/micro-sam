@@ -86,7 +86,7 @@ def get_model(model_type, ckpt):
 
 
 def get_paths(dataset_name, split):
-    assert dataset_name in DATASETS
+    assert dataset_name in DATASETS, dataset_name
 
     if dataset_name == "livecell":
         return _get_livecell_paths(input_folder=os.path.join(ROOT, "livecell"), split=split)

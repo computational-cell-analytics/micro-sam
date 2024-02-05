@@ -130,9 +130,16 @@ def submit_slurm(args):
         all_setups = ["precompute_embeddings", "evaluate_amg", "iterative_prompting"]
     else:
         all_setups = ["precompute_embeddings", "evaluate_amg", "evaluate_instance_segmentation", "iterative_prompting"]
+
+    # env name
+    if model_type == "vit_t":
+        env_name = "mobilesam"
+    else:
+        env_name = "sam"
+
     for current_setup in all_setups:
         write_batch_script(
-            env_name="sam",
+            env_name=env_name,
             out_path=get_batch_script_names(tmp_folder),
             inference_setup=current_setup,
             checkpoint=checkpoint,
