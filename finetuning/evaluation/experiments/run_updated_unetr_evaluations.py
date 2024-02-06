@@ -53,7 +53,7 @@ def _get_plots(dataset_name, model_type):
         for i, result_path in enumerate(all_result_paths):
             # avoid using the grid-search parameters' files
             _tmp_check = os.path.split(result_path)[-1]
-            if _tmp_check.startswith("grid_search_") or _tmp_check.startswith("amg"):
+            if _tmp_check.startswith("grid_search_"):
                 continue
 
             res = pd.read_csv(result_path)
