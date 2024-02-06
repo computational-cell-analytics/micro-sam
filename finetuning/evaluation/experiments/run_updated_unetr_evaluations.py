@@ -39,30 +39,6 @@ def run_specific_experiment(dataset_name, model_type, setup):
         run_eval_process(_cmd)
 
 
-def run_one_setup(all_dataset_list, all_model_list, setup):
-    for dataset_name in all_dataset_list:
-        for model_type in all_model_list:
-            run_specific_experiment(dataset_name=dataset_name, model_type=model_type, setup=setup)
-            breakpoint()
-
-
-def for_all_lm(setup):
-    assert setup in ["conv-transpose", "bilinear"]
-
-    # let's run for in-domain
-    run_one_setup(
-        all_dataset_list=["tissuenet", "deepbacs", "plantseg/root", "livecell", "neurips-cell-seg"],
-        all_model_list=["vit_t", "vit_b", "vit_l", "vit_h"],
-        setup=setup
-    )
-
-
-def _run_evaluations():
-    os.chdir("../")
-    # for_all_lm("conv-transpose")
-    for_all_lm("bilinear")
-
-
 def _get_plots(dataset_name, model_type):
     experiment_dirs = sorted(glob(os.path.join(EXPERIMENT_ROOT, "*")))
 
@@ -152,6 +128,30 @@ def _get_plots(dataset_name, model_type):
 
     plt.close()
     print(f"Plot saved at {save_path}")
+
+
+def run_one_setup(all_dataset_list, all_model_list, setup):
+    for dataset_name in all_dataset_list:
+        for model_type in all_model_list:
+            run_specific_experiment(dataset_name=dataset_name, model_type=model_type, setup=setup)
+            breakpoint()
+
+
+def for_all_lm(setup):
+    assert setup in ["conv-transpose", "bilinear"]
+
+    # let's run for in-domain
+    run_one_setup(
+        all_dataset_list=["tissuenet", "deepbacs", "plantseg/root", "livecell", "neurips-cell-seg"],
+        all_model_list=["vit_t", "vit_b", "vit_l", "vit_h"],
+        setup=setup
+    )
+
+
+def _run_evaluations():
+    os.chdir("../")
+    # for_all_lm("conv-transpose")
+    for_all_lm("bilinear")
 
 
 def _get_all_plots():
