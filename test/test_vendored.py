@@ -33,7 +33,7 @@ class TestVendored(unittest.TestCase):
         self._test_batched_mask_to_box(device="cuda")
 
 
-    @unittest.skipif((os.getenv("GITHUB_ACTIONS") == "true"),
+    @unittest.skipIf((os.getenv("GITHUB_ACTIONS") == "true"),
                      "Test fails on Github Actions macos-14 runner " + \
                      "https://github.com/computational-cell-analytics/micro-sam/issues/380")
     @unittest.skipIf(not (torch.backends.mps.is_available() and torch.backends.mps.is_built()),
