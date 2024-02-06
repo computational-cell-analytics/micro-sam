@@ -41,7 +41,8 @@ def finetune_lm_generalist(args):
         use_sam_stats=True,
         final_activation="Sigmoid",
         use_skip_connection=False,
-        resize_input=True
+        resize_input=True,
+        use_conv_transpose=not args.use_bilinear
     )
     unetr.to(device)
 
@@ -121,6 +122,7 @@ def main():
         "--save_every_kth_epoch", type=int, default=None,
         help="To save every kth epoch while fine-tuning. Expects an integer value."
     )
+    parser.add_argument("--use_bilinear", action="store_true")
     args = parser.parse_args()
     finetune_lm_generalist(args)
 
