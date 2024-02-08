@@ -112,7 +112,7 @@ class MedSAMTrainer(torch_em.trainer.DefaultTrainer):
         return metric_val
 
 
-class MedSamLogger(TorchEmLogger):
+class MedSAMLogger(TorchEmLogger):
     """@private"""
     def __init__(self, trainer, save_root, **unused_kwargs):
         super().__init__(trainer, save_root)
