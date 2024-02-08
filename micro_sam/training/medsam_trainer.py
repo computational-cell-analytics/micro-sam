@@ -64,18 +64,18 @@ class MedSAMTrainer(torch_em.trainer.DefaultTrainer):
                 ).to(torch.float32)
                 loss = self._seg_loss(masks, sampled_binary_y)
 
-        backprop(loss)
+            backprop(loss)
 
-        if self.logger is not None:
-            lr = [pm["lr"] for pm in self.optimizer.param_groups][0]
-            samples = sampled_binary_y if self._iteration % self.log_image_interval == 0 else None
-            self.logger.log_train(self._iteration, loss, lr, x, y, samples)
+            if self.logger is not None:
+                lr = [pm["lr"] for pm in self.optimizer.param_groups][0]
+                samples = sampled_binary_y if self._iteration % self.log_image_interval == 0 else None
+                self.logger.log_train(self._iteration, loss, lr, x, y, samples)
 
-        self._iteration += 1
-        n_iter += 1
-        if self._iteration >= self.max_iteration:
-            break
-        progress.update(1)
+            self._iteration += 1
+            n_iter += 1
+            if self._iteration >= self.max_iteration:
+                break
+            progress.update(1)
 
         t_per_iter = (time.time() - t_per_iter) / n_iter
         return t_per_iter
