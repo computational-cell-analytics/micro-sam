@@ -142,7 +142,7 @@ def image_series_annotator(
 
     viewer.window.add_dock_widget(next_image)
 
-    @viewer.bind_key("n")
+    @viewer.bind_key("n", overwrite=True)
     def _next_image(viewer):
         next_image(viewer)
 

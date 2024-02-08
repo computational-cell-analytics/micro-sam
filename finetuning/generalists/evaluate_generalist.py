@@ -33,10 +33,10 @@ def submit_array_job(model_name, datasets):
 
 def evaluate_dataset_slurm(model_name, dataset):
     if dataset in EM_DATASETS:
-        run_amg = False
+        do_amg = False
         max_num_val_images = None
     else:
-        run_amg = True
+        do_amg = True
         max_num_val_images = 64
 
     is_custom_model = model_name not in ("vit_h", "vit_b")
@@ -46,7 +46,7 @@ def evaluate_dataset_slurm(model_name, dataset):
     experiment_folder = os.path.join(EXPERIMENT_ROOT, model_name, dataset)
     evaluate_checkpoint_for_dataset(
         checkpoint, model_type, dataset, experiment_folder,
-        run_default_evaluation=True, run_amg=run_amg,
+        run_default_evaluation=True, do_amg=do_amg,
         is_custom_model=is_custom_model,
         max_num_val_images=max_num_val_images,
     )

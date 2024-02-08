@@ -321,6 +321,24 @@ def evaluate_instance_segmentation_grid_search(
     return best_kwargs, best_score
 
 
+def save_grid_search_best_params(best_kwargs, best_msa, grid_search_result_dir=None):
+    # saving the best parameters estimated from grid-search in the `results` folder
+    param_df = pd.DataFrame.from_dict([best_kwargs])
+    res_df = pd.DataFrame.from_dict([{"best_msa": best_msa}])
+    best_param_df = pd.merge(res_df, param_df, left_index=True, right_index=True)
+
+    path_name = "grid_search_params_amg.csv" if "pred_iou_thresh" and "stability_score_thresh" in best_kwargs \
+        else "grid_search_params_instance_segmentation_with_decoder.csv"
+
+    if grid_search_result_dir is not None:
+        os.makedirs(os.path.join(grid_search_result_dir, "results"), exist_ok=True)
+        res_path = os.path.join(grid_search_result_dir, "results", path_name)
+    else:
+        res_path = path_name
+
+    best_param_df.to_csv(res_path)
+
+
 def run_instance_segmentation_grid_search_and_inference(
     segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
     grid_search_values: Dict[str, List],
@@ -359,6 +377,8 @@ def run_instance_segmentation_grid_search_and_inference(
     best_kwargs, best_msa = evaluate_instance_segmentation_grid_search(result_dir, list(grid_search_values.keys()))
     best_param_str = ", ".join(f"{k} = {v}" for k, v in best_kwargs.items())
     print("Best grid-search result:", best_msa, "with parmeters:\n", best_param_str)
+
+    save_grid_search_best_params(best_kwargs, best_msa, Path(embedding_dir).parent)
 
     generate_kwargs = {} if fixed_generate_kwargs is None else fixed_generate_kwargs
     generate_kwargs.update(best_kwargs)
