@@ -44,9 +44,8 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
             n_samples=1000 if split_choice == "train" else 100
         ),
         datasets.get_livecell_dataset(
-            path=os.path.join(input_path, "livecell"), split=split_choice, patch_shape=patch_shape,
-            label_transform=label_transform, sampler=sampler, label_dtype=label_dtype, raw_transform=identity,
-            n_samples=1000 if split_choice == "train" else 100, download=True
+            path=os.path.join(input_path, "livecell"), split=split_choice, patch_shape=patch_shape, download=True,
+            label_transform=label_transform, sampler=sampler, label_dtype=label_dtype, raw_transform=identity
         ),
         datasets.get_deepbacs_dataset(
             path=os.path.join(input_path, "deepbacs"), split=split_choice, patch_shape=patch_shape,

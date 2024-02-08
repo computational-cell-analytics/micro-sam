@@ -752,8 +752,8 @@ def for_neurips_cellseg(save_dir, use_tuning_set=False):
 def for_deepbacs(save_dir):
     "Move the datasets from the internal split (provided by default in deepbacs) to our `slices` logic"
     for split in ["val", "test"]:
-        image_paths = os.path.join(ROOT, "deepbacs", "mixed", split, "source", "*")
-        label_paths = os.path.join(ROOT, "deepbacs", "mixed", split, "target", "*")
+        image_paths = sorted(glob(os.path.join(ROOT, "deepbacs", "mixed", split, "source", "*")))
+        label_paths = sorted(glob(os.path.join(ROOT, "deepbacs", "mixed", split, "target", "*")))
 
         os.makedirs(os.path.join(save_dir, split, "raw"), exist_ok=True)
         os.makedirs(os.path.join(save_dir, split, "labels"), exist_ok=True)
@@ -801,7 +801,7 @@ def main():
     # let's ensure all the data is downloaded
     download_all_datasets(ROOT)
 
-    # now let's save the slices as tif 
+    # now let's save the slices as tif
     preprocess_lm_datasets()
     preprocess_em_datasets()
 
