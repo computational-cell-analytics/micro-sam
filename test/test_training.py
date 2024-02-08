@@ -77,7 +77,7 @@ class TestTraining(unittest.TestCase):
         import micro_sam.training as sam_training
 
         batch_size = 1
-        n_sub_iteration = 4
+        n_sub_iteration = 3
         patch_shape = (512, 512)
         n_objects_per_batch = 2
 
@@ -86,7 +86,7 @@ class TestTraining(unittest.TestCase):
         val_loader = self._get_dataloader("val", patch_shape, batch_size)
 
         model = sam_training.get_trainable_sam_model(model_type=model_type, device=device)
-        convert_inputs = sam_training.ConvertToSamInputs()
+        convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.05)
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode="min", factor=0.9, patience=10, verbose=True
@@ -97,8 +97,6 @@ class TestTraining(unittest.TestCase):
             train_loader=train_loader,
             val_loader=val_loader,
             model=model,
-            loss=torch_em.loss.DiceLoss(),
-            metric=torch_em.loss.DiceLoss(),
             optimizer=optimizer,
             lr_scheduler=scheduler,
             device=device,

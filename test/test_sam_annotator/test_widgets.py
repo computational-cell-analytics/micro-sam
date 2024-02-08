@@ -1,8 +1,10 @@
 import json
 import os
+import platform
 
 from mobile_sam.predictor import SamPredictor as MobileSamPredictor
 from segment_anything.predictor import SamPredictor
+import pytest
 import torch
 import zarr
 
@@ -15,6 +17,7 @@ from micro_sam.util import _compute_data_signature
 # you don't need to import it, as long as napari is installed
 # in your testing environment.
 # tmp_path is a regular pytest fixture.
+@pytest.mark.skipif(platform.system() == "Windows", reason="Gui test is not working on windows.")
 def test_embedding_widget(make_napari_viewer, tmp_path):
     """Test embedding widget for micro-sam napari plugin."""
     # setup

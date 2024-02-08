@@ -121,7 +121,6 @@ def batched_inference(
         # then we need to select the most likely mask (according to the predicted IOU) here.
         if reduce_multimasking and multimasking:
             _, max_index = batch_ious.max(axis=1)
-            # How can this be vectorized???
             batch_masks = torch.cat([batch_masks[i, max_id][None] for i, max_id in enumerate(max_index)]).unsqueeze(1)
             batch_ious = torch.cat([batch_ious[i, max_id][None] for i, max_id in enumerate(max_index)]).unsqueeze(1)
 
@@ -144,6 +143,6 @@ def batched_inference(
     ]
 
     if return_instance_segmentation:
-        masks = mask_data_to_segmentation(masks, image_shape, with_background=False, min_object_size=0)
+        masks = mask_data_to_segmentation(masks, with_background=False, min_object_size=0)
 
     return masks

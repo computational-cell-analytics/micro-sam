@@ -60,8 +60,8 @@ def get_cache_directory() -> None:
 
     Users can set the MICROSAM_CACHEDIR environment variable for a custom cache directory.
     """
-    default_cache_directory = os.path.expanduser(pooch.os_cache('micro_sam'))
-    cache_directory = Path(os.environ.get('MICROSAM_CACHEDIR', default_cache_directory))
+    default_cache_directory = os.path.expanduser(pooch.os_cache("micro_sam"))
+    cache_directory = Path(os.environ.get("MICROSAM_CACHEDIR", default_cache_directory))
     return cache_directory
 
 
@@ -69,7 +69,8 @@ def get_cache_directory() -> None:
 # Functionality for model download and export
 #
 
-def microsam_cachedir():
+
+def microsam_cachedir() -> None:
     """Return the micro-sam cache directory.
 
     Returns the top level cache directory for micro-sam models and sample data.
@@ -77,7 +78,7 @@ def microsam_cachedir():
     Every time this function is called, we check for any user updates made to
     the MICROSAM_CACHEDIR os environment variable since the last time.
     """
-    cache_directory = os.environ.get('MICROSAM_CACHEDIR') or pooch.os_cache('micro_sam')
+    cache_directory = os.environ.get("MICROSAM_CACHEDIR") or pooch.os_cache("micro_sam")
     return cache_directory
 
 
@@ -106,10 +107,9 @@ def models():
         # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
         "vit_t": "sha256:6dbb90523a35330fedd7f1d3dfc66f995213d81b29a5ca8108dbcdd4e37d6c2f",
         # first version of finetuned models on zenodo
-        "vit_h_lm": "sha256:9a65ee0cddc05a98d60469a12a058859c89dc3ea3ba39fed9b90d786253fbf26",
-        "vit_b_lm": "sha256:5a59cc4064092d54cd4d92cd967e39168f3760905431e868e474d60fe5464ecd",
-        "vit_h_em": "sha256:ae3798a0646c8df1d4db147998a2d37e402ff57d3aa4e571792fbb911d8a979c",
-        "vit_b_em": "sha256:c04a714a4e14a110f0eec055a65f7409d54e6bf733164d2933a0ce556f7d6f81",
+        "vit_b_lm": "sha256:e8f5feb1ad837a7507935409c7f83f7c8af11c6e39cfe3df03f8d3bd4a358449",
+        "vit_b_em_organelles": "sha256:8fabbe38a427a0c91bbe6518a5c0f103f36b73e6ee6c86fbacd32b4fc66294b4",
+        "vit_b_em_boundaries": "sha256:d87348b2adef30ab427fb787d458643300eb30624a0e808bf36af21764705f4f",
     }
     registry_xxh128 = {
         # the default segment anything models
@@ -119,10 +119,9 @@ def models():
         # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
         "vit_t": "xxh128:8eadbc88aeb9d8c7e0b4b60c3db48bd0",
         # first version of finetuned models on zenodo
-        "vit_h_lm": "xxh128:e113adac6a0a21514bb2d73de16b921b",
-        "vit_b_lm": "xxh128:5fc0851abf8a209dcbed4e95634d9e27",
-        "vit_h_em": "xxh128:64b6eb2d32ac9c5d9b022b1ac57f1cc6",
-        "vit_b_em": "xxh128:f50d499db5bf54dc9849c3dbd271d5c9",
+        "vit_b_lm": "xxh128:6b061eb8684d9d5f55545330d6dce50d",
+        "vit_b_em_organelles": "xxh128:3919c2b761beba7d3f4ece342c9f5369",
+        "vit_b_em_boundaries": "xxh128:3099fe6339f5be91ca84db889db1909f",
     }
 
     models = pooch.create(
@@ -138,10 +137,9 @@ def models():
             # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
             "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
             # first version of finetuned models on zenodo
-            "vit_h_lm": "https://zenodo.org/record/8250299/files/vit_h_lm.pth?download=1",
-            "vit_b_lm": "https://zenodo.org/record/8250281/files/vit_b_lm.pth?download=1",
-            "vit_h_em": "https://zenodo.org/record/8250291/files/vit_h_em.pth?download=1",
-            "vit_b_em": "https://zenodo.org/record/8250260/files/vit_b_em.pth?download=1",
+            "vit_b_lm": "https://zenodo.org/records/10524791/files/vit_b_lm.pth?download=1",
+            "vit_b_em_organelles": "https://zenodo.org/records/10524828/files/vit_b_em_organelles.pth?download=1",
+            "vit_b_em_boundaries": "https://zenodo.org/records/10524894/files/vit_b_em_boundaries.pth?download=1",
         },
     )
     return models
@@ -503,9 +501,12 @@ def _precompute_2d(input_, predictor, save_path, tile_shape, halo):
     f = zarr.open(save_path, "a")
 
     use_tiled_prediction = tile_shape is not None
+    set_embeddings = False
+
     if "input_size" in f.attrs:  # the embeddings have already been precomputed
         features = f["features"][:] if tile_shape is None else f["features"]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
+        set_embeddings = True
 
     elif use_tiled_prediction:  # the embeddings have not been computed yet and we use tiled prediction
         features = _precompute_tiled_2d(predictor, input_, tile_shape, halo, f)
@@ -523,6 +524,11 @@ def _precompute_2d(input_, predictor, save_path, tile_shape, halo):
     image_embeddings = {
         "features": features, "input_size": input_size, "original_size": original_size,
     }
+
+    # Make sure that the embeddings are set if we load normal 2d embeddings.
+    if set_embeddings:
+        set_precomputed(predictor, image_embeddings)
+
     return image_embeddings
 
 

@@ -4,213 +4,47 @@ from typing import Optional, Tuple
 import napari
 import numpy as np
 
-from magicgui import magicgui
-from napari import Viewer
 from segment_anything import SamPredictor
 
-from .. import instance_segmentation, util
-from ..precompute_state import cache_amg_state
-from ..visualization import project_embeddings_for_visualization
-from . import util as vutil
-from .gui_utils import show_wrong_file_warning
+from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
+from ._widgets import segment_widget, amg_widget_2d
+from .util import _initialize_parser
+from .. import util
 
 
-@magicgui(call_button="Segment Object [S]")
-def _segment_widget(v: Viewer, box_extension: float = 0.1) -> None:
-    shape = v.layers["current_object"].data.shape
-
-    # get the current box and point prompts
-    boxes, masks = vutil.shape_layer_to_prompts(v.layers["prompts"], shape)
-    points, labels = vutil.point_layer_to_prompts(v.layers["point_prompts"], with_stop_annotation=False)
-
-    predictor = AnnotatorState().predictor
-    image_embeddings = AnnotatorState().image_embeddings
-    if image_embeddings["original_size"] is None:  # tiled prediction
-        seg = vutil.prompt_segmentation(
-            predictor, points, labels, boxes, masks, shape, image_embeddings=image_embeddings,
-            multiple_box_prompts=True, box_extension=box_extension,
+class Annotator2d(_AnnotatorBase):
+    def __init__(
+        self,
+        viewer: "napari.viewer.Viewer",
+        segmentation_result: Optional[np.ndarray] = None,
+    ) -> None:
+        super().__init__(
+            viewer=viewer,
+            ndim=2,
+            segment_widget=segment_widget,
+            autosegment_widget=amg_widget_2d,
+            segmentation_result=segmentation_result
         )
-    else:  # normal prediction and we have set the precomputed embeddings already
-        seg = vutil.prompt_segmentation(
-            predictor, points, labels, boxes, masks, shape, multiple_box_prompts=True, box_extension=box_extension,
-        )
-
-    # no prompts were given or prompts were invalid, skip segmentation
-    if seg is None:
-        print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
-        return
-
-    v.layers["current_object"].data = seg
-    v.layers["current_object"].refresh()
-
-
-def _changed_param(amg, **params):
-    if amg is None:
-        return None
-    for name, val in params.items():
-        if hasattr(amg, f"_{name}") and getattr(amg, f"_{name}") != val:
-            return name
-    return None
-
-
-@magicgui(
-    call_button="Automatic Segmentation",
-    min_object_size={"min": 0, "max": 10000},
-)
-def _autosegment_widget(
-    v: Viewer,
-    pred_iou_thresh: float = 0.88,
-    stability_score_thresh: float = 0.95,
-    min_object_size: int = 100,
-    with_background: bool = True,
-) -> None:
-    state = AnnotatorState()
-
-    is_tiled = state.image_embeddings["input_size"] is None
-    if state.amg is None:
-        state.amg = instance_segmentation.get_amg(state.predictor, is_tiled)
-
-    shape = state.image_shape
-    if not state.amg.is_initialized:
-        # we don't need to pass the actual image data here, since the embeddings are passed
-        # (the image data is only used by the amg to compute image embeddings, so not needed here)
-        dummy_image = np.zeros(shape, dtype="uint8")
-        state.amg.initialize(dummy_image, image_embeddings=state.image_embeddings, verbose=True)
-
-    seg = state.amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
-
-    seg = instance_segmentation.mask_data_to_segmentation(
-        seg, shape, with_background=with_background, min_object_size=min_object_size
-    )
-    assert isinstance(seg, np.ndarray)
-
-    v.layers["auto_segmentation"].data = seg
-    v.layers["auto_segmentation"].refresh()
-
-
-def _get_shape(raw):
-    if raw.ndim == 2:
-        shape = raw.shape
-    elif raw.ndim == 3 and raw.shape[-1] == 3:
-        shape = raw.shape[:2]
-    else:
-        raise ValueError(f"Invalid input image of shape {raw.shape}. Expect either 2D grayscale or 3D RGB image.")
-    return shape
-
-
-def _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings):
-    v = Viewer()
-
-    #
-    # initialize the viewer and add layers
-    #
-
-    v.add_image(raw)
-    shape = _get_shape(raw)
-
-    v.add_labels(data=np.zeros(shape, dtype="uint32"), name="auto_segmentation")
-    if segmentation_result is None:
-        v.add_labels(data=np.zeros(shape, dtype="uint32"), name="committed_objects")
-    else:
-        v.add_labels(segmentation_result, name="committed_objects")
-    v.layers["committed_objects"].new_colormap()  # randomize colors so it is easy to see when object committed
-    v.add_labels(data=np.zeros(shape, dtype="uint32"), name="current_object")
-
-    # show the PCA of the image embeddings
-    if show_embeddings:
-        embedding_vis, scale = project_embeddings_for_visualization(AnnotatorState().image_embeddings)
-        v.add_image(embedding_vis, name="embeddings", scale=scale)
-
-    labels = ["positive", "negative"]
-    prompts = v.add_points(
-        data=[[0.0, 0.0], [0.0, 0.0]],  # FIXME workaround
-        name="point_prompts",
-        properties={"label": labels},
-        edge_color="label",
-        edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
-        symbol="o",
-        face_color="transparent",
-        edge_width=0.5,
-        size=12,
-        ndim=2,
-    )
-    prompts.edge_color_mode = "cycle"
-
-    v.add_shapes(
-        face_color="transparent", edge_color="green", edge_width=4, name="prompts"
-    )
-
-    #
-    # add the widgets
-    #
-
-    prompt_widget = vutil.create_prompt_menu(prompts, labels)
-    v.window.add_dock_widget(prompt_widget)
-
-    v.window.add_dock_widget(_autosegment_widget)
-    v.window.add_dock_widget(_segment_widget)
-    v.window.add_dock_widget(vutil._commit_segmentation_widget)
-    v.window.add_dock_widget(vutil._clear_widget)
-
-    #
-    # key bindings
-    #
-
-    @v.bind_key("s")
-    def _segmet(v):
-        _segment_widget(v)
-
-    @v.bind_key("c")
-    def _commit(v):
-        vutil._commit_segmentation_widget(v)
-
-    @v.bind_key("t")
-    def _toggle_label(event=None):
-        vutil.toggle_label(prompts)
-
-    @v.bind_key("Shift-C")
-    def clear_prompts(v):
-        vutil.clear_annotations(v)
-
-    return v
-
-
-def _update_viewer(v, raw, show_embeddings, segmentation_result):
-    if show_embeddings or segmentation_result is not None:
-        raise NotImplementedError
-
-    # update the image layer
-    v.layers["raw"].data = raw
-    shape = _get_shape(raw)
-
-    # update the segmentation layers
-    v.layers["auto_segmentation"].data = np.zeros(shape, dtype="uint32")
-    v.layers["committed_objects"].data = np.zeros(shape, dtype="uint32")
-    v.layers["current_object"].data = np.zeros(shape, dtype="uint32")
 
 
 def annotator_2d(
-    raw: np.ndarray,
+    image: np.ndarray,
     embedding_path: Optional[str] = None,
-    show_embeddings: bool = False,
     segmentation_result: Optional[np.ndarray] = None,
     model_type: str = util._DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
-    v: Optional[Viewer] = None,
-    predictor: Optional[SamPredictor] = None,
+    viewer: Optional["napari.viewer.Viewer"] = None,
+    predictor: Optional["SamPredictor"] = None,
     precompute_amg_state: bool = False,
-) -> Optional[Viewer]:
-    """The 2d annotation tool.
+) -> Optional["napari.viewer.Viewer"]:
+    """Start the 2d annotation tool for a given image.
 
     Args:
-        raw: The image data.
+        image: The image data.
         embedding_path: Filepath where to save the embeddings.
-        show_embeddings: Show PCA visualization of the image embeddings.
-            This can be helpful to judge how well Segment Anything works for your data,
-            and which objects can be segmented.
         segmentation_result: An initial segmentation to load.
             This can be used to correct segmentations with Segment Anything or to save and load progress.
             The segmentation will be loaded as the 'committed_objects' layer.
@@ -220,8 +54,8 @@ def annotator_2d(
             If `None` then the whole image is passed to Segment Anything.
         halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
-        v: The viewer to which the SegmentAnything functionality should be added.
-            This enables using a pre-initialized viewer, for example in `sam_annotator.image_series_annotator`.
+        viewer: The viewer to which the SegmentAnything functionality should be added.
+            This enables using a pre-initialized viewer.
         predictor: The Segment Anything model. Passing this enables using fully custom models.
             If you pass `predictor` then `model_type` will be ignored.
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
@@ -231,50 +65,38 @@ def annotator_2d(
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
     """
+
     state = AnnotatorState()
-
-    if predictor is None:
-        state.predictor = util.get_sam_model(model_type=model_type)
-    else:
-        state.predictor = predictor
-    state.image_shape = _get_shape(raw)
-
-    state.image_embeddings = util.precompute_image_embeddings(
-        state.predictor, raw, save_path=embedding_path, ndim=2, tile_shape=tile_shape, halo=halo,
-        wrong_file_callback=show_wrong_file_warning
+    state.image_shape = image.shape[:-1] if image.ndim == 3 else image.shape
+    state.initialize_predictor(
+        image, model_type=model_type, save_path=embedding_path, predictor=predictor,
+        halo=halo, tile_shape=tile_shape, precompute_amg_state=precompute_amg_state,
     )
-    if precompute_amg_state and (embedding_path is not None):
-        state.amg = cache_amg_state(state.predictor, raw, state.image_embeddings, embedding_path)
 
-    # we set the pre-computed image embeddings if we don't use tiling
-    # (if we use tiling we cannot directly set it because the tile will be chosen dynamically)
-    if tile_shape is None:
-        util.set_precomputed(state.predictor, state.image_embeddings)
+    if viewer is None:
+        viewer = napari.Viewer()
 
-    # viewer is freshly initialized
-    if v is None:
-        v = _initialize_viewer(raw, segmentation_result, tile_shape, show_embeddings)
-    # we use an existing viewer and just update all the layers
-    else:
-        _update_viewer(v, raw, show_embeddings, segmentation_result)
+    viewer.add_image(image, name="image")
+    annotator = Annotator2d(viewer, segmentation_result=segmentation_result)
 
-    #
-    # start the viewer
-    #
-    vutil.clear_annotations(v, clear_segmentations=False)
+    # Trigger layer update of the annotator so that layers have the correct shape.
+    annotator._update_image()
+
+    # Add the annotator widget to the viewer.
+    viewer.window.add_dock_widget(annotator)
 
     if return_viewer:
-        return v
+        return viewer
 
     napari.run()
 
 
 def main():
     """@private"""
-    parser = vutil._initialize_parser(description="Run interactive segmentation for an image.")
+    parser = _initialize_parser(description="Run interactive segmentation for an image.")
     parser.add_argument("--precompute_amg_state", action="store_true")
     args = parser.parse_args()
-    raw = util.load_image_data(args.input, key=args.key)
+    image = util.load_image_data(args.input, key=args.key)
 
     if args.segmentation_result is None:
         segmentation_result = None
@@ -285,8 +107,8 @@ def main():
         warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
 
     annotator_2d(
-        raw, embedding_path=args.embedding_path,
-        show_embeddings=args.show_embeddings, segmentation_result=segmentation_result,
+        image, embedding_path=args.embedding_path,
+        segmentation_result=segmentation_result,
         model_type=args.model_type, tile_shape=args.tile_shape, halo=args.halo,
         precompute_amg_state=args.precompute_amg_state,
     )
