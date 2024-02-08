@@ -3,8 +3,6 @@ import argparse
 
 import torch
 
-from torch_em.model import UNETR
-from torch_em.loss import DiceBasedDistanceLoss
 from torch_em.data.datasets import get_livecell_loader
 from torch_em.transform.label import label_consecutive
 
@@ -12,10 +10,10 @@ import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
 
 
-def get_dataloaders(patch_shape, data_path, cell_type=None):
+def get_dataloaders(patch_shape, data_path):
     """This returns the livecell data loaders implemented in torch_em:
-    https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/livecell.py
-    It will automatically download the livecell data.
+    https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/btcv.py
+    It will not automatically download the BTCV data. Take a look at `get_btcv_dataset`.
 
     Note: to replace this with another data loader you need to return a torch data loader
     that retuns `x, y` tensors, where `x` is the image data and `y` are the labels.
@@ -23,23 +21,15 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
     I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
     Important: the ID 0 is reseved for background, and the IDs must be consecutive
     """
-    label_transform = label_consecutive
-    raw_transform = sam_training.identity  # the current workflow avoids rescaling the inputs to [-1, 1]
-    train_loader = get_livecell_loader(
-        path=data_path, patch_shape=patch_shape, split="train", batch_size=2, num_workers=16,
-        cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform
-    )
-    val_loader = get_livecell_loader(
-        path=data_path, patch_shape=patch_shape, split="val", batch_size=1, num_workers=16,
-        cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform
-    )
+    label_transform = ...
+    raw_transform = ...
+    train_loader = ...
+    val_loader = ...
     return train_loader, val_loader
 
 
-def finetune_livecell(args):
-    """Code for finetuning SAM on LiveCELL in micro_sam-based MedSAM reimplementation"""
+def finetune_btcv(args):
+    """Code for finetuning SAM on BTCV in micro_sam-based MedSAM reimplementation"""
     # override this (below) if you have some more complex set-up and need to specify the exact gpu
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -47,7 +37,6 @@ def finetune_livecell(args):
     model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
     patch_shape = (520, 704)  # the patch shape for training
-    n_objects_per_batch = args.n_objects  # the number of objects per batch that will be sampled (default: 25)
     freeze_parts = args.freeze  # override this to freeze different parts of the model
 
     # get the trainable segment anything model
@@ -100,14 +89,14 @@ def finetune_livecell(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LiveCELL dataset.")
+    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the BTCV dataset.")
     parser.add_argument(
-        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/livecell/",
-        help="The filepath to the LiveCELL data. If the data does not exist yet it will be downloaded."
+        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/btcv/",
+        help="The filepath to the BTCV data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
-        help="The model type to use for fine-tuning. Either vit_b, vit_l or vit_h."
+        help="The model type to use for fine-tuning. Either vit_t, vit_b, vit_l or vit_h."
     )
     parser.add_argument(
         "--save_root", "-s",
@@ -130,7 +119,7 @@ def main():
         help="To save every kth epoch while fine-tuning. Expects an integer value."
     )
     args = parser.parse_args()
-    finetune_livecell(args)
+    finetune_btcv(args)
 
 
 if __name__ == "__main__":
