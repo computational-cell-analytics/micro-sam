@@ -36,7 +36,24 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
     )
     sampler = MinInstanceSampler()
 
-    generalist_dataset = ConcatDataset(
+    def get_ctc_datasets(
+        input_path, patch_shape, sampler,
+        ignore_datasets=["Fluo-N2DH-GOWT1", "Fluo-N2DL-HeLa"]
+    ):
+        all_ctc_datasets = []
+        for dataset_name in datasets.ctc.CTC_URLS.keys():
+            if dataset_name in ignore_datasets:
+                continue
+
+            all_ctc_datasets.append(
+                datasets.get_ctc_segmentation_dataset(
+                    path=os.path.join(input_path, "ctc"), dataset_name=dataset_name,
+                    patch_shape=patch_shape, sampler=sampler
+                )
+            )
+        return all_ctc_datasets
+
+    _datasets = [
         datasets.get_tissuenet_dataset(
             path=os.path.join(input_path, "tissuenet"), split=split_choice, download=True, patch_shape=patch_shape,
             raw_channel="rgb", label_channel="cell", sampler=sampler, label_dtype=label_dtype,
@@ -68,10 +85,18 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
             raw_transform=ResizeRawTrafo(patch_shape, do_rescaling=False),
             label_transform=ResizeLabelTrafo(patch_shape, min_size=0),
             n_samples=1000 if split_choice == "train" else 100
-        )
-    )
+        ),
+    ]
+    if split_choice == "train":
+        _datasets += get_ctc_datasets(input_path, patch_shape, sampler)
+
+    generalist_dataset = ConcatDataset(*_datasets)
+
     # increasing the sampling attempts for the neurips cellseg dataset
     generalist_dataset.datasets[3].max_sampling_attempts = 5000
+
+    print(len(generalist_dataset))
+    breakpoint()
 
     return generalist_dataset
 
