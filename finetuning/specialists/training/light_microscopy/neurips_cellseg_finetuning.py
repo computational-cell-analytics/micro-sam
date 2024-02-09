@@ -27,7 +27,7 @@ def neurips_raw_trafo(raw):
 def get_dataloaders(patch_shape, data_path):
     """This returns the neurips cellseg data loaders implemented in torch_em:
     https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/neurips_cell_seg.py
-    NOTE: It will hot download the NeurIPS CellSeg data automatically (https://neurips22-cellseg.grand-challenge.org/)
+    NOTE: It will not download the NeurIPS CellSeg data automatically (https://neurips22-cellseg.grand-challenge.org/)
     """
     label_transform = PerObjectDistanceTransform(
         distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=0
@@ -46,8 +46,8 @@ def get_dataloaders(patch_shape, data_path):
     )
 
     # increasing the sampling attempts for the neurips cellseg dataset
-    train_loader.datasets.max_sampling_attempts = 5000
-    val_loader.datasets.max_sampling_attempts = 5000
+    train_loader.dataset.max_sampling_attempts = 5000
+    val_loader.dataset.max_sampling_attempts = 5000
 
     return train_loader, val_loader
 
@@ -61,7 +61,7 @@ def finetune_neurips_cellseg_root(args):
     model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
     patch_shape = (512, 512)  # the patch shape for training
-    n_objects_per_batch = 25  # this is the number of objects per batch that will be sampled
+    n_objects_per_batch = args.n_objects  # this is the number of objects per batch that will be sampled (default: 25)
     freeze_parts = args.freeze  # override this to freeze different parts of the model
 
     # get the trainable segment anything model
@@ -81,7 +81,8 @@ def finetune_neurips_cellseg_root(args):
         use_sam_stats=True,
         final_activation="Sigmoid",
         use_skip_connection=False,
-        resize_input=True
+        resize_input=True,
+        use_conv_transpose=True,
     )
     unetr.to(device)
 
@@ -93,7 +94,7 @@ def finetune_neurips_cellseg_root(args):
 
     # all the stuff we need for training
     optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=50, verbose=True)
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
@@ -140,12 +141,12 @@ def finetune_neurips_cellseg_root(args):
 def main():
     parser = argparse.ArgumentParser(description="Finetune Segment Anything for the NeurIPS CellSeg dataset.")
     parser.add_argument(
-        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/neurips_cellseg/",
+        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/neurips-cell-seg/",
         help="The filepath to the NeurIPS CellSeg data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
-        help="The model type to use for fine-tuning. Either vit_b, vit_l or vit_h."
+        help="The model type to use for fine-tuning. Either vit_t, vit_b, vit_l or vit_h."
     )
     parser.add_argument(
         "--save_root", "-s",
@@ -166,6 +167,9 @@ def main():
     parser.add_argument(
         "--save_every_kth_epoch", type=int, default=None,
         help="To save every kth epoch while fine-tuning. Expects an integer value."
+    )
+    parser.add_argument(
+        "--n_objects", type=int, default=25, help="The number of instances (objects) per batch used for finetuning."
     )
     args = parser.parse_args()
     finetune_neurips_cellseg_root(args)
