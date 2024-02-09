@@ -21,7 +21,7 @@ def neurips_raw_trafo(raw):
     return raw
 
 
-def deepbacs_raw_trafo(raw):
+def to_8bit(raw):
     raw = normalize(raw)
     raw = raw * 255
     return raw
@@ -37,7 +37,7 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
     sampler = MinInstanceSampler()
 
     def get_ctc_datasets(
-        input_path, patch_shape, sampler,
+        input_path, patch_shape, sampler, raw_transform, label_transform,
         ignore_datasets=["Fluo-N2DH-GOWT1", "Fluo-N2DL-HeLa"]
     ):
         all_ctc_datasets = []
@@ -47,8 +47,8 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
 
             all_ctc_datasets.append(
                 datasets.get_ctc_segmentation_dataset(
-                    path=os.path.join(input_path, "ctc"), dataset_name=dataset_name,
-                    patch_shape=patch_shape, sampler=sampler
+                    path=os.path.join(input_path, "ctc"), dataset_name=dataset_name, patch_shape=(1, *patch_shape),
+                    sampler=sampler, raw_transform=raw_transform, label_transform=label_transform
                 )
             )
         return all_ctc_datasets
@@ -66,7 +66,7 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
         ),
         datasets.get_deepbacs_dataset(
             path=os.path.join(input_path, "deepbacs"), split=split_choice, patch_shape=patch_shape,
-            raw_transform=deepbacs_raw_trafo, label_transform=label_transform, label_dtype=label_dtype,
+            raw_transform=to_8bit, label_transform=label_transform, label_dtype=label_dtype,
             download=True, sampler=MinInstanceSampler(min_num_instances=4)
         ),
         datasets.get_neurips_cellseg_supervised_dataset(
@@ -88,15 +88,14 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
         ),
     ]
     if split_choice == "train":
-        _datasets += get_ctc_datasets(input_path, patch_shape, sampler)
+        _datasets += get_ctc_datasets(
+            input_path, patch_shape, sampler, raw_transform=to_8bit, label_transform=label_transform
+        )
 
     generalist_dataset = ConcatDataset(*_datasets)
 
     # increasing the sampling attempts for the neurips cellseg dataset
     generalist_dataset.datasets[3].max_sampling_attempts = 5000
-
-    print(len(generalist_dataset))
-    breakpoint()
 
     return generalist_dataset
 
