@@ -924,6 +924,7 @@ class InstanceSegmentationWithDecoder:
         center_distance_threshold: float = 0.5,
         boundary_distance_threshold: float = 0.5,
         foreground_threshold: float = 0.5,
+        foreground_smoothing: float = 0.0,
         distance_smoothing: float = 1.6,
         min_size: int = 0,
         output_mode: Optional[str] = "binary_mask",
@@ -935,6 +936,8 @@ class InstanceSegmentationWithDecoder:
                 used to find seeds (intersected with thresholded boundary distance predictions).
             boundary_distance_threshold: Boundary distance predictions below this value will be
                 used to find seeds (intersected with thresholded center distance predictions).
+            foreground_smoothing: Sigma value for smoothing the foreground predictions, to avoid
+                checkerboard artifacts in the prediction.
             foreground_threshold: Foreground predictions above this value will be used as foreground mask.
             distance_smoothing: Sigma value for smoothing the distance predictions.
             min_size: Minimal object size in the segmentation result.
@@ -946,8 +949,12 @@ class InstanceSegmentationWithDecoder:
         if not self.is_initialized:
             raise RuntimeError("InstanceSegmentationWithDecoder has not been initialized. Call initialize first.")
 
+        if foreground_smoothing > 0:
+            foreground = vigra.filters.gaussianSmoothing(self._foreground, foreground_smoothing)
+        else:
+            foreground = self._foreground
         segmentation = watershed_from_center_and_boundary_distances(
-            self._center_distances, self._boundary_distances, self._foreground,
+            self._center_distances, self._boundary_distances, foreground,
             center_distance_threshold=center_distance_threshold,
             boundary_distance_threshold=boundary_distance_threshold,
             foreground_threshold=foreground_threshold,

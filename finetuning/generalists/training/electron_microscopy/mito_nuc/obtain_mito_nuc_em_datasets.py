@@ -38,7 +38,7 @@ def _check_dataset_available_for_rois(path, patch_shape):
     print("All the datasets are available for RoI splitting")
 
 
-def get_concat_mito_nuc_datasets(input_path, patch_shape, with_cem=False):
+def get_concat_mito_nuc_datasets(input_path, patch_shape):
     _check_dataset_available_for_rois(path=input_path, patch_shape=patch_shape)
 
     sampler = MinInstanceSampler()
@@ -82,21 +82,20 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape, with_cem=False):
     platy_nuclei_train_dataset = platy_nuclei_dataset(platy_nuclei_train_rois, sample_ids=platy_nuclei_train_samples)
     platy_nuclei_val_dataset = platy_nuclei_dataset(platy_nuclei_val_rois, sample_ids=platy_nuclei_val_samples)
 
-    train_datasets = [mitoem_train_dataset, platy_nuclei_train_dataset]
-    val_datasets = [mitoem_val_dataset, platy_nuclei_val_dataset]
+    def cem_dataset(split):
+        # 10% of the total training set, 1/3 of the total val set
+        n_samples = 1620 if split == "train" else 600
+        return datasets.cem.get_mitolab_dataset(
+            path=os.path.join(input_path, "mitolab"), split=split, val_fraction=0.1, sampler=sampler,
+            raw_transform=ResizeRawTrafo(patch_shape[1:], do_rescaling=False), patch_shape=patch_shape[1:],
+            label_transform=ResizeLabelTrafo(patch_shape[1:]), n_samples=n_samples
+        )
 
-    if with_cem:
-        def cem_dataset(split):
-            # 10% of the total training set, 1/3 of the total val set
-            n_samples = 1620 if split == "train" else 600
-            return datasets.cem.get_mitolab_dataset(
-                path=os.path.join(input_path, "mitolab"), split=split, val_fraction=0.1, sampler=sampler,
-                raw_transform=ResizeRawTrafo(patch_shape[1:], do_rescaling=False), patch_shape=patch_shape[1:],
-                label_transform=ResizeLabelTrafo(patch_shape[1:]), n_samples=n_samples
-            )
+    cem_train_dataset = cem_dataset("train")
+    cem_val_dataset = cem_dataset("val")
 
-        train_datasets.append(cem_dataset("train"))
-        val_datasets.append(cem_dataset("val"))
+    train_datasets = [mitoem_train_dataset, platy_nuclei_train_dataset, cem_train_dataset]
+    val_datasets = [mitoem_val_dataset, platy_nuclei_val_dataset, cem_val_dataset]
 
     for train_dataset in train_datasets:
         train_dataset.max_sampling_attempts = 5000
@@ -110,7 +109,7 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape, with_cem=False):
     return generalist_em_train_dataset, generalist_em_val_dataset
 
 
-def get_generalist_mito_nuc_loaders(input_path, patch_shape, with_cem=False):
+def get_generalist_mito_nuc_loaders(input_path, patch_shape):
     """This returns the concatenated electron microscopy datasets implemented in torch_em:
     https://github.com/constantinpape/torch-em/tree/main/torch_em/data/datasets
     It will automatically download all the datasets
@@ -119,9 +118,7 @@ def get_generalist_mito_nuc_loaders(input_path, patch_shape, with_cem=False):
     i.e. the tensors (inputs & masks) should be of same spatial shape, with each object in the mask having it's own ID.
     IMPORTANT: the ID 0 is reserved for background, and the IDs must be consecutive.
     """
-    generalist_train_dataset, generalist_val_dataset = get_concat_mito_nuc_datasets(
-        input_path, patch_shape, with_cem=with_cem
-    )
+    generalist_train_dataset, generalist_val_dataset = get_concat_mito_nuc_datasets(input_path, patch_shape)
     train_loader = get_data_loader(generalist_train_dataset, batch_size=2, shuffle=True, num_workers=16)
     val_loader = get_data_loader(generalist_val_dataset, batch_size=1, shuffle=True, num_workers=16)
     return train_loader, val_loader
