@@ -72,13 +72,17 @@ def evaluate_dataset(prediction_folder, dataset, model_type):
     print(f"Results are saved at {result_path}")
 
 
-def run_cellpose_baseline(datasets, model_type):
+def run_cellpose_baseline(datasets, model_types):
     if isinstance(datasets, str):
         datasets = [datasets]
 
+    if isinstance(model_types, str):
+        model_types = [model_types]
+
     for dataset in datasets:
-        prediction_folder = run_cellpose_segmentation(dataset, model_type)
-        evaluate_dataset(prediction_folder, dataset, model_type)
+        for model_type in model_types:
+            prediction_folder = run_cellpose_segmentation(dataset, model_type)
+            evaluate_dataset(prediction_folder, dataset, model_type)
 
 
 def main(args):
@@ -88,13 +92,18 @@ def main(args):
         datasets = args.dataset
         assert datasets in LM_DATASETS
 
-    run_cellpose_baseline(datasets, args.model_type)
+    if args.model_type is None:
+        model_types = ["cyto", "cyto2", "nuclei", "livecell", "tissuenet"]
+    else:
+        model_types = args.model_type
+
+    run_cellpose_baseline(datasets, model_types)
 
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--dataset", type=str, default=None)
-    parser.add_argument("-m", "--model_type", type=str, default="cyto")
+    parser.add_argument("-m", "--model_type", type=str, default=None)
     args = parser.parse_args()
     main(args)
