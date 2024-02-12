@@ -75,7 +75,7 @@ def get_benchmark_results(dataset_name, benchmark_name, benchmark_choice):
 
 def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice):
     res_df = gather_all_results(dataset_name, modality, model_type)
-    sns.barplot(x="name", y="results", hue="type", data=res_df, ax=ax, palette=PALETTE)
+    sns.barplot(x="name", y="results", hue="type", data=res_df, ax=ax, palette=PALETTE, hue_order=PALETTE.keys())
     ax.set(xlabel=None, ylabel=None)
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
     ax.title.set_text(dataset_name)
@@ -126,6 +126,7 @@ def plot_evaluation_for_lm_datasets(model_type):
     plt.close()
 
 
+# TODO: need to update this part
 def plot_evaluation_for_em_datasets(model_type):
     modality = "em"
     fig, ax = plt.subplots(3, 3, figsize=(20, 15))
