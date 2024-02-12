@@ -131,7 +131,7 @@ def plot_evaluation_for_lm_datasets(model_type):
     plt.tight_layout()
     plt.subplots_adjust(top=0.90, right=0.95, left=0.05, bottom=0.05)
     fig.suptitle("Light Microscopy", fontsize=20)
-    plt.savefig(f"lm_{model_type}_evaluation.png")
+    plt.savefig(f"lm_{model_type}_evaluation.png", transparent=True)
     plt.close()
 
 
@@ -177,7 +177,7 @@ def plot_evaluation_for_em_datasets(model_type):
     plt.tight_layout()
     plt.subplots_adjust(top=0.90, right=0.95, left=0.05, bottom=0.05)
     fig.suptitle("Electron Microscopy", fontsize=20)
-    plt.savefig(f"em_{model_type}_evaluation.png")
+    plt.savefig(f"em_{model_type}_evaluation.png", transparent=True)
     plt.close()
 
 

@@ -101,7 +101,7 @@ def plot_for_livecell(benchmark_choice):
     plt.tight_layout()
     plt.subplots_adjust(top=0.90, right=0.95, left=0.05, bottom=0.07)
     fig.suptitle("LiveCELL", fontsize=20)
-    plt.savefig("livecell.png")
+    plt.savefig("livecell.png", transparent=True)
     plt.close()
 
 
