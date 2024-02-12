@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments"
 
 # adding a fixed color palette to each experiments, for consistency in plotting the legends
-PALETTE = {"ais": "C0", "amg": "C1", "point": "C2", "i_p": "C3", "box": "C4", "i_b": "C5"}
+PALETTE = {"ais": "#045275", "amg": "#089099", "point": "#7CCBA2", "i_p": "#FCDE9C", "box": "#F0746E", "i_b": "#7C1D6F"}
 
 
 def gather_all_results(dataset, modality, model_type):
@@ -73,17 +73,25 @@ def get_benchmark_results(dataset_name, benchmark_name, benchmark_choice):
     return res["msa"][0]
 
 
-def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice):
+def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice=None):
+    plt.rcParams["hatch.linewidth"] = 1.5
     res_df = gather_all_results(dataset_name, modality, model_type)
     sns.barplot(x="name", y="results", hue="type", data=res_df, ax=ax, palette=PALETTE, hue_order=PALETTE.keys())
+    lines, labels = ax.get_legend_handles_labels()
+    for line, label in zip(lines, labels):
+        if label == "ais":
+            for k in range(len(line)):
+                line.patches[k].set_hatch('///')
+                line.patches[k].set_edgecolor('white')
+
     ax.set(xlabel=None, ylabel=None)
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
     ax.title.set_text(dataset_name)
 
-    if dataset_name != "ctc":
+    if dataset_name != "ctc" and modality != "em":  # HACK: as we don't have mitonet results now
         benchmark_name = "cellpose" if modality == "lm" else "mitonet"
         benchmark_res = get_benchmark_results(dataset_name, benchmark_name, benchmark_choice)
-        ax.axhline(y=benchmark_res, label=benchmark_name, color="darkorange")
+        ax.axhline(y=benchmark_res, label=benchmark_name, color="#E31A1C")
 
 
 def plot_evaluation_for_lm_datasets(model_type):
@@ -114,19 +122,19 @@ def plot_evaluation_for_lm_datasets(model_type):
                 all_labels.append(label)
         ax.get_legend().remove()
 
-    fig.legend(all_lines, all_labels)
+    fig.legend(all_lines, all_labels, loc="upper left")
 
-    fig.text(0.5, 0.07, 'Models', ha='center', fontdict={"size": 22})
-    fig.text(0.07, 0.5, 'Segmentation Quality', va='center', rotation='vertical', fontdict={"size": 22})
+    fig.text(0.5, 0.01, 'Models', ha='center', fontdict={"size": 22})
+    fig.text(0.01, 0.5, 'Segmentation Quality', va='center', rotation='vertical', fontdict={"size": 22})
 
     plt.show()
-    plt.subplots_adjust(top=0.90, right=0.95)
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.90, right=0.95, left=0.05, bottom=0.05)
     fig.suptitle("Light Microscopy", fontsize=20)
     plt.savefig(f"lm_{model_type}_evaluation.png")
     plt.close()
 
 
-# TODO: need to update this part
 def plot_evaluation_for_em_datasets(model_type):
     modality = "em"
     fig, ax = plt.subplots(3, 3, figsize=(20, 15))
@@ -140,27 +148,42 @@ def plot_evaluation_for_em_datasets(model_type):
     # for boundaries
     #    "platynereis/cilia", "cremi", "platynereis/cells", "axondeepseg", "snemi", "isbi"
 
-    get_barplots(ax[0, 0], "livecell", modality, model_type)
-    get_barplots(ax[0, 1], "deepbacs", modality, model_type)
-    get_barplots(ax[0, 2], "tissuenet", modality, model_type)
-    get_barplots(ax[1, 0], "plantseg_root", modality, model_type)
-    get_barplots(ax[1, 1], "covid_if", modality, model_type)
-    get_barplots(ax[1, 2], "neurips-cell-seg", modality, model_type)
-    get_barplots(ax[2, 0], "ctc", modality, model_type)
-    get_barplots(ax[2, 1], "lizard", modality, model_type)
-    get_barplots(ax[2, 2], "hpa", modality, model_type)
+    get_barplots(ax[0, 0], "mitoem/rat", modality, model_type)
+    get_barplots(ax[0, 1], "mitoem/human", modality, model_type)
+    get_barplots(ax[0, 2], "platynereis/nuclei", modality, model_type)
+    get_barplots(ax[1, 0], "lucchi", modality, model_type)
+    get_barplots(ax[1, 1], "mitolab/fly_brain", modality, model_type)
+    get_barplots(ax[1, 2], "uro_cell", modality, model_type)
+    get_barplots(ax[2, 0], "nuc-mm/mouse", modality, model_type)
+    get_barplots(ax[2, 1], "sponge_em", modality, model_type)
+    get_barplots(ax[2, 2], "mitolab/c_elegans", modality, model_type)
 
-    fig.text(0.5, 0.07, 'Models', ha='center', fontdict={"size": 22})
-    fig.text(0.07, 0.5, 'Segmentation Quality', va='center', rotation='vertical', fontdict={"size": 22})
+    # here, we remove the legends for each subplot, and get one common legend for all
+    all_lines, all_labels = [], []
+    for ax in fig.axes:
+        lines, labels = ax.get_legend_handles_labels()
+        for line, label in zip(lines, labels):
+            if label not in all_labels:
+                all_lines.append(line)
+                all_labels.append(label)
+        ax.get_legend().remove()
+
+    fig.legend(all_lines, all_labels, loc="upper left")
+
+    fig.text(0.5, 0.01, 'Models', ha='center', fontdict={"size": 22})
+    fig.text(0.01, 0.5, 'Segmentation Quality', va='center', rotation='vertical', fontdict={"size": 22})
 
     plt.show()
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.90, right=0.95, left=0.05, bottom=0.05)
+    fig.suptitle("Electron Microscopy", fontsize=20)
     plt.savefig(f"em_{model_type}_evaluation.png")
     plt.close()
 
 
 def main():
     plot_evaluation_for_lm_datasets("vit_h")
-    # plot_evaluation_for_em_datasets("vit_h")
+    plot_evaluation_for_em_datasets("vit_h")
 
 
 if __name__ == "__main__":

@@ -56,21 +56,21 @@ def gather_livecell_results(model_type, experiment_name, benchmark_choice):
 
 
 def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
-    sns.barplot(x="iteration", y="result", hue="name", data=ib_data, palette=sns.color_palette("deep"), ax=ax)
+    sns.barplot(x="iteration", y="result", hue="name", data=ib_data, ax=ax, palette=["#7CCBA2"])
     all_containers = ax.containers[-1]
     for k in range(len(all_containers)):
         ax.patches[k].set_hatch('///')
         ax.patches[k].set_edgecolor('k')
 
-    sns.barplot(x="iteration", y="result", hue="name", data=ip_data, ax=ax, palette=sns.color_palette("viridis"))
-    ax.set(xlabel="Iterative Prompting", ylabel="Segmentation Quality")
+    sns.barplot(x="iteration", y="result", hue="name", data=ip_data, ax=ax, palette=["#089099"])
+    ax.set(xlabel=None, ylabel=None)
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
     ax.title.set_text(name)
 
-    ax.axhline(y=amg, label="amg", color="forestgreen")
+    ax.axhline(y=amg, label="amg", color="#7c1D6F")
     if ais is not None:
         ax.axhline(y=ais, label="ais", color="darkorange")
-    ax.axhline(y=cellpose, label="cellpose", color="red")
+    ax.axhline(y=cellpose, label="cellpose", color="#E31A1C")
 
 
 def plot_for_livecell(benchmark_choice):
@@ -92,11 +92,14 @@ def plot_for_livecell(benchmark_choice):
                 all_labels.append(label)
         ax.get_legend().remove()
 
-    fig.legend(all_lines, all_labels, loc="upper left")
+    fig.legend(all_lines, all_labels, bbox_to_anchor=(0.11, 0.9))
+
+    fig.text(0.5, 0.01, 'Iterative Prompting', ha='center', fontdict={"size": 22})
+    fig.text(0.01, 0.5, 'Segmentation Quality', va='center', rotation='vertical', fontdict={"size": 22})
 
     plt.show()
     plt.tight_layout()
-    plt.subplots_adjust(top=0.90)
+    plt.subplots_adjust(top=0.90, right=0.95, left=0.05, bottom=0.07)
     fig.suptitle("LiveCELL", fontsize=20)
     plt.savefig("livecell.png")
     plt.close()
