@@ -4,4 +4,3 @@ sam_embeddings/
 results/
 iterative_prompting_results/
 *.sh
-run_all_finetuning.py
