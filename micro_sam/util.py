@@ -279,8 +279,8 @@ def get_sam_model(
             abbreviated_model_type = "vit_tiny"
         else:
             raise RuntimeError(
-                "sam-hq is required for the vit_tiny."
-                "You can install it via `pip install git+https://github.com/SysCV/sam-hq.git`"
+                "HQ-SAM is required for the vit_tiny. "
+                "You can install it via 'pip install git+https://github.com/SysCV/sam-hq.git'"
             )
     # For the logic below: we want to use SAM-HQ for `vit_tiny`:
     #     which incorporates additional learnable layers to increase the quality of masks
