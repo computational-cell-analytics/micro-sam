@@ -5,7 +5,7 @@ The models are hosted on zenodo. We currently offer the following models:
 - `vit_h`: Default Segment Anything model with vit-h backbone.
 - `vit_l`: Default Segment Anything model with vit-l backbone.
 - `vit_b`: Default Segment Anything model with vit-b backbone.
-- `vit_t`: Segment Anything model with vit-tiny backbone. From the [Mobile SAM publication](https://arxiv.org/abs/2306.14289). 
+- `vit_t`: Segment Anything model with vit-tiny backbone. From the [MobileSAM publication](https://arxiv.org/abs/2306.14289) and [HQ-SAM](https://arxiv.org/abs/2306.01567). 
 - `vit_b_lm`: Finetuned Segment Anything model for cells and nuclei in light microscopy data with vit-b backbone.
 - `vit_b_em_organelles`: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with vit-b backbone.
 - `vit_b_em_boundaries`: Finetuned Segment Anything model for neurites and cells in electron microscopy data with vit-b backbone.

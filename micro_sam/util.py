@@ -22,12 +22,14 @@ from nifty.tools import blocking
 from skimage.measure import regionprops
 from skimage.segmentation import relabel_sequential
 
-from segment_anything import sam_model_registry, SamPredictor
+from segment_anything import SamPredictor
 
 try:
     from segment_anything.modeling import MaskDecoderHQ  # noqa # pylint: disable=unused-import
+    from segment_anything import sam_model_registry, sam_model_registry_baseline
     VIT_T_SUPPORT = True
 except ImportError:
+    from segment_anything import sam_model_registry
     VIT_T_SUPPORT = False
 
 try:
@@ -280,9 +282,16 @@ def get_sam_model(
                 "sam-hq is required for the vit_tiny."
                 "You can install it via `pip install git+https://github.com/SysCV/sam-hq.git`"
             )
+    # For the logic below: we want to use SAM-HQ for `vit_tiny`:
+    #     which incorporates additional learnable layers to increase the quality of masks
+    if VIT_T_SUPPORT:
+        if abbreviated_model_type == "vit_tiny":
+            sam = sam_model_registry[abbreviated_model_type](checkpoint=checkpoint)
+        else:
+            sam = sam_model_registry_baseline[abbreviated_model_type](checkpoint=checkpoint)
+    else:
+        sam = sam_model_registry[abbreviated_model_type](checkpoint=checkpoint)
 
-    from segment_anything import sam_model_registry_baseline
-    sam = sam_model_registry_baseline[abbreviated_model_type](checkpoint=checkpoint)
     sam.to(device=device)
     predictor = SamPredictor(sam)
     predictor.model_type = abbreviated_model_type
@@ -336,11 +345,17 @@ def get_custom_sam_model(
     assert model_type in _MODEL_TYPES
     if model_type == "vit_t":
         model_type = "vit_tiny"
-    sam = sam_model_registry[model_type]()
+
+    if VIT_T_SUPPORT:
+        if model_type == "vit_tiny":
+            sam = sam_model_registry[model_type]()
+        else:
+            sam = sam_model_registry_baseline[model_type]()
+    else:
+        sam = sam_model_registry[model_type]()
 
     # load the model state, ignoring any attributes that can't be found by pickle
     state = torch.load(checkpoint_path, map_location=device, pickle_module=custom_pickle)
-    breakpoint()
     model_state = state["model_state"]
 
     # copy the model weights from torch_em's training format
