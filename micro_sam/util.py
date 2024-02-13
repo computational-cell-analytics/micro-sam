@@ -22,11 +22,12 @@ from nifty.tools import blocking
 from skimage.measure import regionprops
 from skimage.segmentation import relabel_sequential
 
+from segment_anything import sam_model_registry, SamPredictor
+
 try:
-    from mobile_sam import sam_model_registry, SamPredictor
+    from segment_anything.modeling import MaskDecoderHQ  # noqa # pylint: disable=unused-import
     VIT_T_SUPPORT = True
 except ImportError:
-    from segment_anything import sam_model_registry, SamPredictor
     VIT_T_SUPPORT = False
 
 try:
@@ -104,8 +105,8 @@ def models():
         "vit_h": "sha256:a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e",
         "vit_l": "sha256:3adcc4315b642a4d2101128f611684e8734c41232a17c648ed1693702a49a622",
         "vit_b": "sha256:ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
-        # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
-        "vit_t": "sha256:6dbb90523a35330fedd7f1d3dfc66f995213d81b29a5ca8108dbcdd4e37d6c2f",
+        # the model with vit tiny backend from https://github.com/SysCV/sam-hq
+        "vit_t": "sha256:0f32c075ccdd870ae54db2f7630e7a0878ede5a2b06d05d6fe02c65a82fb7196",
         # first version of finetuned models on zenodo
         "vit_b_lm": "sha256:e8f5feb1ad837a7507935409c7f83f7c8af11c6e39cfe3df03f8d3bd4a358449",
         "vit_b_em_organelles": "sha256:8fabbe38a427a0c91bbe6518a5c0f103f36b73e6ee6c86fbacd32b4fc66294b4",
@@ -116,8 +117,8 @@ def models():
         "vit_h": "xxh128:97698fac30bd929c2e6d8d8cc15933c2",
         "vit_l": "xxh128:a82beb3c660661e3dd38d999cc860e9a",
         "vit_b": "xxh128:6923c33df3637b6a922d7682bfc9a86b",
-        # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
-        "vit_t": "xxh128:8eadbc88aeb9d8c7e0b4b60c3db48bd0",
+        # the model with vit tiny backend from https://github.com/SysCV/sam-hq
+        "vit_t": "xxh128:bbc50e2cae13dc87bc75bfc17bf85ddd",
         # first version of finetuned models on zenodo
         "vit_b_lm": "xxh128:6b061eb8684d9d5f55545330d6dce50d",
         "vit_b_em_organelles": "xxh128:3919c2b761beba7d3f4ece342c9f5369",
@@ -134,8 +135,8 @@ def models():
             "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
             "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
             "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
-            # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
-            "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
+            # the model with vit tiny backend from https://github.com/SysCV/sam-hq
+            "vit_t": "https://owncloud.gwdg.de/index.php/s/Wz81tgC2s9npUMq/download",
             # first version of finetuned models on zenodo
             "vit_b_lm": "https://zenodo.org/records/10524791/files/vit_b_lm.pth?download=1",
             "vit_b_em_organelles": "https://zenodo.org/records/10524828/files/vit_b_em_organelles.pth?download=1",
@@ -271,13 +272,17 @@ def get_sam_model(
     abbreviated_model_type = model_type[:5]
     if abbreviated_model_type not in _MODEL_TYPES:
         raise ValueError(f"Invalid model_type: {abbreviated_model_type}. Expect one of {_MODEL_TYPES}")
-    if abbreviated_model_type == "vit_t" and not VIT_T_SUPPORT:
-        raise RuntimeError(
-            "mobile_sam is required for the vit-tiny."
-            "You can install it via 'pip install git+https://github.com/ChaoningZhang/MobileSAM.git'"
-        )
+    if abbreviated_model_type == "vit_t":
+        if VIT_T_SUPPORT:
+            abbreviated_model_type = "vit_tiny"
+        else:
+            raise RuntimeError(
+                "sam-hq is required for the vit_tiny."
+                "You can install it via `pip install git+https://github.com/SysCV/sam-hq.git`"
+            )
 
-    sam = sam_model_registry[abbreviated_model_type](checkpoint=checkpoint)
+    from segment_anything import sam_model_registry_baseline
+    sam = sam_model_registry_baseline[abbreviated_model_type](checkpoint=checkpoint)
     sam.to(device=device)
     predictor = SamPredictor(sam)
     predictor.model_type = abbreviated_model_type
@@ -328,10 +333,14 @@ def get_custom_sam_model(
     custom_pickle.Unpickler = _CustomUnpickler
 
     device = get_device(device)
+    assert model_type in _MODEL_TYPES
+    if model_type == "vit_t":
+        model_type = "vit_tiny"
     sam = sam_model_registry[model_type]()
 
     # load the model state, ignoring any attributes that can't be found by pickle
     state = torch.load(checkpoint_path, map_location=device, pickle_module=custom_pickle)
+    breakpoint()
     model_state = state["model_state"]
 
     # copy the model weights from torch_em's training format

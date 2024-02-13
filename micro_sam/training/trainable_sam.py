@@ -7,6 +7,12 @@ from torch.nn import functional as F
 from segment_anything.modeling import Sam
 from segment_anything.utils.transforms import ResizeLongestSide
 
+try:
+    from segment_anything.modeling import MaskDecoderHQ  # noqa # pylint: disable=unused-import
+    _have_sam_hq = True
+except ImportError:
+    _have_sam_hq = False
+
 
 # simple wrapper around SAM in order to keep things trainable
 class TrainableSAM(nn.Module):
@@ -81,7 +87,11 @@ class TrainableSAM(nn.Module):
             The predicted segmentation masks and iou values.
         """
         outputs = []
-        for image_record, curr_embedding in zip(batched_inputs, image_embeddings):
+
+        if _have_sam_hq:
+            image_embeddings, interm_embeddings = image_embeddings
+
+        for i, (image_record, curr_embedding) in enumerate(zip(batched_inputs, image_embeddings)):
             if "point_coords" in image_record:
                 points = (image_record["point_coords"].to(self.device), image_record["point_labels"].to(self.device))
             else:
@@ -103,12 +113,21 @@ class TrainableSAM(nn.Module):
                 masks=masks,
             )
 
+            if _have_sam_hq:
+                kwargs = {
+                    "hq_token_only": True,
+                    "interm_embeddings": [interm_embedding[i].unsqueeze(0) for interm_embedding in interm_embeddings]
+                }
+            else:
+                kwargs = {}
+
             low_res_masks, iou_predictions = self.sam.mask_decoder(
                 image_embeddings=curr_embedding.unsqueeze(0),
                 image_pe=self.sam.prompt_encoder.get_dense_pe(),
                 sparse_prompt_embeddings=sparse_embeddings,
                 dense_prompt_embeddings=dense_embeddings,
                 multimask_output=multimask_output,
+                **kwargs
             )
 
             masks = self.sam.postprocess_masks(
