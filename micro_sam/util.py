@@ -294,7 +294,7 @@ def get_sam_model(
 
     sam.to(device=device)
     predictor = SamPredictor(sam)
-    predictor.model_type = abbreviated_model_type
+    predictor.model_type = abbreviated_model_type[:5]
     if return_sam:
         return predictor, sam
     return predictor
@@ -367,7 +367,7 @@ def get_custom_sam_model(
     sam.to(device)
 
     predictor = SamPredictor(sam)
-    predictor.model_type = model_type
+    predictor.model_type = model_type[:5]
 
     if return_sam:
         return predictor, sam
