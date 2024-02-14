@@ -282,16 +282,8 @@ def get_sam_model(
                 "HQ-SAM is required for the vit_tiny. "
                 "You can install it via 'pip install git+https://github.com/SysCV/sam-hq.git'"
             )
-    # For the logic below: we want to use SAM-HQ for `vit_tiny`:
-    #     which incorporates additional learnable layers to increase the quality of masks
-    if VIT_T_SUPPORT:
-        if abbreviated_model_type == "vit_tiny":
-            sam = sam_model_registry[abbreviated_model_type](checkpoint=checkpoint)
-        else:
-            sam = sam_model_registry_baseline[abbreviated_model_type](checkpoint=checkpoint)
-    else:
-        sam = sam_model_registry[abbreviated_model_type](checkpoint=checkpoint)
 
+    sam = sam_model_registry[abbreviated_model_type](checkpoint=checkpoint)
     sam.to(device=device)
     predictor = SamPredictor(sam)
     predictor.model_type = abbreviated_model_type[:5]
@@ -346,13 +338,7 @@ def get_custom_sam_model(
     if model_type == "vit_t":
         model_type = "vit_tiny"
 
-    if VIT_T_SUPPORT:
-        if model_type == "vit_tiny":
-            sam = sam_model_registry[model_type]()
-        else:
-            sam = sam_model_registry_baseline[model_type]()
-    else:
-        sam = sam_model_registry[model_type]()
+    sam = sam_model_registry[model_type]()
 
     # load the model state, ignoring any attributes that can't be found by pickle
     state = torch.load(checkpoint_path, map_location=device, pickle_module=custom_pickle)
