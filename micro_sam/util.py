@@ -22,14 +22,12 @@ from nifty.tools import blocking
 from skimage.measure import regionprops
 from skimage.segmentation import relabel_sequential
 
-from segment_anything import SamPredictor
+from segment_anything import SamPredictor, sam_model_registry
 
 try:
     from segment_anything.modeling import MaskDecoderHQ  # noqa # pylint: disable=unused-import
-    from segment_anything import sam_model_registry, sam_model_registry_baseline
     VIT_T_SUPPORT = True
 except ImportError:
-    from segment_anything import sam_model_registry
     VIT_T_SUPPORT = False
 
 try:
@@ -103,47 +101,73 @@ def models():
     #
     # You may need to install xxhash with conda or your system package manager.
     registry_sha256 = {
-        # the default segment anything models
-        "vit_h": "sha256:a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e",
-        "vit_l": "sha256:3adcc4315b642a4d2101128f611684e8734c41232a17c648ed1693702a49a622",
-        "vit_b": "sha256:ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
-        # the model with vit tiny backend from https://github.com/SysCV/sam-hq
-        "vit_t": "sha256:0f32c075ccdd870ae54db2f7630e7a0878ede5a2b06d05d6fe02c65a82fb7196",
-        # first version of finetuned models on zenodo
-        "vit_b_lm": "sha256:e8f5feb1ad837a7507935409c7f83f7c8af11c6e39cfe3df03f8d3bd4a358449",
-        "vit_b_em_organelles": "sha256:8fabbe38a427a0c91bbe6518a5c0f103f36b73e6ee6c86fbacd32b4fc66294b4",
-        "vit_b_em_boundaries": "sha256:d87348b2adef30ab427fb787d458643300eb30624a0e808bf36af21764705f4f",
+        "sam": {
+            # the default segment anything models
+            "vit_h": "sha256:a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e",
+            "vit_l": "sha256:3adcc4315b642a4d2101128f611684e8734c41232a17c648ed1693702a49a622",
+            "vit_b": "sha256:ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
+            # first version of finetuned models on zenodo
+            "vit_b_lm": "sha256:e8f5feb1ad837a7507935409c7f83f7c8af11c6e39cfe3df03f8d3bd4a358449",
+            "vit_b_em_organelles": "sha256:8fabbe38a427a0c91bbe6518a5c0f103f36b73e6ee6c86fbacd32b4fc66294b4",
+            "vit_b_em_boundaries": "sha256:d87348b2adef30ab427fb787d458643300eb30624a0e808bf36af21764705f4f",
+        },
+        "sam-hq": {
+            # the model with vit tiny backend from https://github.com/SysCV/sam-hq
+            "vit_t": "sha256:0f32c075ccdd870ae54db2f7630e7a0878ede5a2b06d05d6fe02c65a82fb7196",
+            "vit_b": "sha256:14a9d662cd6f5a9c2dba6d40ab0058d88d287e4a18fd6fdc6ad5fb1a3fdeaa57",
+            "vit_l": "sha256:e1a6c385d62bf005ded91a54d5ec55c985cfc4103ef89c08d90f39f04934c343",
+            "vit_h": "sha256:a7ac14a085326d9fa6199c8c698c4f0e7280afdbb974d2c4660ec60877b45e35",
+        }
     }
     registry_xxh128 = {
-        # the default segment anything models
-        "vit_h": "xxh128:97698fac30bd929c2e6d8d8cc15933c2",
-        "vit_l": "xxh128:a82beb3c660661e3dd38d999cc860e9a",
-        "vit_b": "xxh128:6923c33df3637b6a922d7682bfc9a86b",
-        # the model with vit tiny backend from https://github.com/SysCV/sam-hq
-        "vit_t": "xxh128:bbc50e2cae13dc87bc75bfc17bf85ddd",
-        # first version of finetuned models on zenodo
-        "vit_b_lm": "xxh128:6b061eb8684d9d5f55545330d6dce50d",
-        "vit_b_em_organelles": "xxh128:3919c2b761beba7d3f4ece342c9f5369",
-        "vit_b_em_boundaries": "xxh128:3099fe6339f5be91ca84db889db1909f",
+        "sam": {
+            # the default segment anything models
+            "vit_h": "xxh128:97698fac30bd929c2e6d8d8cc15933c2",
+            "vit_l": "xxh128:a82beb3c660661e3dd38d999cc860e9a",
+            "vit_b": "xxh128:6923c33df3637b6a922d7682bfc9a86b",
+            # first version of finetuned models on zenodo
+            "vit_b_lm": "xxh128:6b061eb8684d9d5f55545330d6dce50d",
+            "vit_b_em_organelles": "xxh128:3919c2b761beba7d3f4ece342c9f5369",
+            "vit_b_em_boundaries": "xxh128:3099fe6339f5be91ca84db889db1909f",
+        },
+        "sam-hq": {
+            # the model with vit tiny backend from https://github.com/SysCV/sam-hq
+            "vit_t": "xxh128:bbc50e2cae13dc87bc75bfc17bf85ddd",
+            "vit_b": "xxh128:0fef6bd43692ec4bd6da5768f8380677",
+            "vit_l": "xxh128:ec926683f6442e8a7adea4bacee22a75",
+            "vit_h": "xxh128:4a888a4470191b66f1f677130d430782",
+        }
     }
-
-    models = pooch.create(
-        path=os.path.join(microsam_cachedir(), "models"),
-        base_url="",
-        registry=registry_xxh128 if HAS_XXH128 else registry_sha256,
-        # Now specify custom URLs for some of the files in the registry.
-        urls={
+    urls = {
+        "sam": {
             # the default segment anything models
             "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
             "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
             "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
-            # the model with vit tiny backend from https://github.com/SysCV/sam-hq
-            "vit_t": "https://owncloud.gwdg.de/index.php/s/Wz81tgC2s9npUMq/download",
             # first version of finetuned models on zenodo
             "vit_b_lm": "https://zenodo.org/records/10524791/files/vit_b_lm.pth?download=1",
             "vit_b_em_organelles": "https://zenodo.org/records/10524828/files/vit_b_em_organelles.pth?download=1",
             "vit_b_em_boundaries": "https://zenodo.org/records/10524894/files/vit_b_em_boundaries.pth?download=1",
         },
+        "sam-hq": {
+            # the model with vit tiny backend from https://github.com/SysCV/sam-hq
+            "vit_t": "https://owncloud.gwdg.de/index.php/s/Wz81tgC2s9npUMq/download",
+            "vit_b": "https://owncloud.gwdg.de/index.php/s/YRCdQSd8RMpVwyu/download",
+            "vit_l": "https://owncloud.gwdg.de/index.php/s/KkKVauYCm4Ub2hy/download",
+            "vit_h": "https://owncloud.gwdg.de/index.php/s/klGdvGJiTeIbWhn/download",
+        }
+    }
+
+    backend_choice = "sam-hq" if VIT_T_SUPPORT else "sam"
+    print(
+        "Found 'HQ-SAM' installed." if VIT_T_SUPPORT else "Found 'Segment Anything' installed."
+    )
+    models = pooch.create(
+        path=os.path.join(microsam_cachedir(), "models"),
+        base_url="",
+        registry=registry_xxh128[backend_choice] if HAS_XXH128 else registry_sha256[backend_choice],
+        # Now specify custom URLs for some of the files in the registry.
+        urls=urls[backend_choice],
     )
     return models
 
