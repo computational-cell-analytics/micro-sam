@@ -23,9 +23,9 @@ def load_cellpose_model(model_type):
     from cellpose import models
     device, gpu = models.assign_device(True, True)
 
-    if model_type in ["cyto", "cyto2", "nuclei"]:
-        model = models.Cellpose(gpu=gpu, model_type=model_type, device=device, net_avg=True)
-    elif model_type in ["livecell", "tissuenet"]:
+    if model_type in ["cyto", "cyto2", "cyto3", "nuclei"]:
+        model = models.Cellpose(gpu=gpu, model_type=model_type, device=device)
+    elif model_type in ["livecell", "tissuenet", "livecell_cp3"]:
         model = models.CellposeModel(gpu=gpu, model_type=model_type, device=device)
     else:
         raise ValueError(model_type)
