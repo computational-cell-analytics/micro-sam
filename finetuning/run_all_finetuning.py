@@ -86,10 +86,15 @@ def submit_slurm(args):
             f"Choose from {list(script_combinations.keys())}"
         experiments = [args.experiment_name]
 
+    if args.model_type is None:
+        models = list(N_OBJECTS.keys())
+    else:
+        models = [args.model_type]
+
     for experiment in experiments:
         script_name = script_combinations[experiment]
         print(f"Running for {script_name}")
-        for model_type in N_OBJECTS.keys():
+        for model_type in models:
             write_batch_script(
                 out_path=get_batch_script_names(tmp_folder),
                 _name=script_name,
@@ -113,5 +118,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--experiment_name", type=str, default=None)
     parser.add_argument("-s", "--save_root", type=str, default="/scratch/usr/nimanwai/micro-sam/")
+    parser.add_argument("-m", "--model_type", type=str, default=None)
     args = parser.parse_args()
     main(args)
