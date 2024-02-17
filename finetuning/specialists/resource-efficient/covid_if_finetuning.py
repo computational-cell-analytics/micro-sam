@@ -148,7 +148,7 @@ def main():
         help="Where to save the checkpoint and logs. By default they will be saved where this script is run."
     )
     parser.add_argument(
-        "--iterations", type=int, default=int(1e2),
+        "--iterations", type=int, default=int(1e3),
         help="For how many iterations should the model be trained? By default 250k."
     )
     parser.add_argument(
