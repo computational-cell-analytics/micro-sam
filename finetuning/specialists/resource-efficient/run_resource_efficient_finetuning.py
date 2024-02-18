@@ -1,6 +1,14 @@
 import common
 
-
+# NOTE:
+# current resources available:
+#   - xps13 (CPU compute) (local)
+#   - medium (CPU compute partition) (SCC)
+#   - gtx1080: 8GB (SCC)
+#   - rtx5000: 16GB (SCC)
+#   - v100: 32GB (SCC / Grete)
+#   - A100: 40GB (Grete)
+#   - A100: 80GB (Grete)
 def write_batch_sript(tier_choice, env_name, resource_name):
     "Writing scripts for resource-efficient trainings for micro-sam finetuning on Covid-IF."
     batch_script = common.base_slurm_script(

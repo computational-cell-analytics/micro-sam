@@ -52,7 +52,7 @@ def finetune_covid_if(args):
     # training settings:
     model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
-    patch_shape = (768, 768)  # the patch shape for training
+    patch_shape = (512, 512)  # the patch shape for training
     n_objects_per_batch = args.n_objects  # the number of objects per batch that will be sampled (default: 25)
     freeze_parts = args.freeze  # override this to freeze different parts of the model
 
@@ -119,9 +119,7 @@ def finetune_covid_if(args):
         instance_metric=DiceBasedDistanceLoss(mask_distances_in_bg=True),
         early_stopping=25
     )
-    trainer.fit(
-        args.iterations, save_every_kth_epoch=args.save_every_kth_epoch
-    )
+    trainer.fit(args.iterations, save_every_kth_epoch=args.save_every_kth_epoch)
     if args.export_path is not None:
         checkpoint_path = os.path.join(
             "" if args.save_root is None else args.save_root, "checkpoints", checkpoint_name, "best.pt"
