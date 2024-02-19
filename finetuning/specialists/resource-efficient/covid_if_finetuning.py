@@ -4,10 +4,10 @@ import argparse
 import torch
 
 from torch_em.model import UNETR
+from torch_em.data import MinInstanceSampler
 from torch_em.loss import DiceBasedDistanceLoss
 from torch_em.data.datasets import get_covid_if_loader
 from torch_em.transform.label import PerObjectDistanceTransform
-from torch_em.data import MinInstanceSampler
 
 import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
@@ -31,14 +31,14 @@ def get_dataloaders(patch_shape, data_path, n_samples):
     sampler = MinInstanceSampler()
 
     train_loader = get_covid_if_loader(
-        path=data_path, patch_shape=patch_shape, batch_size=1, target="cells", download=True, num_workers=16, shuffle=True,
-        raw_transform=raw_transform, sampler=sampler, label_transform=label_transform, label_dtype=torch.float32,
-        sample_range=(None, 6), n_samples=n_samples,
+        path=data_path, patch_shape=patch_shape, batch_size=1, target="cells", download=True, num_workers=16,
+        shuffle=True, raw_transform=raw_transform, sampler=sampler, label_transform=label_transform,
+        label_dtype=torch.float32, sample_range=(None, 6), n_samples=n_samples,
     )
     val_loader = get_covid_if_loader(
-        path=data_path, patch_shape=patch_shape, batch_size=1, target="cells", download=True, num_workers=16, shuffle=True,
-        raw_transform=raw_transform, sampler=sampler, label_transform=label_transform, label_dtype=torch.float32,
-        sample_range=(6, 8), n_samples=5,
+        path=data_path, patch_shape=patch_shape, batch_size=1, target="cells", download=True, num_workers=16,
+        shuffle=True, raw_transform=raw_transform, sampler=sampler, label_transform=label_transform,
+        label_dtype=torch.float32, sample_range=(6, 8), n_samples=5,
     )
 
     return train_loader, val_loader
@@ -87,7 +87,9 @@ def finetune_covid_if(args):
     # all the stuff we need for training
     optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10, verbose=True)
-    train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path, n_samples=args.n_samples)
+    train_loader, val_loader = get_dataloaders(
+        patch_shape=patch_shape, data_path=args.input_path, n_samples=args.n_samples
+    )
 
     print(len(train_loader), len(val_loader))
 
