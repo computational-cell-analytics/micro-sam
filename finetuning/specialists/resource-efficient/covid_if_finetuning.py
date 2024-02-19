@@ -38,7 +38,7 @@ def get_dataloaders(patch_shape, data_path, n_samples):
     val_loader = get_covid_if_loader(
         path=data_path, patch_shape=patch_shape, batch_size=1, target="cells", download=True, num_workers=16,
         shuffle=True, raw_transform=raw_transform, sampler=sampler, label_transform=label_transform,
-        label_dtype=torch.float32, sample_range=(6, 8), n_samples=5,
+        label_dtype=torch.float32, sample_range=(6, 8), n_samples=1,
     )
 
     return train_loader, val_loader
@@ -53,7 +53,7 @@ def finetune_covid_if(args):
     model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
     patch_shape = (512, 512)  # the patch shape for training
-    n_objects_per_batch = args.n_objects  # the number of objects per batch that will be sampled (default: 25)
+    n_objects_per_batch = args.n_objects  # the number of objects per batch that will be sampled
     freeze_parts = args.freeze  # override this to freeze different parts of the model
 
     # get the trainable segment anything model
@@ -156,8 +156,7 @@ def main():
         help="Where to export the finetuned model to. The exported model can be used in the annotation tools."
     )
     parser.add_argument(
-        "--freeze", type=str, nargs="+", default=None,
-        help="Which parts of the model to freeze for finetuning."
+        "--freeze", type=str, nargs="+", default=None, help="Which parts of the model to freeze for finetuning."
     )
     parser.add_argument(
         "--save_every_kth_epoch", type=int, default=None,
