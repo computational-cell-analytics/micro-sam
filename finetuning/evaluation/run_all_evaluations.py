@@ -57,7 +57,7 @@ def for_all_em(specific_script):
         all_dataset_list=[
             "mitoem/rat", "mitoem/human", "platynereis/nuclei", "mitolab/c_elegans", "mitolab/fly_brain",
             "mitolab/glycolytic_muscle", "mitolab/hela_cell", "mitolab/lucchi_pp", "mitolab/salivary_gland",
-            "mitolab/tem", "lucchi", "nuc-mm/mouse", "nuc-mm/zebrafish", "uro_cell", "sponge_em", "platynereis/cilia",
+            "mitolab/tem", "lucchi", "nuc_mm/mouse", "nuc_mm/zebrafish", "uro_cell", "sponge_em", "platynereis/cilia",
         ],
         all_model_list=ALl_MODELS,
         all_experiment_set_list=["vanilla", "generalist"],
