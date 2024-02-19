@@ -6,15 +6,6 @@ import subprocess
 import common
 
 
-# NOTE:
-# current resources available:
-#   - xps13 (CPU compute) (local)
-#   - medium (CPU compute partition) (SCC)
-#   - gtx1080: 8GB (SCC)
-#   - rtx5000: 16GB (SCC)
-#   - v100: 32GB (SCC / Grete)
-#   - A100: 40GB (Grete)
-#   - A100: 80GB (Grete)
 def write_batch_sript(
     tier_choice, env_name, resource_name, input_path, save_root, model_type, n_objects, n_samples, script_name
 ):

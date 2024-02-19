@@ -1,6 +1,12 @@
 Questions:
 
-a. Resource combinations: (see `run_resource_efficient_finetuning.py`)
+a. Resource combinations:
+    - `xps13` (CPU compute) (local)
+    - `medium` (CPU compute partition) (SCC)
+    - `gtx1080`: 8GB (SCC)
+    - `rtx5000`: 16GB (SCC)
+    - `v100`: 32GB (SCC / Grete)
+    - `A100`: 40GB (Grete)
 
 b. Experiment combinations:
     i. `vit_t` / `vit_b` / both
