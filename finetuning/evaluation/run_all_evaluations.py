@@ -28,6 +28,10 @@ def run_one_setup(all_dataset_list, all_model_list, all_experiment_set_list, roi
     for dataset_name in all_dataset_list:
         for model_type in all_model_list:
             for experiment_set in all_experiment_set_list:
+                if experiment_set == "vanilla" and specific_script == "evaluate_instance_segmentation":
+                    # we don't perform ais on vanilla models
+                    continue
+
                 run_specific_experiment(dataset_name, model_type, experiment_set, roi, specific_script)
 
 
