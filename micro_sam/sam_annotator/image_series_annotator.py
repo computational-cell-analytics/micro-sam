@@ -14,6 +14,7 @@ from segment_anything import SamPredictor
 from .. import util
 from ..precompute_state import _precompute_state_for_files
 from .annotator_2d import annotator_2d
+from ._state import AnnotatorState
 
 
 def image_series_annotator(
@@ -92,6 +93,8 @@ def image_series_annotator(
         print("Loading next image from:", image_files[next_image_id])
         image = imageio.imread(image_files[next_image_id])
         image_embedding_path = None if embedding_paths is None else embedding_paths[next_image_id]
+        # Reset the state.
+        AnnotatorState().reset_state()
         annotator_2d(image, embedding_path=image_embedding_path, v=v, return_viewer=True, predictor=predictor, **kwargs)
 
     v.window.add_dock_widget(next_image)
