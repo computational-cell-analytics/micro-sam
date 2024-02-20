@@ -33,12 +33,21 @@ def get_dataloaders(patch_shape, data_path, n_samples):
     train_loader = get_covid_if_loader(
         path=data_path, patch_shape=patch_shape, batch_size=1, target="cells", download=True, num_workers=16,
         shuffle=True, raw_transform=raw_transform, sampler=sampler, label_transform=label_transform,
-        label_dtype=torch.float32, sample_range=(None, 6), n_samples=n_samples,
+        label_dtype=torch.float32, sample_range=(None, 6), n_samples=None,
     )
+    # pseudocode
+    this_n_samples = len(train_loader)
+    if this_n_samples < 50:
+        train_loader = get_covid_if_loader(
+            path=data_path, patch_shape=patch_shape, batch_size=1, target="cells", download=True, num_workers=16,
+            shuffle=True, raw_transform=raw_transform, sampler=sampler, label_transform=label_transform,
+            label_dtype=torch.float32, sample_range=(None, 6), n_samples=50,
+        )   
+
     val_loader = get_covid_if_loader(
         path=data_path, patch_shape=patch_shape, batch_size=1, target="cells", download=True, num_workers=16,
         shuffle=True, raw_transform=raw_transform, sampler=sampler, label_transform=label_transform,
-        label_dtype=torch.float32, sample_range=(6, 8), n_samples=1,
+        label_dtype=torch.float32, sample_range=(6, 8), n_samples=1,  # set n samples to 5 or so
     )
 
     return train_loader, val_loader
