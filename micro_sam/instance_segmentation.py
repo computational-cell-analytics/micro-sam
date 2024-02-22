@@ -924,7 +924,7 @@ class InstanceSegmentationWithDecoder:
         center_distance_threshold: float = 0.5,
         boundary_distance_threshold: float = 0.5,
         foreground_threshold: float = 0.5,
-        foreground_smoothing: float = 0.0,
+        foreground_smoothing: float = 0.75,
         distance_smoothing: float = 1.6,
         min_size: int = 0,
         output_mode: Optional[str] = "binary_mask",
