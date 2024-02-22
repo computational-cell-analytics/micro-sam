@@ -13,7 +13,7 @@ import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
 
 
-def get_dataloaders(patch_shape, data_path, n_samples):
+def get_dataloaders(patch_shape, data_path, n_images):
     """This returns the immunofluoroscence data loaders implemented in torch_em:
     https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/covid_if.py
     It will automatically download the IF data.
@@ -30,24 +30,35 @@ def get_dataloaders(patch_shape, data_path, n_samples):
     raw_transform = sam_training.identity  # the current workflow avoids rescaling the inputs to [-1, 1]
     sampler = MinInstanceSampler()
 
+    choice_of_images = [1, 2, 5, 10]
+    assert n_images in choice_of_images, \
+        f"The current choice of experiments explores a limited combination. Choose from {choice_of_images}"
+
+    train_volumes = (None, n_images)
+    val_volumes = (10, 13)
+
+    # let's estimate the total number of patches
     train_loader = get_covid_if_loader(
-        path=data_path, patch_shape=patch_shape, batch_size=1, target="cells", download=True, num_workers=16,
-        shuffle=True, raw_transform=raw_transform, sampler=sampler, label_transform=label_transform,
-        label_dtype=torch.float32, sample_range=(None, 6), n_samples=None,
+        path=data_path, patch_shape=patch_shape, batch_size=1, target="cells",
+        download=True, sampler=sampler, sample_range=train_volumes
     )
-    # pseudocode
-    this_n_samples = len(train_loader)
-    if this_n_samples < 50:
-        train_loader = get_covid_if_loader(
-            path=data_path, patch_shape=patch_shape, batch_size=1, target="cells", download=True, num_workers=16,
-            shuffle=True, raw_transform=raw_transform, sampler=sampler, label_transform=label_transform,
-            label_dtype=torch.float32, sample_range=(None, 6), n_samples=50,
-        )   
+
+    print(
+        f"Found {len(train_loader)} samples for training.",
+        "Hence, we will use {0} samples for training.".format(50 if len(train_loader) < 50 else len(train_loader))
+    )
+
+    # now, let's get the training and validation dataloaders
+    train_loader = get_covid_if_loader(
+        path=data_path, patch_shape=patch_shape, batch_size=1, target="cells", num_workers=16, shuffle=True,
+        raw_transform=raw_transform, sampler=sampler, label_transform=label_transform, label_dtype=torch.float32,
+        sample_range=train_volumes, n_samples=50 if len(train_loader) < 50 else None,
+    )
 
     val_loader = get_covid_if_loader(
         path=data_path, patch_shape=patch_shape, batch_size=1, target="cells", download=True, num_workers=16,
-        shuffle=True, raw_transform=raw_transform, sampler=sampler, label_transform=label_transform,
-        label_dtype=torch.float32, sample_range=(6, 8), n_samples=1,  # set n samples to 5 or so
+        raw_transform=raw_transform, sampler=sampler, label_transform=label_transform, label_dtype=torch.float32,
+        sample_range=val_volumes, n_samples=5,
     )
 
     return train_loader, val_loader
@@ -67,10 +78,7 @@ def finetune_covid_if(args):
 
     # get the trainable segment anything model
     model = sam_training.get_trainable_sam_model(
-        model_type=model_type,
-        device=device,
-        checkpoint_path=checkpoint_path,
-        freeze=freeze_parts
+        model_type=model_type, device=device, checkpoint_path=checkpoint_path, freeze=freeze_parts
     )
     model.to(device)
 
@@ -95,12 +103,10 @@ def finetune_covid_if(args):
 
     # all the stuff we need for training
     optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=4, verbose=True)
     train_loader, val_loader = get_dataloaders(
-        patch_shape=patch_shape, data_path=args.input_path, n_samples=args.n_samples
+        patch_shape=patch_shape, data_path=args.input_path, n_images=args.n_images
     )
-
-    print(len(train_loader), len(val_loader))
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
     convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
@@ -128,9 +134,9 @@ def finetune_covid_if(args):
         unetr=unetr,
         instance_loss=DiceBasedDistanceLoss(mask_distances_in_bg=True),
         instance_metric=DiceBasedDistanceLoss(mask_distances_in_bg=True),
-        early_stopping=25
+        early_stopping=10
     )
-    trainer.fit(args.iterations, save_every_kth_epoch=args.save_every_kth_epoch)
+    trainer.fit(epochs=args.epochs, save_every_kth_epoch=args.save_every_kth_epoch)
     if args.export_path is not None:
         checkpoint_path = os.path.join(
             "" if args.save_root is None else args.save_root, "checkpoints", checkpoint_name, "best.pt"
@@ -143,6 +149,7 @@ def finetune_covid_if(args):
 
 
 def main():
+    print("Available Resource: '{0}'".format(torch.cuda.get_device_name() if torch.cuda.is_available else "CPU"))
     parser = argparse.ArgumentParser(description="Finetune Segment Anything for the Covid-IF dataset.")
     parser.add_argument(
         "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/covid_if/",
@@ -157,8 +164,8 @@ def main():
         help="Where to save the checkpoint and logs. By default they will be saved where this script is run."
     )
     parser.add_argument(
-        "--iterations", type=int, default=int(1e3),
-        help="For how many iterations should the model be trained? By default 250k."
+        "--epochs", type=int, default=100,
+        help="For how many epochs should the model be trained? By default 100."
     )
     parser.add_argument(
         "--export_path", "-e",
@@ -175,11 +182,13 @@ def main():
         "--n_objects", type=int, default=25, help="The number of instances (objects) per batch used for finetuning."
     )
     parser.add_argument(
-        "--n_samples", type=int, default=None, help="The number of samples (images) used for finetuning."
+        "--n_images", type=int, default=None, help="The number of images used for finetuning."
     )
     args = parser.parse_args()
     finetune_covid_if(args)
 
 
 if __name__ == "__main__":
+    import warnings
+    warnings.filterwarnings("ignore")
     main()

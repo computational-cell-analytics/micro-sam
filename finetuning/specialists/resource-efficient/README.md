@@ -25,3 +25,50 @@ c. Inference:
     ii. `vit_<X>_lm` micro-sam (using finetuned LM generalist)
     iii. `vit_<X>_covid-if` micro-sam (training a specialist)
     iv. finetuning `vit_<X>_lm` microsam (finetuning the LM generalist)
+
+
+## Combinations:
+
+Description of parameters which fit the resource requirements to run the finetuning experiments
+
+Fixed parameters:
+- number of epochs - 100
+- train and val batch size - 1
+- minimum number of training "samples" for training on the provided images - min. **50** (oversample while we don't find min. 50 training samples)
+- learning rate: TODO
+- lr scheduler: TODO
+- freeze any? : TODO
+- early stopping: TODO
+- patch shape: (512, 512)
+- choice of models: vit_t / vit_b
+
+### GPU Resources:
+1. `gtx1080`:
+    - `vit_t`:
+        - finetune all layers
+        - `n_objects`: 10
+    - `vit_b`:
+        - freeze `image_encoder`
+        - `n_objects`: 10
+
+2. `rtx5000`:
+    - `vit_t`:
+        - finetune all layers
+        - `n_objects`: 20
+    - `vit_b`:
+        - finetune all layers
+        - `n_objects`: 10
+
+3. `v100`:
+    - `vit_t`:
+    - `vit_b`:
+
+4. `A100`:
+    - TODO: recheck the numbers on A100 (40GB)
+    - `vit_t`: 55
+    - `vit_b`: 45
+    - `vit_l`: 35
+    - `vit_h`: 25
+
+### CPU Resources:
+TODO
