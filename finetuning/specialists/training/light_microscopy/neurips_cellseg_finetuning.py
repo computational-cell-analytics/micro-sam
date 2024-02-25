@@ -1,50 +1,59 @@
 import os
 import argparse
+import numpy as np
 
 import torch
 
 from torch_em.model import UNETR
-from torch_em.data import MinInstanceSampler
 from torch_em.loss import DiceBasedDistanceLoss
-from torch_em.data.datasets import get_plantseg_loader
+from torch_em.data import MinInstanceSampler, datasets
+from torch_em.transform.label import PerObjectDistanceTransform
+from torch_em.transform.raw import normalize_percentile, normalize
+from torch_em.data.datasets import get_neurips_cellseg_supervised_loader
 
 import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
-from micro_sam.training.util import ResizeLabelTrafo, ResizeRawTrafo
+
+
+def neurips_raw_trafo(raw):
+    raw = datasets.neurips_cell_seg.to_rgb(raw)  # ensures 3 channels for the neurips data
+    raw = normalize_percentile(raw)
+    raw = np.mean(raw, axis=0)
+    raw = normalize(raw)
+    raw = raw * 255
+    return raw
 
 
 def get_dataloaders(patch_shape, data_path):
-    """This returns the plantseg data loaders implemented in torch_em:
-    https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/plantseg.py
-    It will automatically download the plantseg (root) data.
-
-    Note: to replace this with another data loader you need to return a torch data loader
-    that retuns `x, y` tensors, where `x` is the image data and `y` are the labels.
-    The labels have to be in a label mask instance segmentation format.
-    I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
-    Important: the ID 0 is reseved for background, and the IDs must be consecutive
+    """This returns the neurips cellseg data loaders implemented in torch_em:
+    https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/neurips_cell_seg.py
+    NOTE: It will not download the NeurIPS CellSeg data automatically (https://neurips22-cellseg.grand-challenge.org/)
     """
-    raw_transform = ResizeRawTrafo(patch_shape, do_rescaling=False)
-    label_transform = ResizeLabelTrafo(patch_shape)
-    sampler = MinInstanceSampler(min_num_instances=10)
+    label_transform = PerObjectDistanceTransform(
+        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=0
+    )
+    sampler = MinInstanceSampler(min_num_instances=3)
     label_dtype = torch.float32
 
-    train_loader = get_plantseg_loader(
-        path=data_path, name="root", split="train", patch_shape=(1, *patch_shape), batch_size=2,
-        download=True, ndim=2, sampler=sampler, raw_transform=raw_transform, label_transform=label_transform,
-        num_workers=16, shuffle=True, label_dtype=label_dtype, n_samples=5000  # training w. ~25% of the total train-set
+    train_loader = get_neurips_cellseg_supervised_loader(
+        root=data_path, split="train", patch_shape=patch_shape, batch_size=2, raw_transform=neurips_raw_trafo,
+        label_transform=label_transform, label_dtype=label_dtype, sampler=sampler, num_workers=16, shuffle=True,
     )
-    val_loader = get_plantseg_loader(
-        path=data_path, name="root", split="val", patch_shape=(1, *patch_shape), batch_size=1,
-        download=True, ndim=2, sampler=sampler, raw_transform=raw_transform, label_transform=label_transform,
-        num_workers=16, shuffle=True, label_dtype=label_dtype
+
+    val_loader = get_neurips_cellseg_supervised_loader(
+        root=data_path, split="val", patch_shape=patch_shape, batch_size=1, raw_transform=neurips_raw_trafo,
+        label_transform=label_transform, label_dtype=label_dtype, sampler=sampler, num_workers=16, shuffle=True,
     )
+
+    # increasing the sampling attempts for the neurips cellseg dataset
+    train_loader.dataset.max_sampling_attempts = 5000
+    val_loader.dataset.max_sampling_attempts = 5000
 
     return train_loader, val_loader
 
 
-def finetune_plantseg_root(args):
-    """Code for finetuning SAM on PlantSeg (root)"""
+def finetune_neurips_cellseg_root(args):
+    """Code for finetuning SAM on NeurIPS CellSeg"""
     # override this (below) if you have some more complex set-up and need to specify the exact gpu
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -85,7 +94,7 @@ def finetune_plantseg_root(args):
 
     # all the stuff we need for training
     optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=50, verbose=True)
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
@@ -93,7 +102,7 @@ def finetune_plantseg_root(args):
         transform=model.transform, box_distortion_factor=0.025
     )
 
-    checkpoint_name = f"{args.model_type}/plantseg_root_sam"
+    checkpoint_name = f"{args.model_type}/neurips_cellseg_sam"
 
     # the trainer which performs the joint training and validation (implemented using "torch_em")
     trainer = sam_training.JointSamTrainer(
@@ -130,10 +139,10 @@ def finetune_plantseg_root(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the PlantSeg dataset.")
+    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the NeurIPS CellSeg dataset.")
     parser.add_argument(
-        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/plantseg/",
-        help="The filepath to the PlantSeg (root) data. If the data does not exist yet it will be downloaded."
+        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/neurips-cell-seg/",
+        help="The filepath to the NeurIPS CellSeg data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
@@ -163,7 +172,7 @@ def main():
         "--n_objects", type=int, default=25, help="The number of instances (objects) per batch used for finetuning."
     )
     args = parser.parse_args()
-    finetune_plantseg_root(args)
+    finetune_neurips_cellseg_root(args)
 
 
 if __name__ == "__main__":

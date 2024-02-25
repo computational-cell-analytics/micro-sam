@@ -21,7 +21,7 @@ def neurips_raw_trafo(raw):
     return raw
 
 
-def deepbacs_raw_trafo(raw):
+def to_8bit(raw):
     raw = normalize(raw)
     raw = raw * 255
     return raw
@@ -36,7 +36,24 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
     )
     sampler = MinInstanceSampler()
 
-    generalist_dataset = ConcatDataset(
+    def get_ctc_datasets(
+        input_path, patch_shape, sampler, raw_transform, label_transform,
+        ignore_datasets=["Fluo-N2DH-GOWT1", "Fluo-N2DL-HeLa"]
+    ):
+        all_ctc_datasets = []
+        for dataset_name in datasets.ctc.CTC_URLS.keys():
+            if dataset_name in ignore_datasets:
+                continue
+
+            all_ctc_datasets.append(
+                datasets.get_ctc_segmentation_dataset(
+                    path=os.path.join(input_path, "ctc"), dataset_name=dataset_name, patch_shape=(1, *patch_shape),
+                    sampler=sampler, raw_transform=raw_transform, label_transform=label_transform
+                )
+            )
+        return all_ctc_datasets
+
+    _datasets = [
         datasets.get_tissuenet_dataset(
             path=os.path.join(input_path, "tissuenet"), split=split_choice, download=True, patch_shape=patch_shape,
             raw_channel="rgb", label_channel="cell", sampler=sampler, label_dtype=label_dtype,
@@ -44,13 +61,12 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
             n_samples=1000 if split_choice == "train" else 100
         ),
         datasets.get_livecell_dataset(
-            path=os.path.join(input_path, "livecell"), split=split_choice, patch_shape=patch_shape,
-            label_transform=label_transform, sampler=sampler, label_dtype=label_dtype, raw_transform=identity,
-            n_samples=1000 if split_choice == "train" else 100, download=True
+            path=os.path.join(input_path, "livecell"), split=split_choice, patch_shape=patch_shape, download=True,
+            label_transform=label_transform, sampler=sampler, label_dtype=label_dtype, raw_transform=identity
         ),
         datasets.get_deepbacs_dataset(
             path=os.path.join(input_path, "deepbacs"), split=split_choice, patch_shape=patch_shape,
-            raw_transform=deepbacs_raw_trafo, label_transform=label_transform, label_dtype=label_dtype,
+            raw_transform=to_8bit, label_transform=label_transform, label_dtype=label_dtype,
             download=True, sampler=MinInstanceSampler(min_num_instances=4)
         ),
         datasets.get_neurips_cellseg_supervised_dataset(
@@ -69,8 +85,15 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
             raw_transform=ResizeRawTrafo(patch_shape, do_rescaling=False),
             label_transform=ResizeLabelTrafo(patch_shape, min_size=0),
             n_samples=1000 if split_choice == "train" else 100
+        ),
+    ]
+    if split_choice == "train":
+        _datasets += get_ctc_datasets(
+            input_path, patch_shape, sampler, raw_transform=to_8bit, label_transform=label_transform
         )
-    )
+
+    generalist_dataset = ConcatDataset(*_datasets)
+
     # increasing the sampling attempts for the neurips cellseg dataset
     generalist_dataset.datasets[3].max_sampling_attempts = 5000
 

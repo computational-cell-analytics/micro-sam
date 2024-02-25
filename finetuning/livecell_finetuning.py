@@ -71,6 +71,7 @@ def finetune_livecell(args):
         final_activation="Sigmoid",
         use_skip_connection=False,
         resize_input=True,
+        use_conv_transpose=True,
     )
     unetr.to(device)
 
@@ -134,7 +135,7 @@ def main():
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
-        help="The model type to use for fine-tuning. Either vit_b, vit_l or vit_h."
+        help="The model type to use for fine-tuning. Either vit_t, vit_b, vit_l or vit_h."
     )
     parser.add_argument(
         "--save_root", "-s",
