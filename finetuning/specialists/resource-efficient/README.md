@@ -40,35 +40,32 @@ Fixed parameters:
 
 ### GPU Resources:
 1. `gtx1080`: (32G cpu memory, 8 cpu cores)
-    - `vit_t`:
-        - finetune all layers
+    - `vit_t`: finetune all layers
         - `n_objects`: 5
-    - `vit_b`:
-        - freeze `image_encoder`
+    - `vit_b`: freeze `image_encoder`
         - `n_objects`: 10
 
 2. `rtx5000`:
-    - `vit_t`:
-        - finetune all layers
+    - `vit_t`: (finetune all layers)
         - `n_objects`: 20
-    - `vit_b`:
-        - finetune all layers
+    - `vit_b`: (finetune all layers)
         - `n_objects`: 10
 
 3. `v100`:
-    - `vit_t`:
-        - finetune all layers
+    - `vit_t`: (finetune all layers)
         - `n_objects`: 45
-    - `vit_b`:
-        - finetune all layers
+    - `vit_b`: (finetune all layers)
         - `n_objects`: 35
 
 4. `A100`:
-    - TODO: recheck the numbers on A100 (40GB)
-    - `vit_t`: 55
-    - `vit_b`: 45
-    - `vit_l`: 35
-    - `vit_h`: 25
+    - `vit_t`: (finetune all layers)
+        - `n_objects`: 55
+    - `vit_b`: (finetune all layers)
+        - `n_objects`: 45
+    - `vit_l`: (finetune all layers)
+        - `n_objects`: 35
+    - `vit_h`: (finetune all layers)
+        - `n_objects`: 25
 
 ### CPU Resources:
 
