@@ -24,6 +24,8 @@ def get_dataloaders(patch_shape, data_path, n_images):
     I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
     Important: the ID 0 is reseved for background, and the IDs must be consecutive
     """
+    num_workers = 8 if torch.cuda.is_available() else 0
+
     label_transform = PerObjectDistanceTransform(
         distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=25
     )
@@ -50,13 +52,13 @@ def get_dataloaders(patch_shape, data_path, n_images):
 
     # now, let's get the training and validation dataloaders
     train_loader = get_covid_if_loader(
-        path=data_path, patch_shape=patch_shape, batch_size=1, target="cells", num_workers=16, shuffle=True,
+        path=data_path, patch_shape=patch_shape, batch_size=1, target="cells", num_workers=num_workers, shuffle=True,
         raw_transform=raw_transform, sampler=sampler, label_transform=label_transform, label_dtype=torch.float32,
         sample_range=train_volumes, n_samples=50 if len(train_loader) < 50 else None,
     )
 
     val_loader = get_covid_if_loader(
-        path=data_path, patch_shape=patch_shape, batch_size=1, target="cells", download=True, num_workers=16,
+        path=data_path, patch_shape=patch_shape, batch_size=1, target="cells", download=True, num_workers=num_workers,
         raw_transform=raw_transform, sampler=sampler, label_transform=label_transform, label_dtype=torch.float32,
         sample_range=val_volumes, n_samples=5,
     )
@@ -103,7 +105,7 @@ def finetune_covid_if(args):
 
     # all the stuff we need for training
     optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=4, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=3, verbose=True)
     train_loader, val_loader = get_dataloaders(
         patch_shape=patch_shape, data_path=args.input_path, n_images=args.n_images
     )
@@ -149,7 +151,7 @@ def finetune_covid_if(args):
 
 
 def main():
-    print("Available Resource: '{0}'".format(torch.cuda.get_device_name() if torch.cuda.is_available else "CPU"))
+    print("Available Resource: '{0}'".format(torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU"))
     parser = argparse.ArgumentParser(description="Finetune Segment Anything for the Covid-IF dataset.")
     parser.add_argument(
         "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/covid_if/",
