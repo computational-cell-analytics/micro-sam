@@ -54,6 +54,8 @@ def image_series_annotator(
     Args:
         input_files: List of the file paths for the images to be annotated.
         output_folder: The folder where the segmentation results are saved.
+        model_type: The Segment Anything model to use. For details on the available models check out
+            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
         embedding_path: Filepath where to save the embeddings.
         tile_shape: Shape of tiles for tiled embedding prediction.
             If `None` then the whole image is passed to Segment Anything.
@@ -63,21 +65,12 @@ def image_series_annotator(
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
         predictor: The Segment Anything model. Passing this enables using fully custom models.
             If you pass `predictor` then `model_type` will be ignored.
-<<<<<<< HEAD
-        tile_shape: Shape of tiles for tiled embedding prediction.
-            If `None` then the whole image is passed to Segment Anything.
-        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
-        precompute_amg_state: Whether to precompute the state for automatic mask generation.
-            This will take more time when precomputing embeddings, but will then make
-            automatic mask generation much faster.
-=======
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
->>>>>>> dev
     """
 
     os.makedirs(output_folder, exist_ok=True)
