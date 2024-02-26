@@ -27,10 +27,10 @@ def base_slurm_script(env_name, partition, cpu_mem, cpu_cores, gpu_name=None):
 
 
 def write_batch_sript(
-    env_name, partition, cpu_mem, cpu_cores, gpu_name, input_path,
-    save_root, model_type, n_objects, n_images, script_name, freeze
+    env_name, partition, cpu_mem, cpu_cores, gpu_name, input_path, save_root,
+    model_type, n_objects, n_images, script_name, freeze, checkpoint_path
 ):
-    assert model_type in ["vit_t", "vit_b", "vit_l", "vit_h"]
+    assert model_type in ["vit_t", "vit_b", "vit_t_lm", "vit_b_lm"]
 
     "Writing scripts for resource-efficient trainings for micro-sam finetuning on Covid-IF."
     batch_script = base_slurm_script(
@@ -45,9 +45,12 @@ def write_batch_sript(
 
     # add parameters to the python script
     python_script += f"-i {input_path} "  # path to the covid-if data
-    python_script += f"-m {model_type} "  # choice of vit
+    python_script += f"-m {model_type[:5]} "  # choice of vit
     python_script += f"--n_objects {n_objects} "  # number of objects per batch for finetuning
     python_script += f"--n_images {n_images} "  # number of images we train for
+
+    if checkpoint_path is not None:
+        python_script += f"-c {checkpoint_path} "
 
     if gpu_name is not None:
         resource_name = f"{gpu_name}"
@@ -65,7 +68,7 @@ def write_batch_sript(
         python_script += f"-s {updated_save_root} "  # path to save model checkpoints and logs
 
     if freeze is not None:
-        python_script += f"--freeze {freeze}"
+        python_script += f"--freeze {freeze} "
 
     # let's add the python script to the bash script
     batch_script += python_script
@@ -108,7 +111,8 @@ def main(args):
             n_objects=args.n_objects,
             n_images=n_images,
             script_name=get_batch_script_names(tmp_folder),
-            freeze=args.freeze
+            freeze=args.freeze,
+            checkpoint_path=args.checkpoint
         )
 
 
@@ -125,6 +129,7 @@ if __name__ == "__main__":
     parser.add_argument("-m", "--model_type", type=str, required=True, help="Choice of image encoder in SAM")
     parser.add_argument("--n_objects", type=int, required=True, help="The number of objects (instances) per batch.")
     parser.add_argument("--freeze", type=str, default=None, help="Which parts of the model to freeze for finetuning.")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Path to custom checkpoint.")
 
     parser.add_argument("--partition", type=str, required=True, help="Name of the partition for running the job.")
     parser.add_argument("--mem", type=str, required=True, help="Amount of cpu memory.")

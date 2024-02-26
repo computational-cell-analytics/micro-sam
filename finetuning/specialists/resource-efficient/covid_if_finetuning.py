@@ -73,7 +73,7 @@ def finetune_covid_if(args):
 
     # training settings:
     model_type = args.model_type
-    checkpoint_path = None  # override this to start training from a custom checkpoint
+    checkpoint_path = args.checkpoint_path  # override this to start training from a custom checkpoint
     patch_shape = (512, 512)  # the patch shape for training
     n_objects_per_batch = args.n_objects  # the number of objects per batch that will be sampled
     freeze_parts = args.freeze  # override this to freeze different parts of the model
@@ -164,6 +164,10 @@ def main():
     parser.add_argument(
         "--save_root", "-s",
         help="Where to save the checkpoint and logs. By default they will be saved where this script is run."
+    )
+    parser.add_argument(
+        "-c", "--checkpoint_path", type=str, default=None,
+        help="The path to custom checkpoint for training."
     )
     parser.add_argument(
         "--epochs", type=int, default=100,

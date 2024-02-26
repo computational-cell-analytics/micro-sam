@@ -16,7 +16,7 @@ b. Experiment combinations:
     v. number of epochs for different number of training samples
         - idea: let's keep the number of epochs per combination training to stay the same (for consistency in early stopping, lr scheduler)
 
-c. Inference:
+c. **Inference**:
     i. vanilla SAM
     ii. `vit_<X>_lm` micro-sam (using finetuned LM generalist)
     iii. `vit_<X>_covid-if` micro-sam (training a specialist)
@@ -39,7 +39,10 @@ Fixed parameters:
 - choice of models: vit_t / vit_b
 
 ### GPU Resources:
-1. `gtx1080`: (32G cpu memory, 8 cpu cores)
+
+(32G cpu memory, 8 cpu cores)
+
+1. `gtx1080`:
     - `vit_t`: finetune all layers
         - `n_objects`: 5
     - `vit_b`: freeze `image_encoder`
@@ -74,12 +77,15 @@ All jobs are tested on `medium` partition
 1. RAM: 64GB, Cores: 16
     - `vit_b`: finetune all layers
     - `n_objects`: 15 (higher fits, but slows down the training)
+
 2. RAM: 32GB, Cores: 16
     - `vit_b`: finetune all layers
     - `n_objects`: 10 (higher fits, but slows down the training)
+
 2: RAM: 16GB, Cores: 8
     - `vit_t`: finetune all layers
     - `n_objects`: 5
+
 3. RAM: 8GB, Cores: 8
     - `vit_t`: freeze `image_encoder`
     - `n_objects`: 1
