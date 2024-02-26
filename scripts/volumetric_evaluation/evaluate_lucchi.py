@@ -11,7 +11,7 @@ from micro_sam.prompt_generators import PointAndBoxPromptGenerator
 from micro_sam.multi_dimensional_segmentation import segment_mask_in_volume
 
 
-ROOT = "/scratch/projects/nim00007/sam/data"
+ROOT = "/home/anwai/data/lucchi"
 
 
 def get_raw_and_label_volumes(volume_path):
@@ -23,10 +23,10 @@ def get_raw_and_label_volumes(volume_path):
 
 
 def segment_lucchi_from_slices():
-    predictor = util.get_sam_model(model_type="vit_b")
+    predictor = util.get_sam_model(model_type="vit_b_em_organelles")
     embedding_path = "./embeddings/"
 
-    test_volume_path = os.path.join(ROOT, "lucchi", "lucchi_test.h5")
+    test_volume_path = os.path.join(ROOT, "lucchi_test.h5")
     volume, labels = get_raw_and_label_volumes(test_volume_path)
 
     # precompute embeddings
@@ -41,7 +41,7 @@ def segment_lucchi_from_slices():
         this_seg = np.zeros_like(instance_labels)
         this_seg[instance_labels == label_id] = 1
 
-        # we search for which slices have the object
+        # we search which slices have the current object
         slice_range = np.where(this_seg)[0]
 
         # we choose the middle slice of the current object
@@ -56,18 +56,21 @@ def segment_lucchi_from_slices():
         _, bbox_coordinates = util.get_centers_and_bounding_boxes(this_seg[slice_choice])
         _, _, box_prompts, _ = prompt_generator(this_seg[slice_choice], [bbox_coordinates[1]])
 
-        # now, we need to perform interactive segmentation on one slice
+        # now, we perform interactive segmentation on one slice
         output_slice = batched_inference(predictor, volume[slice_choice], 1, boxes=box_prompts.numpy())
         output_seg = np.zeros_like(instance_labels)
-        output_seg[slice_choice][output_slice] = 1
+        output_seg[slice_choice][output_slice == 1] = 1
 
         this_seg = segment_mask_in_volume(
             output_seg, predictor, image_embeddings, segmented_slices=np.array(slice_choice),
-            stop_lower=False, stop_upper=False, iou_threshold=0.8, projection="mask", box_extension=0.0
+            stop_lower=False, stop_upper=False, iou_threshold=0.8, projection="mask", box_extension=0
         )
 
-        breakpoint()
-
+        import napari
+        v = napari.Viewer()
+        v.add_image(volume)
+        v.add_labels(this_seg)
+        napari.run()
 
 def main():
     segment_lucchi_from_slices()
