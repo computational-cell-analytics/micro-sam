@@ -66,7 +66,7 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
         ),
         datasets.get_livecell_dataset(
             path=os.path.join(input_path, "livecell"), split=split_choice, patch_shape=patch_shape,
-            download=True, label_transform=get_label_transform(min_size=25), sampler=sampler,
+            download=True, label_transform=get_label_transform(), sampler=sampler,
             label_dtype=label_dtype, raw_transform=identity
         ),
         datasets.get_deepbacs_dataset(
