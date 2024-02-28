@@ -59,19 +59,34 @@ def segment_mask_in_volume(
         if progress_bar is not None:
             progress_bar.update(1)
 
+    def _compute_mean_iou_for_n_slices(z, increment, seg_z, n_slices):
+        iou_list = [
+            util.compute_iou(segmentation[z - increment * _slice], seg_z) for _slice in range(1, n_slices+1)
+        ]
+        return np.mean(iou_list)
+
+
     def segment_range(z_start, z_stop, increment, stopping_criterion, threshold=None, verbose=False):
         z = z_start + increment
         while True:
             if verbose:
                 print(f"Segment {z_start} to {z_stop}: segmenting slice {z}")
             seg_prev = segmentation[z - increment]
-            seg_z = segment_from_mask(predictor, seg_prev, image_embeddings=image_embeddings, i=z,
-                                      use_mask=use_mask, use_box=use_box, use_points=use_points,
-                                      box_extension=box_extension)
+            seg_z, score, _ = segment_from_mask(
+                predictor, seg_prev, image_embeddings=image_embeddings, i=z, use_mask=use_mask,
+                use_box=use_box, use_points=use_points, box_extension=box_extension, return_all=True
+            )
             if threshold is not None:
                 iou = util.compute_iou(seg_prev, seg_z)
+                # ff_iou = util.compute_iou(segmentation[z_start], seg_z)
+                # criterion = 0.5 * iou + 0.3 * score + 0.2 * ff_iou
+                # criterion = _compute_mean_iou_for_n_slices(z, increment, seg_z, min(5, abs(z - z_start)))
+                # print(
+                #     z, iou, score, ff_iou, criterion,
+                #     _compute_mean_iou_for_n_slices(z, increment, seg_z, min(5, abs(z - z_start)))
+                # )
                 if iou < threshold:
-                    msg = f"Segmentation stopped at slice {z} due to IOU {iou} < {iou_threshold}."
+                    msg = f"Segmentation stopped at slice {z} due to IOU {iou} < {threshold}."
                     print(msg)
                     break
             segmentation[z] = seg_z
@@ -91,6 +106,8 @@ def segment_mask_in_volume(
     # segment above the max slice
     if z1 < segmentation.shape[0] - 1 and not stop_upper:
         segment_range(z1, segmentation.shape[0] - 1, 1, np.greater, iou_threshold)
+
+    breakpoint()
 
     verbose = False
     # segment in between min and max slice
