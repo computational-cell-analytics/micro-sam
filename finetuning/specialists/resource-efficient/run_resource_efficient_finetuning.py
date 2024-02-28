@@ -100,7 +100,7 @@ def main(args):
     all_n_images = [1, 2, 5, 10]
     for n_images in all_n_images:
         write_batch_sript(
-            env_name="mobilesam" if model_type == "vit_t" else "sam",
+            env_name="mobilesam" if model_type[:5] == "vit_t" else "sam",
             partition=args.partition,
             cpu_mem=args.mem,
             cpu_cores=args.cpu_cores,
