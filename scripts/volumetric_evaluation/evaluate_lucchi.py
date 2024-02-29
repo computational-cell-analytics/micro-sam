@@ -63,7 +63,7 @@ def segment_lucchi_from_slices(model_type, checkpoint, embedding_path):
 
         this_seg = segment_mask_in_volume(
             output_seg, predictor, image_embeddings, segmented_slices=np.array(slice_choice),
-            stop_lower=False, stop_upper=False, iou_threshold=0.8, projection="mask", box_extension=0.025
+            stop_lower=False, stop_upper=False, iou_threshold=0.8, projection="points", box_extension=0.025
         )
 
         import napari
