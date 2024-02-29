@@ -79,12 +79,15 @@ def finetune_covid_if(args):
     freeze_parts = args.freeze  # override this to freeze different parts of the model
 
     # HACK: let's convert the model checkpoints to the desired format
-    from pathlib import Path
-    target_checkpoint_path = os.path.join(Path(checkpoint_path).parent, "checkpoint.pt")
-    if not os.path.exists(target_checkpoint_path):
-        export_custom_sam_model(
-            checkpoint_path=checkpoint_path, model_type=model_type, save_path=target_checkpoint_path
-        )
+    if checkpoint_path is not None:
+        from pathlib import Path
+        target_checkpoint_path = os.path.join(Path(checkpoint_path).parent, "checkpoint.pt")
+        if not os.path.exists(target_checkpoint_path):
+            export_custom_sam_model(
+                checkpoint_path=checkpoint_path, model_type=model_type, save_path=target_checkpoint_path
+            )
+    else:
+        target_checkpoint_path = checkpoint_path
 
     # get the trainable segment anything model
     model = sam_training.get_trainable_sam_model(
