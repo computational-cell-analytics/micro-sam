@@ -106,6 +106,16 @@ def finetune_covid_if(args):
         resize_input=True,
         use_conv_transpose=True,
     )
+
+    # let's initialize the decoder block from the previous fine-tuning, if provided
+    if checkpoint_path is not None:
+        decoder_state = torch.load(checkpoint_path, map_location="cpu")["decoder_state"]
+        unetr_state_dict = unetr.state_dict()
+        for k, v in unetr_state_dict.items():
+            if not k.startswith("encoder"):
+                unetr_state_dict[k] = decoder_state[k]
+        unetr.load_state_dict(unetr_state_dict)
+
     unetr.to(device)
 
     # let's get the parameters for SAM and the decoder from UNETR

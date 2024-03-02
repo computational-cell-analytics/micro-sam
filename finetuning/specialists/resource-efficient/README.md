@@ -5,8 +5,7 @@ a. Resource combinations:
     - `medium` (CPU compute partition) (SCC)
     - `gtx1080`: 8GB (SCC)
     - `rtx5000`: 16GB (SCC)
-    - `v100`: 32GB (SCC / Grete)
-    - `A100`: 40GB (Grete)
+    - `v100`: 32GB (SCC)
 
 b. Experiment combinations:
     i. `vit_t` / `vit_b` / both
@@ -59,16 +58,6 @@ Fixed parameters:
         - `n_objects`: 45
     - `vit_b`: (finetune all layers)
         - `n_objects`: 35
-
-4. `A100`:
-    - `vit_t`: (finetune all layers)
-        - `n_objects`: 55
-    - `vit_b`: (finetune all layers)
-        - `n_objects`: 45
-    - `vit_l`: (finetune all layers)
-        - `n_objects`: 35
-    - `vit_h`: (finetune all layers)
-        - `n_objects`: 25
 
 ### CPU Resources:
 

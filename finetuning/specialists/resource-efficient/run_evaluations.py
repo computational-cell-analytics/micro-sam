@@ -1,4 +1,7 @@
 import os
+import re
+import shutil
+import subprocess
 from glob import glob
 from tqdm import tqdm
 from pathlib import Path
@@ -17,13 +20,31 @@ ALL_SCRIPTS = [
 
 
 def process_covid_if(input_path):
-    all_image_paths = sorted(glob(os.path.join(input_path, "*")))[13:]
+    all_image_paths = sorted(glob(os.path.join(input_path, "*.h5")))
 
-    for image_path in tqdm(all_image_paths):
+    # val images
+    for image_path in tqdm(all_image_paths[10:13]):
         image_id = Path(image_path).stem
 
-        image_save_dir = os.path.join(Path(image_path).parent, "slices", "raw")
-        label_save_dir = os.path.join(Path(image_path).parent, "slices", "labels")
+        image_save_dir = os.path.join(Path(image_path).parent, "slices", "val", "raw")
+        label_save_dir = os.path.join(Path(image_path).parent, "slices", "val", "labels")
+
+        os.makedirs(image_save_dir, exist_ok=True)
+        os.makedirs(label_save_dir, exist_ok=True)
+
+        with h5py.File(image_path, "r") as f:
+            raw = f["raw/serum_IgG/s0"][:]
+            labels = f["labels/cells/s0"][:]
+
+            imageio.imwrite(os.path.join(image_save_dir, f"{image_id}.tif"), raw)
+            imageio.imwrite(os.path.join(label_save_dir, f"{image_id}.tif"), labels)
+
+    # test images
+    for image_path in tqdm(all_image_paths[13:]):
+        image_id = Path(image_path).stem
+
+        image_save_dir = os.path.join(Path(image_path).parent, "slices", "test", "raw")
+        label_save_dir = os.path.join(Path(image_path).parent, "slices", "test", "labels")
 
         os.makedirs(image_save_dir, exist_ok=True)
         os.makedirs(label_save_dir, exist_ok=True)
@@ -41,17 +62,17 @@ def write_slurm_scripts(
 ):
     batch_script = f"""#!/bin/bash
 #SBATCH -c 8
-#SBATCH --mem 32G
+#SBATCH --mem 16G
 #SBATCH -t 2-00:00:00
 #SBATCH -p gpu
-#SBATCH -G rtx5000:1
-#SBATCH --job-name={inference_setup}
+#SBATCH -G v100:1
+#SBATCH --job-name={Path(inference_setup).stem}
 
 source ~/.bashrc
 mamba activate {env_name} \n"""
 
     # python script
-    batch_script += f"python {inference_setup}.py -c {checkpoint} -m {model_type} -e {experiment_folder}"
+    batch_script += f"python {inference_setup}.py -c {checkpoint} -m {model_type} -e {experiment_folder} -d covid-if "
 
     _op = out_path[:-3] + f"_{Path(inference_setup).stem}.sh"
 
@@ -62,7 +83,7 @@ mamba activate {env_name} \n"""
     if inference_setup.endswith("iterative_prompting"):
         batch_script += "--box "
 
-        new_path = out_path[:-3] + f"_{inference_setup}_box.sh"
+        new_path = out_path[:-3] + f"_{Path(inference_setup).stem}.sh"
         with open(new_path, "w") as f:
             f.write(batch_script)
 
@@ -80,7 +101,7 @@ def get_batch_script_names(tmp_folder):
     return batch_script
 
 
-def run_slurm_scripts(model_type, checkpoint):
+def run_slurm_scripts(model_type, checkpoint, experiment_folder):
     tmp_folder = "./gpu_jobs"
 
     for current_setup in ALL_SCRIPTS:
@@ -93,6 +114,20 @@ def run_slurm_scripts(model_type, checkpoint):
             out_path=get_batch_script_names(tmp_folder)
         )
 
+    # the logic below automates the process of first running the precomputation of embeddings, and only then inference.
+    job_id = []
+    for i, my_script in enumerate(sorted(glob(tmp_folder + "/*"))):
+        cmd = ["sbatch", my_script]
+
+        if i > 0:
+            cmd.insert(1, f"--dependency=afterany:{job_id[0]}")
+
+        cmd_out = subprocess.run(cmd, capture_output=True, text=True)
+        print(cmd_out.stdout if len(cmd_out.stdout) > 1 else cmd_out.stderr)
+
+        if i == 0:
+            job_id.append(re.findall(r'\d+', cmd_out.stdout)[0])
+
 
 def main(args):
     process_covid_if(
@@ -101,7 +136,20 @@ def main(args):
 
     all_checkpoint_paths = glob("/scratch/users/archit/experiments/**/best.pt", recursive=True)
     for checkpoint_path in all_checkpoint_paths:
-        print(checkpoint_path)
+        try:
+            shutil.rmtree("./gpu_jobs")
+        except FileNotFoundError:
+            pass
+
+        experiment_folder = os.path.join("/", *checkpoint_path.split("/")[:-4])
+
+        run_slurm_scripts(
+            model_type=checkpoint_path.split("/")[-3],
+            checkpoint=checkpoint_path,
+            experiment_folder=experiment_folder
+        )
+
+        breakpoint()
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ from datetime import datetime
 def base_slurm_script(env_name, partition, cpu_mem, cpu_cores, gpu_name=None):
     assert partition in ["grete:shared", "gpu", "medium"]
     if gpu_name is not None:
-        assert gpu_name in ["gtx1080", "rtx5000", "v100", "V100", "A100"]
+        assert gpu_name in ["gtx1080", "rtx5000", "v100", "V100"]
 
     base_script = f"""#!/bin/bash
 #SBATCH -c {cpu_cores}
