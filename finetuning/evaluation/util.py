@@ -15,6 +15,7 @@ ROOT = "/scratch/users/archit/data"
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/new_models"
 
 VANILLA_MODELS = {
+    "vit_t": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/vit_t_mobile_sam.pth",
     "vit_b": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/sam_vit_b_01ec64.pth",
     "vit_l": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/sam_vit_l_0b3195.pth",
     "vit_h": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/sam_vit_h_4b8939.pth"
@@ -42,8 +43,8 @@ DATASETS = [
     "mitoem/rat", "mitoem/human", "platynereis/nuclei",
     #   - out-of-domain
     "mitolab/c_elegans", "mitolab/fly_brain", "mitolab/glycolytic_muscle", "mitolab/hela_cell",
-    "mitolab/lucchi_pp", "mitolab/salivary_gland", "mitolab/tem", "lucchi", "nuc-mm/mouse",
-    "nuc-mm/zebrafish", "uro_cell", "sponge_em", "platynereis/cilia",
+    "mitolab/lucchi_pp", "mitolab/salivary_gland", "mitolab/tem", "lucchi", "nuc_mm/mouse",
+    "nuc_mm/zebrafish", "uro_cell", "sponge_em", "platynereis/cilia",
     # boundaries - EM
     #   - in-domain
     "cremi", "platynereis/cells",
