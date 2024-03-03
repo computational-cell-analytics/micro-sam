@@ -9,7 +9,8 @@ from micro_sam.evaluation import get_predictor
 from micro_sam.evaluation.livecell import _get_livecell_paths
 
 
-ROOT = "/scratch/projects/nim00007/sam/data/"
+# ROOT = "/scratch/projects/nim00007/sam/data/"
+ROOT = "/scratch/users/archit/data"
 
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/new_models"
 
@@ -47,7 +48,9 @@ DATASETS = [
     #   - in-domain
     "cremi", "platynereis/cells",
     #   - out-of-domain
-    "axondeepseg", "snemi", "isbi"
+    "axondeepseg", "snemi", "isbi",
+    # HACK:
+    "covid-if"
 ]
 
 

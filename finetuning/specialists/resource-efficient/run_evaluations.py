@@ -134,7 +134,7 @@ def main(args):
         input_path=args.input_path
     )
 
-    all_checkpoint_paths = glob("/scratch/users/archit/experiments/**/best.pt", recursive=True)
+    all_checkpoint_paths = glob("/scratch/users/archit/experiments/*/vit_*_lm/**/best.pt", recursive=True)
     for checkpoint_path in all_checkpoint_paths:
         try:
             shutil.rmtree("./gpu_jobs")
