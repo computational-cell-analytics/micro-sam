@@ -47,17 +47,10 @@ def axondeepseg_label_trafo(labels):
 
 def _check_dataset_available_for_rois(path, patch_shape):
     """This function checks whether or not all the expected datasets are available, else downloads them
-    We do this for "platynereis - cells", "cremi", "platynereis - nuclei", "mitoem" datasets
-        - as we expect specific RoIs only from them
+    We do this only for "platynereis - cells", "cremi" datasets - as we expect specific RoIs only from them
     """
     datasets.get_cremi_dataset(path=os.path.join(path, "cremi"), patch_shape=patch_shape, download=True)
     datasets.get_platynereis_cell_dataset(
-        path=os.path.join(path, "platynereis"), patch_shape=patch_shape, download=True
-    )
-    datasets.get_mitoem_dataset(
-        path=os.path.join(path, "mitoem"), patch_shape=patch_shape, download=True, splits="train"
-    )
-    datasets.get_platynereis_nuclei_dataset(
         path=os.path.join(path, "platynereis"), patch_shape=patch_shape, download=True
     )
     print("All the datasets are available for RoI splitting")
@@ -87,34 +80,6 @@ def get_concat_boundaries_datasets(input_path, patch_shape):
     platy_cell_val_rois = compute_platy_rois(platy_root, platy_cell_val_samples, ignore_label=0,
                                              file_template=platy_cell_template, label_key=platy_cell_label_key)
 
-    # platynereis nuclei dataset parameters
-    platy_root = os.path.join(input_path, "platynereis")
-    platy_nuclei_template = "nuclei/train_data_nuclei_%02i.h5"
-    platy_nuclei_label_key = "volumes/labels/nucleus_instance_labels"
-
-    platy_nuclei_train_samples = [1, 2, 3, 4, 5, 6, 7, 8]
-    platy_nuclei_train_rois = compute_platy_rois(platy_root, platy_nuclei_train_samples, ignore_label=-1,
-                                                 file_template=platy_nuclei_template, label_key=platy_nuclei_label_key)
-    platy_nuclei_val_samples = [9, 10]
-    platy_nuclei_val_rois = compute_platy_rois(platy_root, platy_nuclei_val_samples, ignore_label=-1,
-                                               file_template=platy_nuclei_template, label_key=platy_nuclei_label_key)
-
-    # mitoem parameters
-    mitoem_train_rois = [np.s_[100:110, :, :], np.s_[100:110, :, :]]
-    mitoem_val_rois = [np.s_[0:5, :, :], np.s_[0:5, :, :]]
-
-    def axondeepseg_dataset(split):
-        # train is oversampled by ~10 times and val by ~15 times
-        n_samples = 500 if split == "train" else 100
-        return datasets.get_axondeepseg_dataset(
-            path=os.path.join(input_path, "axondeepseg"), name=["sem"], patch_shape=patch_shape[1:],
-            label_transform=axondeepseg_label_trafo, sampler=sampler, split=split,
-            raw_transform=identity, download=True, val_fraction=0.1, n_samples=n_samples
-        )
-
-    axondeepseg_train_dataset = axondeepseg_dataset("train")
-    axondeepseg_val_dataset = axondeepseg_dataset("val")
-
     def cremi_dataset(rois, n_samples):
         return datasets.get_cremi_dataset(
             path=os.path.join(input_path, "cremi"), patch_shape=patch_shape, label_transform=standard_label_trafo,
@@ -135,52 +100,20 @@ def get_concat_boundaries_datasets(input_path, patch_shape):
     platy_cell_train_dataset = platy_cell_dataset(platy_cell_train_rois, platy_cell_train_samples)
     platy_cell_val_dataset = platy_cell_dataset(platy_cell_val_rois, platy_cell_val_samples)
 
-    def mitoem_dataset(split, roi_choice):
-        return datasets.get_mitoem_dataset(
-            path=os.path.join(input_path, "mitoem"), splits=split, download=True, patch_shape=patch_shape,
-            rois=roi_choice, label_transform=standard_label_trafo, ndim=2, raw_transform=identity,
-            sampler=MinInstanceSampler(min_num_instances=5)
+    def axondeepseg_dataset(split):
+        # train is oversampled by ~10 times and val by ~15 times
+        n_samples = 500 if split == "train" else 100
+        return datasets.get_axondeepseg_dataset(
+            path=os.path.join(input_path, "axondeepseg"), name=["sem"], patch_shape=patch_shape[1:],
+            label_transform=axondeepseg_label_trafo, sampler=sampler, split=split,
+            raw_transform=identity, download=True, val_fraction=0.1, n_samples=n_samples
         )
 
-    mitoem_train_dataset = mitoem_dataset("train", mitoem_train_rois)
-    mitoem_val_dataset = mitoem_dataset("val", mitoem_val_rois)
+    axondeepseg_train_dataset = axondeepseg_dataset("train")
+    axondeepseg_val_dataset = axondeepseg_dataset("val")
 
-    def platy_nuclei_dataset(roi_choice, sample_ids):
-        return datasets.get_platynereis_nuclei_dataset(
-            path=platy_root, patch_shape=patch_shape, download=True, sampler=sampler, ndim=2,
-            label_transform=ResizeLabelTrafo(patch_shape[1:]), rois=roi_choice,
-            raw_transform=ResizeRawTrafo(patch_shape[1:], do_rescaling=False), sample_ids=sample_ids
-        )
-
-    platy_nuclei_train_dataset = platy_nuclei_dataset(platy_nuclei_train_rois, sample_ids=platy_nuclei_train_samples)
-    platy_nuclei_val_dataset = platy_nuclei_dataset(platy_nuclei_val_rois, sample_ids=platy_nuclei_val_samples)
-
-    def cem_dataset(split):
-        # 10% of the total training set, 1/3 of the total val set
-        n_samples = 1620 if split == "train" else 600
-        return datasets.cem.get_mitolab_dataset(
-            path=os.path.join(input_path, "mitolab"), split=split, val_fraction=0.1, sampler=sampler,
-            raw_transform=ResizeRawTrafo(patch_shape[1:], do_rescaling=False), patch_shape=patch_shape[1:],
-            label_transform=ResizeLabelTrafo(patch_shape[1:]), n_samples=n_samples
-        )
-
-    cem_train_dataset = cem_dataset("train")
-    cem_val_dataset = cem_dataset("val")
-
-    train_datasets = [
-        axondeepseg_train_dataset, cremi_train_dataset, platy_cell_train_dataset,
-        mitoem_train_dataset, platy_nuclei_train_dataset, cem_train_dataset
-    ]
-    val_datasets = [
-        axondeepseg_val_dataset, cremi_val_dataset, platy_cell_val_dataset,
-        mitoem_val_dataset, platy_nuclei_val_dataset, cem_val_dataset
-    ]
-
-    for train_dataset in train_datasets:
-        train_dataset.max_sampling_attempts = 5000
-
-    for val_dataset in val_datasets:
-        val_dataset.max_sampling_attempts = 5000
+    train_datasets = [cremi_train_dataset, platy_cell_train_dataset, axondeepseg_train_dataset]
+    val_datasets = [cremi_val_dataset, platy_cell_val_dataset, axondeepseg_val_dataset]
 
     generalist_em_train_dataset = ConcatDataset(*train_datasets)
     generalist_em_val_dataset = ConcatDataset(*val_datasets)
