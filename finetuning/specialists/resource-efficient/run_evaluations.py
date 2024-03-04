@@ -83,7 +83,7 @@ mamba activate {env_name} \n"""
     if inference_setup.endswith("iterative_prompting"):
         batch_script += "--box "
 
-        new_path = out_path[:-3] + f"_{Path(inference_setup).stem}.sh"
+        new_path = out_path[:-3] + f"_{Path(inference_setup).stem}_box.sh"
         with open(new_path, "w") as f:
             f.write(batch_script)
 
@@ -130,11 +130,35 @@ def run_slurm_scripts(model_type, checkpoint, experiment_folder):
 
 
 def main(args):
+    # preprocess the data
     process_covid_if(
         input_path=args.input_path
     )
 
-    all_checkpoint_paths = glob("/scratch/users/archit/experiments/*/vit_*_lm/**/best.pt", recursive=True)
+    # results on vanilla models
+    run_slurm_scripts(
+        model_type="vit_b", experiment_folder="/scratch/users/archit/experiments/vanilla/vit_b"
+    )
+    run_slurm_scripts(
+        model_type="vit_t", experiment_folder="/scratch/users/archit/experiments/vanilla/vit_t"
+    )
+
+    # results on generalist models
+    run_slurm_scripts(
+        model_type="vit_b",
+        checkpoint="/scratch/users/archit/micro-sam/vit_b/livecell/best.pt",
+        experiment_folder="/scratch/users/archit/experiments/generalist/vit_b"
+    )
+    run_slurm_scripts(
+        model_type="vit_t",
+        checkpoint="/scratch/users/archit/micro-sam/vit_t/livecell/best.pt",
+        experiment_folder="/scratch/users/archit/experiments/generalist/vit_t"
+    )
+
+    breakpoint()
+
+    # results on resource-efficient finetuned checkpoints
+    all_checkpoint_paths = glob("/scratch/users/archit/experiments/vit_*_lm/**/best.pt", recursive=True)
     for checkpoint_path in all_checkpoint_paths:
         try:
             shutil.rmtree("./gpu_jobs")

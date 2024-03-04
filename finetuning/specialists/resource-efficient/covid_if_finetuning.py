@@ -109,7 +109,14 @@ def finetune_covid_if(args):
 
     # let's initialize the decoder block from the previous fine-tuning, if provided
     if checkpoint_path is not None:
-        decoder_state = torch.load(checkpoint_path, map_location="cpu")["decoder_state"]
+        import pickle
+        from micro_sam.util import _CustomUnpickler
+        custom_unpickle = pickle
+        custom_unpickle.Unpickler = _CustomUnpickler
+
+        decoder_state = torch.load(
+            checkpoint_path, map_location="cpu", pickle_module=custom_unpickle
+        )["decoder_state"]
         unetr_state_dict = unetr.state_dict()
         for k, v in unetr_state_dict.items():
             if not k.startswith("encoder"):
