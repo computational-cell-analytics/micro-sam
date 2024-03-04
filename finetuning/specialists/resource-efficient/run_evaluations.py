@@ -101,10 +101,11 @@ def get_batch_script_names(tmp_folder):
     return batch_script
 
 
-def run_slurm_scripts(model_type, checkpoint, experiment_folder):
+def run_slurm_scripts(model_type, checkpoint, experiment_folder, scripts=ALL_SCRIPTS):
     tmp_folder = "./gpu_jobs"
+    shutil.rmtree(tmp_folder, ignore_errors=True)
 
-    for current_setup in ALL_SCRIPTS:
+    for current_setup in scripts:
         write_slurm_scripts(
             inference_setup=current_setup,
             env_name="mobilesam" if model_type == "vit_t" else "sam",
@@ -131,27 +132,35 @@ def run_slurm_scripts(model_type, checkpoint, experiment_folder):
 
 def main(args):
     # preprocess the data
-    process_covid_if(
-        input_path=args.input_path
-    )
+    process_covid_if(input_path=args.input_path)
 
     # results on vanilla models
     run_slurm_scripts(
-        model_type="vit_b", experiment_folder="/scratch/users/archit/experiments/vanilla/vit_b"
+        model_type="vit_b",
+        checkpoint="/scratch/users/archit/segment-anything/sam_vit_b_01ec64.pth",
+        experiment_folder="/scratch/users/archit/experiments/vanilla/vit_b",
+        scripts=ALL_SCRIPTS[:-1]
     )
+
     run_slurm_scripts(
-        model_type="vit_t", experiment_folder="/scratch/users/archit/experiments/vanilla/vit_t"
+        model_type="vit_t",
+        checkpoint="/scratch/users/archit/segment-anything/vit_t_mobile_sam.pth",
+        experiment_folder="/scratch/users/archit/experiments/vanilla/vit_t",
+        scripts=ALL_SCRIPTS[:-1]
     )
+
+    breakpoint()
 
     # results on generalist models
     run_slurm_scripts(
         model_type="vit_b",
-        checkpoint="/scratch/users/archit/micro-sam/vit_b/livecell/best.pt",
+        checkpoint="/scratch/users/archit/micro-sam/vit_b/lm_generalist/best.pt",
         experiment_folder="/scratch/users/archit/experiments/generalist/vit_b"
     )
+
     run_slurm_scripts(
         model_type="vit_t",
-        checkpoint="/scratch/users/archit/micro-sam/vit_t/livecell/best.pt",
+        checkpoint="/scratch/users/archit/micro-sam/vit_t/lm_generalist/best.pt",
         experiment_folder="/scratch/users/archit/experiments/generalist/vit_t"
     )
 
