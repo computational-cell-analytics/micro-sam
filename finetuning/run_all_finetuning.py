@@ -12,7 +12,7 @@ N_OBJECTS = {
 }
 
 
-def write_batch_script(out_path, _name, env_name, model_type):
+def write_batch_script(out_path, _name, env_name, model_type, save_root):
     "Writing scripts with different micro-sam finetunings."
     batch_script = f"""#!/bin/bash
 #SBATCH -t 14-00:00:00
@@ -33,7 +33,7 @@ source activate {env_name} \n"""
     python_script = f"python {_name}.py "
 
     # save root folder
-    python_script += "-s /scratch/usr/nimanwai/micro-sam/ "
+    python_script += f"-s {save_root} "
 
     # name of the model configuration
     python_script += f"-m {model_type} "
@@ -65,40 +65,59 @@ def get_batch_script_names(tmp_folder):
     return batch_script
 
 
-def submit_slurm():
+def submit_slurm(args):
     "Submit python script that needs gpus with given inputs on a slurm node."
     tmp_folder = "./gpu_jobs"
 
-    script_combinations = [
-        "livecell_finetuning",
-        "specialists/training/light_microscopy/deepbacs_finetuning",
-        "specialists/training/light_microscopy/tissuenet_finetuning",
-        "specialists/training/light_microscopy/plantseg_root_finetuning",
-        "specialists/training/light_microscopy/neurips_cellseg_finetuning",
-        "generalists/training/light_microscopy/train_lm_generalist",
-        "generalists/training/electron_microscopy/mito_nuc/train_mito_nuc_em_generalist",
-        "generalists/training/electron_microscopy/boundaries/train_boundaries_em_generalist"
-    ]
+    script_combinations = {
+        "livecell_specialist": "livecell_finetuning",
+        "deepbacs_specialist": "specialists/training/light_microscopy/deepbacs_finetuning",
+        "tissuenet_specialist": "specialists/training/light_microscopy/tissuenet_finetuning",
+        "plantseg_root_specialist": "specialists/training/light_microscopy/plantseg_root_finetuning",
+        "neurips_cellseg_specialist": "specialists/training/light_microscopy/neurips_cellseg_finetuning",
+        "lm_generalist": "generalists/training/light_microscopy/train_lm_generalist",
+        "em_mito_nuc_generalist": "generalists/training/electron_microscopy/mito_nuc/train_mito_nuc_em_generalist",
+        "em_boundaries_generalist": "generalists/training/electron_microscopy/boundaries/train_boundaries_em_generalist"
+    }
+    if args.experiment_name is None:
+        experiments = list(script_combinations.keys())
+    else:
+        assert args.experiment_name in list(script_combinations.keys()), \
+            f"Choose from {list(script_combinations.keys())}"
+        experiments = [args.experiment_name]
 
-    for script_name in script_combinations:
+    if args.model_type is None:
+        models = list(N_OBJECTS.keys())
+    else:
+        models = [args.model_type]
+
+    for experiment in experiments:
+        script_name = script_combinations[experiment]
         print(f"Running for {script_name}")
-        for model_type in N_OBJECTS.keys():
+        for model_type in models:
             write_batch_script(
                 out_path=get_batch_script_names(tmp_folder),
                 _name=script_name,
                 env_name="mobilesam" if model_type == "vit_t" else "sam",
-                model_type=model_type
+                model_type=model_type,
+                save_root=args.save_root
             )
 
 
-def main():
+def main(args):
     try:
         shutil.rmtree("./gpu_jobs")
     except FileNotFoundError:
         pass
 
-    submit_slurm()
+    submit_slurm(args)
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-e", "--experiment_name", type=str, default=None)
+    parser.add_argument("-s", "--save_root", type=str, default="/scratch/usr/nimanwai/micro-sam/")
+    parser.add_argument("-m", "--model_type", type=str, default=None)
+    args = parser.parse_args()
+    main(args)
