@@ -6,10 +6,12 @@ from glob import glob
 import matplotlib.pyplot as plt
 
 
-EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/new_models"
+EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/new_models/v2"
+
+MODELS = ["vit_t", "vit_b", "vit_l", "vit_h"]
 
 
-def plot_evaluation_for_datasets(dataset_name, modality, all_models=["vit_b", "vit_h"]):
+def plot_evaluation_for_datasets(dataset_name, modality, all_models):
     experiment_dirs = glob(os.path.join(EXPERIMENT_ROOT, "*", modality, dataset_name))
 
     # adding a fixed color palette to each experiments, for consistency in plotting the legends
@@ -93,7 +95,7 @@ def plot_evaluation_for_datasets(dataset_name, modality, all_models=["vit_b", "v
     plt.subplots_adjust(top=0.90, right=0.95)
     fig.suptitle(dataset_name, fontsize=20)
 
-    save_path = f"figures/{dataset_name}.png"
+    save_path = f"figures/v2/{dataset_name}.png"
 
     try:
         plt.savefig(save_path)
@@ -109,20 +111,20 @@ def for_all_em():
     all_datasets = [
         "mitoem/rat", "mitoem/human", "platynereis/nuclei", "mitolab/c_elegans", "mitolab/fly_brain",
         "mitolab/glycolytic_muscle", "mitolab/hela_cell", "mitolab/lucchi_pp", "mitolab/salivary_gland",
-        "mitolab/tem", "lucchi", "nuc-mm/mouse", "nuc-mm/zebrafish", "uro_cell", "sponge_em",
+        "mitolab/tem", "lucchi", "nuc_mm/mouse", "nuc_mm/zebrafish", "uro_cell", "sponge_em",
         "platynereis/cilia", "cremi", "platynereis/cells", "axondeepseg", "snemi", "isbi"
     ]
     for dataset_name in all_datasets:
-        plot_evaluation_for_datasets(dataset_name, "em")
+        plot_evaluation_for_datasets(dataset_name, "em", all_models=MODELS)
 
 
 def for_all_lm():
     all_datasets = [
-        "livecell", "tissuenet", "deepbacs", "plantseg_root", "covid_if", "plantseg_ovules",
-        "hpa", "ctc", "neurips-cell-seg", "lizard", "mouse-embryo"
+        "livecell", "tissuenet", "deepbacs", "plantseg/root", "covid_if", "plantseg/ovules",
+        "hpa", "neurips-cell-seg", "lizard", "mouse-embryo"
     ]
     for dataset_name in all_datasets:
-        plot_evaluation_for_datasets(dataset_name, "lm")
+        plot_evaluation_for_datasets(dataset_name, "lm", all_models=MODELS)
 
 
 def main():
