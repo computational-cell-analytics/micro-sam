@@ -48,7 +48,6 @@ def segment_mask_in_volume(
     Returns:
         Array with the volumetric segmentation
     """
-    kwargs = {}
     if isinstance(projection, str):
         if projection == "mask":
             use_box, use_mask, use_points = True, True, False
@@ -74,7 +73,6 @@ def segment_mask_in_volume(
         ]
         return np.mean(iou_list)
 
-
     def segment_range(z_start, z_stop, increment, stopping_criterion, threshold=None, verbose=False):
         z = z_start + increment
         while True:
@@ -95,7 +93,7 @@ def segment_mask_in_volume(
                     criterion = iou
 
                 elif criterion_choice == 2:
-                    # 2. combining model's iou score + iou of current slice w.r.t. first segmented slice + iou of current slice vs previous slice
+                    # 2. combining SAM iou + iou: curr. slice & first segmented slice + iou: curr. slice vs prev. slice
                     iou = util.compute_iou(seg_prev, seg_z)
                     ff_iou = util.compute_iou(segmentation[z_start], seg_z)
                     criterion = 0.5 * iou + 0.3 * score + 0.2 * ff_iou

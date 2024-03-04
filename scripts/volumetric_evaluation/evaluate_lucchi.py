@@ -118,7 +118,7 @@ def main(args):
         results.append(pd.DataFrame.from_dict([this_result]))
 
     results = pd.concat(results, ignore_index=True)
-
+    results.to_csv("./results.csv")
 
 
 if __name__ == "__main__":
