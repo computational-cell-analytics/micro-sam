@@ -132,50 +132,46 @@ def run_slurm_scripts(model_type, checkpoint, experiment_folder, scripts=ALL_SCR
 
 def main(args):
     # preprocess the data
-    process_covid_if(input_path=args.input_path)
+    # process_covid_if(input_path=args.input_path)
 
     # results on vanilla models
-    run_slurm_scripts(
-        model_type="vit_b",
-        checkpoint="/scratch/users/archit/segment-anything/sam_vit_b_01ec64.pth",
-        experiment_folder="/scratch/users/archit/experiments/vanilla/vit_b",
-        scripts=ALL_SCRIPTS[:-1]
-    )
+    # run_slurm_scripts(
+    #     model_type="vit_b",
+    #     checkpoint="/scratch/users/archit/segment-anything/sam_vit_b_01ec64.pth",
+    #     experiment_folder="/scratch/users/archit/experiments/vanilla/vit_b",
+    #     scripts=ALL_SCRIPTS[:-1]
+    # )
 
-    run_slurm_scripts(
-        model_type="vit_t",
-        checkpoint="/scratch/users/archit/segment-anything/vit_t_mobile_sam.pth",
-        experiment_folder="/scratch/users/archit/experiments/vanilla/vit_t",
-        scripts=ALL_SCRIPTS[:-1]
-    )
-
-    breakpoint()
+    # run_slurm_scripts(
+    #     model_type="vit_t",
+    #     checkpoint="/scratch/users/archit/segment-anything/vit_t_mobile_sam.pth",
+    #     experiment_folder="/scratch/users/archit/experiments/vanilla/vit_t",
+    #     scripts=ALL_SCRIPTS[:-1]
+    # )
 
     # results on generalist models
-    run_slurm_scripts(
-        model_type="vit_b",
-        checkpoint="/scratch/users/archit/micro-sam/vit_b/lm_generalist/best.pt",
-        experiment_folder="/scratch/users/archit/experiments/generalist/vit_b"
-    )
+    # run_slurm_scripts(
+    #     model_type="vit_b",
+    #     checkpoint="/scratch/users/archit/micro-sam/vit_b/lm_generalist/best.pt",
+    #     experiment_folder="/scratch/users/archit/experiments/generalist/vit_b"
+    # )
 
-    run_slurm_scripts(
-        model_type="vit_t",
-        checkpoint="/scratch/users/archit/micro-sam/vit_t/lm_generalist/best.pt",
-        experiment_folder="/scratch/users/archit/experiments/generalist/vit_t"
-    )
-
-    breakpoint()
+    # run_slurm_scripts(
+    #     model_type="vit_t",
+    #     checkpoint="/scratch/users/archit/micro-sam/vit_t/lm_generalist/best.pt",
+    #     experiment_folder="/scratch/users/archit/experiments/generalist/vit_t"
+    # )
 
     # results on resource-efficient finetuned checkpoints
-    all_checkpoint_paths = glob("/scratch/users/archit/experiments/vit_*_lm/**/best.pt", recursive=True)
+    all_checkpoint_paths = glob("/scratch/users/archit/experiments/*/vit_*_lm/**/best.pt", recursive=True)
+
+    # let's get all gpu jobs and run evaluation for them
+    all_checkpoint_paths = [
+        ckpt for ckpt in all_checkpoint_paths if ckpt.find("cpu") != -1
+    ]
+
     for checkpoint_path in all_checkpoint_paths:
-        try:
-            shutil.rmtree("./gpu_jobs")
-        except FileNotFoundError:
-            pass
-
         experiment_folder = os.path.join("/", *checkpoint_path.split("/")[:-4])
-
         run_slurm_scripts(
             model_type=checkpoint_path.split("/")[-3],
             checkpoint=checkpoint_path,
