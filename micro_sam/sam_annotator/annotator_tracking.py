@@ -148,10 +148,10 @@ class AnnotatorTracking(_AnnotatorBase):
         super().__init__(
             viewer=viewer,
             ndim=3,
-            segment_widget=widgets.segment_frame_widget,
-            segment_nd_widget=widgets.track_object_widget,
-            commit_widget=widgets.commit_tracking_widget,
-            clear_widget=widgets.clear_tracking_widget,
+            segment_widget=widgets.segment_frame,
+            segment_nd_widget=widgets.track_object,
+            commit_widget=widgets.commit_track,
+            clear_widget=widgets.clear_track,
             # segmentation_result=segmentation_result,
         )
 
@@ -164,7 +164,7 @@ class AnnotatorTracking(_AnnotatorBase):
             self._point_prompt_layer, self._box_prompt_layer,
             states=self._track_state_labels, track_ids=list(state.lineage.keys()),
         )
-        self._save_lineage_widget = widgets.save_lineage_widget()
+        self._save_lineage_widget = widgets.save_lineage()
         # Add the two widgets to the docked widgets.
         self.extend([self._tracking_widget, self._save_lineage_widget])
 
