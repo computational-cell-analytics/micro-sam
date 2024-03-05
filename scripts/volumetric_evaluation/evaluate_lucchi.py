@@ -1,7 +1,10 @@
 import os
 import h5py
+import itertools
+import pandas as pd
 import numpy as np
 from math import floor
+from typing import Union
 
 from skimage.measure import label
 
@@ -10,8 +13,7 @@ from micro_sam.inference import batched_inference
 from micro_sam.prompt_generators import PointAndBoxPromptGenerator
 from micro_sam.multi_dimensional_segmentation import segment_mask_in_volume
 
-
-ROOT = "/home/anwai/data/lucchi"
+from elf.evaluation import mean_segmentation_accuracy
 
 
 def get_raw_and_label_volumes(volume_path):
@@ -22,11 +24,19 @@ def get_raw_and_label_volumes(volume_path):
     return raw, label
 
 
-def segment_lucchi_from_slices(model_type, checkpoint, embedding_path):
+def segment_lucchi_from_slices(
+    input_path: str,
+    model_type: str,
+    checkpoint: str,
+    embedding_path: str,
+    iou_threshold: float = 0.8,
+    projection: Union[str, dict] = "mask",
+    box_extension: Union[float, int] = 0.025
+):
     _get_model = util.get_sam_model if checkpoint is None else util.get_custom_sam_model
     predictor = _get_model(model_type=model_type, checkpoint_path=checkpoint)
 
-    test_volume_path = os.path.join(ROOT, "lucchi_test.h5")
+    test_volume_path = os.path.join(input_path, "lucchi_test.h5")
     volume, labels = get_raw_and_label_volumes(test_volume_path)
 
     # precompute embeddings
@@ -36,6 +46,7 @@ def segment_lucchi_from_slices(model_type, checkpoint, embedding_path):
     instance_labels = label(labels)
 
     label_ids = np.unique(instance_labels)[1:]
+    final_segmentation = np.zeros_like(instance_labels)
     for label_id in label_ids:
         # the binary volume segmentation
         this_seg = np.zeros_like(instance_labels)
@@ -62,20 +73,52 @@ def segment_lucchi_from_slices(model_type, checkpoint, embedding_path):
         output_seg[slice_choice][output_slice == 1] = 1
 
         this_seg = segment_mask_in_volume(
-            output_seg, predictor, image_embeddings, segmented_slices=np.array(slice_choice),
-            stop_lower=False, stop_upper=False, iou_threshold=0.8, projection="points", box_extension=0.025
+            output_seg, predictor, image_embeddings, segmented_slices=np.array(slice_choice), stop_lower=False,
+            stop_upper=False, iou_threshold=iou_threshold, projection=projection, box_extension=box_extension
         )
 
-        import napari
-        v = napari.Viewer()
-        v.add_image(volume)
-        v.add_labels(this_seg)
-        napari.run()
+        final_segmentation[this_seg == 1] = label_id
+
+    msa = mean_segmentation_accuracy(final_segmentation, instance_labels)
+    return msa
+
 
 def main(args):
-    segment_lucchi_from_slices(
-        model_type=args.model_type, checkpoint=args.checkpoint, embedding_path=args.embedding_path
+    iou_thresholds = np.arange(0.5, 1, 0.1)
+    all_projection_methods = ["mask", "points", "bounding_box"]
+    all_extension_factors = np.arange(0, 0.5, 0.025)
+
+    parameter_combinations = list(
+        itertools.product(
+            [round(iou_threshold, 1) for iou_threshold in iou_thresholds],
+            all_projection_methods,
+            [round(box_extension, 3) for box_extension in all_extension_factors]
+        )
     )
+
+    results = []
+    for parameters in parameter_combinations:
+        iou_threshold, projection, box_extension = parameters
+
+        msa = segment_lucchi_from_slices(
+            input_path=args.input_path,
+            model_type=args.model_type,
+            checkpoint=args.checkpoint,
+            embedding_path=args.embedding_path,
+            iou_threshold=iou_threshold,
+            projection=projection,
+            box_extension=box_extension
+        )
+        this_result = {
+            "iou_threshold": iou_threshold,
+            "projection": projection,
+            "box_extension": box_extension,
+            "msa": msa
+        }
+        results.append(pd.DataFrame.from_dict([this_result]))
+
+    results = pd.concat(results, ignore_index=True)
+    results.to_csv("./results.csv")
 
 
 if __name__ == "__main__":
@@ -84,6 +127,7 @@ if __name__ == "__main__":
 
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument("-i", "--input_path", type=str, default="/home/anwai/data/lucchi", help="Path to volume")
     parser.add_argument("-m", "--model_type", type=str, default="vit_b", help="Name of the image encoder")
     parser.add_argument("-c", "--checkpoint", type=str, default=None, help="The custom checkpoint path.")
     parser.add_argument("-e", "--embedding_path", type=str, default=None, help="Path to save embeddings")
