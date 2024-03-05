@@ -216,10 +216,8 @@ def settings_widget(
 #
 
 
-# TODO support extra mode for one point per object
-# See https://github.com/computational-cell-analytics/micro-sam/issues/333
 @magic_factory(call_button="Segment Object [S]")
-def segment(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) -> None:
+def segment(viewer: "napari.viewer.Viewer", box_extension: float = 0.05, batched: bool = False) -> None:
     shape = viewer.layers["current_object"].data.shape
 
     # get the current box and point prompts
@@ -231,11 +229,12 @@ def segment(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) -> None:
     if image_embeddings["original_size"] is None:  # tiled prediction
         seg = vutil.prompt_segmentation(
             predictor, points, labels, boxes, masks, shape, image_embeddings=image_embeddings,
-            multiple_box_prompts=True, box_extension=box_extension,
+            multiple_box_prompts=True, box_extension=box_extension, multiple_point_prompts=batched,
         )
-    else:  # normal prediction and we have set the precomputed embeddings already
+    else:  # normal prediction
         seg = vutil.prompt_segmentation(
             predictor, points, labels, boxes, masks, shape, multiple_box_prompts=True, box_extension=box_extension,
+            multiple_point_prompts=batched,
         )
 
     # no prompts were given or prompts were invalid, skip segmentation

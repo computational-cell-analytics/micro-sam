@@ -34,7 +34,7 @@ except ImportError:
 
 try:
     import xxhash
-    HAS_XXH128 = hasattr(xxhash, 'xxh128')
+    HAS_XXH128 = hasattr(xxhash, "xxh128")
 except ImportError:
     HAS_XXH128 = False
 
@@ -509,7 +509,7 @@ def _precompute_2d(input_, predictor, save_path, tile_shape, halo):
     if "input_size" in f.attrs:  # the embeddings have already been precomputed
         features = f["features"][:] if tile_shape is None else f["features"]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
-        set_embeddings = True
+        set_embeddings = not use_tiled_prediction
 
     elif use_tiled_prediction:  # the embeddings have not been computed yet and we use tiled prediction
         features = _precompute_tiled_2d(predictor, input_, tile_shape, halo, f)
@@ -707,7 +707,7 @@ def set_precomputed(
     device = predictor.device
     features = image_embeddings["features"]
 
-    assert features.ndim in (4, 5)
+    assert features.ndim in (4, 5), f"{features.ndim}"
     if features.ndim == 5 and i is None:
         raise ValueError("The data is 3D so an index i is needed.")
     elif features.ndim == 4 and i is not None:

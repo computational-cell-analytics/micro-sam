@@ -94,7 +94,7 @@ def annotator_3d(
     state = AnnotatorState()
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path, predictor=predictor,
-        halo=halo, tile_shape=tile_shape
+        halo=halo, tile_shape=tile_shape, ndim=3,
     )
     state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
 
