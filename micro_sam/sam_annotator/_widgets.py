@@ -144,7 +144,7 @@ def embedding(
     model: Literal[tuple(util.models().urls.keys())] = util._DEFAULT_MODEL,
     device: Literal[tuple(["auto"] + util._available_devices())] = "auto",
     save_path: Optional[Path] = None,  # where embeddings for this image are cached (optional)
-    optional_custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
+    custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
 ) -> util.ImageEmbeddings:
     """Widget to compute the embeddings for a napari image layer."""
     state = AnnotatorState()
@@ -158,11 +158,12 @@ def embedding(
         ndim = image.data.ndim
         state.image_shape = image.data.shape
 
-    @thread_worker(connect={'started': pbar.show, 'finished': pbar.hide})
-    def _compute_image_embedding(state, image_data, save_path, ndim=None,
-                                 device="auto", model=util._DEFAULT_MODEL,
-                                 optional_custom_weights=None,
-                                 ):
+    @thread_worker(connect={"started": pbar.show, "finished": pbar.hide})
+    def _compute_image_embedding(
+        state, image_data, save_path, ndim=None,
+        device="auto", model=util._DEFAULT_MODEL,
+        custom_weights=None,
+    ):
         # Make sure save directory exists and is an empty directory
         if save_path is not None:
             os.makedirs(save_path, exist_ok=True)
@@ -181,13 +182,13 @@ def embedding(
 
         state.initialize_predictor(
             image_data, model_type=model, save_path=save_path, ndim=ndim, device=device,
-            checkpoint_path=optional_custom_weights,
+            checkpoint_path=custom_weights,
         )
         return state  # returns napari._qt.qthreading.FunctionWorker
 
     return _compute_image_embedding(
         state, image.data, save_path, ndim=ndim, device=device, model=model,
-        optional_custom_weights=optional_custom_weights
+        custom_weights=custom_weights
     )
 
 
