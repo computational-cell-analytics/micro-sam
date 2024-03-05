@@ -71,6 +71,7 @@ def annotator_2d(
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path, predictor=predictor,
         halo=halo, tile_shape=tile_shape, precompute_amg_state=precompute_amg_state,
+        ndim=2,
     )
 
     if viewer is None:
