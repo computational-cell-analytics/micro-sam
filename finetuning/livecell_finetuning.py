@@ -62,6 +62,10 @@ def finetune_livecell(args):
     )
     model.to(device)
 
+    print()
+    print(type(model.sam.mask_decoder))
+    print()
+
     # let's get the UNETR model for automatic instance segmentation pipeline
     unetr = UNETR(
         backbone="sam",

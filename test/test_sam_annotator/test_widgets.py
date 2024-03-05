@@ -2,11 +2,11 @@ import json
 import os
 import platform
 
-from mobile_sam.predictor import SamPredictor as MobileSamPredictor
-from segment_anything.predictor import SamPredictor
 import pytest
 import torch
 import zarr
+
+from segment_anything.predictor import SamPredictor
 
 from micro_sam.sam_annotator._state import AnnotatorState
 from micro_sam.sam_annotator._widgets import embedding_widget
@@ -28,7 +28,7 @@ def test_embedding_widget(make_napari_viewer, tmp_path):
     worker = my_widget(image=layer, model="vit_t", device="cpu", save_path=tmp_path)
     worker.await_workers()  # blocks until thread worker is finished the embedding
     # Check in-memory state - predictor
-    assert isinstance(AnnotatorState().predictor, (SamPredictor, MobileSamPredictor))
+    assert isinstance(AnnotatorState().predictor, SamPredictor)
     # Check in-memory state - image embeddings
     assert AnnotatorState().image_embeddings is not None
     assert 'features' in AnnotatorState().image_embeddings.keys()

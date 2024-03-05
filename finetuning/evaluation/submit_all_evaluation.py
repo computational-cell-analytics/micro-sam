@@ -25,8 +25,7 @@ def write_batch_script(
 #SBATCH --constraint=80gb
 #SBATCH --job-name={inference_setup}
 
-source ~/.bashrc
-mamba activate {env_name} \n"""
+source activate {env_name} \n"""
 
     if delay is not None:
         batch_script += f"sleep {delay} \n"
@@ -124,7 +123,7 @@ def submit_slurm(args):
     region = args.roi  # use the organelles model or boundaries model
     make_delay = "10s"  # wait for precomputing the embeddings and later run inference scripts
 
-    if args.checkpoint_path is None and args.experiment_path is None:
+    if args.checkpoint_path is None and args.experiment_folder is None:
         checkpoint = get_checkpoint_path(experiment_set, dataset_name, model_type, region)
 
         modality = region if region == "lm" else "em"
@@ -133,7 +132,7 @@ def submit_slurm(args):
         experiment_folder += f"{experiment_set}/{modality}/{dataset_name}/{model_type}/"
     else:
         checkpoint = args.checkpoint_path
-        experiment_folder = args.experiment_path
+        experiment_folder = args.experiment_folder
 
     # now let's run the experiments
     if args.specific_experiment is None:
@@ -145,15 +144,9 @@ def submit_slurm(args):
         assert args.specific_experiment in ALL_SCRIPTS
         all_setups = [args.specific_experiment]
 
-    # env name
-    if model_type == "vit_t":
-        env_name = "mobilesam"
-    else:
-        env_name = "sam"
-
     for current_setup in all_setups:
         write_batch_script(
-            env_name=env_name,
+            env_name=args.env,
             out_path=get_batch_script_names(tmp_folder),
             inference_setup=current_setup,
             checkpoint=checkpoint,
@@ -161,7 +154,7 @@ def submit_slurm(args):
             experiment_folder=experiment_folder,
             dataset_name=dataset_name,
             delay=None if current_setup == "precompute_embeddings" else make_delay
-            )
+        )
 
     # the logic below automates the process of first running the precomputation of embeddings, and only then inference.
     job_id = []
@@ -191,6 +184,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     # the parameters to use the default models
+    parser.add_argument("--env", type=str, default="sam")
     parser.add_argument("-d", "--dataset_name", type=str, required=True)
     parser.add_argument("-m", "--model_type", type=str, required=True)
     parser.add_argument("-e", "--experiment_set", type=str, required=True)
@@ -199,7 +193,7 @@ if __name__ == "__main__":
 
     # overwrite the checkpoint path and experiment root to use this flexibly
     parser.add_argument("--checkpoint_path", type=str, default=None)
-    parser.add_argument("--experiment_path", type=str, default=None)
+    parser.add_argument("--experiment_folder", type=str, default=None)
 
     # ask for a specific experiment
     parser.add_argument("-s", "--specific_experiment", type=str, default=None)

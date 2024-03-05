@@ -17,4 +17,4 @@ dependencies:
     - tqdm
     - timm
     - pip:
-        - git+https://github.com/ChaoningZhang/MobileSAM.git
+        - git+https://github.com/SysCV/sam-hq.git
