@@ -12,7 +12,7 @@ from segment_anything import SamPredictor
 
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
-from ._widgets import segment_slice_widget, segment_object_widget, amg_widget_3d
+from ._widgets import segment_slice, segment_object, amg_3d
 from .util import _initialize_parser
 from .. import util
 
@@ -43,9 +43,9 @@ class Annotator3d(_AnnotatorBase):
         super().__init__(
             viewer=viewer,
             ndim=3,
-            segment_widget=segment_slice_widget,
-            segment_nd_widget=segment_object_widget,
-            autosegment_widget=amg_widget_3d,
+            segment_widget=segment_slice,
+            segment_nd_widget=segment_object,
+            autosegment_widget=amg_3d,
             segmentation_result=segmentation_result,
         )
 
