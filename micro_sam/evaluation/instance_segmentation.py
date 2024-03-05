@@ -277,7 +277,14 @@ def run_instance_segmentation_inference(
         masks = segmenter.generate(**generate_kwargs)
 
         if len(masks) == 0:  # the instance segmentation can have no masks, hence we just save empty labels
-            instances = np.zeros(image.shape[-2:], dtype="uint32")
+            if isinstance(segmenter, InstanceSegmentationWithDecoder):
+                this_shape = segmenter._foreground.shape
+            elif isinstance(segmenter, AMGBase):
+                this_shape = segmenter._original_size
+            else:
+                this_shape = image.shape[-2:]
+
+            instances = np.zeros(this_shape, dtype="uint32")
         else:
             instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=min_object_size)
 
