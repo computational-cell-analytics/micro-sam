@@ -29,7 +29,7 @@ def segment_mask_in_volume(
     projection: Union[str, dict],
     progress_bar: Optional[Any] = None,
     box_extension: float = 0.0,
-    verbose: bool = True
+    verbose: bool = False
 ) -> np.ndarray:
     """Segment an object mask in in volumetric data.
 
