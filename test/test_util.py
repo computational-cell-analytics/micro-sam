@@ -69,6 +69,10 @@ class TestUtil(unittest.TestCase):
             self.assertIn("features", f)
             self.assertEqual(len(f["features"]), 4)
 
+        # set the precomputed embeddings again, to make sure this does not fail due to
+        # a wrong code-path
+        precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=tile_shape, halo=halo)
+
     def test_segmentation_to_one_hot(self):
         from micro_sam.util import segmentation_to_one_hot
 
