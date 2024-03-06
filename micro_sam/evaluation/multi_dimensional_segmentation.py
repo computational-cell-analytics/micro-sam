@@ -66,38 +66,58 @@ def segment_slices_from_ground_truth(
     verbose: bool = True,
     return_segmentation: bool = False
 ) -> Union[float, Tuple[np.ndarray, float]]:
+    """Segment all objects in a volume by prompt-based segmentation in one slice per object.
+
+    This function first segments each object in the respective specified slice using interactive
+    (prompt-based) segmentation functionality. Then it segments the particular object in the
+    remaining slices in the volume.
+
+    Args:
+        volume: The input volume.
+        ground_truth: The label volume with instance segmentations.
+        model_type: Choice of segment anything model.
+        checkpoint_path: Path to the model checkpoint.
+        embedding_path: Path to cache the computed embeddings.
+        iou_threshold: The criterion to decide whether to link the objects in the consecutive slice's segmentation.
+        projection: The projection (prompting) method to generate prompts for consecutive slices.
+        box_extension: Extension factor for increasing the box size after projection.
+        device: The selected device for computation.
+        interactive_seg_mode: Method for guiding prompt-based instance segmentation.
+        verbose: Whether to get the trace for projected segmentations.
+        return_segmentation: Whether to return the segmented volume.
+    """
     assert volume.ndim == 3
 
     _get_model = util.get_sam_model if checkpoint_path is None else util.get_custom_sam_model
     predictor = _get_model(model_type=model_type, checkpoint_path=checkpoint_path, device=device)
 
-    # compute the image embeddings
+    # Compute the image embeddings
     embeddings = util.precompute_image_embeddings(
         predictor=predictor, input_=volume, save_path=embedding_path, ndim=3
     )
 
-    # instance ids (without the background)
+    # Compute instance ids (without the background)
     label_ids = np.unique(ground_truth)[1:]
     assert len(label_ids) > 0, "There are no objects to perform volumetric segmentation."
 
-    # empty volume to store incoming segmentations
+    # Create an empty volume to store incoming segmentations
     final_segmentation = np.zeros_like(ground_truth)
 
     for label_id in label_ids:
-        # binary segmentation volume for each instance (also referred to as object)
+        # Binary label volume per instance (also referred to as object)
         this_seg = np.zeros_like(ground_truth)
         this_seg[ground_truth == label_id] = 1
 
-        # let's search the slices where we have the current object
+        # Let's search the slices where we have the current object
         slice_range = np.where(this_seg)[0]
 
-        # now, we choose the middle slice of the current object for prompt-based segmentation
+        # Choose the middle slice of the current object for prompt-based segmentation
         slice_range = (slice_range.min(), slice_range.max())
         slice_choice = floor(np.mean(slice_range))
         if verbose:
             print(f"The object with id {label_id} lies in slice range: {slice_range}")
 
-        # let's get the segmentation for the current slice
+        # Prompts for segmentation for the current slice
         if interactive_seg_mode == "points":
             _get_points, _get_box = True, False
         elif interactive_seg_mode == "box":
@@ -118,7 +138,7 @@ def segment_slices_from_ground_truth(
         _, box_coords = util.get_centers_and_bounding_boxes(this_seg[slice_choice])
         point_prompts, point_labels, box_prompts, _ = prompt_generator(this_seg[slice_choice], [box_coords[1]])
 
-        # perform prompt-based segmentation on middle slice of the current object
+        # Prompt-based segmentation on middle slice of the current object
         output_slice = batched_inference(
             predictor=predictor, image=volume[slice_choice], batch_size=1,
             boxes=box_prompts.numpy() if isinstance(box_prompts, torch.Tensor) else box_prompts,
@@ -128,7 +148,7 @@ def segment_slices_from_ground_truth(
         output_seg = np.zeros_like(ground_truth)
         output_seg[slice_choice][output_slice == 1] = 1
 
-        # let's use the prompted segmentation to segment the object in the entire volume
+        # Segment the object in the entire volume with the specified segmented slice
         this_seg = segment_mask_in_volume(
             segmentation=output_seg,
             predictor=predictor,
@@ -141,10 +161,10 @@ def segment_slices_from_ground_truth(
             verbose=verbose
         )
 
-        # let's store the entire segmented object
+        # Store the entire segmented object
         final_segmentation[this_seg == 1] = label_id
 
-    # let's evaluate the volumetric segmentation
+    # Evaluate the volumetric segmentation
     msa = mean_segmentation_accuracy(final_segmentation, ground_truth)
 
     if return_segmentation:
