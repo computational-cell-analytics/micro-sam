@@ -132,6 +132,10 @@ def _process_box(box, shape, original_size=None, box_extension=0):
     if original_size is not None:
         trafo = ResizeLongestSide(max(original_size))
         box = trafo.apply_boxes(box[None], (256, 256)).squeeze()
+
+    # round up the bounding box values
+    box = np.round(box).astype(int)
+
     return box
 
 

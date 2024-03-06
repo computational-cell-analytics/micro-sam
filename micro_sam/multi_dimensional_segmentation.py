@@ -26,9 +26,10 @@ def segment_mask_in_volume(
     stop_lower: bool,
     stop_upper: bool,
     iou_threshold: float,
-    projection: str,
+    projection: Union[str, dict],
     progress_bar: Optional[Any] = None,
     box_extension: float = 0.0,
+    verbose: bool = False
 ) -> np.ndarray:
     """Segment an object mask in in volumetric data.
 
@@ -41,23 +42,37 @@ def segment_mask_in_volume(
         stop_upper: Wheter to stop at the topmost segmented slice.
         iou_threshold: The IOU threshold for continuing segmentation across 3d.
         projection: The projection method to use. One of 'mask', 'bounding_box' or 'points'.
+            - (optional: you can also pass custom choices for the projection combination)
         progress_bar: Optional progress bar.
         box_extension: Extension factor for increasing the box size after projection.
 
     Returns:
         Array with the volumetric segmentation
     """
-    assert projection in ("mask", "bounding_box", "points")
-    if projection == "mask":
-        use_box, use_mask, use_points = True, True, False
-    elif projection == "points":
-        use_box, use_mask, use_points = True, True, True
+    if isinstance(projection, str):
+        if projection == "mask":
+            use_box, use_mask, use_points = True, True, False
+        elif projection == "points":
+            use_box, use_mask, use_points = True, True, True
+        elif projection == "bounding_box":
+            use_box, use_mask, use_points = True, False, False
+        else:
+            raise ValueError("Choose projection method from 'mask' / 'points' / 'bounding_box'.")
+    elif isinstance(projection, dict):
+        assert len(projection.keys()) == 3, "There should be three parameters assigned for the projection method."
+        use_box, use_mask, use_points = projection["use_box"], projection["use_mask"], projection["use_points"]
     else:
-        use_box, use_mask, use_points = True, False, False
+        raise ValueError(f"{projection} is not a supported projection method.")
 
     def _update_progress():
         if progress_bar is not None:
             progress_bar.update(1)
+
+    def _compute_mean_iou_for_n_slices(z, increment, seg_z, n_slices):
+        iou_list = [
+            util.compute_iou(segmentation[z - increment * _slice], seg_z) for _slice in range(1, n_slices+1)
+        ]
+        return np.mean(iou_list)
 
     def segment_range(z_start, z_stop, increment, stopping_criterion, threshold=None, verbose=False):
         z = z_start + increment
@@ -65,13 +80,31 @@ def segment_mask_in_volume(
             if verbose:
                 print(f"Segment {z_start} to {z_stop}: segmenting slice {z}")
             seg_prev = segmentation[z - increment]
-            seg_z = segment_from_mask(predictor, seg_prev, image_embeddings=image_embeddings, i=z,
-                                      use_mask=use_mask, use_box=use_box, use_points=use_points,
-                                      box_extension=box_extension)
+            seg_z, score, _ = segment_from_mask(
+                predictor, seg_prev, image_embeddings=image_embeddings, i=z, use_mask=use_mask,
+                use_box=use_box, use_points=use_points, box_extension=box_extension, return_all=True
+            )
             if threshold is not None:
-                iou = util.compute_iou(seg_prev, seg_z)
-                if iou < threshold:
-                    msg = f"Segmentation stopped at slice {z} due to IOU {iou} < {iou_threshold}."
+
+                criterion_choice = 1
+
+                if criterion_choice == 1:
+                    # 1. current metric: iou of current segmentation and the previous slice
+                    iou = util.compute_iou(seg_prev, seg_z)
+                    criterion = iou
+
+                elif criterion_choice == 2:
+                    # 2. combining SAM iou + iou: curr. slice & first segmented slice + iou: curr. slice vs prev. slice
+                    iou = util.compute_iou(seg_prev, seg_z)
+                    ff_iou = util.compute_iou(segmentation[z_start], seg_z)
+                    criterion = 0.5 * iou + 0.3 * score + 0.2 * ff_iou
+
+                elif criterion_choice == 3:
+                    # 3. iou of current segmented slice w.r.t the previous n slices
+                    criterion = _compute_mean_iou_for_n_slices(z, increment, seg_z, min(5, abs(z - z_start)))
+
+                if criterion < threshold:
+                    msg = f"Segmentation stopped at slice {z} due to IOU {criterion} < {threshold}."
                     print(msg)
                     break
             segmentation[z] = seg_z
@@ -86,13 +119,12 @@ def segment_mask_in_volume(
 
     # segment below the min slice
     if z0 > 0 and not stop_lower:
-        segment_range(z0, 0, -1, np.less, iou_threshold)
+        segment_range(z0, 0, -1, np.less, iou_threshold, verbose=verbose)
 
     # segment above the max slice
     if z1 < segmentation.shape[0] - 1 and not stop_upper:
-        segment_range(z1, segmentation.shape[0] - 1, 1, np.greater, iou_threshold)
+        segment_range(z1, segmentation.shape[0] - 1, 1, np.greater, iou_threshold, verbose=verbose)
 
-    verbose = False
     # segment in between min and max slice
     if z0 != z1:
         for z_start, z_stop in zip(segmented_slices[:-1], segmented_slices[1:]):

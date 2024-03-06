@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 def _reset_tracking_state(viewer):
     """Reset the tracking state.
 
-    This helper function is needed by clear_tracking_widget and by commit_tracking_widget.
+    This helper function is needed by the widgets clear_track and by commit_track.
     """
     state = AnnotatorState()
 
@@ -45,20 +45,20 @@ def _reset_tracking_state(viewer):
 
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
-def clear_widget(viewer: "napari.viewer.Viewer") -> None:
+def clear(viewer: "napari.viewer.Viewer") -> None:
     """Widget for clearing the current annotations."""
     vutil.clear_annotations(viewer)
 
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
-def clear_tracking_widget(viewer: "napari.viewer.Viewer") -> None:
+def clear_track(viewer: "napari.viewer.Viewer") -> None:
     """Widget for clearing all tracking annotations and state."""
     _reset_tracking_state(viewer)
     vutil.clear_annotations(viewer)
 
 
 @magic_factory(call_button="Commit [C]", layer={"choices": ["current_object", "auto_segmentation"]})
-def commit_segmentation_widget(viewer: "napari.viewer.Viewer", layer: str = "current_object") -> None:
+def commit(viewer: "napari.viewer.Viewer", layer: str = "current_object") -> None:
     """Widget for committing the segmented objects from automatic or interactive segmentation."""
     seg = viewer.layers[layer].data
     shape = seg.shape
@@ -77,7 +77,7 @@ def commit_segmentation_widget(viewer: "napari.viewer.Viewer", layer: str = "cur
 
 
 @magic_factory(call_button="Commit [C]", layer={"choices": ["current_object"]})
-def commit_tracking_widget(viewer: "napari.viewer.Viewer", layer: str = "current_object") -> None:
+def commit_track(viewer: "napari.viewer.Viewer", layer: str = "current_object") -> None:
     state = AnnotatorState()
 
     seg = viewer.layers[layer].data
@@ -102,7 +102,7 @@ def commit_tracking_widget(viewer: "napari.viewer.Viewer", layer: str = "current
 
 
 @magic_factory(call_button="Save Lineage")
-def save_lineage_widget(viewer: "napari.viewer.Viewer", path: Path) -> None:
+def save_lineage(viewer: "napari.viewer.Viewer", path: Path) -> None:
     state = AnnotatorState()
     path = path.with_suffix(".json")
     with open(path, "w") as f:
@@ -138,13 +138,13 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
     call_button="Compute image embeddings",
     save_path={"mode": "d"},  # choose a directory
 )
-def embedding_widget(
+def embedding(
     pbar: widgets.ProgressBar,
     image: "napari.layers.Image",
     model: Literal[tuple(util.models().urls.keys())] = util._DEFAULT_MODEL,
     device: Literal[tuple(["auto"] + util._available_devices())] = "auto",
     save_path: Optional[Path] = None,  # where embeddings for this image are cached (optional)
-    optional_custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
+    custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
 ) -> util.ImageEmbeddings:
     """Widget to compute the embeddings for a napari image layer."""
     state = AnnotatorState()
@@ -158,11 +158,12 @@ def embedding_widget(
         ndim = image.data.ndim
         state.image_shape = image.data.shape
 
-    @thread_worker(connect={'started': pbar.show, 'finished': pbar.hide})
-    def _compute_image_embedding(state, image_data, save_path, ndim=None,
-                                 device="auto", model=util._DEFAULT_MODEL,
-                                 optional_custom_weights=None,
-                                 ):
+    @thread_worker(connect={"started": pbar.show, "finished": pbar.hide})
+    def _compute_image_embedding(
+        state, image_data, save_path, ndim=None,
+        device="auto", model=util._DEFAULT_MODEL,
+        custom_weights=None,
+    ):
         # Make sure save directory exists and is an empty directory
         if save_path is not None:
             os.makedirs(save_path, exist_ok=True)
@@ -181,13 +182,13 @@ def embedding_widget(
 
         state.initialize_predictor(
             image_data, model_type=model, save_path=save_path, ndim=ndim, device=device,
-            checkpoint_path=optional_custom_weights,
+            checkpoint_path=custom_weights,
         )
         return state  # returns napari._qt.qthreading.FunctionWorker
 
     return _compute_image_embedding(
         state, image.data, save_path, ndim=ndim, device=device, model=model,
-        optional_custom_weights=optional_custom_weights
+        custom_weights=custom_weights
     )
 
 
@@ -207,18 +208,16 @@ def settings_widget(
 # See https://github.com/computational-cell-analytics/micro-sam/issues/332
 #
 # Widgets for interactive segmentation:
-# - segment_widget: for the 2d annotation tool
-# - segment_slice_widget: segment object a single slice for the 3d annotation tool
-# - segment_volume_widget: segment object in 3d for the 3d annotation tool
-# - segment_frame_widget: segment object in frame for the tracking annotation tool
-# - track_object_widget: track object over time for the tracking annotation tool
+# - segment: for the 2d annotation tool
+# - segment_slice: segment object a single slice for the 3d annotation tool
+# - segment_volume: segment object in 3d for the 3d annotation tool
+# - segment_frame: segment object in frame for the tracking annotation tool
+# - track_object: track object over time for the tracking annotation tool
 #
 
 
-# TODO support extra mode for one point per object
-# See https://github.com/computational-cell-analytics/micro-sam/issues/333
 @magic_factory(call_button="Segment Object [S]")
-def segment_widget(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) -> None:
+def segment(viewer: "napari.viewer.Viewer", box_extension: float = 0.05, batched: bool = False) -> None:
     shape = viewer.layers["current_object"].data.shape
 
     # get the current box and point prompts
@@ -230,11 +229,12 @@ def segment_widget(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) -
     if image_embeddings["original_size"] is None:  # tiled prediction
         seg = vutil.prompt_segmentation(
             predictor, points, labels, boxes, masks, shape, image_embeddings=image_embeddings,
-            multiple_box_prompts=True, box_extension=box_extension,
+            multiple_box_prompts=True, box_extension=box_extension, multiple_point_prompts=batched,
         )
-    else:  # normal prediction and we have set the precomputed embeddings already
+    else:  # normal prediction
         seg = vutil.prompt_segmentation(
             predictor, points, labels, boxes, masks, shape, multiple_box_prompts=True, box_extension=box_extension,
+            multiple_point_prompts=batched,
         )
 
     # no prompts were given or prompts were invalid, skip segmentation
@@ -247,7 +247,7 @@ def segment_widget(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) -
 
 
 @magic_factory(call_button="Segment Slice [S]")
-def segment_slice_widget(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) -> None:
+def segment_slice(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) -> None:
     shape = viewer.layers["current_object"].data.shape[1:]
     position = viewer.cursor.position
     z = int(position[0])
@@ -281,7 +281,7 @@ def segment_slice_widget(viewer: "napari.viewer.Viewer", box_extension: float = 
     call_button="Segment All Slices [Shift-S]",
     projection={"choices": ["default", "bounding_box", "mask", "points"]},
 )
-def segment_object_widget(
+def segment_object(
     viewer: "napari.viewer.Viewer",
     iou_threshold: float = 0.8,
     projection: str = "default",
@@ -344,7 +344,7 @@ def _update_lineage(viewer):
 
 
 @magic_factory(call_button="Segment Frame [S]")
-def segment_frame_widget(viewer: "napari.viewer.Viewer") -> None:
+def segment_frame(viewer: "napari.viewer.Viewer") -> None:
     state = AnnotatorState()
     shape = state.image_shape[1:]
     position = viewer.cursor.position
@@ -379,7 +379,7 @@ def segment_frame_widget(viewer: "napari.viewer.Viewer") -> None:
 
 # TODO should probably be wrappred in a thread worker
 @magic_factory(call_button="Track Object [Shift-S]", projection={"choices": ["default", "bounding_box", "mask"]})
-def track_object_widget(
+def track_object(
     viewer: "napari.viewer.Viewer",
     iou_threshold: float = 0.5,
     projection: str = "default",
@@ -424,10 +424,10 @@ def track_object_widget(
 
 #
 # Widgets for automatic segmentation:
-# - amg_widget_2d: AMG widget for the 2d annotation tool
-# - instace_seg_widget_2d: Widget for instance segmentation with decoder (2d)
-# - amg_widget_3d: AMG widget for the 3d annotation tool
-# - instace_seg_widget_3d: Widget for instance segmentation with decoder (3d)
+# - amg_2d: AMG widget for the 2d annotation tool
+# - instace_seg_2d: Widget for instance segmentation with decoder (2d)
+# - amg_3d: AMG widget for the 3d annotation tool
+# - instace_seg_3d: Widget for instance segmentation with decoder (3d)
 #
 
 
@@ -488,7 +488,7 @@ def _instance_segmentation_impl(viewer, with_background, min_object_size, i=None
     call_button="Automatic Segmentation",
     min_object_size={"min": 0, "max": 10000},
 )
-def amg_widget_2d(
+def amg_2d(
     viewer: "napari.viewer.Viewer",
     pred_iou_thresh: float = 0.88,
     stability_score_thresh: float = 0.95,
@@ -507,7 +507,7 @@ def amg_widget_2d(
     call_button="Automatic Segmentation",
     min_object_size={"min": 0, "max": 10000},
 )
-def instance_seg_widget_2d(
+def instance_seg_2d(
     viewer: "napari.viewer.Viewer",
     min_object_size: int = 100,
     with_background: bool = True,
@@ -524,7 +524,7 @@ def instance_seg_widget_2d(
     call_button="Automatic Segmentation",
     min_object_size={"min": 0, "max": 10000}
 )
-def amg_widget_3d(
+def amg_3d(
     viewer: "napari.viewer.Viewer",
     pred_iou_thresh: float = 0.88,
     stability_score_thresh: float = 0.95,
@@ -545,7 +545,7 @@ def amg_widget_3d(
     call_button="Automatic Segmentation",
     min_object_size={"min": 0, "max": 10000},
 )
-def instance_seg_widget_3d(
+def instance_seg_3d(
     viewer: "napari.viewer.Viewer",
     min_object_size: int = 100,
     with_background: bool = True,

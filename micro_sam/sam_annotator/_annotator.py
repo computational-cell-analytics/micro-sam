@@ -50,7 +50,7 @@ class _AnnotatorBase(Container):
         self._viewer.layers["committed_objects"].new_colormap()
 
     def _create_widgets(self, segment_widget, segment_nd_widget, autosegment_widget, commit_widget, clear_widget):
-        self._embedding_widget = widgets.embedding_widget()
+        self._embedding_widget = widgets.embedding()
         # Connect the call button of the embedding widget with a function
         # that updates all relevant layers when the image changes.
         self._embedding_widget.call_button.changed.connect(self._update_image)
@@ -108,8 +108,8 @@ class _AnnotatorBase(Container):
         segment_widget: Widget,
         segment_nd_widget: Optional[Widget] = None,
         autosegment_widget: Optional[Widget] = None,
-        commit_widget: Widget = widgets.commit_segmentation_widget,
-        clear_widget: Widget = widgets.clear_widget,
+        commit_widget: Widget = widgets.commit,
+        clear_widget: Widget = widgets.clear,
         segmentation_result: Optional[np.ndarray] = None,
     ) -> None:
         """

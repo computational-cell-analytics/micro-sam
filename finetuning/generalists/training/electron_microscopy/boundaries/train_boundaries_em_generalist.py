@@ -54,7 +54,7 @@ def finetune_boundaries_em_generalist(args):
 
     # all the stuff we need for training
     optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=20, verbose=True)
     train_loader, val_loader = get_generalist_boundaries_loaders(input_path=args.input_path, patch_shape=patch_shape)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
@@ -104,7 +104,7 @@ def main():
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
-        help="The model type to use for fine-tuning. Either vit_h, vit_b, vit_l or vit_h."
+        help="The model type to use for fine-tuning. Either vit_t, vit_b, vit_l or vit_h."
     )
     parser.add_argument(
         "--save_root", "-s",

@@ -25,7 +25,7 @@ class JointSamTrainer(SamTrainer):
         self.instance_loss = instance_loss
         self.instance_metric = instance_metric
 
-    def save_checkpoint(self, name, best_metric, **extra_save_dict):
+    def save_checkpoint(self, name, current_metric, best_metric, **extra_save_dict):
         current_unetr_state = self.unetr.state_dict()
         decoder_state = []
         for k, v in current_unetr_state.items():
@@ -33,7 +33,9 @@ class JointSamTrainer(SamTrainer):
                 decoder_state.append((k, v))
         decoder_state = OrderedDict(decoder_state)
 
-        super().save_checkpoint(name, best_metric, decoder_state=decoder_state, **extra_save_dict)
+        super().save_checkpoint(
+            name, current_metric=current_metric, best_metric=best_metric, decoder_state=decoder_state, **extra_save_dict
+        )
 
     def load_checkpoint(self, checkpoint="best"):
         save_dict = super().load_checkpoint(checkpoint)

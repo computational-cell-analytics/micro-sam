@@ -9,7 +9,7 @@ from segment_anything import SamPredictor
 
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
-from ._widgets import segment_widget, amg_widget_2d, instance_seg_widget_2d
+from ._widgets import segment, amg_2d, instance_seg_2d
 from .util import _initialize_parser
 from .. import util
 
@@ -22,15 +22,15 @@ class Annotator2d(_AnnotatorBase):
     ) -> None:
         state = AnnotatorState()
         if state.decoder is None:
-            autosegment_widget = amg_widget_2d
+            autosegment = amg_2d
         else:
-            autosegment_widget = instance_seg_widget_2d
+            autosegment = instance_seg_2d
 
         super().__init__(
             viewer=viewer,
             ndim=2,
-            segment_widget=segment_widget,
-            autosegment_widget=autosegment_widget,
+            segment_widget=segment,
+            autosegment_widget=autosegment,
             segmentation_result=segmentation_result
         )
 
@@ -80,6 +80,7 @@ def annotator_2d(
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path, predictor=predictor,
         halo=halo, tile_shape=tile_shape, precompute_amg_state=precompute_amg_state,
+        ndim=2,
     )
     state.decoder = decoder
 

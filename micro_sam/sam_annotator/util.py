@@ -365,7 +365,7 @@ def segment_slices_with_prompts(
 
 def prompt_segmentation(
     predictor, points, labels, boxes, masks, shape, multiple_box_prompts,
-    image_embeddings=None, i=None, box_extension=0,
+    image_embeddings=None, i=None, box_extension=0, multiple_point_prompts=None,
 ):
     """@private"""
     assert len(points) == len(labels)
@@ -374,6 +374,14 @@ def prompt_segmentation(
 
     # no prompts were given, return None
     if not have_points and not have_boxes:
+        return
+
+    # we use the batched point prompt segmentation mode, but
+    # have a box prompt -> this does not work
+    elif multiple_point_prompts and have_boxes:
+        print("You have activated batched point segmentation but have passed a box prompt.")
+        print("This setting is currently not supported.")
+        print("Provide a single positive point prompt per object when using batched point segmentation.")
         return
 
     # box and point prompts were given
@@ -395,9 +403,32 @@ def prompt_segmentation(
 
     # only point prompts were given
     elif have_points and not have_boxes:
-        seg = prompt_based_segmentation.segment_from_points(
-            predictor, points, labels, image_embeddings=image_embeddings, i=i
-        ).squeeze()
+
+        if multiple_point_prompts:
+            seg = np.zeros(shape, dtype="uint32")
+            batched_points, batched_labels = [], []
+            negative_points, negative_labels = [], []
+            for j in range(len(points)):
+                if labels[j] == 1:  # positive point
+                    batched_points.append(points[j:j+1])
+                    batched_labels.append(labels[j:j+1])
+                else:  # negative points
+                    negative_points.append(points[j:j+1])
+                    negative_labels.append(labels[j:j+1])
+
+            # Batch this?
+            for seg_id, (point, label) in enumerate(zip(batched_points, batched_labels), 1):
+                if len(negative_points) > 0:
+                    point = np.concatenate([point] + negative_points)
+                    label = np.concatenate([label] + negative_labels)
+                prediction = prompt_based_segmentation.segment_from_points(
+                    predictor, point, label, image_embeddings=image_embeddings, i=i
+                ).squeeze()
+                seg[prediction] = seg_id
+        else:
+            seg = prompt_based_segmentation.segment_from_points(
+                predictor, points, labels, image_embeddings=image_embeddings, i=i
+            ).squeeze()
 
     # only box prompts were given
     elif not have_points and have_boxes:
@@ -408,6 +439,7 @@ def prompt_segmentation(
             print("You can only segment one object at a time in 3d.")
             return
 
+        # Batch this?
         for seg_id, (box, mask) in enumerate(zip(boxes, masks), 1):
             if mask is None:
                 prediction = prompt_based_segmentation.segment_from_box(

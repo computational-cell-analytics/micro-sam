@@ -92,7 +92,7 @@ def image_series_annotator(
     state = AnnotatorState()
     state.initialize_predictor(
         image, model_type=model_type, save_path=image_embedding_path,
-        halo=halo, tile_shape=tile_shape, predictor=predictor,
+        halo=halo, tile_shape=tile_shape, predictor=predictor, ndim=2,
     )
     state.image_shape = image.shape[:-1] if image.ndim == 3 else image.shape
 

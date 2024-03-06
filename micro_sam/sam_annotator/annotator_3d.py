@@ -13,7 +13,7 @@ from segment_anything import SamPredictor
 
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
-from ._widgets import segment_slice_widget, segment_object_widget, amg_widget_3d, instance_seg_widget_3d
+from ._widgets import segment_slice, segment_object, amg_3d, instance_seg_3d
 from .util import _initialize_parser
 from .. import util
 
@@ -42,12 +42,12 @@ class Annotator3d(_AnnotatorBase):
         segmentation_result: Optional[np.ndarray] = None,
     ) -> None:
         self._with_decoder = AnnotatorState().decoder is not None
-        autosegment_widget = instance_seg_widget_3d if self._with_decoder else amg_widget_3d
+        autosegment_widget = instance_seg_3d if self._with_decoder else amg_3d
         super().__init__(
             viewer=viewer,
             ndim=3,
-            segment_widget=segment_slice_widget,
-            segment_nd_widget=segment_object_widget,
+            segment_widget=segment_slice,
+            segment_nd_widget=segment_object,
             autosegment_widget=autosegment_widget,
             segmentation_result=segmentation_result,
         )
@@ -100,7 +100,7 @@ def annotator_3d(
     state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path, predictor=predictor,
-        halo=halo, tile_shape=tile_shape
+        halo=halo, tile_shape=tile_shape, ndim=3,
     )
     state.decoder = decoder
 
