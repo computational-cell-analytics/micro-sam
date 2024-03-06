@@ -63,7 +63,7 @@ def segment_slices_from_ground_truth(
     box_extension: Union[float, int] = 0.025,
     device: Union[str, torch.device] = None,
     interactive_seg_mode: str = "box",
-    verbose: bool = True,
+    verbose: bool = False,
     return_segmentation: bool = False
 ) -> Union[float, Tuple[np.ndarray, float]]:
     """Segment all objects in a volume by prompt-based segmentation in one slice per object.
