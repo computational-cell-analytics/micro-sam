@@ -22,7 +22,7 @@ from .. import util
 def _get_range_of_search_values(input_vals, step):
     if isinstance(input_vals, list):
         search_range = np.arange(input_vals[0], input_vals[1] + step, step)
-        search_range = [round(e, 2) for e in search_range]
+        search_range = [round(e, 3) for e in search_range]
     else:
         search_range = [input_vals]
     return search_range
@@ -67,13 +67,13 @@ def default_grid_search_values_instance_segmentation_with_decoder(
 
     Args:
         center_distance_threshold_values: The values for `center_distance_threshold` used in the gridsearch.
-            By default values in the range from 0.5 to 0.9 with a stepsize of 0.1 will be used.
+            By default values in the range from 0.3 to 0.7 with a stepsize of 0.1 will be used.
         boundary_distance_threshold_values: The values for `boundary_distance_threshold` used in the gridsearch.
-            By default values in the range from 0.5 to 0.9 with a stepsize of 0.1 will be used.
+            By default values in the range from 0.3 to 0.7 with a stepsize of 0.1 will be used.
         distance_smoothing_values: The values for `distance_smoothing` used in the gridsearch.
             By default values in the range from 1.0 to 2.0 with a stepsize of 0.1 will be used.
         min_size_values: The values for `min_size` used in the gridsearch.
-            By default the values 25, 50, 75, 100 and 200  are used.
+            By default the values 50, 100 and 200  are used.
 
     Returns:
         The values for grid search.

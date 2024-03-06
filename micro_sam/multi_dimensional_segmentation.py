@@ -29,6 +29,7 @@ def segment_mask_in_volume(
     projection: Union[str, dict],
     progress_bar: Optional[Any] = None,
     box_extension: float = 0.0,
+    verbose: bool = True
 ) -> np.ndarray:
     """Segment an object mask in in volumetric data.
 
@@ -118,13 +119,12 @@ def segment_mask_in_volume(
 
     # segment below the min slice
     if z0 > 0 and not stop_lower:
-        segment_range(z0, 0, -1, np.less, iou_threshold)
+        segment_range(z0, 0, -1, np.less, iou_threshold, verbose=verbose)
 
     # segment above the max slice
     if z1 < segmentation.shape[0] - 1 and not stop_upper:
-        segment_range(z1, segmentation.shape[0] - 1, 1, np.greater, iou_threshold)
+        segment_range(z1, segmentation.shape[0] - 1, 1, np.greater, iou_threshold, verbose=verbose)
 
-    verbose = False
     # segment in between min and max slice
     if z0 != z1:
         for z_start, z_stop in zip(segmented_slices[:-1], segmented_slices[1:]):
