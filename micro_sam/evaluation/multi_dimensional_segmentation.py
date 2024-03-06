@@ -203,7 +203,6 @@ def run_multi_dimensional_segmentation_grid_search(
 
     net_list = []
     for gs_kwargs in tqdm(gs_combinations):
-        print(gs_kwargs)
         msa = segment_slices_from_ground_truth(
             volume=volume,
             ground_truth=ground_truth,
