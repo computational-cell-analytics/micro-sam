@@ -1,4 +1,4 @@
-Questions:
+# Resource Efficient Finetuning
 
 a. Resource combinations:
     - `xps13` (CPU compute) (local)
@@ -21,13 +21,12 @@ c. **Inference**:
     iii. `vit_<X>_covid-if` micro-sam (training a specialist)
     iv. finetuning `vit_<X>_lm` microsam (finetuning the LM generalist)
 
-
-## Combinations:
+## Combinations
 
 Description of parameters which fit the resource requirements to run the finetuning experiments
 
 Fixed parameters:
-- number of epochs - 100
+- number of epochs: 100
 - train and val batch size - 1
 - minimum number of training "samples" for training on the provided images - min. **50** (oversample while we don't find min. 50 training samples)
 - learning rate: 1e-5
@@ -37,7 +36,7 @@ Fixed parameters:
 - patch shape: (512, 512)
 - choice of models: vit_t / vit_b
 
-### GPU Resources:
+### GPU Resources
 
 (32G cpu memory, 8 cpu cores)
 
@@ -59,7 +58,7 @@ Fixed parameters:
     - `vit_b`: (finetune all layers)
         - `n_objects`: 35
 
-### CPU Resources:
+### CPU Resources
 
 All jobs are tested on `medium` partition
 
@@ -71,11 +70,11 @@ All jobs are tested on `medium` partition
     - `vit_b`: finetune all layers
     - `n_objects`: 10 (higher fits, but slows down the training)
 
-2: RAM: 16GB, Cores: 8
+3. RAM: 16GB, Cores: 8
     - `vit_t`: finetune all layers
     - `n_objects`: 5
 
-3. RAM: 8GB, Cores: 8
+4. RAM: 8GB, Cores: 8
     - `vit_t`: freeze `image_encoder`
     - `n_objects`: 1
 
