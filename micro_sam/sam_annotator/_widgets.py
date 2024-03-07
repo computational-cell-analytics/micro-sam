@@ -145,6 +145,8 @@ def embedding(
     device: Literal[tuple(["auto"] + util._available_devices())] = "auto",
     save_path: Optional[Path] = None,  # where embeddings for this image are cached (optional)
     custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
+    tile_shape: tuple[int, int] = (None, None),  # Shape of tiles to process 
+    halo: tuple[int, int] = (None, None),  # Halo size for padding tiles 
 ) -> util.ImageEmbeddings:
     """Widget to compute the embeddings for a napari image layer."""
     state = AnnotatorState()
@@ -162,7 +164,7 @@ def embedding(
     def _compute_image_embedding(
         state, image_data, save_path, ndim=None,
         device="auto", model=util._DEFAULT_MODEL,
-        custom_weights=None,
+        custom_weights=None, tile_shape=None, halo=None,
     ):
         # Make sure save directory exists and is an empty directory
         if save_path is not None:
@@ -179,16 +181,39 @@ def embedding(
                         "The user selected 'save_path' is not a zarr array "
                         f"or empty directory: {save_path}"
                     )
+                   
+        # check if tile_shape/halo are not set: (0, 0)
+        if isinstance(tile_shape, tuple):
+            if all(item is 0 for item in tile_shape):
+                tile_shape = None
+            # check if at least 1 param is given
+            elif tile_shape[0] != 0 or  tile_shape[1] != 0:
+                max_val = max(tile_shape[0], tile_shape[1])
+                tile_shape = (max_val, max_val)
+        if isinstance(halo, tuple):
+            if all(item is 0 for item in halo):
+                if tile_shape is not None:
+                    halo = (0, 0)
+                else:
+                    halo = None
+            # check if at least 1 param is given
+            elif halo[0] != 0 or  halo[1] != 0:
+                max_val = max(halo[0], halo[1])
+                # don't apply halo if there is no tiling
+                if tile_shape is None:
+                    halo = None
+                else:
+                    halo = (max_val, max_val)
 
         state.initialize_predictor(
             image_data, model_type=model, save_path=save_path, ndim=ndim, device=device,
-            checkpoint_path=custom_weights,
+            checkpoint_path=custom_weights, tile_shape=tile_shape, halo=halo,
         )
         return state  # returns napari._qt.qthreading.FunctionWorker
 
     return _compute_image_embedding(
         state, image.data, save_path, ndim=ndim, device=device, model=model,
-        custom_weights=custom_weights
+        custom_weights=custom_weights, tile_shape=tile_shape, halo=halo
     )
 
 
