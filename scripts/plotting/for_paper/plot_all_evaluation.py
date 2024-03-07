@@ -6,17 +6,16 @@ from glob import glob
 import matplotlib.pyplot as plt
 
 
-EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments"
+EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/"
 
 # adding a fixed color palette to each experiments, for consistency in plotting the legends
-PALETTE = {"ais": "#045275", "amg": "#089099", "point": "#7CCBA2", "i_p": "#FCDE9C", "box": "#F0746E", "i_b": "#7C1D6F"}
+PALETTE = {"ais": "#045275", "amg": "#089099", "point": "#7CCBA2", "i_p": "#FCDE9C", "box": "#F0746E", "i_b": "#90477F"}
 
 
 def gather_all_results(dataset, modality, model_type):
     res_list_per_dataset = []
-    for experiment_dir in glob(os.path.join(EXPERIMENT_ROOT, "new_models", "*", modality, dataset)):
+    for experiment_dir in glob(os.path.join(EXPERIMENT_ROOT, "new_models", "v2", "*", modality, dataset)):
         experiment_name = os.path.split(experiment_dir[:experiment_dir.find(f"/{modality}")])[-1]
-
         res_list_per_experiment = []
         for i, result_path in enumerate(sorted(glob(os.path.join(experiment_dir, model_type, "results", "*")))):
             # avoid using the grid-search parameters' files
@@ -86,12 +85,13 @@ def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice=None):
 
     ax.set(xlabel=None, ylabel=None)
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
-    ax.title.set_text(dataset_name)
+    ax.title.set_color("#212427")
+    ax.set_title(dataset_name, fontweight="bold", fontsize=13)
 
     if dataset_name != "ctc" and modality != "em":  # HACK: as we don't have mitonet results now
         benchmark_name = "cellpose" if modality == "lm" else "mitonet"
         benchmark_res = get_benchmark_results(dataset_name, benchmark_name, benchmark_choice)
-        ax.axhline(y=benchmark_res, label=benchmark_name, color="#E31A1C")
+        ax.axhline(y=benchmark_res, label=benchmark_name, color="#DC3977")
 
 
 def plot_evaluation_for_lm_datasets(model_type):
@@ -105,10 +105,10 @@ def plot_evaluation_for_lm_datasets(model_type):
     get_barplots(ax[0, 0], "livecell", modality, model_type, benchmark_choice="livecell")
     get_barplots(ax[0, 1], "deepbacs", modality, model_type, benchmark_choice="cyto")
     get_barplots(ax[0, 2], "tissuenet", modality, model_type, benchmark_choice="cyto")
-    get_barplots(ax[1, 0], "plantseg_root", modality, model_type, benchmark_choice="cyto")
+    get_barplots(ax[1, 0], "plantseg/root", modality, model_type, benchmark_choice="cyto")
     get_barplots(ax[1, 1], "covid_if", modality, model_type, benchmark_choice="cyto")
     get_barplots(ax[1, 2], "neurips-cell-seg", modality, model_type, benchmark_choice="cyto")
-    get_barplots(ax[2, 0], "ctc", modality, model_type, benchmark_choice="cyto")
+    get_barplots(ax[2, 0], "plantseg/ovules", modality, model_type, benchmark_choice="cyto")
     get_barplots(ax[2, 1], "lizard", modality, model_type, benchmark_choice="cyto")
     get_barplots(ax[2, 2], "hpa", modality, model_type, benchmark_choice="cyto")
 
@@ -124,14 +124,14 @@ def plot_evaluation_for_lm_datasets(model_type):
 
     fig.legend(all_lines, all_labels, loc="upper left")
 
-    fig.text(0.5, 0.01, 'Models', ha='center', fontdict={"size": 22})
-    fig.text(0.01, 0.5, 'Segmentation Quality', va='center', rotation='vertical', fontdict={"size": 22})
+    # fig.text(0.5, 0.01, 'Models', ha='center', fontdict={"size": 22})
+    # fig.text(0.01, 0.5, 'Segmentation Quality', va='center', rotation='vertical', fontdict={"size": 22})
 
     plt.show()
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.90, right=0.95, left=0.05, bottom=0.05)
-    fig.suptitle("Light Microscopy", fontsize=20)
-    plt.savefig(f"lm_{model_type}_evaluation.png", transparent=True)
+    # plt.tight_layout()
+    plt.subplots_adjust(top=0.879, right=0.95, left=0.075, bottom=0.05)
+    fig.suptitle("Light Microscopy", fontsize=26, x=0.52, y=0.948)
+    plt.savefig(f"lm_{model_type}_evaluation.png")  # transparent=True
     plt.close()
 
 
@@ -154,7 +154,7 @@ def plot_evaluation_for_em_datasets(model_type):
     get_barplots(ax[1, 0], "lucchi", modality, model_type)
     get_barplots(ax[1, 1], "mitolab/fly_brain", modality, model_type)
     get_barplots(ax[1, 2], "uro_cell", modality, model_type)
-    get_barplots(ax[2, 0], "nuc-mm/mouse", modality, model_type)
+    get_barplots(ax[2, 0], "nuc_mm/mouse", modality, model_type)
     get_barplots(ax[2, 1], "sponge_em", modality, model_type)
     get_barplots(ax[2, 2], "mitolab/c_elegans", modality, model_type)
 
@@ -174,16 +174,16 @@ def plot_evaluation_for_em_datasets(model_type):
     fig.text(0.01, 0.5, 'Segmentation Quality', va='center', rotation='vertical', fontdict={"size": 22})
 
     plt.show()
-    plt.tight_layout()
+    # plt.tight_layout()
     plt.subplots_adjust(top=0.90, right=0.95, left=0.05, bottom=0.05)
     fig.suptitle("Electron Microscopy", fontsize=20)
-    plt.savefig(f"em_{model_type}_evaluation.png", transparent=True)
+    plt.savefig(f"em_{model_type}_evaluation.png")  # transparent=True
     plt.close()
 
 
 def main():
     plot_evaluation_for_lm_datasets("vit_h")
-    plot_evaluation_for_em_datasets("vit_h")
+    plot_evaluation_for_em_datasets("vit_b")
 
 
 if __name__ == "__main__":
