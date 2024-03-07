@@ -14,7 +14,7 @@ from .. import util
 from ..inference import batched_inference
 from ..prompt_generators import PointAndBoxPromptGenerator
 from ..multi_dimensional_segmentation import segment_mask_in_volume
-from ..evaluation.instance_segmentation import _get_range_of_search_values
+from ..evaluation.instance_segmentation import _get_range_of_search_values, evaluate_instance_segmentation_grid_search
 
 
 def default_grid_search_values_multi_dimensional_segmentation(
@@ -56,8 +56,8 @@ def segment_slices_from_ground_truth(
     volume: np.ndarray,
     ground_truth: np.ndarray,
     model_type: str,
-    checkpoint_path: str,
-    embedding_path: str,
+    checkpoint_path: Union[str, os.PathLike],
+    embedding_path: Union[str, os.PathLike],
     iou_threshold: float = 0.8,
     projection: Union[str, dict] = "mask",
     box_extension: Union[float, int] = 0.025,
@@ -173,13 +173,19 @@ def segment_slices_from_ground_truth(
         return msa
 
 
+def _get_best_parameters_from_grid_search_combinations(result_dir, grid_search_values):
+    best_kwargs, best_msa = evaluate_instance_segmentation_grid_search(result_dir, list(grid_search_values.keys()))
+    best_param_str = ", ".join(f"{k} = {v}" for k, v in best_kwargs.items())
+    print("Best grid-search result:", best_msa, "with parmeters:\n", best_param_str)
+
+
 def run_multi_dimensional_segmentation_grid_search(
     volume: np.ndarray,
     ground_truth: np.ndarray,
     model_type: str,
-    checkpoint_path: str,
-    embedding_path: str,
-    result_path: str,
+    checkpoint_path: Union[str, os.PathLike],
+    embedding_path: Union[str, os.PathLike],
+    result_dir: Union[str, os.PathLike],
     interactive_seg_mode: str = "box",
     verbose: bool = False,
     grid_search_values: Optional[Dict[str, List]] = None
@@ -211,7 +217,16 @@ def run_multi_dimensional_segmentation_grid_search(
         verbose: Whether to get the trace for projected segmentations.
         grid_search_values: The grid search values for parameters of the `segment_slices_from_ground_truth` function.
     """
-    grid_search_values = default_grid_search_values_multi_dimensional_segmentation()
+    if grid_search_values is None:
+        grid_search_values = default_grid_search_values_multi_dimensional_segmentation()
+
+    assert len(grid_search_values.keys()) == 3, "There must be three grid-search parameters. See above for details."
+
+    os.makedirs(result_dir, exist_ok=True)
+    result_path = os.path.join(result_dir, "grid_search_multi_dimensional_segmentation.csv")
+    if os.path.exists(result_path):
+        _get_best_parameters_from_grid_search_combinations(result_dir, grid_search_values)
+        return
 
     # Compute all combinations of grid search values.
     gs_combinations = product(*grid_search_values.values())
@@ -240,9 +255,6 @@ def run_multi_dimensional_segmentation_grid_search(
         net_list.append(tmp_df)
 
     res_df = pd.concat(net_list, ignore_index=True)
-    if not result_path.endswith("csv"):
-        result_path = os.path.join(result_path, "grid_search_multi_dimensional_segmentation.csv")
-
     res_df.to_csv(result_path)
 
-    return res_df
+    _get_best_parameters_from_grid_search_combinations(result_dir, grid_search_values)

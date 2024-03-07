@@ -26,7 +26,7 @@ def main(args):
         model_type=args.model_type,
         checkpoint_path=args.checkpoint,
         embedding_path=args.embedding_path,
-        result_path="./results.csv",
+        result_dir="./results_v2_em_organelles/",
         interactive_seg_mode="box",
         verbose=False
     )
