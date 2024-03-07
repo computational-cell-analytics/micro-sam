@@ -94,8 +94,10 @@ def plot_for_livecell(benchmark_choice):
 
     fig.legend(all_lines, all_labels, loc="upper left")
 
-    # fig.text(0.5, 0.01, 'Iterative Prompting', ha='center', fontdict={"size": 22})
-    # fig.text(0.01, 0.5, 'Segmentation Quality', va='center', rotation='vertical', fontdict={"size": 22})
+    plt.text(
+        x=0.872, y=1.05, s=" X-Axis: Models \n Y-Axis: Segmentation Quality ", ha='center', va='center',
+        transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#045275", "boxstyle": "round"}
+    )
 
     plt.show()
     plt.tight_layout()

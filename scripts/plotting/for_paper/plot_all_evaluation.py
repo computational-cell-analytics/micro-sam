@@ -94,6 +94,32 @@ def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice=None):
         ax.axhline(y=benchmark_res, label=benchmark_name, color="#DC3977")
 
 
+def _get_plot_postprocessing(fig, experiment_title, save_path):
+    # here, we remove the legends for each subplot, and get one common legend for all
+    all_lines, all_labels = [], []
+    for ax in fig.axes:
+        lines, labels = ax.get_legend_handles_labels()
+        for line, label in zip(lines, labels):
+            if label not in all_labels:
+                all_lines.append(line)
+                all_labels.append(label)
+        ax.get_legend().remove()
+
+    fig.legend(all_lines, all_labels, loc="upper left")
+
+    plt.text(
+        x=0.791, y=3.65, s=" X-Axis: Models \n Y-Axis: Segmentation Quality ", ha='center', va='center',
+        transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#045275", "boxstyle": "round"}
+    )
+
+    plt.show()
+    # plt.tight_layout()
+    plt.subplots_adjust(top=0.879, right=0.95, left=0.075, bottom=0.05)
+    fig.suptitle(experiment_title, fontsize=26, x=0.52, y=0.948)
+    plt.savefig(save_path)  # transparent=True
+    plt.close()
+
+
 def plot_evaluation_for_lm_datasets(model_type):
     modality = "lm"
     fig, ax = plt.subplots(3, 3, figsize=(20, 15))
@@ -112,27 +138,9 @@ def plot_evaluation_for_lm_datasets(model_type):
     get_barplots(ax[2, 1], "lizard", modality, model_type, benchmark_choice="cyto")
     get_barplots(ax[2, 2], "hpa", modality, model_type, benchmark_choice="cyto")
 
-    # here, we remove the legends for each subplot, and get one common legend for all
-    all_lines, all_labels = [], []
-    for ax in fig.axes:
-        lines, labels = ax.get_legend_handles_labels()
-        for line, label in zip(lines, labels):
-            if label not in all_labels:
-                all_lines.append(line)
-                all_labels.append(label)
-        ax.get_legend().remove()
-
-    fig.legend(all_lines, all_labels, loc="upper left")
-
-    # fig.text(0.5, 0.01, 'Models', ha='center', fontdict={"size": 22})
-    # fig.text(0.01, 0.5, 'Segmentation Quality', va='center', rotation='vertical', fontdict={"size": 22})
-
-    plt.show()
-    # plt.tight_layout()
-    plt.subplots_adjust(top=0.879, right=0.95, left=0.075, bottom=0.05)
-    fig.suptitle("Light Microscopy", fontsize=26, x=0.52, y=0.948)
-    plt.savefig(f"lm_{model_type}_evaluation.png")  # transparent=True
-    plt.close()
+    _get_plot_postprocessing(
+        fig=fig, experiment_title="Light Microscopy", save_path=f"lm_{model_type}_evaluation.png"
+    )
 
 
 def plot_evaluation_for_em_datasets(model_type):
@@ -158,27 +166,9 @@ def plot_evaluation_for_em_datasets(model_type):
     get_barplots(ax[2, 1], "sponge_em", modality, model_type)
     get_barplots(ax[2, 2], "mitolab/c_elegans", modality, model_type)
 
-    # here, we remove the legends for each subplot, and get one common legend for all
-    all_lines, all_labels = [], []
-    for ax in fig.axes:
-        lines, labels = ax.get_legend_handles_labels()
-        for line, label in zip(lines, labels):
-            if label not in all_labels:
-                all_lines.append(line)
-                all_labels.append(label)
-        ax.get_legend().remove()
-
-    fig.legend(all_lines, all_labels, loc="upper left")
-
-    fig.text(0.5, 0.01, 'Models', ha='center', fontdict={"size": 22})
-    fig.text(0.01, 0.5, 'Segmentation Quality', va='center', rotation='vertical', fontdict={"size": 22})
-
-    plt.show()
-    # plt.tight_layout()
-    plt.subplots_adjust(top=0.90, right=0.95, left=0.05, bottom=0.05)
-    fig.suptitle("Electron Microscopy", fontsize=20)
-    plt.savefig(f"em_{model_type}_evaluation.png")  # transparent=True
-    plt.close()
+    _get_plot_postprocessing(
+        fig=fig, experiment_title="Electron Microscopy", save_path=f"em_{model_type}_evaluation.png"
+    )
 
 
 def main():
