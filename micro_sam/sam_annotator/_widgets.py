@@ -131,12 +131,51 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
 
     return label_widget
 
+def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
+    tile_shape = (tile_shape_x, tile_shape_y)
+    halo = (halo_x, halo_y)
+    # check if tile_shape/halo are not set: (0, 0)
+    if isinstance(tile_shape, tuple):
+        if all(item == 0 for item in tile_shape):
+            tile_shape = None
+        # check if at least 1 param is given
+        elif tile_shape[0] != 0 or tile_shape[1] != 0:
+            max_val = max(tile_shape[0], tile_shape[1])
+            if max_val < 256: # at least tile shape >256
+                max_val = 256
+            tile_shape = (max_val, max_val)
+        # if both inputs given, check if smaller than 256
+        elif tile_shape[0] != 0 and tile_shape[1] != 0:
+            if tile_shape[0] < 256:
+                tile_shape[0] = 256
+            elif tile_shape[1] < 256:
+                tile_shape[1] = 256 
+    if isinstance(halo, tuple):
+        if all(item == 0 for item in halo):
+            if tile_shape is not None:
+                halo = (0, 0)
+            else:
+                halo = None
+        # check if at least 1 param is given
+        elif halo[0] != 0 or  halo[1] != 0:
+            max_val = max(halo[0], halo[1])
+            # don't apply halo if there is no tiling
+            if tile_shape is None:
+                halo = None
+            else:
+                halo = (max_val, max_val)
+    return tile_shape, halo
 
 # TODO add options for tiling, see https://github.com/computational-cell-analytics/micro-sam/issues/331
 @magic_factory(
     pbar={"visible": False, "max": 0, "value": 0, "label": "working..."},
     call_button="Compute image embeddings",
     save_path={"mode": "d"},  # choose a directory
+    tile_shape_x={"min": 0, "max": 2048},
+    tile_shape_y={"min": 0, "max": 2048},
+    halo_x={"min": 0, "max": 2048},
+    halo_y={"min": 0, "max": 2048},
+
 )
 def embedding(
     pbar: widgets.ProgressBar,
@@ -145,8 +184,10 @@ def embedding(
     device: Literal[tuple(["auto"] + util._available_devices())] = "auto",
     save_path: Optional[Path] = None,  # where embeddings for this image are cached (optional)
     custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
-    tile_shape: tuple[int, int] = (None, None),  # Shape of tiles to process 
-    halo: tuple[int, int] = (None, None),  # Halo size for padding tiles 
+    tile_shape_x: int = None,
+    tile_shape_y: int = None,
+    halo_x: int = None,
+    halo_y: int = None,
 ) -> util.ImageEmbeddings:
     """Widget to compute the embeddings for a napari image layer."""
     state = AnnotatorState()
@@ -159,6 +200,9 @@ def embedding(
     else:
         ndim = image.data.ndim
         state.image_shape = image.data.shape
+    
+    # process tile_shape and halo to tuples or None
+    tile_shape, halo = _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y)
 
     @thread_worker(connect={"started": pbar.show, "finished": pbar.hide})
     def _compute_image_embedding(
@@ -182,29 +226,6 @@ def embedding(
                         f"or empty directory: {save_path}"
                     )
                    
-        # check if tile_shape/halo are not set: (0, 0)
-        if isinstance(tile_shape, tuple):
-            if all(item is 0 for item in tile_shape):
-                tile_shape = None
-            # check if at least 1 param is given
-            elif tile_shape[0] != 0 or  tile_shape[1] != 0:
-                max_val = max(tile_shape[0], tile_shape[1])
-                tile_shape = (max_val, max_val)
-        if isinstance(halo, tuple):
-            if all(item is 0 for item in halo):
-                if tile_shape is not None:
-                    halo = (0, 0)
-                else:
-                    halo = None
-            # check if at least 1 param is given
-            elif halo[0] != 0 or  halo[1] != 0:
-                max_val = max(halo[0], halo[1])
-                # don't apply halo if there is no tiling
-                if tile_shape is None:
-                    halo = None
-                else:
-                    halo = (max_val, max_val)
-
         state.initialize_predictor(
             image_data, model_type=model, save_path=save_path, ndim=ndim, device=device,
             checkpoint_path=custom_weights, tile_shape=tile_shape, halo=halo,
