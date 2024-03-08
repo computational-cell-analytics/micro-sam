@@ -125,7 +125,7 @@ class AnnotatorTracking(_AnnotatorBase):
             name="prompts",
             edge_color="green",
             property_choices={"track_id": ["1"]},
-            # properties={"track_id": ["1", "1"], "state": state_labels},
+            # property_choces={"track_id": ["1"], "state": self._track_state_labels},
             # edge_color_cycle=STATE_COLOR_CYCLE,
         )
         # self._box_prompt_layer.edge_color_mode = "cycle"

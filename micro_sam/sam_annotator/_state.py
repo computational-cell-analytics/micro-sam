@@ -4,14 +4,23 @@ https://itnext.io/deciding-the-best-singleton-approach-in-python-65c61e90cdc4
 """
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import torch.nn as nn
 
 import micro_sam.util as util
 from micro_sam.instance_segmentation import AMGBase
-from micro_sam.precompute_state import cache_amg_state
+from micro_sam.precompute_state import cache_amg_state, cache_is_state
 
 from segment_anything import SamPredictor
 from magicgui.widgets import Container
+
+try:
+    from napari.utils import progress as tqdm
+except ImportError:
+    from tqdm import tqdm
 
 
 class Singleton(type):
@@ -35,8 +44,10 @@ class AnnotatorState(metaclass=Singleton):
 
     # amg: needs to be initialized for the automatic segmentation functionality.
     # amg_state: for storing the instance segmentation state for the 3d segmentation tool.
+    # decoder: for direct prediction of instance segmentation
     amg: Optional[AMGBase] = None
     amg_state: Optional[Dict] = None
+    decoder: Optional[nn.Module] = None
 
     # current_track_id, lineage, committed_lineages, tracking_widget:
     # State for the tracking annotator to keep track of lineage information.
@@ -49,8 +60,8 @@ class AnnotatorState(metaclass=Singleton):
         self,
         image_data,
         model_type,
+        ndim,
         save_path=None,
-        ndim=None,
         device=None,
         predictor=None,
         checkpoint_path=None,
@@ -58,6 +69,7 @@ class AnnotatorState(metaclass=Singleton):
         halo=None,
         precompute_amg_state=False,
     ):
+        assert ndim in (2, 3)
         # Initialize the model if necessary.
         if predictor is None:
             self.predictor = util.get_sam_model(
@@ -78,8 +90,29 @@ class AnnotatorState(metaclass=Singleton):
         self.embedding_path = save_path
 
         # Precompute the amg state (if specified).
-        if precompute_amg_state and (save_path is not None):
-            self.amg = cache_amg_state(self.predictor, image_data, self.image_embeddings, save_path)
+        if precompute_amg_state:
+            if save_path is None:
+                raise RuntimeError("Require a save path to precompute the amg state")
+
+            cache_state = cache_amg_state if self.decoder is None else partial(cache_is_state, decoder=self.decoder)
+
+            if ndim == 2:
+                self.amg = cache_state(
+                    predictor=self.predictor,
+                    raw=image_data,
+                    image_embeddings=self.image_embeddings,
+                    save_path=save_path
+                )
+            else:
+                n_slices = image_data.shape[0] if image_data.ndim == 3 else image_data.shape[1]
+                for i in tqdm(range(n_slices), desc="Precompute amg state"):
+                    slice_ = np.s_[i] if image_data.ndim == 3 else np.s_[:, i]
+                    cache_state(
+                        predictor=self.predictor,
+                        raw=image_data[slice_],
+                        image_embeddings=self.image_embeddings,
+                        save_path=save_path, i=i, verbose=False,
+                    )
 
     def initialized_for_interactive_segmentation(self):
         have_image_embeddings = self.image_embeddings is not None
@@ -122,9 +155,7 @@ class AnnotatorState(metaclass=Singleton):
                 if not have_name
             ]
             miss_vars = ", ".join(miss_vars)
-            raise RuntimeError(
-                f"Invalid state: the variables {miss_vars} have to be initialized for tracking."
-            )
+            raise RuntimeError(f"Invalid state: the variables {miss_vars} have to be initialized for tracking.")
 
     def reset_state(self):
         """Reset state, clear all attributes."""
@@ -134,6 +165,7 @@ class AnnotatorState(metaclass=Singleton):
         self.embedding_path = None
         self.amg = None
         self.amg_state = None
+        self.decoder = None
         self.current_track_id = None
         self.lineage = None
         self.committed_lineages = None

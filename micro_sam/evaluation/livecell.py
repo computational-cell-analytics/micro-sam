@@ -15,7 +15,10 @@ import pandas as pd
 from segment_anything import SamPredictor
 from tqdm import tqdm
 
-from ..instance_segmentation import AutomaticMaskGenerator, load_instance_segmentation_with_decoder_from_checkpoint
+from ..instance_segmentation import (
+    get_custom_sam_model_with_decoder,
+    AutomaticMaskGenerator, InstanceSegmentationWithDecoder,
+)
 from . import instance_segmentation, inference, evaluation
 from .experiments import default_experiment_settings, full_experiment_settings
 
@@ -220,9 +223,8 @@ def run_livecell_instance_segmentation_with_decoder(
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
 
-    segmenter = load_instance_segmentation_with_decoder_from_checkpoint(
-        checkpoint, model_type,
-    )
+    predictor, decoder = get_custom_sam_model_with_decoder(checkpoint, model_type)
+    segmenter = InstanceSegmentationWithDecoder(predictor, decoder)
     seg_prefix = "instance_segmentation_with_decoder"
 
     # where the predictions are saved

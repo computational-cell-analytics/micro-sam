@@ -8,6 +8,7 @@ from glob import glob
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
+import h5py
 import numpy as np
 import torch
 from segment_anything.predictor import SamPredictor
@@ -79,8 +80,71 @@ def cache_amg_state(
     return amg
 
 
+def cache_is_state(
+    predictor: SamPredictor,
+    decoder: torch.nn.Module,
+    raw: np.ndarray,
+    image_embeddings: util.ImageEmbeddings,
+    save_path: Union[str, os.PathLike],
+    verbose: bool = True,
+    i: Optional[int] = None,
+    **kwargs,
+) -> instance_segmentation.AMGBase:
+    """Compute and cache or load the state for the automatic mask generator.
+
+    Args:
+        predictor: The segment anything predictor.
+        decoder: The instance segmentation decoder.
+        raw: The image data.
+        image_embeddings: The image embeddings.
+        save_path: The embedding save path. The AMG state will be stored in 'save_path/amg_state.pickle'.
+        verbose: Whether to run the computation verbose.
+        i: The index for which to cache the state.
+        kwargs: The keyword arguments for the amg class.
+
+    Returns:
+        The instance segmentation class with the cached state.
+    """
+    is_tiled = image_embeddings["input_size"] is None
+    amg = instance_segmentation.get_amg(predictor, is_tiled, decoder=decoder, **kwargs)
+
+    # If i is given we compute the state for a given slice/frame.
+    # And we have to save the state for slices/frames separately.
+    save_path = os.path.join(save_path, "is_state.h5")
+    save_key = "state" if i is None else f"state-{i}"
+
+    with h5py.File(save_path, "a") as f:
+        if save_key in f:
+            if verbose:
+                print("Load instance segmentation state from", save_path, ":", save_key)
+            g = f[save_key]
+            state = {
+                "foreground": g["foreground"][:],
+                "boundary_distances": g["boundary_distances"][:],
+                "center_distances": g["center_distances"][:],
+            }
+            amg.set_state(state)
+            return amg
+
+    if verbose:
+        print("Precomputing the state for instance segmentation.")
+
+    amg.initialize(raw, image_embeddings=image_embeddings, verbose=verbose, i=i)
+    state = amg.get_state()
+
+    with h5py.File(save_path, "a") as f:
+        g = f.create_group(save_key)
+        g.create_dataset("foreground", data=state["foreground"], compression="gzip")
+        g.create_dataset("boundary_distances", data=state["boundary_distances"], compression="gzip")
+        g.create_dataset("center_distances", data=state["center_distances"], compression="gzip")
+
+    return amg
+
+
 def _precompute_state_for_file(
-    predictor, input_path, output_path, key, ndim, tile_shape, halo, precompute_amg_state,
+    predictor, input_path, output_path, key, ndim,
+    tile_shape, halo, precompute_amg_state,
+    decoder=None,
 ):
     image_data = util.load_image_data(input_path, key)
     output_path = Path(output_path).with_suffix(".zarr")
@@ -88,11 +152,15 @@ def _precompute_state_for_file(
         predictor, image_data, output_path, ndim=ndim, tile_shape=tile_shape, halo=halo,
     )
     if precompute_amg_state:
-        cache_amg_state(predictor, image_data, embeddings, output_path, verbose=True)
+        if decoder is None:
+            cache_amg_state(predictor, image_data, embeddings, output_path, verbose=True)
+        else:
+            cache_is_state(predictor, decoder, image_data, embeddings, output_path, verbose=True)
 
 
 def _precompute_state_for_files(
     predictor, input_files, output_path, ndim, tile_shape, halo, precompute_amg_state,
+    decoder=None,
 ):
     os.makedirs(output_path, exist_ok=True)
     for file_path in tqdm(input_files, desc="Precompute state for files."):
@@ -100,7 +168,7 @@ def _precompute_state_for_files(
         _precompute_state_for_file(
             predictor, file_path, out_path,
             key=None, ndim=ndim, tile_shape=tile_shape, halo=halo,
-            precompute_amg_state=precompute_amg_state,
+            precompute_amg_state=precompute_amg_state, decoder=decoder,
         )
 
 

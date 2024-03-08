@@ -3,12 +3,13 @@ from typing import Optional, Tuple
 
 import napari
 import numpy as np
+import torch.nn as nn
 
 from segment_anything import SamPredictor
 
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
-from ._widgets import segment, amg_2d
+from ._widgets import segment, amg_2d, instance_seg_2d
 from .util import _initialize_parser
 from .. import util
 
@@ -19,11 +20,17 @@ class Annotator2d(_AnnotatorBase):
         viewer: "napari.viewer.Viewer",
         segmentation_result: Optional[np.ndarray] = None,
     ) -> None:
+        state = AnnotatorState()
+        if state.decoder is None:
+            autosegment = amg_2d
+        else:
+            autosegment = instance_seg_2d
+
         super().__init__(
             viewer=viewer,
             ndim=2,
             segment_widget=segment,
-            autosegment_widget=amg_2d,
+            autosegment_widget=autosegment,
             segmentation_result=segmentation_result
         )
 
@@ -38,6 +45,7 @@ def annotator_2d(
     return_viewer: bool = False,
     viewer: Optional["napari.viewer.Viewer"] = None,
     predictor: Optional["SamPredictor"] = None,
+    decoder: Optional["nn.Module"] = None,
     precompute_amg_state: bool = False,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the 2d annotation tool for a given image.
@@ -58,6 +66,7 @@ def annotator_2d(
             This enables using a pre-initialized viewer.
         predictor: The Segment Anything model. Passing this enables using fully custom models.
             If you pass `predictor` then `model_type` will be ignored.
+        decoder: The instance segmentation decoder.
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster.
@@ -68,6 +77,8 @@ def annotator_2d(
 
     state = AnnotatorState()
     state.image_shape = image.shape[:-1] if image.ndim == 3 else image.shape
+    state.decoder = decoder
+
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path, predictor=predictor,
         halo=halo, tile_shape=tile_shape, precompute_amg_state=precompute_amg_state,

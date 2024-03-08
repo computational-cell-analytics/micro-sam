@@ -249,8 +249,6 @@ def segment_3d_from_slice(
     return segmentation
 
 
-# TODO do we need to add a repulsive term between touching objects in the same slice??
-# TODO extend this to allow for gaps in the segmentation and then interpolate the gaps
 def merge_instance_segmentation_3d(
     slice_segmentation: np.ndarray,
     beta: float = 0.5,

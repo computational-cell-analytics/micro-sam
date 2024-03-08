@@ -7,6 +7,7 @@ import pickle
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Literal
 
+import h5py
 import numpy as np
 import zarr
 
@@ -19,7 +20,12 @@ from zarr.errors import PathNotFoundError
 from ._state import AnnotatorState
 from . import util as vutil
 from .. import instance_segmentation, util
-from ..multi_dimensional_segmentation import segment_mask_in_volume
+from ..multi_dimensional_segmentation import segment_mask_in_volume, merge_instance_segmentation_3d
+
+try:
+    from napari.utils import progress as tqdm
+except ImportError:
+    from tqdm import tqdm
 
 if TYPE_CHECKING:
     import napari
@@ -425,8 +431,106 @@ def track_object(
 #
 # Widgets for automatic segmentation:
 # - amg_2d: AMG widget for the 2d annotation tool
+# - instace_seg_2d: Widget for instance segmentation with decoder (2d)
 # - amg_3d: AMG widget for the 3d annotation tool
+# - instace_seg_3d: Widget for instance segmentation with decoder (3d)
 #
+
+
+def _instance_segmentation_impl(viewer, with_background, min_object_size, i=None, skip_update=False, **kwargs):
+    state = AnnotatorState()
+
+    if state.amg is None:
+        is_tiled = state.image_embeddings["input_size"] is None
+        state.amg = instance_segmentation.get_amg(state.predictor, is_tiled, decoder=state.decoder)
+
+    shape = state.image_shape
+
+    # For 3D we store the amg state in a dict and check if it is computed already.
+    if state.amg_state is not None:
+        assert i is not None
+        if i in state.amg_state:
+            amg_state_i = state.amg_state[i]
+            state.amg.set_state(amg_state_i)
+
+        else:
+            dummy_image = np.zeros(shape[-2:], dtype="uint8")
+            state.amg.initialize(dummy_image, image_embeddings=state.image_embeddings, verbose=True, i=i)
+            amg_state_i = state.amg.get_state()
+            state.amg_state[i] = amg_state_i
+
+            cache_folder = state.amg_state.get("cache_folder", None)
+            if cache_folder is not None:
+                cache_path = os.path.join(cache_folder, f"state-{i}.pkl")
+                with open(cache_path, "wb") as f:
+                    pickle.dump(amg_state_i, f)
+
+            cache_path = state.amge_state.get("cache_path", None)
+            if cache_path is not None:
+                save_key = f"state-{i}"
+                with h5py.File(cache_path, "a") as f:
+                    g = f.create_group(save_key)
+                    g.create_dataset("foreground", data=state["foreground"], compression="gzip")
+                    g.create_dataset("boundary_distances", data=state["boundary_distances"], compression="gzip")
+                    g.create_dataset("center_distances", data=state["center_distances"], compression="gzip")
+
+    # Otherwise (2d segmentation) we just check if the amg is initialized or not.
+    elif not state.amg.is_initialized:
+        assert i is None
+        # We don't need to pass the actual image data here, since the embeddings are passed.
+        # (The image data is only used by the amg to compute image embeddings, so not needed here.)
+        dummy_image = np.zeros(shape, dtype="uint8")
+        state.amg.initialize(dummy_image, image_embeddings=state.image_embeddings, verbose=True)
+
+    seg = state.amg.generate(**kwargs)
+    if len(seg) == 0:
+        seg = np.zeros(shape[-2:], dtype=viewer.layers["auto_segmentation"].data.dtype)
+    else:
+        seg = instance_segmentation.mask_data_to_segmentation(
+            seg, with_background=with_background, min_object_size=min_object_size
+        )
+    assert isinstance(seg, np.ndarray)
+
+    if skip_update:
+        return seg
+
+    if i is None:
+        viewer.layers["auto_segmentation"].data = seg
+    else:
+        viewer.layers["auto_segmentation"].data[i] = seg
+    viewer.layers["auto_segmentation"].refresh()
+
+    return seg
+
+
+def _segment_volume(viewer, with_background, min_object_size, **kwargs):
+    segmentation = np.zeros_like(viewer.layers["auto_segmentation"].data)
+
+    offset = 0
+    for i in tqdm(range(segmentation.shape[0])):
+        seg = _instance_segmentation_impl(
+            viewer, with_background, min_object_size, i=i, skip_update=True, **kwargs
+        )
+        seg[seg != 0] += offset
+        offset = seg.max()
+        segmentation[i] = seg
+
+    segmentation = merge_instance_segmentation_3d(
+        segmentation, beta=0.5, with_background=with_background
+    )
+
+    # TODO we need one more refinement step to bridge gaps due to a few missing slices
+    # Implement in multi-dimensional-seg
+
+    # Idea:
+    # - go over all objects
+    # - if object is full slice range then don't do anything
+    # - continue objects that don't with projection
+    # - build potential merge pairs of objects that don't overlap within z, but are within certain range
+    # - merge objects that are > some overlap threshold + fill in the gaps from projections
+
+    viewer.layers["auto_segmentation"].data = segmentation
+    viewer.layers["auto_segmentation"].refresh()
 
 
 # TODO should be wrapped in a threadworker
@@ -441,28 +545,26 @@ def amg_2d(
     min_object_size: int = 100,
     with_background: bool = True,
 ) -> None:
-    state = AnnotatorState()
-
-    is_tiled = state.image_embeddings["input_size"] is None
-    if state.amg is None:
-        state.amg = instance_segmentation.get_amg(state.predictor, is_tiled)
-
-    shape = state.image_shape
-    if not state.amg.is_initialized:
-        # We don't need to pass the actual image data here, since the embeddings are passed.
-        # (The image data is only used by the amg to compute image embeddings, so not needed here.)
-        dummy_image = np.zeros(shape, dtype="uint8")
-        state.amg.initialize(dummy_image, image_embeddings=state.image_embeddings, verbose=True)
-
-    seg = state.amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
-
-    seg = instance_segmentation.mask_data_to_segmentation(
-        seg, with_background=with_background, min_object_size=min_object_size
+    _instance_segmentation_impl(
+        viewer, with_background, min_object_size,
+        pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh
     )
-    assert isinstance(seg, np.ndarray)
 
-    viewer.layers["auto_segmentation"].data = seg
-    viewer.layers["auto_segmentation"].refresh()
+
+# TODO should be wrapped in a threadworker
+# TODO more parameters
+@magic_factory(
+    call_button="Automatic Segmentation",
+    min_object_size={"min": 0, "max": 10000},
+)
+def instance_seg_2d(
+    viewer: "napari.viewer.Viewer",
+    min_object_size: int = 100,
+    with_background: bool = True,
+) -> None:
+    _instance_segmentation_impl(
+        viewer, with_background, min_object_size, min_size=min_object_size,
+    )
 
 
 # TODO should be wrapped in a threadworker
@@ -476,41 +578,50 @@ def amg_3d(
     stability_score_thresh: float = 0.95,
     min_object_size: int = 100,
     with_background: bool = True,
+    apply_to_volume: bool = False,
 ) -> None:
-    state = AnnotatorState()
-
-    is_tiled = state.image_embeddings["input_size"] is None
-    if state.amg is None:
-        state.amg = instance_segmentation.get_amg(state.predictor, is_tiled)
-
-    i = int(viewer.cursor.position[0])
-    shape = state.image_shape[-2:]
-
-    if i in state.amg_state:
-        amg_state_i = state.amg_state[i]
-        state.amg.set_state(amg_state_i)
-
+    if apply_to_volume:
+        # We refuse to run 3D segmentation with the AMG unless we have a GPU or all embeddings
+        # are precomputed. Otherwise this would take too long.
+        state = AnnotatorState()
+        predictor = state.predictor
+        if str(predictor.device) == "cpu" or str(predictor.device) == "mps":
+            n_slices = viewer.layers["auto_segmentation"].data.shape[0]
+            embeddings_are_precomputed = len(state.amg_state) > n_slices
+            if not embeddings_are_precomputed:
+                print("Volumetric segmentation with AMG is only supported if you have a GPU.")
+                return
+        _segment_volume(
+            viewer, with_background, min_object_size,
+            pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh
+        )
     else:
-        # we don't need to pass the actual image data here, since the embeddings are passed
-        # (the image data is only used by the amg to compute image embeddings, so not needed here)
-        dummy_image = np.zeros(shape, dtype="uint8")
+        i = int(viewer.cursor.position[0])
+        _instance_segmentation_impl(
+            viewer, with_background, min_object_size, i=i,
+            pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh
+        )
 
-        state.amg.initialize(dummy_image, image_embeddings=state.image_embeddings, verbose=True, i=i)
-        amg_state_i = state.amg.get_state()
 
-        state.amg_state[i] = amg_state_i
-        cache_folder = state.amg_state["cache_folder"]
-        if cache_folder is not None:
-            cache_path = os.path.join(cache_folder, f"state-{i}.pkl")
-            with open(cache_path, "wb") as f:
-                pickle.dump(amg_state_i, f)
-
-    seg = state.amg.generate(pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh)
-
-    seg = instance_segmentation.mask_data_to_segmentation(
-        seg, with_background=with_background, min_object_size=min_object_size
-    )
-    assert isinstance(seg, np.ndarray)
-
-    viewer.layers["auto_segmentation"].data[i] = seg
-    viewer.layers["auto_segmentation"].refresh()
+# TODO more parameters
+# TODO should be wrapped in a threadworker
+@magic_factory(
+    call_button="Automatic Segmentation",
+    min_object_size={"min": 0, "max": 10000},
+)
+def instance_seg_3d(
+    viewer: "napari.viewer.Viewer",
+    min_object_size: int = 100,
+    with_background: bool = True,
+    apply_to_volume: bool = False,
+) -> None:
+    if apply_to_volume:
+        _segment_volume(
+            viewer, with_background, min_object_size, min_size=min_object_size,
+        )
+    else:
+        i = int(viewer.cursor.position[0])
+        _instance_segmentation_impl(
+            viewer, with_background, min_object_size, i=i,
+            min_size=min_object_size,
+        )

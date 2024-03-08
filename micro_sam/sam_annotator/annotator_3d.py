@@ -5,14 +5,16 @@ from glob import glob
 from pathlib import Path
 from typing import Optional, Tuple
 
+import h5py
 import napari
 import numpy as np
+import torch.nn as nn
 
 from segment_anything import SamPredictor
 
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
-from ._widgets import segment_slice, segment_object, amg_3d
+from ._widgets import segment_slice, segment_object, amg_3d, instance_seg_3d
 from .util import _initialize_parser
 from .. import util
 
@@ -34,18 +36,40 @@ def _load_amg_state(embedding_path):
     return amg_state
 
 
+def _load_is_state(embedding_path):
+    if embedding_path is None or not os.path.exists(embedding_path):
+        return {"cache_path": None}
+
+    cache_path = os.path.join(embedding_path, "is_state.h5")
+    is_state = {"cache_path": cache_path}
+
+    with h5py.File(cache_path, "a") as f:
+        for name, g in f.items():
+            i = int(name.split("-")[-1])
+            state = {
+                "foreground": g["foreground"][:],
+                "boundary_distances": g["boundary_distances"][:],
+                "center_distances": g["center_distances"][:],
+            }
+            is_state[i] = state
+
+    return is_state
+
+
 class Annotator3d(_AnnotatorBase):
     def __init__(
         self,
         viewer: "napari.viewer.Viewer",
         segmentation_result: Optional[np.ndarray] = None,
     ) -> None:
+        self._with_decoder = AnnotatorState().decoder is not None
+        autosegment_widget = instance_seg_3d if self._with_decoder else amg_3d
         super().__init__(
             viewer=viewer,
             ndim=3,
             segment_widget=segment_slice,
             segment_nd_widget=segment_object,
-            autosegment_widget=amg_3d,
+            autosegment_widget=autosegment_widget,
             segmentation_result=segmentation_result,
         )
 
@@ -53,7 +77,10 @@ class Annotator3d(_AnnotatorBase):
         super()._update_image()
         # Load the amg state from the embedding path.
         state = AnnotatorState()
-        state.amg_state = _load_amg_state(state.embedding_path)
+        if self._with_decoder:
+            state.amg_state = _load_is_state(state.embedding_path)
+        else:
+            state.amg_state = _load_amg_state(state.embedding_path)
 
 
 def annotator_3d(
@@ -66,6 +93,8 @@ def annotator_3d(
     return_viewer: bool = False,
     viewer: Optional["napari.viewer.Viewer"] = None,
     predictor: Optional["SamPredictor"] = None,
+    decoder: Optional["nn.Module"] = None,
+    precompute_amg_state: bool = False,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the 3d annotation tool for a given image volume.
 
@@ -85,6 +114,10 @@ def annotator_3d(
             This enables using a pre-initialized viewer.
         predictor: The Segment Anything model. Passing this enables using fully custom models.
             If you pass `predictor` then `model_type` will be ignored.
+        decoder: The instance segmentation decoder.
+        precompute_amg_state: Whether to precompute the state for automatic mask generation.
+            This will take more time when precomputing embeddings, but will then make
+            automatic mask generation much faster.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -92,11 +125,12 @@ def annotator_3d(
 
     # Initialize the predictor state.
     state = AnnotatorState()
+    state.decoder = decoder
+    state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path, predictor=predictor,
-        halo=halo, tile_shape=tile_shape, ndim=3,
+        halo=halo, tile_shape=tile_shape, ndim=3, precompute_amg_state=precompute_amg_state,
     )
-    state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
 
     if viewer is None:
         viewer = napari.Viewer()
