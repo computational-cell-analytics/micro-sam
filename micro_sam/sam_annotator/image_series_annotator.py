@@ -7,6 +7,7 @@ from typing import List, Optional, Union, Tuple
 
 import imageio.v3 as imageio
 import napari
+import torch.nn as nn
 
 from magicgui import magicgui
 from segment_anything import SamPredictor
@@ -17,7 +18,10 @@ from .annotator_2d import Annotator2d
 from ._state import AnnotatorState
 
 
-def _precompute(image_files, model_type, predictor, embedding_path, tile_shape, halo, precompute_amg_state):
+def _precompute(
+    image_files, model_type, predictor, embedding_path,
+    tile_shape, halo, precompute_amg_state, decoder,
+):
     if predictor is None:
         predictor = util.get_sam_model(model_type=model_type)
 
@@ -28,6 +32,7 @@ def _precompute(image_files, model_type, predictor, embedding_path, tile_shape, 
             predictor, image_files, embedding_path, ndim=2,
             tile_shape=tile_shape, halo=halo,
             precompute_amg_state=precompute_amg_state,
+            decoder=decoder,
         )
         embedding_paths = [
             os.path.join(embedding_path, f"{Path(path).stem}.zarr") for path in image_files
@@ -47,6 +52,7 @@ def image_series_annotator(
     viewer: Optional["napari.viewer.Viewer"] = None,
     return_viewer: bool = False,
     predictor: Optional[SamPredictor] = None,
+    decoder: Optional["nn.Module"] = None,
     precompute_amg_state: bool = False,
 ) -> Optional["napari.viewer.Viewer"]:
     """Run the 2d annotation tool for a series of images.
@@ -65,6 +71,7 @@ def image_series_annotator(
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
         predictor: The Segment Anything model. Passing this enables using fully custom models.
             If you pass `predictor` then `model_type` will be ignored.
+        decoder: The instance segmentation decoder.
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster.
@@ -78,7 +85,9 @@ def image_series_annotator(
 
     # Precompute embeddings and amg state (if corresponding options set).
     predictor, embedding_paths = _precompute(
-        image_files, model_type, predictor, embedding_path, tile_shape, halo, precompute_amg_state
+        image_files, model_type, predictor,
+        embedding_path, tile_shape, halo, precompute_amg_state,
+        decoder=decoder,
     )
 
     # Load the first image and intialize the viewer, annotator and state.
@@ -90,9 +99,11 @@ def image_series_annotator(
     viewer.add_image(image, name="image")
 
     state = AnnotatorState()
+    state.decoder = decoder
     state.initialize_predictor(
         image, model_type=model_type, save_path=image_embedding_path,
         halo=halo, tile_shape=tile_shape, predictor=predictor, ndim=2,
+        precompute_amg_state=precompute_amg_state,
     )
     state.image_shape = image.shape[:-1] if image.ndim == 3 else image.shape
 
@@ -134,9 +145,11 @@ def image_series_annotator(
         # Set the new image in the viewer, state and annotator.
         viewer.layers["image"].data = image
 
+        state.amg.clear_state()
         state.initialize_predictor(
-            image, model_type=model_type, save_path=image_embedding_path,
+            image, model_type=model_type, ndim=2, save_path=image_embedding_path,
             halo=halo, tile_shape=tile_shape, predictor=predictor,
+            precompute_amg_state=precompute_amg_state,
         )
         state.image_shape = image.shape[:-1] if image.ndim == 3 else image.shape
 

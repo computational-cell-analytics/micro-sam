@@ -1,6 +1,6 @@
 import imageio.v3 as imageio
 
-CHECKPOINT = "./for_decoder/best.pt"
+CHECKPOINT = "./for_decoder/lm/vit_b/best.pt"
 IMAGE_PATH = "/home/pape/Work/data/incu_cyte/livecell/images/livecell_train_val_images/A172_Phase_A7_1_02d00h00m_1.tif"
 EMBEDDING_PATH = "./for_decoder/A172_Phase_A7_1_02d00h00m_1.zarr"
 
@@ -42,7 +42,7 @@ def run_annotator():
     predictor, decoder = get_custom_sam_model_with_decoder(CHECKPOINT, model_type="vit_b")
     image = imageio.imread(IMAGE_PATH)
 
-    annotator_2d(image, EMBEDDING_PATH, predictor=predictor, decoder=decoder)
+    annotator_2d(image, EMBEDDING_PATH, predictor=predictor, decoder=decoder, precompute_amg_state=True)
 
 
 def main():

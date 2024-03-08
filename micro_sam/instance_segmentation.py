@@ -312,6 +312,14 @@ class AMGBase(ABC):
         self._original_size = state["original_size"]
         self._is_initialized = True
 
+    def clear_state(self):
+        """Clear the state of the mask generator.
+        """
+        self._crop_list = None
+        self._crop_boxes = None
+        self._original_size = None
+        self._is_initialized = False
+
 
 class AutomaticMaskGenerator(AMGBase):
     """Generates an instance segmentation without prompts, using a point grid.
@@ -967,6 +975,14 @@ class InstanceSegmentationWithDecoder:
         self._center_distances = state["center_distances"]
         self._boundary_distances = state["boundary_distances"]
         self._is_initialized = True
+
+    def clear_state(self):
+        """Clear the state of the instance segmenter.
+        """
+        self._foreground = None
+        self._center_distances = None
+        self._boundary_distances = None
+        self._is_initialized = False
 
 
 def get_amg(
