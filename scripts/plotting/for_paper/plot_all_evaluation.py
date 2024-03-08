@@ -11,6 +11,35 @@ EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/"
 # adding a fixed color palette to each experiments, for consistency in plotting the legends
 PALETTE = {"ais": "#045275", "amg": "#089099", "point": "#7CCBA2", "i_p": "#FCDE9C", "box": "#F0746E", "i_b": "#90477F"}
 
+TITLE = {
+    "livecell": "$\it{LIVECell}$",
+    "tissuenet": "$\it{TissueNet}$",
+    "deepbacs": "$\it{DeepBacs}$",
+    "covid_if": "Covid IF",
+    "plantseg/root": "$\it{PlantSeg}$ $\it{(Root)}$",
+    "hpa": "HPA",
+    "ctc": "Cell Tracking Challenge",
+    "plantseg/ovules": "PlantSeg (Ovules)",
+    "neurips-cell-seg": "$\it{NeurIPS}$ $\it{CellSeg}$",
+    "lizard": "Lizard",
+    "mouse-embryo": "Mouse Embryo",
+    "mitoem/rat": "MitoEM (Rat)",
+    "mitoem/human": "MitoEM (Human)",
+    "platynereis/nuclei": "Platynereis (Nuclei)",
+    "mitolab/c_elegans": "MitoLab (C. elegans)",
+    "mitolab/fly_brain": "MitoLab (Fly Brain)",
+    "mitolab/glycotic_muscle": "MitoLab (Glycotic Muscle)",
+    "mitolab/hela_cell": "MitoLab (HeLa Cell)",
+    "mitolab/lucchi_pp": "MitoLab (Lucchi++)",
+    "mitolab/salivary_gland": "MitoLab (Salivary Gland: Rat)",
+    "mitolab/tem": "MitoLab (TEM)",
+    "lucchi": "Lucchi",
+    "nuc_mm/mouse": "NucMM (Mouse)",
+    "nuc_mm/zebrafish": "NucMM (Zebrafish)",
+    "uro_cell": "UroCell",
+    "sponge_em": "Sponge EM"
+    }
+
 
 def gather_all_results(dataset, modality, model_type):
     res_list_per_dataset = []
@@ -86,7 +115,7 @@ def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice=None):
     ax.set(xlabel=None, ylabel=None)
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
     ax.title.set_color("#212427")
-    ax.set_title(dataset_name, fontweight="bold", fontsize=13)
+    ax.set_title(TITLE[dataset_name], fontweight="bold", fontsize=13)
 
     if dataset_name != "ctc" and modality != "em":  # HACK: as we don't have mitonet results now
         benchmark_name = "cellpose" if modality == "lm" else "mitonet"
@@ -108,8 +137,8 @@ def _get_plot_postprocessing(fig, experiment_title, save_path):
     fig.legend(all_lines, all_labels, loc="upper left")
 
     plt.text(
-        x=0.791, y=3.65, s=" X-Axis: Models \n Y-Axis: Segmentation Quality ", ha='center', va='center',
-        transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#045275", "boxstyle": "round"}
+        x=0.59, y=3.6, s=" X-Axis: Models \n Y-Axis: Segmentation Quality ", ha='left',
+        transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#D6D6D6", "boxstyle": "round"}
     )
 
     plt.show()
@@ -125,15 +154,15 @@ def plot_evaluation_for_lm_datasets(model_type):
     fig, ax = plt.subplots(3, 3, figsize=(20, 15))
 
     # choices:
-    # "livecell", "tissuenet", "deepbacs", "covid_if", "plantseg_root", "hpa",
-    # "ctc", "plantseg_ovules", "neurips-cell-seg", "lizard", "mouse-embryo"
+    # "livecell", "tissuenet", "deepbacs", "covid_if", "plantseg/root", "hpa",
+    # "ctc", "plantseg/ovules", "neurips-cell-seg", "lizard", "mouse-embryo"
 
     get_barplots(ax[0, 0], "livecell", modality, model_type, benchmark_choice="livecell")
     get_barplots(ax[0, 1], "deepbacs", modality, model_type, benchmark_choice="cyto")
     get_barplots(ax[0, 2], "tissuenet", modality, model_type, benchmark_choice="cyto")
     get_barplots(ax[1, 0], "plantseg/root", modality, model_type, benchmark_choice="cyto")
-    get_barplots(ax[1, 1], "covid_if", modality, model_type, benchmark_choice="cyto")
-    get_barplots(ax[1, 2], "neurips-cell-seg", modality, model_type, benchmark_choice="cyto")
+    get_barplots(ax[1, 1], "neurips-cell-seg", modality, model_type, benchmark_choice="cyto")
+    get_barplots(ax[1, 2], "covid_if", modality, model_type, benchmark_choice="cyto")
     get_barplots(ax[2, 0], "plantseg/ovules", modality, model_type, benchmark_choice="cyto")
     get_barplots(ax[2, 1], "lizard", modality, model_type, benchmark_choice="cyto")
     get_barplots(ax[2, 2], "hpa", modality, model_type, benchmark_choice="cyto")

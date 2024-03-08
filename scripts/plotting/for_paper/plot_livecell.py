@@ -9,6 +9,9 @@ import matplotlib.pyplot as plt
 from plot_all_evaluation import EXPERIMENT_ROOT
 
 
+TOP_BAR_COLOR, BOTTOM_BAR_COLOR = "#F0746E", "#01B3B7"
+
+
 def gather_livecell_results(model_type, experiment_name, benchmark_choice):
     result_paths = glob(
         os.path.join(
@@ -56,30 +59,30 @@ def gather_livecell_results(model_type, experiment_name, benchmark_choice):
 
 
 def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
-    sns.barplot(x="iteration", y="result", hue="name", data=ib_data, ax=ax, palette=["#7CCBA2"])
-    all_containers = ax.containers[-1]
-    for k in range(len(all_containers)):
-        ax.patches[k].set_hatch('//')
-        ax.patches[k].set_edgecolor('k')
+    sns.barplot(x="iteration", y="result", hue="name", data=ib_data, ax=ax, palette=[TOP_BAR_COLOR])
+    # all_containers = ax.containers[-1]
+    # for k in range(len(all_containers)):
+    #     ax.patches[k].set_hatch('//')
+    #     ax.patches[k].set_edgecolor('k')
 
-    sns.barplot(x="iteration", y="result", hue="name", data=ip_data, ax=ax, palette=["#089099"])
+    sns.barplot(x="iteration", y="result", hue="name", data=ip_data, ax=ax, palette=[BOTTOM_BAR_COLOR])
     ax.set(xlabel=None, ylabel=None)
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
     ax.set_title(name, fontsize=13, fontweight="bold")
 
-    ax.axhline(y=amg, label="amg", color="#7c1D6F")
+    ax.axhline(y=amg, label="amg", color="#DC3977")
     if ais is not None:
-        ax.axhline(y=ais, label="ais", color="darkorange")
-    ax.axhline(y=cellpose, label="cellpose", color="#DC3977")
+        ax.axhline(y=ais, label="ais", color="#E19951")
+    ax.axhline(y=cellpose, label="cellpose", color="#5454DA")
 
 
 def plot_for_livecell(benchmark_choice):
     fig, ax = plt.subplots(1, 2, figsize=(20, 10), sharex="col", sharey="row")
-    amg_vanilla, _, ib_vanilla, ip_vanilla, cellpose_res = gather_livecell_results("vit_h", "vanilla", benchmark_choice)
+    amg_vanilla, _, ib_vanilla, ip_vanilla, cellpose_res = gather_livecell_results("vit_l", "vanilla", benchmark_choice)
     get_barplots("Default SAM", ax[0], ib_vanilla, ip_vanilla, amg_vanilla, cellpose_res)
 
     (amg_specialist, ais_specialist,
-     ib_specialist, ip_specialist, cellpose_res) = gather_livecell_results("vit_h", "specialist", benchmark_choice)
+     ib_specialist, ip_specialist, cellpose_res) = gather_livecell_results("vit_l", "specialist", benchmark_choice)
     get_barplots("Finetuned SAM", ax[1], ib_specialist, ip_specialist, amg_specialist, cellpose_res, ais_specialist)
 
     # here, we remove the legends for each subplot, and get one common legend for all
@@ -102,7 +105,7 @@ def plot_for_livecell(benchmark_choice):
     plt.show()
     plt.tight_layout()
     plt.subplots_adjust(top=0.865, right=0.95, left=0.075, bottom=0.05)
-    fig.suptitle("LiveCELL", fontsize=26, x=0.515, y=0.95)
+    fig.suptitle("LIVECell", fontsize=26, x=0.515, y=0.95)
     plt.savefig("livecell.png")
     plt.close()
 
