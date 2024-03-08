@@ -285,7 +285,7 @@ def segment_slice(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) ->
 # See https://github.com/computational-cell-analytics/micro-sam/issues/334
 @magic_factory(
     call_button="Segment All Slices [Shift-S]",
-    projection={"choices": ["default", "bounding_box", "mask", "points"]},
+    projection={"choices": ["default", "bounding_box", "mask", "points", "single_point"]},
 )
 def segment_object(
     viewer: "napari.viewer.Viewer",

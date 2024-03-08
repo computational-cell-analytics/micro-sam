@@ -49,13 +49,17 @@ def segment_mask_in_volume(
     Returns:
         Array with the volumetric segmentation
     """
+    use_single_point = False
     if isinstance(projection, str):
         if projection == "mask":
             use_box, use_mask, use_points = True, True, False
         elif projection == "points":
-            use_box, use_mask, use_points = True, True, True
+            use_box, use_mask, use_points = False, False, True
         elif projection == "bounding_box":
             use_box, use_mask, use_points = True, False, False
+        elif projection == "single_point":
+            use_box, use_mask, use_points = False, False, True
+            use_single_point = True
         else:
             raise ValueError("Choose projection method from 'mask' / 'points' / 'bounding_box'.")
     elif isinstance(projection, dict):
@@ -82,7 +86,8 @@ def segment_mask_in_volume(
             seg_prev = segmentation[z - increment]
             seg_z, score, _ = segment_from_mask(
                 predictor, seg_prev, image_embeddings=image_embeddings, i=z, use_mask=use_mask,
-                use_box=use_box, use_points=use_points, box_extension=box_extension, return_all=True
+                use_box=use_box, use_points=use_points, box_extension=box_extension, return_all=True,
+                use_single_point=use_single_point,
             )
             if threshold is not None:
 
