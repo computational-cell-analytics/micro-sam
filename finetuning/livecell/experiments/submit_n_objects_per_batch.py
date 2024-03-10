@@ -5,7 +5,7 @@ from glob import glob
 from datetime import datetime
 
 
-def write_batch_script(env_name, out_path, model_type, iterations, n_objects, save_root=None):
+def write_batch_script(env_name, out_path, model_type, iterations, n_objects, save_root):
     """Writing scripts with different number of objects for finetuning
     """
     batch_script = f"""#!/bin/bash
@@ -16,7 +16,7 @@ def write_batch_script(env_name, out_path, model_type, iterations, n_objects, sa
 #SBATCH -G A100:1
 #SBATCH -A gzz0001
 #SBATCH --constraint=80gb
-#SBATCH --job-name=sam-n-objects
+#SBATCH --job-name=sam-n_objects
 
 source ~/.bashrc
 mamba activate {env_name} \n"""
@@ -29,7 +29,7 @@ mamba activate {env_name} \n"""
     # name of the model configuration
     python_script += f"-m {model_type} "
 
-    # iterations to run the experiment for (10k)
+    # iterations to run the experiment for (100k)
     python_script += f"--iterations {iterations} "
 
     # let's select the number of objects per batch
@@ -65,9 +65,9 @@ def submit_slurm():
 
     # parameters to run the inference scripts
     environment_name = "sam"
-    model_type = "vit_b"
-    iterations = int(1e4)
-    num_combinations = range(1, 46)
+    model_type = "vit_l"
+    iterations = int(1e5)
+    num_combinations = range(1, 36, 1)
     # NOTE: overwrite the path below to save the checkpoints to your desired path
     _save_root = "/scratch/usr/nimanwai/experiments/micro-sam/n_objects_per_batch/"
 
