@@ -19,20 +19,6 @@ def run_eval_process(cmd):
         outs, errs = proc.communicate()
 
 
-def for_vit_t():
-    checkpoint = os.path.join(
-        ROOT, "experiments", "test", "micro-sam", "vit_t", "checkpoints", "vit_t", "livecell_sam", "best.pt"
-    )
-    experiment_folder = os.path.join(EXPERIMENT_ROOT, "vit_t")
-
-    cmd = CMD + "-m vit_t " + f"-c {checkpoint} " + f"-e {experiment_folder}"
-    print(f"Running the command: {cmd} \n")
-
-    _cmd = re.split(r"\s", cmd)
-
-    run_eval_process(_cmd)
-
-
 def for_n_objects(max_objects=45):
     ckpt_root = os.path.join(ROOT, "experiments", "micro-sam", "n_objects_per_batch")
     exp_root = os.path.join(EXPERIMENT_ROOT, "n_objects_per_batch")
@@ -88,6 +74,7 @@ def for_freezing_backbones():
 
 
 def main():
+    for_n_objects()
     for_freezing_backbones()
 
 
