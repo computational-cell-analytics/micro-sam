@@ -5,7 +5,7 @@ IMAGE_PATH = "/home/pape/Work/data/incu_cyte/livecell/images/livecell_train_val_
 EMBEDDING_PATH = "./for_decoder/A172_Phase_A7_1_02d00h00m_1.zarr"
 
 
-def segment_with_decoder():
+def segment_with_decoder(args):
     import napari
     from micro_sam.instance_segmentation import (
         get_custom_sam_model_with_decoder,
@@ -14,12 +14,17 @@ def segment_with_decoder():
     )
     from micro_sam.util import precompute_image_embeddings
 
-    predictor, decoder = get_custom_sam_model_with_decoder(CHECKPOINT, model_type="vit_b")
+    checkpoint = CHECKPOINT if args.checkpoint_path is None else args.checkpoint_path
+    model_type = "vit_b" if args.model_type is None else args.model_type
+    image_path = IMAGE_PATH if args.input_path is None else args.input_path
+    embedding_path = EMBEDDING_PATH if args.embedding_path is None else args.embedding_path
+
+    predictor, decoder = get_custom_sam_model_with_decoder(checkpoint, model_type=model_type)
     segmenter = InstanceSegmentationWithDecoder(predictor, decoder)
 
-    image = imageio.imread(IMAGE_PATH)
+    image = imageio.imread(image_path)
     image_embeddings = precompute_image_embeddings(
-        segmenter._predictor, image, EMBEDDING_PATH,
+        segmenter._predictor, image, embedding_path,
     )
 
     print("Start segmentation ...")
@@ -35,20 +40,40 @@ def segment_with_decoder():
     napari.run()
 
 
-def run_annotator():
+def run_annotator(args):
     from micro_sam.instance_segmentation import get_custom_sam_model_with_decoder
     from micro_sam.sam_annotator import annotator_2d
+    
+    model_type = "vit_b" if args.model_type is None else args.model_type
+    checkpoint = CHECKPOINT if args.checkpoint_path is None else args.checkpoint_path
+    image_path = IMAGE_PATH if args.input_path is None else args.input_path
+    embedding_path = EMBEDDING_PATH if args.embedding_path is None else args.embedding_path
 
-    predictor, decoder = get_custom_sam_model_with_decoder(CHECKPOINT, model_type="vit_b")
-    image = imageio.imread(IMAGE_PATH)
+    predictor, decoder = get_custom_sam_model_with_decoder(checkpoint, model_type=model_type)
+    image = imageio.imread(image_path)
 
-    annotator_2d(image, EMBEDDING_PATH, predictor=predictor, decoder=decoder, precompute_amg_state=True)
+    annotator_2d(
+        image,
+        embedding_path,
+        predictor=predictor,
+        decoder=decoder,
+        precompute_amg_state=True
+    )
 
 
-def main():
-    # segment_with_decoder()
-    run_annotator()
+def main(args):
+    # segment_with_decoder(args)
+    run_annotator(args)
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-i", "--input_path", type=str)
+    parser.add_argument("-m", "--model_type", type=str)
+    parser.add_argument("-e", "--embedding_path", type=str)
+    parser.add_argument("-c", "--checkpoint_path", type=str)
+
+    args = parser.parse_args()
+    main(args)
