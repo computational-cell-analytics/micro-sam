@@ -16,10 +16,13 @@ def write_batch_script(
     batch_script = f"""#!/bin/bash
 #SBATCH -c 16
 #SBATCH --mem 64G
-#SBATCH -t 2-00:00:00
+#SBATCH -t 14-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
 #SBATCH -A gzz0001
+#SBATCH --qos=14d
 #SBATCH --constraint=80gb
 #SBATCH --job-name={experiment_name}
 
@@ -148,8 +151,10 @@ if __name__ == "__main__":
     except FileNotFoundError:
         pass
 
+    print("Running experiments for 'n_objects'")
     submit_n_objects_slurm()
 
     shutil.rmtree("./gpu_jobs")
 
+    print("Running experiments for 'finetuning parts'")
     submit_freezing_slurm()
