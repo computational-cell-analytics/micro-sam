@@ -135,35 +135,33 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
     tile_shape = (tile_shape_x, tile_shape_y)
     halo = (halo_x, halo_y)
     # check if tile_shape/halo are not set: (0, 0)
-    if isinstance(tile_shape, tuple):
-        if all(item == 0 for item in tile_shape):
-            tile_shape = None
-        # check if at least 1 param is given
-        elif tile_shape[0] != 0 or tile_shape[1] != 0:
-            max_val = max(tile_shape[0], tile_shape[1])
-            if max_val < 256: # at least tile shape >256
-                max_val = 256
-            tile_shape = (max_val, max_val)
-        # if both inputs given, check if smaller than 256
-        elif tile_shape[0] != 0 and tile_shape[1] != 0:
-            if tile_shape[0] < 256:
-                tile_shape[0] = 256
-            elif tile_shape[1] < 256:
-                tile_shape[1] = 256 
-    if isinstance(halo, tuple):
-        if all(item == 0 for item in halo):
-            if tile_shape is not None:
-                halo = (0, 0)
-            else:
-                halo = None
-        # check if at least 1 param is given
-        elif halo[0] != 0 or  halo[1] != 0:
-            max_val = max(halo[0], halo[1])
-            # don't apply halo if there is no tiling
-            if tile_shape is None:
-                halo = None
-            else:
-                halo = (max_val, max_val)
+    if all(item == 0 for item in tile_shape):
+        tile_shape = None
+    # check if at least 1 param is given
+    elif tile_shape[0] == 0 or tile_shape[1] == 0:
+        max_val = max(tile_shape[0], tile_shape[1])
+        if max_val < 256: # at least tile shape >256
+            max_val = 256
+        tile_shape = (max_val, max_val)
+    # if both inputs given, check if smaller than 256
+    elif tile_shape[0] != 0 and tile_shape[1] != 0:
+        if tile_shape[0] < 256:
+                tile_shape = (256, tile_shape[1])  # Create a new tuple
+        if tile_shape[1] < 256:
+                tile_shape = (tile_shape[0], 256)  # Create a new tuple with modified value
+    if all(item == 0 for item in halo):
+        if tile_shape is not None:
+            halo = (0, 0)
+        else:
+            halo = None
+    # check if at least 1 param is given
+    elif halo[0] != 0 or  halo[1] != 0:
+        max_val = max(halo[0], halo[1])
+        # don't apply halo if there is no tiling
+        if tile_shape is None:
+            halo = None
+        else:
+            halo = (max_val, max_val)
     return tile_shape, halo
 
 # TODO add options for tiling, see https://github.com/computational-cell-analytics/micro-sam/issues/331
