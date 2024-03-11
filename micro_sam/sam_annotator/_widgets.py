@@ -329,22 +329,14 @@ def segment_slice(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) ->
 # See https://github.com/computational-cell-analytics/micro-sam/issues/334
 @magic_factory(
     call_button="Segment All Slices [Shift-S]",
-    projection={"choices": ["default", "bounding_box", "mask", "points"]},
+    projection={"choices": ["box", "mask", "points", "points_and_mask", "single_point"]},
 )
 def segment_object(
     viewer: "napari.viewer.Viewer",
-    iou_threshold: float = 0.8,
-    projection: str = "default",
+    iou_threshold: float = 0.5,
+    projection: str = "points",
     box_extension: float = 0.05,
 ) -> None:
-
-    # we have the following projection modes:
-    # bounding_box: uses only the bounding box as prompt
-    # mask: uses the bounding box and the mask
-    # points: uses the bounding box, mask and points derived from the mask
-    # by default we choose mask, which qualitatively seems to work the best
-    projection = "mask" if projection == "default" else projection
-
     state = AnnotatorState()
     shape = state.image_shape
 

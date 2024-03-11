@@ -10,6 +10,7 @@ import torch
 from nifty.tools import blocking
 from skimage.feature import peak_local_max
 from skimage.filters import gaussian
+from skimage.segmentation import find_boundaries
 from scipy.ndimage import distance_transform_edt
 
 from segment_anything.predictor import SamPredictor
@@ -33,7 +34,7 @@ def _compute_box_from_mask(mask, original_size=None, box_extension=0):
 
 
 # sample points from a mask. SAM expects the following point inputs:
-def _compute_points_from_mask(mask, original_size, box_extension):
+def _compute_points_from_mask(mask, original_size, box_extension, use_single_point=False):
     box = _compute_box_from_mask(mask, box_extension=box_extension)
 
     # get slice and offset in python coordinate convention
@@ -42,8 +43,20 @@ def _compute_points_from_mask(mask, original_size, box_extension):
 
     # crop the mask and compute distances
     cropped_mask = mask[bb]
-    inner_distances = gaussian(distance_transform_edt(cropped_mask == 1))
-    outer_distances = gaussian(distance_transform_edt(cropped_mask == 0))
+    object_boundaries = find_boundaries(cropped_mask, mode="outer")
+    distances = gaussian(distance_transform_edt(object_boundaries == 0))
+    inner_distances = distances.copy()
+    cropped_mask = cropped_mask.astype("bool")
+    inner_distances[~cropped_mask] = 0.0
+    if use_single_point:
+        center = inner_distances.argmax()
+        center = np.unravel_index(center, inner_distances.shape)
+        point_coords = (center + offset)[None]
+        point_labels = np.ones(1, dtype="uint8")
+        return point_coords[:, ::-1], point_labels
+
+    outer_distances = distances.copy()
+    outer_distances[cropped_mask] = 0.0
 
     # sample positives and negatives from the distance maxima
     inner_maxima = peak_local_max(inner_distances, exclude_border=False, min_distance=3)
@@ -323,6 +336,7 @@ def segment_from_mask(
     box: Optional[np.ndarray] = None,
     points: Optional[np.ndarray] = None,
     labels: Optional[np.ndarray] = None,
+    use_single_point: bool = False,
 ):
     """Segmentation from a mask prompt.
 
@@ -343,6 +357,8 @@ def segment_from_mask(
         box: Precomputed bounding box.
         points: Precomputed point prompts.
         labels: Positive/negative labels corresponding to the point prompts.
+        use_single_point: Whether to derive just a single point from the mask.
+            In case use_points is true.
 
     Returns:
         The binary segmentation mask.
@@ -373,7 +389,8 @@ def segment_from_mask(
 
     elif use_points:
         point_coords, point_labels = _compute_points_from_mask(
-            mask, original_size=original_size, box_extension=box_extension
+            mask, original_size=original_size, box_extension=box_extension,
+            use_single_point=use_single_point,
         )
 
     else:
