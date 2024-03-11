@@ -21,22 +21,22 @@ def main(args):
     #     "test" for validation-based grid-search (amg, ais)
     split = "test"
     test_volume_paths = glob(os.path.join(args.input_path, split, "*.h5"))
-    for test_volume_path in test_volume_paths:
-        volume, labels = get_raw_and_label_volumes(test_volume_path)
+    test_volume_path = test_volume_paths[0]
+    volume, labels = get_raw_and_label_volumes(test_volume_path)
 
-        # applying connected components to get instances
-        labels = label(labels)
+    # applying connected components to get instances
+    labels = label(labels)
 
-        run_multi_dimensional_segmentation_grid_search(
-            volume=volume,
-            ground_truth=labels,
-            model_type=args.model_type,
-            checkpoint_path=args.checkpoint,
-            embedding_path=args.embedding_path,
-            result_dir="./mouse-embryo/results_default/",
-            interactive_seg_mode="box",
-            verbose=False
-        )
+    run_multi_dimensional_segmentation_grid_search(
+        volume=volume,
+        ground_truth=labels,
+        model_type=args.model_type,
+        checkpoint_path=args.checkpoint,
+        embedding_path=args.embedding_path,
+        result_dir="./mouse-embryo/results_v2_lm/",
+        interactive_seg_mode="box",
+        verbose=False
+    )
 
 
 if __name__ == "__main__":
