@@ -20,12 +20,11 @@ from zarr.errors import PathNotFoundError
 from ._state import AnnotatorState
 from . import util as vutil
 from .. import instance_segmentation, util
-from ..multi_dimensional_segmentation import segment_mask_in_volume, merge_instance_segmentation_3d
-
-try:
-    from napari.utils import progress as tqdm
-except ImportError:
-    from tqdm import tqdm
+from ..multi_dimensional_segmentation import (
+    merge_instance_segmentation_3d,
+    postprocess_volumetric_segmentation,
+    segment_mask_in_volume,
+)
 
 if TYPE_CHECKING:
     import napari
@@ -503,11 +502,11 @@ def _instance_segmentation_impl(viewer, with_background, min_object_size, i=None
     return seg
 
 
-def _segment_volume(viewer, with_background, min_object_size, **kwargs):
+def _segment_volume(viewer, with_background, min_object_size, z_extension, **kwargs):
     segmentation = np.zeros_like(viewer.layers["auto_segmentation"].data)
 
     offset = 0
-    for i in tqdm(range(segmentation.shape[0])):
+    for i in progress(range(segmentation.shape[0]), desc="Segment slices"):
         seg = _instance_segmentation_impl(
             viewer, with_background, min_object_size, i=i, skip_update=True, **kwargs
         )
@@ -519,15 +518,19 @@ def _segment_volume(viewer, with_background, min_object_size, **kwargs):
         segmentation, beta=0.5, with_background=with_background
     )
 
-    # TODO we need one more refinement step to bridge gaps due to a few missing slices
-    # Implement in multi-dimensional-seg
-
-    # Idea:
-    # - go over all objects
-    # - if object is full slice range then don't do anything
-    # - continue objects that don't with projection
-    # - build potential merge pairs of objects that don't overlap within z, but are within certain range
-    # - merge objects that are > some overlap threshold + fill in the gaps from projections
+    if z_extension > 0:
+        state = AnnotatorState()
+        n_objects = int(segmentation.max()) + 1
+        with progress(total=n_objects, desc="Postprocess objects") as progress_bar:
+            segmentation = postprocess_volumetric_segmentation(
+                segmentation, state.predictor, state.image_embeddings,
+                z_extension=z_extension,
+                # TODO expose some of these parameters
+                # and / or get from model specific defaults
+                projection="points",
+                iou_threshold=0.8,
+                progress_bar=progress_bar,
+            )
 
     viewer.layers["auto_segmentation"].data = segmentation
     viewer.layers["auto_segmentation"].refresh()
@@ -579,6 +582,7 @@ def amg_3d(
     min_object_size: int = 100,
     with_background: bool = True,
     apply_to_volume: bool = False,
+    z_extension: int = 2,
 ) -> None:
     if apply_to_volume:
         # We refuse to run 3D segmentation with the AMG unless we have a GPU or all embeddings
@@ -593,7 +597,8 @@ def amg_3d(
                 return
         _segment_volume(
             viewer, with_background, min_object_size,
-            pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh
+            pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
+            z_extension=z_extension,
         )
     else:
         i = int(viewer.cursor.position[0])
@@ -614,10 +619,12 @@ def instance_seg_3d(
     min_object_size: int = 100,
     with_background: bool = True,
     apply_to_volume: bool = False,
+    z_extension: int = 2,
 ) -> None:
     if apply_to_volume:
         _segment_volume(
-            viewer, with_background, min_object_size, min_size=min_object_size,
+            viewer, with_background, min_object_size,
+            z_extension=z_extension, min_size=min_object_size,
         )
     else:
         i = int(viewer.cursor.position[0])

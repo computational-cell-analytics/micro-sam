@@ -33,9 +33,7 @@ class TestUtil(unittest.TestCase):
         check_predictor(predictor)
 
         # check predictor with checkpoint path (using the cached model)
-        checkpoint_path = os.path.join(
-            get_cache_directory(), "models", "vit_t" if VIT_T_SUPPORT else "vit_b"
-        )
+        checkpoint_path = os.path.join(get_cache_directory(), "models", self.model_type)
         predictor = get_sam_model(model_type=self.model_type, checkpoint_path=checkpoint_path)
         check_predictor(predictor)
 
@@ -55,9 +53,9 @@ class TestUtil(unittest.TestCase):
             self.assertTrue(0.0 < compute_iou(x1, x2) < 1.0)
 
     def test_tiled_prediction(self):
-        from micro_sam.util import precompute_image_embeddings, get_sam_model, VIT_T_SUPPORT
+        from micro_sam.util import precompute_image_embeddings, get_sam_model
 
-        predictor = get_sam_model(model_type="vit_t" if VIT_T_SUPPORT else "vit_b")
+        predictor = get_sam_model(model_type=self.model_type)
 
         tile_shape, halo = (256, 256), (16, 16)
         input_ = np.random.rand(512, 512).astype("float32")
