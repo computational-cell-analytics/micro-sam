@@ -137,6 +137,7 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
 
     return label_widget
 
+
 def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
     tile_shape = (tile_shape_x, tile_shape_y)
     halo = (halo_x, halo_y)
@@ -146,22 +147,22 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
     # check if at least 1 param is given
     elif tile_shape[0] == 0 or tile_shape[1] == 0:
         max_val = max(tile_shape[0], tile_shape[1])
-        if max_val < 256: # at least tile shape >256
+        if max_val < 256:  # at least tile shape >256
             max_val = 256
         tile_shape = (max_val, max_val)
     # if both inputs given, check if smaller than 256
     elif tile_shape[0] != 0 and tile_shape[1] != 0:
         if tile_shape[0] < 256:
-                tile_shape = (256, tile_shape[1])  # Create a new tuple
+            tile_shape = (256, tile_shape[1])  # Create a new tuple
         if tile_shape[1] < 256:
-                tile_shape = (tile_shape[0], 256)  # Create a new tuple with modified value
+            tile_shape = (tile_shape[0], 256)  # Create a new tuple with modified value
     if all(item == 0 for item in halo):
         if tile_shape is not None:
             halo = (0, 0)
         else:
             halo = None
     # check if at least 1 param is given
-    elif halo[0] != 0 or  halo[1] != 0:
+    elif halo[0] != 0 or halo[1] != 0:
         max_val = max(halo[0], halo[1])
         # don't apply halo if there is no tiling
         if tile_shape is None:
@@ -169,6 +170,7 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
         else:
             halo = (max_val, max_val)
     return tile_shape, halo
+
 
 # TODO add options for tiling, see https://github.com/computational-cell-analytics/micro-sam/issues/331
 @magic_factory(
@@ -204,7 +206,7 @@ def embedding(
     else:
         ndim = image.data.ndim
         state.image_shape = image.data.shape
-    
+
     # process tile_shape and halo to tuples or None
     tile_shape, halo = _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y)
 
@@ -229,7 +231,7 @@ def embedding(
                         "The user selected 'save_path' is not a zarr array "
                         f"or empty directory: {save_path}"
                     )
-                   
+
         state.initialize_predictor(
             image_data, model_type=model, save_path=save_path, ndim=ndim, device=device,
             checkpoint_path=custom_weights, tile_shape=tile_shape, halo=halo,
