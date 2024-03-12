@@ -95,6 +95,7 @@ def annotator_3d(
     predictor: Optional["SamPredictor"] = None,
     decoder: Optional["nn.Module"] = None,
     precompute_amg_state: bool = False,
+    checkpoint_path: Optional[str] = None,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the 3d annotation tool for a given image volume.
 
@@ -118,6 +119,7 @@ def annotator_3d(
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster.
+        checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -130,6 +132,7 @@ def annotator_3d(
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path, predictor=predictor,
         halo=halo, tile_shape=tile_shape, ndim=3, precompute_amg_state=precompute_amg_state,
+        checkpoint_path=checkpoint_path,
     )
 
     if viewer is None:
@@ -168,4 +171,5 @@ def main():
         image, embedding_path=args.embedding_path,
         segmentation_result=segmentation_result,
         model_type=args.model_type, tile_shape=args.tile_shape, halo=args.halo,
+        checkpoint_path=args.checkpoint,
     )
