@@ -2,6 +2,7 @@ import argparse
 import warnings
 from typing import List, Optional, Tuple
 
+import elf.parallel
 import napari
 import numpy as np
 
@@ -43,8 +44,15 @@ def _commit_segmentation_widget(v: napari.Viewer, layer: str = "current_object")
     seg = v.layers[layer].data
     shape = seg.shape
 
-    id_offset = int(v.layers["committed_objects"].data.max())
-    mask = seg != 0
+    # We parallelize these operations because they take long for large volumes.
+    block_shape = tuple(min(bs, sh) for bs, sh in zip((32, 256, 256), shape))
+
+    # id_offset = int(v.layers["committed_objects"].data.max())
+    id_offset = int(elf.parallel.max(v.layers["committed_objects"].data, block_shape=block_shape))
+
+    # mask = seg[bb] != 0
+    mask = np.zeros(seg.shape, dtype="bool")
+    mask = elf.parallel.apply_operation(seg, 0, np.not_equal, block_shape=block_shape, out=mask)
 
     v.layers["committed_objects"].data[mask] = (seg[mask] + id_offset)
     v.layers["committed_objects"].refresh()
