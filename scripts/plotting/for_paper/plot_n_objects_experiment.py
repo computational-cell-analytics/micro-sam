@@ -2,12 +2,27 @@ import os
 from glob import glob
 from pathlib import Path
 
+import numpy as np
 from math import pi
 import pandas as pd
+import imageio.v3 as imageio
 import matplotlib.pyplot as plt
 
 
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/new_models/v2/test/n_objects_per_batch/"
+
+
+def _get_volume_stack():
+    all_slice_paths = sorted(glob("/scratch/projects/nim00007/sam/data/ctc/DIC-C2DH-HeLa/01/*"))
+    list_of_slices = []
+    for slice_path in all_slice_paths:
+        image = imageio.imread(slice_path)
+        list_of_slices.append(image[None])
+    volume = np.concatenate(list_of_slices, axis=0)
+    imageio.imwrite(
+        "/scratch/projects/nim00007/sam/data/ctc/DIC-C2DH-HeLa.tif",
+        volume
+    )
 
 
 def _get_result_dict(res_df, result_path, experiment_name):
@@ -52,7 +67,8 @@ def plot_n_objects():
 
 
 def main():
-    plot_n_objects()
+    # plot_n_objects()
+    _get_volume_stack()
 
 
 if __name__ == "__main__":
