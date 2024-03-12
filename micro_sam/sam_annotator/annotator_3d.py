@@ -57,11 +57,7 @@ def _load_is_state(embedding_path):
 
 
 class Annotator3d(_AnnotatorBase):
-    def __init__(
-        self,
-        viewer: "napari.viewer.Viewer",
-        segmentation_result: Optional[np.ndarray] = None,
-    ) -> None:
+    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
         self._with_decoder = AnnotatorState().decoder is not None
         autosegment_widget = instance_seg_3d if self._with_decoder else amg_3d
         super().__init__(
@@ -70,11 +66,10 @@ class Annotator3d(_AnnotatorBase):
             segment_widget=segment_slice,
             segment_nd_widget=segment_object,
             autosegment_widget=autosegment_widget,
-            segmentation_result=segmentation_result,
         )
 
-    def _update_image(self):
-        super()._update_image()
+    def _update_image(self, segmentation_result=None):
+        super()._update_image(segmentation_result=segmentation_result)
         # Load the amg state from the embedding path.
         state = AnnotatorState()
         if self._with_decoder:
@@ -139,10 +134,11 @@ def annotator_3d(
         viewer = napari.Viewer()
 
     viewer.add_image(image, name="image")
-    annotator = Annotator3d(viewer, segmentation_result=segmentation_result)
+    annotator = Annotator3d(viewer)
 
     # Trigger layer update of the annotator so that layers have the correct shape.
-    annotator._update_image()
+    # And initialize the 'committed_objects' with the segmentation result if it was given.
+    annotator._update_image(segmentation_result=segmentation_result)
 
     # Add the annotator widget to the viewer.
     viewer.window.add_dock_widget(annotator)

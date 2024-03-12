@@ -15,11 +15,7 @@ from .. import util
 
 
 class Annotator2d(_AnnotatorBase):
-    def __init__(
-        self,
-        viewer: "napari.viewer.Viewer",
-        segmentation_result: Optional[np.ndarray] = None,
-    ) -> None:
+    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
         state = AnnotatorState()
         if state.decoder is None:
             autosegment = amg_2d
@@ -31,7 +27,6 @@ class Annotator2d(_AnnotatorBase):
             ndim=2,
             segment_widget=segment,
             autosegment_widget=autosegment,
-            segmentation_result=segmentation_result
         )
 
 
@@ -91,10 +86,11 @@ def annotator_2d(
         viewer = napari.Viewer()
 
     viewer.add_image(image, name="image")
-    annotator = Annotator2d(viewer, segmentation_result=segmentation_result)
+    annotator = Annotator2d(viewer)
 
     # Trigger layer update of the annotator so that layers have the correct shape.
-    annotator._update_image()
+    # And initialize the 'committed_objects' with the segmentation result if it was given.
+    annotator._update_image(segmentation_result=segmentation_result)
 
     # Add the annotator widget to the viewer.
     viewer.window.add_dock_widget(annotator)

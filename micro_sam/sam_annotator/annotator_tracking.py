@@ -92,7 +92,7 @@ class AnnotatorTracking(_AnnotatorBase):
     # The tracking annotator needs different settings for the prompt layers
     # to support the additional tracking state.
     # That's why we over-ride this function.
-    def _create_layers(self, segmentation_result):
+    def _create_layers(self):
         self._point_labels = ["positive", "negative"]
         self._track_state_labels = ["track", "division"]
 
@@ -134,17 +134,11 @@ class AnnotatorTracking(_AnnotatorBase):
         dummy_data = np.zeros(self._shape, dtype="uint32")
         self._viewer.add_labels(data=dummy_data, name="current_object")
         self._viewer.add_labels(data=dummy_data, name="auto_segmentation")
-        self._viewer.add_labels(
-            data=dummy_data if segmentation_result is None else segmentation_result, name="committed_objects"
-        )
+        self._viewer.add_labels(data=dummy_data, name="committed_objects")
         # Randomize colors so it is easy to see when object committed.
         self._viewer.layers["committed_objects"].new_colormap()
 
-    def __init__(
-        self,
-        viewer: "napari.viewer.Viewer",
-        # segmentation_result: Optional[np.ndarray] = None,
-    ) -> None:
+    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
         super().__init__(
             viewer=viewer,
             ndim=3,
@@ -152,7 +146,6 @@ class AnnotatorTracking(_AnnotatorBase):
             segment_nd_widget=widgets.track_object,
             commit_widget=widgets.commit_track,
             clear_widget=widgets.clear_track,
-            # segmentation_result=segmentation_result,
         )
 
         # Initialize the state for tracking.
