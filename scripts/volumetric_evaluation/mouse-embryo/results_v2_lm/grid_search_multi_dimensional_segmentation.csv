@@ -1,0 +1,441 @@
+,mSA,iou_threshold,projection,box_extension
+0,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.0
+1,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.025
+2,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.05
+3,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.075
+4,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.1
+5,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.125
+6,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.15
+7,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.175
+8,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.2
+9,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.225
+10,0.00457725016689403,0.5,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.25
+11,0.004542595769010864,0.5,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.0
+12,0.004542595769010864,0.5,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.025
+13,0.004542595769010864,0.5,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.05
+14,0.004542595769010864,0.5,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.075
+15,0.004542595769010864,0.5,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.1
+16,0.004542595769010864,0.5,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.125
+17,0.004542595769010864,0.5,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.15
+18,0.004542595769010864,0.5,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.175
+19,0.004542595769010864,0.5,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.2
+20,0.004542595769010864,0.5,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.225
+21,0.004542595769010864,0.5,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.25
+22,0.006116003169235109,0.5,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.0
+23,0.0062502030856520395,0.5,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.025
+24,0.00524359420180395,0.5,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.05
+25,0.0007905138339920949,0.5,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.075
+26,0.0,0.5,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.1
+27,0.0,0.5,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.125
+28,0.0,0.5,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.15
+29,0.0,0.5,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.175
+30,0.0,0.5,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.2
+31,0.00470281862745098,0.5,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.225
+32,0.004648169764448834,0.5,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.25
+33,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.0
+34,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.025
+35,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.05
+36,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.075
+37,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.1
+38,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.125
+39,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.15
+40,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.175
+41,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.2
+42,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.225
+43,0.0026819923371647508,0.5,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.25
+44,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.0
+45,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.025
+46,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.05
+47,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.075
+48,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.1
+49,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.125
+50,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.15
+51,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.175
+52,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.2
+53,0.0,0.5,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.225
+54,0.0026515151515151517,0.5,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.25
+55,0.009731869087441987,0.5,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.0
+56,0.0008368200836820083,0.5,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.025
+57,0.0004,0.5,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.05
+58,0.0,0.5,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.075
+59,0.0,0.5,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.1
+60,0.0,0.5,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.125
+61,0.0,0.5,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.15
+62,0.00042016806722689073,0.5,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.175
+63,0.003043478260869565,0.5,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.2
+64,0.0,0.5,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.225
+65,0.0008968609865470852,0.5,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.25
+66,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.0
+67,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.025
+68,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.05
+69,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.075
+70,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.1
+71,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.125
+72,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.15
+73,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.175
+74,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.2
+75,0.0,0.5,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.225
+76,0.0004016064257028112,0.5,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.25
+77,0.004612437371058061,0.5,single_point,0.0
+78,0.004612437371058061,0.5,single_point,0.025
+79,0.004612437371058061,0.5,single_point,0.05
+80,0.004612437371058061,0.5,single_point,0.075
+81,0.004612437371058061,0.5,single_point,0.1
+82,0.004612437371058061,0.5,single_point,0.125
+83,0.004612437371058061,0.5,single_point,0.15
+84,0.004612437371058061,0.5,single_point,0.175
+85,0.004612437371058061,0.5,single_point,0.2
+86,0.004612437371058061,0.5,single_point,0.225
+87,0.004612437371058061,0.5,single_point,0.25
+88,0.0,0.6,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.0
+89,0.0,0.6,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.025
+90,0.0,0.6,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.05
+91,0.0,0.6,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.075
+92,0.0,0.6,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.1
+93,0.0,0.6,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.125
+94,0.0,0.6,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.15
+95,0.0026717557251908397,0.6,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.175
+96,0.0026515151515151517,0.6,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.2
+97,0.0026415094339622643,0.6,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.225
+98,0.004542595769010864,0.6,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.25
+99,0.004542595769010864,0.6,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.0
+100,0.004542595769010864,0.6,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.025
+101,0.004542595769010864,0.6,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.05
+102,0.004542595769010864,0.6,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.075
+103,0.004542595769010864,0.6,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.1
+104,0.004542595769010864,0.6,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.125
+105,0.004542595769010864,0.6,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.15
+106,0.004542595769010864,0.6,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.175
+107,0.004542595769010864,0.6,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.2
+108,0.004542595769010864,0.6,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.225
+109,0.004542595769010864,0.6,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.25
+110,0.006092712319127414,0.6,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.0
+111,0.0062502030856520395,0.6,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.025
+112,0.006705731785687265,0.6,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.05
+113,0.005543082408779497,0.6,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.075
+114,0.0,0.6,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.1
+115,0.004612437371058061,0.6,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.125
+116,0.0046662443821072,0.6,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.15
+117,0.004612437371058061,0.6,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.175
+118,0.0046662443821072,0.6,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.2
+119,0.0046302346302346305,0.6,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.225
+120,0.004963316675624397,0.6,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.25
+121,0.0,0.6,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.0
+122,0.0,0.6,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.025
+123,0.0,0.6,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.05
+124,0.0,0.6,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.075
+125,0.0,0.6,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.1
+126,0.0,0.6,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.125
+127,0.0,0.6,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.15
+128,0.0,0.6,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.175
+129,0.0027559055118110236,0.6,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.2
+130,0.002734375,0.6,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.225
+131,0.002661596958174905,0.6,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.25
+132,0.0,0.6,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.0
+133,0.0,0.6,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.025
+134,0.0,0.6,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.05
+135,0.0,0.6,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.075
+136,0.0,0.6,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.1
+137,0.0,0.6,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.125
+138,0.0,0.6,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.15
+139,0.0,0.6,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.175
+140,0.0003773584905660377,0.6,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.2
+141,0.0,0.6,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.225
+142,0.004542595769010864,0.6,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.25
+143,0.013628835624215935,0.6,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.0
+144,0.0012278353964536636,0.6,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.025
+145,0.00040650406504065046,0.6,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.05
+146,0.00042016806722689073,0.6,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.075
+147,0.0008733624454148471,0.6,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.1
+148,0.00282258064516129,0.6,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.125
+149,0.003056768558951965,0.6,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.15
+150,0.003083700440528635,0.6,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.175
+151,0.003364890259901429,0.6,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.2
+152,0.0031158803501945527,0.6,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.225
+153,0.0038905547226386803,0.6,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.25
+154,0.0,0.6,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.0
+155,0.0,0.6,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.025
+156,0.0,0.6,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.05
+157,0.0,0.6,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.075
+158,0.0,0.6,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.1
+159,0.0,0.6,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.125
+160,0.0,0.6,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.15
+161,0.0,0.6,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.175
+162,0.0026515151515151517,0.6,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.2
+163,0.0030217267009719838,0.6,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.225
+164,0.0026415094339622643,0.6,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.25
+165,0.00500150776012845,0.6,single_point,0.0
+166,0.005020824555708276,0.6,single_point,0.025
+167,0.005020824555708276,0.6,single_point,0.05
+168,0.005020824555708276,0.6,single_point,0.075
+169,0.005020824555708276,0.6,single_point,0.1
+170,0.005020824555708276,0.6,single_point,0.125
+171,0.005020824555708276,0.6,single_point,0.15
+172,0.005020824555708276,0.6,single_point,0.175
+173,0.005020824555708276,0.6,single_point,0.2
+174,0.005020824555708276,0.6,single_point,0.225
+175,0.005020824555708276,0.6,single_point,0.25
+176,0.0,0.7,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.0
+177,0.0,0.7,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.025
+178,0.0,0.7,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.05
+179,0.0,0.7,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.075
+180,0.0,0.7,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.1
+181,0.0,0.7,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.125
+182,0.0003773584905660377,0.7,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.15
+183,0.004542595769010864,0.7,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.175
+184,0.004542595769010864,0.7,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.2
+185,0.004542595769010864,0.7,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.225
+186,0.004542595769010864,0.7,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.25
+187,0.004542595769010864,0.7,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.0
+188,0.004542595769010864,0.7,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.025
+189,0.004542595769010864,0.7,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.05
+190,0.004542595769010864,0.7,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.075
+191,0.004542595769010864,0.7,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.1
+192,0.004542595769010864,0.7,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.125
+193,0.004542595769010864,0.7,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.15
+194,0.004542595769010864,0.7,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.175
+195,0.004542595769010864,0.7,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.2
+196,0.004542595769010864,0.7,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.225
+197,0.004542595769010864,0.7,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.25
+198,0.005311737568687014,0.7,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.0
+199,0.006130459827500373,0.7,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.025
+200,0.00733799313612669,0.7,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.05
+201,0.004963316675624397,0.7,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.075
+202,0.0061480196805282356,0.7,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.1
+203,0.004944439020571722,0.7,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.125
+204,0.004594776403147026,0.7,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.15
+205,0.00457725016689403,0.7,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.175
+206,0.00457725016689403,0.7,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.2
+207,0.004542595769010864,0.7,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.225
+208,0.004542595769010864,0.7,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.25
+209,0.0,0.7,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.0
+210,0.0,0.7,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.025
+211,0.0,0.7,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.05
+212,0.0,0.7,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.075
+213,0.0,0.7,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.1
+214,0.0,0.7,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.125
+215,0.0,0.7,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.15
+216,0.002661596958174905,0.7,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.175
+217,0.0026415094339622643,0.7,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.2
+218,0.0026415094339622643,0.7,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.225
+219,0.004542595769010864,0.7,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.25
+220,0.0003773584905660377,0.7,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.0
+221,0.0,0.7,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.025
+222,0.0,0.7,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.05
+223,0.0,0.7,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.075
+224,0.0007575757575757576,0.7,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.1
+225,0.0007575757575757576,0.7,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.125
+226,0.0,0.7,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.15
+227,0.004542595769010864,0.7,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.175
+228,0.004542595769010864,0.7,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.2
+229,0.004542595769010864,0.7,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.225
+230,0.004542595769010864,0.7,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.25
+231,0.011208162243995137,0.7,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.0
+232,0.004849012775842044,0.7,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.025
+233,0.0011904761904761904,0.7,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.05
+234,0.0007751937984496124,0.7,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.075
+235,0.0031037915120803545,0.7,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.1
+236,0.003056359860782077,0.7,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.125
+237,0.00304472759991873,0.7,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.15
+238,0.003056359860782077,0.7,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.175
+239,0.003825568131964552,0.7,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.2
+240,0.0030217267009719838,0.7,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.225
+241,0.0026415094339622643,0.7,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.25
+242,0.0,0.7,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.0
+243,0.0,0.7,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.025
+244,0.0,0.7,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.05
+245,0.0,0.7,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.075
+246,0.0,0.7,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.1
+247,0.0,0.7,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.125
+248,0.0007575757575757576,0.7,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.15
+249,0.0026415094339622643,0.7,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.175
+250,0.0034019439679817036,0.7,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.2
+251,0.0026415094339622643,0.7,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.225
+252,0.004542595769010864,0.7,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.25
+253,0.004542595769010864,0.7,single_point,0.0
+254,0.004542595769010864,0.7,single_point,0.025
+255,0.004542595769010864,0.7,single_point,0.05
+256,0.004542595769010864,0.7,single_point,0.075
+257,0.004542595769010864,0.7,single_point,0.1
+258,0.004542595769010864,0.7,single_point,0.125
+259,0.004542595769010864,0.7,single_point,0.15
+260,0.004542595769010864,0.7,single_point,0.175
+261,0.004542595769010864,0.7,single_point,0.2
+262,0.004542595769010864,0.7,single_point,0.225
+263,0.004542595769010864,0.7,single_point,0.25
+264,0.0015180429012124255,0.8,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.0
+265,0.0,0.8,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.025
+266,0.0,0.8,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.05
+267,0.0003773584905660377,0.8,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.075
+268,0.0,0.8,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.1
+269,0.0,0.8,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.125
+270,0.0018867924528301887,0.8,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.15
+271,0.004542595769010864,0.8,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.175
+272,0.004542595769010864,0.8,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.2
+273,0.004542595769010864,0.8,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.225
+274,0.004542595769010864,0.8,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.25
+275,0.004542595769010864,0.8,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.0
+276,0.004542595769010864,0.8,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.025
+277,0.004542595769010864,0.8,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.05
+278,0.004542595769010864,0.8,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.075
+279,0.004542595769010864,0.8,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.1
+280,0.004542595769010864,0.8,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.125
+281,0.004542595769010864,0.8,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.15
+282,0.004542595769010864,0.8,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.175
+283,0.004542595769010864,0.8,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.2
+284,0.004542595769010864,0.8,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.225
+285,0.004542595769010864,0.8,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.25
+286,0.005694846221757644,0.8,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.0
+287,0.004542595769010864,0.8,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.025
+288,0.006080879368363165,0.8,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.05
+289,0.004925704422081493,0.8,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.075
+290,0.005694846221757644,0.8,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.1
+291,0.004925704422081493,0.8,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.125
+292,0.004925704422081493,0.8,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.15
+293,0.004542595769010864,0.8,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.175
+294,0.004542595769010864,0.8,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.2
+295,0.004542595769010864,0.8,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.225
+296,0.004542595769010864,0.8,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.25
+297,0.0,0.8,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.0
+298,0.0,0.8,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.025
+299,0.0,0.8,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.05
+300,0.0,0.8,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.075
+301,0.0,0.8,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.1
+302,0.0,0.8,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.125
+303,0.0,0.8,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.15
+304,0.004542595769010864,0.8,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.175
+305,0.004542595769010864,0.8,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.2
+306,0.004542595769010864,0.8,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.225
+307,0.004542595769010864,0.8,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.25
+308,0.013278246684762513,0.8,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.0
+309,0.0,0.8,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.025
+310,0.0003773584905660377,0.8,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.05
+311,0.0011450381679389313,0.8,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.075
+312,0.0011349342481417953,0.8,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.1
+313,0.0,0.8,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.125
+314,0.0018867924528301887,0.8,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.15
+315,0.004542595769010864,0.8,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.175
+316,0.004542595769010864,0.8,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.2
+317,0.004542595769010864,0.8,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.225
+318,0.004542595769010864,0.8,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.25
+319,0.010378323794598892,0.8,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.0
+320,0.007850844935879554,0.8,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.025
+321,0.008074861968871527,0.8,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.05
+322,0.0064698706233717925,0.8,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.075
+323,0.0064698706233717925,0.8,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.1
+324,0.006083837476766272,0.8,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.125
+325,0.003404835354042614,0.8,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.15
+326,0.004551303034667574,0.8,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.175
+327,0.0034019439679817036,0.8,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.2
+328,0.0026415094339622643,0.8,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.225
+329,0.0026415094339622643,0.8,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.25
+330,0.009588162208096888,0.8,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.0
+331,0.0,0.8,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.025
+332,0.0,0.8,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.05
+333,0.000390625,0.8,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.075
+334,0.0041710857676578545,0.8,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.1
+335,0.003404835354042614,0.8,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.125
+336,0.0026415094339622643,0.8,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.15
+337,0.004542595769010864,0.8,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.175
+338,0.004542595769010864,0.8,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.2
+339,0.004542595769010864,0.8,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.225
+340,0.004542595769010864,0.8,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.25
+341,0.004542595769010864,0.8,single_point,0.0
+342,0.004542595769010864,0.8,single_point,0.025
+343,0.004542595769010864,0.8,single_point,0.05
+344,0.004542595769010864,0.8,single_point,0.075
+345,0.004542595769010864,0.8,single_point,0.1
+346,0.004542595769010864,0.8,single_point,0.125
+347,0.004542595769010864,0.8,single_point,0.15
+348,0.004542595769010864,0.8,single_point,0.175
+349,0.004542595769010864,0.8,single_point,0.2
+350,0.004542595769010864,0.8,single_point,0.225
+351,0.004542595769010864,0.8,single_point,0.25
+352,0.015605737591607213,0.9,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.0
+353,0.005355679852056924,0.9,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.025
+354,0.0026501183729105383,0.9,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.05
+355,0.0018867924528301887,0.9,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.075
+356,0.0018867924528301887,0.9,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.1
+357,0.0018867924528301887,0.9,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.125
+358,0.0018867924528301887,0.9,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.15
+359,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.175
+360,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.2
+361,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.225
+362,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': False, 'use_points': False}",0.25
+363,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.0
+364,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.025
+365,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.05
+366,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.075
+367,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.1
+368,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.125
+369,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.15
+370,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.175
+371,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.2
+372,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.225
+373,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': True, 'use_points': False}",0.25
+374,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.0
+375,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.025
+376,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.05
+377,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.075
+378,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.1
+379,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.125
+380,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.15
+381,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.175
+382,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.2
+383,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.225
+384,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': False, 'use_points': True}",0.25
+385,0.014529244771743086,0.9,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.0
+386,0.0003787878787878788,0.9,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.025
+387,0.0003787878787878788,0.9,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.05
+388,0.0003773584905660377,0.9,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.075
+389,0.0,0.9,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.1
+390,0.0,0.9,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.125
+391,0.0018867924528301887,0.9,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.15
+392,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.175
+393,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.2
+394,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.225
+395,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': True, 'use_points': False}",0.25
+396,0.015245655888520735,0.9,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.0
+397,0.010369205749712802,0.9,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.025
+398,0.004925704422081493,0.9,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.05
+399,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.075
+400,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.1
+401,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.125
+402,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.15
+403,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.175
+404,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.2
+405,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.225
+406,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': False, 'use_points': True}",0.25
+407,0.005311737568687014,0.9,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.0
+408,0.007250845373812193,0.9,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.025
+409,0.004925704422081493,0.9,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.05
+410,0.005308813075152124,0.9,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.075
+411,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.1
+412,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.125
+413,0.004542595769010864,0.9,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.15
+414,0.0026415094339622643,0.9,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.175
+415,0.0026415094339622643,0.9,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.2
+416,0.0026415094339622643,0.9,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.225
+417,0.0026415094339622643,0.9,"{'use_box': False, 'use_mask': True, 'use_points': True}",0.25
+418,0.016408623619457264,0.9,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.0
+419,0.0031039635454424407,0.9,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.025
+420,0.00649642997979452,0.9,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.05
+421,0.0026415094339622643,0.9,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.075
+422,0.0030217267009719838,0.9,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.1
+423,0.0026415094339622643,0.9,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.125
+424,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.15
+425,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.175
+426,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.2
+427,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.225
+428,0.004542595769010864,0.9,"{'use_box': True, 'use_mask': True, 'use_points': True}",0.25
+429,0.004542595769010864,0.9,single_point,0.0
+430,0.004542595769010864,0.9,single_point,0.025
+431,0.004542595769010864,0.9,single_point,0.05
+432,0.004542595769010864,0.9,single_point,0.075
+433,0.004542595769010864,0.9,single_point,0.1
+434,0.004542595769010864,0.9,single_point,0.125
+435,0.004542595769010864,0.9,single_point,0.15
+436,0.004542595769010864,0.9,single_point,0.175
+437,0.004542595769010864,0.9,single_point,0.2
+438,0.004542595769010864,0.9,single_point,0.225
+439,0.004542595769010864,0.9,single_point,0.25
