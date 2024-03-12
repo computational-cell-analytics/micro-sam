@@ -71,7 +71,7 @@ class TestPromptBasedSegmentation(unittest.TestCase):
             expected_iou_mask = 0.9
         else:
             mask, image = self._get_input(shape)
-            predictor = self._get_model(image, self.model_type)
+            predictor, _ = self._get_model(image, self.model_type)
             expected_iou_mask = 0.8
 
         #
