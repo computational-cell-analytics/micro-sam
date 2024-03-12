@@ -52,7 +52,7 @@ class TestUtil(unittest.TestCase):
             x1, x2 = (np.random.rand(32, 32) > 0.5), (np.random.rand(32, 32) > 0.5)
             self.assertTrue(0.0 < compute_iou(x1, x2) < 1.0)
 
-    def test_tiled_prediction(self):
+    def test_tiled_embeddings(self):
         from micro_sam.util import precompute_image_embeddings, get_sam_model
 
         predictor = get_sam_model(model_type=self.model_type)
