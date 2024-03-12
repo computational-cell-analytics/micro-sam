@@ -671,10 +671,10 @@ def precompute_image_embeddings(
                     f"Embeddings file {save_path} is invalid due to unmatching {key}: "
                     f"{f.attrs.get(key)} != {val}.Please recompute embeddings in a new file."
                 )
-                if wrong_file_callback is not None:
-                    save_path = wrong_file_callback(save_path)
-                    f = zarr.open(save_path, "a")
-                break
+            if wrong_file_callback is not None:
+                save_path = wrong_file_callback(save_path)
+                f = zarr.open(save_path, "a")
+            break
 
     for key, val in key_vals:
         if key not in f.attrs:
