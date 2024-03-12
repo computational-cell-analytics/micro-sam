@@ -222,7 +222,7 @@ def _mask_to_tile(mask, shape, tile_shape, halo):
 def _initialize_predictor(predictor, image_embeddings, i, prompts, to_tile):
     tile = None
 
-    # set uthe precomputed state for tiled prediction
+    # Set the precomputed state for tiled prediction.
     if image_embeddings is not None and image_embeddings["input_size"] is None:
         features = image_embeddings["features"]
         shape, tile_shape, halo = features.attrs["shape"], features.attrs["tile_shape"], features.attrs["halo"]
@@ -235,7 +235,7 @@ def _initialize_predictor(predictor, image_embeddings, i, prompts, to_tile):
         }
         util.set_precomputed(predictor, tile_image_embeddings, i)
 
-    # set the precomputed state for normal prediction
+    # Set the precomputed state for normal prediction.
     elif image_embeddings is not None:
         shape = image_embeddings["input_size"]
         util.set_precomputed(predictor, image_embeddings, i)
@@ -246,11 +246,10 @@ def _initialize_predictor(predictor, image_embeddings, i, prompts, to_tile):
     return predictor, tile, prompts, shape
 
 
-def _tile_to_full_mask(mask, shape, tile, return_all, multimask_output):
-    assert not return_all and not multimask_output
-    full_mask = np.zeros((1,) + tuple(shape), dtype=mask.dtype)
+def _tile_to_full_mask(mask, shape, tile):
+    full_mask = np.zeros(mask.shape[0:1] + tuple(shape), dtype=mask.dtype)
     bb = tuple(slice(beg, end) for beg, end in zip(tile.begin, tile.end))
-    full_mask[0][bb] = mask[0]
+    full_mask[(slice(None),) + bb] = mask
     return full_mask
 
 
@@ -312,7 +311,8 @@ def segment_from_points(
         mask = mask[best_mask_id][None]
 
     if tile is not None:
-        return _tile_to_full_mask(mask, shape, tile, return_all, multimask_output)
+        mask = _tile_to_full_mask(mask, shape, tile)
+
     if return_all:
         return mask, scores, logits
     else:
@@ -412,7 +412,7 @@ def segment_from_mask(
     )
 
     if tile is not None:
-        return _tile_to_full_mask(mask, shape, tile, return_all, multimask_output)
+        mask = _tile_to_full_mask(mask, shape, tile)
 
     if return_all:
         return mask, scores, logits
@@ -455,7 +455,8 @@ def segment_from_box(
     )
 
     if tile is not None:
-        return _tile_to_full_mask(mask, shape, tile, return_all, multimask_output)
+        mask = _tile_to_full_mask(mask, shape, tile)
+
     if return_all:
         return mask, scores, logits
     else:
@@ -513,7 +514,8 @@ def segment_from_box_and_points(
     )
 
     if tile is not None:
-        return _tile_to_full_mask(mask, shape, tile, return_all, multimask_output)
+        mask = _tile_to_full_mask(mask, shape, tile)
+
     if return_all:
         return mask, scores, logits
     else:
