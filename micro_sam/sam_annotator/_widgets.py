@@ -7,6 +7,7 @@ import pickle
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Literal
 
+import elf.parallel
 import h5py
 import numpy as np
 import zarr
@@ -69,8 +70,15 @@ def commit(viewer: "napari.viewer.Viewer", layer: str = "current_object") -> Non
     seg = viewer.layers[layer].data
     shape = seg.shape
 
-    id_offset = int(viewer.layers["committed_objects"].data.max())
-    mask = seg != 0
+    # We parallelize these opeatios because they take quite long for large volumes.
+    block_shape = tuple(min(bs, sh) for bs, sh in zip((32, 256, 256), shape))
+
+    # id_offset = int(viewer.layers["committed_objects"].data.max())
+    id_offset = int(elf.parallel.max(viewer.layers["committed_objects"].data, block_shape=block_shape))
+
+    # mask = seg != 0
+    mask = np.zeros(seg.shape, dtype="bool")
+    mask = elf.parallel.apply_operation(seg, 0, np.not_equal, block_shape=block_shape, out=mask)
 
     viewer.layers["committed_objects"].data[mask] = (seg[mask] + id_offset)
     viewer.layers["committed_objects"].refresh()
