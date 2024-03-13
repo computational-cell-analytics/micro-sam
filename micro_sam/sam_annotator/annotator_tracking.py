@@ -1,8 +1,9 @@
 import warnings
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import napari
 import numpy as np
+import torch
 
 from magicgui.widgets import ComboBox, Container
 from segment_anything import SamPredictor
@@ -193,6 +194,7 @@ def annotator_tracking(
     viewer: Optional["napari.viewer.Viewer"] = None,
     predictor: Optional[SamPredictor] = None,
     checkpoint_path: Optional[str] = None,
+    device: Optional[Union[str, torch.device]] = None,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the tracking annotation tool fora given timeseries.
 
@@ -210,6 +212,7 @@ def annotator_tracking(
         predictor: The Segment Anything model. Passing this enables using fully custom models.
             If you pass `predictor` then `model_type` will be ignored.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
+        device: The computational device to use for the SAM model.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -220,7 +223,7 @@ def annotator_tracking(
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path,
         halo=halo, tile_shape=tile_shape, predictor=predictor,
-        ndim=3, checkpoint_path=checkpoint_path,
+        ndim=3, checkpoint_path=checkpoint_path, device=device,
     )
     state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
 
@@ -271,5 +274,5 @@ def main():
     annotator_tracking(
         image, embedding_path=args.embedding_path, model_type=args.model_type,
         tile_shape=args.tile_shape, halo=args.halo,
-        checkpoint_path=args.checkpoint,
+        checkpoint_path=args.checkpoint, device=args.device,
     )

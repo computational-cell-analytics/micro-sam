@@ -3,11 +3,12 @@ import pickle
 import warnings
 from glob import glob
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import h5py
 import napari
 import numpy as np
+import torch
 import torch.nn as nn
 
 from segment_anything import SamPredictor
@@ -91,6 +92,7 @@ def annotator_3d(
     decoder: Optional["nn.Module"] = None,
     precompute_amg_state: bool = False,
     checkpoint_path: Optional[str] = None,
+    device: Optional[Union[str, torch.device]] = None,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the 3d annotation tool for a given image volume.
 
@@ -115,6 +117,7 @@ def annotator_3d(
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
+        device: The computational device to use for the SAM model.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -127,7 +130,7 @@ def annotator_3d(
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path, predictor=predictor,
         halo=halo, tile_shape=tile_shape, ndim=3, precompute_amg_state=precompute_amg_state,
-        checkpoint_path=checkpoint_path,
+        checkpoint_path=checkpoint_path, device=device,
     )
 
     if viewer is None:
@@ -167,5 +170,5 @@ def main():
         image, embedding_path=args.embedding_path,
         segmentation_result=segmentation_result,
         model_type=args.model_type, tile_shape=args.tile_shape, halo=args.halo,
-        checkpoint_path=args.checkpoint,
+        checkpoint_path=args.checkpoint, device=args.device
     )
