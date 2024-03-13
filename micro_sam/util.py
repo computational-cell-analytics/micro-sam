@@ -503,7 +503,7 @@ def _compute_2d(input_, predictor):
 def _precompute_2d(input_, predictor, save_path, tile_shape, halo, f):
     if save_path is not None:
         f = zarr.open(save_path, "a")
-    
+
     use_tiled_prediction = tile_shape is not None
     set_embeddings = False
 
@@ -616,6 +616,44 @@ def _compute_data_signature(input_):
     return data_signature
 
 
+def _check_existing_embeddings(
+    input_,
+    predictor,
+    f,
+    save_path=None,
+    tile_shape=None,
+    halo=None,
+    wrong_file_callback=None,
+) -> zarr.Group:
+    data_signature = _compute_data_signature(input_)
+    key_vals = [
+        ("data_signature", data_signature),
+        ("tile_shape", tile_shape if tile_shape is None else list(tile_shape)),
+        ("halo", halo if halo is None else list(halo)),
+        ("model_type", predictor.model_type)
+    ]
+    if "input_size" in f.attrs:  # we have computed the embeddings already and perform checks
+        for key, val in key_vals:
+            if val is None:
+                continue
+            # check whether the key signature does not match or is not in the file
+            if key not in f.attrs or f.attrs[key] != val:
+                raise RuntimeError(
+                    f"Embeddings file {save_path} is invalid due to unmatching {key}: "
+                    f"{f.attrs.get(key)} != {val}.Please recompute embeddings in a new file."
+                )
+            if wrong_file_callback is not None:
+                save_path = wrong_file_callback(save_path)
+                f = zarr.open(save_path, "a")
+            break
+
+    for key, val in key_vals:
+        if key not in f.attrs:
+            f.attrs[key] = val
+
+    return f
+
+
 def precompute_image_embeddings(
     predictor: SamPredictor,
     input_: np.ndarray,
@@ -652,40 +690,15 @@ def precompute_image_embeddings(
     if save_path is not None:
         save_path = str(save_path)
         f = zarr.open(save_path, "a")
+        f = _check_existing_embeddings(input_, predictor, f, save_path, tile_shape, halo, wrong_file_callback)
     else:
         f = zarr.group()
-    data_signature = _compute_data_signature(input_)        
-    key_vals = [
-        ("data_signature", data_signature),
-        ("tile_shape", tile_shape if tile_shape is None else list(tile_shape)),
-        ("halo", halo if halo is None else list(halo)),
-        ("model_type", predictor.model_type)
-    ]
-    if "input_size" in f.attrs:  # we have computed the embeddings already and perform checks
-        for key, val in key_vals:
-            if val is None:
-                continue
-            # check whether the key signature does not match or is not in the file
-            if key not in f.attrs or f.attrs[key] != val:
-                raise RuntimeError(
-                    f"Embeddings file {save_path} is invalid due to unmatching {key}: "
-                    f"{f.attrs.get(key)} != {val}.Please recompute embeddings in a new file."
-                )
-            if wrong_file_callback is not None:
-                save_path = wrong_file_callback(save_path)
-                f = zarr.open(save_path, "a")
-            break
-
-    for key, val in key_vals:
-        if key not in f.attrs:
-            f.attrs[key] = val
-
     if ndim == 2:
-        image_embeddings = _compute_2d(input_, predictor) if tile_shape is None else\
+        image_embeddings = _compute_2d(input_, predictor) if save_path is None and tile_shape is None else\
             _precompute_2d(input_, predictor, save_path, tile_shape, halo, f)
 
     elif ndim == 3:
-        image_embeddings = _compute_3d(input_, predictor) if tile_shape is None else\
+        image_embeddings = _compute_3d(input_, predictor) if save_path is None and tile_shape is None else\
             _precompute_3d(input_, predictor, save_path, lazy_loading, tile_shape, halo, f)
 
     else:
