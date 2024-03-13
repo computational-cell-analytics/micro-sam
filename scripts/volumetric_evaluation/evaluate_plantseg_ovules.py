@@ -2,7 +2,6 @@ import os
 from glob import glob
 
 import h5py
-from skimage.measure import label
 
 from micro_sam.evaluation.multi_dimensional_segmentation import run_multi_dimensional_segmentation_grid_search
 
@@ -19,9 +18,6 @@ def main(args):
     test_volume_paths = glob(os.path.join(args.input_path, "*.h5"))
     test_volume_path = test_volume_paths[0]
     volume, labels = get_raw_and_label_volumes(test_volume_path)
-
-    # applying connected components to get instances
-    labels = label(labels)
 
     run_multi_dimensional_segmentation_grid_search(
         volume=volume,

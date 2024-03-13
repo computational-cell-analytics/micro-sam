@@ -158,17 +158,20 @@ def segment_slices_from_ground_truth(
         output_seg[slice_choice][output_slice == 1] = 1
 
         # Segment the object in the entire volume with the specified segmented slice
-        this_seg = segment_mask_in_volume(
-            segmentation=output_seg,
-            predictor=predictor,
-            image_embeddings=embeddings,
-            segmented_slices=np.array(slice_choice),
-            stop_lower=False, stop_upper=False,
-            iou_threshold=iou_threshold,
-            projection=projection,
-            box_extension=box_extension,
-            verbose=verbose
-        )
+        try:
+            this_seg = segment_mask_in_volume(
+                segmentation=output_seg,
+                predictor=predictor,
+                image_embeddings=embeddings,
+                segmented_slices=np.array(slice_choice),
+                stop_lower=False, stop_upper=False,
+                iou_threshold=iou_threshold,
+                projection=projection,
+                box_extension=box_extension,
+                verbose=verbose
+            )
+        except ValueError:  # TODO: take a look at what's happening here (for label ids 1120, 1845, 4453)
+            continue
 
         # Store the entire segmented object
         final_segmentation[this_seg == 1] = label_id
