@@ -499,7 +499,6 @@ def run_inference_with_iterative_prompting(
         batch_size: The batch size used for batched predictions.
         n_iterations: The number of iterations for iterative prompting.
         use_masks: Whether to make use of logits from previous prompt-based segmentation
-            (especially in iterative prompting.)
     """
     if len(image_paths) != len(gt_paths):
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
