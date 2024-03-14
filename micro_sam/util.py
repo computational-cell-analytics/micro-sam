@@ -501,12 +501,12 @@ def _compute_2d(input_, predictor, f, save_path):
             features.attrs["shape"] = input_.shape[:2]
             predictor.reset_image()
             predictor.set_image(_to_image(input_))
-            features = predictor.get_image_embedding().cpu().numpy()
+            embedding = predictor.get_image_embedding().cpu().numpy()
             original_size = predictor.original_size
             input_size = predictor.input_size
 
             ds = features.create_dataset(
-                "features", data=features, compression="gzip", chunks=features.shape
+                "features", data=embedding, compression="gzip", chunks=embedding.shape
             )
             ds.attrs["original_size"] = original_size
             ds.attrs["input_size"] = input_size
