@@ -124,15 +124,16 @@ def submit_slurm(args):
     region = args.roi  # use the organelles model or boundaries model
     make_delay = "10s"  # wait for precomputing the embeddings and later run inference scripts
 
-    if args.checkpoint_path is None and args.experiment_path is None:
+    if args.checkpoint_path is None:
         checkpoint = get_checkpoint_path(experiment_set, dataset_name, model_type, region)
+    else:
+        checkpoint = args.checkpoint_path
 
+    if args.experiment_path is None:
         modality = region if region == "lm" else "em"
-
         experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/v2/"
         experiment_folder += f"{experiment_set}/{modality}/{dataset_name}/{model_type}/"
     else:
-        checkpoint = args.checkpoint_path
         experiment_folder = args.experiment_path
 
     # now let's run the experiments
