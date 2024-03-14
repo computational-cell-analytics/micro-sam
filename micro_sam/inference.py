@@ -25,7 +25,8 @@ def batched_inference(
     embedding_path: Optional[Union[str, os.PathLike]] = None,
     return_instance_segmentation: bool = True,
     segmentation_ids: Optional[list] = None,
-    reduce_multimasking: bool = True
+    reduce_multimasking: bool = True,
+    logits_masks: bool = False
 ):
     """Run batched inference for input prompts.
 
@@ -48,6 +49,8 @@ def batched_inference(
             derived from the prompts.
         reduce_multimasking: Whether to choose the most likely masks with
             highest ious from multimasking
+        logits_masks: The logits masks. Array of shape N_PROMPTS x 1 x 256 x 256.
+            Whether to use the logits masks from previous segmentation.
 
     Returns:
         The predicted segmentation masks.
@@ -63,6 +66,7 @@ def batched_inference(
 
     have_points = points is not None
     have_boxes = boxes is not None
+    have_logits = logits_masks is not None
     if (not have_points) and (not have_boxes):
         raise ValueError("Point and/or box prompts have to be passed, you passed neither.")
 
@@ -77,6 +81,19 @@ def batched_inference(
             "The number of point and box prompts does not match: "
             f"{len(points)} != {len(boxes)}"
         )
+
+    if have_logits:
+        if have_points and (len(logits_masks) != len(point_labels)):
+            raise ValueError(
+                "The number of point and logits does not match: "
+                f"{len(points) != len(logits_masks)}"
+            )
+        elif have_boxes and (len(logits_masks) != len(boxes)):
+            raise ValueError(
+                "The number of boxes and logits does not match: "
+                f"{len(boxes)} != {len(logits_masks)}"
+            )
+
     n_prompts = boxes.shape[0] if have_boxes else points.shape[0]
 
     if (segmentation_ids is not None) and (len(segmentation_ids) != n_prompts):
@@ -112,10 +129,14 @@ def batched_inference(
         batch_boxes = boxes[batch_start:batch_stop] if have_boxes else None
         batch_points = points[batch_start:batch_stop] if have_points else None
         batch_labels = point_labels[batch_start:batch_stop] if have_points else None
+        batch_logits = logits_masks[batch_start:batch_stop] if have_logits else None
 
-        batch_masks, batch_ious, _ = predictor.predict_torch(
-            point_coords=batch_points, point_labels=batch_labels,
-            boxes=batch_boxes, multimask_output=multimasking
+        batch_masks, batch_ious, batch_logits = predictor.predict_torch(
+            point_coords=batch_points,
+            point_labels=batch_labels,
+            boxes=batch_boxes,
+            mask_input=batch_logits,
+            multimask_output=multimasking
         )
 
         # If we expect to reduce the masks from multimasking and use multi-masking,
@@ -124,10 +145,12 @@ def batched_inference(
             _, max_index = batch_ious.max(axis=1)
             batch_masks = torch.cat([batch_masks[i, max_id][None] for i, max_id in enumerate(max_index)]).unsqueeze(1)
             batch_ious = torch.cat([batch_ious[i, max_id][None] for i, max_id in enumerate(max_index)]).unsqueeze(1)
+            batch_logits = torch.cat([batch_logits[i, max_id][None] for i, max_id in enumerate(max_index)]).unsqueeze(1)
 
         batch_data = amg_utils.MaskData(masks=batch_masks.flatten(0, 1), iou_preds=batch_ious.flatten(0, 1))
         batch_data["masks"] = (batch_data["masks"] > predictor.model.mask_threshold).type(torch.bool)
         batch_data["boxes"] = batched_mask_to_box(batch_data["masks"])
+        batch_data["logits"] = batch_logits
 
         masks.cat(batch_data)
 
@@ -139,6 +162,7 @@ def batched_inference(
             "bbox": amg_utils.box_xyxy_to_xywh(masks["boxes"][idx]).tolist(),
             "predicted_iou": masks["iou_preds"][idx].item(),
             "seg_id": idx + 1 if segmentation_ids is None else int(segmentation_ids[idx]),
+            "logits": masks["logits"][idx]
         }
         for idx in range(len(masks["masks"]))
     ]

@@ -406,7 +406,8 @@ def _run_inference_with_iterative_prompting_for_image(
     batch_size,
     embedding_path,
     n_iterations,
-    prediction_paths
+    prediction_paths,
+    use_masks=False
 ) -> None:
     prompt_generator = IterativePromptGenerator()
 
@@ -433,12 +434,15 @@ def _run_inference_with_iterative_prompting_for_image(
 
     sampled_binary_gt = util.segmentation_to_one_hot(gt.astype("int64"), gt_ids)
 
+    if use_masks:
+        logits_masks = None
+
     for iteration in range(n_iterations):
         batched_outputs = batched_inference(
             predictor, image, batch_size,
             boxes=boxes, points=points, point_labels=point_labels,
             multimasking=multimasking, embedding_path=embedding_path,
-            return_instance_segmentation=False
+            return_instance_segmentation=False, logits_masks=logits_masks
         )
 
         # switching off multimasking after first iter, as next iters (with multiple prompts) don't expect multimasking
@@ -459,6 +463,11 @@ def _run_inference_with_iterative_prompting_for_image(
         else:
             point_labels = next_labels
 
+        incoming_logits = torch.stack([m["logits"] for m in batched_outputs]).to(torch.float32)
+
+        if use_masks:
+            logits_masks = incoming_logits
+
         _save_segmentation(masks, prediction_paths[iteration])
 
 
@@ -472,6 +481,7 @@ def run_inference_with_iterative_prompting(
     dilation: int = 5,
     batch_size: int = 32,
     n_iterations: int = 8,
+    use_masks: bool = False
 ) -> None:
     """Run segment anything inference for multiple images using prompts iteratively
         derived from model outputs and groundtruth
@@ -487,6 +497,7 @@ def run_inference_with_iterative_prompting(
             around which points will not be sampled.
         batch_size: The batch size used for batched predictions.
         n_iterations: The number of iterations for iterative prompting.
+        use_masks: To make use of logits masks from previously placed points in iterative prompting.
     """
     if len(image_paths) != len(gt_paths):
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
@@ -494,6 +505,9 @@ def run_inference_with_iterative_prompting(
     # create all prediction folders for all intermediate iterations
     for i in range(n_iterations):
         os.makedirs(os.path.join(prediction_dir, f"iteration{i:02}"), exist_ok=True)
+
+    if use_masks:
+        print("The iterative prompting will make use of logits masks from previous iterations.")
 
     for image_path, gt_path in tqdm(
         zip(image_paths, gt_paths), total=len(image_paths), desc="Run inference with iterative prompting for all images"
@@ -517,7 +531,7 @@ def run_inference_with_iterative_prompting(
         _run_inference_with_iterative_prompting_for_image(
             predictor, image, gt, start_with_box_prompt=start_with_box_prompt,
             dilation=dilation, batch_size=batch_size, embedding_path=embedding_path,
-            n_iterations=n_iterations, prediction_paths=prediction_paths
+            n_iterations=n_iterations, prediction_paths=prediction_paths, use_masks=use_masks
         )
 
 
