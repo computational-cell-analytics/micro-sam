@@ -1,24 +1,30 @@
 import os
+from pathlib import Path
 from tempfile import NamedTemporaryFile as tmp_file
-import numpy as np
 from typing import Optional, Union
 
+import bioimageio.spec.model.v0_5 as spec
+import numpy as np
 import torch
 
-from bioimageio.core.build_spec import build_model
+from bioimageio.spec import save_bioimageio_package
+
 
 from .. import util
 from ..prompt_generators import PointAndBoxPromptGenerator
 from .predictor_adaptor import PredictorAdaptor
 
-
-def _get_model(image, model_type, checkpoint_path):
-    "Returns the model and predictor while initializing with the model checkpoints"
-    predictor, sam_model = util.get_sam_model(model_type=model_type, return_sam=True,
-                                              checkpoint_path=checkpoint_path)  # type: ignore
-    image_embeddings = util.precompute_image_embeddings(predictor, image)
-    util.set_precomputed(predictor, image_embeddings)
-    return predictor, sam_model
+# TODO extend the defaults
+DEFAULTS = {
+    "authors": [
+        spec.Author(name="Anwai Archit", affiliation="University Goettingen", github_user="anwai98"),
+        spec.Author(name="Constantin Pape", affiliation="University Goettingen", github_user="constantinpape"),
+    ],
+    "description": "Finetuned Segment Anything Model for Microscopy",
+    "cite": [
+        spec.CiteEntry(text="Archit et al. Segment Anything for Microscopy", doi=spec.Doi("10.1101/2023.08.21.554208")),
+    ]
+}
 
 
 def _create_test_inputs_and_outputs(
@@ -36,34 +42,45 @@ def _create_test_inputs_and_outputs(
     # For now we just generate a single box prompt here, but we could also generate more input prompts.
     generator = PointAndBoxPromptGenerator(0, 0, 4, False, True)
     centers, bounding_boxes = util.get_centers_and_bounding_boxes(labels)
-    masks = util.segmentation_to_one_hot(labels.astype("int64"), segmentation_ids=[1])  # type: ignore
-    _, _, box_prompts, _ = generator(masks, [bounding_boxes[1]])
-    box_prompts = box_prompts.numpy()
+    masks = util.segmentation_to_one_hot(labels.astype("int64"), segmentation_ids=[1, 2])  # type: ignore
+    _, _, box_prompts, _ = generator(masks, [bounding_boxes[1], bounding_boxes[2]])
+    box_prompts = box_prompts.numpy()[None]
 
-    save_image_path = input_path.name
-    np.save(save_image_path, image[None, None])
-
-    _, sam_model = _get_model(image, model_type, checkpoint_path)
-    predictor = PredictorAdaptor(sam_model=sam_model)
+    predictor = PredictorAdaptor(model_type=model_type)
+    predictor.load_state_dict(torch.load(checkpoint_path))
 
     save_box_prompt_path = box_path.name
     np.save(save_box_prompt_path, box_prompts)
 
-    input_ = util._to_image(image).transpose(2, 0, 1)
+    input_ = util._to_image(image).transpose(2, 0, 1)[None]
+    save_image_path = input_path.name
+    np.save(save_image_path, input_)
 
     masks, scores, embeddings = predictor(
-        input_image=torch.from_numpy(input_)[None],
-        image_embeddings=None,
-        box_prompts=torch.from_numpy(box_prompts)[None]
+        image=torch.from_numpy(input_),
+        embeddings=None,
+        box_prompts=torch.from_numpy(box_prompts)
     )
 
     np.save(mask_path.name, masks.numpy())
     np.save(score_path.name, scores.numpy())
     np.save(embed_path.name, embeddings.numpy())
 
-    return [save_image_path, save_box_prompt_path], [mask_path.name, score_path.name, embed_path.name]
+    # TODO autogenerate the cover and return it too.
+
+    inputs = {
+        "image": save_image_path,
+        "box_prompts": save_box_prompt_path,
+    }
+    outputs = {
+        "mask": mask_path.name,
+        "score": score_path.name,
+        "embeddings": embed_path.name
+    }
+    return inputs, outputs
 
 
+# TODO url with documentation for the modelzoo interface, and just add it to defaults
 def _write_documentation(doc_path, doc):
     with open(doc_path, "w") as f:
         if doc is None:
@@ -75,15 +92,19 @@ def _write_documentation(doc_path, doc):
     return doc_path
 
 
-# TODO enable over-riding the authors and citation and tags from kwargs
-# TODO support RGB sample inputs
+def _get_checkpoint(model_type, checkpoint_path):
+    if checkpoint_path is None:
+        model_registry = util.models()
+        checkpoint_path = model_registry.fetch(model_type)
+    return checkpoint_path
+
+
 def export_bioimageio_model(
     image: np.ndarray,
     label_image: np.ndarray,
     model_type: str,
-    model_name: str,
+    name: str,
     output_path: Union[str, os.PathLike],
-    doc: Optional[str] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     **kwargs
 ) -> None:
@@ -97,12 +118,9 @@ def export_bioimageio_model(
         label_image: The segmentation correspoding to `image`.
             It is used to derive prompt inputs for the model.
         model_type: The type of the SAM model.
-        model_name: The name of the exported model.
+        name: The name of the exported model.
         output_path: Where the exported model is saved.
-        doc: Documentation for the model.
         checkpoint_path: Optional checkpoint for loading the SAM model.
-        kwargs: optional keyword arguments for the 'build_model' function
-            that converts to the modelzoo format.
     """
     with (
         tmp_file(suffix=".md") as tmp_doc_path,
@@ -112,6 +130,7 @@ def export_bioimageio_model(
         tmp_file(suffix=".npy") as tmp_score_path,
         tmp_file(suffix=".npy") as tmp_embed_path,
     ):
+        checkpoint_path = _get_checkpoint(model_type, checkpoint_path=checkpoint_path)
         input_paths, result_paths = _create_test_inputs_and_outputs(
             image, label_image, model_type, checkpoint_path,
             input_path=tmp_input_path,
@@ -120,35 +139,159 @@ def export_bioimageio_model(
             score_path=tmp_score_path,
             embed_path=tmp_embed_path,
         )
-        checkpoint = util._get_checkpoint(model_type, checkpoint_path=checkpoint_path)
+        input_descriptions = [
+            # First input: the image data.
+            spec.InputTensorDescr(
+                id=spec.TensorId("image"),
+                axes=[
+                    spec.BatchAxis(),
+                    # NOTE: to support 1 and 3 channels we can add another preprocessing.
+                    # Best solution: Have a pre-processing for this! (1C -> RGB)
+                    spec.ChannelAxis(channel_names=[spec.Identifier(cname) for cname in "RGB"]),
+                    spec.SpaceInputAxis(id=spec.AxisId("y"), size=spec.ARBITRARY_SIZE),
+                    spec.SpaceInputAxis(id=spec.AxisId("x"), size=spec.ARBITRARY_SIZE),
+                ],
+                test_tensor=spec.FileDescr(source=input_paths["image"]),
+                data=spec.IntervalOrRatioDataDescr(type="uint8")
+            ),
 
+            # Second input: the box prompts (optional)
+            spec.InputTensorDescr(
+                id=spec.TensorId("box_prompts"),
+                optional=True,
+                axes=[
+                    spec.BatchAxis(),
+                    spec.IndexAxis(
+                        id=spec.AxisId("object"),
+                        size=spec.ARBITRARY_SIZE
+                    ),
+                    # TODO double check the axis names
+                    spec.ChannelAxis(channel_names=[spec.Identifier(bname) for bname in "hwxy"]),
+                ],
+                test_tensor=spec.FileDescr(source=input_paths["box_prompts"]),
+                data=spec.IntervalOrRatioDataDescr(type="int64")
+            ),
+
+            # TODO
+            # Third input: the point prompts (optional)
+
+            # TODO
+            # Fourth input: the mask prompts (optional)
+
+            # Fifth input: the image embeddings (optional)
+            spec.InputTensorDescr(
+                id=spec.TensorId("embeddings"),
+                optional=True,
+                axes=[
+                    spec.BatchAxis(),
+                    # NOTE: we currently have to specify all the channel names
+                    # (It would be nice to also support size)
+                    spec.ChannelAxis(channel_names=[spec.Identifier(f"c{i}") for i in range(256)]),
+                    spec.SpaceInputAxis(id=spec.AxisId("y"), size=64),
+                    spec.SpaceInputAxis(id=spec.AxisId("x"), size=64),
+                ],
+                test_tensor=spec.FileDescr(source=result_paths["embeddings"]),
+                data=spec.IntervalOrRatioDataDescr(type="float32")
+            ),
+
+        ]
+
+        output_descriptions = [
+            # First output: The mask predictions.
+            spec.OutputTensorDescr(
+                id=spec.TensorId("masks"),
+                axes=[
+                    spec.BatchAxis(),
+                    spec.IndexAxis(
+                        id=spec.AxisId("object"),
+                        size=spec.SizeReference(
+                            tensor_id=spec.TensorId("box_prompts"), axis_id=spec.AxisId("object")
+                        )
+                    ),
+                    # NOTE: this could be a 3 once we use multi-masking
+                    spec.ChannelAxis(channel_names=[spec.Identifier("mask")]),
+                    spec.SpaceOutputAxis(
+                        id=spec.AxisId("y"),
+                        size=spec.SizeReference(
+                            tensor_id=spec.TensorId("image"), axis_id=spec.AxisId("y"),
+                        )
+                    ),
+                    spec.SpaceOutputAxis(
+                        id=spec.AxisId("x"),
+                        size=spec.SizeReference(
+                            tensor_id=spec.TensorId("image"), axis_id=spec.AxisId("x"),
+                        )
+                    )
+                ],
+                data=spec.IntervalOrRatioDataDescr(type="uint8"),
+                test_tensor=spec.FileDescr(source=result_paths["mask"])
+            ),
+
+            # The score predictions
+            spec.OutputTensorDescr(
+                id=spec.TensorId("scores"),
+                axes=[
+                    spec.BatchAxis(),
+                    spec.IndexAxis(
+                        id=spec.AxisId("object"),
+                        size=spec.SizeReference(
+                            tensor_id=spec.TensorId("box_prompts"), axis_id=spec.AxisId("object")
+                        )
+                    ),
+                    # NOTE: this could be a 3 once we use multi-masking
+                    spec.ChannelAxis(channel_names=[spec.Identifier("mask")]),
+                ],
+                data=spec.IntervalOrRatioDataDescr(type="float32"),
+                test_tensor=spec.FileDescr(source=result_paths["score"])
+            ),
+
+            # The image embeddings
+            spec.OutputTensorDescr(
+                id=spec.TensorId("embeddings"),
+                axes=[
+                    spec.BatchAxis(),
+                    spec.ChannelAxis(channel_names=[spec.Identifier(f"c{i}") for i in range(256)]),
+                    spec.SpaceOutputAxis(id=spec.AxisId("y"), size=64),
+                    spec.SpaceOutputAxis(id=spec.AxisId("x"), size=64),
+                ],
+                data=spec.IntervalOrRatioDataDescr(type="float32"),
+                test_tensor=spec.FileDescr(source=result_paths["embeddings"])
+            )
+        ]
+
+        # TODO sha256
         architecture_path = os.path.join(os.path.split(__file__)[0], "predictor_adaptor.py")
-
-        doc_path = tmp_doc_path.name
-        _write_documentation(doc_path, doc)
-
-        build_model(
-            weight_uri=checkpoint,  # type: ignore
-            test_inputs=input_paths,
-            test_outputs=result_paths,
-            input_axes=["bcyx", "bic"],
-            # FIXME this causes some error in build-model
-            # input_names=["image", "box-prompts"],
-            output_axes=["bcyx", "bic", "bcyx"],
-            # FIXME this causes some error in build-model
-            # output_names=["masks", "scores", "image_embeddings"],
-            name=model_name,
-            description="Finetuned Segment Anything models for Microscopy",
-            authors=[{"name": "Anwai Archit", "affiliation": "Uni Goettingen"},
-                     {"name": "Constantin Pape", "affiliation": "Uni Goettingen"}],
-            tags=["instance-segmentation", "segment-anything"],
-            license="CC-BY-4.0",
-            documentation=doc_path,  # type: ignore
-            cite=[{"text": "Archit, ..., Pape et al. Segment Anything for Microscopy",
-                   "doi": "10.1101/2023.08.21.554208"}],
-            output_path=output_path,  # type: ignore
-            architecture=architecture_path,
-            **kwargs,
+        architecture = spec.ArchitectureFromFileDescr(
+            source=Path(architecture_path),
+            callable="PredictorAdaptor",
+            kwargs={"model_type": model_type}
         )
 
-        # TODO actually test the model
+        weight_descriptions = spec.WeightsDescr(
+            pytorch_state_dict=spec.PytorchStateDictWeightsDescr(
+                source=Path(checkpoint_path),
+                architecture=architecture,
+                pytorch_version=spec.Version(torch.__version__),
+            )
+        )
+
+        doc_path = tmp_doc_path.name
+        _write_documentation(doc_path, kwargs.get("documentation", None))
+
+        # TODO tags, dependencies, other stuff ...
+        model_description = spec.ModelDescr(
+            name=name,
+            description=kwargs.get("description", DEFAULTS["description"]),
+            authors=kwargs.get("authors", DEFAULTS["authors"]),
+            cite=kwargs.get("cite", DEFAULTS["cite"]),
+            license=spec.LicenseId("MIT"),
+            documentation=Path(doc_path),
+            git_repo=spec.HttpUrl("https://github.com/computational-cell-analytics/micro-sam"),
+            inputs=input_descriptions,
+            outputs=output_descriptions,
+            weights=weight_descriptions,
+        )
+
+        # TODO test the model.
+
+        save_bioimageio_package(model_description, output_path=output_path)
