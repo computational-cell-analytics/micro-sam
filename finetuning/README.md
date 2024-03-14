@@ -2,16 +2,22 @@
 
 Code for finetuning segment anything data on microscopy data and evaluating the finetuned models.
 
-## Example: LiveCELL
+## Example: LIVECell
 
 **Finetuning**
 
-Run the script `livecell_finetuning.py` for fine-tuning a model on LiveCELL.
+Run the script `livecell_finetuning.py` for fine-tuning a model on LIVECell. Run the following script for details on how to run the scripts:
+
+```
+python livecell_finetuning.py -h
+```
 
 **Inference**
 
+TODO: update this as this changes
+
 The script `livecell_inference.py` can be used to run inference on the test set. It supports different arguments for inference with different configurations.
-For example run
+For example run:
 ```
 python livecell_inference.py -c checkpoints/livecell_sam/best.pt -m vit_b -e experiment -i /scratch/projects/nim00007/data/LiveCELL --points --positive 1 --negative 0
 ```
@@ -41,6 +47,8 @@ This will first perform a grid-search for the best parameters on a subset of the
 
 **Evaluation**
 
+TODO: update this as this changes as well
+
 The script `livecell_evaluation.py` can then be used to evaluate the results from the inference runs.
 E.g. run the script like below to evaluate the previous predictions.
 ```
@@ -50,6 +58,8 @@ This will create a folder `experiment/results` with csv tables with the results 
 
 
 ## Finetuning and evaluation code
+
+TODO: hint the users to the `generalist/`, `specialist/` and `evaluation/` scripts with a bit of hints
 
 The subfolders contain the code for different finetuning and evaluation experiments for microscopy data:
 - `livecell`: TODO
