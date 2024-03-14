@@ -72,6 +72,25 @@ class TestUtil(unittest.TestCase):
         # set the precomputed embeddings again, to make sure this does not fail due to
         # a wrong code-path
         precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=tile_shape, halo=halo)
+        
+    def test_tiled_prediction_3d(self):
+        from micro_sam.util import precompute_image_embeddings, get_sam_model, VIT_T_SUPPORT
+
+        predictor = get_sam_model(model_type="vit_t" if VIT_T_SUPPORT else "vit_b")
+
+        tile_shape, halo = (256, 256), (16, 16)
+        input_ = np.random.rand(3, 512, 512).astype("float32")
+        save_path = os.path.join(self.tmp_folder, "emebd.zarr")
+        precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=tile_shape, halo=halo)
+
+        self.assertTrue(os.path.exists(save_path))
+        with zarr.open(save_path, "r") as f:
+            self.assertIn("features", f)
+            self.assertEqual(len(f["features"]), 4)
+
+        # set the precomputed embeddings again, to make sure this does not fail due to
+        # a wrong code-path
+        precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=tile_shape, halo=halo)
 
     def test_segmentation_to_one_hot(self):
         from micro_sam.util import segmentation_to_one_hot
