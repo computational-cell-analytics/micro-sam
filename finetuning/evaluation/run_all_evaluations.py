@@ -99,8 +99,9 @@ def for_custom_livecell(specific_script):
         cmd += f"-m {model_type} "
         cmd += f"-e {experiment_set} "
         cmd += "-r lm "
-        cmd += f"--experiment_path {EXP_ROOT}/test2/input_logits/{experiment_set}/lm/livecell/{model_type} "
-        cmd += f"-s {specific_script}"
+        cmd += f"--experiment_path {EXP_ROOT}/test/input_logits/{experiment_set}/lm/livecell/{model_type} "
+        cmd += f"-s {specific_script} "
+        cmd += "--use_masks"
 
         print(f"Running the command: {cmd} \n")
         _cmd = re.split(r"\s", cmd)
