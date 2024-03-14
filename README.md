@@ -1,5 +1,6 @@
 [![DOC](https://shields.mitmproxy.org/badge/docs-pdoc.dev-brightgreen.svg)](https://computational-cell-analytics.github.io/micro-sam/)
 [![Conda](https://anaconda.org/conda-forge/micro_sam/badges/version.svg)](https://anaconda.org/conda-forge/micro_sam)
+[![codecov](https://codecov.io/gh/computational-cell-analytics/micro-sam/graph/badge.svg?token=7ETPP5CABP)](https://codecov.io/gh/computational-cell-analytics/micro-sam)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7919746.svg)](https://doi.org/10.5281/zenodo.7919746)
 
 # SegmentAnything for Microscopy
@@ -30,6 +31,11 @@ You can then start the `micro_sam` tools by running `$ micro_sam.annotator` in t
 For an introduction in how to use the napari based annotation tools check out [the video tutorials](https://www.youtube.com/watch?v=ket7bDUP9tI&list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO&pp=gAQBiAQB).
 Please check out [the documentation](https://computational-cell-analytics.github.io/micro-sam/) for more details on the installation and usage of `micro_sam`.
 
+## Contributing
+
+We welcome new contributions!
+
+If you are interested in contributing to micro-sam, please see the [contributing guide](doc/contributing.md) and [developer documentation](doc/development.md). The first step is to [discuss your idea in a new issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) with the current developers.
 
 ## Citation
 
@@ -43,7 +49,7 @@ If you are using this repository in your research please cite
 
 There are a few other napari plugins build around Segment Anything:
 - https://github.com/MIC-DKFZ/napari-sam (2d and 3d support)
-- https://github.com/JoOkuma/napari-segment-anything (only 2d support)
+- https://github.com/royerlab/napari-segment-anything (only 2d support)
 - https://github.com/hiroalchem/napari-SAM4IS
 
 Compared to these we support more applications (2d, 3d and tracking), and provide finetuning methods and finetuned models for microscopy data.
@@ -51,6 +57,13 @@ Compared to these we support more applications (2d, 3d and tracking), and provid
 
 
 ## Release Overview
+
+**New in version 0.4.0**
+
+- Significantly improved model finetuning
+- Update the finetuned models for microscopy, see [details in the doc](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models)
+- Training decoder for direct instance segmentation (not available via the GUI yet)
+- Refactored model download functionality using [pooch](https://pypi.org/project/pooch/)
 
 **New in version 0.3.0**
 
@@ -92,13 +105,3 @@ Compared to these we support more applications (2d, 3d and tracking), and provid
 - We have added support for bounding box prompts, which provide better segmentation results than points in many cases.
 - Interactive tracking now uses a better heuristic to propagate masks across time, leading to better automatic tracking results.
 - And have fixed several small bugs.
-
-
-<!---
-## Contributing
-
-```
-micro_sam <- library with utility functionality for using SAM for microscopy data
-    /sam_annotator <- the napari plugins for annotation
-```
--->

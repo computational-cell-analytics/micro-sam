@@ -1,5 +1,15 @@
-"""
+r"""
 Sample microscopy data.
+
+You can change the download location for sample data and model weights
+by setting the environment variable: MICROSAM_CACHEDIR
+
+By default sample data is downloaded to a folder named 'micro_sam/sample_data'
+inside your default cache directory, eg:
+    * Mac: ~/Library/Caches/<AppName>
+    * Unix: ~/.cache/<AppName> or the value of the XDG_CACHE_HOME environment variable, if defined.
+    * Windows: C:\Users\<user>\AppData\Local\<AppAuthor>\<AppName>\Cache
+
 """
 
 import os
@@ -13,6 +23,8 @@ import pooch
 from skimage.data import binary_blobs
 from skimage.measure import label
 from skimage.transform import resize
+
+from .util import get_cache_directory
 
 
 def fetch_image_series_example_data(save_directory: Union[str, os.PathLike]) -> str:
@@ -56,8 +68,8 @@ def sample_data_image_series():
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    default_base_data_dir = pooch.os_cache('micro-sam')
-    data_directory = fetch_image_series_example_data(default_base_data_dir)
+    base_data_directory = os.path.join(get_cache_directory(), "sample_data")
+    data_directory = fetch_image_series_example_data(base_data_directory)
     fnames = os.listdir(data_directory)
     full_filenames = [os.path.join(data_directory, f) for f in fnames]
     full_filenames.sort()
@@ -97,8 +109,8 @@ def sample_data_wholeslide():
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    default_base_data_dir = pooch.os_cache('micro-sam')
-    filename = fetch_wholeslide_example_data(default_base_data_dir)
+    base_data_directory = os.path.join(get_cache_directory(), "sample_data")
+    filename = fetch_wholeslide_example_data(base_data_directory)
     data = imageio.imread(filename)
     add_image_kwargs = {"name": "wholeslide"}
     return [(data, add_image_kwargs)]
@@ -135,8 +147,8 @@ def sample_data_livecell():
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    default_base_data_dir = pooch.os_cache('micro-sam')
-    filename = fetch_livecell_example_data(default_base_data_dir)
+    base_data_directory = os.path.join(get_cache_directory(), 'sample_data')
+    filename = fetch_livecell_example_data(base_data_directory)
     data = imageio.imread(filename)
     add_image_kwargs = {"name": "livecell"}
     return [(data, add_image_kwargs)]
@@ -173,8 +185,8 @@ def sample_data_hela_2d():
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    default_base_data_dir = pooch.os_cache("micro-sam")
-    filename = fetch_hela_2d_example_data(default_base_data_dir)
+    base_data_directory = os.path.join(get_cache_directory(), "sample_data")
+    filename = fetch_hela_2d_example_data(base_data_directory)
     data = imageio.imread(filename)
     add_image_kwargs = {"name": "hela_2d"}
     return [(data, add_image_kwargs)]
@@ -216,8 +228,8 @@ def sample_data_3d():
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    default_base_data_dir = pooch.os_cache("micro-sam")
-    data_directory = fetch_3d_example_data(default_base_data_dir)
+    base_data_directory = os.path.join(get_cache_directory(), "sample_data")
+    data_directory = fetch_3d_example_data(base_data_directory)
     fnames = os.listdir(data_directory)
     full_filenames = [os.path.join(data_directory, f) for f in fnames]
     full_filenames.sort()
@@ -248,7 +260,7 @@ def fetch_tracking_example_data(save_directory: Union[str, os.PathLike]) -> str:
     fname = "DIC-C2DH-HeLa.zip"
     pooch.retrieve(
         url="http://data.celltrackingchallenge.net/training-datasets/DIC-C2DH-HeLa.zip",  # 37 MB
-        known_hash="fac24746fa0ad5ddf6f27044c785edef36bfa39f7917da4ad79730a7748787af",
+        known_hash="832fed2d05bb7488cf9c51a2994b75f8f3f53b3c3098856211f2d39023c34e1a",
         fname=fname,
         path=save_directory,
         progressbar=True,
@@ -266,8 +278,8 @@ def sample_data_tracking():
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    default_base_data_dir = pooch.os_cache("micro-sam")
-    data_directory = fetch_tracking_example_data(default_base_data_dir)
+    base_data_directory = os.path.join(get_cache_directory(), 'sample_data')
+    data_directory = fetch_tracking_example_data(base_data_directory)
     fnames = os.listdir(data_directory)
     full_filenames = [os.path.join(data_directory, f) for f in fnames]
     full_filenames.sort()
@@ -312,8 +324,8 @@ def sample_data_segmentation():
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    default_base_data_dir = pooch.os_cache("micro-sam")
-    data_directory = fetch_tracking_segmentation_data(default_base_data_dir)
+    base_data_directory = os.path.join(get_cache_directory(), 'sample_data')
+    data_directory = fetch_tracking_segmentation_data(base_data_directory)
     fnames = os.listdir(data_directory)
     full_filenames = [os.path.join(data_directory, f) for f in fnames]
     full_filenames.sort()
@@ -322,12 +334,12 @@ def sample_data_segmentation():
     return [(data, add_image_kwargs)]
 
 
-def synthetic_data(shape):
+def synthetic_data(shape, seed=None):
     """Create synthetic image data and segmentation for training."""
     ndim = len(shape)
     assert ndim in (2, 3)
     image_shape = shape if ndim == 2 else shape[1:]
-    image = binary_blobs(length=image_shape[0], blob_size_fraction=0.05, volume_fraction=0.15)
+    image = binary_blobs(length=image_shape[0], blob_size_fraction=0.05, volume_fraction=0.15, rng=seed)
 
     if image_shape[1] != image_shape[0]:
         image = resize(image, image_shape, order=0, anti_aliasing=False, preserve_range=True).astype(image.dtype)
@@ -336,4 +348,31 @@ def synthetic_data(shape):
         image = np.stack([image] * nz)
 
     segmentation = label(image)
+    image = image.astype("uint8") * 255
     return image, segmentation
+
+
+def fetch_nucleus_3d_example_data(save_directory: Union[str, os.PathLike]) -> str:
+    """Download the sample data for 3d segmentation of nuclei.
+
+    This data contains a small crop from a volume from the publication
+    "Efficient automatic 3D segmentation of cell nuclei for high-content screening"
+    https://doi.org/10.1186/s12859-022-04737-4
+
+    Args:
+        save_directory: Root folder to save the downloaded data.
+    Returns:
+        The path of the downloaded image.
+    """
+    save_directory = Path(save_directory)
+    os.makedirs(save_directory, exist_ok=True)
+    print("Example data directory is:", save_directory.resolve())
+    fname = "3d-nucleus-data.tif"
+    pooch.retrieve(
+        url="https://owncloud.gwdg.de/index.php/s/eW0uNCo8gedzWU4/download",
+        known_hash="4946896f747dc1c3fc82fb2e1320226d92f99d22be88ea5f9c37e3ba4e281205",
+        fname=fname,
+        path=save_directory,
+        progressbar=True,
+    )
+    return os.path.join(save_directory, fname)

@@ -6,7 +6,7 @@ from typing import Union
 from magicgui.widgets import Container
 from magicgui.application import use_app
 
-from PyQt5 import QtWidgets
+from qtpy import QtWidgets
 
 
 def show_wrong_file_warning(file_path: Union[str, os.PathLike]) -> Union[str, os.PathLike]:

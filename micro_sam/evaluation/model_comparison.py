@@ -109,7 +109,7 @@ def generate_data_for_model_comparison(
         output_folder: The folder where the samples will be saved.
         model_type1: The first model to use for comparison.
             The value needs to be a valid model_type for `micro_sam.util.get_sam_model`.
-        model_type1: The second model to use for comparison.
+        model_type2: The second model to use for comparison.
             The value needs to be a valid model_type for `micro_sam.util.get_sam_model`.
         n_samples: The number of samples to draw from the dataloader.
     """

@@ -29,7 +29,7 @@ def evaluate_checkpoint_slurm(model_type, job_id, checkpoints):
     experiment_root = os.path.join(EXPERIMENT_ROOT, f"{model_type}-epoch-{epoch}")
     result = evaluate_checkpoint_for_datasets(
         None, None, experiment_root, EVAL_DATASETS,
-        run_default_evaluation=True, run_amg=False,
+        run_default_evaluation=True, do_amg=False,
         is_custom_model=True, predictor=predictor,
     )
 

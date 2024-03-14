@@ -3,25 +3,26 @@
 
 import os
 import pickle
-import warnings
-
+import numpy as np
+from tqdm import tqdm
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Union
 
 import imageio.v3 as imageio
-import numpy as np
+from skimage.segmentation import relabel_sequential
+
 import torch
 
-from skimage.segmentation import relabel_sequential
-from tqdm import tqdm
-
 from segment_anything import SamPredictor
-from segment_anything.utils.transforms import ResizeLongestSide
 
 from .. import util as util
-from ..instance_segmentation import mask_data_to_segmentation
+from ..inference import batched_inference
+from ..instance_segmentation import (
+    mask_data_to_segmentation, get_custom_sam_model_with_decoder,
+    AutomaticMaskGenerator, InstanceSegmentationWithDecoder,
+)
+from . import instance_segmentation
 from ..prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
-from ..training import get_trainable_sam_model, ConvertToSamInputs
 
 
 def _load_prompts(
@@ -72,7 +73,6 @@ def _get_batched_prompts(
     n_positives,
     n_negatives,
     dilation,
-    transform_function,
 ):
     # Initialize the prompt generator.
     prompt_generator = PointAndBoxPromptGenerator(
@@ -87,25 +87,21 @@ def _get_batched_prompts(
     bbox_coordinates = [bbox_coordinates[gt_id] for gt_id in gt_ids]
     masks = util.segmentation_to_one_hot(gt.astype("int64"), gt_ids)
 
-    input_points, input_labels, input_boxes, _ = prompt_generator(
+    points, point_labels, boxes, _ = prompt_generator(
         masks, bbox_coordinates, center_coordinates
     )
 
-    # apply the transforms to the points and boxes
-    if use_boxes:
-        input_boxes = torch.from_numpy(
-            transform_function.apply_boxes(input_boxes.numpy(), gt.shape)
-        )
-    if use_points:
-        input_points = torch.from_numpy(
-            transform_function.apply_coords(input_points.numpy(), gt.shape)
-        )
+    def to_numpy(x):
+        if x is None:
+            return x
+        return x.numpy()
 
-    return input_points, input_labels, input_boxes
+    return to_numpy(points), to_numpy(point_labels), to_numpy(boxes)
 
 
 def _run_inference_with_prompts_for_image(
     predictor,
+    image,
     gt,
     use_points,
     use_boxes,
@@ -114,62 +110,30 @@ def _run_inference_with_prompts_for_image(
     dilation,
     batch_size,
     cached_prompts,
+    embedding_path,
 ):
-    # We need the resize transformation for the expected model input size.
-    transform_function = ResizeLongestSide(1024)
     gt_ids = np.unique(gt)[1:]
-
     if cached_prompts is None:
-        input_points, input_labels, input_boxes = _get_batched_prompts(
-            gt, gt_ids, use_points, use_boxes, n_positives, n_negatives, dilation, transform_function,
+        points, point_labels, boxes = _get_batched_prompts(
+            gt, gt_ids, use_points, use_boxes, n_positives, n_negatives, dilation
         )
     else:
-        input_points, input_labels, input_boxes = cached_prompts
+        points, point_labels, boxes = cached_prompts
 
     # Make a copy of the point prompts to return them at the end.
-    prompts = deepcopy((input_points, input_labels, input_boxes))
-
-    # Transform the prompts into batches
-    device = predictor.device
-    input_points = None if input_points is None else torch.tensor(np.array(input_points)).to(device)
-    input_labels = None if input_labels is None else torch.tensor(np.array(input_labels)).to(device)
-    input_boxes = None if input_boxes is None else torch.tensor(np.array(input_boxes)).to(device)
+    prompts = deepcopy((points, point_labels, boxes))
 
     # Use multi-masking only if we have a single positive point without box
     multimasking = False
     if not use_boxes and (n_positives == 1 and n_negatives == 0):
         multimasking = True
 
-    # Run the batched inference.
-    n_samples = input_boxes.shape[0] if input_points is None else input_points.shape[0]
-    n_batches = int(np.ceil(float(n_samples) / batch_size))
-    masks, ious = [], []
-    with torch.no_grad():
-        for batch_idx in range(n_batches):
-            batch_start = batch_idx * batch_size
-            batch_stop = min((batch_idx + 1) * batch_size, n_samples)
-
-            batch_points = None if input_points is None else input_points[batch_start:batch_stop]
-            batch_labels = None if input_labels is None else input_labels[batch_start:batch_stop]
-            batch_boxes = None if input_boxes is None else input_boxes[batch_start:batch_stop]
-
-            batch_masks, batch_ious, _ = predictor.predict_torch(
-                point_coords=batch_points, point_labels=batch_labels,
-                boxes=batch_boxes, multimask_output=multimasking
-            )
-            masks.append(batch_masks)
-            ious.append(batch_ious)
-    masks = torch.cat(masks)
-    ious = torch.cat(ious)
-    assert len(masks) == len(ious) == n_samples
-
-    # TODO we should actually use non-max suppression here
-    # I will implement it somewhere to have it refactored
-    instance_labels = np.zeros_like(gt, dtype=int)
-    for m, iou, gt_idx in zip(masks, ious, gt_ids):
-        best_idx = torch.argmax(iou)
-        best_mask = m[best_idx]
-        instance_labels[best_mask.detach().cpu().numpy()] = gt_idx
+    instance_labels = batched_inference(
+        predictor, image, batch_size,
+        boxes=boxes, points=points, point_labels=point_labels,
+        multimasking=multimasking, embedding_path=embedding_path,
+        return_instance_segmentation=True,
+    )
 
     return instance_labels, prompts
 
@@ -177,6 +141,7 @@ def _run_inference_with_prompts_for_image(
 def get_predictor(
     checkpoint_path: Union[str, os.PathLike],
     model_type: str,
+    device: Optional[Union[str, torch.device]] = None,
     return_state: bool = False,
     is_custom_model: Optional[bool] = None,
 ) -> SamPredictor:
@@ -185,22 +150,27 @@ def get_predictor(
     Args:
         checkpoint_path: The checkpoint filepath.
         model_type: The type of the model, either vit_h, vit_b or vit_l.
+        device: The device to use.
         return_state: Whether to return the complete state of the checkpoint in addtion to the predictor.
         is_custom_model: Whether this is a custom model or not.
     Returns:
         The segment anything predictor.
     """
+    device = util.get_device(device)
+
     # By default we check if the model follows the torch_em checkpint naming scheme to check whether it is a
     # custom model or not. This can be over-ridden by passing True or False for is_custom_model.
     is_custom_model = checkpoint_path.split("/")[-1] == "best.pt" if is_custom_model is None else is_custom_model
 
     if is_custom_model:  # Finetuned SAM model
         predictor = util.get_custom_sam_model(
-            checkpoint_path=checkpoint_path, model_type=model_type, return_state=return_state
+            checkpoint_path=checkpoint_path, model_type=model_type, device=device, return_state=return_state
         )
     else:  # Vanilla SAM model
         assert not return_state
-        predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path)  # type: ignore
+        predictor = util.get_sam_model(
+            model_type=model_type, device=device, checkpoint_path=checkpoint_path
+        )  # type: ignore
     return predictor
 
 
@@ -225,7 +195,7 @@ def precompute_all_embeddings(
         util.precompute_image_embeddings(predictor, im, embedding_path, ndim=2)
 
 
-def _precompute_prompts(gt_path, use_points, use_boxes, n_positives, n_negatives, dilation, transform_function):
+def _precompute_prompts(gt_path, use_points, use_boxes, n_positives, n_negatives, dilation):
     name = os.path.basename(gt_path)
 
     gt = imageio.imread(gt_path).astype("uint32")
@@ -233,7 +203,7 @@ def _precompute_prompts(gt_path, use_points, use_boxes, n_positives, n_negatives
     gt_ids = np.unique(gt)[1:]
 
     input_point, input_label, input_box = _get_batched_prompts(
-        gt, gt_ids, use_points, use_boxes, n_positives, n_negatives, dilation, transform_function
+        gt, gt_ids, use_points, use_boxes, n_positives, n_negatives, dilation
     )
 
     if use_boxes and not use_points:
@@ -256,7 +226,6 @@ def precompute_all_prompts(
         prompt_settings: The settings for which the prompts will be computed.
     """
     os.makedirs(prompt_save_dir, exist_ok=True)
-    transform_function = ResizeLongestSide(1024)
 
     for settings in tqdm(prompt_settings, desc="Precompute prompts"):
 
@@ -281,7 +250,6 @@ def precompute_all_prompts(
                 n_positives=n_positives,
                 n_negatives=n_negatives,
                 dilation=dilation,
-                transform_function=transform_function,
             )
             results.append(prompts)
 
@@ -342,7 +310,7 @@ def run_inference_with_prompts(
     prompt_save_dir: Optional[Union[str, os.PathLike]] = None,
     batch_size: int = 512,
 ) -> None:
-    """Run segment anything inference for multiple images using prompts derived form groundtruth.
+    """Run segment anything inference for multiple images using prompts derived from groundtruth.
 
     Args:
         predictor: The SegmentAnything predictor.
@@ -350,7 +318,7 @@ def run_inference_with_prompts(
         gt_paths: The ground-truth segmentation file paths.
         embedding_dir: The directory where the image embddings will be saved or are already saved.
         use_points: Whether to use point prompts.
-        use_boxes: Whetehr to use box prompts
+        use_boxes: Whether to use box prompts
         n_positives: The number of positive point prompts that will be sampled.
         n_negativess: The number of negative point prompts that will be sampled.
         dilation: The dilation factor for the radius around the ground-truth object
@@ -390,18 +358,16 @@ def run_inference_with_prompts(
         gt = relabel_sequential(gt)[0]
 
         embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
-        image_embeddings = util.precompute_image_embeddings(predictor, im, embedding_path, ndim=2)
-        util.set_precomputed(predictor, image_embeddings)
-
         this_prompts, cached_point_prompts, cached_box_prompts = _load_prompts(
             cached_point_prompts, save_point_prompts,
             cached_box_prompts, save_box_prompts,
             label_name
         )
         instances, this_prompts = _run_inference_with_prompts_for_image(
-            predictor, gt, n_positives=n_positives, n_negatives=n_negatives,
+            predictor, im, gt, n_positives=n_positives, n_negatives=n_negatives,
             dilation=dilation, use_points=use_points, use_boxes=use_boxes,
-            batch_size=batch_size, cached_prompts=this_prompts
+            batch_size=batch_size, cached_prompts=this_prompts,
+            embedding_path=embedding_path,
         )
 
         if save_point_prompts:
@@ -424,121 +390,118 @@ def run_inference_with_prompts(
 
 def _save_segmentation(masks, prediction_path):
     # masks to segmentation
-    masks = masks.cpu().numpy().squeeze().astype("bool")
-    shape = masks.shape[-2:]
+    masks = masks.cpu().numpy().squeeze(1).astype("bool")
     masks = [{"segmentation": mask, "area": mask.sum()} for mask in masks]
-    segmentation = mask_data_to_segmentation(masks, shape, with_background=True)
-    imageio.imwrite(prediction_path, segmentation)
+    segmentation = mask_data_to_segmentation(masks, with_background=True)
+    imageio.imwrite(prediction_path, segmentation, compression=5)
 
 
+@torch.no_grad()
 def _run_inference_with_iterative_prompting_for_image(
-    model,
+    predictor,
     image,
     gt,
-    n_iterations,
-    device,
-    use_boxes,
-    prediction_paths,
+    start_with_box_prompt,
+    dilation,
     batch_size,
-):
-    assert len(prediction_paths) == n_iterations, f"{len(prediction_paths)}, {n_iterations}"
-    to_sam_inputs = ConvertToSamInputs()
-
-    image = torch.from_numpy(
-        image[None, None] if image.ndim == 2 else image[None]
-    )
-    gt = torch.from_numpy(gt[None].astype("int32"))
-
-    n_pos = 0 if use_boxes else 1
-    batched_inputs, sampled_ids = to_sam_inputs(image, gt, n_pos=n_pos, n_neg=0, get_boxes=use_boxes)
-
-    input_images = torch.stack([model.preprocess(x=x["image"].to(device)) for x in batched_inputs], dim=0)
-    image_embeddings = model.image_embeddings_oft(input_images)
-
-    multimasking = n_pos == 1
+    embedding_path,
+    n_iterations,
+    prediction_paths
+) -> None:
     prompt_generator = IterativePromptGenerator()
 
-    n_samples = len(sampled_ids[0])
-    n_batches = int(np.ceil(float(n_samples) / batch_size))
+    gt_ids = np.unique(gt)[1:]
+
+    # Use multi-masking only if we have a single positive point without box
+    if start_with_box_prompt:
+        use_boxes, use_points = True, False
+        n_positives = 0
+        multimasking = False
+    else:
+        use_boxes, use_points = False, True
+        n_positives = 1
+        multimasking = True
+
+    points, point_labels, boxes = _get_batched_prompts(
+        gt, gt_ids,
+        use_points=use_points,
+        use_boxes=use_boxes,
+        n_positives=n_positives,
+        n_negatives=0,
+        dilation=dilation
+    )
+
+    sampled_binary_gt = util.segmentation_to_one_hot(gt.astype("int64"), gt_ids)
 
     for iteration in range(n_iterations):
-        final_masks = []
-        for batch_idx in range(n_batches):
-            batch_start = batch_idx * batch_size
-            batch_stop = min((batch_idx + 1) * batch_size, n_samples)
+        batched_outputs = batched_inference(
+            predictor, image, batch_size,
+            boxes=boxes, points=points, point_labels=point_labels,
+            multimasking=multimasking, embedding_path=embedding_path,
+            return_instance_segmentation=False
+        )
 
-            this_batched_inputs = [{
-                k: v[batch_start:batch_stop] if k in ("point_coords", "point_labels") else v
-                for k, v in batched_inputs[0].items()
-            }]
+        # switching off multimasking after first iter, as next iters (with multiple prompts) don't expect multimasking
+        multimasking = False
 
-            sampled_binary_y = torch.stack([
-                torch.stack([_gt == idx for idx in sampled[batch_start:batch_stop]])[:, None]
-                for _gt, sampled in zip(gt, sampled_ids)
-            ]).to(torch.float32)
+        masks = torch.stack([m["segmentation"][None] for m in batched_outputs]).to(torch.float32)
 
-            batched_outputs = model(
-                this_batched_inputs,
-                multimask_output=multimasking if iteration == 0 else False,
-                image_embeddings=image_embeddings
-            )
+        next_coords, next_labels, _, _ = prompt_generator(sampled_binary_gt, masks)
+        next_coords, next_labels = next_coords.detach().cpu().numpy(), next_labels.detach().cpu().numpy()
 
-            masks, logits_masks = [], []
-            for m in batched_outputs:
-                mask, l_mask = [], []
-                for _m, _l, _iou in zip(m["masks"], m["low_res_masks"], m["iou_predictions"]):
-                    best_iou_idx = torch.argmax(_iou)
-                    mask.append(torch.sigmoid(_m[best_iou_idx][None]))
-                    l_mask.append(_l[best_iou_idx][None])
-                mask, l_mask = torch.stack(mask), torch.stack(l_mask)
-                masks.append(mask)
-                logits_masks.append(l_mask)
+        if points is not None:
+            points = np.concatenate([points, next_coords], axis=1)
+        else:
+            points = next_coords
 
-            masks, logits_masks = torch.stack(masks), torch.stack(logits_masks)
-            masks = (masks > 0.5).to(torch.float32)
-            final_masks.append(masks)
+        if point_labels is not None:
+            point_labels = np.concatenate([point_labels, next_labels], axis=1)
+        else:
+            point_labels = next_labels
 
-            for _pred, _gt, _inp, logits in zip(masks, sampled_binary_y, this_batched_inputs, logits_masks):
-                next_coords, next_labels, _, _ = prompt_generator(_gt, _pred)
-                updated_point_coords = torch.cat([_inp["point_coords"], next_coords], dim=1) \
-                    if "point_coords" in _inp.keys() else next_coords
-                updated_point_labels = torch.cat([_inp["point_labels"], next_labels], dim=1) \
-                    if "point_labels" in _inp.keys() else next_labels
-
-                _inp["point_coords"] = updated_point_coords
-                _inp["point_labels"] = updated_point_labels
-                _inp["mask_inputs"] = logits
-
-        final_masks = torch.cat(final_masks, dim=1)
-        _save_segmentation(final_masks, prediction_paths[iteration])
+        _save_segmentation(masks, prediction_paths[iteration])
 
 
 def run_inference_with_iterative_prompting(
-    checkpoint_path: Union[str, os.PathLike],
-    model_type: str,
+    predictor: SamPredictor,
     image_paths: List[Union[str, os.PathLike]],
     gt_paths: List[Union[str, os.PathLike]],
-    prediction_root: Union[str, os.PathLike],
-    use_boxes: bool,
-    n_iterations: int = 8,
+    embedding_dir: Union[str, os.PathLike],
+    prediction_dir: Union[str, os.PathLike],
+    start_with_box_prompt: bool,
+    dilation: int = 5,
     batch_size: int = 32,
+    n_iterations: int = 8,
 ) -> None:
-    """@private"""
-    warnings.warn("The iterative prompting functionality is not working correctly yet.")
+    """Run segment anything inference for multiple images using prompts iteratively
+        derived from model outputs and groundtruth
 
-    device = util._get_device()
-    model = get_trainable_sam_model(model_type, checkpoint_path)
+    Args:
+        predictor: The SegmentAnything predictor.
+        image_paths: The image file paths.
+        gt_paths: The ground-truth segmentation file paths.
+        embedding_dir: The directory where the image embeddings will be saved or are already saved.
+        prediction_dir: The directory where the predictions from SegmentAnything will be saved per iteration.
+        start_with_box_prompt: Whether to use the first prompt as bounding box or a single point
+        dilation: The dilation factor for the radius around the ground-truth obkect
+            around which points will not be sampled.
+        batch_size: The batch size used for batched predictions.
+        n_iterations: The number of iterations for iterative prompting.
+    """
+    if len(image_paths) != len(gt_paths):
+        raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
 
-    # create all prediction folders
+    # create all prediction folders for all intermediate iterations
     for i in range(n_iterations):
-        os.makedirs(os.path.join(prediction_root, f"iteration{i:02}"), exist_ok=True)
+        os.makedirs(os.path.join(prediction_dir, f"iteration{i:02}"), exist_ok=True)
 
     for image_path, gt_path in tqdm(
-        zip(image_paths, gt_paths), total=len(image_paths), desc="Run inference with prompts"
+        zip(image_paths, gt_paths), total=len(image_paths), desc="Run inference with iterative prompting for all images"
     ):
         image_name = os.path.basename(image_path)
 
-        prediction_paths = [os.path.join(prediction_root, f"iteration{i:02}", image_name) for i in range(n_iterations)]
+        # We skip the images that already have been segmented
+        prediction_paths = [os.path.join(prediction_dir, f"iteration{i:02}", image_name) for i in range(n_iterations)]
         if all(os.path.exists(prediction_path) for prediction_path in prediction_paths):
             continue
 
@@ -549,7 +512,92 @@ def run_inference_with_iterative_prompting(
         gt = imageio.imread(gt_path).astype("uint32")
         gt = relabel_sequential(gt)[0]
 
-        with torch.no_grad():
-            _run_inference_with_iterative_prompting_for_image(
-                model, image, gt, n_iterations, device, use_boxes, prediction_paths, batch_size,
-            )
+        embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
+
+        _run_inference_with_iterative_prompting_for_image(
+            predictor, image, gt, start_with_box_prompt=start_with_box_prompt,
+            dilation=dilation, batch_size=batch_size, embedding_path=embedding_path,
+            n_iterations=n_iterations, prediction_paths=prediction_paths
+        )
+
+
+#
+# AMG FUNCTION
+#
+
+
+def run_amg(
+    checkpoint: Union[str, os.PathLike],
+    model_type: str,
+    experiment_folder: Union[str, os.PathLike],
+    val_image_paths: List[Union[str, os.PathLike]],
+    val_gt_paths: List[Union[str, os.PathLike]],
+    test_image_paths: List[Union[str, os.PathLike]],
+    iou_thresh_values: Optional[List[float]] = None,
+    stability_score_values: Optional[List[float]] = None,
+) -> str:
+    embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
+    os.makedirs(embedding_folder, exist_ok=True)
+
+    predictor = get_predictor(checkpoint, model_type)
+    amg = AutomaticMaskGenerator(predictor)
+    amg_prefix = "amg"
+
+    # where the predictions are saved
+    prediction_folder = os.path.join(experiment_folder, amg_prefix, "inference")
+    os.makedirs(prediction_folder, exist_ok=True)
+
+    # where the grid-search results are saved
+    gs_result_folder = os.path.join(experiment_folder, amg_prefix, "grid_search")
+    os.makedirs(gs_result_folder, exist_ok=True)
+
+    grid_search_values = instance_segmentation.default_grid_search_values_amg(
+        iou_thresh_values=iou_thresh_values,
+        stability_score_values=stability_score_values,
+    )
+
+    instance_segmentation.run_instance_segmentation_grid_search_and_inference(
+        amg, grid_search_values,
+        val_image_paths, val_gt_paths, test_image_paths,
+        embedding_folder, prediction_folder, gs_result_folder,
+    )
+    return prediction_folder
+
+
+#
+# INSTANCE SEGMENTATION FUNCTION
+#
+
+
+def run_instance_segmentation_with_decoder(
+    checkpoint: Union[str, os.PathLike],
+    model_type: str,
+    experiment_folder: Union[str, os.PathLike],
+    val_image_paths: List[Union[str, os.PathLike]],
+    val_gt_paths: List[Union[str, os.PathLike]],
+    test_image_paths: List[Union[str, os.PathLike]],
+) -> str:
+    embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
+    os.makedirs(embedding_folder, exist_ok=True)
+
+    predictor, decoder = get_custom_sam_model_with_decoder(checkpoint, model_type)
+    segmenter = InstanceSegmentationWithDecoder(predictor, decoder)
+    seg_prefix = "instance_segmentation_with_decoder"
+
+    # where the predictions are saved
+    prediction_folder = os.path.join(experiment_folder, seg_prefix, "inference")
+    os.makedirs(prediction_folder, exist_ok=True)
+
+    # where the grid-search results are saved
+    gs_result_folder = os.path.join(experiment_folder, seg_prefix, "grid_search")
+    os.makedirs(gs_result_folder, exist_ok=True)
+
+    grid_search_values = instance_segmentation.default_grid_search_values_instance_segmentation_with_decoder()
+
+    instance_segmentation.run_instance_segmentation_grid_search_and_inference(
+        segmenter, grid_search_values,
+        val_image_paths, val_gt_paths, test_image_paths,
+        embedding_dir=embedding_folder, prediction_dir=prediction_folder,
+        result_dir=gs_result_folder,
+    )
+    return prediction_folder

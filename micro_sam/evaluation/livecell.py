@@ -15,8 +15,11 @@ import pandas as pd
 from segment_anything import SamPredictor
 from tqdm import tqdm
 
-from ..instance_segmentation import AutomaticMaskGenerator, _EmbeddingMaskGenerator
-from . import automatic_mask_generation, inference, evaluation
+from ..instance_segmentation import (
+    get_custom_sam_model_with_decoder,
+    AutomaticMaskGenerator, InstanceSegmentationWithDecoder,
+)
+from . import instance_segmentation, inference, evaluation
 from .experiments import default_experiment_settings, full_experiment_settings
 
 CELL_TYPES = ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"]
@@ -29,7 +32,7 @@ CELL_TYPES = ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"
 
 def _get_livecell_paths(input_folder, split="test", n_val_per_cell_type=None):
     assert split in ["val", "test"]
-    assert os.path.exists(input_folder), "Please download the LIVECell Dataset"
+    assert os.path.exists(input_folder), f"Data not found at {input_folder}. Please download the LIVECell Dataset"
 
     if split == "test":
 
@@ -147,8 +150,7 @@ def run_livecell_amg(
     stability_score_values: Optional[List[float]] = None,
     verbose_gs: bool = False,
     n_val_per_cell_type: int = 25,
-    use_mws: bool = False,
-) -> None:
+) -> str:
     """Run automatic mask generation grid-search and inference for livecell.
 
     Args:
@@ -162,17 +164,16 @@ def run_livecell_amg(
             By default values in the range from 0.6 to 0.9 with a stepsize of 0.025 will be used.
         verbose_gs: Whether to run the gridsearch for individual images in a verbose mode.
         n_val_per_cell_type: The number of validation images per cell type.
-        use_mws: Whether to use the mutex watershed based automatic mask generator approach.
+
+    Returns:
+        The path where the predicted images are stored.
     """
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
 
-    if use_mws:
-        amg_prefix = "amg_mws"
-        AMG = _EmbeddingMaskGenerator
-    else:
-        amg_prefix = "amg"
-        AMG = AutomaticMaskGenerator
+    predictor = inference.get_predictor(checkpoint, model_type)
+    amg = AutomaticMaskGenerator(predictor)
+    amg_prefix = "amg"
 
     # where the predictions are saved
     prediction_folder = os.path.join(experiment_folder, amg_prefix, "inference")
@@ -185,13 +186,67 @@ def run_livecell_amg(
     val_image_paths, val_gt_paths = _get_livecell_paths(input_folder, "val", n_val_per_cell_type=n_val_per_cell_type)
     test_image_paths, _ = _get_livecell_paths(input_folder, "test")
 
-    predictor = inference.get_predictor(checkpoint, model_type)
-    automatic_mask_generation.run_amg_grid_search_and_inference(
-        predictor, val_image_paths, val_gt_paths, test_image_paths,
-        embedding_folder, prediction_folder, gs_result_folder,
-        iou_thresh_values=iou_thresh_values, stability_score_values=stability_score_values,
-        AMG=AMG, verbose_gs=verbose_gs,
+    grid_search_values = instance_segmentation.default_grid_search_values_amg(
+        iou_thresh_values=iou_thresh_values,
+        stability_score_values=stability_score_values,
     )
+
+    instance_segmentation.run_instance_segmentation_grid_search_and_inference(
+        amg, grid_search_values,
+        val_image_paths, val_gt_paths, test_image_paths,
+        embedding_folder, prediction_folder, gs_result_folder,
+    )
+    return prediction_folder
+
+
+def run_livecell_instance_segmentation_with_decoder(
+    checkpoint: Union[str, os.PathLike],
+    input_folder: Union[str, os.PathLike],
+    model_type: str,
+    experiment_folder: Union[str, os.PathLike],
+    verbose_gs: bool = False,
+    n_val_per_cell_type: int = 25,
+) -> str:
+    """Run automatic mask generation grid-search and inference for livecell.
+
+    Args:
+        checkpoint: The segment anything model checkpoint.
+        input_folder: The folder with the livecell data.
+        model_type: The type of the segmenta anything model.
+        experiment_folder: The folder where to save all data associated with the experiment.
+        verbose_gs: Whether to run the gridsearch for individual images in a verbose mode.
+        n_val_per_cell_type: The number of validation images per cell type.
+
+    Returns:
+        The path where the predicted images are stored.
+    """
+    embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
+    os.makedirs(embedding_folder, exist_ok=True)
+
+    predictor, decoder = get_custom_sam_model_with_decoder(checkpoint, model_type)
+    segmenter = InstanceSegmentationWithDecoder(predictor, decoder)
+    seg_prefix = "instance_segmentation_with_decoder"
+
+    # where the predictions are saved
+    prediction_folder = os.path.join(experiment_folder, seg_prefix, "inference")
+    os.makedirs(prediction_folder, exist_ok=True)
+
+    # where the grid-search results are saved
+    gs_result_folder = os.path.join(experiment_folder, seg_prefix, "grid_search")
+    os.makedirs(gs_result_folder, exist_ok=True)
+
+    val_image_paths, val_gt_paths = _get_livecell_paths(input_folder, "val", n_val_per_cell_type=n_val_per_cell_type)
+    test_image_paths, _ = _get_livecell_paths(input_folder, "test")
+
+    grid_search_values = instance_segmentation.default_grid_search_values_instance_segmentation_with_decoder()
+
+    instance_segmentation.run_instance_segmentation_grid_search_and_inference(
+        segmenter, grid_search_values,
+        val_image_paths, val_gt_paths, test_image_paths,
+        embedding_dir=embedding_folder, prediction_dir=prediction_folder,
+        result_dir=gs_result_folder,
+    )
+    return prediction_folder
 
 
 def _run_multiple_prompt_settings(args, prompt_settings):
@@ -226,7 +281,7 @@ def run_livecell_inference() -> None:
                         help="Pass the checkpoint-specific model name being used for inference.")
 
     # the experiment type:
-    # - default settings (p1-n0, p2-n4, box)
+    # - default settings (p1-n0, p2-n4, p4-n8, box)
     # - full experiment (ranges: p:1-16, n:0-16)
     # - automatic mask generation (auto)
     # if none of the two are active then the prompt setting arguments will be parsed

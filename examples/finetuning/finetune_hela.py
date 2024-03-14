@@ -1,17 +1,22 @@
 import os
-
 import numpy as np
+
 import torch
+
 import torch_em
+from torch_em.model import UNETR
+from torch_em.loss import DiceBasedDistanceLoss
+from torch_em.transform.label import PerObjectDistanceTransform
 
 import micro_sam.training as sam_training
-from micro_sam.sample_data import fetch_tracking_example_data, fetch_tracking_segmentation_data
 from micro_sam.util import export_custom_sam_model
+from micro_sam.sample_data import fetch_tracking_example_data, fetch_tracking_segmentation_data
+
 
 DATA_FOLDER = "data"
 
 
-def get_dataloader(split, patch_shape, batch_size):
+def get_dataloader(split, patch_shape, batch_size, train_instance_segmentation):
     """Return train or val data loader for finetuning SAM.
 
     The data loader must be a torch data loader that retuns `x, y` tensors,
@@ -46,24 +51,33 @@ def get_dataloader(split, patch_shape, batch_size):
     # raw_key, label_key= None, None
 
     # The 'roi' argument can be used to subselect parts of the data.
-    # Here, we use it to select the first 70 frames fro the test split and the other frames for the val split.
+    # Here, we use it to select the first 70 frames for the train split and the other frames for the val split.
     if split == "train":
         roi = np.s_[:70, :, :]
     else:
         roi = np.s_[70:, :, :]
+
+    if train_instance_segmentation:
+        # Computes the distance transform for objects to perform end-to-end automatic instance segmentation.
+        label_transform = PerObjectDistanceTransform(
+            distances=True, boundary_distances=True, directed_distances=False,
+            foreground=True, instances=True, min_size=25
+        )
+    else:
+        label_transform = torch_em.transform.label.connected_components
 
     loader = torch_em.default_segmentation_loader(
         raw_paths=image_dir, raw_key=raw_key,
         label_paths=segmentation_dir, label_key=label_key,
         patch_shape=patch_shape, batch_size=batch_size,
         ndim=2, is_seg_dataset=True, rois=roi,
-        label_transform=torch_em.transform.label.connected_components,
-        num_workers=8, shuffle=True,
+        label_transform=label_transform,
+        num_workers=8, shuffle=True, raw_transform=sam_training.identity,
     )
     return loader
 
 
-def run_training(checkpoint_name, model_type):
+def run_training(checkpoint_name, model_type, train_instance_segmentation):
     """Run the actual model training."""
 
     # All hyperparameters for training.
@@ -74,37 +88,51 @@ def run_training(checkpoint_name, model_type):
     n_iterations = 10000  # how long we train (in iterations)
 
     # Get the dataloaders.
-    train_loader = get_dataloader("train", patch_shape, batch_size)
-    val_loader = get_dataloader("val", patch_shape, batch_size)
+    train_loader = get_dataloader("train", patch_shape, batch_size, train_instance_segmentation)
+    val_loader = get_dataloader("val", patch_shape, batch_size, train_instance_segmentation)
 
-    # Get the segment anything model, the optimizer and the LR scheduler
+    # Get the segment anything model
     model = sam_training.get_trainable_sam_model(model_type=model_type, device=device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10, verbose=True)
 
     # This class creates all the training data for a batch (inputs, prompts and labels).
-    convert_inputs = sam_training.ConvertToSamInputs()
+    convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
+
+    # Get the optimizer and the LR scheduler
+    if train_instance_segmentation:
+        # for instance segmentation, we use the UNETR model configuration.
+        unetr = UNETR(
+            backbone="sam", encoder=model.sam.image_encoder, out_channels=3, use_sam_stats=True,
+            final_activation="Sigmoid", use_skip_connection=False, resize_input=True,
+        )
+        # let's get the parameters for SAM and the decoder from UNETR
+        joint_model_params = [params for params in model.parameters()]  # sam parameters
+        for name, params in unetr.named_parameters():  # unetr's decoder parameters
+            if not name.startswith("encoder"):
+                joint_model_params.append(params)
+        unetr.to(device)
+        optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
+    else:
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
+
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10, verbose=True)
 
     # the trainer which performs training and validation (implemented using "torch_em")
-    trainer = sam_training.SamTrainer(
-        name=checkpoint_name,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        model=model,
-        optimizer=optimizer,
-        # currently we compute loss batch-wise, else we pass channelwise True
-        loss=torch_em.loss.DiceLoss(channelwise=False),
-        metric=torch_em.loss.DiceLoss(),
-        device=device,
-        lr_scheduler=scheduler,
-        logger=sam_training.SamLogger,
-        log_image_interval=100,
-        mixed_precision=True,
-        convert_inputs=convert_inputs,
-        n_objects_per_batch=n_objects_per_batch,
-        n_sub_iteration=8,
-        compile_model=False
-    )
+    if train_instance_segmentation:
+        instance_seg_loss = DiceBasedDistanceLoss(mask_distances_in_bg=True)
+        trainer = sam_training.JointSamTrainer(
+            name=checkpoint_name, train_loader=train_loader, val_loader=val_loader, model=model,
+            optimizer=optimizer, device=device, lr_scheduler=scheduler, logger=sam_training.JointSamLogger,
+            log_image_interval=100, mixed_precision=True, convert_inputs=convert_inputs,
+            n_objects_per_batch=n_objects_per_batch, n_sub_iteration=8, compile_model=False, unetr=unetr,
+            instance_loss=instance_seg_loss, instance_metric=instance_seg_loss
+        )
+    else:
+        trainer = sam_training.SamTrainer(
+            name=checkpoint_name, train_loader=train_loader, val_loader=val_loader, model=model,
+            optimizer=optimizer, device=device, lr_scheduler=scheduler, logger=sam_training.SamLogger,
+            log_image_interval=100, mixed_precision=True, convert_inputs=convert_inputs,
+            n_objects_per_batch=n_objects_per_batch, n_sub_iteration=8, compile_model=False
+        )
     trainer.fit(n_iterations)
 
 
@@ -133,7 +161,10 @@ def main():
     # The name of the checkpoint. The checkpoints will be stored in './checkpoints/<checkpoint_name>'
     checkpoint_name = "sam_hela"
 
-    run_training(checkpoint_name, model_type)
+    # Train an additional convolutional decoder for end-to-end automatic instance segmentation
+    train_instance_segmentation = False
+
+    run_training(checkpoint_name, model_type, train_instance_segmentation)
     export_model(checkpoint_name, model_type)
 
 
