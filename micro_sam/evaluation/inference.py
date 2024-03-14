@@ -463,7 +463,7 @@ def _run_inference_with_iterative_prompting_for_image(
         else:
             point_labels = next_labels
 
-        incoming_logits = torch.stack([m["logits"] for m in batched_outputs]).to(torch.float32)
+        incoming_logits = torch.stack([m["logits"] for m in batched_outputs])
 
         if use_masks:
             logits_masks = incoming_logits
