@@ -494,11 +494,12 @@ def run_inference_with_iterative_prompting(
         embedding_dir: The directory where the image embeddings will be saved or are already saved.
         prediction_dir: The directory where the predictions from SegmentAnything will be saved per iteration.
         start_with_box_prompt: Whether to use the first prompt as bounding box or a single point
-        dilation: The dilation factor for the radius around the ground-truth obkect
+        dilation: The dilation factor for the radius around the ground-truth object
             around which points will not be sampled.
         batch_size: The batch size used for batched predictions.
         n_iterations: The number of iterations for iterative prompting.
-        use_masks: To make use of logits masks from previously placed points in iterative prompting.
+        use_masks: Whether to make use of logits from previous prompt-based segmentation
+            (especially in iterative prompting.)
     """
     if len(image_paths) != len(gt_paths):
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
