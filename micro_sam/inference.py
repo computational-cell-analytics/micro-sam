@@ -26,7 +26,7 @@ def batched_inference(
     return_instance_segmentation: bool = True,
     segmentation_ids: Optional[list] = None,
     reduce_multimasking: bool = True,
-    logits_masks: bool = False
+    logits_masks: Optional[torch.Tensor] = False
 ):
     """Run batched inference for input prompts.
 

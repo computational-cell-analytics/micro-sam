@@ -434,10 +434,13 @@ def _run_inference_with_iterative_prompting_for_image(
 
     sampled_binary_gt = util.segmentation_to_one_hot(gt.astype("int64"), gt_ids)
 
-    if use_masks:
-        logits_masks = None
-
     for iteration in range(n_iterations):
+        if iteration == 0:  # logits mask can not be used for the first iteration.
+            logits_masks = None
+        else:
+            if not use_masks:  # logits mask should not be used when not desired.
+                logits_masks = None
+
         batched_outputs = batched_inference(
             predictor, image, batch_size,
             boxes=boxes, points=points, point_labels=point_labels,
@@ -463,10 +466,8 @@ def _run_inference_with_iterative_prompting_for_image(
         else:
             point_labels = next_labels
 
-        incoming_logits = torch.stack([m["logits"] for m in batched_outputs])
-
         if use_masks:
-            logits_masks = incoming_logits
+            logits_masks = torch.stack([m["logits"] for m in batched_outputs])
 
         _save_segmentation(masks, prediction_paths[iteration])
 
