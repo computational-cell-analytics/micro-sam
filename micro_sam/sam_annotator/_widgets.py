@@ -64,9 +64,7 @@ def clear_track(viewer: "napari.viewer.Viewer") -> None:
     vutil.clear_annotations(viewer)
 
 
-@magic_factory(call_button="Commit [C]", layer={"choices": ["current_object", "auto_segmentation"]})
-def commit(viewer: "napari.viewer.Viewer", layer: str = "current_object") -> None:
-    """Widget for committing the segmented objects from automatic or interactive segmentation."""
+def _commit_impl(viewer, layer):
     seg = viewer.layers[layer].data
     shape = seg.shape
 
@@ -83,36 +81,32 @@ def commit(viewer: "napari.viewer.Viewer", layer: str = "current_object") -> Non
     viewer.layers["committed_objects"].data[mask] = (seg[mask] + id_offset)
     viewer.layers["committed_objects"].refresh()
 
-    viewer.layers[layer].data = np.zeros(shape, dtype="uint32")
-    viewer.layers[layer].refresh()
-
     if layer == "current_object":
         vutil.clear_annotations(viewer)
+
+    return id_offset
+
+
+@magic_factory(call_button="Commit [C]", layer={"choices": ["current_object", "auto_segmentation"]})
+def commit(viewer: "napari.viewer.Viewer", layer: str = "current_object") -> int:
+    """Widget for committing the segmented objects from automatic or interactive segmentation."""
+    _commit_impl(viewer, layer)
 
 
 @magic_factory(call_button="Commit [C]", layer={"choices": ["current_object"]})
 def commit_track(viewer: "napari.viewer.Viewer", layer: str = "current_object") -> None:
+    # Commit the segmentation layer.
+    id_offset = _commit_impl(viewer, layer)
+
+    # Update the lineages.
     state = AnnotatorState()
-
-    seg = viewer.layers[layer].data
-
-    id_offset = int(viewer.layers["committed_objects"].data.max())
-    mask = seg != 0
-
-    viewer.layers["committed_objects"].data[mask] = (seg[mask] + id_offset)
-    viewer.layers["committed_objects"].refresh()
-
-    shape = state.image_shape
-    viewer.layers[layer].data = np.zeros(shape, dtype="uint32")
-    viewer.layers[layer].refresh()
-
     updated_lineage = {
         parent + id_offset: [child + id_offset for child in children] for parent, children in state.lineage.items()
     }
     state.committed_lineages.append(updated_lineage)
 
+    # Reset the tracking state.
     _reset_tracking_state(viewer)
-    vutil.clear_annotations(viewer, clear_segmentations=False)
 
 
 @magic_factory(call_button="Save Lineage")
