@@ -8,6 +8,7 @@ from typing import List, Optional, Union, Tuple
 import imageio.v3 as imageio
 import napari
 import torch.nn as nn
+import torch
 
 from magicgui import magicgui
 from segment_anything import SamPredictor
@@ -21,9 +22,12 @@ from ._state import AnnotatorState
 def _precompute(
     image_files, model_type, predictor, embedding_path,
     tile_shape, halo, precompute_amg_state, decoder,
+    checkpoint_path, device,
 ):
     if predictor is None:
-        predictor = util.get_sam_model(model_type=model_type)
+        predictor = util.get_sam_model(
+            model_type=model_type, checkpoint_path=checkpoint_path, device=device
+        )
 
     if embedding_path is None:
         embedding_paths = [None] * len(image_files)
@@ -54,6 +58,8 @@ def image_series_annotator(
     predictor: Optional[SamPredictor] = None,
     decoder: Optional["nn.Module"] = None,
     precompute_amg_state: bool = False,
+    checkpoint_path: Optional[str] = None,
+    device: Optional[Union[str, torch.device]] = None,
 ) -> Optional["napari.viewer.Viewer"]:
     """Run the 2d annotation tool for a series of images.
 
@@ -75,6 +81,7 @@ def image_series_annotator(
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster.
+        checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -87,7 +94,7 @@ def image_series_annotator(
     predictor, embedding_paths = _precompute(
         image_files, model_type, predictor,
         embedding_path, tile_shape, halo, precompute_amg_state,
-        decoder=decoder,
+        decoder=decoder, checkpoint_path=checkpoint_path, device=device,
     )
 
     # Load the first image and intialize the viewer, annotator and state.
@@ -104,6 +111,7 @@ def image_series_annotator(
         image, model_type=model_type, save_path=image_embedding_path,
         halo=halo, tile_shape=tile_shape, predictor=predictor, ndim=2,
         precompute_amg_state=precompute_amg_state,
+        checkpoint_path=checkpoint_path, device=device,
     )
     state.image_shape = image.shape[:-1] if image.ndim == 3 else image.shape
 
@@ -149,7 +157,7 @@ def image_series_annotator(
         state.initialize_predictor(
             image, model_type=model_type, ndim=2, save_path=image_embedding_path,
             halo=halo, tile_shape=tile_shape, predictor=predictor,
-            precompute_amg_state=precompute_amg_state,
+            precompute_amg_state=precompute_amg_state, device=device,
         )
         state.image_shape = image.shape[:-1] if image.ndim == 3 else image.shape
 
@@ -223,9 +231,19 @@ def main():
         "otherwise they will be recomputed every time (which can take a long time)."
     )
     parser.add_argument(
-        "--model_type", default=util._DEFAULT_MODEL,
+        "-m", "--model_type", default=util._DEFAULT_MODEL,
         help=f"The segment anything model that will be used, one of {available_models}."
     )
+    parser.add_argument(
+        "-c", "--checkpoint", default=None,
+        help="Checkpoint from which the SAM model will be loaded loaded."
+    )
+    parser.add_argument(
+        "-d", "--device", default=None,
+        help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
+        "By default the most performant available device will be selected."
+    )
+
     parser.add_argument(
         "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
     )
@@ -244,4 +262,5 @@ def main():
         embedding_path=args.embedding_path, model_type=args.model_type,
         tile_shape=args.tile_shape, halo=args.halo,
         precompute_amg_state=args.precompute_amg_state,
+        checkpoint_path=args.checkpoint, device=args.device,
     )
