@@ -54,6 +54,44 @@ class TestUtil(unittest.TestCase):
             x1, x2 = (np.random.rand(32, 32) > 0.5), (np.random.rand(32, 32) > 0.5)
             self.assertTrue(0.0 < compute_iou(x1, x2) < 1.0)
 
+    def test_prediction(self):
+        from micro_sam.util import precompute_image_embeddings, get_sam_model, VIT_T_SUPPORT
+
+        predictor = get_sam_model(model_type="vit_t" if VIT_T_SUPPORT else "vit_b")
+
+        input_ = np.random.rand(512, 512).astype("float32")
+        save_path = os.path.join(self.tmp_folder, "emebd.zarr")
+        precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=None, halo=None)
+
+        self.assertTrue(os.path.exists(save_path))
+        with zarr.open(save_path, "r") as f:
+            self.assertIn("features", f)
+            self.assertEqual(len(f["features"]), 1)
+
+        # set the precomputed embeddings again, to make sure this does not fail due to
+        # a wrong code-path
+        precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=None, halo=None)
+        precompute_image_embeddings(predictor, input_, save_path=None, tile_shape=None, halo=None)
+
+    def test_prediction_3d(self):
+        from micro_sam.util import precompute_image_embeddings, get_sam_model, VIT_T_SUPPORT
+
+        predictor = get_sam_model(model_type="vit_t" if VIT_T_SUPPORT else "vit_b")
+
+        input_ = np.random.rand(3, 512, 512).astype("float32")
+        save_path = os.path.join(self.tmp_folder, "emebd.zarr")
+        precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=None, halo=None)
+
+        self.assertTrue(os.path.exists(save_path))
+        with zarr.open(save_path, "r") as f:
+            self.assertIn("features", f)
+            self.assertEqual(len(f["features"]), 3)
+
+        # set the precomputed embeddings again, to make sure this does not fail due to
+        # a wrong code-path
+        precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=None, halo=None)
+        precompute_image_embeddings(predictor, input_, save_path=None, tile_shape=None, halo=None)
+
     def test_tiled_prediction(self):
         from micro_sam.util import precompute_image_embeddings, get_sam_model, VIT_T_SUPPORT
 

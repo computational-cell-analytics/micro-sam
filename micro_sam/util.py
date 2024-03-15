@@ -492,7 +492,7 @@ def _compute_2d(input_, predictor, f, save_path):
     # check for directory store
     if save_path is not None:
         if "input_size" in f.attrs:  # the embeddings have already been precomputed
-            features = f["features"][:]
+            features = f["features"]  # [:]
             original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
         else:  # calculate embeddings and save to save_path
             f.attrs["input_size"] = None
@@ -635,6 +635,7 @@ def _compute_tiled_3d(input_, predictor, save_path, lazy_loading, tile_shape=Non
         "features": features, "input_size": input_size, "original_size": original_size,
     }
     return image_embeddings
+
 
 def _compute_data_signature(input_):
     data_signature = hashlib.sha1(np.asarray(input_).tobytes()).hexdigest()
