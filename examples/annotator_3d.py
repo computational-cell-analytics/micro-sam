@@ -37,7 +37,7 @@ def main():
     # - None / False (will use the vanilla model)
     # - "organelles": will use the model for mitochondria and other organelles
     # - "boundaries": will use the model for boundary based structures
-    finetuned_model = "boundaries"
+    finetuned_model = None
 
     em_3d_annotator(finetuned_model)
 
