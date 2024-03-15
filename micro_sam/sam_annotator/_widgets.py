@@ -78,55 +78,65 @@ def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None
         vutil.clear_annotations_slice(viewer, i=i)
 
 
-@magic_factory(call_button="Commit [C]", layer={"choices": ["current_object", "auto_segmentation"]})
-def commit(viewer: "napari.viewer.Viewer", layer: str = "current_object") -> None:
-    """Widget for committing the segmented objects from automatic or interactive segmentation."""
-    seg = viewer.layers[layer].data
+def _commit_impl(viewer, layer):
+    # Check if we have a z_range. If yes, use it to set a bounding box.
+    state = AnnotatorState()
+    if state.z_range is None:
+        bb = np.s_[:]
+    else:
+        z_min, z_max = state.z_range
+        bb = np.s_[z_min:(z_max+1)]
+
+    seg = viewer.layers[layer].data[bb]
     shape = seg.shape
 
-    # We parallelize these opeatios because they take quite long for large volumes.
-    block_shape = tuple(min(bs, sh) for bs, sh in zip((32, 256, 256), shape))
+    # We parallelize these operatios because they take quite long for large volumes.
 
+    # Choose block shape for the parallelization.
+    if seg.ndim == 2:
+        block_shape = tuple(min(bs, sh) for bs, sh in zip((1024, 1024), shape))
+    else:
+        block_shape = tuple(min(bs, sh) for bs, sh in zip((32, 256, 256), shape))
+
+    # Compute the max id in the commited objects.
     # id_offset = int(viewer.layers["committed_objects"].data.max())
     id_offset = int(elf.parallel.max(viewer.layers["committed_objects"].data, block_shape=block_shape))
 
+    # Compute the mask for the current object.
     # mask = seg != 0
     mask = np.zeros(seg.shape, dtype="bool")
     mask = elf.parallel.apply_operation(seg, 0, np.not_equal, block_shape=block_shape, out=mask)
 
-    viewer.layers["committed_objects"].data[mask] = (seg[mask] + id_offset)
+    # Write the current object to committed objects.
+    viewer.layers["committed_objects"].data[bb][mask] = (seg[mask] + id_offset)
     viewer.layers["committed_objects"].refresh()
-
-    viewer.layers[layer].data = np.zeros(shape, dtype="uint32")
-    viewer.layers[layer].refresh()
 
     if layer == "current_object":
         vutil.clear_annotations(viewer)
 
+    return id_offset
+
+
+@magic_factory(call_button="Commit [C]", layer={"choices": ["current_object", "auto_segmentation"]})
+def commit(viewer: "napari.viewer.Viewer", layer: str = "current_object") -> int:
+    """Widget for committing the segmented objects from automatic or interactive segmentation."""
+    _commit_impl(viewer, layer)
+
 
 @magic_factory(call_button="Commit [C]", layer={"choices": ["current_object"]})
 def commit_track(viewer: "napari.viewer.Viewer", layer: str = "current_object") -> None:
+    # Commit the segmentation layer.
+    id_offset = _commit_impl(viewer, layer)
+
+    # Update the lineages.
     state = AnnotatorState()
-
-    seg = viewer.layers[layer].data
-
-    id_offset = int(viewer.layers["committed_objects"].data.max())
-    mask = seg != 0
-
-    viewer.layers["committed_objects"].data[mask] = (seg[mask] + id_offset)
-    viewer.layers["committed_objects"].refresh()
-
-    shape = state.image_shape
-    viewer.layers[layer].data = np.zeros(shape, dtype="uint32")
-    viewer.layers[layer].refresh()
-
     updated_lineage = {
         parent + id_offset: [child + id_offset for child in children] for parent, children in state.lineage.items()
     }
     state.committed_lineages.append(updated_lineage)
 
+    # Reset the tracking state.
     _reset_tracking_state(viewer)
-    vutil.clear_annotations(viewer, clear_segmentations=False)
 
 
 @magic_factory(call_button="Save Lineage")
@@ -374,12 +384,14 @@ def segment_object(
         )
 
         # step 2: segment the rest of the volume based on smart prompting
-        seg = segment_mask_in_volume(
+        seg, (z_min, z_max) = segment_mask_in_volume(
             seg, state.predictor, state.image_embeddings, slices,
             stop_lower, stop_upper,
             iou_threshold=iou_threshold, projection=projection,
             progress_bar=progress_bar, box_extension=box_extension,
         )
+
+    state.z_range = (z_min, z_max)
 
     viewer.layers["current_object"].data = seg
     viewer.layers["current_object"].refresh()

@@ -158,7 +158,7 @@ def segment_slices_from_ground_truth(
         output_seg[slice_choice][output_slice == 1] = 1
 
         # Segment the object in the entire volume with the specified segmented slice
-        this_seg = segment_mask_in_volume(
+        this_seg, _ = segment_mask_in_volume(
             segmentation=output_seg,
             predictor=predictor,
             image_embeddings=embeddings,
