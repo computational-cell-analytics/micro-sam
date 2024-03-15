@@ -71,10 +71,9 @@ def _commit_impl(viewer, layer):
         bb = np.s_[:]
     else:
         z_min, z_max = state.z_range
-        bb = np.s_[z_min:z_max]
-        print("!!!!!!", z_min, z_max, bb)
+        bb = np.s_[z_min:(z_max+1)]
 
-    seg = viewer.layers[layer].data
+    seg = viewer.layers[layer].data[bb]
     shape = seg.shape
 
     # We parallelize these operatios because they take quite long for large volumes.
@@ -92,7 +91,7 @@ def _commit_impl(viewer, layer):
     # Compute the mask for the current object.
     # mask = seg != 0
     mask = np.zeros(seg.shape, dtype="bool")
-    mask = elf.parallel.apply_operation(seg[bb], 0, np.not_equal, block_shape=block_shape, out=mask)
+    mask = elf.parallel.apply_operation(seg, 0, np.not_equal, block_shape=block_shape, out=mask)
 
     # Write the current object to committed objects.
     viewer.layers["committed_objects"].data[bb][mask] = (seg[mask] + id_offset)

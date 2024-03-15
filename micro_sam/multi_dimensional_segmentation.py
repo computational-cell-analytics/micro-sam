@@ -124,7 +124,7 @@ def segment_mask_in_volume(
                 break
             _update_progress()
 
-        return z
+        return z - increment
 
     z0, z1 = int(segmented_slices.min()), int(segmented_slices.max())
 
