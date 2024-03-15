@@ -65,20 +65,37 @@ def clear_track(viewer: "napari.viewer.Viewer") -> None:
 
 
 def _commit_impl(viewer, layer):
+    # Check if we have a z_range. If yes, use it to set a bounding box.
+    state = AnnotatorState()
+    if state.z_range is None:
+        bb = np.s_[:]
+    else:
+        z_min, z_max = state.z_range
+        bb = np.s_[z_min:z_max]
+        print("!!!!!!", z_min, z_max, bb)
+
     seg = viewer.layers[layer].data
     shape = seg.shape
 
-    # We parallelize these opeatios because they take quite long for large volumes.
-    block_shape = tuple(min(bs, sh) for bs, sh in zip((32, 256, 256), shape))
+    # We parallelize these operatios because they take quite long for large volumes.
 
+    # Choose block shape for the parallelization.
+    if seg.ndim == 2:
+        block_shape = tuple(min(bs, sh) for bs, sh in zip((1024, 1024), shape))
+    else:
+        block_shape = tuple(min(bs, sh) for bs, sh in zip((32, 256, 256), shape))
+
+    # Compute the max id in the commited objects.
     # id_offset = int(viewer.layers["committed_objects"].data.max())
     id_offset = int(elf.parallel.max(viewer.layers["committed_objects"].data, block_shape=block_shape))
 
+    # Compute the mask for the current object.
     # mask = seg != 0
     mask = np.zeros(seg.shape, dtype="bool")
-    mask = elf.parallel.apply_operation(seg, 0, np.not_equal, block_shape=block_shape, out=mask)
+    mask = elf.parallel.apply_operation(seg[bb], 0, np.not_equal, block_shape=block_shape, out=mask)
 
-    viewer.layers["committed_objects"].data[mask] = (seg[mask] + id_offset)
+    # Write the current object to committed objects.
+    viewer.layers["committed_objects"].data[bb][mask] = (seg[mask] + id_offset)
     viewer.layers["committed_objects"].refresh()
 
     if layer == "current_object":
@@ -354,12 +371,14 @@ def segment_object(
         )
 
         # step 2: segment the rest of the volume based on smart prompting
-        seg = segment_mask_in_volume(
+        seg, (z_min, z_max) = segment_mask_in_volume(
             seg, state.predictor, state.image_embeddings, slices,
             stop_lower, stop_upper,
             iou_threshold=iou_threshold, projection=projection,
             progress_bar=progress_bar, box_extension=box_extension,
         )
+
+    state.z_range = (z_min, z_max)
 
     viewer.layers["current_object"].data = seg
     viewer.layers["current_object"].refresh()
