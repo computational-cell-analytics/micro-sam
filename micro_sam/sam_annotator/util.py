@@ -107,6 +107,23 @@ def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:
     viewer.layers["current_object"].refresh()
 
 
+def clear_annotations_slice(viewer: napari.Viewer, i: int, clear_segmentations=True) -> None:
+    """@private"""
+    point_prompts = viewer.layers["point_prompts"].data
+    point_prompts = point_prompts[point_prompts[:, 0] != i]
+    viewer.layers["point_prompts"].data = point_prompts
+    viewer.layers["point_prompts"].refresh()
+    if "prompts" in viewer.layers:
+        prompts = viewer.layers["prompts"].data
+        prompts = [prompt for prompt in prompts if not (prompt[:, 0] == i).all()]
+        viewer.layers["prompts"].data = prompts
+        viewer.layers["prompts"].refresh()
+    if not clear_segmentations:
+        return
+    viewer.layers["current_object"].data[i] = 0
+    viewer.layers["current_object"].refresh()
+
+
 #
 # Helper functions to extract prompts from napari layers.
 #

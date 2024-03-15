@@ -58,10 +58,24 @@ def clear(viewer: "napari.viewer.Viewer") -> None:
 
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
-def clear_track(viewer: "napari.viewer.Viewer") -> None:
+def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> None:
+    """Widget for clearing the current annotations in 3D."""
+    if all_slices:
+        vutil.clear_annotations(viewer)
+    else:
+        i = int(viewer.cursor.position[0])
+        vutil.clear_annotations_slice(viewer, i=i)
+
+
+@magic_factory(call_button="Clear Annotations [Shift + C]")
+def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None:
     """Widget for clearing all tracking annotations and state."""
-    _reset_tracking_state(viewer)
-    vutil.clear_annotations(viewer)
+    if all_frames:
+        _reset_tracking_state(viewer)
+        vutil.clear_annotations(viewer)
+    else:
+        i = int(viewer.cursor.position[0])
+        vutil.clear_annotations_slice(viewer, i=i)
 
 
 @magic_factory(call_button="Commit [C]", layer={"choices": ["current_object", "auto_segmentation"]})
