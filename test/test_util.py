@@ -72,7 +72,8 @@ class TestUtil(unittest.TestCase):
         # set the precomputed embeddings again, to make sure this does not fail due to
         # a wrong code-path
         precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=tile_shape, halo=halo)
-        
+        precompute_image_embeddings(predictor, input_, save_path=None, tile_shape=tile_shape, halo=halo)
+
     def test_tiled_prediction_3d(self):
         from micro_sam.util import precompute_image_embeddings, get_sam_model, VIT_T_SUPPORT
 
@@ -91,6 +92,7 @@ class TestUtil(unittest.TestCase):
         # set the precomputed embeddings again, to make sure this does not fail due to
         # a wrong code-path
         precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=tile_shape, halo=halo)
+        precompute_image_embeddings(predictor, input_, save_path=None, tile_shape=tile_shape, halo=halo)
 
     def test_segmentation_to_one_hot(self):
         from micro_sam.util import segmentation_to_one_hot
