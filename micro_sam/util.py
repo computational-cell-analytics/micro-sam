@@ -823,7 +823,7 @@ def segmentation_to_one_hot(
         n_ids = int(segmentation.max())
 
     else:
-        assert segmentation_ids[0] != 0
+        assert segmentation_ids[0] != 0, "No objects were found."
 
         # the segmentation ids have to be sorted
         segmentation_ids = np.sort(segmentation_ids)
