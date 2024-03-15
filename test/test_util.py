@@ -55,14 +55,15 @@ class TestUtil(unittest.TestCase):
             self.assertTrue(0.0 < compute_iou(x1, x2) < 1.0)
 
     def test_prediction(self):
-        from micro_sam.util import precompute_image_embeddings, get_sam_model, VIT_T_SUPPORT
+        from micro_sam.util import precompute_image_embeddings, get_sam_model, VIT_T_SUPPORT, set_precomputed
 
         predictor = get_sam_model(model_type="vit_t" if VIT_T_SUPPORT else "vit_b")
 
         input_ = np.random.rand(512, 512).astype("float32")
         save_path = os.path.join(self.tmp_folder, "emebd.zarr")
-        precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=None, halo=None)
-
+        img_embedds = precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=None, halo=None)
+        predictor.reset_image()
+        set_precomputed(predictor, img_embedds)
         self.assertTrue(os.path.exists(save_path))
         with zarr.open(save_path, "r") as f:
             self.assertIn("features", f)

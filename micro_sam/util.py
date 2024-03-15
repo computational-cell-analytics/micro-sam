@@ -408,7 +408,7 @@ def _to_image(input_):
     return image
 
 
-def _compute_tile_features_2d(predictor, input_, tile_shape, halo, f, verbose=True):
+def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, verbose=True):
     tiling = blocking([0, 0], input_.shape[:2], tile_shape)
     n_tiles = tiling.numberOfBlocks
 
@@ -489,24 +489,26 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, verbose=T
 
 
 def _compute_2d(input_, predictor, f, save_path):
+    set_embeddings = False
     # check for directory store
     if save_path is not None:
         if "input_size" in f.attrs:  # the embeddings have already been precomputed
             features = f["features"]  # [:]
             original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
+            set_embeddings = True
         else:  # calculate embeddings and save to save_path
             f.attrs["input_size"] = None
             f.attrs["original_size"] = None
-            features = f.require_group("features")
-            features.attrs["shape"] = input_.shape[:2]
+            #  features = f.require_group("features")
+            #  features.attrs["shape"] = input_.shape[:2]
             predictor.reset_image()
             predictor.set_image(_to_image(input_))
-            embedding = predictor.get_image_embedding().cpu().numpy()
+            features = predictor.get_image_embedding().cpu().numpy()
             original_size = predictor.original_size
             input_size = predictor.input_size
 
-            ds = features.create_dataset(
-                "features", data=embedding, compression="gzip", chunks=embedding.shape
+            ds = f.create_dataset(
+                "features", data=features, compression="gzip", chunks=features.shape
             )
             ds.attrs["original_size"] = original_size
             ds.attrs["input_size"] = input_size
@@ -520,6 +522,8 @@ def _compute_2d(input_, predictor, f, save_path):
     image_embeddings = {
         "features": features, "input_size": input_size, "original_size": original_size,
     }
+    if set_embeddings:
+        set_precomputed(predictor, image_embeddings)
     return image_embeddings
 
 
@@ -534,7 +538,7 @@ def _compute_tiled_2d(input_, predictor, tile_shape, halo, f):
         set_embeddings = not use_tiled_prediction
 
     elif use_tiled_prediction:  # the embeddings have not been computed yet and we use tiled prediction
-        features = _compute_tile_features_2d(predictor, input_, tile_shape, halo, f)
+        features = _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f)
         original_size, input_size = None, None
 
     else:  # the embeddings have not been computed yet and we use normal prediction
@@ -558,6 +562,7 @@ def _compute_tiled_2d(input_, predictor, tile_shape, halo, f):
 
 
 def _compute_3d(input_, predictor, f, save_path):
+    set_embeddings = False
     if save_path is not None:
         # embeddings have already been calculated
         if "input_size" in f.attrs:  # the embeddings have already been precomputed
@@ -609,6 +614,8 @@ def _compute_3d(input_, predictor, f, save_path):
     image_embeddings = {
         "features": features, "input_size": input_size, "original_size": original_size,
     }
+    if set_embeddings:
+        set_precomputed(predictor, image_embeddings)
     return image_embeddings
 
 
@@ -746,7 +753,6 @@ def set_precomputed(
     """
     device = predictor.device
     features = image_embeddings["features"]
-
     assert features.ndim in (4, 5), f"{features.ndim}"
     if features.ndim == 5 and i is None:
         raise ValueError("The data is 3D so an index i is needed.")
