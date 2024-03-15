@@ -312,6 +312,14 @@ class AMGBase(ABC):
         self._original_size = state["original_size"]
         self._is_initialized = True
 
+    def clear_state(self):
+        """Clear the state of the mask generator.
+        """
+        self._crop_list = None
+        self._crop_boxes = None
+        self._original_size = None
+        self._is_initialized = False
+
 
 class AutomaticMaskGenerator(AMGBase):
     """Generates an instance segmentation without prompts, using a point grid.
@@ -660,26 +668,6 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         self._crop_boxes = crop_boxes
 
 
-def get_amg(
-    predictor: SamPredictor,
-    is_tiled: bool,
-    **kwargs,
-) -> AMGBase:
-    """Get the automatic mask generator class.
-
-    Args:
-        predictor: The segment anything predictor.
-        is_tiled: Whether tiled embeddings are used.
-        kwargs: The keyword arguments for the amg class.
-
-    Returns:
-        The automatic mask generator.
-    """
-    amg = TiledAutomaticMaskGenerator(predictor, **kwargs) if is_tiled else\
-        AutomaticMaskGenerator(predictor, **kwargs)
-    return amg
-
-
 #
 # Instance segmentation functionality based on fine-tuned decoder
 #
@@ -733,20 +721,13 @@ class DecoderAdapter(torch.nn.Module):
         return x
 
 
-def load_instance_segmentation_with_decoder_from_checkpoint(
+# TODO refactor this once the exact layout for the new model architecture is clear
+def get_custom_sam_model_with_decoder(
     checkpoint: Union[os.PathLike, str],
     model_type: str,
-    device: Optional[Union[str, torch.device]] = None
+    device: Optional[Union[str, torch.device]] = None,
 ):
-    """Load `InstanceSegmentationWithDecoder` from a `training.JointSamTrainer` checkpoint.
-
-    Args:
-        checkpoint: The path to the checkpoint.
-        model_type: The type of the model, i.e. which image encoder type is used.
-        device: The device to use (cpu or cuda).
-
-    Returns:
-        InstanceSegmentationWithDecoder
+    """
     """
     device = util.get_device(device)
 
@@ -795,9 +776,7 @@ def load_instance_segmentation_with_decoder_from_checkpoint(
 
     decoder = DecoderAdapter(unetr)
 
-    # Instantiate the segmenter.
-    segmenter = InstanceSegmentationWithDecoder(predictor, decoder)
-    return segmenter
+    return predictor, decoder
 
 
 class InstanceSegmentationWithDecoder:
@@ -844,6 +823,7 @@ class InstanceSegmentationWithDecoder:
         image: np.ndarray,
         image_embeddings: Optional[util.ImageEmbeddings] = None,
         i: Optional[int] = None,
+        verbose: bool = False,
     ) -> None:
         """Initialize image embeddings and decoder predictions for an image.
 
@@ -853,6 +833,7 @@ class InstanceSegmentationWithDecoder:
                 See `util.precompute_image_embeddings` for details.
             i: Index for the image data. Required if `image` has three spatial dimensions
                 or a time dimension and two spatial dimensions.
+            verbose: Dummy input to be compatible with other function signatures.
         """
         if image_embeddings is None:
             image_embeddings = util.precompute_image_embeddings(self._predictor, image)
@@ -860,9 +841,13 @@ class InstanceSegmentationWithDecoder:
         # This could be made more versatile to also support other decoder inputs,
         # e.g. the UNETR with skip connections.
         if isinstance(image_embeddings["features"], torch.Tensor):
-            embeddings = image_embeddings["features"].to(self._predictor.device)
+            embeddings = image_embeddings["features"]
         else:
-            embeddings = torch.from_numpy(image_embeddings["features"]).to(self._predictor.device)
+            embeddings = torch.from_numpy(image_embeddings["features"])
+
+        if i is not None:
+            embeddings = embeddings[i]
+        embeddings = embeddings.to(self._predictor.device)
 
         input_shape = tuple(image_embeddings["input_size"])
         original_shape = tuple(image_embeddings["original_size"])
@@ -964,3 +949,64 @@ class InstanceSegmentationWithDecoder:
         if output_mode is not None:
             segmentation = self._to_masks(segmentation, output_mode)
         return segmentation
+
+    def get_state(self) -> Dict[str, Any]:
+        """Get the initialized state of the instance segmenter.
+
+        Returns:
+            Instance segmentation state.
+        """
+        if not self.is_initialized:
+            raise RuntimeError("The state has not been computed yet. Call initialize first.")
+
+        return {
+            "foreground": self._foreground,
+            "center_distances": self._center_distances,
+            "boundary_distances": self._boundary_distances,
+        }
+
+    def set_state(self, state: Dict[str, Any]) -> None:
+        """Set the state of the instance segmenter.
+
+        Args:
+            state: The instance segmentation state
+        """
+        self._foreground = state["foreground"]
+        self._center_distances = state["center_distances"]
+        self._boundary_distances = state["boundary_distances"]
+        self._is_initialized = True
+
+    def clear_state(self):
+        """Clear the state of the instance segmenter.
+        """
+        self._foreground = None
+        self._center_distances = None
+        self._boundary_distances = None
+        self._is_initialized = False
+
+
+def get_amg(
+    predictor: SamPredictor,
+    is_tiled: bool,
+    decoder: Optional[torch.nn.Module] = None,
+    **kwargs,
+) -> Union[AMGBase, InstanceSegmentationWithDecoder]:
+    """Get the automatic mask generator class.
+
+    Args:
+        predictor: The segment anything predictor.
+        is_tiled: Whether tiled embeddings are used.
+        decoder: Decoder to predict instacne segmmentation.
+        kwargs: The keyword arguments for the amg class.
+
+    Returns:
+        The automatic mask generator.
+    """
+    if decoder is None:
+        segmenter = TiledAutomaticMaskGenerator(predictor, **kwargs) if is_tiled else\
+            AutomaticMaskGenerator(predictor, **kwargs)
+    else:
+        if is_tiled:
+            raise NotImplementedError
+        segmenter = InstanceSegmentationWithDecoder(predictor, decoder, **kwargs)
+    return segmenter

@@ -18,7 +18,8 @@ from segment_anything import SamPredictor
 from .. import util as util
 from ..inference import batched_inference
 from ..instance_segmentation import (
-    mask_data_to_segmentation, AutomaticMaskGenerator, load_instance_segmentation_with_decoder_from_checkpoint
+    mask_data_to_segmentation, get_custom_sam_model_with_decoder,
+    AutomaticMaskGenerator, InstanceSegmentationWithDecoder,
 )
 from . import instance_segmentation
 from ..prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
@@ -405,7 +406,8 @@ def _run_inference_with_iterative_prompting_for_image(
     batch_size,
     embedding_path,
     n_iterations,
-    prediction_paths
+    prediction_paths,
+    use_masks=False
 ) -> None:
     prompt_generator = IterativePromptGenerator()
 
@@ -433,11 +435,17 @@ def _run_inference_with_iterative_prompting_for_image(
     sampled_binary_gt = util.segmentation_to_one_hot(gt.astype("int64"), gt_ids)
 
     for iteration in range(n_iterations):
+        if iteration == 0:  # logits mask can not be used for the first iteration.
+            logits_masks = None
+        else:
+            if not use_masks:  # logits mask should not be used when not desired.
+                logits_masks = None
+
         batched_outputs = batched_inference(
             predictor, image, batch_size,
             boxes=boxes, points=points, point_labels=point_labels,
             multimasking=multimasking, embedding_path=embedding_path,
-            return_instance_segmentation=False
+            return_instance_segmentation=False, logits_masks=logits_masks
         )
 
         # switching off multimasking after first iter, as next iters (with multiple prompts) don't expect multimasking
@@ -458,6 +466,9 @@ def _run_inference_with_iterative_prompting_for_image(
         else:
             point_labels = next_labels
 
+        if use_masks:
+            logits_masks = torch.stack([m["logits"] for m in batched_outputs])
+
         _save_segmentation(masks, prediction_paths[iteration])
 
 
@@ -471,6 +482,7 @@ def run_inference_with_iterative_prompting(
     dilation: int = 5,
     batch_size: int = 32,
     n_iterations: int = 8,
+    use_masks: bool = False
 ) -> None:
     """Run segment anything inference for multiple images using prompts iteratively
         derived from model outputs and groundtruth
@@ -482,10 +494,11 @@ def run_inference_with_iterative_prompting(
         embedding_dir: The directory where the image embeddings will be saved or are already saved.
         prediction_dir: The directory where the predictions from SegmentAnything will be saved per iteration.
         start_with_box_prompt: Whether to use the first prompt as bounding box or a single point
-        dilation: The dilation factor for the radius around the ground-truth obkect
+        dilation: The dilation factor for the radius around the ground-truth object
             around which points will not be sampled.
         batch_size: The batch size used for batched predictions.
         n_iterations: The number of iterations for iterative prompting.
+        use_masks: Whether to make use of logits from previous prompt-based segmentation
     """
     if len(image_paths) != len(gt_paths):
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
@@ -493,6 +506,9 @@ def run_inference_with_iterative_prompting(
     # create all prediction folders for all intermediate iterations
     for i in range(n_iterations):
         os.makedirs(os.path.join(prediction_dir, f"iteration{i:02}"), exist_ok=True)
+
+    if use_masks:
+        print("The iterative prompting will make use of logits masks from previous iterations.")
 
     for image_path, gt_path in tqdm(
         zip(image_paths, gt_paths), total=len(image_paths), desc="Run inference with iterative prompting for all images"
@@ -516,7 +532,7 @@ def run_inference_with_iterative_prompting(
         _run_inference_with_iterative_prompting_for_image(
             predictor, image, gt, start_with_box_prompt=start_with_box_prompt,
             dilation=dilation, batch_size=batch_size, embedding_path=embedding_path,
-            n_iterations=n_iterations, prediction_paths=prediction_paths
+            n_iterations=n_iterations, prediction_paths=prediction_paths, use_masks=use_masks
         )
 
 
@@ -579,9 +595,8 @@ def run_instance_segmentation_with_decoder(
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
 
-    segmenter = load_instance_segmentation_with_decoder_from_checkpoint(
-        checkpoint, model_type,
-    )
+    predictor, decoder = get_custom_sam_model_with_decoder(checkpoint, model_type)
+    segmenter = InstanceSegmentationWithDecoder(predictor, decoder)
     seg_prefix = "instance_segmentation_with_decoder"
 
     # where the predictions are saved

@@ -13,7 +13,7 @@ class TestState(unittest.TestCase):
         image = binary_blobs(512)
 
         state = AnnotatorState()
-        state.initialize_predictor(image, self.model_type)
+        state.initialize_predictor(image, self.model_type, ndim=2)
         state.image_shape = image.shape
         self.assertTrue(state.initialized_for_interactive_segmentation())
 

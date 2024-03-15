@@ -41,7 +41,7 @@ def segment_mask_in_volume(
         stop_lower: Whether to stop at the lowest segmented slice.
         stop_upper: Wheter to stop at the topmost segmented slice.
         iou_threshold: The IOU threshold for continuing segmentation across 3d.
-        projection: The projection method to use. One of 'mask', 'bounding_box' or 'points'.
+        projection: The projection method to use. One of 'mask', 'box', 'points' or 'points_and_mask'.
             - (optional: you can also pass custom choices for the projection combination)
         progress_bar: Optional progress bar.
         box_extension: Extension factor for increasing the box size after projection.
@@ -49,15 +49,21 @@ def segment_mask_in_volume(
     Returns:
         Array with the volumetric segmentation
     """
+    use_single_point = False
     if isinstance(projection, str):
         if projection == "mask":
             use_box, use_mask, use_points = True, True, False
         elif projection == "points":
-            use_box, use_mask, use_points = True, True, True
-        elif projection == "bounding_box":
+            use_box, use_mask, use_points = False, False, True
+        elif projection == "box":
             use_box, use_mask, use_points = True, False, False
+        elif projection == "points_and_mask":
+            use_box, use_mask, use_points = False, True, True
+        elif projection == "single_point":
+            use_box, use_mask, use_points = False, False, True
+            use_single_point = True
         else:
-            raise ValueError("Choose projection method from 'mask' / 'points' / 'bounding_box'.")
+            raise ValueError("Choose projection method from 'mask' / 'points' / 'box' / 'points_and_mask' / 'single_point'.")
     elif isinstance(projection, dict):
         assert len(projection.keys()) == 3, "There should be three parameters assigned for the projection method."
         use_box, use_mask, use_points = projection["use_box"], projection["use_mask"], projection["use_points"]
@@ -82,7 +88,8 @@ def segment_mask_in_volume(
             seg_prev = segmentation[z - increment]
             seg_z, score, _ = segment_from_mask(
                 predictor, seg_prev, image_embeddings=image_embeddings, i=z, use_mask=use_mask,
-                use_box=use_box, use_points=use_points, box_extension=box_extension, return_all=True
+                use_box=use_box, use_points=use_points, box_extension=box_extension, return_all=True,
+                use_single_point=use_single_point,
             )
             if threshold is not None:
 
@@ -178,7 +185,7 @@ def segment_3d_from_slice(
     raw: np.ndarray,
     z: Optional[int] = None,
     embedding_path: Optional[Union[str, os.PathLike]] = None,
-    projection: str = "mask",
+    projection: str = "points",
     box_extension: float = 0.0,
     verbose: bool = True,
     pred_iou_thresh: float = 0.88,
@@ -200,7 +207,7 @@ def segment_3d_from_slice(
             If none is given the central slice will be used.
         embedding_path: The path were embeddings will be cached.
             If none is given embeddings will not be cached.
-        projection: The projection method to use. One of 'mask', 'bounding_box' or 'points'.
+        projection: The projection method to use. One of 'mask', 'box', 'points' or 'points_and_mask'.
         box_extension: Extension factor for increasing the box size after projection.
         verbose: Whether to print progress bar and other status messages.
         pred_iou_thresh: The predicted iou value to filter objects in `AutomaticMaskGenerator.generate`.
@@ -249,8 +256,6 @@ def segment_3d_from_slice(
     return segmentation
 
 
-# TODO do we need to add a repulsive term between touching objects in the same slice??
-# TODO extend this to allow for gaps in the segmentation and then interpolate the gaps
 def merge_instance_segmentation_3d(
     slice_segmentation: np.ndarray,
     beta: float = 0.5,

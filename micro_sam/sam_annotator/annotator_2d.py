@@ -1,30 +1,33 @@
 import warnings
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import napari
 import numpy as np
+import torch
+import torch.nn as nn
 
 from segment_anything import SamPredictor
 
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
-from ._widgets import segment, amg_2d
+from ._widgets import segment, amg_2d, instance_seg_2d
 from .util import _initialize_parser
 from .. import util
 
 
 class Annotator2d(_AnnotatorBase):
-    def __init__(
-        self,
-        viewer: "napari.viewer.Viewer",
-        segmentation_result: Optional[np.ndarray] = None,
-    ) -> None:
+    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
+        state = AnnotatorState()
+        if state.decoder is None:
+            autosegment = amg_2d
+        else:
+            autosegment = instance_seg_2d
+
         super().__init__(
             viewer=viewer,
             ndim=2,
             segment_widget=segment,
-            autosegment_widget=amg_2d,
-            segmentation_result=segmentation_result
+            autosegment_widget=autosegment,
         )
 
 
@@ -38,7 +41,10 @@ def annotator_2d(
     return_viewer: bool = False,
     viewer: Optional["napari.viewer.Viewer"] = None,
     predictor: Optional["SamPredictor"] = None,
+    decoder: Optional["nn.Module"] = None,
     precompute_amg_state: bool = False,
+    checkpoint_path: Optional[str] = None,
+    device: Optional[Union[str, torch.device]] = None,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the 2d annotation tool for a given image.
 
@@ -58,9 +64,12 @@ def annotator_2d(
             This enables using a pre-initialized viewer.
         predictor: The Segment Anything model. Passing this enables using fully custom models.
             If you pass `predictor` then `model_type` will be ignored.
+        decoder: The instance segmentation decoder.
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster.
+        checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
+        device: The computational device to use for the SAM model.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -68,20 +77,23 @@ def annotator_2d(
 
     state = AnnotatorState()
     state.image_shape = image.shape[:-1] if image.ndim == 3 else image.shape
+    state.decoder = decoder
+
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path, predictor=predictor,
         halo=halo, tile_shape=tile_shape, precompute_amg_state=precompute_amg_state,
-        ndim=2,
+        ndim=2, checkpoint_path=checkpoint_path, device=device,
     )
 
     if viewer is None:
         viewer = napari.Viewer()
 
     viewer.add_image(image, name="image")
-    annotator = Annotator2d(viewer, segmentation_result=segmentation_result)
+    annotator = Annotator2d(viewer)
 
     # Trigger layer update of the annotator so that layers have the correct shape.
-    annotator._update_image()
+    # And initialize the 'committed_objects' with the segmentation result if it was given.
+    annotator._update_image(segmentation_result=segmentation_result)
 
     # Add the annotator widget to the viewer.
     viewer.window.add_dock_widget(annotator)
@@ -111,5 +123,6 @@ def main():
         image, embedding_path=args.embedding_path,
         segmentation_result=segmentation_result,
         model_type=args.model_type, tile_shape=args.tile_shape, halo=args.halo,
-        precompute_amg_state=args.precompute_amg_state,
+        precompute_amg_state=args.precompute_amg_state, checkpoint_path=args.checkpoint,
+        device=args.device,
     )
