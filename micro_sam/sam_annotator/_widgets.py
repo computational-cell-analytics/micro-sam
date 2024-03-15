@@ -2,6 +2,7 @@
 """
 
 import json
+import multiprocessing as mp
 import os
 import pickle
 from pathlib import Path
@@ -11,6 +12,7 @@ import elf.parallel
 import h5py
 import numpy as np
 import zarr
+import z5py
 
 from magicgui import magic_factory, widgets
 from magicgui.widgets import ComboBox, Container
@@ -92,41 +94,131 @@ def _commit_impl(viewer, layer):
 
     # We parallelize these operatios because they take quite long for large volumes.
 
-    # Choose block shape for the parallelization.
-    if seg.ndim == 2:
-        block_shape = tuple(min(bs, sh) for bs, sh in zip((1024, 1024), shape))
-    else:
-        block_shape = tuple(min(bs, sh) for bs, sh in zip((32, 256, 256), shape))
-
     # Compute the max id in the commited objects.
     # id_offset = int(viewer.layers["committed_objects"].data.max())
-    id_offset = int(elf.parallel.max(viewer.layers["committed_objects"].data, block_shape=block_shape))
+    full_shape = viewer.layers["committed_objects"].data.shape
+    id_offset = int(
+        elf.parallel.max(viewer.layers["committed_objects"].data, block_shape=util.get_block_shape(full_shape))
+    )
 
     # Compute the mask for the current object.
     # mask = seg != 0
     mask = np.zeros(seg.shape, dtype="bool")
-    mask = elf.parallel.apply_operation(seg, 0, np.not_equal, block_shape=block_shape, out=mask)
+    mask = elf.parallel.apply_operation(
+        seg, 0, np.not_equal, out=mask, block_shape=util.get_block_shape(shape)
+    )
 
     # Write the current object to committed objects.
-    viewer.layers["committed_objects"].data[bb][mask] = (seg[mask] + id_offset)
+    seg[mask] += id_offset
+    viewer.layers["committed_objects"].data[bb][mask] = seg[mask]
     viewer.layers["committed_objects"].refresh()
+
+    return id_offset, seg, mask, bb
+
+
+# TODO also keep track of the model being used and the micro-sam version.
+def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
+
+    # NOTE: Zarr is incredibly inefficient and writes empty blocks.
+    # So we have to use z5py here.
+
+    # Deal with issues z5py has with empty folders and require the json.
+    if os.path.exists(path):
+        required_json = os.path.join(path, ".zgroup")
+        if not os.path.exists(required_json):
+            with open(required_json, "w") as f:
+                json.dump({"zarr_format": 2}, f)
+
+    f = z5py.ZarrFile(path, "a")
+
+    # Write the segmentation.
+    full_shape = viewer.layers["committed_objects"].data.shape
+    block_shape = util.get_block_shape(full_shape)
+    ds = f.require_dataset(
+        "committed_objects", shape=full_shape, chunks=block_shape, compression="gzip", dtype=seg.dtype
+    )
+    ds.n_threads = mp.cpu_count()
+    data = ds[bb]
+    data[mask] = seg[mask]
+    ds[bb] = data
+
+    # Write additional information to attrs.
+    if extra_attrs is not None:
+        f.attrs.update(extra_attrs)
+
+    # If we run commit from the automatic segmentation we don't have
+    # any prompts and so don't need to commit anything else.
+    if layer == "auto_segmentation":
+        return
+
+    def write_prompts(object_id, prompts, point_prompts):
+        g = f.create_group(f"prompts/{object_id}")
+        if prompts is not None and len(prompts) > 0:
+            data = np.array(prompts)
+            g.create_dataset("prompts", data=data, chunks=data.shape)
+        if point_prompts is not None and len(point_prompts) > 0:
+            g.create_dataset("point_prompts", data=point_prompts, chunks=point_prompts.shape)
+
+    # Commit the prompts for all the objects in the commit.
+    object_ids = np.unique(seg[mask])
+    if len(object_ids) == 1:  # We only have a single object.
+        write_prompts(object_ids[0], viewer.layers["prompts"].data, viewer.layers["point_prompts"].data)
+    else:
+        have_prompts = len(viewer.layers["prompts"].data) > 0
+        have_point_prompts = len(viewer.layers["point_prompts"].data) > 0
+        if have_prompts and not have_point_prompts:
+            prompts = viewer.layers["prompts"].data
+            point_prompts = None
+        elif not have_prompts and have_point_prompts:
+            prompts = None
+            point_prompts = viewer.layers["point_prompts"].data
+        else:
+            msg = "Got multiple objects from interactive segmentation with box and point prompts." if (
+                have_prompts and have_point_prompts
+            ) else "Got multiple objects from interactive segmentation with neither box or point prompts."
+            raise RuntimeError(msg)
+
+        for i, object_id in enumerate(object_ids):
+            write_prompts(
+                object_id,
+                None if prompts is None else prompts[i:i+1],
+                None if point_prompts is None else point_prompts[i:i+1]
+            )
+
+
+@magic_factory(
+    call_button="Commit [C]",
+    layer={"choices": ["current_object", "auto_segmentation"]},
+    commit_path={"mode": "d"},  # choose a directory
+)
+def commit(
+    viewer: "napari.viewer.Viewer",
+    layer: str = "current_object",
+    commit_path: Optional[Path] = None,
+) -> None:
+    """Widget for committing the segmented objects from automatic or interactive segmentation."""
+    _, seg, mask, bb = _commit_impl(viewer, layer)
+
+    if commit_path is not None:
+        _commit_to_file(commit_path, viewer, layer, seg, mask, bb)
 
     if layer == "current_object":
         vutil.clear_annotations(viewer)
 
-    return id_offset
 
-
-@magic_factory(call_button="Commit [C]", layer={"choices": ["current_object", "auto_segmentation"]})
-def commit(viewer: "napari.viewer.Viewer", layer: str = "current_object") -> int:
-    """Widget for committing the segmented objects from automatic or interactive segmentation."""
-    _commit_impl(viewer, layer)
-
-
-@magic_factory(call_button="Commit [C]", layer={"choices": ["current_object"]})
-def commit_track(viewer: "napari.viewer.Viewer", layer: str = "current_object") -> None:
+@magic_factory(
+    call_button="Commit [C]",
+    layer={"choices": ["current_object"]},
+    commit_path={"mode": "d"},  # choose a directory
+)
+def commit_track(
+    viewer: "napari.viewer.Viewer",
+    layer: str = "current_object",
+    commit_path: Optional[Path] = None,
+) -> None:
+    """Widget for committing the segmented objects from interactive tracking."""
     # Commit the segmentation layer.
-    id_offset = _commit_impl(viewer, layer)
+    id_offset, seg, mask, bb = _commit_impl(viewer, layer)
 
     # Update the lineages.
     state = AnnotatorState()
@@ -134,6 +226,15 @@ def commit_track(viewer: "napari.viewer.Viewer", layer: str = "current_object") 
         parent + id_offset: [child + id_offset for child in children] for parent, children in state.lineage.items()
     }
     state.committed_lineages.append(updated_lineage)
+
+    if commit_path is not None:
+        _commit_to_file(
+            commit_path, viewer, layer, seg, mask, bb,
+            extra_attrs={"committed_lineages": state.committed_lineages}
+        )
+
+    if layer == "current_object":
+        vutil.clear_annotations(viewer)
 
     # Reset the tracking state.
     _reset_tracking_state(viewer)
