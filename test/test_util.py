@@ -94,6 +94,7 @@ class TestUtil(unittest.TestCase):
         precompute_image_embeddings(predictor, input_, save_path=None, tile_shape=None, halo=None)
 
     def test_tiled_prediction(self):
+
         from micro_sam.util import precompute_image_embeddings, get_sam_model, VIT_T_SUPPORT
 
         predictor = get_sam_model(model_type="vit_t" if VIT_T_SUPPORT else "vit_b")
