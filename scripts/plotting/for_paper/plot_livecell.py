@@ -11,13 +11,22 @@ from plot_all_evaluation import EXPERIMENT_ROOT
 
 TOP_BAR_COLOR, BOTTOM_BAR_COLOR = "#F0746E", "#01B3B7"
 
+MODEL_CHOICE = "vit_l"
+COMPARE_WITH = "specialist"
 
-def gather_livecell_results(model_type, experiment_name, benchmark_choice):
+
+def gather_livecell_results(model_type, experiment_name, benchmark_choice, results_with_logits):
+    if results_with_logits:
+        sub_dir_experiment = "new_models/test/input_logits"
+    else:
+        sub_dir_experiment = "new_models/v2"
+
     result_paths = glob(
         os.path.join(
-            EXPERIMENT_ROOT, "new_models", "v2", experiment_name, "lm", "livecell", model_type, "results", "*"
+            EXPERIMENT_ROOT, sub_dir_experiment, experiment_name, "lm", "livecell", model_type, "results", "*"
         )
     )
+
     ais_score = None
     for result_path in sorted(result_paths):
         if os.path.split(result_path)[-1].startswith("grid_search_"):
@@ -60,6 +69,7 @@ def gather_livecell_results(model_type, experiment_name, benchmark_choice):
 
 def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
     sns.barplot(x="iteration", y="result", hue="name", data=ib_data, ax=ax, palette=[TOP_BAR_COLOR])
+    # NOTE: this is the snippet which creates hatches on the iterative prompting starting with box.
     # all_containers = ax.containers[-1]
     # for k in range(len(all_containers)):
     #     ax.patches[k].set_hatch('//')
@@ -76,14 +86,17 @@ def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
     ax.axhline(y=cellpose, label="cellpose", color="#5454DA")
 
 
-def plot_for_livecell(benchmark_choice):
+def plot_for_livecell(benchmark_choice, results_with_logits):
     fig, ax = plt.subplots(1, 2, figsize=(20, 10), sharex="col", sharey="row")
-    amg_vanilla, _, ib_vanilla, ip_vanilla, cellpose_res = gather_livecell_results("vit_l", "vanilla", benchmark_choice)
+    amg_vanilla, _, ib_vanilla, ip_vanilla, cellpose_res = gather_livecell_results(
+        MODEL_CHOICE, "vanilla", benchmark_choice, results_with_logits
+    )
     get_barplots("Default SAM", ax[0], ib_vanilla, ip_vanilla, amg_vanilla, cellpose_res)
 
-    (amg_specialist, ais_specialist,
-     ib_specialist, ip_specialist, cellpose_res) = gather_livecell_results("vit_l", "specialist", benchmark_choice)
-    get_barplots("Finetuned SAM", ax[1], ib_specialist, ip_specialist, amg_specialist, cellpose_res, ais_specialist)
+    amg, ais, ib, ip, cellpose_res = gather_livecell_results(
+        MODEL_CHOICE, COMPARE_WITH, benchmark_choice, results_with_logits
+    )
+    get_barplots("Finetuned SAM", ax[1], ib, ip, amg, cellpose_res, ais)
 
     # here, we remove the legends for each subplot, and get one common legend for all
     all_lines, all_labels = [], []
@@ -110,9 +123,16 @@ def plot_for_livecell(benchmark_choice):
     plt.close()
 
 
-def main():
-    plot_for_livecell(benchmark_choice="livecell")
+def main(args):
+    plot_for_livecell(
+        benchmark_choice="livecell",
+        results_with_logits=args.use_masks
+    )
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--use_masks", action="store_true")
+    args = parser.parse_args()
+    main(args)
