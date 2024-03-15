@@ -75,7 +75,7 @@ class AnnotatorState(metaclass=Singleton):
         assert ndim in (2, 3)
         # Initialize the model if necessary.
         if predictor is None:
-            self.predictor = util.get_sam_model(
+            self.predictor = util.get_custom_sam_model(
                 device=device, model_type=model_type, checkpoint_path=checkpoint_path,
             )
         else:
