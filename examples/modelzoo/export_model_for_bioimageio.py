@@ -7,7 +7,7 @@ def export_model_with_synthetic_data():
 
     export_bioimageio_model(
         image, labels,
-        model_type="vit_b", name="sam-test-vit-b",
+        model_type="vit_t", name="sam-test-vit-t",
         output_path="./test_export.zip",
     )
 
