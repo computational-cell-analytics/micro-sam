@@ -150,11 +150,11 @@ class _AnnotatorBase(Container):
 
         # Reset all layers.
         self._viewer.layers["current_object"].data = np.zeros(self._shape, dtype="uint32")
-        self._viewer.layers["committed_objects"].data = np.zeros(self._shape, dtype="uint32")
+        self._viewer.layers["auto_segmentation"].data = np.zeros(self._shape, dtype="uint32")
         if segmentation_result is None:
-            self._viewer.layers["auto_segmentation"].data = np.zeros(self._shape, dtype="uint32")
+            self._viewer.layers["committed_objects"].data = np.zeros(self._shape, dtype="uint32")
         else:
             assert segmentation_result.shape == self._shape
-            self._viewer.layers["auto_segmentation"].data = segmentation_result
+            self._viewer.layers["committed_objects"].data = segmentation_result
 
         vutil.clear_annotations(self._viewer, clear_segmentations=False)
