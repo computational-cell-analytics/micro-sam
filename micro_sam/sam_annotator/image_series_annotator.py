@@ -35,10 +35,8 @@ def _precompute(
         embedding_paths = [None] * len(images)
     else:
         _precompute_state_for_files(
-            predictor, images, embedding_path, ndim=ndim,
-            tile_shape=tile_shape, halo=halo,
-            precompute_amg_state=precompute_amg_state,
-            decoder=decoder,
+            predictor, images, embedding_path, ndim=ndim, tile_shape=tile_shape, halo=halo,
+            precompute_amg_state=precompute_amg_state, decoder=decoder,
         )
         if isinstance(images[0], np.ndarray):
             embedding_paths = [
@@ -123,9 +121,8 @@ def image_series_annotator(
     state = AnnotatorState()
     state.decoder = decoder
     state.initialize_predictor(
-        image, model_type=model_type, save_path=image_embedding_path,
-        halo=halo, tile_shape=tile_shape, predictor=predictor, ndim=image.ndim,
-        precompute_amg_state=precompute_amg_state,
+        image, model_type=model_type, save_path=image_embedding_path, halo=halo, tile_shape=tile_shape,
+        predictor=predictor, ndim=3 if is_volumetric else 2, precompute_amg_state=precompute_amg_state,
         checkpoint_path=checkpoint_path, device=device,
     )
     if image.ndim == 2:
@@ -195,9 +192,8 @@ def image_series_annotator(
         if state.amg is not None:
             state.amg.clear_state()
         state.initialize_predictor(
-            image, model_type=model_type, ndim=image.ndim, save_path=image_embedding_path,
-            halo=halo, tile_shape=tile_shape, predictor=predictor,
-            precompute_amg_state=precompute_amg_state, device=device,
+            image, model_type=model_type, ndim=3 if is_volumetric else 2, save_path=image_embedding_path, halo=halo,
+            tile_shape=tile_shape, predictor=predictor, precompute_amg_state=precompute_amg_state, device=device,
         )
         state.image_shape = image.shape
 
