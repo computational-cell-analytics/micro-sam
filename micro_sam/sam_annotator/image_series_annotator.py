@@ -185,7 +185,7 @@ def image_series_annotator(
         if state.amg is not None:
             state.amg.clear_state()
         state.initialize_predictor(
-            image, model_type=model_type, ndim=2, save_path=image_embedding_path,
+            image, model_type=model_type, ndim=image.ndim, save_path=image_embedding_path,
             halo=halo, tile_shape=tile_shape, predictor=predictor,
             precompute_amg_state=precompute_amg_state, device=device,
         )
