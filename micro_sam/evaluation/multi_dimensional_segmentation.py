@@ -39,7 +39,16 @@ def default_grid_search_values_multi_dimensional_segmentation(
         iou_threshold_values = _get_range_of_search_values([0.5, 0.9], step=0.1)
 
     if projection_method_values is None:
-        projection_method_values = ["mask", "bounding_box", "points"]
+        projection_method_values = [
+            {"use_box": True, "use_mask": False, "use_points": False},
+            {"use_box": False, "use_mask": True, "use_points": False},
+            {"use_box": False, "use_mask": False, "use_points": True},
+            {"use_box": True, "use_mask": True, "use_points": False},
+            {"use_box": True, "use_mask": False, "use_points": True},
+            {"use_box": False, "use_mask": True, "use_points": True},
+            {"use_box": True, "use_mask": True, "use_points": True},
+            "single_point"
+        ]
 
     if box_extension_values is None:
         box_extension_values = _get_range_of_search_values([0, 0.25], step=0.025)
@@ -149,7 +158,7 @@ def segment_slices_from_ground_truth(
         output_seg[slice_choice][output_slice == 1] = 1
 
         # Segment the object in the entire volume with the specified segmented slice
-        this_seg = segment_mask_in_volume(
+        this_seg, _ = segment_mask_in_volume(
             segmentation=output_seg,
             predictor=predictor,
             image_embeddings=embeddings,

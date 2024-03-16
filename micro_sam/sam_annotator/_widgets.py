@@ -2,14 +2,17 @@
 """
 
 import json
+import multiprocessing as mp
 import os
 import pickle
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Literal
 
+import elf.parallel
 import h5py
 import numpy as np
 import zarr
+import z5py
 
 from magicgui import magic_factory, widgets
 from magicgui.widgets import ComboBox, Container
@@ -57,54 +60,184 @@ def clear(viewer: "napari.viewer.Viewer") -> None:
 
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
-def clear_track(viewer: "napari.viewer.Viewer") -> None:
+def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> None:
+    """Widget for clearing the current annotations in 3D."""
+    if all_slices:
+        vutil.clear_annotations(viewer)
+    else:
+        i = int(viewer.cursor.position[0])
+        vutil.clear_annotations_slice(viewer, i=i)
+
+
+@magic_factory(call_button="Clear Annotations [Shift + C]")
+def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None:
     """Widget for clearing all tracking annotations and state."""
-    _reset_tracking_state(viewer)
-    vutil.clear_annotations(viewer)
+    if all_frames:
+        _reset_tracking_state(viewer)
+        vutil.clear_annotations(viewer)
+    else:
+        i = int(viewer.cursor.position[0])
+        vutil.clear_annotations_slice(viewer, i=i)
 
 
-@magic_factory(call_button="Commit [C]", layer={"choices": ["current_object", "auto_segmentation"]})
-def commit(viewer: "napari.viewer.Viewer", layer: str = "current_object") -> None:
-    """Widget for committing the segmented objects from automatic or interactive segmentation."""
-    seg = viewer.layers[layer].data
+def _commit_impl(viewer, layer):
+    # Check if we have a z_range. If yes, use it to set a bounding box.
+    state = AnnotatorState()
+    if state.z_range is None:
+        bb = np.s_[:]
+    else:
+        z_min, z_max = state.z_range
+        bb = np.s_[z_min:(z_max+1)]
+
+    seg = viewer.layers[layer].data[bb]
     shape = seg.shape
 
-    id_offset = int(viewer.layers["committed_objects"].data.max())
-    mask = seg != 0
+    # We parallelize these operatios because they take quite long for large volumes.
 
-    viewer.layers["committed_objects"].data[mask] = (seg[mask] + id_offset)
+    # Compute the max id in the commited objects.
+    # id_offset = int(viewer.layers["committed_objects"].data.max())
+    full_shape = viewer.layers["committed_objects"].data.shape
+    id_offset = int(
+        elf.parallel.max(viewer.layers["committed_objects"].data, block_shape=util.get_block_shape(full_shape))
+    )
+
+    # Compute the mask for the current object.
+    # mask = seg != 0
+    mask = np.zeros(seg.shape, dtype="bool")
+    mask = elf.parallel.apply_operation(
+        seg, 0, np.not_equal, out=mask, block_shape=util.get_block_shape(shape)
+    )
+
+    # Write the current object to committed objects.
+    seg[mask] += id_offset
+    viewer.layers["committed_objects"].data[bb][mask] = seg[mask]
     viewer.layers["committed_objects"].refresh()
 
-    viewer.layers[layer].data = np.zeros(shape, dtype="uint32")
-    viewer.layers[layer].refresh()
+    return id_offset, seg, mask, bb
+
+
+# TODO also keep track of the model being used and the micro-sam version.
+def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
+
+    # NOTE: Zarr is incredibly inefficient and writes empty blocks.
+    # So we have to use z5py here.
+
+    # Deal with issues z5py has with empty folders and require the json.
+    if os.path.exists(path):
+        required_json = os.path.join(path, ".zgroup")
+        if not os.path.exists(required_json):
+            with open(required_json, "w") as f:
+                json.dump({"zarr_format": 2}, f)
+
+    f = z5py.ZarrFile(path, "a")
+
+    # Write the segmentation.
+    full_shape = viewer.layers["committed_objects"].data.shape
+    block_shape = util.get_block_shape(full_shape)
+    ds = f.require_dataset(
+        "committed_objects", shape=full_shape, chunks=block_shape, compression="gzip", dtype=seg.dtype
+    )
+    ds.n_threads = mp.cpu_count()
+    data = ds[bb]
+    data[mask] = seg[mask]
+    ds[bb] = data
+
+    # Write additional information to attrs.
+    if extra_attrs is not None:
+        f.attrs.update(extra_attrs)
+
+    # If we run commit from the automatic segmentation we don't have
+    # any prompts and so don't need to commit anything else.
+    if layer == "auto_segmentation":
+        return
+
+    def write_prompts(object_id, prompts, point_prompts):
+        g = f.create_group(f"prompts/{object_id}")
+        if prompts is not None and len(prompts) > 0:
+            data = np.array(prompts)
+            g.create_dataset("prompts", data=data, chunks=data.shape)
+        if point_prompts is not None and len(point_prompts) > 0:
+            g.create_dataset("point_prompts", data=point_prompts, chunks=point_prompts.shape)
+
+    # Commit the prompts for all the objects in the commit.
+    object_ids = np.unique(seg[mask])
+    if len(object_ids) == 1:  # We only have a single object.
+        write_prompts(object_ids[0], viewer.layers["prompts"].data, viewer.layers["point_prompts"].data)
+    else:
+        have_prompts = len(viewer.layers["prompts"].data) > 0
+        have_point_prompts = len(viewer.layers["point_prompts"].data) > 0
+        if have_prompts and not have_point_prompts:
+            prompts = viewer.layers["prompts"].data
+            point_prompts = None
+        elif not have_prompts and have_point_prompts:
+            prompts = None
+            point_prompts = viewer.layers["point_prompts"].data
+        else:
+            msg = "Got multiple objects from interactive segmentation with box and point prompts." if (
+                have_prompts and have_point_prompts
+            ) else "Got multiple objects from interactive segmentation with neither box or point prompts."
+            raise RuntimeError(msg)
+
+        for i, object_id in enumerate(object_ids):
+            write_prompts(
+                object_id,
+                None if prompts is None else prompts[i:i+1],
+                None if point_prompts is None else point_prompts[i:i+1]
+            )
+
+
+@magic_factory(
+    call_button="Commit [C]",
+    layer={"choices": ["current_object", "auto_segmentation"]},
+    commit_path={"mode": "d"},  # choose a directory
+)
+def commit(
+    viewer: "napari.viewer.Viewer",
+    layer: str = "current_object",
+    commit_path: Optional[Path] = None,
+) -> None:
+    """Widget for committing the segmented objects from automatic or interactive segmentation."""
+    _, seg, mask, bb = _commit_impl(viewer, layer)
+
+    if commit_path is not None:
+        _commit_to_file(commit_path, viewer, layer, seg, mask, bb)
 
     if layer == "current_object":
         vutil.clear_annotations(viewer)
 
 
-@magic_factory(call_button="Commit [C]", layer={"choices": ["current_object"]})
-def commit_track(viewer: "napari.viewer.Viewer", layer: str = "current_object") -> None:
+@magic_factory(
+    call_button="Commit [C]",
+    layer={"choices": ["current_object"]},
+    commit_path={"mode": "d"},  # choose a directory
+)
+def commit_track(
+    viewer: "napari.viewer.Viewer",
+    layer: str = "current_object",
+    commit_path: Optional[Path] = None,
+) -> None:
+    """Widget for committing the segmented objects from interactive tracking."""
+    # Commit the segmentation layer.
+    id_offset, seg, mask, bb = _commit_impl(viewer, layer)
+
+    # Update the lineages.
     state = AnnotatorState()
-
-    seg = viewer.layers[layer].data
-
-    id_offset = int(viewer.layers["committed_objects"].data.max())
-    mask = seg != 0
-
-    viewer.layers["committed_objects"].data[mask] = (seg[mask] + id_offset)
-    viewer.layers["committed_objects"].refresh()
-
-    shape = state.image_shape
-    viewer.layers[layer].data = np.zeros(shape, dtype="uint32")
-    viewer.layers[layer].refresh()
-
     updated_lineage = {
         parent + id_offset: [child + id_offset for child in children] for parent, children in state.lineage.items()
     }
     state.committed_lineages.append(updated_lineage)
 
+    if commit_path is not None:
+        _commit_to_file(
+            commit_path, viewer, layer, seg, mask, bb,
+            extra_attrs={"committed_lineages": state.committed_lineages}
+        )
+
+    if layer == "current_object":
+        vutil.clear_annotations(viewer)
+
+    # Reset the tracking state.
     _reset_tracking_state(viewer)
-    vutil.clear_annotations(viewer, clear_segmentations=False)
 
 
 @magic_factory(call_button="Save Lineage")
@@ -138,11 +271,50 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
     return label_widget
 
 
+def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
+    tile_shape = (tile_shape_x, tile_shape_y)
+    halo = (halo_x, halo_y)
+    # check if tile_shape/halo are not set: (0, 0)
+    if all(item == 0 for item in tile_shape):
+        tile_shape = None
+    # check if at least 1 param is given
+    elif tile_shape[0] == 0 or tile_shape[1] == 0:
+        max_val = max(tile_shape[0], tile_shape[1])
+        if max_val < 256:  # at least tile shape >256
+            max_val = 256
+        tile_shape = (max_val, max_val)
+    # if both inputs given, check if smaller than 256
+    elif tile_shape[0] != 0 and tile_shape[1] != 0:
+        if tile_shape[0] < 256:
+            tile_shape = (256, tile_shape[1])  # Create a new tuple
+        if tile_shape[1] < 256:
+            tile_shape = (tile_shape[0], 256)  # Create a new tuple with modified value
+    if all(item == 0 for item in halo):
+        if tile_shape is not None:
+            halo = (0, 0)
+        else:
+            halo = None
+    # check if at least 1 param is given
+    elif halo[0] != 0 or halo[1] != 0:
+        max_val = max(halo[0], halo[1])
+        # don't apply halo if there is no tiling
+        if tile_shape is None:
+            halo = None
+        else:
+            halo = (max_val, max_val)
+    return tile_shape, halo
+
+
 # TODO add options for tiling, see https://github.com/computational-cell-analytics/micro-sam/issues/331
 @magic_factory(
     pbar={"visible": False, "max": 0, "value": 0, "label": "working..."},
     call_button="Compute image embeddings",
     save_path={"mode": "d"},  # choose a directory
+    tile_shape_x={"min": 0, "max": 2048},
+    tile_shape_y={"min": 0, "max": 2048},
+    halo_x={"min": 0, "max": 2048},
+    halo_y={"min": 0, "max": 2048},
+
 )
 def embedding(
     pbar: widgets.ProgressBar,
@@ -151,6 +323,10 @@ def embedding(
     device: Literal[tuple(["auto"] + util._available_devices())] = "auto",
     save_path: Optional[Path] = None,  # where embeddings for this image are cached (optional)
     custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
+    tile_shape_x: int = None,
+    tile_shape_y: int = None,
+    halo_x: int = None,
+    halo_y: int = None,
 ) -> util.ImageEmbeddings:
     """Widget to compute the embeddings for a napari image layer."""
     state = AnnotatorState()
@@ -164,11 +340,14 @@ def embedding(
         ndim = image.data.ndim
         state.image_shape = image.data.shape
 
+    # process tile_shape and halo to tuples or None
+    tile_shape, halo = _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y)
+
     @thread_worker(connect={"started": pbar.show, "finished": pbar.hide})
     def _compute_image_embedding(
         state, image_data, save_path, ndim=None,
         device="auto", model=util._DEFAULT_MODEL,
-        custom_weights=None,
+        custom_weights=None, tile_shape=None, halo=None,
     ):
         # Make sure save directory exists and is an empty directory
         if save_path is not None:
@@ -188,13 +367,13 @@ def embedding(
 
         state.initialize_predictor(
             image_data, model_type=model, save_path=save_path, ndim=ndim, device=device,
-            checkpoint_path=custom_weights,
+            checkpoint_path=custom_weights, tile_shape=tile_shape, halo=halo,
         )
         return state  # returns napari._qt.qthreading.FunctionWorker
 
     return _compute_image_embedding(
         state, image.data, save_path, ndim=ndim, device=device, model=model,
-        custom_weights=custom_weights
+        custom_weights=custom_weights, tile_shape=tile_shape, halo=halo
     )
 
 
@@ -285,22 +464,14 @@ def segment_slice(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) ->
 # See https://github.com/computational-cell-analytics/micro-sam/issues/334
 @magic_factory(
     call_button="Segment All Slices [Shift-S]",
-    projection={"choices": ["default", "bounding_box", "mask", "points"]},
+    projection={"choices": ["box", "mask", "points", "points_and_mask", "single_point"]},
 )
 def segment_object(
     viewer: "napari.viewer.Viewer",
-    iou_threshold: float = 0.8,
-    projection: str = "default",
+    iou_threshold: float = 0.5,
+    projection: str = "points",
     box_extension: float = 0.05,
 ) -> None:
-
-    # we have the following projection modes:
-    # bounding_box: uses only the bounding box as prompt
-    # mask: uses the bounding box and the mask
-    # points: uses the bounding box, mask and points derived from the mask
-    # by default we choose mask, which qualitatively seems to work the best
-    projection = "mask" if projection == "default" else projection
-
     state = AnnotatorState()
     shape = state.image_shape
 
@@ -314,12 +485,14 @@ def segment_object(
         )
 
         # step 2: segment the rest of the volume based on smart prompting
-        seg = segment_mask_in_volume(
+        seg, (z_min, z_max) = segment_mask_in_volume(
             seg, state.predictor, state.image_embeddings, slices,
             stop_lower, stop_upper,
             iou_threshold=iou_threshold, projection=projection,
             progress_bar=progress_bar, box_extension=box_extension,
         )
+
+    state.z_range = (z_min, z_max)
 
     viewer.layers["current_object"].data = seg
     viewer.layers["current_object"].refresh()
