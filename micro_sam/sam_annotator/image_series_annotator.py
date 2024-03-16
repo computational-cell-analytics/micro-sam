@@ -66,9 +66,10 @@ def image_series_annotator(
     decoder: Optional["nn.Module"] = None,
     precompute_amg_state: bool = False,
     checkpoint_path: Optional[str] = None,
+    is_volumetric: bool = False,
     device: Optional[Union[str, torch.device]] = None,
 ) -> Optional["napari.viewer.Viewer"]:
-    """Run the 2d annotation tool for a series of images.
+    """Run the annotation tool for a series of images (supported for both 2d and 3d images).
 
     Args:
         images: List of the file paths or list of (set of) slices for the images to be annotated.
@@ -89,6 +90,7 @@ def image_series_annotator(
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
+        is_volumetric: Whether to use the 3d annotator.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -126,7 +128,15 @@ def image_series_annotator(
         precompute_amg_state=precompute_amg_state,
         checkpoint_path=checkpoint_path, device=device,
     )
-    state.image_shape = image.shape
+    if image.ndim == 2:
+        state.image_shape = image.shape
+    elif image.ndim == 3:
+        if is_volumetric:
+            state.image_shape = image.shape
+        else:
+            state.image_shape = image.shape[:-1]
+    elif image.ndim == 4:
+        state.image_shape = image.shape[:-1]
 
     if image.ndim == 2:
         annotator = Annotator2d(viewer)

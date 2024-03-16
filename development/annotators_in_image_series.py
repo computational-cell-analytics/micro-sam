@@ -73,6 +73,7 @@ def segment_each_n_slices(z_batch, input_volume, embedding_dir, output_folder):
         embedding_path=embedding_dir,
         tile_shape=None,
         halo=None,
+        is_volumetric=True,
     )
 
 
