@@ -51,6 +51,20 @@ def _precompute(
     return predictor, embedding_paths
 
 
+def _get_input_shape(image, is_volumetric=False):
+    if image.ndim == 2:
+        image_shape = image.shape
+    elif image.ndim == 3:
+        if is_volumetric:
+            image_shape = image.shape
+        else:
+            image_shape = image.shape[:-1]
+    elif image.ndim == 4:
+        image_shape = image.shape[:-1]
+
+    return image_shape
+
+
 def image_series_annotator(
     images: Union[List[Union[os.PathLike, str]], List[np.ndarray]],
     output_folder: str,
@@ -125,19 +139,12 @@ def image_series_annotator(
         predictor=predictor, ndim=3 if is_volumetric else 2, precompute_amg_state=precompute_amg_state,
         checkpoint_path=checkpoint_path, device=device,
     )
-    if image.ndim == 2:
-        state.image_shape = image.shape
-    elif image.ndim == 3:
-        if is_volumetric:
-            state.image_shape = image.shape
-        else:
-            state.image_shape = image.shape[:-1]
-    elif image.ndim == 4:
-        state.image_shape = image.shape[:-1]
+    state.image_shape = _get_input_shape(image, is_volumetric)
 
-    if image.ndim == 2:
+    if image.ndim == 2 or (image.ndim == 3 and not is_volumetric):  # for mono-channel and RGB images
         annotator = Annotator2d(viewer)
-    else:
+    else:  # for 3d images
+        assert is_volumetric, "Please pass 'is_volumetric' attribute to use 3d annotator."
         annotator = Annotator3d(viewer)
 
     annotator._update_image()
@@ -195,7 +202,7 @@ def image_series_annotator(
             image, model_type=model_type, ndim=3 if is_volumetric else 2, save_path=image_embedding_path, halo=halo,
             tile_shape=tile_shape, predictor=predictor, precompute_amg_state=precompute_amg_state, device=device,
         )
-        state.image_shape = image.shape
+        state.image_shape = _get_input_shape(image, is_volumetric)
 
         annotator._update_image()
 
@@ -279,6 +286,9 @@ def main():
         help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
         "By default the most performant available device will be selected."
     )
+    parser.add_argument(
+        "--is_volumetric", action="store_true", help="Whether to use the 3d annotator for a set of 3d volumes."
+    )
 
     parser.add_argument(
         "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
@@ -296,7 +306,6 @@ def main():
     image_folder_annotator(
         args.input_folder, args.output_folder, args.pattern,
         embedding_path=args.embedding_path, model_type=args.model_type,
-        tile_shape=args.tile_shape, halo=args.halo,
-        precompute_amg_state=args.precompute_amg_state,
-        checkpoint_path=args.checkpoint, device=args.device,
+        tile_shape=args.tile_shape, halo=args.halo, precompute_amg_state=args.precompute_amg_state,
+        checkpoint_path=args.checkpoint, device=args.device, is_volumetric=args.is_volumetric
     )
