@@ -5,6 +5,7 @@ from glob import glob
 from pathlib import Path
 from typing import List, Optional, Union, Tuple
 
+import numpy as np
 import imageio.v3 as imageio
 import napari
 import torch.nn as nn
@@ -16,13 +17,14 @@ from segment_anything import SamPredictor
 from .. import util
 from ..precompute_state import _precompute_state_for_files
 from .annotator_2d import Annotator2d
+from .annotator_3d import Annotator3d
 from ._state import AnnotatorState
 
 
 def _precompute(
     image_files, model_type, predictor, embedding_path,
     tile_shape, halo, precompute_amg_state, decoder,
-    checkpoint_path, device,
+    checkpoint_path, device, ndim=None
 ):
     if predictor is None:
         predictor = util.get_sam_model(
@@ -33,21 +35,26 @@ def _precompute(
         embedding_paths = [None] * len(image_files)
     else:
         _precompute_state_for_files(
-            predictor, image_files, embedding_path, ndim=2,
+            predictor, image_files, embedding_path, ndim=ndim,
             tile_shape=tile_shape, halo=halo,
             precompute_amg_state=precompute_amg_state,
             decoder=decoder,
         )
-        embedding_paths = [
-            os.path.join(embedding_path, f"{Path(path).stem}.zarr") for path in image_files
-        ]
+        if isinstance(image_files[0], np.ndarray):
+            embedding_paths = [
+                os.path.join(embedding_path, f"embedding_{i:05}.zarr") for i, path in enumerate(image_files)
+            ]
+        else:
+            embedding_paths = [
+                os.path.join(embedding_path, f"{Path(path).stem}.zarr") for path in image_files
+            ]
         assert all(os.path.exists(emb_path) for emb_path in embedding_paths)
 
     return predictor, embedding_paths
 
 
 def image_series_annotator(
-    image_files: List[Union[os.PathLike, str]],
+    image_files: Union[List[Union[os.PathLike, str]], List[np.ndarray]],
     output_folder: str,
     model_type: str = util._DEFAULT_MODEL,
     embedding_path: Optional[str] = None,
@@ -64,7 +71,7 @@ def image_series_annotator(
     """Run the 2d annotation tool for a series of images.
 
     Args:
-        input_files: List of the file paths for the images to be annotated.
+        image_files: List of the file paths or list of (set of) slices for the images to be annotated.
         output_folder: The folder where the segmentation results are saved.
         model_type: The Segment Anything model to use. For details on the available models check out
             https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
@@ -98,7 +105,13 @@ def image_series_annotator(
     )
 
     # Load the first image and intialize the viewer, annotator and state.
-    image = imageio.imread(image_files[next_image_id])
+    if isinstance(image_files[next_image_id], np.ndarray):
+        image = image_files[next_image_id]
+        have_inputs_as_arrays = True
+    else:
+        image = imageio.imread(image_files[next_image_id])
+        have_inputs_as_arrays = False
+
     image_embedding_path = embedding_paths[next_image_id]
 
     if viewer is None:
@@ -109,20 +122,28 @@ def image_series_annotator(
     state.decoder = decoder
     state.initialize_predictor(
         image, model_type=model_type, save_path=image_embedding_path,
-        halo=halo, tile_shape=tile_shape, predictor=predictor, ndim=2,
+        halo=halo, tile_shape=tile_shape, predictor=predictor, ndim=image.ndim,
         precompute_amg_state=precompute_amg_state,
         checkpoint_path=checkpoint_path, device=device,
     )
-    state.image_shape = image.shape[:-1] if image.ndim == 3 else image.shape
+    state.image_shape = image.shape
 
-    annotator = Annotator2d(viewer)
+    if image.ndim == 2:
+        annotator = Annotator2d(viewer)
+    else:
+        annotator = Annotator3d(viewer)
+
     annotator._update_image()
 
     viewer.window.add_dock_widget(annotator)
 
-    def _save_segmentation(image_path, segmentation):
-        fname = os.path.basename(image_path)
-        fname = os.path.splitext(fname)[0] + ".tif"
+    def _save_segmentation(image_path, current_idx, segmentation):
+        if have_inputs_as_arrays:
+            fname = f"seg_{current_idx:05}.tif"
+        else:
+            fname = os.path.basename(image_path)
+            fname = os.path.splitext(fname)[0] + ".tif"
+
         out_path = os.path.join(output_folder, fname)
         imageio.imwrite(out_path, segmentation)
 
@@ -137,7 +158,7 @@ def image_series_annotator(
             return
 
         # Save the current segmentation.
-        _save_segmentation(image_files[next_image_id], segmentation)
+        _save_segmentation(image_files[next_image_id], next_image_id, segmentation)
 
         # Load the next image.
         next_image_id += 1
@@ -146,8 +167,16 @@ def image_series_annotator(
             viewer.close()
             return
 
-        print("Loading next image from:", image_files[next_image_id])
-        image = imageio.imread(image_files[next_image_id])
+        print(
+            "Loading next image from:",
+            image_files[next_image_id] if have_inputs_as_arrays else f"at index {next_image_id}"
+        )
+
+        if have_inputs_as_arrays:
+            image = image_files[next_image_id]
+        else:
+            image = imageio.imread(image_files[next_image_id])
+
         image_embedding_path = embedding_paths[next_image_id]
 
         # Set the new image in the viewer, state and annotator.
