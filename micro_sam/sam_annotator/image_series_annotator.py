@@ -168,8 +168,8 @@ def image_series_annotator(
             return
 
         print(
-            "Loading next image from:",
-            images[next_image_id] if have_inputs_as_arrays else f"at index {next_image_id}"
+            "Loading next image:",
+            images[next_image_id] if not have_inputs_as_arrays else f"at index {next_image_id}"
         )
 
         if have_inputs_as_arrays:
@@ -189,7 +189,7 @@ def image_series_annotator(
             halo=halo, tile_shape=tile_shape, predictor=predictor,
             precompute_amg_state=precompute_amg_state, device=device,
         )
-        state.image_shape = image.shape[:-1] if image.ndim == 3 else image.shape
+        state.image_shape = image.shape
 
         annotator._update_image()
 
