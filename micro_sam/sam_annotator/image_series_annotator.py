@@ -153,7 +153,8 @@ def image_series_annotator(
         # Set the new image in the viewer, state and annotator.
         viewer.layers["image"].data = image
 
-        state.amg.clear_state()
+        if state.amg is not None:
+            state.amg.clear_state()
         state.initialize_predictor(
             image, model_type=model_type, ndim=2, save_path=image_embedding_path,
             halo=halo, tile_shape=tile_shape, predictor=predictor,
