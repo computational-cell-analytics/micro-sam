@@ -40,7 +40,7 @@ def segment_each_slice(input_volume, embedding_dir, output_folder):
 
     all_slices = [each_slice for each_slice in input_volume]
     image_series_annotator(
-        image_files=all_slices,
+        images=all_slices,
         output_folder=output_folder,
         model_type="vit_b_em_organelles",
         embedding_path=embedding_dir,
@@ -67,7 +67,7 @@ def segment_each_n_slices(z_batch, input_volume, embedding_dir, output_folder):
 
     print(f"We split the volume into {len(all_per_n_slices_volumes)} sub-volumes.")
     image_series_annotator(
-        image_files=all_per_n_slices_volumes,
+        images=all_per_n_slices_volumes,
         output_folder=output_folder,
         model_type="vit_b_em_organelles",
         embedding_path=embedding_dir,

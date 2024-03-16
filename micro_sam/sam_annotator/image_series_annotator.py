@@ -22,7 +22,7 @@ from ._state import AnnotatorState
 
 
 def _precompute(
-    image_files, model_type, predictor, embedding_path,
+    images, model_type, predictor, embedding_path,
     tile_shape, halo, precompute_amg_state, decoder,
     checkpoint_path, device, ndim=None
 ):
@@ -32,21 +32,21 @@ def _precompute(
         )
 
     if embedding_path is None:
-        embedding_paths = [None] * len(image_files)
+        embedding_paths = [None] * len(images)
     else:
         _precompute_state_for_files(
-            predictor, image_files, embedding_path, ndim=ndim,
+            predictor, images, embedding_path, ndim=ndim,
             tile_shape=tile_shape, halo=halo,
             precompute_amg_state=precompute_amg_state,
             decoder=decoder,
         )
-        if isinstance(image_files[0], np.ndarray):
+        if isinstance(images[0], np.ndarray):
             embedding_paths = [
-                os.path.join(embedding_path, f"embedding_{i:05}.zarr") for i, path in enumerate(image_files)
+                os.path.join(embedding_path, f"embedding_{i:05}.zarr") for i, path in enumerate(images)
             ]
         else:
             embedding_paths = [
-                os.path.join(embedding_path, f"{Path(path).stem}.zarr") for path in image_files
+                os.path.join(embedding_path, f"{Path(path).stem}.zarr") for path in images
             ]
         assert all(os.path.exists(emb_path) for emb_path in embedding_paths)
 
@@ -54,7 +54,7 @@ def _precompute(
 
 
 def image_series_annotator(
-    image_files: Union[List[Union[os.PathLike, str]], List[np.ndarray]],
+    images: Union[List[Union[os.PathLike, str]], List[np.ndarray]],
     output_folder: str,
     model_type: str = util._DEFAULT_MODEL,
     embedding_path: Optional[str] = None,
@@ -71,7 +71,7 @@ def image_series_annotator(
     """Run the 2d annotation tool for a series of images.
 
     Args:
-        image_files: List of the file paths or list of (set of) slices for the images to be annotated.
+        images: List of the file paths or list of (set of) slices for the images to be annotated.
         output_folder: The folder where the segmentation results are saved.
         model_type: The Segment Anything model to use. For details on the available models check out
             https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
@@ -99,17 +99,17 @@ def image_series_annotator(
 
     # Precompute embeddings and amg state (if corresponding options set).
     predictor, embedding_paths = _precompute(
-        image_files, model_type, predictor,
+        images, model_type, predictor,
         embedding_path, tile_shape, halo, precompute_amg_state,
         decoder=decoder, checkpoint_path=checkpoint_path, device=device,
     )
 
     # Load the first image and intialize the viewer, annotator and state.
-    if isinstance(image_files[next_image_id], np.ndarray):
-        image = image_files[next_image_id]
+    if isinstance(images[next_image_id], np.ndarray):
+        image = images[next_image_id]
         have_inputs_as_arrays = True
     else:
-        image = imageio.imread(image_files[next_image_id])
+        image = imageio.imread(images[next_image_id])
         have_inputs_as_arrays = False
 
     image_embedding_path = embedding_paths[next_image_id]
@@ -158,24 +158,24 @@ def image_series_annotator(
             return
 
         # Save the current segmentation.
-        _save_segmentation(image_files[next_image_id], next_image_id, segmentation)
+        _save_segmentation(images[next_image_id], next_image_id, segmentation)
 
         # Load the next image.
         next_image_id += 1
-        if next_image_id == len(image_files):
+        if next_image_id == len(images):
             print("You have annotated the last image.")
             viewer.close()
             return
 
         print(
             "Loading next image from:",
-            image_files[next_image_id] if have_inputs_as_arrays else f"at index {next_image_id}"
+            images[next_image_id] if have_inputs_as_arrays else f"at index {next_image_id}"
         )
 
         if have_inputs_as_arrays:
-            image = image_files[next_image_id]
+            image = images[next_image_id]
         else:
-            image = imageio.imread(image_files[next_image_id])
+            image = imageio.imread(images[next_image_id])
 
         image_embedding_path = embedding_paths[next_image_id]
 
