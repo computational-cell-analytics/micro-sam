@@ -141,11 +141,14 @@ def image_series_annotator(
     )
     state.image_shape = _get_input_shape(image, is_volumetric)
 
-    if image.ndim == 2 or (image.ndim == 3 and not is_volumetric):  # for mono-channel and RGB images
-        annotator = Annotator2d(viewer)
-    else:  # for 3d images
-        assert is_volumetric, "Please pass 'is_volumetric' attribute to use 3d annotator."
+    if is_volumetric:
+        if image.ndim not in [3, 4]:
+            raise ValueError(f"Invalid image dimensions for 3d annotator, expect 3 or 4 dimensions, got {image.ndim}")
         annotator = Annotator3d(viewer)
+    else:
+        if image.ndim not in (2, 3):
+            raise ValueError(f"Invalid image dimensions for 2d annotator, expect 2 or 3 dimensions, got {image.ndim}")
+        annotator = Annotator2d(viewer)
 
     annotator._update_image()
 
