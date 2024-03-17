@@ -6,11 +6,7 @@ import json
 import argparse
 import warnings
 from glob import glob
-from tqdm import tqdm
 from typing import List, Optional, Union
-
-import numpy as np
-import pandas as pd
 
 from segment_anything import SamPredictor
 
@@ -393,54 +389,6 @@ def run_livecell_inference() -> None:
 #
 
 
-def evaluate_livecell_predictions(
-    gt_dir: Union[os.PathLike, str],
-    pred_dir: Union[os.PathLike, str],
-    verbose: bool,
-) -> None:
-    """Evaluate LiveCELL predictions.
-
-    Args:
-        gt_dir: The folder with the groundtruth segmentations.
-        pred_dir: The folder with the segmentation predictions.
-        verbose: Whether to run the evaluation in verbose mode.
-    """
-    assert os.path.exists(gt_dir), gt_dir
-    assert os.path.exists(pred_dir), pred_dir
-
-    msas, sa50s, sa75s = [], [], []
-    msas_ct, sa50s_ct, sa75s_ct = [], [], []
-
-    for ct in tqdm(CELL_TYPES, desc="Evaluate livecell predictions", disable=not verbose):
-
-        gt_pattern = os.path.join(gt_dir, f"{ct}/*.tif")
-        gt_paths = glob(gt_pattern)
-        assert len(gt_paths) > 0, "gt_pattern"
-
-        pred_paths = [
-            os.path.join(pred_dir, os.path.basename(path)) for path in gt_paths
-        ]
-
-        this_msas, this_sa50s, this_sa75s = evaluation._run_evaluation(
-            gt_paths, pred_paths, False
-        )
-
-        msas.extend(this_msas), sa50s.extend(this_sa50s), sa75s.extend(this_sa75s)
-        msas_ct.append(np.mean(this_msas))
-        sa50s_ct.append(np.mean(this_sa50s))
-        sa75s_ct.append(np.mean(this_sa75s))
-
-    result_dict = {
-        "cell_type": CELL_TYPES + ["Total"],
-        "msa": msas_ct + [np.mean(msas)],
-        "sa50": sa50s_ct + [np.mean(sa50s_ct)],
-        "sa75": sa75s_ct + [np.mean(sa75s_ct)],
-    }
-    df = pd.DataFrame.from_dict(result_dict)
-    df = df.round(decimals=4)
-    return df
-
-
 def run_livecell_evaluation() -> None:
     """Run LiveCELL evaluation with command line tool."""
     parser = argparse.ArgumentParser()
@@ -455,33 +403,36 @@ def run_livecell_evaluation() -> None:
         "-f", "--force", action="store_true",
         help="Force recomputation of already cached eval results."
     )
+    parser.add_argument(
+        "-b", "--start_with_box", action="store_true",
+        help="Start with box for iterative prompt-based segmentation."
+    )
     args = parser.parse_args()
 
-    gt_dir = os.path.join(args.input, "annotations", "livecell_test_images")
-    assert os.path.exists(gt_dir), "The LiveCELL Dataset is incomplete"
+    _, gt_paths = _get_livecell_paths(args.input, "test")
 
     experiment_folder = args.experiment_folder
     save_root = os.path.join(experiment_folder, "results")
 
-    inference_root_names = ["points", "box", "amg/inference"]
+    inference_root_names = [
+        "amg/inference", "instance_segmentation_with_decoder/inference", "start_with_box", "start_with_point"
+    ]
     for inf_root in inference_root_names:
-
         pred_root = os.path.join(experiment_folder, inf_root)
-        if inf_root.startswith("amg"):
-            pred_folders = [pred_root]
-        else:
-            pred_folders = sorted(glob(os.path.join(pred_root, "*")))
 
-        if inf_root == "amg/inference":
-            save_folder = os.path.join(save_root, "amg")
+        if inf_root.startswith("start_with"):
+            evaluation.evaluate_interactive_prompting(
+                gt_paths=gt_paths,
+                prediction_root=pred_root,
+                start_with_box_prompt=args.start_with_box,
+                experiment_folder=experiment_folder
+            )
         else:
-            save_folder = os.path.join(save_root, inf_root)
-        os.makedirs(save_folder, exist_ok=True)
-
-        for pred_folder in tqdm(pred_folders, desc=f"Evaluate predictions for {inf_root} prompt settings"):
-            exp_name = os.path.basename(pred_folder)
-            save_path = os.path.join(save_folder, f"{exp_name}.csv")
-            if os.path.exists(save_path) and not args.force:
-                continue
-            results = evaluate_livecell_predictions(gt_dir, pred_folder, verbose=False)
-            results.to_csv(save_path, index=False)
+            pred_paths = sorted(glob(os.path.join(pred_root, "*")))
+            save_name = inf_root.split("/")[0]
+            results = evaluation.run_evaluation(
+                gt_paths=gt_paths,
+                prediction_paths=pred_paths,
+                save_path=os.path.join(save_root, f"{save_name}.csv"),
+            )
+            print(results)
