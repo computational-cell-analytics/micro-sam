@@ -429,10 +429,6 @@ def run_livecell_evaluation() -> None:
         "-f", "--force", action="store_true",
         help="Force recomputation of already cached eval results."
     )
-    parser.add_argument(
-        "-b", "--start_with_box", action="store_true",
-        help="Start with box for iterative prompt-based segmentation."
-    )
     args = parser.parse_args()
 
     _, gt_paths = _get_livecell_paths(args.input, "test")
@@ -457,14 +453,20 @@ def run_livecell_evaluation() -> None:
                 gt_paths=gt_paths,
                 prediction_root=pred_root,
                 experiment_folder=experiment_folder,
-                start_with_box_prompt=args.start_with_box,
+                start_with_box_prompt=(inf_root == "start_with_box"),
+                overwrite_results=args.force
             )
         else:
             pred_paths = sorted(glob(os.path.join(pred_root, "*")))
             save_name = inf_root.split("/")[0]
+            save_path = os.path.join(save_root, f"{save_name}.csv")
+
+            if args.force and os.path.exists(save_path):
+                os.remove(save_path)
+
             results = evaluation.run_evaluation(
                 gt_paths=gt_paths,
                 prediction_paths=pred_paths,
-                save_path=os.path.join(save_root, f"{save_name}.csv"),
+                save_path=save_path,
             )
             print(results)

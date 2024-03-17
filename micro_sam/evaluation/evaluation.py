@@ -79,6 +79,7 @@ def run_evaluation_for_interactive_prompting(
     prediction_root: Union[os.PathLike, str],
     experiment_folder: Union[os.PathLike, str],
     start_with_box_prompt: bool = False,
+    overwrite_results: bool = False,
 ) -> pd.DataFrame:
     """Run evaluation for iterative prompt-based segmentation predictions.
 
@@ -102,6 +103,11 @@ def run_evaluation_for_interactive_prompting(
         "iterative_prompts_start_box.csv" if start_with_box_prompt else "iterative_prompts_start_point.csv"
     )
 
+    # Overwrite the previously saved results
+    if overwrite_results and os.path.exists(csv_path):
+        os.remove(csv_path)
+
+    # If the results have been computed already, it's not needed to re-run it again.
     if os.path.exists(csv_path):
         print(pd.read_csv(csv_path))
         return
