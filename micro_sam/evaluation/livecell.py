@@ -1,26 +1,26 @@
-"""Inference and evaluation for the [LiveCELL dataset](https://www.nature.com/articles/s41592-021-01249-6) and
+"""Inference and evaluation for the [LIVECell dataset](https://www.nature.com/articles/s41592-021-01249-6) and
 the different cell lines contained in it.
 """
-
-import argparse
-import json
 import os
-
+import json
+import argparse
+import warnings
 from glob import glob
+from tqdm import tqdm
 from typing import List, Optional, Union
 
 import numpy as np
 import pandas as pd
 
 from segment_anything import SamPredictor
-from tqdm import tqdm
 
 from ..instance_segmentation import (
     get_custom_sam_model_with_decoder,
     AutomaticMaskGenerator, InstanceSegmentationWithDecoder,
 )
+from ..evaluation import precompute_all_embeddings
 from . import instance_segmentation, inference, evaluation
-from .experiments import default_experiment_settings, full_experiment_settings
+
 
 CELL_TYPES = ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"]
 
@@ -141,6 +141,75 @@ def livecell_inference(
     )
 
 
+def run_livecell_precompute_embeddings(
+    checkpoint: Union[str, os.PathLike],
+    input_folder: Union[str, os.PathLike],
+    model_type: str,
+    experiment_folder: Union[str, os.PathLike],
+    n_val_per_cell_type: int = 25,
+) -> None:
+    """Run precomputation of val and test image embeddings for livecell.
+
+    Args:
+        checkpoint: The segment anything model checkpoint.
+        input_folder: The folder with the livecell data.
+        model_type: The type of the segmenta anything model.
+        experiment_folder: The folder where to save all data associated with the experiment.
+    """
+    embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the embeddings will be saved
+    os.makedirs(embedding_folder, exist_ok=True)
+
+    predictor = inference.get_predictor(checkpoint, model_type)
+
+    val_image_paths, _ = _get_livecell_paths(input_folder, "val", n_val_per_cell_type=n_val_per_cell_type)
+    test_image_paths, _ = _get_livecell_paths(input_folder, "test")
+
+    precompute_all_embeddings(predictor, val_image_paths, embedding_folder)
+    precompute_all_embeddings(predictor, test_image_paths, embedding_folder)
+
+
+def run_livecell_iterative_prompting(
+    checkpoint: Union[str, os.PathLike],
+    input_folder: Union[str, os.PathLike],
+    model_type: str,
+    experiment_folder: Union[str, os.PathLike],
+    n_val_per_cell_type: int = 25,
+    start_with_box: bool = False,
+    use_masks: bool = False,
+) -> str:
+    """Run inference on livecell with iterative prompting setting.
+
+    Args:
+        checkpoint: The segment anything model checkpoint.
+        input_folder: The folder with the livecell data.
+        model_type: The type of the segment anything model.
+        experiment_folder: The folder where to save all data associated with the experiment.
+
+    """
+    embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the embeddings will be saved
+    os.makedirs(embedding_folder, exist_ok=True)
+
+    predictor = inference.get_predictor(checkpoint, model_type)
+
+    # where the predictions are saved
+    prediction_folder = os.path.join(
+        experiment_folder, "start_with_box" if start_with_box else "start_with_point"
+    )
+
+    image_paths, gt_paths = _get_livecell_paths(input_folder, "test")
+
+    inference.run_inference_with_iterative_prompting(
+        predictor=predictor,
+        image_paths=image_paths,
+        gt_paths=gt_paths,
+        embedding_dir=embedding_folder,
+        prediction_dir=prediction_folder,
+        start_with_box_prompt=start_with_box,
+        use_masks=use_masks,
+    )
+    return prediction_folder
+
+
 def run_livecell_amg(
     checkpoint: Union[str, os.PathLike],
     input_folder: Union[str, os.PathLike],
@@ -249,73 +318,74 @@ def run_livecell_instance_segmentation_with_decoder(
     return prediction_folder
 
 
-def _run_multiple_prompt_settings(args, prompt_settings):
-    predictor = inference.get_predictor(args.ckpt, args.model)
-    for settings in prompt_settings:
-        livecell_inference(
-            args.ckpt,
-            args.input,
-            args.model,
-            args.experiment_folder,
-            use_points=settings["use_points"],
-            use_boxes=settings["use_boxes"],
-            n_positives=settings["n_positives"],
-            n_negatives=settings["n_negatives"],
-            prompt_folder=args.prompt_folder,
-            predictor=predictor
-        )
-
-
 def run_livecell_inference() -> None:
-    """Run LiveCELL inference with command line tool."""
+    """Run LIVECell inference with command line tool."""
     parser = argparse.ArgumentParser()
 
     # the checkpoint, input and experiment folder
-    parser.add_argument("-c", "--ckpt", type=str, required=True,
-                        help="Provide model checkpoints (vanilla / finetuned).")
-    parser.add_argument("-i", "--input", type=str, required=True,
-                        help="Provide the data directory for LIVECell Dataset.")
-    parser.add_argument("-e", "--experiment_folder", type=str, required=True,
-                        help="Provide the path where all data for the inference run will be stored.")
-    parser.add_argument("-m", "--model", type=str, required=True,
-                        help="Pass the checkpoint-specific model name being used for inference.")
+    parser.add_argument(
+        "-c", "--ckpt", type=str, required=True,
+        help="Provide model checkpoints (vanilla / finetuned)."
+    )
+    parser.add_argument(
+        "-i", "--input", type=str, required=True,
+        help="Provide the data directory for LIVECell Dataset."
+    )
+    parser.add_argument(
+        "-e", "--experiment_folder", type=str, required=True,
+        help="Provide the path where all data for the inference run will be stored."
+    )
+    parser.add_argument(
+        "-m", "--model", type=str, required=True,
+        help="Pass the checkpoint-specific model name being used for inference."
+    )
 
     # the experiment type:
-    # - default settings (p1-n0, p2-n4, p4-n8, box)
-    # - full experiment (ranges: p:1-16, n:0-16)
-    # - automatic mask generation (auto)
-    # if none of the two are active then the prompt setting arguments will be parsed
-    # and used to run inference for a single prompt setting
-    parser.add_argument("-d", "--default_experiment", action="store_true")
-    parser.add_argument("-f", "--full_experiment", action="store_true")
-    parser.add_argument("-a", "--auto_mask_generation", action="store_true")
+    # 1. precompute image embeddings
+    # 2. interactive instance segmentation (interactive)
+    #     - iterative prompting
+    #         - starting with point
+    #         - starting with box
+    # 3. automatic segmentation (auto)
+    #     - automatic mask generation (amg)
+    #     - automatic instance segmentation (ais)
 
-    # the prompt settings for an individual inference run
-    parser.add_argument("--box", action="store_true", help="Activate box-prompted based inference")
-    parser.add_argument("--points", action="store_true", help="Activate point-prompt based inference")
-    parser.add_argument("-p", "--positive", type=int, default=1, help="No. of positive prompts")
-    parser.add_argument("-n", "--negative", type=int, default=0, help="No. of negative prompts")
+    parser.add_argument("-p", "--precompute_embeddings", action="store_true")
+    parser.add_argument("-ip", "--interactive_segmentation", action="store_true")
+    parser.add_argument("-amg", "--auto_mask_generation", action="store_true")
+    parser.add_argument("-ais", "--auto_instance_segmentation", action="store_true")
 
-    # optional external prompt folder
-    parser.add_argument("--prompt_folder", help="Provide the path where all input point prompts will be stored")
+    # the prompt settings for starting iterative prompting for interactive instance segmentation
+    #     - (default: start with points)
+    parser.add_argument(
+        "-b", "--start_with_box", action="store_true", help="Start with box for iterative prompt-based segmentation."
+    )
+    parser.add_argument(
+        "--use_masks", action="store_true",
+        help="Whether to use logits from previous interactive segmentation as inputs for iterative prompting."
+    )
 
     args = parser.parse_args()
-    if sum([args.full_experiment, args.default_experiment, args.auto_mask_generation]) > 2:
-        raise ValueError("Can only run one of 'full_experiment', 'default_experiment' or 'auto_mask_generation'.")
-
-    if args.full_experiment:
-        prompt_settings = full_experiment_settings(args.box)
-        _run_multiple_prompt_settings(args, prompt_settings)
-    elif args.default_experiment:
-        prompt_settings = default_experiment_settings()
-        _run_multiple_prompt_settings(args, prompt_settings)
-    elif args.auto_mask_generation:
-        run_livecell_amg(args.ckpt, args.input, args.model, args.experiment_folder)
-    else:
-        livecell_inference(
-            args.ckpt, args.input, args.model, args.experiment_folder,
-            args.points, args.box, args.positive, args.negative, args.prompt_folder,
+    if sum([args.interactive_segmentation, args.auto_mask_generation, args.auto_instance_segmentation]) > 1:
+        warnings.warn(
+            "It's recommended to choose either from 'interactive_segmentation', 'auto_mask_generation' or "
+            "'auto_instance_segmentation' at once, else it might take a while."
         )
+
+    if args.precompute_embeddings:
+        run_livecell_precompute_embeddings(args.ckpt, args.input, args.model, args.experiment_folder)
+
+    if args.interactive_segmentation:
+        run_livecell_iterative_prompting(
+            args.ckpt, args.input, args.model, args.experiment_folder,
+            start_with_box=args.start_with_box, use_masks=args.use_masks
+        )
+
+    if args.auto_instance_segmentation:
+        run_livecell_instance_segmentation_with_decoder(args.ckpt, args.input, args.model, args.experiment_folder)
+
+    if args.auto_mask_generation:
+        run_livecell_amg(args.ckpt, args.input, args.model, args.experiment_folder)
 
 
 #
