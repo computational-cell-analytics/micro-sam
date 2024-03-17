@@ -4,6 +4,7 @@ import argparse
 import torch
 
 from torch_em.model import UNETR
+from torch_em.data import MinForegroundSampler
 from torch_em.loss import DiceBasedDistanceLoss
 from torch_em.data.datasets import get_asem_loader
 from torch_em.transform.label import PerObjectDistanceTransform
@@ -12,10 +13,23 @@ import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
 
 
-def get_dataloaders(patch_shape, data_path, cell_type=None):
+def _get_label_transform(label):
+    label_transform = PerObjectDistanceTransform(
+        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=50
+    )
+    label = label_transform(label)
+    return label
+
+
+def get_dataloaders(patch_shape, data_path):
     """This returns the asem data loaders implemented in torch_em:
     https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/asem.py
     It will automatically download the asem data.
+
+    Experimental split:
+        - Training: `cell_1`, `cell_2`
+        - Validation: `cell_3`
+        - Testing: `cell_6`
 
     Note: to replace this with another data loader you need to return a torch data loader
     that retuns `x, y` tensors, where `x` is the image data and `y` are the labels.
@@ -23,12 +37,19 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
     I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
     Important: the ID 0 is reseved for background, and the IDs must be consecutive
     """
-    label_transform = PerObjectDistanceTransform(
-        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=25
-    )
+    label_transform = _get_label_transform
     raw_transform = sam_training.identity  # the current workflow avoids rescaling the inputs to [-1, 1]
-    train_loader = ...
-    val_loader = ...
+    sampler = MinForegroundSampler(min_fraction=0.01)
+    train_loader = get_asem_loader(
+        path=data_path, patch_shape=patch_shape, batch_size=2, ndim=2, download=True,
+        organelles="er", volume_ids=["cell_1", "cell_2"], raw_transform=raw_transform, n_samples=1500,
+        label_transform=label_transform, num_workers=16, sampler=sampler, shuffle=True,
+    )
+    val_loader = get_asem_loader(
+        path=data_path, patch_shape=patch_shape, batch_size=1, ndim=2, download=True,
+        organelles="er", volume_ids=["cell_3"], raw_transform=raw_transform, n_samples=500,
+        label_transform=label_transform, num_workers=16, sampler=sampler, shuffle=True,
+    )
 
     return train_loader, val_loader
 
@@ -41,7 +62,7 @@ def finetune_asem(args):
     # training settings:
     model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
-    patch_shape = (520, 704)  # the patch shape for training
+    patch_shape = (1, 512, 512)  # the patch shape for training
     n_objects_per_batch = args.n_objects  # the number of objects per batch that will be sampled (default: 25)
     freeze_parts = args.freeze  # override this to freeze different parts of the model
 
