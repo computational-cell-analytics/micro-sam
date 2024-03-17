@@ -40,17 +40,17 @@ The arguments `-c`, `-i`, `-e` and `m` specify where the checkpoint for the mode
 
 To run the default set of experiments from our publication use the command:
 ```bash
-$ python livecell_inference.py -c path/to/saved/checkpoints -i /path/to/livecell -e /path/to/store/experiment -m vit_b -p  # precompute the embeddings
-$ python livecell_inference.py -c path/to/saved/checkpoints -i /path/to/livecell -e /path/to/store/experiment -m vit_b -ip  # iterative prompting starting with point
-$ python livecell_inference.py -c path/to/saved/checkpoints -i /path/to/livecell -e /path/to/store/experiment -m vit_b -ip -b  # iterative prompting starting with box
+$ python livecell_inference.py -c /path/to/saved/checkpoints -i /path/to/livecell -e /path/to/store/experiment -m vit_b -p  # precompute the embeddings
+$ python livecell_inference.py -c /path/to/saved/checkpoints -i /path/to/livecell -e /path/to/store/experiment -m vit_b -ip  # iterative prompting starting with point
+$ python livecell_inference.py -c /path/to/saved/checkpoints -i /path/to/livecell -e /path/to/store/experiment -m vit_b -ip -b  # iterative prompting starting with box
 ```
 
 Here, `-ip` stands for interactive instance segmentation using iterative prompting (i.e. starting with placing 1 positive point prompt OR a box to segment the object, and continuing prompt-based segmentation by placing additional points subjected to the model's prediction - where the model makes mistakes (to add a negative point prompt) and where the model missed to segment the object of interest (to add a positive point prompt))
 
 You can also evaluate the automatic instance segmentation functionality, by running
 ```bash
-$ python livecell_inference.py -c path/to/saved/checkpoints -i /path/to/livecell -e /path/to/store/experiment -m vit_b -amg  # automatic mask generation
-$ python livecell_inference.py -c path/to/saved/checkpoints -i /path/to/livecell -e /path/to/store/experiment -m vit_b -ais  # automatic instance segmentation
+$ python livecell_inference.py -c /path/to/saved/checkpoints -i /path/to/livecell -e /path/to/store/experiment -m vit_b -amg  # automatic mask generation
+$ python livecell_inference.py -c /path/to/saved/checkpoints -i /path/to/livecell -e /path/to/store/experiment -m vit_b -ais  # automatic instance segmentation
 ```
 
 This will first perform a grid-search for the best parameters on a subset of the validation set and then run inference on the test set. This can take up to a day.
@@ -61,7 +61,7 @@ The script `livecell_evaluation.py` can be used to evaluate the results from the
 Here is an example run for evaluation:
 
 ```bash
-$ python livecell_evaluation.py -i /scratch/projects/nim00007/data/LiveCELL -e experiment
+$ python livecell_evaluation.py -i /path/to/livecell -e /path/to/stored/experiments
 ```
 This will create a folder `experiment/results` with csv tables with the results per cell type and averaged over all images.
 
