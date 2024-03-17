@@ -93,6 +93,19 @@ def run_evaluation_for_interactive_prompting(
     """
     assert os.path.exists(prediction_root), prediction_root
 
+    # Save the results in the experiment folder
+    result_folder = os.path.join(experiment_folder, "results")
+    os.makedirs(result_folder, exist_ok=True)
+
+    csv_path = os.path.join(
+        result_folder,
+        "iterative_prompts_start_box.csv" if start_with_box_prompt else "iterative_prompts_start_point.csv"
+    )
+
+    if os.path.exists(csv_path):
+        print(pd.read_csv(csv_path))
+        return
+
     list_of_results = []
     prediction_folders = sorted(glob(os.path.join(prediction_root, "iteration*")))
     for pred_folder in prediction_folders:
@@ -103,15 +116,6 @@ def run_evaluation_for_interactive_prompting(
         print(result)
 
     res_df = pd.concat(list_of_results, ignore_index=True)
-
-    # Save the results in the experiment folder
-    result_folder = os.path.join(experiment_folder, "results")
-    os.makedirs(result_folder, exist_ok=True)
-
-    csv_path = os.path.join(
-        result_folder,
-        "iterative_prompts_start_box.csv" if start_with_box_prompt else "iterative_prompts_start_point.csv"
-    )
     res_df.to_csv(csv_path)
 
 

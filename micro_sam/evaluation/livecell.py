@@ -151,6 +151,7 @@ def run_livecell_precompute_embeddings(
         input_folder: The folder with the livecell data.
         model_type: The type of the segmenta anything model.
         experiment_folder: The folder where to save all data associated with the experiment.
+        n_val_per_cell_type: The number of validation images per cell type.
     """
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the embeddings will be saved
     os.makedirs(embedding_folder, exist_ok=True)
@@ -169,7 +170,6 @@ def run_livecell_iterative_prompting(
     input_folder: Union[str, os.PathLike],
     model_type: str,
     experiment_folder: Union[str, os.PathLike],
-    n_val_per_cell_type: int = 25,
     start_with_box: bool = False,
     use_masks: bool = False,
 ) -> str:
@@ -180,6 +180,8 @@ def run_livecell_iterative_prompting(
         input_folder: The folder with the livecell data.
         model_type: The type of the segment anything model.
         experiment_folder: The folder where to save all data associated with the experiment.
+        start_with_box_prompt: Whether to use the first prompt as bounding box or a single point.
+        use_masks: Whether to make use of logits from previous prompt-based segmentation.
 
     """
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the embeddings will be saved
@@ -257,9 +259,8 @@ def run_livecell_amg(
     )
 
     instance_segmentation.run_instance_segmentation_grid_search_and_inference(
-        amg, grid_search_values,
-        val_image_paths, val_gt_paths, test_image_paths,
-        embedding_folder, prediction_folder, gs_result_folder,
+        amg, grid_search_values, val_image_paths, val_gt_paths, test_image_paths,
+        embedding_folder, prediction_folder, gs_result_folder, verbose_gs=verbose_gs
     )
     return prediction_folder
 
@@ -269,6 +270,10 @@ def run_livecell_instance_segmentation_with_decoder(
     input_folder: Union[str, os.PathLike],
     model_type: str,
     experiment_folder: Union[str, os.PathLike],
+    center_distance_threshold_values: Optional[List[float]] = None,
+    boundary_distance_threshold_values: Optional[List[float]] = None,
+    distance_smoothing_values: Optional[List[float]] = None,
+    min_size_values: Optional[List[float]] = None,
     verbose_gs: bool = False,
     n_val_per_cell_type: int = 25,
 ) -> str:
@@ -279,6 +284,14 @@ def run_livecell_instance_segmentation_with_decoder(
         input_folder: The folder with the livecell data.
         model_type: The type of the segmenta anything model.
         experiment_folder: The folder where to save all data associated with the experiment.
+        center_distance_threshold_values: The values for `center_distance_threshold` used in the gridsearch.
+            By default values in the range from 0.3 to 0.7 with a stepsize of 0.1 will be used.
+        boundary_distance_threshold_values: The values for `boundary_distance_threshold` used in the gridsearch.
+            By default values in the range from 0.3 to 0.7 with a stepsize of 0.1 will be used.
+        distance_smoothing_values: The values for `distance_smoothing` used in the gridsearch.
+            By default values in the range from 1.0 to 2.0 with a stepsize of 0.1 will be used.
+        min_size_values: The values for `min_size` used in the gridsearch.
+            By default the values 50, 100 and 200  are used.
         verbose_gs: Whether to run the gridsearch for individual images in a verbose mode.
         n_val_per_cell_type: The number of validation images per cell type.
 
@@ -303,13 +316,16 @@ def run_livecell_instance_segmentation_with_decoder(
     val_image_paths, val_gt_paths = _get_livecell_paths(input_folder, "val", n_val_per_cell_type=n_val_per_cell_type)
     test_image_paths, _ = _get_livecell_paths(input_folder, "test")
 
-    grid_search_values = instance_segmentation.default_grid_search_values_instance_segmentation_with_decoder()
+    grid_search_values = instance_segmentation.default_grid_search_values_instance_segmentation_with_decoder(
+        center_distance_threshold_values=center_distance_threshold_values,
+        boundary_distance_threshold_values=boundary_distance_threshold_values,
+        distance_smoothing_values=distance_smoothing_values,
+        min_size_values=min_size_values
+    )
 
     instance_segmentation.run_instance_segmentation_grid_search_and_inference(
-        segmenter, grid_search_values,
-        val_image_paths, val_gt_paths, test_image_paths,
-        embedding_dir=embedding_folder, prediction_dir=prediction_folder,
-        result_dir=gs_result_folder,
+        segmenter, grid_search_values, val_image_paths, val_gt_paths, test_image_paths, embedding_dir=embedding_folder,
+        prediction_dir=prediction_folder, result_dir=gs_result_folder, verbose_gs=verbose_gs
     )
     return prediction_folder
 
@@ -360,6 +376,10 @@ def run_livecell_inference() -> None:
         "--use_masks", action="store_true",
         help="Whether to use logits from previous interactive segmentation as inputs for iterative prompting."
     )
+    parser.add_argument(
+        "--n_val_per_cell_type", default=25, type=int,
+        help="How many validation samples per cell type to be used for grid search."
+    )
 
     args = parser.parse_args()
     if sum([args.interactive_segmentation, args.auto_mask_generation, args.auto_instance_segmentation]) > 1:
@@ -369,7 +389,9 @@ def run_livecell_inference() -> None:
         )
 
     if args.precompute_embeddings:
-        run_livecell_precompute_embeddings(args.ckpt, args.input, args.model, args.experiment_folder)
+        run_livecell_precompute_embeddings(
+            args.ckpt, args.input, args.model, args.experiment_folder, args.n_val_per_cell_type
+        )
 
     if args.interactive_segmentation:
         run_livecell_iterative_prompting(
@@ -378,10 +400,14 @@ def run_livecell_inference() -> None:
         )
 
     if args.auto_instance_segmentation:
-        run_livecell_instance_segmentation_with_decoder(args.ckpt, args.input, args.model, args.experiment_folder)
+        run_livecell_instance_segmentation_with_decoder(
+            args.ckpt, args.input, args.model, args.experiment_folder, n_val_per_cell_type=args.n_val_per_cell_type
+        )
 
     if args.auto_mask_generation:
-        run_livecell_amg(args.ckpt, args.input, args.model, args.experiment_folder)
+        run_livecell_amg(
+            args.ckpt, args.input, args.model, args.experiment_folder, n_val_per_cell_type=args.n_val_per_cell_type
+        )
 
 
 #
@@ -419,13 +445,19 @@ def run_livecell_evaluation() -> None:
     ]
     for inf_root in inference_root_names:
         pred_root = os.path.join(experiment_folder, inf_root)
+        if not os.path.exists(pred_root):
+            print(
+                f"The inference for '{inf_root}' were not generated.",
+                "Please run the inference first to evaluate on the predictions."
+            )
+            continue
 
         if inf_root.startswith("start_with"):
-            evaluation.evaluate_interactive_prompting(
+            evaluation.run_evaluation_for_interactive_prompting(
                 gt_paths=gt_paths,
                 prediction_root=pred_root,
+                experiment_folder=experiment_folder,
                 start_with_box_prompt=args.start_with_box,
-                experiment_folder=experiment_folder
             )
         else:
             pred_paths = sorted(glob(os.path.join(pred_root, "*")))
