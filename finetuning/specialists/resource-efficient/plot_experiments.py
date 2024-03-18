@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 
 ROOT = "/scratch/users/archit/experiments"
 
-PALETTE = {"ais": "#045275", "amg": "#7CCBA2", "point": "#90477F", "box": "#F0746E"}
+PALETTE = {"ais": "#440154", "amg": "#404788", "point": "#1F968B", "box": "#73D055"}
 
 
 def _get_all_results(name, all_res_paths):
@@ -123,7 +123,7 @@ def plot_all_experiments():
             fig.legend(all_lines, all_labels, loc="upper left")
 
             plt.text(
-                x=0.6425, y=2.3, s=" X-Axis: Images \n Y-Axis: Segmentation Quality ", ha='left',
+                x=0.6425, y=2.35, s=" X-Axis: Images \n Y-Axis: Segmentation Quality ", ha='left',
                 transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#D6D6D6", "boxstyle": "round"}
             )
 
