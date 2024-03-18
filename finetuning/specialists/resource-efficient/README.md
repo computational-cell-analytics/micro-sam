@@ -1,44 +1,45 @@
-# Resource Efficient Finetuning
+# Resource Efficient Finetuning of Segment Anything
 
-a. Resource combinations:
-    - `xps13` (CPU compute) (local)
-    - `medium` (CPU compute partition) (SCC)
-    - `gtx1080`: 8GB (SCC)
-    - `rtx5000`: 16GB (SCC)
-    - `v100`: 32GB (SCC)
+All the fullscale experiment in `micro-sam` have been performed on A100s. Can we finetune Segment Anything on limited resources?
 
-b. Experiment combinations:
-    i. `vit_t` / `vit_b` / both
-    ii. number of training images (1/2/5/10)
-    iii. number of validation images (set to 1)
-    iv. number of objects per batch (X to fit all)
-    v. number of epochs for different number of training samples
-        - idea: let's keep the number of epochs per combination training to stay the same (for consistency in early stopping, lr scheduler)
+## Available Resource Combinations:
+- `xps13` (CPU - local)
+- `medium` (CPU - SCC)
+- `gtx1080`: (GPU - SCC) 8GB
+- `rtx5000`: (GPU - SCC) 16GB
+- `v100`: (GPU - SCC) 32GB
 
-c. **Inference**:
-    i. vanilla SAM
-    ii. `vit_<X>_lm` micro-sam (using finetuned LM generalist)
-    iii. `vit_<X>_covid-if` micro-sam (training a specialist)
-    iv. finetuning `vit_<X>_lm` microsam (finetuning the LM generalist)
+## Experimental Combinations:
+- `vit_t` / `vit_b` (ideally, fewer the parameters, the better for our use-case here)
+- number of training images (1 / 2 / 5 / 10)
+- number of validation images (fixed to 1)
+- number of objects per batch (? - depends on the maximum number which we can fit on the respective resource)
 
-## Combinations
+## Inference:
 
-Description of parameters which fit the resource requirements to run the finetuning experiments
+- Using default Segment Anything
+- Using `vit_<X>_lm` micro-sam (LM generalist)
+- Using finetuned Segment Anything `vit_<X>_covid-if` (training a `covid-if` specialist)
+- Using finetuned `vit_<X>_lm` micro-sam (finetuning the LM generalist)
+
+## Training Parameters
+
+Description of parameters which fit the respective resource requirements to run the finetuning experiments
 
 Fixed parameters:
-- number of epochs: 100
-- train and val batch size - 1
-- minimum number of training "samples" for training on the provided images - min. **50** (oversample while we don't find min. 50 training samples)
-- learning rate: 1e-5
-- optimizer: Adam
-- lr scheduler: ReduceLRonPlateau
-- early stopping: 10
-- patch shape: (512, 512)
-- choice of models: vit_t / vit_b
+- number of epochs: `100`
+- training and validation batch size - `1`
+- minimum number of training "samples" for training on the provided images - min. **`50`** (oversample while min. 50 training samples not found) (this is done to avoid the exhaustive time constraints while training with only 1 training sample)
+- learning rate: `1e-5`
+- optimizer: `Adam`
+- lr scheduler: `ReduceLRonPlateau`
+- early stopping: `10`
+- patch shape: `(512, 512)`
+- choice of models: `vit_t` / `vit_b`
 
 ### GPU Resources
 
-(32G cpu memory, 8 cpu cores)
+(32G CPU memory, 8 CPU cores)
 
 1. `gtx1080`:
     - `vit_t`: finetune all layers
@@ -60,7 +61,7 @@ Fixed parameters:
 
 ### CPU Resources
 
-All jobs are tested on `medium` partition
+All jobs are tested on `medium` partition.
 
 1. RAM: 64GB, Cores: 16
     - `vit_b`: finetune all layers
@@ -78,4 +79,9 @@ All jobs are tested on `medium` partition
     - `vit_t`: freeze `image_encoder`
     - `n_objects`: 1
 
-TODO: check on XPS13
+5. `XPS13`:
+    - TODO
+
+## Scripts:
+
+ TODO: need to explain what are the purpose of the scripts in brief.
