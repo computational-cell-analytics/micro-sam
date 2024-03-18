@@ -1,7 +1,10 @@
 import os
 import itertools
+
+import numpy as np
 import pandas as pd
 import seaborn as sns
+
 import matplotlib.pyplot as plt
 
 
@@ -108,11 +111,11 @@ def get_partial_finetuning_plots():
     print(f"Plot saved at {save_path}")
 
 
-def get_n_objects_plots(max_objects=45):
+def get_n_objects_plots(max_objects=45, fgap=1):
     exp_root = os.path.join(EXPERIMENT_ROOT, "n_objects_per_batch")
 
     amg_list, ais_list, _1p_list, _box_list, _itp_p_last_list, _itp_b_last_list = [], [], [], [], [], []
-    all_n_objects = [*range(1, max_objects+1)]
+    all_n_objects = [*np.arange(0, max_objects+1, fgap)][1:]  # the first element is always 0, we don't want it
     for i in all_n_objects:
         experiment_folder = os.path.join(exp_root, f"{i}", "results")
         amg, ais, _1p, _box, _itp_p, _itp_b = _get_results(experiment_folder)
@@ -151,7 +154,7 @@ def get_n_objects_plots(max_objects=45):
 
 def main():
     get_partial_finetuning_plots()
-    get_n_objects_plots()
+    get_n_objects_plots(fgap=1)
 
 
 if __name__ == "__main__":
