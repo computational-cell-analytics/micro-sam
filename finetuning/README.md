@@ -11,9 +11,9 @@ Here is an example run for finetuning:
 
 ```bash
 $ python livecell_finetuning.py -i /path/to/livecell
-                              -m vit_b
-                              -s /path/to/save/checkpoints
-                              --export_path /path/to/save/exported/model.pth
+                                -m vit_b
+                                -s /path/to/save/checkpoints
+                                --export_path /path/to/save/exported/model.pth
 ```
 The arguments `-i`, `-m`, `-s` and `--export_path`specify where the input dataset (LIVECell) is stored, which Segment Anything model to finetune, where the checkpoints and logs for the finetuned models will be stored, and 
 
@@ -24,17 +24,17 @@ Here is an example run for inference:
 
 ```bash
 $ python livecell_inference.py -c /path/to/saved/checkpoints
-                             -i /path/to/livecell
-                             -e /path/to/store/experiment
-                             -m vit_b
-                             # choice of inference:
-                             #    - ('-p') precompute image embeddings
-                             #    - ('-ip') interactive instance segmentation 
-                             #        - default: iterative prompt-based segmentation starting with point
-                             #        - ('-b') iterative prompt-based segmentation starting with box
-                             #        - ('--use_masks') use logits from previous segmentations in iterative prompt-based segmentation
-                             #    - ('-amg') automatic mask generation
-                             #    - ('-ais') automatic instance segmentation
+                               -i /path/to/livecell
+                               -e /path/to/store/experiment
+                               -m vit_b
+                               # choice of inference:
+                               #    - ('-p') precompute image embeddings
+                               #    - ('-ip') interactive instance segmentation 
+                               #        - default: iterative prompt-based segmentation starting with point
+                               #        - ('-b') iterative prompt-based segmentation starting with box
+                               #        - ('--use_masks') use logits from previous segmentations in iterative prompt-based segmentation
+                               #    - ('-amg') automatic mask generation
+                               #    - ('-ais') automatic instance segmentation
 ```
 The arguments `-c`, `-i`, `-e` and `m` specify where the checkpoint for the model is, where the input dataset (LiveCELL) is stored, where the predictions from the model and other experiment data will be saved, and the model name for the respective model checkpoint.
 
