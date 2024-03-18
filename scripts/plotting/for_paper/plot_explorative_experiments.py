@@ -99,23 +99,30 @@ def get_partial_finetuning_plots():
 
     ax = sns.barplot(x="name", y="results", hue="type", data=res_df, palette=PALETTE, hue_order=PALETTE.keys())
 
-    for bars in ax.containers:
-        ax.bar_label(bars, fmt='%.3f')
+    lines, labels = ax.get_legend_handles_labels()
+    for line, label in zip(lines, labels):
+        if label == "ais":
+            for k in range(len(line)):
+                line.patches[k].set_hatch('///')
+                line.patches[k].set_edgecolor('white')
 
-    ax.set(xlabel="Finetuned Parts", ylabel="Segmentation Quality")
-    plt.legend(title="Settings", loc="upper left")
-    plt.title("Partial Finetuning")
+    plt.xlabel("Finetuned Parts", fontdict={"fontsize": 13}, labelpad=15)
+    plt.ylabel("Segmentation Quality", fontdict={"fontsize": 13}, labelpad=15)
+    plt.legend(title="Settings", bbox_to_anchor=(-0.05, 1.01))
+    plt.suptitle("Partial Finetuning", fontsize=26)
+
+    plt.subplots_adjust(top=0.9, right=0.95, left=0.1, bottom=0.1)
 
     save_path = "livecell_vit_l_partial_finetuning.png"
     plt.savefig(save_path)
     print(f"Plot saved at {save_path}")
 
 
-def get_n_objects_plots(max_objects=45, fgap=1):
+def get_n_objects_plots(max_objects=45):
     exp_root = os.path.join(EXPERIMENT_ROOT, "n_objects_per_batch")
 
     amg_list, ais_list, _1p_list, _box_list, _itp_p_last_list, _itp_b_last_list = [], [], [], [], [], []
-    all_n_objects = [*np.arange(0, max_objects+1, fgap)][1:]  # the first element is always 0, we don't want it
+    all_n_objects = [*np.arange(0, max_objects+1)][1:]  # the first element is always 0, we don't want it
     for i in all_n_objects:
         experiment_folder = os.path.join(exp_root, f"{i}", "results")
         amg, ais, _1p, _box, _itp_p, _itp_b = _get_results(experiment_folder)
@@ -141,20 +148,58 @@ def get_n_objects_plots(max_objects=45, fgap=1):
 
     res_df = pd.DataFrame.from_dict(res)
 
-    ax = sns.lineplot(x="name", y="value", hue="variable", data=pd.melt(res_df, ["name"]))
-    ax.set(xlabel="n_objects", ylabel="Segmentation Quality")
+    palette = sns.color_palette('viridis', 3)
+    dark_palette = [(max(0, rgb[0] - 0.2), max(0, rgb[1] - 0.2), max(0, rgb[2] - 0.2)) for rgb in palette]
 
-    plt.legend(title="Settings", loc="upper left")
-    plt.title("Number of Objects for Finetuning")
+    ax = sns.stripplot(
+        x="variable", y="value", hue="name", data=pd.melt(res_df, ["name"]),
+        dodge=True, alpha=.5, palette='viridis', legend=None,
+        edgecolor=dark_palette, linewidth=0.5
+    )
+    ax.set(xlabel=None, ylabel=None)
+
+    norm = plt.Normalize(1, max_objects)
+    sm = plt.cm.ScalarMappable(cmap="viridis", norm=norm)
+    sm.set_array([])
+    plt.colorbar(sm, ax=plt.gca(), alpha=.5, aspect=20)
+
+    def _get_all_interval_fills(name, color):
+        interval_data = res_df.groupby('name')[name].agg(['mean', 'std'])
+        interval_data['lower'] = interval_data['mean'].min()
+        interval_data['upper'] = interval_data['mean'].max()
+        ax.fill_between(
+            x=np.linspace(-1, 7),
+            y1=interval_data["lower"].iloc[0] - 0.005,
+            y2=interval_data["upper"].iloc[0] + 0.005,
+            color=color,
+            alpha=0.075,
+        )
+
+    _get_all_interval_fills("amg", color="#440154")
+    _get_all_interval_fills("ais", color="#440154")
+    _get_all_interval_fills("point", color="#440154")
+    _get_all_interval_fills("box", color="#440154")
+    _get_all_interval_fills(r"i$_{p}$", color="#440154")
+    _get_all_interval_fills(r"i$_{b}$", color="#440154")
+
+    ax.set_xticks(np.arange(0, 6))
+    ax.set_xticklabels(["amg", "ais", "point", "box", r"i$_{p}$", r"i$_{b}$"])
+
+    ax.set_xlim(-0.5, len(res_df.columns[1:]) - 0.5)
+
+    plt.suptitle("n_objects", fontsize=26, x=0.45, y=0.945)
+    plt.xlabel("Inference Settings", fontdict={"fontsize": 13}, labelpad=15)
+    plt.ylabel("Segmentation Quality", fontdict={"fontsize": 13}, labelpad=15)
 
     save_path = "livecell_vit_b_n_objects.png"
     plt.savefig(save_path)
+    plt.close()
     print(f"Plot saved at {save_path}")
 
 
 def main():
     get_partial_finetuning_plots()
-    get_n_objects_plots(fgap=1)
+    get_n_objects_plots()
 
 
 if __name__ == "__main__":

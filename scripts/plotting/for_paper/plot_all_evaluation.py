@@ -9,7 +9,14 @@ import matplotlib.pyplot as plt
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/"
 
 # adding a fixed color palette to each experiments, for consistency in plotting the legends
-PALETTE = {"ais": "#045275", "amg": "#089099", "point": "#7CCBA2", "i_p": "#FCDE9C", "box": "#F0746E", "i_b": "#90477F"}
+PALETTE = {
+    "ais": "#045275",
+    "amg": "#089099",
+    "point": "#7CCBA2",
+    r"i$_{p}$": "#FCDE9C",
+    "box": "#F0746E",
+    r"i$_{b}$": "#90477F"
+}
 
 TITLE = {
     "livecell": "$\it{LIVECell}$",
@@ -70,7 +77,11 @@ def gather_all_results(dataset, modality, model_type):
                             index=[i]
                         ),
                         pd.DataFrame(
-                            {"name": experiment_name, "type": f"i_{prompt_name[0]}", "results": res.iloc[-1]["msa"]},
+                            {
+                                "name": experiment_name,
+                                "type": r"i$_{p}$" if prompt_name[0] == "p" else r"i$_{b}$",
+                                "results": res.iloc[-1]["msa"]
+                            },
                             index=[i]
                         )
                     ], ignore_index=True
@@ -142,11 +153,11 @@ def _get_plot_postprocessing(fig, experiment_title, save_path):
     )
 
     plt.show()
-    # plt.tight_layout()
     plt.subplots_adjust(top=0.879, right=0.95, left=0.075, bottom=0.05)
     fig.suptitle(experiment_title, fontsize=26, x=0.52, y=0.948)
     plt.savefig(save_path)  # transparent=True
     plt.close()
+    print(f"Plots saved at {save_path}")
 
 
 def plot_evaluation_for_lm_datasets(model_type):
