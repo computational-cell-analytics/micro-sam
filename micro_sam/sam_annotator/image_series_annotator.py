@@ -8,28 +8,32 @@ from typing import List, Optional, Union, Tuple
 import numpy as np
 import imageio.v3 as imageio
 import napari
-import torch.nn as nn
 import torch
 
 from magicgui import magicgui
-from segment_anything import SamPredictor
 
 from .. import util
 from ..precompute_state import _precompute_state_for_files
+from ..instance_segmentation import get_decoder
 from .annotator_2d import Annotator2d
 from .annotator_3d import Annotator3d
 from ._state import AnnotatorState
 
 
 def _precompute(
-    images, model_type, predictor, embedding_path,
-    tile_shape, halo, precompute_amg_state, decoder,
+    images, model_type, embedding_path,
+    tile_shape, halo, precompute_amg_state,
     checkpoint_path, device, ndim=None
 ):
-    if predictor is None:
-        predictor = util.get_sam_model(
-            model_type=model_type, checkpoint_path=checkpoint_path, device=device
-        )
+    device = util.get_device(device)
+    predictor, state = util.get_sam_model(
+        model_type=model_type, checkpoint_path=checkpoint_path, device=device, return_state=True
+    )
+    # TODO use preference for decoder
+    if "decoder_state" in state:
+        decoder = get_decoder(predictor.model.image_encoder, state["decoder_state"], device)
+    else:
+        decoder = None
 
     if embedding_path is None:
         embedding_paths = [None] * len(images)
@@ -48,7 +52,7 @@ def _precompute(
             ]
         assert all(os.path.exists(emb_path) for emb_path in embedding_paths)
 
-    return predictor, embedding_paths
+    return predictor, decoder, embedding_paths
 
 
 def _get_input_shape(image, is_volumetric=False):
@@ -65,6 +69,8 @@ def _get_input_shape(image, is_volumetric=False):
     return image_shape
 
 
+# TODO remove the option to pass predictor and decoder from all high level annotator functions
+# add preference boolean for decoder instead
 def image_series_annotator(
     images: Union[List[Union[os.PathLike, str]], List[np.ndarray]],
     output_folder: str,
@@ -74,8 +80,6 @@ def image_series_annotator(
     halo: Optional[Tuple[int, int]] = None,
     viewer: Optional["napari.viewer.Viewer"] = None,
     return_viewer: bool = False,
-    predictor: Optional[SamPredictor] = None,
-    decoder: Optional["nn.Module"] = None,
     precompute_amg_state: bool = False,
     checkpoint_path: Optional[str] = None,
     is_volumetric: bool = False,
@@ -95,9 +99,6 @@ def image_series_annotator(
         viewer: The viewer to which the SegmentAnything functionality should be added.
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
-        predictor: The Segment Anything model. Passing this enables using fully custom models.
-            If you pass `predictor` then `model_type` will be ignored.
-        decoder: The instance segmentation decoder.
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster.
@@ -112,10 +113,10 @@ def image_series_annotator(
     next_image_id = 0
 
     # Precompute embeddings and amg state (if corresponding options set).
-    predictor, embedding_paths = _precompute(
-        images, model_type, predictor,
+    predictor, decoder, embedding_paths = _precompute(
+        images, model_type,
         embedding_path, tile_shape, halo, precompute_amg_state,
-        decoder=decoder, checkpoint_path=checkpoint_path, device=device,
+        checkpoint_path=checkpoint_path, device=device,
     )
 
     # Load the first image and intialize the viewer, annotator and state.
@@ -133,10 +134,10 @@ def image_series_annotator(
     viewer.add_image(image, name="image")
 
     state = AnnotatorState()
-    state.decoder = decoder
     state.initialize_predictor(
         image, model_type=model_type, save_path=image_embedding_path, halo=halo, tile_shape=tile_shape,
-        predictor=predictor, ndim=3 if is_volumetric else 2, precompute_amg_state=precompute_amg_state,
+        predictor=predictor, decoder=decoder,
+        ndim=3 if is_volumetric else 2, precompute_amg_state=precompute_amg_state,
         checkpoint_path=checkpoint_path, device=device,
     )
     state.image_shape = _get_input_shape(image, is_volumetric)

@@ -11,7 +11,7 @@ import numpy as np
 import torch.nn as nn
 
 import micro_sam.util as util
-from micro_sam.instance_segmentation import AMGBase
+from micro_sam.instance_segmentation import AMGBase, get_decoder
 from micro_sam.precompute_state import cache_amg_state, cache_is_state
 
 from segment_anything import SamPredictor
@@ -67,19 +67,31 @@ class AnnotatorState(metaclass=Singleton):
         save_path=None,
         device=None,
         predictor=None,
+        decoder=None,
         checkpoint_path=None,
         tile_shape=None,
         halo=None,
         precompute_amg_state=False,
+        use_decoder_if_available=True,
     ):
         assert ndim in (2, 3)
+
         # Initialize the model if necessary.
         if predictor is None:
-            self.predictor = util.get_sam_model(
-                device=device, model_type=model_type, checkpoint_path=checkpoint_path,
+            self.predictor, state = util.get_sam_model(
+                device=device, model_type=model_type,
+                checkpoint_path=checkpoint_path, return_state=True
             )
+            if use_decoder_if_available and "decoder_state" in state:
+                self.decoder = get_decoder(
+                    image_encoder=self.predictor.model.image_encoder,
+                    decoder_state=state["decoder_state"],
+                    device=device,
+                )
+
         else:
             self.predictor = predictor
+            self.decoder = decoder
 
         # Compute the image embeddings.
         self.image_embeddings = util.precompute_image_embeddings(
@@ -173,3 +185,4 @@ class AnnotatorState(metaclass=Singleton):
         self.lineage = None
         self.committed_lineages = None
         self.tracking_widget = None
+        self.z_range = None

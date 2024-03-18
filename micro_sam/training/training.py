@@ -4,10 +4,10 @@ from typing import List, Optional, Union
 import torch
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import _LRScheduler
-from torch_em.model import UNETR
 from torch_em.loss import DiceBasedDistanceLoss
 
 from ..util import get_device
+from ..instance_segmentation import get_unetr
 from .util import get_trainable_sam_model, ConvertToSamInputs
 from . import sam_trainer as trainers
 from . import joint_sam_trainer as joint_trainers
@@ -72,20 +72,12 @@ def train_sam(
     # Create the UNETR decoder (if train with it) and the optimizer.
     if with_segmentation_decoder:
 
-        # For instance segmentation, we add a UNETR decoder.
-        unetr = UNETR(
-            backbone="sam", encoder=model.sam.image_encoder, out_channels=3, use_sam_stats=True,
-            final_activation="Sigmoid", use_skip_connection=False, resize_input=True,
+        # Get the UNETR.
+        unetr = get_unetr(
+            image_encoder=model.sam.image_encoder,
+            decoder_state=state.get("decoder_state", None),
+            device=device,
         )
-
-        # Set the decoder state from the checkpoint if it is contained.
-        if "decoder_state" in state:
-            decoder_state = state["decoder_state"]
-            unetr_state_dict = unetr.state_dict()
-            for k, v in unetr_state_dict.items():
-                if not k.startswith("encoder"):
-                    unetr_state_dict[k] = decoder_state[k]
-            unetr.load_state_dict(unetr_state_dict)
 
         # Get the parameters for SAM and the decoder from UNETR.
         joint_model_params = [params for params in model.parameters()]  # sam parameters
@@ -93,7 +85,6 @@ def train_sam(
             if not param_name.startswith("encoder"):
                 joint_model_params.append(params)
 
-        unetr.to(device)
         optimizer = torch.optim.Adam(joint_model_params, lr=lr)
 
     else:
