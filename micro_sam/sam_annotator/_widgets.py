@@ -716,11 +716,13 @@ def amg_2d(
     pred_iou_thresh: float = 0.88,
     stability_score_thresh: float = 0.95,
     min_object_size: int = 100,
+    box_nms_thresh: float = 0.7,
     with_background: bool = True,
 ) -> None:
     _instance_segmentation_impl(
         viewer, with_background, min_object_size,
-        pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh
+        pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
+        box_nms_thresh=box_nms_thresh,
     )
 
 
@@ -750,6 +752,7 @@ def amg_3d(
     pred_iou_thresh: float = 0.88,
     stability_score_thresh: float = 0.95,
     min_object_size: int = 100,
+    box_nms_thresh: float = 0.7,
     with_background: bool = True,
     apply_to_volume: bool = False,
 ) -> None:
@@ -766,13 +769,15 @@ def amg_3d(
                 return
         _segment_volume(
             viewer, with_background, min_object_size,
-            pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh
+            pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
+            box_nms_thresh=box_nms_thresh,
         )
     else:
         i = int(viewer.cursor.position[0])
         _instance_segmentation_impl(
             viewer, with_background, min_object_size, i=i,
-            pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh
+            pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
+            box_nms_thresh=box_nms_thresh,
         )
 
 
