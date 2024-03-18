@@ -90,10 +90,36 @@ def for_livecell(specific_script):
     )
 
 
+def for_custom_livecell(specific_script):
+    EXP_ROOT = "/scratch/projects/nim00007/sam/experiments/new_models"
+
+    def _run_custom_livecell(model_type, experiment_set):
+        cmd = CMD
+        cmd += "-d livecell "
+        cmd += f"-m {model_type} "
+        cmd += f"-e {experiment_set} "
+        cmd += "-r lm "
+        cmd += f"--experiment_path {EXP_ROOT}/test/input_logits/{experiment_set}/lm/livecell/{model_type} "
+        cmd += f"-s {specific_script} "
+        cmd += "--use_masks"
+
+        print(f"Running the command: {cmd} \n")
+        _cmd = re.split(r"\s", cmd)
+        run_eval_process(_cmd)
+
+    all_experiments = ["vanilla", "generalist", "specialist"]
+    for model_type in ALl_MODELS:
+        for experiment_set in all_experiments:
+            _run_custom_livecell(model_type, experiment_set)
+
+
 def main(args):
     # for_all_lm(specific_script=args.specific_script)
     # for_all_em(specific_script=args.specific_script)
-    for_livecell(specific_script=args.specific_script)
+    # for_livecell(specific_script=args.specific_script)
+
+    # for_custom_livecell(specific_script="precompute_embeddings")
+    for_custom_livecell(specific_script="iterative_prompting")
 
 
 if __name__ == "__main__":
