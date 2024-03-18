@@ -86,12 +86,22 @@ def mask_data_to_segmentation(
         segmentation[require_numpy(mask["segmentation"])] = this_seg_id
         seg_id = this_seg_id + 1
 
+    seg_ids, sizes = np.unique(segmentation, return_counts=True)
+
+    # In some cases objects may be smaller than peviously calculated,
+    # since they are covered by other objects. We ensure these also get
+    # filtered out here.
+    filter_ids = seg_ids[sizes < min_object_size]
+
+    # If we run segmentation with background we also map the largest segment
+    # (the most likely background object) to zero. This is often zero already,
+    # but it does not hurt to reset that to zero either.
     if with_background:
-        seg_ids, sizes = np.unique(segmentation, return_counts=True)
         bg_id = seg_ids[np.argmax(sizes)]
-        if bg_id != 0:
-            segmentation[segmentation == bg_id] = 0
-        vigra.analysis.relabelConsecutive(segmentation, out=segmentation)
+        filter_ids = np.concatenate([filter_ids, [bg_id]])
+
+    segmentation[np.isin(segmentation, filter_ids)] = 0
+    vigra.analysis.relabelConsecutive(segmentation, out=segmentation)
 
     return segmentation
 
