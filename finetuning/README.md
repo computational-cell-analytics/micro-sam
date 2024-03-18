@@ -15,7 +15,7 @@ $ python livecell_finetuning.py -i /path/to/livecell
                                 -s /path/to/save/checkpoints
                                 --export_path /path/to/save/exported/model.pth
 ```
-The arguments `-i`, `-m`, `-s` and `--export_path`specify where the input dataset (LIVECell) is stored, which Segment Anything model to finetune, where the checkpoints and logs for the finetuned models will be stored, and 
+The arguments `-i`, `-m`, `-s` and `--export_path`specify where the input dataset (LIVECell) is stored, which Segment Anything model to finetune, where the checkpoints and logs for the finetuned models will be stored, and the exported model for making use of the annotator tool, respectively.
 
 **Inference**
 
@@ -36,7 +36,7 @@ $ python livecell_inference.py -c /path/to/saved/checkpoints
                                #    - ('-amg') automatic mask generation
                                #    - ('-ais') automatic instance segmentation
 ```
-The arguments `-c`, `-i`, `-e` and `m` specify where the checkpoint for the model is, where the input dataset (LiveCELL) is stored, where the predictions from the model and other experiment data will be saved, and the model name for the respective model checkpoint.
+The arguments `-c`, `-i`, `-e` and `m` specify where the checkpoint for the model is, where the input dataset (LiveCELL) is stored, where the predictions from the model and other experiment data will be saved, and the model name for the model checkpoint, respectively.
 
 To run the default set of experiments from our publication use the command:
 ```bash
