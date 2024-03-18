@@ -138,42 +138,6 @@ def _run_inference_with_prompts_for_image(
     return instance_labels, prompts
 
 
-def get_predictor(
-    checkpoint_path: Union[str, os.PathLike],
-    model_type: str,
-    device: Optional[Union[str, torch.device]] = None,
-    return_state: bool = False,
-    is_custom_model: Optional[bool] = None,
-) -> SamPredictor:
-    """Get the segment anything predictor from an exported or custom checkpoint.
-
-    Args:
-        checkpoint_path: The checkpoint filepath.
-        model_type: The type of the model, either vit_h, vit_b or vit_l.
-        device: The device to use.
-        return_state: Whether to return the complete state of the checkpoint in addtion to the predictor.
-        is_custom_model: Whether this is a custom model or not.
-    Returns:
-        The segment anything predictor.
-    """
-    device = util.get_device(device)
-
-    # By default we check if the model follows the torch_em checkpint naming scheme to check whether it is a
-    # custom model or not. This can be over-ridden by passing True or False for is_custom_model.
-    is_custom_model = checkpoint_path.split("/")[-1] == "best.pt" if is_custom_model is None else is_custom_model
-
-    if is_custom_model:  # Finetuned SAM model
-        predictor = util.get_custom_sam_model(
-            checkpoint_path=checkpoint_path, model_type=model_type, device=device, return_state=return_state
-        )
-    else:  # Vanilla SAM model
-        assert not return_state
-        predictor = util.get_sam_model(
-            model_type=model_type, device=device, checkpoint_path=checkpoint_path
-        )  # type: ignore
-    return predictor
-
-
 def precompute_all_embeddings(
     predictor: SamPredictor,
     image_paths: List[Union[str, os.PathLike]],
@@ -554,7 +518,7 @@ def run_amg(
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
 
-    predictor = get_predictor(checkpoint, model_type)
+    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint)
     amg = AutomaticMaskGenerator(predictor)
     amg_prefix = "amg"
 

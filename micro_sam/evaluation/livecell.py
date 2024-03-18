@@ -14,6 +14,7 @@ from ..instance_segmentation import (
     get_custom_sam_model_with_decoder,
     AutomaticMaskGenerator, InstanceSegmentationWithDecoder,
 )
+from ..util import get_sam_model
 from ..evaluation import precompute_all_embeddings
 from . import instance_segmentation, inference, evaluation
 
@@ -98,7 +99,7 @@ def livecell_inference(
     """
     image_paths, gt_paths = _get_livecell_paths(input_folder)
     if predictor is None:
-        predictor = inference.get_predictor(checkpoint, model_type)
+        predictor = get_sam_model(model_type=model_type, checkpoint_path=checkpoint)
 
     if use_boxes and use_points:
         assert (n_positives is not None) and (n_negatives is not None)
@@ -156,7 +157,7 @@ def run_livecell_precompute_embeddings(
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the embeddings will be saved
     os.makedirs(embedding_folder, exist_ok=True)
 
-    predictor = inference.get_predictor(checkpoint, model_type)
+    predictor = get_sam_model(model_type=model_type, checkpoint_path=checkpoint)
 
     val_image_paths, _ = _get_livecell_paths(input_folder, "val", n_val_per_cell_type=n_val_per_cell_type)
     test_image_paths, _ = _get_livecell_paths(input_folder, "test")
@@ -187,7 +188,7 @@ def run_livecell_iterative_prompting(
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the embeddings will be saved
     os.makedirs(embedding_folder, exist_ok=True)
 
-    predictor = inference.get_predictor(checkpoint, model_type)
+    predictor = get_sam_model(model_type=model_type, checkpoint_path=checkpoint)
 
     # where the predictions are saved
     prediction_folder = os.path.join(
@@ -238,7 +239,7 @@ def run_livecell_amg(
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
 
-    predictor = inference.get_predictor(checkpoint, model_type)
+    predictor = get_sam_model(model_type=model_type, checkpoint_path=checkpoint)
     amg = AutomaticMaskGenerator(predictor)
     amg_prefix = "amg"
 
