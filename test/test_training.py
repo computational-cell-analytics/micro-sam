@@ -9,7 +9,7 @@ import torch
 import torch_em
 
 from micro_sam.sample_data import synthetic_data
-from micro_sam.util import VIT_T_SUPPORT, get_custom_sam_model, SamPredictor
+from micro_sam.util import VIT_T_SUPPORT, get_sam_model, SamPredictor
 
 
 @unittest.skipUnless(VIT_T_SUPPORT, "Integration test is only run with vit_t support, otherwise it takes too long.")
@@ -125,7 +125,7 @@ class TestTraining(unittest.TestCase):
     ):
         import micro_sam.evaluation as evaluation
 
-        predictor = evaluation.get_predictor(model_path, model_type)
+        predictor = get_sam_model(model_type=model_type, checkpoint_path=model_path)
 
         image_paths = sorted(glob(os.path.join(self.tmp_folder, "synthetic-data", "images", "test", "*.tif")))
         label_paths = sorted(glob(os.path.join(self.tmp_folder, "synthetic-data", "labels", "test", "*.tif")))
@@ -155,7 +155,7 @@ class TestTraining(unittest.TestCase):
         self.assertTrue(os.path.exists(checkpoint_path))
 
         # Check that the model can be loaded from a custom checkpoint.
-        predictor = get_custom_sam_model(checkpoint_path, model_type=model_type, device=device)
+        predictor = get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path, device=device)
         self.assertTrue(isinstance(predictor, SamPredictor))
 
         # Export the model.

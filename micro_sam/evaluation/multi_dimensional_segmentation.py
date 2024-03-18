@@ -100,8 +100,7 @@ def segment_slices_from_ground_truth(
     """
     assert volume.ndim == 3
 
-    _get_model = util.get_sam_model if checkpoint_path is None else util.get_custom_sam_model
-    predictor = _get_model(model_type=model_type, checkpoint_path=checkpoint_path, device=device)
+    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path, device=device)
 
     # Compute the image embeddings
     embeddings = util.precompute_image_embeddings(
@@ -119,7 +118,7 @@ def segment_slices_from_ground_truth(
     for label_id in label_ids:
         # Binary label volume per instance (also referred to as object)
         this_seg = ground_truth == label_id
-        
+
         # Let's search the slices where we have the current object
         slice_range = np.where(this_seg)[0]
 

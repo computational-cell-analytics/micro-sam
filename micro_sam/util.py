@@ -209,11 +209,25 @@ def _available_devices():
     return available_devices
 
 
+# We write a custom unpickler that skips objects that cannot be found instead of
+# throwing an AttributeError or ModueNotFoundError.
+# NOTE: since we just want to unpickle the model to load its weights these errors don't matter.
+# See also https://stackoverflow.com/questions/27732354/unable-to-load-files-using-pickle-and-multiple-modules
+class _CustomUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        try:
+            return super().find_class(module, name)
+        except (AttributeError, ModuleNotFoundError) as e:
+            warnings.warn(f"Did not find {module}:{name} and will skip it, due to error {e}")
+            return None
+
+
 def get_sam_model(
     model_type: str = _DEFAULT_MODEL,
     device: Optional[Union[str, torch.device]] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
+    return_state: bool = False,
 ) -> SamPredictor:
     r"""Get the SegmentAnything Predictor.
 
@@ -245,10 +259,12 @@ def get_sam_model(
             corresponding to the weight file. E.g. if you use weights for SAM with vit_b encoder
             then `model_type` must be given as "vit_b".
         return_sam: Return the sam model object as well as the predictor.
+        return_state: Return the unpickled checkpoint state.
 
     Returns:
         The segment anything predictor.
     """
+    assert not (return_sam and return_state)
     device = get_device(device)
 
     # We support passing a local filepath to a checkpoint.
@@ -259,7 +275,7 @@ def get_sam_model(
     # URL from the model_type. If the model_type is invalid pooch will raise an error.
     if checkpoint_path is None:
         model_registry = models()
-        checkpoint = model_registry.fetch(model_type)
+        checkpoint_path = model_registry.fetch(model_type)
     # checkpoint_path has been passed, we use it instead of downloading a model.
     else:
         # Check if the file exists and raise an error otherwise.
@@ -267,7 +283,6 @@ def get_sam_model(
         # (If it isn't the model creation will fail below.)
         if not os.path.exists(checkpoint_path):
             raise ValueError(f"Checkpoint at {checkpoint_path} could not be found.")
-        checkpoint = checkpoint_path
 
     # Our fine-tuned model types have a suffix "_...". This suffix needs to be stripped
     # before calling sam_model_registry.
@@ -280,73 +295,28 @@ def get_sam_model(
             "You can install it via 'pip install git+https://github.com/ChaoningZhang/MobileSAM.git'"
         )
 
-    sam = sam_model_registry[abbreviated_model_type](checkpoint=checkpoint)
-    sam.to(device=device)
-    predictor = SamPredictor(sam)
-    predictor.model_type = abbreviated_model_type
-    if return_sam:
-        return predictor, sam
-    return predictor
-
-
-# We write a custom unpickler that skips objects that cannot be found instead of
-# throwing an AttributeError or ModueNotFoundError.
-# NOTE: since we just want to unpickle the model to load its weights these errors don't matter.
-# See also https://stackoverflow.com/questions/27732354/unable-to-load-files-using-pickle-and-multiple-modules
-class _CustomUnpickler(pickle.Unpickler):
-    def find_class(self, module, name):
-        try:
-            return super().find_class(module, name)
-        except (AttributeError, ModuleNotFoundError) as e:
-            warnings.warn(f"Did not find {module}:{name} and will skip it, due to error {e}")
-            return None
-
-
-def get_custom_sam_model(
-    checkpoint_path: Union[str, os.PathLike],
-    model_type: str = "vit_h",
-    device: Optional[Union[str, torch.device]] = None,
-    return_sam: bool = False,
-    return_state: bool = False,
-) -> SamPredictor:
-    """Load a SAM model from a torch_em checkpoint.
-
-    This function enables loading from the checkpoints saved by
-    the functionality in `micro_sam.training`.
-
-    Args:
-        checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
-        model_type: The SegmentAnything model_type for the given checkpoint.
-        device: The device for the model. If none is given will use GPU if available.
-        return_sam: Return the sam model object as well as the predictor.
-        return_state: Return the full state of the checkpoint in addition to the predictor.
-
-    Returns:
-        The segment anything predictor.
-    """
-    assert not (return_sam and return_state)
-
-    # over-ride the unpickler with our custom one
+    # Over-ride the unpickler with our custom one.
+    # This enables imports from torch_em checkpoints even if it cannot be fully unpickled.
     custom_pickle = pickle
     custom_pickle.Unpickler = _CustomUnpickler
 
-    device = get_device(device)
-    sam = sam_model_registry[model_type]()
+    state = torch.load(checkpoint_path, map_location="cpu", pickle_module=custom_pickle)
+    if "model_state" in state:
+        # Copy the model weights from torch_em's training format.
+        model_state = state["model_state"]
+        sam_prefix = "sam."
+        model_state = OrderedDict(
+            [(k[len(sam_prefix):] if k.startswith(sam_prefix) else k, v) for k, v in model_state.items()]
+        )
+    else:
+        model_state = state
 
-    # load the model state, ignoring any attributes that can't be found by pickle
-    state = torch.load(checkpoint_path, map_location=device, pickle_module=custom_pickle)
-    model_state = state["model_state"]
-
-    # copy the model weights from torch_em's training format
-    sam_prefix = "sam."
-    model_state = OrderedDict(
-        [(k[len(sam_prefix):] if k.startswith(sam_prefix) else k, v) for k, v in model_state.items()]
-    )
+    sam = sam_model_registry[abbreviated_model_type]()
     sam.load_state_dict(model_state)
-    sam.to(device)
 
+    sam.to(device=device)
     predictor = SamPredictor(sam)
-    predictor.model_type = model_type
+    predictor.model_type = abbreviated_model_type
 
     if return_sam:
         return predictor, sam
@@ -369,8 +339,8 @@ def export_custom_sam_model(
         model_type: The SegmentAnything model type corresponding to the checkpoint (vit_h, vit_b, vit_l or vit_t).
         save_path: Where to save the exported model.
     """
-    _, state = get_custom_sam_model(
-        checkpoint_path, model_type=model_type, return_state=True, device="cpu",
+    _, state = get_sam_model(
+        model_type=model_type, checkpoint_path=checkpoint_path, return_state=True, device="cpu",
     )
     model_state = state["model_state"]
     prefix = "sam."
