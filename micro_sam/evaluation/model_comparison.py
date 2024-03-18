@@ -126,7 +126,7 @@ def generate_data_for_model_comparison(
 
 
 #
-# Visual evaluation accroding to metrics
+# Visual evaluation according to metrics
 #
 
 

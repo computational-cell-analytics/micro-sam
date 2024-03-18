@@ -1,9 +1,11 @@
 import os
+import tempfile
+
 from pathlib import Path
-from tempfile import NamedTemporaryFile as tmp_file
 from typing import Optional, Union
 
 import bioimageio.spec.model.v0_5 as spec
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
@@ -12,9 +14,9 @@ from bioimageio.spec import save_bioimageio_package
 
 from .. import util
 from ..prompt_generators import PointAndBoxPromptGenerator
+from ..evaluation.model_comparison import _enhance_image, _overlay_outline, _overlay_box
 from .predictor_adaptor import PredictorAdaptor
 
-# TODO extend the defaults
 DEFAULTS = {
     "authors": [
         spec.Author(name="Anwai Archit", affiliation="University Goettingen", github_user="anwai98"),
@@ -23,7 +25,8 @@ DEFAULTS = {
     "description": "Finetuned Segment Anything Model for Microscopy",
     "cite": [
         spec.CiteEntry(text="Archit et al. Segment Anything for Microscopy", doi=spec.Doi("10.1101/2023.08.21.554208")),
-    ]
+    ],
+    "tags": ["segment-anything", "instance-segmentation"]
 }
 
 
@@ -32,11 +35,7 @@ def _create_test_inputs_and_outputs(
     labels,
     model_type,
     checkpoint_path,
-    input_path,
-    box_path,
-    mask_path,
-    score_path,
-    embed_path,
+    tmp_dir,
 ):
 
     # For now we just generate a single box prompt here, but we could also generate more input prompts.
@@ -49,11 +48,11 @@ def _create_test_inputs_and_outputs(
     predictor = PredictorAdaptor(model_type=model_type)
     predictor.load_state_dict(torch.load(checkpoint_path))
 
-    save_box_prompt_path = box_path.name
+    save_box_prompt_path = os.path.join(tmp_dir, "box_prompts.npy")
     np.save(save_box_prompt_path, box_prompts)
 
     input_ = util._to_image(image).transpose(2, 0, 1)[None]
-    save_image_path = input_path.name
+    save_image_path = os.path.join(tmp_dir, "input.npy")
     np.save(save_image_path, input_)
 
     masks, scores, embeddings = predictor(
@@ -62,9 +61,12 @@ def _create_test_inputs_and_outputs(
         box_prompts=torch.from_numpy(box_prompts)
     )
 
-    np.save(mask_path.name, masks.numpy())
-    np.save(score_path.name, scores.numpy())
-    np.save(embed_path.name, embeddings.numpy())
+    mask_path = os.path.join(tmp_dir, "mask.npy")
+    score_path = os.path.join(tmp_dir, "scores.npy")
+    embed_path = os.path.join(tmp_dir, "embeddings.npy")
+    np.save(mask_path, masks.numpy())
+    np.save(score_path, scores.numpy())
+    np.save(embed_path, embeddings.numpy())
 
     # TODO autogenerate the cover and return it too.
 
@@ -73,9 +75,9 @@ def _create_test_inputs_and_outputs(
         "box_prompts": save_box_prompt_path,
     }
     outputs = {
-        "mask": mask_path.name,
-        "score": score_path.name,
-        "embeddings": embed_path.name
+        "mask": mask_path,
+        "score": score_path,
+        "embeddings": embed_path
     }
     return inputs, outputs
 
@@ -99,7 +101,56 @@ def _get_checkpoint(model_type, checkpoint_path):
     return checkpoint_path
 
 
-def export_bioimageio_model(
+def _write_dependencies(dependency_file, require_mobile_sam):
+    content = """name: sam
+channels:
+    - pytorch
+    - conda-forge
+dependencies:
+    - segment-anything"""
+    if require_mobile_sam:
+        content += """
+    - pip:
+        - git+https://github.com/ChaoningZhang/MobileSAM.git"""
+    with open(dependency_file, "w") as f:
+        f.write(content)
+
+
+def _generate_covers(input_paths, result_paths, tmp_dir):
+    image = np.load(input_paths["image"]).squeeze()
+    prompts = np.load(input_paths["box_prompts"])
+    mask = np.load(result_paths["mask"])
+
+    # create the image overlay
+    if image.ndim == 2:
+        overlay = np.stack([image, image, image]).transpose((1, 2, 0))
+    elif image.shape[0] == 3:
+        overlay = image.transpose((1, 2, 0))
+    else:
+        overlay = image
+    overlay = _enhance_image(overlay.astype("float32"))
+
+    # overlay the mask as outline
+    overlay = _overlay_outline(overlay, mask[0, 0, 0], outline_dilation=2)
+
+    # overlay the bounding box prompt
+    prompt = prompts[0, 0][[1, 0, 3, 2]]
+    prompt = np.array([prompt[:2], prompt[2:]])
+    overlay = _overlay_box(overlay, prompt, outline_dilation=4)
+
+    # write  the cover image
+    fig, ax = plt.subplots(1)
+    ax.axis("off")
+    ax.imshow(overlay.astype("uint8"))
+    cover_path = os.path.join(tmp_dir, "cover.jpeg")
+    plt.savefig(cover_path, bbox_inches="tight")
+    plt.close()
+
+    covers = [cover_path]
+    return covers
+
+
+def export_sam_model(
     image: np.ndarray,
     label_image: np.ndarray,
     model_type: str,
@@ -122,22 +173,10 @@ def export_bioimageio_model(
         output_path: Where the exported model is saved.
         checkpoint_path: Optional checkpoint for loading the SAM model.
     """
-    with (
-        tmp_file(suffix=".md") as tmp_doc_path,
-        tmp_file(suffix=".npy") as tmp_input_path,
-        tmp_file(suffix=".npy") as tmp_boxes_path,
-        tmp_file(suffix=".npy") as tmp_mask_path,
-        tmp_file(suffix=".npy") as tmp_score_path,
-        tmp_file(suffix=".npy") as tmp_embed_path,
-    ):
+    with tempfile.TemporaryDirectory() as tmp_dir:
         checkpoint_path = _get_checkpoint(model_type, checkpoint_path=checkpoint_path)
         input_paths, result_paths = _create_test_inputs_and_outputs(
-            image, label_image, model_type, checkpoint_path,
-            input_path=tmp_input_path,
-            box_path=tmp_boxes_path,
-            mask_path=tmp_mask_path,
-            score_path=tmp_score_path,
-            embed_path=tmp_embed_path,
+            image, label_image, model_type, checkpoint_path, tmp_dir,
         )
         input_descriptions = [
             # First input: the image data.
@@ -161,7 +200,7 @@ def export_bioimageio_model(
                 optional=True,
                 axes=[
                     spec.BatchAxis(),
-                    spec.IndexAxis(
+                    spec.IndexInputAxis(
                         id=spec.AxisId("object"),
                         size=spec.ARBITRARY_SIZE
                     ),
@@ -202,7 +241,7 @@ def export_bioimageio_model(
                 id=spec.TensorId("masks"),
                 axes=[
                     spec.BatchAxis(),
-                    spec.IndexAxis(
+                    spec.IndexOutputAxis(
                         id=spec.AxisId("object"),
                         size=spec.SizeReference(
                             tensor_id=spec.TensorId("box_prompts"), axis_id=spec.AxisId("object")
@@ -232,7 +271,7 @@ def export_bioimageio_model(
                 id=spec.TensorId("scores"),
                 axes=[
                     spec.BatchAxis(),
-                    spec.IndexAxis(
+                    spec.IndexOutputAxis(
                         id=spec.AxisId("object"),
                         size=spec.SizeReference(
                             tensor_id=spec.TensorId("box_prompts"), axis_id=spec.AxisId("object")
@@ -259,7 +298,6 @@ def export_bioimageio_model(
             )
         ]
 
-        # TODO sha256
         architecture_path = os.path.join(os.path.split(__file__)[0], "predictor_adaptor.py")
         architecture = spec.ArchitectureFromFileDescr(
             source=Path(architecture_path),
@@ -267,29 +305,43 @@ def export_bioimageio_model(
             kwargs={"model_type": model_type}
         )
 
+        dependency_file = os.path.join(tmp_dir, "environment.yaml")
+        _write_dependencies(dependency_file, require_mobile_sam=model_type.startswith("vit_t"))
+        # print(dependency_file)
+        # breakpoint()
+
         weight_descriptions = spec.WeightsDescr(
             pytorch_state_dict=spec.PytorchStateDictWeightsDescr(
                 source=Path(checkpoint_path),
                 architecture=architecture,
                 pytorch_version=spec.Version(torch.__version__),
+                # FIXME: this leads to a validation error!
+                # dependencies=dependency_file,
             )
         )
 
-        doc_path = tmp_doc_path.name
+        doc_path = os.path.join(tmp_dir, "documentation.md")
         _write_documentation(doc_path, kwargs.get("documentation", None))
 
-        # TODO tags, dependencies, other stuff ...
+        covers = _generate_covers(input_paths, result_paths, tmp_dir)
+
         model_description = spec.ModelDescr(
             name=name,
-            description=kwargs.get("description", DEFAULTS["description"]),
-            authors=kwargs.get("authors", DEFAULTS["authors"]),
-            cite=kwargs.get("cite", DEFAULTS["cite"]),
-            license=spec.LicenseId("MIT"),
-            documentation=Path(doc_path),
-            git_repo=spec.HttpUrl("https://github.com/computational-cell-analytics/micro-sam"),
             inputs=input_descriptions,
             outputs=output_descriptions,
             weights=weight_descriptions,
+            description=kwargs.get("description", DEFAULTS["description"]),
+            authors=kwargs.get("authors", DEFAULTS["authors"]),
+            cite=kwargs.get("cite", DEFAULTS["cite"]),
+            license=spec.LicenseId("CC-BY-4.0"),
+            documentation=Path(doc_path),
+            git_repo=spec.HttpUrl("https://github.com/computational-cell-analytics/micro-sam"),
+            tags=kwargs.get("tags", DEFAULTS["tags"]),
+            covers=covers,
+            # TODO attach the decoder weights if given
+            # attachments=
+            # TODO write the config
+            # config=
         )
 
         # TODO test the model.
