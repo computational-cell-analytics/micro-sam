@@ -23,20 +23,27 @@ def run_eval_process(cmd):
         outs, errs = proc.communicate()
 
 
-def for_n_objects(model, max_objects=45):
+def _submit_scripts(model, checkpoint, experiment_folder, specific_script):
+    cmd = CMD + f"-m {model} " + "-d livecell "
+    cmd += f"--checkpoint_path {checkpoint} "
+    cmd += f"--experiment_path {experiment_folder}"
+    if specific_script is not None:
+        cmd += f" -s {specific_script}"
+
+    run_eval_process(cmd)
+
+
+def for_n_objects(model, max_objects=45, specific_script=None):
     ckpt_root = os.path.join(ROOT, "experiments", "micro-sam", "n_objects_per_batch")
     exp_root = os.path.join(EXPERIMENT_ROOT, "n_objects_per_batch")
     for i in range(1, max_objects+1):
         checkpoint = os.path.join(ckpt_root, f"{i}", "freeze-None", "checkpoints", model, "livecell_sam", "best.pt")
         experiment_folder = os.path.join(exp_root, f"{i}")
 
-        cmd = CMD + f"-m {model} " + "-d livecell "
-        cmd += f"--checkpoint_path {checkpoint} "
-        cmd += f"--experiment_path {experiment_folder}"
-        run_eval_process(cmd)
+        _submit_scripts(model, checkpoint, experiment_folder, specific_script)
 
 
-def for_freezing_backbones(model):
+def for_freezing_backbones(model, specific_script=None):
     ckpt_root = os.path.join(ROOT, "experiments", "micro-sam", "freezing-livecell")
     exp_root = os.path.join(EXPERIMENT_ROOT, "freezing-livecell")
 
@@ -67,15 +74,11 @@ def for_freezing_backbones(model):
 
         checkpoint = os.path.join(checkpoint, "checkpoints", model, "livecell_sam", "best.pt")
 
-        cmd = CMD + f"-m {model} " + "-d livecell "
-        cmd += f"--checkpoint_path {checkpoint} "
-        cmd += f"--experiment_path {experiment_folder}"
-        run_eval_process(cmd)
+        _submit_scripts(model, checkpoint, experiment_folder, specific_script)
 
 
 def main():
     for_freezing_backbones("vit_l")
-    breakpoint()
     for_n_objects("vit_b")
 
 

@@ -19,11 +19,12 @@ def write_batch_script(
     batch_script = f"""#!/bin/bash
 #SBATCH -c 8
 #SBATCH --mem 64G
-#SBATCH -t 2-00:00:00
+#SBATCH -t 4-00:00:00
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
 #SBATCH -A gzz0001
 #SBATCH --constraint=80gb
+#SBATCH --qos=96h
 #SBATCH --job-name={inference_setup}
 
 source ~/.bashrc
