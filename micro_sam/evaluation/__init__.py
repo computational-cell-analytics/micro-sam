@@ -8,7 +8,7 @@ from .instance_segmentation import (
 )
 from .evaluation import (
     run_evaluation,
-    run_evaluation_for_interactive_prompting,
+    run_evaluation_for_iterative_prompting,
 )
 from .inference import (
     get_predictor,

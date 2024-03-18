@@ -449,7 +449,7 @@ def run_livecell_evaluation() -> None:
             continue
 
         if inf_root.startswith("start_with"):
-            evaluation.run_evaluation_for_interactive_prompting(
+            evaluation.run_evaluation_for_iterative_prompting(
                 gt_paths=gt_paths,
                 prediction_root=pred_root,
                 experiment_folder=experiment_folder,

@@ -74,7 +74,7 @@ def run_evaluation(
     return results
 
 
-def run_evaluation_for_interactive_prompting(
+def run_evaluation_for_iterative_prompting(
     gt_paths: List[Union[os.PathLike, str]],
     prediction_root: Union[os.PathLike, str],
     experiment_folder: Union[os.PathLike, str],
