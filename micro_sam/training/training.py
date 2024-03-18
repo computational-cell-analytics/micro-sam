@@ -13,8 +13,6 @@ from . import sam_trainer as trainers
 from . import joint_sam_trainer as joint_trainers
 
 
-# TODO enable loading the decoder checkpoint:
-# - from an extra decoder checkpoint (to support training from the modelzoo)
 def train_sam(
     name: str,
     model_type: str,
@@ -29,6 +27,8 @@ def train_sam(
     device: Optional[Union[str, torch.device]] = None,
     lr: float = 1e-5,
     scheduler: Optional[_LRScheduler] = None,
+    n_sub_iteration: int = 8,
+    save_root: Optional[Union[str, os.PathLike]] = None,
 ) -> None:
     """Run training for a SAM model.
 
@@ -52,33 +52,50 @@ def train_sam(
         device: The device to use for training.
         lr: The learning rate.
         scheduler: The learning rate scheduler. By default ReduceLROnPlateau is used.
+        n_sub_iteration: The number of iterative prompts per training iteration.
+        save_root: Optional root directory for saving the checkpoints and logs.
+            If not given the current working directory is used.
     """
-    device = get_device(device)
     # TODO check the data loaders!
 
+    device = get_device(device)
+
     # Get the trainable segment anything model.
-    model = get_trainable_sam_model(
+    model, state = get_trainable_sam_model(
         model_type=model_type, device=device, freeze=freeze,
-        checkpoint_path=checkpoint_path,
+        checkpoint_path=checkpoint_path, return_state=True,
     )
 
     # This class creates all the training data for a batch (inputs, prompts and labels).
     convert_inputs = ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
 
-    # Get the optimizer and the LR scheduler
+    # Create the UNETR decoder (if train with it) and the optimizer.
     if with_segmentation_decoder:
-        # for instance segmentation, we use the UNETR model configuration.
+
+        # For instance segmentation, we add a UNETR decoder.
         unetr = UNETR(
             backbone="sam", encoder=model.sam.image_encoder, out_channels=3, use_sam_stats=True,
             final_activation="Sigmoid", use_skip_connection=False, resize_input=True,
         )
-        # let's get the parameters for SAM and the decoder from UNETR
+
+        # Set the decoder state from the checkpoint if it is contained.
+        if "decoder_state" in state:
+            decoder_state = state["decoder_state"]
+            unetr_state_dict = unetr.state_dict()
+            for k, v in unetr_state_dict.items():
+                if not k.startswith("encoder"):
+                    unetr_state_dict[k] = decoder_state[k]
+            unetr.load_state_dict(unetr_state_dict)
+
+        # Get the parameters for SAM and the decoder from UNETR.
         joint_model_params = [params for params in model.parameters()]  # sam parameters
         for param_name, params in unetr.named_parameters():  # unetr's decoder parameters
             if not param_name.startswith("encoder"):
                 joint_model_params.append(params)
+
         unetr.to(device)
         optimizer = torch.optim.Adam(joint_model_params, lr=lr)
+
     else:
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
@@ -87,23 +104,23 @@ def train_sam(
             optimizer, mode="min", factor=0.9, patience=3, verbose=True
         )
 
-    # the trainer which performs training and validation (implemented using "torch_em")
+    # The trainer which performs training and validation.
     if with_segmentation_decoder:
         instance_seg_loss = DiceBasedDistanceLoss(mask_distances_in_bg=True)
         trainer = joint_trainers.JointSamTrainer(
             name=name, train_loader=train_loader, val_loader=val_loader, model=model,
             optimizer=optimizer, device=device, lr_scheduler=scheduler, logger=joint_trainers.JointSamLogger,
             log_image_interval=100, mixed_precision=True, convert_inputs=convert_inputs,
-            n_objects_per_batch=n_objects_per_batch, n_sub_iteration=8, compile_model=False, unetr=unetr,
+            n_objects_per_batch=n_objects_per_batch, n_sub_iteration=n_sub_iteration, compile_model=False, unetr=unetr,
             instance_loss=instance_seg_loss, instance_metric=instance_seg_loss,
-            early_stopping=early_stopping,
+            early_stopping=early_stopping, mask_prob=0.5, save_root=save_root,
         )
     else:
         trainer = trainers.SamTrainer(
             name=name, train_loader=train_loader, val_loader=val_loader, model=model,
             optimizer=optimizer, device=device, lr_scheduler=scheduler, logger=trainers.SamLogger,
             log_image_interval=100, mixed_precision=True, convert_inputs=convert_inputs,
-            n_objects_per_batch=n_objects_per_batch, n_sub_iteration=8, compile_model=False,
-            early_stopping=early_stopping,
+            n_objects_per_batch=n_objects_per_batch, n_sub_iteration=n_sub_iteration, compile_model=False,
+            early_stopping=early_stopping, mask_prob=0.5, save_root=save_root,
         )
     trainer.fit(epochs=n_epochs)
