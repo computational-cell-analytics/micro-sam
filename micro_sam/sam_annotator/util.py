@@ -9,7 +9,6 @@ from scipy.ndimage import shift
 from skimage import draw
 
 from .. import prompt_based_segmentation, util
-from ._state import AnnotatorState
 
 # Green and Red
 LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
@@ -72,9 +71,19 @@ def _initialize_parser(description, with_segmentation_result=True, with_show_emb
         )
 
     parser.add_argument(
-        "--model_type", default=util._DEFAULT_MODEL,
+        "-m", "--model_type", default=util._DEFAULT_MODEL,
         help=f"The segment anything model that will be used, one of {available_models}."
     )
+    parser.add_argument(
+        "-c", "--checkpoint", default=None,
+        help="Checkpoint from which the SAM model will be loaded loaded."
+    )
+    parser.add_argument(
+        "-d", "--device", default=None,
+        help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
+        "By default the most performant available device will be selected."
+    )
+
     parser.add_argument(
         "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
     )
@@ -95,6 +104,23 @@ def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:
     if not clear_segmentations:
         return
     viewer.layers["current_object"].data = np.zeros(viewer.layers["current_object"].data.shape, dtype="uint32")
+    viewer.layers["current_object"].refresh()
+
+
+def clear_annotations_slice(viewer: napari.Viewer, i: int, clear_segmentations=True) -> None:
+    """@private"""
+    point_prompts = viewer.layers["point_prompts"].data
+    point_prompts = point_prompts[point_prompts[:, 0] != i]
+    viewer.layers["point_prompts"].data = point_prompts
+    viewer.layers["point_prompts"].refresh()
+    if "prompts" in viewer.layers:
+        prompts = viewer.layers["prompts"].data
+        prompts = [prompt for prompt in prompts if not (prompt[:, 0] == i).all()]
+        viewer.layers["prompts"].data = prompts
+        viewer.layers["prompts"].refresh()
+    if not clear_segmentations:
+        return
+    viewer.layers["current_object"].data[i] = 0
     viewer.layers["current_object"].refresh()
 
 

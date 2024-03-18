@@ -56,6 +56,9 @@ class AnnotatorState(metaclass=Singleton):
     committed_lineages: Optional[List[Dict]] = None
     tracking_widget: Optional[Container] = None
 
+    # z-range to limit the data being committed in 3d / tracking.
+    z_range: Optional[Tuple[int, int]] = None
+
     def initialize_predictor(
         self,
         image_data,

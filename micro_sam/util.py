@@ -823,7 +823,7 @@ def segmentation_to_one_hot(
         n_ids = int(segmentation.max())
 
     else:
-        assert segmentation_ids[0] != 0
+        assert segmentation_ids[0] != 0, "No objects were found."
 
         # the segmentation ids have to be sorted
         segmentation_ids = np.sort(segmentation_ids)
@@ -842,3 +842,26 @@ def segmentation_to_one_hot(
     # add the extra singleton dimenion to get shape NUM_OBJECTS x 1 x H x W
     masks = masks.unsqueeze(1)
     return masks
+
+
+def get_block_shape(shape: Tuple[int]) -> Tuple[int]:
+    """Get a suitable block shape for chunking a given shape.
+
+    The primary use for this is determining chunk sizes for
+    zarr arrays or block shapes for parallelization.
+
+    Args:
+        shape: The image or volume shape.
+
+    Returns:
+        The block shape.
+    """
+    ndim = len(shape)
+    if ndim == 2:
+        block_shape = tuple(min(bs, sh) for bs, sh in zip((1024, 1024), shape))
+    elif ndim == 3:
+        block_shape = tuple(min(bs, sh) for bs, sh in zip((32, 256, 256), shape))
+    else:
+        raise ValueError(f"Only 2 or 3 dimensional shapes are supported, got {ndim}D.")
+
+    return block_shape

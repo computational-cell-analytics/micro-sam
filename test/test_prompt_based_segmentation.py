@@ -10,27 +10,37 @@ class TestPromptBasedSegmentation(unittest.TestCase):
     model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"
 
     @staticmethod
-    def _get_input(shape=(256, 256)):
+    def _get_input(shape=(256, 256), radius=20):
         mask = np.zeros(shape, dtype="uint8")
         center = tuple(sh // 2 for sh in shape)
-        circle = disk(center, radius=20, shape=shape)
+        circle = disk(center, radius=radius, shape=shape)
         mask[circle] = 1
         image = mask * 255
         return mask, image
 
     @staticmethod
-    def _get_model(image, model_type):
+    def _get_model(image, model_type, tile_shape=None, halo=None):
         predictor = util.get_sam_model(model_type=model_type, device=util.get_device(None))
-        image_embeddings = util.precompute_image_embeddings(predictor, image)
-        util.set_precomputed(predictor, image_embeddings)
-        return predictor
+        # FIXME remove the embedding path once we can hold the tiles in memory
+        image_embeddings = util.precompute_image_embeddings(
+            predictor, image, tile_shape=tile_shape, halo=halo,
+            save_path=None if tile_shape is None else "tmp.zarr"
+        )
+        if tile_shape is None:
+            util.set_precomputed(predictor, image_embeddings)
+        return predictor, image_embeddings
 
     # we compute the default mask and predictor once for the class
     # so that we don't have to precompute it every time
     @classmethod
     def setUpClass(cls):
         cls.mask, cls.image = cls._get_input()
-        cls.predictor = cls._get_model(cls.image, cls.model_type)
+        cls.predictor, _ = cls._get_model(cls.image, cls.model_type)
+
+        cls.mask_tiled, cls.image_tiled = cls._get_input(shape=(1024, 1024), radius=64)
+        cls.predictor_tiled, cls.tiled_embeddings = cls._get_model(
+            cls.image_tiled, cls.model_type, tile_shape=(512, 512), halo=(96, 96)
+        )
 
     def test_segment_from_points(self):
         from micro_sam.prompt_based_segmentation import segment_from_points
@@ -61,7 +71,7 @@ class TestPromptBasedSegmentation(unittest.TestCase):
             expected_iou_mask = 0.9
         else:
             mask, image = self._get_input(shape)
-            predictor = self._get_model(image, self.model_type)
+            predictor, _ = self._get_model(image, self.model_type)
             expected_iou_mask = 0.8
 
         #
@@ -122,6 +132,42 @@ class TestPromptBasedSegmentation(unittest.TestCase):
 
         predicted = segment_from_box_and_points(self.predictor, box, points, labels)
         self.assertGreater(util.compute_iou(self.mask, predicted), 0.9)
+
+    def test_segment_from_points_tiled(self):
+        from micro_sam.prompt_based_segmentation import segment_from_points
+
+        # segment with one positive and two negative points
+        points = np.array([[510, 510], [400, 200], [200, 400]])
+        labels = np.array([1, 0, 0])
+
+        predicted = segment_from_points(
+            self.predictor_tiled, points, labels, image_embeddings=self.tiled_embeddings
+        )
+
+        self.assertGreater(util.compute_iou(self.mask_tiled, predicted), 0.9)
+
+        # segment with one positive point, using the best multimask
+        points = np.array([[512, 512]])
+        labels = np.array([1])
+
+        predicted = segment_from_points(
+            self.predictor_tiled, points, labels, image_embeddings=self.tiled_embeddings
+        )
+        self.assertGreater(util.compute_iou(self.mask_tiled, predicted), 0.9)
+
+        # segment with multimasking
+        predicted = segment_from_points(
+            self.predictor_tiled, points, labels, image_embeddings=self.tiled_embeddings,
+            multimask_output=True, use_best_multimask=False,
+        )
+        self.assertEqual(predicted.shape, (3,) + self.mask_tiled.shape)
+
+    def test_segment_from_box_tiled(self):
+        from micro_sam.prompt_based_segmentation import segment_from_box
+
+        box = np.array([450, 450, 570, 570])
+        predicted = segment_from_box(self.predictor_tiled, box, image_embeddings=self.tiled_embeddings)
+        self.assertGreater(util.compute_iou(self.mask_tiled, predicted), 0.9)
 
 
 if __name__ == "__main__":

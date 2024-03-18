@@ -41,23 +41,30 @@ def segment_mask_in_volume(
         stop_lower: Whether to stop at the lowest segmented slice.
         stop_upper: Wheter to stop at the topmost segmented slice.
         iou_threshold: The IOU threshold for continuing segmentation across 3d.
-        projection: The projection method to use. One of 'mask', 'bounding_box' or 'points'.
+        projection: The projection method to use. One of 'mask', 'box', 'points' or 'points_and_mask'.
             - (optional: you can also pass custom choices for the projection combination)
         progress_bar: Optional progress bar.
         box_extension: Extension factor for increasing the box size after projection.
 
     Returns:
-        Array with the volumetric segmentation
+        Array with the volumetric segmentation.
+        Tuple with the first and last segmented slice.
     """
+    use_single_point = False
     if isinstance(projection, str):
         if projection == "mask":
             use_box, use_mask, use_points = True, True, False
         elif projection == "points":
-            use_box, use_mask, use_points = True, True, True
-        elif projection == "bounding_box":
+            use_box, use_mask, use_points = False, False, True
+        elif projection == "box":
             use_box, use_mask, use_points = True, False, False
+        elif projection == "points_and_mask":
+            use_box, use_mask, use_points = False, True, True
+        elif projection == "single_point":
+            use_box, use_mask, use_points = False, False, True
+            use_single_point = True
         else:
-            raise ValueError("Choose projection method from 'mask' / 'points' / 'bounding_box'.")
+            raise ValueError("Choose projection method from 'mask' / 'points' / 'box' / 'points_and_mask' / 'single_point'.")
     elif isinstance(projection, dict):
         assert len(projection.keys()) == 3, "There should be three parameters assigned for the projection method."
         use_box, use_mask, use_points = projection["use_box"], projection["use_mask"], projection["use_points"]
@@ -82,7 +89,8 @@ def segment_mask_in_volume(
             seg_prev = segmentation[z - increment]
             seg_z, score, _ = segment_from_mask(
                 predictor, seg_prev, image_embeddings=image_embeddings, i=z, use_mask=use_mask,
-                use_box=use_box, use_points=use_points, box_extension=box_extension, return_all=True
+                use_box=use_box, use_points=use_points, box_extension=box_extension, return_all=True,
+                use_single_point=use_single_point,
             )
             if threshold is not None:
 
@@ -107,6 +115,7 @@ def segment_mask_in_volume(
                     msg = f"Segmentation stopped at slice {z} due to IOU {criterion} < {threshold}."
                     print(msg)
                     break
+
             segmentation[z] = seg_z
             z += increment
             if stopping_criterion(z, z_stop):
@@ -115,15 +124,21 @@ def segment_mask_in_volume(
                 break
             _update_progress()
 
+        return z - increment
+
     z0, z1 = int(segmented_slices.min()), int(segmented_slices.max())
 
     # segment below the min slice
     if z0 > 0 and not stop_lower:
-        segment_range(z0, 0, -1, np.less, iou_threshold, verbose=verbose)
+        z_min = segment_range(z0, 0, -1, np.less, iou_threshold, verbose=verbose)
+    else:
+        z_min = z0
 
     # segment above the max slice
     if z1 < segmentation.shape[0] - 1 and not stop_upper:
-        segment_range(z1, segmentation.shape[0] - 1, 1, np.greater, iou_threshold, verbose=verbose)
+        z_max = segment_range(z1, segmentation.shape[0] - 1, 1, np.greater, iou_threshold, verbose=verbose)
+    else:
+        z_max = z1
 
     # segment in between min and max slice
     if z0 != z1:
@@ -170,7 +185,7 @@ def segment_mask_in_volume(
                     )
                     _update_progress()
 
-    return segmentation
+    return segmentation, (z_min, z_max)
 
 
 def segment_3d_from_slice(
@@ -178,7 +193,7 @@ def segment_3d_from_slice(
     raw: np.ndarray,
     z: Optional[int] = None,
     embedding_path: Optional[Union[str, os.PathLike]] = None,
-    projection: str = "mask",
+    projection: str = "points",
     box_extension: float = 0.0,
     verbose: bool = True,
     pred_iou_thresh: float = 0.88,
@@ -200,7 +215,7 @@ def segment_3d_from_slice(
             If none is given the central slice will be used.
         embedding_path: The path were embeddings will be cached.
             If none is given embeddings will not be cached.
-        projection: The projection method to use. One of 'mask', 'bounding_box' or 'points'.
+        projection: The projection method to use. One of 'mask', 'box', 'points' or 'points_and_mask'.
         box_extension: Extension factor for increasing the box size after projection.
         verbose: Whether to print progress bar and other status messages.
         pred_iou_thresh: The predicted iou value to filter objects in `AutomaticMaskGenerator.generate`.
@@ -239,7 +254,7 @@ def segment_3d_from_slice(
     for seg_id in tqdm(seg_ids, desc="Segment objects in 3d", disable=not verbose):
         this_seg = np.zeros_like(segmentation)
         this_seg[z][seg_z == seg_id] = 1
-        this_seg = segment_mask_in_volume(
+        this_seg, _ = segment_mask_in_volume(
             this_seg, predictor, image_embeddings,
             segmented_slices=np.array([z]), stop_lower=False, stop_upper=False,
             iou_threshold=iou_threshold, projection=projection, box_extension=box_extension,

@@ -58,19 +58,25 @@ def _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1,
         centers = [centers[gt_id] for gt_id in gt_ids]
         boxes = [boxes[gt_id] for gt_id in gt_ids]
 
-        object_masks = util.segmentation_to_one_hot(gt, gt_ids)
-        coords, labels, boxes, _ = prompt_generator(object_masks, boxes, centers)
+        object_masks = util.segmentation_to_one_hot(gt.astype("int64"), gt_ids)
+        coords, labels, boxes, _ = prompt_generator(
+            segmentation=object_masks,
+            bbox_coordinates=boxes,
+            center_coordinates=centers,
+        )
 
         for idx, gt_id in tqdm(enumerate(gt_ids), total=len(gt_ids)):
 
-            # TODO bring the outputs to the correct format
-            box = boxes[idx]
+            # Box prompts:
+            # Reorder the coordinates so that they match the normal python convention.
+            box = boxes[idx][[1, 0, 3, 2]]
             mask1_box = segment_from_box(predictor1, box)
             mask2_box = segment_from_box(predictor2, box)
             mask1_box, mask2_box = mask1_box.squeeze(), mask2_box.squeeze()
 
-            # TODO bring the outputs to the correct format
-            point_coords, point_labels = np.array(coords[idx]), np.array(labels[idx])
+            # Point prompts:
+            # Reorder the coordinates so that they match the normal python convention.
+            point_coords, point_labels = np.array(coords[idx])[:, ::-1], np.array(labels[idx])
             mask1_points = segment_from_points(predictor1, point_coords, point_labels)
             mask2_points = segment_from_points(predictor2, point_coords, point_labels)
             mask1_points, mask2_points = mask1_points.squeeze(), mask2_points.squeeze()
@@ -99,6 +105,8 @@ def generate_data_for_model_comparison(
     model_type1: str,
     model_type2: str,
     n_samples: int,
+    checkpoint1: Optional[Union[str, os.PathLike]] = None,
+    checkpoint2: Optional[Union[str, os.PathLike]] = None,
 ) -> None:
     """Generate samples for qualitative model comparison.
 
@@ -112,6 +120,8 @@ def generate_data_for_model_comparison(
         model_type2: The second model to use for comparison.
             The value needs to be a valid model_type for `micro_sam.util.get_sam_model`.
         n_samples: The number of samples to draw from the dataloader.
+        checkpoint1: Optional checkpoint for the first model.
+        checkpoint2: Optional checkpoint for the second model.
     """
     prompt_generator = PointAndBoxPromptGenerator(
         n_positive_points=1,
@@ -120,8 +130,8 @@ def generate_data_for_model_comparison(
         get_point_prompts=True,
         get_box_prompts=True,
     )
-    predictor1 = util.get_sam_model(model_type=model_type1)
-    predictor2 = util.get_sam_model(model_type=model_type2)
+    predictor1 = util.get_sam_model(model_type=model_type1, checkpoint_path=checkpoint1)
+    predictor2 = util.get_sam_model(model_type=model_type2, checkpoint_path=checkpoint2)
     _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1, predictor2, output_folder)
 
 
@@ -348,7 +358,6 @@ def _compare_models(
         )
 
 
-# TODO adapt to new prompt generator
 def model_comparison(
     output_folder: Union[str, os.PathLike],
     n_images_per_sample: int,

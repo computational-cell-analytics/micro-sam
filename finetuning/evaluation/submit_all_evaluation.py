@@ -12,7 +12,8 @@ ALL_SCRIPTS = [
 
 
 def write_batch_script(
-    env_name, out_path, inference_setup, checkpoint, model_type, experiment_folder, dataset_name, delay=None
+    env_name, out_path, inference_setup, checkpoint, model_type,
+    experiment_folder, dataset_name, delay=None, use_masks=False
 ):
     "Writing scripts with different fold-trainings for micro-sam evaluation"
     batch_script = f"""#!/bin/bash
@@ -22,7 +23,6 @@ def write_batch_script(
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
 #SBATCH -A gzz0001
-#SBATCH --constraint=80gb
 #SBATCH --job-name={inference_setup}
 
 source ~/.bashrc
@@ -47,6 +47,10 @@ mamba activate {env_name} \n"""
 
     # IMPORTANT: choice of the dataset
     python_script += f"-d {dataset_name} "
+
+    # use logits for iterative prompting
+    if inference_setup == "iterative_prompting" and use_masks:
+        python_script += "--use_masks "
 
     # let's add the python script to the bash script
     batch_script += python_script
@@ -124,15 +128,16 @@ def submit_slurm(args):
     region = args.roi  # use the organelles model or boundaries model
     make_delay = "10s"  # wait for precomputing the embeddings and later run inference scripts
 
-    if args.checkpoint_path is None and args.experiment_path is None:
+    if args.checkpoint_path is None:
         checkpoint = get_checkpoint_path(experiment_set, dataset_name, model_type, region)
+    else:
+        checkpoint = args.checkpoint_path
 
+    if args.experiment_path is None:
         modality = region if region == "lm" else "em"
-
         experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/v2/"
         experiment_folder += f"{experiment_set}/{modality}/{dataset_name}/{model_type}/"
     else:
-        checkpoint = args.checkpoint_path
         experiment_folder = args.experiment_path
 
     # now let's run the experiments
@@ -160,7 +165,8 @@ def submit_slurm(args):
             model_type=model_type,
             experiment_folder=experiment_folder,
             dataset_name=dataset_name,
-            delay=None if current_setup == "precompute_embeddings" else make_delay
+            delay=None if current_setup == "precompute_embeddings" else make_delay,
+            use_masks=args.use_masks
             )
 
     # the logic below automates the process of first running the precomputation of embeddings, and only then inference.
@@ -196,6 +202,7 @@ if __name__ == "__main__":
     parser.add_argument("-e", "--experiment_set", type=str, required=True)
     # optional argument to specify for the experiment root folder automatically
     parser.add_argument("-r", "--roi", type=str)
+    parser.add_argument("--use_masks", action="store_true")
 
     # overwrite the checkpoint path and experiment root to use this flexibly
     parser.add_argument("--checkpoint_path", type=str, default=None)

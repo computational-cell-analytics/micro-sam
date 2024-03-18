@@ -222,6 +222,9 @@ def get_default_arguments():
     parser.add_argument("-e", "--experiment_folder", type=str, required=True)
     parser.add_argument("-d", "--dataset", type=str, required=True)
     parser.add_argument("--box", action="store_true", help="If passed, starts with first prompt as box")
+    parser.add_argument(
+        "--use_masks", action="store_true", help="To use logits masks for iterative prompting."
+    )
     args = parser.parse_args()
     return args
 

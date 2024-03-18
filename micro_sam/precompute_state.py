@@ -6,11 +6,12 @@ import pickle
 
 from glob import glob
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, List
 
 import h5py
 import numpy as np
 import torch
+import torch.nn as nn
 from segment_anything.predictor import SamPredictor
 from tqdm import tqdm
 
@@ -142,11 +143,13 @@ def cache_is_state(
 
 
 def _precompute_state_for_file(
-    predictor, input_path, output_path, key, ndim,
-    tile_shape, halo, precompute_amg_state,
-    decoder=None,
+    predictor, input_path, output_path, key, ndim, tile_shape, halo, precompute_amg_state, decoder=None,
 ):
-    image_data = util.load_image_data(input_path, key)
+    if isinstance(input_path, np.ndarray):
+        image_data = input_path
+    else:
+        image_data = util.load_image_data(input_path, key)
+
     output_path = Path(output_path).with_suffix(".zarr")
     embeddings = util.precompute_image_embeddings(
         predictor, image_data, output_path, ndim=ndim, tile_shape=tile_shape, halo=halo,
@@ -159,12 +162,23 @@ def _precompute_state_for_file(
 
 
 def _precompute_state_for_files(
-    predictor, input_files, output_path, ndim, tile_shape, halo, precompute_amg_state,
-    decoder=None,
+    predictor: SamPredictor,
+    input_files: Union[List[Union[os.PathLike, str]], List[np.ndarray]],
+    output_path: Union[os.PathLike, str],
+    ndim: Optional[int] = None,
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
+    precompute_amg_state: bool = False,
+    decoder: Optional["nn.Module"] = None,
 ):
     os.makedirs(output_path, exist_ok=True)
-    for file_path in tqdm(input_files, desc="Precompute state for files."):
-        out_path = os.path.join(output_path, os.path.basename(file_path))
+    for i, file_path in enumerate(tqdm(input_files, total=len(input_files), desc="Precompute state for files")):
+
+        if isinstance(file_path, np.ndarray):
+            out_path = os.path.join(output_path, f"embedding_{i:05}.tif")
+        else:
+            out_path = os.path.join(output_path, os.path.basename(file_path))
+
         _precompute_state_for_file(
             predictor, file_path, out_path,
             key=None, ndim=ndim, tile_shape=tile_shape, halo=halo,
