@@ -354,7 +354,7 @@ def run_livecell_inference() -> None:
 
     # the experiment type:
     # 1. precompute image embeddings
-    # 2. interactive instance segmentation (interactive)
+    # 2. iterative prompting-based interactive instance segmentation (iterative prompting)
     #     - iterative prompting
     #         - starting with point
     #         - starting with box
@@ -363,7 +363,7 @@ def run_livecell_inference() -> None:
     #     - automatic instance segmentation (ais)
 
     parser.add_argument("-p", "--precompute_embeddings", action="store_true")
-    parser.add_argument("-ip", "--interactive_segmentation", action="store_true")
+    parser.add_argument("-ip", "--iterative_prompting", action="store_true")
     parser.add_argument("-amg", "--auto_mask_generation", action="store_true")
     parser.add_argument("-ais", "--auto_instance_segmentation", action="store_true")
 
@@ -382,9 +382,9 @@ def run_livecell_inference() -> None:
     )
 
     args = parser.parse_args()
-    if sum([args.interactive_segmentation, args.auto_mask_generation, args.auto_instance_segmentation]) > 1:
+    if sum([args.iterative_prompting, args.auto_mask_generation, args.auto_instance_segmentation]) > 1:
         warnings.warn(
-            "It's recommended to choose either from 'interactive_segmentation', 'auto_mask_generation' or "
+            "It's recommended to choose either from 'iterative_prompting', 'auto_mask_generation' or "
             "'auto_instance_segmentation' at once, else it might take a while."
         )
 
@@ -393,7 +393,7 @@ def run_livecell_inference() -> None:
             args.ckpt, args.input, args.model, args.experiment_folder, args.n_val_per_cell_type
         )
 
-    if args.interactive_segmentation:
+    if args.iterative_prompting:
         run_livecell_iterative_prompting(
             args.ckpt, args.input, args.model, args.experiment_folder,
             start_with_box=args.start_with_box, use_masks=args.use_masks

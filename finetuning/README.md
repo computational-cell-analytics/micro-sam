@@ -29,10 +29,10 @@ $ python livecell_inference.py -c /path/to/saved/checkpoints
                                -m vit_b
                                # choice of inference:
                                #    - ('-p') precompute image embeddings
-                               #    - ('-ip') interactive instance segmentation 
-                               #        - default: iterative prompt-based segmentation starting with point
-                               #        - ('-b') iterative prompt-based segmentation starting with box
-                               #        - ('--use_masks') use logits from previous segmentations in iterative prompt-based segmentation
+                               #    - ('-ip') iterative prompting-based interactive instance segmentation 
+                               #        - default: starting with point
+                               #        - ('-b') starting with box
+                               #        - ('--use_masks') use logits from previous iteration's segmentation iteratively
                                #    - ('-amg') automatic mask generation
                                #    - ('-ais') automatic instance segmentation
 ```
@@ -45,7 +45,7 @@ $ python livecell_inference.py -c /path/to/saved/checkpoints -i /path/to/livecel
 $ python livecell_inference.py -c /path/to/saved/checkpoints -i /path/to/livecell -e /path/to/store/experiment -m vit_b -ip -b  # iterative prompting starting with box
 ```
 
-Here, `-ip` stands for interactive instance segmentation using iterative prompting (i.e. starting with placing 1 positive point prompt OR a box to segment the object, and continuing prompt-based segmentation by placing additional points subjected to the model's prediction - where the model makes mistakes (to add a negative point prompt) and where the model missed to segment the object of interest (to add a positive point prompt))
+Here, `-ip` stands for iterative prompting-based interactive instance segmentation (i.e. starting with placing 1 positive point prompt OR a box to segment the object, and continuing prompt-based segmentation by placing additional points subjected to the model's prediction - where the model makes mistakes (to add a negative point prompt) and where the model missed to segment the object of interest (to add a positive point prompt))
 
 You can also evaluate the automatic instance segmentation functionality, by running
 ```bash
