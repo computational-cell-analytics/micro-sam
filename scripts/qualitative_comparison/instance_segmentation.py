@@ -103,15 +103,22 @@ def instance_segmentation_livecell():
     compare_instance_segmentation(image, segmenters, segmenter_kwargs)
 
 
-# Times Lucchi:
+# Times Lucchi: @ CP
 # vit_b_amg : 84.40151119232178 s
 # vit_b_em_amg : 82.40972113609314 s
 # vit_b_em_ais : 13.019227027893066 s
 
-# Times CTC DIC-HeLa
+# Times Lucchi: @ AA
+# vit_b_amg : 48.53724002838135 s
+# vit_b_em_amg : 49.28683686256409 s
+# vit_b_em_ais : 8.000006437301636 s
+
+# Times CTC DIC-HeLa: @ AA
 # vit_b_amg : 42.097354888916016 s
 # vit_b_em_amg : 47.52872157096863 s
 # vit_b_em_ais : 8.633260250091553 s
+
+
 def main():
     instance_segmentation_lucchi()
     # instance_segmentation_livecell()

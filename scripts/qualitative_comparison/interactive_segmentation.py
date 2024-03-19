@@ -1,11 +1,12 @@
 import os
 from glob import glob
 
-from micro_sam.evaluation.model_comparison import (
-    generate_data_for_model_comparison,
-    model_comparison
-)
 from torch_em.data.datasets import get_dsb_loader
+
+from micro_sam.evaluation.model_comparison import (
+    generate_data_for_model_comparison, model_comparison
+)
+
 
 OUT_FOLDER = "./results"
 
@@ -17,12 +18,12 @@ def create_data():
         return
 
     loader = get_dsb_loader(
-        "./data", "train", patch_shape=(256, 256), batch_size=1, download=True,
+        "/home/anwai/data", "train", patch_shape=(256, 256), batch_size=1, download=True,
     )
 
     generate_data_for_model_comparison(
         loader, output_folder=OUT_FOLDER,
-        model_type1="vit_t", model_type2="vit_b", n_samples=n_samples,
+        model_type1="vit_b", model_type2="vit_b_lm", n_samples=n_samples,
     )
 
 
