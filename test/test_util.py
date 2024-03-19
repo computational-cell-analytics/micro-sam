@@ -53,11 +53,21 @@ class TestUtil(unittest.TestCase):
             self.assertTrue(0.0 < compute_iou(x1, x2) < 1.0)
 
     def _check_predictor_initialization(self, predictor, embeddings, i=None, tile_id=None):
+        # We need to do a full reset of the predictor; the orginal_size and input_size
+        # are not being reset.
         predictor.reset_image()
+        predictor.input_size = None
+        predictor.original_size = None
+
         set_precomputed(predictor, embeddings, i=i, tile_id=tile_id)
         self.assertTrue(predictor.is_image_set)
         self.assertEqual(predictor.features.shape, (1, 256, 64, 64))
+        self.assertTrue(predictor.original_size is not None)
+        self.assertTrue(predictor.input_size is not None)
+
         predictor.reset_image()
+        predictor.input_size = None
+        predictor.original_size = None
 
     def test_precompute_image_embeddings(self):
         from micro_sam.util import precompute_image_embeddings
@@ -80,6 +90,10 @@ class TestUtil(unittest.TestCase):
         with zarr.open(save_path, "r") as f:
             self.assertIn("features", f)
             self.assertEqual(f["features"].shape, (1, 256, 64, 64))
+
+        # Check that everything still works when we load the image embeddings from file.
+        embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path)
+        self._check_predictor_initialization(predictor, embeddings)
 
     def test_precompute_image_embeddings_3d(self):
         from micro_sam.util import precompute_image_embeddings
@@ -105,6 +119,11 @@ class TestUtil(unittest.TestCase):
             self.assertIn("features", f)
             self.assertEqual(f["features"].shape, (3, 1, 256, 64, 64))
 
+        # Check that everything still works when we load the image embeddings from file.
+        embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=3)
+        for i in range(input_.shape[0]):
+            self._check_predictor_initialization(predictor, embeddings, i=i)
+
     def test_precompute_image_embeddings_tiled(self):
         from micro_sam.util import precompute_image_embeddings
 
@@ -129,6 +148,11 @@ class TestUtil(unittest.TestCase):
         with zarr.open(save_path, "r") as f:
             self.assertIn("features", f)
             self.assertEqual(len(f["features"]), 4)
+
+        # Check that everything still works when we load the image embeddings from file.
+        precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=tile_shape, halo=halo)
+        for tile_id in range(4):
+            self._check_predictor_initialization(predictor, embeddings, tile_id=tile_id)
 
     def test_precompute_image_embeddings_tiled_3d(self):
         from micro_sam.util import precompute_image_embeddings
@@ -158,6 +182,14 @@ class TestUtil(unittest.TestCase):
         with zarr.open(save_path, "r") as f:
             self.assertIn("features", f)
             self.assertEqual(len(f["features"]), 4)
+
+        # Check that everything still works when we load the image embeddings from file.
+        embeddings = precompute_image_embeddings(
+            predictor, input_, save_path=save_path, tile_shape=tile_shape, halo=halo
+        )
+        for i in range(2):
+            for tile_id in range(4):
+                self._check_predictor_initialization(predictor, embeddings, i=i, tile_id=tile_id)
 
     def test_segmentation_to_one_hot(self):
         from micro_sam.util import segmentation_to_one_hot
