@@ -75,6 +75,7 @@ def segment_slices_from_ground_truth(
     verbose: bool = False,
     return_segmentation: bool = False,
     min_size: int = 0,
+    criterion_choice: int = 1  # TODO: clean up
 ) -> Union[float, Tuple[np.ndarray, float]]:
     """Segment all objects in a volume by prompt-based segmentation in one slice per object.
 
@@ -174,7 +175,8 @@ def segment_slices_from_ground_truth(
             iou_threshold=iou_threshold,
             projection=projection,
             box_extension=box_extension,
-            verbose=verbose
+            verbose=verbose,
+            criterion_choice=criterion_choice
         )
 
         # Store the entire segmented object
