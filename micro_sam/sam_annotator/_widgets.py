@@ -726,19 +726,23 @@ def amg_2d(
     )
 
 
+# TODO do we expose additional params?
 # TODO should be wrapped in a threadworker
-# TODO more parameters
 @magic_factory(
     call_button="Automatic Segmentation",
     min_object_size={"min": 0, "max": 10000},
 )
 def instance_seg_2d(
     viewer: "napari.viewer.Viewer",
+    center_distance_threshold: float = 0.5,
+    boundary_distance_threshold: float = 0.5,
     min_object_size: int = 100,
     with_background: bool = True,
 ) -> None:
     _instance_segmentation_impl(
         viewer, with_background, min_object_size, min_size=min_object_size,
+        center_distance_threshold=center_distance_threshold,
+        boundary_distance_threshold=boundary_distance_threshold,
     )
 
 
@@ -781,7 +785,7 @@ def amg_3d(
         )
 
 
-# TODO more parameters
+# TODO do we expose additional params?
 # TODO should be wrapped in a threadworker
 @magic_factory(
     call_button="Automatic Segmentation",
@@ -789,6 +793,8 @@ def amg_3d(
 )
 def instance_seg_3d(
     viewer: "napari.viewer.Viewer",
+    center_distance_threshold: float = 0.5,
+    boundary_distance_threshold: float = 0.5,
     min_object_size: int = 100,
     with_background: bool = True,
     apply_to_volume: bool = False,
@@ -796,10 +802,14 @@ def instance_seg_3d(
     if apply_to_volume:
         _segment_volume(
             viewer, with_background, min_object_size, min_size=min_object_size,
+            center_distance_threshold=center_distance_threshold,
+            boundary_distance_threshold=boundary_distance_threshold,
         )
     else:
         i = int(viewer.cursor.position[0])
         _instance_segmentation_impl(
             viewer, with_background, min_object_size, i=i,
             min_size=min_object_size,
+            center_distance_threshold=center_distance_threshold,
+            boundary_distance_threshold=boundary_distance_threshold,
         )
