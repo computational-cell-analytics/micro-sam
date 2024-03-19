@@ -675,7 +675,7 @@ def _segment_volume(viewer, with_background, min_object_size, gap_closing, **kwa
     segmentation = np.zeros_like(viewer.layers["auto_segmentation"].data)
 
     offset = 0
-    for i in progress(range(segmentation.shape[0])):
+    for i in progress(range(segmentation.shape[0]), desc="Segment slices"):
         seg = _instance_segmentation_impl(
             viewer, with_background, min_object_size, i=i, skip_update=True, **kwargs
         )
@@ -684,18 +684,8 @@ def _segment_volume(viewer, with_background, min_object_size, gap_closing, **kwa
         segmentation[i] = seg
 
     segmentation = merge_instance_segmentation_3d(
-        segmentation, beta=0.5, with_background=with_background, z_closing=gap_closing,
+        segmentation, beta=0.5, with_background=with_background, gap_closing=gap_closing,
     )
-
-    # TODO we need one more refinement step to bridge gaps due to a few missing slices
-    # Implement in multi-dimensional-seg
-
-    # Idea:
-    # - go over all objects
-    # - if object is full slice range then don't do anything
-    # - continue objects that don't with projection
-    # - build potential merge pairs of objects that don't overlap within z, but are within certain range
-    # - merge objects that are > some overlap threshold + fill in the gaps from projections
 
     viewer.layers["auto_segmentation"].data = segmentation
     viewer.layers["auto_segmentation"].refresh()

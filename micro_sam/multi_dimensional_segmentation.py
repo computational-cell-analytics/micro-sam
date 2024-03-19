@@ -12,7 +12,12 @@ import elf.segmentation as seg_utils
 from segment_anything.predictor import SamPredictor
 from scipy.ndimage import binary_closing
 from skimage.measure import label
-from tqdm import tqdm
+from skimage.segmentation import relabel_sequential
+
+try:
+    from napari.utils import progress as tqdm
+except ImportError:
+    from tqdm import tqdm
 
 from . import util
 from .instance_segmentation import AutomaticMaskGenerator, mask_data_to_segmentation
@@ -280,9 +285,16 @@ def _preprocess_closing(slice_segmentation, gap_closing):
     closed_segmentation = binary_closing(binarized, iterations=gap_closing)
 
     new_segmentation = np.zeros_like(slice_segmentation)
+    n_slices = new_segmentation.shape[0]
 
     def process_slice(z, offset):
         seg_z = slice_segmentation[z]
+
+        # Closing does not work for the first and last gap slices
+        if z < gap_closing or z >= (n_slices - gap_closing):
+            seg_z, _, _ = relabel_sequential(seg_z, offset=offset)
+            offset = int(seg_z.max()) + 1
+            return seg_z, offset
 
         # Apply connected components to the closed segmentation.
         closed_z = label(closed_segmentation[z])
@@ -292,22 +304,33 @@ def _preprocess_closing(slice_segmentation, gap_closing):
         # have overlap with more than one object from the initial segmentation.
         # This indicates wrong merging of closeby objects that we want to prevent.
         matches = nifty.ground_truth.overlap(closed_z, seg_z)
-        matches = {seg_id: matches.overlapArrays(seg_id, sorted=False)
+        matches = {seg_id: matches.overlapArrays(seg_id, sorted=False)[0]
                    for seg_id in range(1, int(closed_z.max() + 1))}
-        breakpoint()
+        matches = {k: v[v != 0] for k, v in matches.items()}
 
-        ids_closed = []
-        ids_initial = []
+        ids_initial, ids_closed = [], []
+        for seg_id, matched in matches.items():
+            if len(matched) > 1:
+                ids_initial.extend(matched.tolist())
+            else:
+                ids_closed.append(seg_id)
 
         seg_new = np.zeros_like(seg_z)
+        closed_mask = np.isin(closed_z, ids_closed)
+        seg_new[closed_mask] = closed_z[closed_mask]
 
-        if offset > 0:
-            seg_new[seg_new != 0] += offset
+        if ids_initial:
+            initial_mask = np.isin(seg_z, ids_initial)
+            seg_new[initial_mask] = relabel_sequential(seg_z[initial_mask], offset=seg_new.max() + 1)[0]
+
+        seg_new, _, _ = relabel_sequential(seg_new, offset=offset)
+        offset = int(seg_new.max()) + 1
+
         return seg_new, offset
 
     # Further optimization: parallelize
-    offset = 0
-    for z in range(new_segmentation.shape[0]):
+    offset = 1
+    for z in tqdm(range(n_slices), desc="Close gap in slices"):
         new_segmentation[z], offset = process_slice(z, offset)
 
     return new_segmentation
