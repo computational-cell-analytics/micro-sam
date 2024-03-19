@@ -25,11 +25,6 @@ from . import util as vutil
 from .. import instance_segmentation, util
 from ..multi_dimensional_segmentation import segment_mask_in_volume, merge_instance_segmentation_3d
 
-try:
-    from napari.utils import progress as tqdm
-except ImportError:
-    from tqdm import tqdm
-
 if TYPE_CHECKING:
     import napari
 
@@ -680,7 +675,7 @@ def _segment_volume(viewer, with_background, min_object_size, **kwargs):
     segmentation = np.zeros_like(viewer.layers["auto_segmentation"].data)
 
     offset = 0
-    for i in tqdm(range(segmentation.shape[0])):
+    for i in progress(range(segmentation.shape[0])):
         seg = _instance_segmentation_impl(
             viewer, with_background, min_object_size, i=i, skip_update=True, **kwargs
         )

@@ -18,6 +18,33 @@ from .precompute_state import cache_amg_state
 from .prompt_based_segmentation import segment_from_mask
 
 
+def _validate_projection(projection):
+    use_single_point = False
+    if isinstance(projection, str):
+        if projection == "mask":
+            use_box, use_mask, use_points = True, True, False
+        elif projection == "points":
+            use_box, use_mask, use_points = False, False, True
+        elif projection == "box":
+            use_box, use_mask, use_points = True, False, False
+        elif projection == "points_and_mask":
+            use_box, use_mask, use_points = False, True, True
+        elif projection == "single_point":
+            use_box, use_mask, use_points = False, False, True
+            use_single_point = True
+        else:
+            raise ValueError(
+                "Choose projection method from 'mask' / 'points' / 'box' / 'points_and_mask' / 'single_point'. "
+                f"You have passed the invalid option {projection}."
+            )
+    elif isinstance(projection, dict):
+        assert len(projection.keys()) == 3, "There should be three parameters assigned for the projection method."
+        use_box, use_mask, use_points = projection["use_box"], projection["use_mask"], projection["use_points"]
+    else:
+        raise ValueError(f"{projection} is not a supported projection method.")
+    return use_box, use_mask, use_points, use_single_point
+
+
 def segment_mask_in_volume(
     segmentation: np.ndarray,
     predictor: SamPredictor,
@@ -41,8 +68,8 @@ def segment_mask_in_volume(
         stop_lower: Whether to stop at the lowest segmented slice.
         stop_upper: Wheter to stop at the topmost segmented slice.
         iou_threshold: The IOU threshold for continuing segmentation across 3d.
-        projection: The projection method to use. One of 'mask', 'box', 'points' or 'points_and_mask'.
-            - (optional: you can also pass custom choices for the projection combination)
+        projection: The projection method to use. One of 'box', 'mask', 'points', 'points_and_mask' or 'single point'.
+            Pass a dictionary to choose the excact combination of projection modes.
         progress_bar: Optional progress bar.
         box_extension: Extension factor for increasing the box size after projection.
 
@@ -50,28 +77,9 @@ def segment_mask_in_volume(
         Array with the volumetric segmentation.
         Tuple with the first and last segmented slice.
     """
-    use_single_point = False
-    if isinstance(projection, str):
-        if projection == "mask":
-            use_box, use_mask, use_points = True, True, False
-        elif projection == "points":
-            use_box, use_mask, use_points = False, False, True
-        elif projection == "box":
-            use_box, use_mask, use_points = True, False, False
-        elif projection == "points_and_mask":
-            use_box, use_mask, use_points = False, True, True
-        elif projection == "single_point":
-            use_box, use_mask, use_points = False, False, True
-            use_single_point = True
-        else:
-            raise ValueError("Choose projection method from 'mask' / 'points' / 'box' / 'points_and_mask' / 'single_point'.")
-    elif isinstance(projection, dict):
-        assert len(projection.keys()) == 3, "There should be three parameters assigned for the projection method."
-        use_box, use_mask, use_points = projection["use_box"], projection["use_mask"], projection["use_points"]
-    else:
-        raise ValueError(f"{projection} is not a supported projection method.")
+    use_box, use_mask, use_points, use_single_point = _validate_projection(projection)
 
-    def _update_progress():
+    def update_progress():
         if progress_bar is not None:
             progress_bar.update(1)
 
@@ -94,6 +102,7 @@ def segment_mask_in_volume(
             )
             if threshold is not None:
 
+                # TODO refactor / clean up
                 criterion_choice = 1
 
                 if criterion_choice == 1:
@@ -122,7 +131,7 @@ def segment_mask_in_volume(
                 if verbose:
                     print(f"Segment {z_start} to {z_stop}: stop at slice {z}")
                 break
-            _update_progress()
+            update_progress()
 
         return z - increment
 
@@ -163,7 +172,7 @@ def segment_mask_in_volume(
                     use_mask=use_mask, use_box=use_box, use_points=use_points,
                     box_extension=box_extension
                 )
-                _update_progress()
+                update_progress()
 
             else:  # there is a range of more than 2 slices in between -> segment ranges
                 # segment from bottom
@@ -183,7 +192,7 @@ def segment_mask_in_volume(
                         use_mask=use_mask, use_box=use_box, use_points=use_points,
                         box_extension=box_extension
                     )
-                    _update_progress()
+                    update_progress()
 
     return segmentation, (z_min, z_max)
 
