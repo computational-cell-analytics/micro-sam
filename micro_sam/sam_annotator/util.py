@@ -32,7 +32,7 @@ def toggle_label(prompts):
     prompts.refresh_colors()
 
 
-def _initialize_parser(description, with_segmentation_result=True, with_show_embeddings=True):
+def _initialize_parser(description, with_segmentation_result=True, with_instance_segmentation=True):
 
     available_models = list(util.get_model_names())
     available_models = ", ".join(available_models)
@@ -91,6 +91,19 @@ def _initialize_parser(description, with_segmentation_result=True, with_show_emb
         "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
     )
 
+    if with_instance_segmentation:
+        parser.add_argument(
+            "--precompute_amg_state", action="store_true",
+            help="Whether to precompute the state for automatic instance segmentation. "
+            "This will lead to a longer start-up time, but the automatic instance segmentation can "
+            "be run directly once the tool has started."
+        )
+        parser.add_argument(
+            "--prefer_decoder", action="store_false",
+            help="Whether to use decoder based instance segmentation if the model "
+            "being used has an additional decoder for that purpose."
+        )
+
     return parser
 
 
@@ -104,6 +117,23 @@ def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:
     if not clear_segmentations:
         return
     viewer.layers["current_object"].data = np.zeros(viewer.layers["current_object"].data.shape, dtype="uint32")
+    viewer.layers["current_object"].refresh()
+
+
+def clear_annotations_slice(viewer: napari.Viewer, i: int, clear_segmentations=True) -> None:
+    """@private"""
+    point_prompts = viewer.layers["point_prompts"].data
+    point_prompts = point_prompts[point_prompts[:, 0] != i]
+    viewer.layers["point_prompts"].data = point_prompts
+    viewer.layers["point_prompts"].refresh()
+    if "prompts" in viewer.layers:
+        prompts = viewer.layers["prompts"].data
+        prompts = [prompt for prompt in prompts if not (prompt[:, 0] == i).all()]
+        viewer.layers["prompts"].data = prompts
+        viewer.layers["prompts"].refresh()
+    if not clear_segmentations:
+        return
+    viewer.layers["current_object"].data[i] = 0
     viewer.layers["current_object"].refresh()
 
 

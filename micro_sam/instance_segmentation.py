@@ -5,7 +5,6 @@ https://computational-cell-analytics.github.io/micro-sam/micro_sam.html
 """
 
 import os
-import pickle
 import warnings
 from abc import ABC
 from collections import OrderedDict
@@ -86,12 +85,22 @@ def mask_data_to_segmentation(
         segmentation[require_numpy(mask["segmentation"])] = this_seg_id
         seg_id = this_seg_id + 1
 
+    seg_ids, sizes = np.unique(segmentation, return_counts=True)
+
+    # In some cases objects may be smaller than peviously calculated,
+    # since they are covered by other objects. We ensure these also get
+    # filtered out here.
+    filter_ids = seg_ids[sizes < min_object_size]
+
+    # If we run segmentation with background we also map the largest segment
+    # (the most likely background object) to zero. This is often zero already,
+    # but it does not hurt to reset that to zero either.
     if with_background:
-        seg_ids, sizes = np.unique(segmentation, return_counts=True)
         bg_id = seg_ids[np.argmax(sizes)]
-        if bg_id != 0:
-            segmentation[segmentation == bg_id] = 0
-        vigra.analysis.relabelConsecutive(segmentation, out=segmentation)
+        filter_ids = np.concatenate([filter_ids, [bg_id]])
+
+    segmentation[np.isin(segmentation, filter_ids)] = 0
+    vigra.analysis.relabelConsecutive(segmentation, out=segmentation)
 
     return segmentation
 
@@ -721,61 +730,89 @@ class DecoderAdapter(torch.nn.Module):
         return x
 
 
-# TODO refactor this once the exact layout for the new model architecture is clear
-def get_custom_sam_model_with_decoder(
-    checkpoint: Union[os.PathLike, str],
-    model_type: str,
+def get_unetr(
+    image_encoder: torch.nn.Module,
+    decoder_state: Optional[OrderedDict[str, torch.Tensor]] = None,
     device: Optional[Union[str, torch.device]] = None,
-):
-    """
+) -> torch.nn.Module:
+    """Get UNETR model for automatic instance segmentation.
+
+    Args:
+        image_encoder: The image encoder of the SAM model.
+            This is used as encoder by the UNETR too.
+        decoder_state: Optional decoder state to initialize the weights
+            of the UNETR decoder.
+        device: The device.
+    Returns:
+        The UNETR model.
     """
     device = util.get_device(device)
 
-    # over-ride the unpickler with our custom one
-    custom_pickle = pickle
-    custom_pickle.Unpickler = util._CustomUnpickler
-
-    state = torch.load(checkpoint, map_location=device, pickle_module=custom_pickle)
-
-    # Get the predictor.
-    model_state = state["model_state"]
-    sam_prefix = "sam."
-    model_state = OrderedDict(
-        [(k[len(sam_prefix):] if k.startswith(sam_prefix) else k, v) for k, v in model_state.items()]
-    )
-
-    sam = util.sam_model_registry[model_type]()
-    sam.to(device)
-    sam.load_state_dict(model_state)
-    predictor = SamPredictor(sam)
-    predictor.model_type = model_type
-
-    # Get the decoder.
-    # NOTE: we hard-code the UNETR settings for now.
-    # Eventually we may need to finds a way to be more flexible.
     unetr = UNETR(
         backbone="sam",
-        encoder=predictor.model.image_encoder,
+        encoder=image_encoder,
         out_channels=3,
         use_sam_stats=True,
         final_activation="Sigmoid",
         use_skip_connection=False,
         resize_input=True,
     )
+    if decoder_state is not None:
+        unetr_state_dict = unetr.state_dict()
+        for k, v in unetr_state_dict.items():
+            if not k.startswith("encoder"):
+                unetr_state_dict[k] = decoder_state[k]
+        unetr.load_state_dict(unetr_state_dict)
 
-    encoder_state = []
-    encoder_prefix = "image_"
-    encoder_state = OrderedDict(
-        (k[len(encoder_prefix):], v) for k, v in model_state.items() if k.startswith(encoder_prefix)
-    )
-
-    decoder_state = state["decoder_state"]
-    unetr_state = OrderedDict(list(encoder_state.items()) + list(decoder_state.items()))
-    unetr.load_state_dict(unetr_state)
     unetr.to(device)
+    return unetr
 
-    decoder = DecoderAdapter(unetr)
 
+def get_decoder(
+    image_encoder: torch.nn.Module,
+    decoder_state: OrderedDict[str, torch.Tensor],
+    device: Optional[Union[str, torch.device]] = None,
+) -> DecoderAdapter:
+    """Get decoder to predict outputs for automatic instance segmentation
+
+    Args:
+        image_encoder: The image encoder of the SAM model.
+        decoder_state: State to initialize the weights of the UNETR decoder.
+        device: The device.
+    Returns:
+        The decoder for instance segmentation.
+    """
+    unetr = get_unetr(image_encoder, decoder_state, device)
+    return DecoderAdapter(unetr)
+
+
+def get_predictor_and_decoder(
+    model_type: str,
+    checkpoint_path: Union[str, os.PathLike],
+    device: Optional[Union[str, torch.device]] = None,
+) -> Tuple[SamPredictor, DecoderAdapter]:
+    """Load the SAM model (predictor) and instance segmentation decoder.
+
+    This requires a checkpoint that contains the state for both predictor
+    and decoder.
+
+    Args:
+        model_type: The type of the image encoder used in the SAM model.
+        checkpoint_path: Path to the checkpoint from which to load the data.
+        device: The device.
+
+    Returns:
+        The SAM predictor.
+        The decoder for instance segmentation.
+    """
+    device = util.get_device(device)
+    predictor, state = util.get_sam_model(
+        model_type=model_type, checkpoint_path=checkpoint_path,
+        device=device, return_state=True
+    )
+    if "decoder_state" not in state:
+        raise ValueError(f"The checkpoint at {checkpoint_path} does not contain a decoder state")
+    decoder = get_decoder(predictor.model.image_encoder, state["decoder_state"], device)
     return predictor, decoder
 
 
@@ -909,7 +946,7 @@ class InstanceSegmentationWithDecoder:
         center_distance_threshold: float = 0.5,
         boundary_distance_threshold: float = 0.5,
         foreground_threshold: float = 0.5,
-        foreground_smoothing: float = 0.75,
+        foreground_smoothing: float = 1.0,
         distance_smoothing: float = 1.6,
         min_size: int = 0,
         output_mode: Optional[str] = "binary_mask",
