@@ -2,7 +2,7 @@
 """
 
 import os
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, Tuple
 
 import numpy as np
 import nifty
@@ -10,6 +10,8 @@ import elf.tracking.tracking_utils as track_utils
 import elf.segmentation as seg_utils
 
 from segment_anything.predictor import SamPredictor
+from scipy.ndimage import binary_closing
+from skimage.measure import label
 from tqdm import tqdm
 
 from . import util
@@ -57,7 +59,7 @@ def segment_mask_in_volume(
     progress_bar: Optional[Any] = None,
     box_extension: float = 0.0,
     verbose: bool = False
-) -> np.ndarray:
+) -> Tuple[np.ndarray, Tuple[int, int]]:
     """Segment an object mask in in volumetric data.
 
     Args:
@@ -273,11 +275,50 @@ def segment_3d_from_slice(
     return segmentation
 
 
+def _preprocess_closing(slice_segmentation, gap_closing):
+    binarized = slice_segmentation > 0
+    closed_segmentation = binary_closing(binarized, iterations=gap_closing)
+
+    new_segmentation = np.zeros_like(slice_segmentation)
+
+    def process_slice(z, offset):
+        seg_z = slice_segmentation[z]
+
+        # Apply connected components to the closed segmentation.
+        closed_z = label(closed_segmentation[z])
+
+        # Map objects in the closed and initial segmentation.
+        # We take objects from the closed segmentation unless they
+        # have overlap with more than one object from the initial segmentation.
+        # This indicates wrong merging of closeby objects that we want to prevent.
+        matches = nifty.ground_truth.overlap(closed_z, seg_z)
+        matches = {seg_id: matches.overlapArrays(seg_id, sorted=False)
+                   for seg_id in range(1, int(closed_z.max() + 1))}
+        breakpoint()
+
+        ids_closed = []
+        ids_initial = []
+
+        seg_new = np.zeros_like(seg_z)
+
+        if offset > 0:
+            seg_new[seg_new != 0] += offset
+        return seg_new, offset
+
+    # Further optimization: parallelize
+    offset = 0
+    for z in range(new_segmentation.shape[0]):
+        new_segmentation[z], offset = process_slice(z, offset)
+
+    return new_segmentation
+
+
 def merge_instance_segmentation_3d(
     slice_segmentation: np.ndarray,
     beta: float = 0.5,
     with_background: bool = True,
-):
+    gap_closing: Optional[int] = None,
+) -> np.ndarray:
     """Merge stacked 2d instance segmentations into a consistent 3d segmentation.
 
     Solves a multicut problem based on the overlap of objects to merge across z.
@@ -289,7 +330,14 @@ def merge_instance_segmentation_3d(
             degree of over-segmentation and vice versa.
         with_background: Whether this is a segmentation problem with background.
             In that case all edges connecting to the background are set to be repulsive.
+        gap_closing: If given, gaps in the segmentation are closed with a binary closing
+            operation. The value is used to determine the number of iterations for the closing.
+
+    Returns:
+        The merged segmentation.
     """
+    if gap_closing is not None and gap_closing > 0:
+        slice_segmentation = _preprocess_closing(slice_segmentation, gap_closing)
 
     # Extract the overlap between slices.
     edges = track_utils.compute_edges_from_overlap(slice_segmentation, verbose=False)

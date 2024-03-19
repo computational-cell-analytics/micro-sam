@@ -671,7 +671,7 @@ def _instance_segmentation_impl(viewer, with_background, min_object_size, i=None
     return seg
 
 
-def _segment_volume(viewer, with_background, min_object_size, **kwargs):
+def _segment_volume(viewer, with_background, min_object_size, gap_closing, **kwargs):
     segmentation = np.zeros_like(viewer.layers["auto_segmentation"].data)
 
     offset = 0
@@ -684,7 +684,7 @@ def _segment_volume(viewer, with_background, min_object_size, **kwargs):
         segmentation[i] = seg
 
     segmentation = merge_instance_segmentation_3d(
-        segmentation, beta=0.5, with_background=with_background
+        segmentation, beta=0.5, with_background=with_background, z_closing=gap_closing,
     )
 
     # TODO we need one more refinement step to bridge gaps due to a few missing slices
@@ -754,6 +754,7 @@ def amg_3d(
     box_nms_thresh: float = 0.7,
     with_background: bool = True,
     apply_to_volume: bool = False,
+    gap_closing: int = 2,
 ) -> None:
     if apply_to_volume:
         # We refuse to run 3D segmentation with the AMG unless we have a GPU or all embeddings
@@ -767,7 +768,7 @@ def amg_3d(
                 print("Volumetric segmentation with AMG is only supported if you have a GPU.")
                 return
         _segment_volume(
-            viewer, with_background, min_object_size,
+            viewer, with_background, min_object_size, gap_closing,
             pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
             box_nms_thresh=box_nms_thresh,
         )
@@ -793,10 +794,12 @@ def instance_seg_3d(
     min_object_size: int = 100,
     with_background: bool = True,
     apply_to_volume: bool = False,
+    gap_closing: int = 2,
 ) -> None:
     if apply_to_volume:
         _segment_volume(
-            viewer, with_background, min_object_size, min_size=min_object_size,
+            viewer, with_background, min_object_size, gap_closing,
+            min_size=min_object_size,
             center_distance_threshold=center_distance_threshold,
             boundary_distance_threshold=boundary_distance_threshold,
         )
