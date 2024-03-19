@@ -71,9 +71,28 @@ class TestPromptBasedSegmentation(unittest.TestCase):
         predicted = segment_from_points(self.predictor, points, labels)
         self.assertGreater(util.compute_iou(self.mask, predicted), 0.9)
 
-    # TODO
     def test_segment_from_points_non_square(self):
-        pass
+        from micro_sam.prompt_based_segmentation import segment_from_points
+
+        predictor, mask = self.predictor_non_square, self.mask_non_square
+
+        mask_coords = np.where(mask)
+        # Get the center from the mask coordinates for positive point.
+        center = [mask_coords[0].mean(), mask_coords[1].mean()]
+
+        # Put negative points at the bounding box edges.
+        border_points = [
+            [mask_coords[0].min(), mask_coords[1].min()],
+            [mask_coords[0].max(), mask_coords[1].min()],
+            [mask_coords[0].min(), mask_coords[1].max()],
+            [mask_coords[0].max(), mask_coords[1].max()],
+        ]
+
+        points = np.array([center] + border_points)
+        labels = np.array([1] + [0] * len(border_points))
+
+        predicted = segment_from_points(predictor, points, labels)
+        self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
     def test_segment_from_points_tiled(self):
         from micro_sam.prompt_based_segmentation import segment_from_points
@@ -109,7 +128,7 @@ class TestPromptBasedSegmentation(unittest.TestCase):
     # normal test, non square inputs, tiled
     #
 
-    def _test_segment_from_mask(self, predictor, mask, expected_iou_mask=0.9):
+    def _test_segment_from_mask(self, predictor, mask, expected_iou_mask=0.9, embeddings=None):
         from micro_sam.prompt_based_segmentation import segment_from_mask
 
         #
@@ -117,15 +136,24 @@ class TestPromptBasedSegmentation(unittest.TestCase):
         #
 
         # only with bounding box
-        predicted = segment_from_mask(predictor, mask, use_box=True, use_mask=False, use_points=False)
+        predicted = segment_from_mask(
+            predictor, mask, use_box=True, use_mask=False, use_points=False,
+            image_embeddings=embeddings,
+        )
         self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
         # only with mask
-        predicted = segment_from_mask(predictor, mask, use_box=False, use_mask=True, use_points=False)
+        predicted = segment_from_mask(
+            predictor, mask, use_box=False, use_mask=True, use_points=False,
+            image_embeddings=embeddings,
+        )
         self.assertGreater(util.compute_iou(mask, predicted), expected_iou_mask)
 
         # only with points
-        predicted = segment_from_mask(predictor, mask, use_box=False, use_mask=False, use_points=True, box_extension=4)
+        predicted = segment_from_mask(
+            predictor, mask, use_box=False, use_mask=False, use_points=True, box_extension=4,
+            image_embeddings=embeddings,
+        )
         self.assertGreater(util.compute_iou(mask, predicted), 0.7)  # need to be more lenient for only points
 
         #
@@ -133,19 +161,31 @@ class TestPromptBasedSegmentation(unittest.TestCase):
         #
 
         # with box and mask (default setting)
-        predicted = segment_from_mask(predictor, mask, use_box=True, use_mask=True, use_points=False)
+        predicted = segment_from_mask(
+            predictor, mask, use_box=True, use_mask=True, use_points=False,
+            image_embeddings=embeddings,
+        )
         self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
         # with box and points
-        predicted = segment_from_mask(predictor, mask, use_box=True, use_mask=False, use_points=True)
+        predicted = segment_from_mask(
+            predictor, mask, use_box=True, use_mask=False, use_points=True,
+            image_embeddings=embeddings,
+        )
         self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
         # with mask and points
-        predicted = segment_from_mask(predictor, mask, use_box=False, use_mask=True, use_points=True)
+        predicted = segment_from_mask(
+            predictor, mask, use_box=False, use_mask=True, use_points=True,
+            image_embeddings=embeddings,
+        )
         self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
         # with box, mask and points
-        predicted = segment_from_mask(predictor, mask, use_mask=True, use_box=True, use_points=True)
+        predicted = segment_from_mask(
+            predictor, mask, use_mask=True, use_box=True, use_points=True,
+            image_embeddings=embeddings,
+        )
         self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
     def test_segment_from_mask(self):
@@ -154,9 +194,10 @@ class TestPromptBasedSegmentation(unittest.TestCase):
     def test_segment_from_mask_non_square(self):
         self._test_segment_from_mask(self.predictor_non_square, self.mask_non_square, expected_iou_mask=0.8)
 
-    # TODO
     def test_segment_from_mask_tiled(self):
-        pass
+        self._test_segment_from_mask(
+            self.predictor_tiled, self.mask_tiled, embeddings=self.tiled_embeddings, expected_iou_mask=0.8
+        )
 
     #
     # Tests for 'segment_from_box':
@@ -202,13 +243,42 @@ class TestPromptBasedSegmentation(unittest.TestCase):
         predicted = segment_from_box_and_points(self.predictor, box, points, labels)
         self.assertGreater(util.compute_iou(self.mask, predicted), 0.9)
 
-    # TODO
     def test_segment_from_box_and_points_non_square(self):
-        pass
+        from micro_sam.prompt_based_segmentation import segment_from_box_and_points
 
-    # TODO
+        predictor, mask = self.predictor_non_square, self.mask_non_square
+
+        mask_coords = np.where(mask)
+        # Get the center from the mask coordinates for positive point.
+        center = [mask_coords[0].mean(), mask_coords[1].mean()]
+
+        # Put negative points at the bounding box edges.
+        border_points = [
+            [mask_coords[0].min(), mask_coords[1].min()],
+            [mask_coords[0].max(), mask_coords[1].min()],
+            [mask_coords[0].min(), mask_coords[1].max()],
+            [mask_coords[0].max(), mask_coords[1].max()],
+        ]
+
+        box = np.array([m.min() for m in mask_coords] + [m.max() for m in mask_coords])
+        points = np.array([center] + border_points)
+        labels = np.array([1] + [0] * len(border_points))
+
+        predicted = segment_from_box_and_points(predictor, box, points, labels)
+        self.assertGreater(util.compute_iou(mask, predicted), 0.9)
+
     def test_segment_from_box_and_points_tiled(self):
-        pass
+        from micro_sam.prompt_based_segmentation import segment_from_box_and_points
+
+        # Segment with one positive and two negative points + box
+        box = np.array([450, 450, 570, 570])
+        points = np.array([[510, 510], [400, 200], [200, 400]])
+        labels = np.array([1, 0, 0])
+
+        predicted = segment_from_box_and_points(
+            self.predictor_tiled, box, points, labels, image_embeddings=self.tiled_embeddings
+        )
+        self.assertGreater(util.compute_iou(self.mask_tiled, predicted), 0.9)
 
 
 if __name__ == "__main__":
