@@ -2,7 +2,7 @@ import imageio.v3 as imageio
 import napari
 
 from micro_sam import instance_segmentation, util
-from micro_sam.multi_dimensional_segmentation import segment_3d_from_slice
+from micro_sam.multi_dimensional_segmentation import automatic_3d_segmentation
 
 
 def cell_segmentation():
@@ -88,9 +88,7 @@ def cell_segmentation_with_tiling():
 
 
 def segmentation_in_3d():
-    """Run instance segmentation in 3d, for segmenting all objects that intersect
-    with a given slice. If you use a fine-tuned model for this then you should
-    first find good parameters for 2d segmentation.
+    """Run instance segmentation in 3d.
     """
     import imageio.v3 as imageio
     from micro_sam.sample_data import fetch_nucleus_3d_example_data
@@ -99,33 +97,22 @@ def segmentation_in_3d():
     path = fetch_nucleus_3d_example_data("./data")
     data = imageio.imread(path)
 
-    # Load the SAM model for prediction.
+    # Load the SAM model and segmentation decoder.
+    # TODO update this to just use vit_b_lm once it's properly released.
     model_type = "vit_b"  # The model-type to use: vit_h, vit_l, vit_b etc.
-    checkpoint_path = None  # You can specifiy the path to a custom (fine-tuned) model here.
-    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path)
+    checkpoint_path = "./vit_b_lm.pt"  # You can specifiy the path to a custom (fine-tuned) model here.
+    embedding_path = "./embeddings-3d.zarr"  # The embeddings will be cached here. (Optional)
 
-    # Run 3d segmentation for a given slice. Will segment all objects found in that slice
-    # throughout the volume.
+    # Load the model and create segmentation functionality.
+    predictor, decoder = instance_segmentation.get_predictor_and_decoder(model_type, checkpoint_path)
+    segmentor = instance_segmentation.InstanceSegmentationWithDecoder(predictor, decoder)
 
-    # The slice that is used for segmentation in 2d. If you don't specify a slice
-    # then the middle slice is used.
-    z_slice = data.shape[0] // 2
-
-    # The threshold for filtering objects in the 2d segmentation based on the model's
-    # predicted iou score. If you use a custom model you should first find a good setting
-    # for this value, e.g. with the 2d annotation tool.
-    pred_iou_thresh = 0.88
-
-    # The threshold for filtering objects in the 2d segmentation based on the model's
-    # stability score for a given object. If you use a custom model you should first find a good setting
-    # for this value, e.g. with the 2d annotation tool.
-    stability_score_thresh = 0.95
-
-    instances = segment_3d_from_slice(
-        predictor, data, z=z_slice,
-        pred_iou_thresh=pred_iou_thresh,
-        stability_score_thresh=stability_score_thresh,
-        verbose=True
+    # Run the automatic instance segmentation.
+    instances = automatic_3d_segmentation(
+        data, predictor, segmentor, embedding_path=embedding_path,
+        gap_closing=2,  # This option closes small gaps (here of size 2) in the initial segmentation.
+        min_object_size=100,  # The minimal object size per slice.
+        center_distance_threshold=0.5,  # We can pass additional arguments for the generate function of the segmenter.
     )
 
     # Show the results.
