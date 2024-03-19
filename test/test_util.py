@@ -8,7 +8,7 @@ import zarr
 
 from skimage.data import binary_blobs
 from skimage.measure import label
-from micro_sam.util import VIT_T_SUPPORT, SamPredictor, get_cache_directory
+from micro_sam.util import VIT_T_SUPPORT, SamPredictor, get_cache_directory, get_sam_model, set_precomputed
 
 
 class TestUtil(unittest.TestCase):
@@ -33,9 +33,7 @@ class TestUtil(unittest.TestCase):
         check_predictor(predictor)
 
         # check predictor with checkpoint path (using the cached model)
-        checkpoint_path = os.path.join(
-            get_cache_directory(), "models", "vit_t" if VIT_T_SUPPORT else "vit_b"
-        )
+        checkpoint_path = os.path.join(get_cache_directory(), "models", self.model_type)
         predictor = get_sam_model(model_type=self.model_type, checkpoint_path=checkpoint_path)
         check_predictor(predictor)
 
@@ -54,85 +52,112 @@ class TestUtil(unittest.TestCase):
             x1, x2 = (np.random.rand(32, 32) > 0.5), (np.random.rand(32, 32) > 0.5)
             self.assertTrue(0.0 < compute_iou(x1, x2) < 1.0)
 
-    def test_prediction(self):
-        from micro_sam.util import precompute_image_embeddings, get_sam_model, VIT_T_SUPPORT, set_precomputed
-
-        predictor = get_sam_model(model_type="vit_t" if VIT_T_SUPPORT else "vit_b")
-
-        input_ = np.random.rand(512, 512).astype("float32")
-        save_path = os.path.join(self.tmp_folder, "emebd.zarr")
-        img_embedds = precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=None, halo=None)
+    def _check_predictor_initialization(self, predictor, embeddings, i=None, tile_id=None):
         predictor.reset_image()
-        set_precomputed(predictor, img_embedds)
-        self.assertTrue(os.path.exists(save_path))
-        with zarr.open(save_path, "r") as f:
-            self.assertIn("features", f)
-            self.assertEqual(len(f["features"]), 1)
+        set_precomputed(predictor, embeddings, i=i, tile_id=tile_id)
+        self.assertTrue(predictor.is_image_set)
+        self.assertEqual(predictor.features.shape, (1, 256, 64, 64))
+        predictor.reset_image()
 
-        # set the precomputed embeddings again, to make sure this does not fail due to
-        # a wrong code-path
-        precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=None, halo=None)
-        precompute_image_embeddings(predictor, input_, save_path=None, tile_shape=None, halo=None)
+    def test_precompute_image_embeddings(self):
+        from micro_sam.util import precompute_image_embeddings
 
-    def test_prediction_3d(self):
-        from micro_sam.util import precompute_image_embeddings, get_sam_model, VIT_T_SUPPORT
+        # Load model and create test data.
+        predictor = get_sam_model(model_type=self.model_type)
+        input_ = np.random.rand(512, 512).astype("float32")
 
-        predictor = get_sam_model(model_type="vit_t" if VIT_T_SUPPORT else "vit_b")
+        # Compute the image embeddings without save path.
+        embeddings = precompute_image_embeddings(predictor, input_)
+        self._check_predictor_initialization(predictor, embeddings)
 
-        input_ = np.random.rand(3, 512, 512).astype("float32")
+        # Compute the image embeddings with save path.
         save_path = os.path.join(self.tmp_folder, "emebd.zarr")
-        precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=None, halo=None)
+        embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path)
+        self._check_predictor_initialization(predictor, embeddings)
 
+        # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
         with zarr.open(save_path, "r") as f:
             self.assertIn("features", f)
-            self.assertEqual(len(f["features"]), 3)
+            self.assertEqual(f["features"].shape, (1, 256, 64, 64))
 
-        # set the precomputed embeddings again, to make sure this does not fail due to
-        # a wrong code-path
-        precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=None, halo=None)
-        precompute_image_embeddings(predictor, input_, save_path=None, tile_shape=None, halo=None)
+    def test_precompute_image_embeddings_3d(self):
+        from micro_sam.util import precompute_image_embeddings
 
-    def test_tiled_prediction(self):
+        # Load model and create test data.
+        predictor = get_sam_model(model_type=self.model_type)
+        input_ = np.random.rand(3, 512, 512).astype("float32")
 
-        from micro_sam.util import precompute_image_embeddings, get_sam_model, VIT_T_SUPPORT
+        # Compute the image embeddings without save path.
+        embeddings = precompute_image_embeddings(predictor, input_, ndim=3)
+        for i in range(input_.shape[0]):
+            self._check_predictor_initialization(predictor, embeddings, i=i)
 
-        predictor = get_sam_model(model_type="vit_t" if VIT_T_SUPPORT else "vit_b")
+        # Compute the image embeddings with save path.
+        save_path = os.path.join(self.tmp_folder, "emebd.zarr")
+        embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=3)
+        for i in range(input_.shape[0]):
+            self._check_predictor_initialization(predictor, embeddings, i=i)
 
+        # Check the contents of the saved embeddings.
+        self.assertTrue(os.path.exists(save_path))
+        with zarr.open(save_path, "r") as f:
+            self.assertIn("features", f)
+            self.assertEqual(f["features"].shape, (3, 1, 256, 64, 64))
+
+    def test_precompute_image_embeddings_tiled(self):
+        from micro_sam.util import precompute_image_embeddings
+
+        # Load model and create test data.
+        predictor = get_sam_model(model_type=self.model_type)
         tile_shape, halo = (256, 256), (16, 16)
         input_ = np.random.rand(512, 512).astype("float32")
+
+        # Compute the image embeddings without save path.
+        embeddings = precompute_image_embeddings(predictor, input_, tile_shape=tile_shape, halo=halo)
+        for tile_id in range(4):
+            self._check_predictor_initialization(predictor, embeddings, tile_id=tile_id)
+
+        # Compute the image embeddings with save path.
         save_path = os.path.join(self.tmp_folder, "emebd.zarr")
         precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=tile_shape, halo=halo)
+        for tile_id in range(4):
+            self._check_predictor_initialization(predictor, embeddings, tile_id=tile_id)
 
+        # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
         with zarr.open(save_path, "r") as f:
             self.assertIn("features", f)
             self.assertEqual(len(f["features"]), 4)
 
-        # set the precomputed embeddings again, to make sure this does not fail due to
-        # a wrong code-path
-        precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=tile_shape, halo=halo)
-        precompute_image_embeddings(predictor, input_, save_path=None, tile_shape=tile_shape, halo=halo)
+    def test_precompute_image_embeddings_tiled_3d(self):
+        from micro_sam.util import precompute_image_embeddings
 
-    def test_tiled_prediction_3d(self):
-        from micro_sam.util import precompute_image_embeddings, get_sam_model, VIT_T_SUPPORT
-
-        predictor = get_sam_model(model_type="vit_t" if VIT_T_SUPPORT else "vit_b")
-
+        # Load model and create test data.
+        predictor = get_sam_model(model_type=self.model_type)
         tile_shape, halo = (256, 256), (16, 16)
-        input_ = np.random.rand(3, 512, 512).astype("float32")
-        save_path = os.path.join(self.tmp_folder, "emebd.zarr")
-        precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=tile_shape, halo=halo)
+        input_ = np.random.rand(2, 512, 512).astype("float32")
 
+        # Compute the image embeddings without save path.
+        embeddings = precompute_image_embeddings(predictor, input_, tile_shape=tile_shape, halo=halo)
+        for i in range(2):
+            for tile_id in range(4):
+                self._check_predictor_initialization(predictor, embeddings, i=i, tile_id=tile_id)
+
+        # Compute the image embeddings with save path.
+        save_path = os.path.join(self.tmp_folder, "emebd.zarr")
+        embeddings = precompute_image_embeddings(
+            predictor, input_, save_path=save_path, tile_shape=tile_shape, halo=halo
+        )
+        for i in range(2):
+            for tile_id in range(4):
+                self._check_predictor_initialization(predictor, embeddings, i=i, tile_id=tile_id)
+
+        # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
         with zarr.open(save_path, "r") as f:
             self.assertIn("features", f)
             self.assertEqual(len(f["features"]), 4)
-
-        # set the precomputed embeddings again, to make sure this does not fail due to
-        # a wrong code-path
-        precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=tile_shape, halo=halo)
-        precompute_image_embeddings(predictor, input_, save_path=None, tile_shape=tile_shape, halo=halo)
 
     def test_segmentation_to_one_hot(self):
         from micro_sam.util import segmentation_to_one_hot

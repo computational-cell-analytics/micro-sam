@@ -661,7 +661,7 @@ def _check_existing_embeddings(
 def precompute_image_embeddings(
     predictor: SamPredictor,
     input_: np.ndarray,
-    save_path: Optional[str] = None,
+    save_path: Optional[Union[str, os.PathLike]] = None,
     lazy_loading: bool = False,
     ndim: Optional[int] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
@@ -689,19 +689,20 @@ def precompute_image_embeddings(
     """
     ndim = input_.ndim if ndim is None else ndim
 
-    if save_path is not None:
+    if save_path is None:
+        f = zarr.group()
+    else:
         save_path = str(save_path)
         f = zarr.open(save_path, "a")
         f = _check_existing_embeddings(input_, predictor, f, save_path, tile_shape, halo, wrong_file_callback)
-    else:
-        f = zarr.group()
+
     if ndim == 2:
         image_embeddings = _compute_2d(input_, predictor, f, save_path) if tile_shape is None else\
             _compute_tiled_2d(input_, predictor, tile_shape, halo, f)
 
     elif ndim == 3:
         image_embeddings = _compute_3d(input_, predictor, f, save_path) if tile_shape is None else\
-            _compute_tiled_3d(input_, predictor, save_path, lazy_loading, tile_shape, halo, f)  # _precompute_3d
+            _compute_tiled_3d(input_, predictor, save_path, lazy_loading, tile_shape, halo, f)
 
     else:
         raise ValueError(f"Invalid dimesionality {input_.ndim}, expect 2 or 3 dim data.")
@@ -712,16 +713,30 @@ def precompute_image_embeddings(
 def set_precomputed(
     predictor: SamPredictor,
     image_embeddings: ImageEmbeddings,
-    i: Optional[int] = None
-):
+    i: Optional[int] = None,
+    tile_id: Optional[int] = None,
+) -> SamPredictor:
     """Set the precomputed image embeddings for a predictor.
 
-    Arguments:
+    Args:
         predictor: The SegmentAnything predictor.
         image_embeddings: The precomputed image embeddings computed by `precompute_image_embeddings`.
         i: Index for the image data. Required if `image` has three spatial dimensions
             or a time dimension and two spatial dimensions.
+        tile_id: Index for the tile. This is required if the embeddings are tiled.
+
+    Returns:
+        The predictor with set features.
     """
+    if tile_id is not None:
+        tile_features = image_embeddings["features"][tile_id]
+        tile_image_embeddings = {
+            "features": tile_features,
+            "input_size": tile_features.attrs["input_size"],
+            "original_size": tile_features.attrs["original_size"]
+        }
+        return set_precomputed(predictor, tile_image_embeddings, i=i)
+
     device = predictor.device
     features = image_embeddings["features"]
     assert features.ndim in (4, 5), f"{features.ndim}"
