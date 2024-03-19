@@ -241,11 +241,9 @@ def export_sam_model(
                 id=spec.TensorId("masks"),
                 axes=[
                     spec.BatchAxis(),
+                    # NOTE: we use the data dependent size here to avoid dependency on optional inputs
                     spec.IndexOutputAxis(
-                        id=spec.AxisId("object"),
-                        size=spec.SizeReference(
-                            tensor_id=spec.TensorId("box_prompts"), axis_id=spec.AxisId("object")
-                        )
+                        id=spec.AxisId("object"), size=spec.DataDependentSize(),
                     ),
                     # NOTE: this could be a 3 once we use multi-masking
                     spec.ChannelAxis(channel_names=[spec.Identifier("mask")]),
@@ -271,11 +269,9 @@ def export_sam_model(
                 id=spec.TensorId("scores"),
                 axes=[
                     spec.BatchAxis(),
+                    # NOTE: we use the data dependent size here to avoid dependency on optional inputs
                     spec.IndexOutputAxis(
-                        id=spec.AxisId("object"),
-                        size=spec.SizeReference(
-                            tensor_id=spec.TensorId("box_prompts"), axis_id=spec.AxisId("object")
-                        )
+                        id=spec.AxisId("object"), size=spec.DataDependentSize(),
                     ),
                     # NOTE: this could be a 3 once we use multi-masking
                     spec.ChannelAxis(channel_names=[spec.Identifier("mask")]),
@@ -307,16 +303,13 @@ def export_sam_model(
 
         dependency_file = os.path.join(tmp_dir, "environment.yaml")
         _write_dependencies(dependency_file, require_mobile_sam=model_type.startswith("vit_t"))
-        # print(dependency_file)
-        # breakpoint()
 
         weight_descriptions = spec.WeightsDescr(
             pytorch_state_dict=spec.PytorchStateDictWeightsDescr(
                 source=Path(checkpoint_path),
                 architecture=architecture,
                 pytorch_version=spec.Version(torch.__version__),
-                # FIXME: this leads to a validation error!
-                # dependencies=dependency_file,
+                dependencies=spec.EnvironmentFileDescr(source=dependency_file),
             )
         )
 
@@ -339,11 +332,15 @@ def export_sam_model(
             tags=kwargs.get("tags", DEFAULTS["tags"]),
             covers=covers,
             # TODO attach the decoder weights if given
-            # attachments=
+            # Can be list of files???
+            # attachments=[spec.FileDescr(source=file_path) for file_path in attachment_files]
             # TODO write the config
+            # dict with yaml values, key must be a str
+            # micro_sam: ...
             # config=
         )
 
         # TODO test the model.
+        # Should work, but not tested with optional.
 
         save_bioimageio_package(model_description, output_path=output_path)
