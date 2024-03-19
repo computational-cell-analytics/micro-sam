@@ -199,6 +199,11 @@ def commit(
 
     if layer == "current_object":
         vutil.clear_annotations(viewer)
+    else:
+        viewer.layers["auto_segmentation"].data = np.zeros(
+            viewer.layers["auto_segmentation"].data.shape, dtype="uint32"
+        )
+        viewer.layers["auto_segmentation"].refresh()
 
 
 @magic_factory(
