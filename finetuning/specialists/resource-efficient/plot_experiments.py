@@ -6,6 +6,7 @@ from natsort import natsorted
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 
 
 ROOT = "/scratch/users/archit/experiments"
@@ -94,7 +95,8 @@ def plot_all_experiments():
 
             sns.lineplot(
                 x="name", y="results", hue="type", data=this_res,
-                ax=ax[0, idx], palette=PALETTE, hue_order=PALETTE.keys()
+                ax=ax[0, idx], palette=PALETTE, hue_order=PALETTE.keys(),
+                marker="o", markersize=8
             )
             _title = "Generalist" if model_name.endswith("lm") else "Vanilla"
             ax[0, idx].set_title(_title, fontsize=13, fontweight="bold")
@@ -102,7 +104,8 @@ def plot_all_experiments():
 
             sns.lineplot(
                 x="name", y="results", hue="type", data=this_box_res,
-                ax=ax[1, idx], palette=PALETTE, hue_order=PALETTE.keys()
+                ax=ax[1, idx], palette=PALETTE, hue_order=PALETTE.keys(),
+                marker="o", markersize=8
             )
             ax[1, idx].set_title(_title, fontsize=13, fontweight="bold")
             ax[1, idx].set(xlabel=None, ylabel=None)
@@ -121,6 +124,11 @@ def plot_all_experiments():
                 ax.get_legend().remove()
 
             fig.legend(all_lines, all_labels, loc="upper left")
+
+            def format_y_tick_label(value, pos):
+                return "{:.2f}".format(value)
+
+            plt.gca().yaxis.set_major_formatter(FuncFormatter(format_y_tick_label))
 
             plt.text(
                 x=0.6425, y=2.35, s=" X-Axis: Images \n Y-Axis: Segmentation Quality ", ha='left',
