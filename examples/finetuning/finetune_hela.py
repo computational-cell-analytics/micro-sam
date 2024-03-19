@@ -4,8 +4,6 @@ import numpy as np
 import torch
 
 import torch_em
-from torch_em.model import UNETR
-from torch_em.loss import DiceBasedDistanceLoss
 from torch_em.transform.label import PerObjectDistanceTransform
 
 import micro_sam.training as sam_training
@@ -85,55 +83,22 @@ def run_training(checkpoint_name, model_type, train_instance_segmentation):
     patch_shape = (1, 512, 512)  # the size of patches for training
     n_objects_per_batch = 25  # the number of objects per batch that will be sampled
     device = torch.device("cuda")  # the device/GPU used for training
-    n_iterations = 10000  # how long we train (in iterations)
 
     # Get the dataloaders.
     train_loader = get_dataloader("train", patch_shape, batch_size, train_instance_segmentation)
     val_loader = get_dataloader("val", patch_shape, batch_size, train_instance_segmentation)
 
-    # Get the segment anything model
-    model = sam_training.get_trainable_sam_model(model_type=model_type, device=device)
-
-    # This class creates all the training data for a batch (inputs, prompts and labels).
-    convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
-
-    # Get the optimizer and the LR scheduler
-    if train_instance_segmentation:
-        # for instance segmentation, we use the UNETR model configuration.
-        unetr = UNETR(
-            backbone="sam", encoder=model.sam.image_encoder, out_channels=3, use_sam_stats=True,
-            final_activation="Sigmoid", use_skip_connection=False, resize_input=True,
-        )
-        # let's get the parameters for SAM and the decoder from UNETR
-        joint_model_params = [params for params in model.parameters()]  # sam parameters
-        for name, params in unetr.named_parameters():  # unetr's decoder parameters
-            if not name.startswith("encoder"):
-                joint_model_params.append(params)
-        unetr.to(device)
-        optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
-    else:
-        optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
-
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10, verbose=True)
-
-    # the trainer which performs training and validation (implemented using "torch_em")
-    if train_instance_segmentation:
-        instance_seg_loss = DiceBasedDistanceLoss(mask_distances_in_bg=True)
-        trainer = sam_training.JointSamTrainer(
-            name=checkpoint_name, train_loader=train_loader, val_loader=val_loader, model=model,
-            optimizer=optimizer, device=device, lr_scheduler=scheduler, logger=sam_training.JointSamLogger,
-            log_image_interval=100, mixed_precision=True, convert_inputs=convert_inputs,
-            n_objects_per_batch=n_objects_per_batch, n_sub_iteration=8, compile_model=False, unetr=unetr,
-            instance_loss=instance_seg_loss, instance_metric=instance_seg_loss
-        )
-    else:
-        trainer = sam_training.SamTrainer(
-            name=checkpoint_name, train_loader=train_loader, val_loader=val_loader, model=model,
-            optimizer=optimizer, device=device, lr_scheduler=scheduler, logger=sam_training.SamLogger,
-            log_image_interval=100, mixed_precision=True, convert_inputs=convert_inputs,
-            n_objects_per_batch=n_objects_per_batch, n_sub_iteration=8, compile_model=False
-        )
-    trainer.fit(n_iterations)
+    # Run training.
+    sam_training.train_sam(
+        name=checkpoint_name,
+        model_type=model_type,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        n_epochs=100,
+        n_objects_per_batch=n_objects_per_batch,
+        with_segmentation_decoder=train_instance_segmentation,
+        device=device,
+    )
 
 
 def export_model(checkpoint_name, model_type):
@@ -162,7 +127,7 @@ def main():
     checkpoint_name = "sam_hela"
 
     # Train an additional convolutional decoder for end-to-end automatic instance segmentation
-    train_instance_segmentation = False
+    train_instance_segmentation = True
 
     run_training(checkpoint_name, model_type, train_instance_segmentation)
     export_model(checkpoint_name, model_type)

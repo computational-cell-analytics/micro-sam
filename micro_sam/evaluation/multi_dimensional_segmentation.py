@@ -73,7 +73,8 @@ def segment_slices_from_ground_truth(
     device: Union[str, torch.device] = None,
     interactive_seg_mode: str = "box",
     verbose: bool = False,
-    return_segmentation: bool = False
+    return_segmentation: bool = False,
+    min_size: int = 0,
 ) -> Union[float, Tuple[np.ndarray, float]]:
     """Segment all objects in a volume by prompt-based segmentation in one slice per object.
 
@@ -94,11 +95,12 @@ def segment_slices_from_ground_truth(
         interactive_seg_mode: Method for guiding prompt-based instance segmentation.
         verbose: Whether to get the trace for projected segmentations.
         return_segmentation: Whether to return the segmented volume.
+        min_size: The minimal size for evaluating an object in the gt.
+            The size is measured within the central slice.
     """
     assert volume.ndim == 3
 
-    _get_model = util.get_sam_model if checkpoint_path is None else util.get_custom_sam_model
-    predictor = _get_model(model_type=model_type, checkpoint_path=checkpoint_path, device=device)
+    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path, device=device)
 
     # Compute the image embeddings
     embeddings = util.precompute_image_embeddings(
@@ -112,10 +114,10 @@ def segment_slices_from_ground_truth(
     # Create an empty volume to store incoming segmentations
     final_segmentation = np.zeros_like(ground_truth)
 
+    skipped_label_ids = []
     for label_id in label_ids:
         # Binary label volume per instance (also referred to as object)
-        this_seg = np.zeros_like(ground_truth)
-        this_seg[ground_truth == label_id] = 1
+        this_seg = ground_truth == label_id
 
         # Let's search the slices where we have the current object
         slice_range = np.where(this_seg)[0]
@@ -123,6 +125,10 @@ def segment_slices_from_ground_truth(
         # Choose the middle slice of the current object for prompt-based segmentation
         slice_range = (slice_range.min(), slice_range.max())
         slice_choice = floor(np.mean(slice_range))
+        this_slice_seg = this_seg[slice_choice]
+        if min_size > 0 and this_slice_seg.sum() < min_size:
+            skipped_label_ids.append(label_id)
+            continue
         if verbose:
             print(f"The object with id {label_id} lies in slice range: {slice_range}")
 
@@ -145,7 +151,7 @@ def segment_slices_from_ground_truth(
             get_box_prompts=_get_box
         )
         _, box_coords = util.get_centers_and_bounding_boxes(this_seg[slice_choice])
-        point_prompts, point_labels, box_prompts, _ = prompt_generator(this_seg[slice_choice], [box_coords[1]])
+        point_prompts, point_labels, box_prompts, _ = prompt_generator(this_slice_seg, [box_coords[1]])
 
         # Prompt-based segmentation on middle slice of the current object
         output_slice = batched_inference(
@@ -158,26 +164,28 @@ def segment_slices_from_ground_truth(
         output_seg[slice_choice][output_slice == 1] = 1
 
         # Segment the object in the entire volume with the specified segmented slice
-        try:
-            this_seg = segment_mask_in_volume(
-                segmentation=output_seg,
-                predictor=predictor,
-                image_embeddings=embeddings,
-                segmented_slices=np.array(slice_choice),
-                stop_lower=False, stop_upper=False,
-                iou_threshold=iou_threshold,
-                projection=projection,
-                box_extension=box_extension,
-                verbose=verbose
-            )
-        except ValueError:  # TODO: take a look at what's happening here (for label ids 1120, 1845, 4453)
-            continue
+        this_seg, _ = segment_mask_in_volume(
+            segmentation=output_seg,
+            predictor=predictor,
+            image_embeddings=embeddings,
+            segmented_slices=np.array(slice_choice),
+            stop_lower=False, stop_upper=False,
+            iou_threshold=iou_threshold,
+            projection=projection,
+            box_extension=box_extension,
+            verbose=verbose
+        )
 
         # Store the entire segmented object
         final_segmentation[this_seg == 1] = label_id
 
     # Evaluate the volumetric segmentation
-    msa = mean_segmentation_accuracy(final_segmentation, ground_truth)
+    if skipped_label_ids:
+        gt_copy = ground_truth.copy()
+        gt_copy[np.isin(gt_copy, skipped_label_ids)] = 0
+        msa = mean_segmentation_accuracy(final_segmentation, gt_copy)
+    else:
+        msa = mean_segmentation_accuracy(final_segmentation, ground_truth)
 
     if return_segmentation:
         return msa, final_segmentation
