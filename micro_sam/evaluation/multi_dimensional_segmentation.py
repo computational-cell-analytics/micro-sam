@@ -95,7 +95,7 @@ def segment_slices_from_ground_truth(
         interactive_seg_mode: Method for guiding prompt-based instance segmentation.
         verbose: Whether to get the trace for projected segmentations.
         return_segmentation: Whether to return the segmented volume.
-        min_size: The minimal size for evaluating an object in the gt.
+        min_size: The minimal size for evaluating an object in the ground-truth.
             The size is measured within the central slice.
     """
     assert volume.ndim == 3
@@ -117,7 +117,7 @@ def segment_slices_from_ground_truth(
     skipped_label_ids = []
     for label_id in label_ids:
         # Binary label volume per instance (also referred to as object)
-        this_seg = ground_truth == label_id
+        this_seg = (ground_truth == label_id).astype("int")
 
         # Let's search the slices where we have the current object
         slice_range = np.where(this_seg)[0]
@@ -129,6 +129,7 @@ def segment_slices_from_ground_truth(
         if min_size > 0 and this_slice_seg.sum() < min_size:
             skipped_label_ids.append(label_id)
             continue
+
         if verbose:
             print(f"The object with id {label_id} lies in slice range: {slice_range}")
 
@@ -150,7 +151,7 @@ def segment_slices_from_ground_truth(
             get_point_prompts=_get_points,
             get_box_prompts=_get_box
         )
-        _, box_coords = util.get_centers_and_bounding_boxes(this_seg[slice_choice])
+        _, box_coords = util.get_centers_and_bounding_boxes(this_slice_seg)
         point_prompts, point_labels, box_prompts, _ = prompt_generator(this_slice_seg, [box_coords[1]])
 
         # Prompt-based segmentation on middle slice of the current object
@@ -208,7 +209,8 @@ def run_multi_dimensional_segmentation_grid_search(
     result_dir: Union[str, os.PathLike],
     interactive_seg_mode: str = "box",
     verbose: bool = False,
-    grid_search_values: Optional[Dict[str, List]] = None
+    grid_search_values: Optional[Dict[str, List]] = None,
+    min_size: int = 0
 ):
     """Run grid search for prompt-based multi-dimensional instance segmentation.
 
@@ -236,6 +238,8 @@ def run_multi_dimensional_segmentation_grid_search(
         interactive_seg_mode: Method for guiding prompt-based instance segmentation.
         verbose: Whether to get the trace for projected segmentations.
         grid_search_values: The grid search values for parameters of the `segment_slices_from_ground_truth` function.
+        min_size: The minimal size for evaluating an object in the ground-truth.
+            The size is measured within the central slice.
     """
     if grid_search_values is None:
         grid_search_values = default_grid_search_values_multi_dimensional_segmentation()
@@ -267,6 +271,7 @@ def run_multi_dimensional_segmentation_grid_search(
             interactive_seg_mode=interactive_seg_mode,
             verbose=verbose,
             return_segmentation=False,
+            min_size=min_size,
             **gs_kwargs
         )
 

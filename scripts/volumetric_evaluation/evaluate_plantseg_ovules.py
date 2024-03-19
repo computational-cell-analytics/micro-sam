@@ -25,9 +25,10 @@ def main(args):
         model_type=args.model_type,
         checkpoint_path=args.checkpoint,
         embedding_path=args.embedding_path,
-        result_dir="./plantseg-ovules/results_default/",
+        result_dir=args.resdir,
         interactive_seg_mode="box",
-        verbose=False
+        verbose=False,
+        min_size=50
     )
 
 
@@ -44,5 +45,6 @@ if __name__ == "__main__":
     parser.add_argument("-m", "--model_type", type=str, default="vit_b", help="Name of the image encoder")
     parser.add_argument("-c", "--checkpoint", type=str, default=None, help="The custom checkpoint path.")
     parser.add_argument("-e", "--embedding_path", type=str, default=None, help="Path to save embeddings")
+    parser.add_argument("--resdir", type=str, required=True, help="Path to save the results")
     args = parser.parse_args()
     main(args)
