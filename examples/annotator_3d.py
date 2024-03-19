@@ -24,10 +24,10 @@ def em_3d_annotator(finetuned_model):
     else:
         assert finetuned_model in ("organelles", "boundaries")
         embedding_path = os.path.join(EMBEDDING_CACHE, f"embeddings-lucchi-vit_b_em_{finetuned_model}.zarr")
-        model_type = "vit_b"
+        model_type = f"vit_b_{finetuned_model}"
 
     # start the annotator, cache the embeddings
-    annotator_3d(raw, embedding_path, model_type=model_type, checkpoint_path="./vit_b_em.pt", precompute_amg_state=True)
+    annotator_3d(raw, embedding_path, model_type=model_type)
 
 
 def main():
