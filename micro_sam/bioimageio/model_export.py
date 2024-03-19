@@ -4,10 +4,13 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Union
 
+# FIXME import fails
+import bioimageio.core
 import bioimageio.spec.model.v0_5 as spec
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import xarray
 
 from bioimageio.spec import save_bioimageio_package
 
@@ -148,6 +151,27 @@ def _generate_covers(input_paths, result_paths, tmp_dir):
 
     covers = [cover_path]
     return covers
+
+
+def _check_model(model_description, input_paths, result_paths):
+    model = bioimageio.core.load_resource_description(model_description)
+
+    # Load inputs and outputs.
+    image = xarray.DataArray(np.load(input_paths["image"]), dims=tuple("bcyx"))
+    embeddings = xarray.DataArray(np.load(result_paths["embeddings"]), dims=tuple("bcyx"))
+    box_prompts = np.load(input_paths["box_prompts"], dims=tuple("bic"))
+    mask = np.load(result_paths["mask"])
+
+    breakpoint()
+
+    # Check with box prompt.
+    with bioimageio.core.create_prediction_pipeline(model) as pp:
+        prediction = pp.forward(
+            image=image,
+            embeddings=embeddings,
+            box_prompts=box_prompts,
+        )
+    breakpoint()
 
 
 def export_sam_model(
@@ -340,7 +364,6 @@ def export_sam_model(
             # config=
         )
 
-        # TODO test the model.
-        # Should work, but not tested with optional.
+        _check_model(model_description, input_paths, result_paths)
 
         save_bioimageio_package(model_description, output_path=output_path)
