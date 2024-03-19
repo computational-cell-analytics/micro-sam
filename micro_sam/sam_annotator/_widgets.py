@@ -25,11 +25,6 @@ from . import util as vutil
 from .. import instance_segmentation, util
 from ..multi_dimensional_segmentation import segment_mask_in_volume, merge_instance_segmentation_3d
 
-try:
-    from napari.utils import progress as tqdm
-except ImportError:
-    from tqdm import tqdm
-
 if TYPE_CHECKING:
     import napari
 
@@ -204,6 +199,11 @@ def commit(
 
     if layer == "current_object":
         vutil.clear_annotations(viewer)
+    else:
+        viewer.layers["auto_segmentation"].data = np.zeros(
+            viewer.layers["auto_segmentation"].data.shape, dtype="uint32"
+        )
+        viewer.layers["auto_segmentation"].refresh()
 
 
 @magic_factory(
@@ -619,6 +619,7 @@ def _instance_segmentation_impl(viewer, with_background, min_object_size, i=None
 
     shape = state.image_shape
 
+    # Further optimization: refactor parts of this so that we can also use it in the automatic 3d segmentation fucnction
     # For 3D we store the amg state in a dict and check if it is computed already.
     if state.amg_state is not None:
         assert i is not None
@@ -676,11 +677,12 @@ def _instance_segmentation_impl(viewer, with_background, min_object_size, i=None
     return seg
 
 
-def _segment_volume(viewer, with_background, min_object_size, **kwargs):
+def _segment_volume(viewer, with_background, min_object_size, gap_closing, **kwargs):
     segmentation = np.zeros_like(viewer.layers["auto_segmentation"].data)
 
     offset = 0
-    for i in tqdm(range(segmentation.shape[0])):
+    # Further optimization: parallelize if state is precomputed for all slices
+    for i in progress(range(segmentation.shape[0]), desc="Segment slices"):
         seg = _instance_segmentation_impl(
             viewer, with_background, min_object_size, i=i, skip_update=True, **kwargs
         )
@@ -689,18 +691,8 @@ def _segment_volume(viewer, with_background, min_object_size, **kwargs):
         segmentation[i] = seg
 
     segmentation = merge_instance_segmentation_3d(
-        segmentation, beta=0.5, with_background=with_background
+        segmentation, beta=0.5, with_background=with_background, gap_closing=gap_closing,
     )
-
-    # TODO we need one more refinement step to bridge gaps due to a few missing slices
-    # Implement in multi-dimensional-seg
-
-    # Idea:
-    # - go over all objects
-    # - if object is full slice range then don't do anything
-    # - continue objects that don't with projection
-    # - build potential merge pairs of objects that don't overlap within z, but are within certain range
-    # - merge objects that are > some overlap threshold + fill in the gaps from projections
 
     viewer.layers["auto_segmentation"].data = segmentation
     viewer.layers["auto_segmentation"].refresh()
@@ -759,6 +751,7 @@ def amg_3d(
     box_nms_thresh: float = 0.7,
     with_background: bool = True,
     apply_to_volume: bool = False,
+    gap_closing: int = 2,
 ) -> None:
     if apply_to_volume:
         # We refuse to run 3D segmentation with the AMG unless we have a GPU or all embeddings
@@ -772,7 +765,7 @@ def amg_3d(
                 print("Volumetric segmentation with AMG is only supported if you have a GPU.")
                 return
         _segment_volume(
-            viewer, with_background, min_object_size,
+            viewer, with_background, min_object_size, gap_closing,
             pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
             box_nms_thresh=box_nms_thresh,
         )
@@ -798,10 +791,12 @@ def instance_seg_3d(
     min_object_size: int = 100,
     with_background: bool = True,
     apply_to_volume: bool = False,
+    gap_closing: int = 2,
 ) -> None:
     if apply_to_volume:
         _segment_volume(
-            viewer, with_background, min_object_size, min_size=min_object_size,
+            viewer, with_background, min_object_size, gap_closing,
+            min_size=min_object_size,
             center_distance_threshold=center_distance_threshold,
             boundary_distance_threshold=boundary_distance_threshold,
         )
