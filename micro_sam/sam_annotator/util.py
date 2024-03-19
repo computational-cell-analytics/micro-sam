@@ -32,7 +32,7 @@ def toggle_label(prompts):
     prompts.refresh_colors()
 
 
-def _initialize_parser(description, with_segmentation_result=True, with_show_embeddings=True):
+def _initialize_parser(description, with_segmentation_result=True, with_instance_segmentation=True):
 
     available_models = list(util.get_model_names())
     available_models = ", ".join(available_models)
@@ -90,6 +90,19 @@ def _initialize_parser(description, with_segmentation_result=True, with_show_emb
     parser.add_argument(
         "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
     )
+
+    if with_instance_segmentation:
+        parser.add_argument(
+            "--precompute_amg_state", action="store_true",
+            help="Whether to precompute the state for automatic instance segmentation. "
+            "This will lead to a longer start-up time, but the automatic instance segmentation can "
+            "be run directly once the tool has started."
+        )
+        parser.add_argument(
+            "--prefer_decoder", action="store_false",
+            help="Whether to use decoder based instance segmentation if the model "
+            "being used has an additional decoder for that purpose."
+        )
 
     return parser
 

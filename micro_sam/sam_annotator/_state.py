@@ -72,7 +72,7 @@ class AnnotatorState(metaclass=Singleton):
         tile_shape=None,
         halo=None,
         precompute_amg_state=False,
-        use_decoder_if_available=True,
+        prefer_decoder=True,
     ):
         assert ndim in (2, 3)
 
@@ -82,7 +82,7 @@ class AnnotatorState(metaclass=Singleton):
                 device=device, model_type=model_type,
                 checkpoint_path=checkpoint_path, return_state=True
             )
-            if use_decoder_if_available and "decoder_state" in state:
+            if prefer_decoder and "decoder_state" in state:
                 self.decoder = get_decoder(
                     image_encoder=self.predictor.model.image_encoder,
                     decoder_state=state["decoder_state"],

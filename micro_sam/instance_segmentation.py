@@ -735,12 +735,16 @@ def get_unetr(
     decoder_state: Optional[OrderedDict[str, torch.Tensor]] = None,
     device: Optional[Union[str, torch.device]] = None,
 ) -> torch.nn.Module:
-    """TODO.
+    """Get UNETR model for automatic instance segmentation.
 
     Args:
-
+        image_encoder: The image encoder of the SAM model.
+            This is used as encoder by the UNETR too.
+        decoder_state: Optional decoder state to initialize the weights
+            of the UNETR decoder.
+        device: The device.
     Returns:
-        The UNETR.
+        The UNETR model.
     """
     device = util.get_device(device)
 
@@ -769,10 +773,12 @@ def get_decoder(
     decoder_state: OrderedDict[str, torch.Tensor],
     device: Optional[Union[str, torch.device]] = None,
 ) -> DecoderAdapter:
-    """TODO.
+    """Get decoder to predict outputs for automatic instance segmentation
 
     Args:
-
+        image_encoder: The image encoder of the SAM model.
+        decoder_state: State to initialize the weights of the UNETR decoder.
+        device: The device.
     Returns:
         The decoder for instance segmentation.
     """
@@ -780,15 +786,20 @@ def get_decoder(
     return DecoderAdapter(unetr)
 
 
-# TODO ret vals
 def get_predictor_and_decoder(
     model_type: str,
     checkpoint_path: Union[str, os.PathLike],
     device: Optional[Union[str, torch.device]] = None,
-):
-    """TODO.
+) -> Tuple[SamPredictor, DecoderAdapter]:
+    """Load the SAM model (predictor) and instance segmentation decoder.
+
+    This requires a checkpoint that contains the state for both predictor
+    and decoder.
 
     Args:
+        model_type: The type of the image encoder used in the SAM model.
+        checkpoint_path: Path to the checkpoint from which to load the data.
+        device: The device.
 
     Returns:
         The SAM predictor.
@@ -800,7 +811,7 @@ def get_predictor_and_decoder(
         device=device, return_state=True
     )
     if "decoder_state" not in state:
-        raise ValueError("TODO")
+        raise ValueError(f"The checkpoint at {checkpoint_path} does not contain a decoder state")
     decoder = get_decoder(predictor.model.image_encoder, state["decoder_state"], device)
     return predictor, decoder
 
