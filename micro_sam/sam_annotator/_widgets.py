@@ -619,6 +619,7 @@ def _instance_segmentation_impl(viewer, with_background, min_object_size, i=None
 
     shape = state.image_shape
 
+    # Further optimization: refactor parts of this so that we can also use it in the automatic 3d segmentation fucnction
     # For 3D we store the amg state in a dict and check if it is computed already.
     if state.amg_state is not None:
         assert i is not None
@@ -680,6 +681,7 @@ def _segment_volume(viewer, with_background, min_object_size, gap_closing, **kwa
     segmentation = np.zeros_like(viewer.layers["auto_segmentation"].data)
 
     offset = 0
+    # Further optimization: parallelize if state is precomputed for all slices
     for i in progress(range(segmentation.shape[0]), desc="Segment slices"):
         seg = _instance_segmentation_impl(
             viewer, with_background, min_object_size, i=i, skip_update=True, **kwargs
