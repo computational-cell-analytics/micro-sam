@@ -11,7 +11,7 @@ from typing import List, Optional, Union
 from segment_anything import SamPredictor
 
 from ..instance_segmentation import (
-    get_custom_sam_model_with_decoder,
+    get_predictor_and_decoder,
     AutomaticMaskGenerator, InstanceSegmentationWithDecoder,
 )
 from ..util import get_sam_model
@@ -302,7 +302,7 @@ def run_livecell_instance_segmentation_with_decoder(
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
 
-    predictor, decoder = get_custom_sam_model_with_decoder(checkpoint, model_type)
+    predictor, decoder = get_predictor_and_decoder(model_type=model_type, checkpoint_path=checkpoint)
     segmenter = InstanceSegmentationWithDecoder(predictor, decoder)
     seg_prefix = "instance_segmentation_with_decoder"
 

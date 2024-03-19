@@ -18,7 +18,7 @@ from segment_anything import SamPredictor
 from .. import util as util
 from ..inference import batched_inference
 from ..instance_segmentation import (
-    mask_data_to_segmentation, get_custom_sam_model_with_decoder,
+    mask_data_to_segmentation, get_predictor_and_decoder,
     AutomaticMaskGenerator, InstanceSegmentationWithDecoder,
 )
 from . import instance_segmentation
@@ -559,7 +559,7 @@ def run_instance_segmentation_with_decoder(
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
 
-    predictor, decoder = get_custom_sam_model_with_decoder(checkpoint, model_type)
+    predictor, decoder = get_predictor_and_decoder(model_type=model_type, checkpoint_path=checkpoint)
     segmenter = InstanceSegmentationWithDecoder(predictor, decoder)
     seg_prefix = "instance_segmentation_with_decoder"
 

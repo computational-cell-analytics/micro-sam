@@ -264,7 +264,6 @@ def get_sam_model(
     Returns:
         The segment anything predictor.
     """
-    assert not (return_sam and return_state)
     device = get_device(device)
 
     # We support passing a local filepath to a checkpoint.
@@ -318,6 +317,8 @@ def get_sam_model(
     predictor = SamPredictor(sam)
     predictor.model_type = abbreviated_model_type
 
+    if return_sam and return_state:
+        return predictor, sam, state
     if return_sam:
         return predictor, sam
     if return_state:

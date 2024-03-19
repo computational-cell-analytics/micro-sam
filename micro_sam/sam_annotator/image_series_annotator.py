@@ -8,28 +8,31 @@ from typing import List, Optional, Union, Tuple
 import numpy as np
 import imageio.v3 as imageio
 import napari
-import torch.nn as nn
 import torch
 
 from magicgui import magicgui
-from segment_anything import SamPredictor
 
 from .. import util
 from ..precompute_state import _precompute_state_for_files
+from ..instance_segmentation import get_decoder
 from .annotator_2d import Annotator2d
 from .annotator_3d import Annotator3d
 from ._state import AnnotatorState
 
 
 def _precompute(
-    images, model_type, predictor, embedding_path,
-    tile_shape, halo, precompute_amg_state, decoder,
-    checkpoint_path, device, ndim=None
+    images, model_type, embedding_path,
+    tile_shape, halo, precompute_amg_state,
+    checkpoint_path, device, ndim, prefer_decoder,
 ):
-    if predictor is None:
-        predictor = util.get_sam_model(
-            model_type=model_type, checkpoint_path=checkpoint_path, device=device
-        )
+    device = util.get_device(device)
+    predictor, state = util.get_sam_model(
+        model_type=model_type, checkpoint_path=checkpoint_path, device=device, return_state=True
+    )
+    if prefer_decoder and "decoder_state" in state:
+        decoder = get_decoder(predictor.model.image_encoder, state["decoder_state"], device)
+    else:
+        decoder = None
 
     if embedding_path is None:
         embedding_paths = [None] * len(images)
@@ -48,7 +51,7 @@ def _precompute(
             ]
         assert all(os.path.exists(emb_path) for emb_path in embedding_paths)
 
-    return predictor, embedding_paths
+    return predictor, decoder, embedding_paths
 
 
 def _get_input_shape(image, is_volumetric=False):
@@ -74,12 +77,11 @@ def image_series_annotator(
     halo: Optional[Tuple[int, int]] = None,
     viewer: Optional["napari.viewer.Viewer"] = None,
     return_viewer: bool = False,
-    predictor: Optional[SamPredictor] = None,
-    decoder: Optional["nn.Module"] = None,
     precompute_amg_state: bool = False,
     checkpoint_path: Optional[str] = None,
     is_volumetric: bool = False,
     device: Optional[Union[str, torch.device]] = None,
+    prefer_decoder: bool = True,
 ) -> Optional["napari.viewer.Viewer"]:
     """Run the annotation tool for a series of images (supported for both 2d and 3d images).
 
@@ -95,14 +97,13 @@ def image_series_annotator(
         viewer: The viewer to which the SegmentAnything functionality should be added.
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
-        predictor: The Segment Anything model. Passing this enables using fully custom models.
-            If you pass `predictor` then `model_type` will be ignored.
-        decoder: The instance segmentation decoder.
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
         is_volumetric: Whether to use the 3d annotator.
+        prefer_decoder: Whether to use decoder based instance segmentation if
+            the model used has an additional decoder for instance segmentation.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -112,10 +113,11 @@ def image_series_annotator(
     next_image_id = 0
 
     # Precompute embeddings and amg state (if corresponding options set).
-    predictor, embedding_paths = _precompute(
-        images, model_type, predictor,
+    predictor, decoder, embedding_paths = _precompute(
+        images, model_type,
         embedding_path, tile_shape, halo, precompute_amg_state,
-        decoder=decoder, checkpoint_path=checkpoint_path, device=device,
+        checkpoint_path=checkpoint_path, device=device,
+        ndim=3 if is_volumetric else 2, prefer_decoder=prefer_decoder,
     )
 
     # Load the first image and intialize the viewer, annotator and state.
@@ -133,10 +135,10 @@ def image_series_annotator(
     viewer.add_image(image, name="image")
 
     state = AnnotatorState()
-    state.decoder = decoder
     state.initialize_predictor(
         image, model_type=model_type, save_path=image_embedding_path, halo=halo, tile_shape=tile_shape,
-        predictor=predictor, ndim=3 if is_volumetric else 2, precompute_amg_state=precompute_amg_state,
+        predictor=predictor, decoder=decoder,
+        ndim=3 if is_volumetric else 2, precompute_amg_state=precompute_amg_state,
         checkpoint_path=checkpoint_path, device=device,
     )
     state.image_shape = _get_input_shape(image, is_volumetric)
@@ -202,8 +204,11 @@ def image_series_annotator(
         if state.amg is not None:
             state.amg.clear_state()
         state.initialize_predictor(
-            image, model_type=model_type, ndim=3 if is_volumetric else 2, save_path=image_embedding_path, halo=halo,
-            tile_shape=tile_shape, predictor=predictor, precompute_amg_state=precompute_amg_state, device=device,
+            image, model_type=model_type, ndim=3 if is_volumetric else 2,
+            save_path=image_embedding_path,
+            tile_shape=tile_shape, halo=halo,
+            predictor=predictor, decoder=decoder,
+            precompute_amg_state=precompute_amg_state, device=device,
         )
         state.image_shape = _get_input_shape(image, is_volumetric)
 
@@ -300,6 +305,7 @@ def main():
         "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
     )
     parser.add_argument("--precompute_amg_state", action="store_true")
+    parser.add_argument("--prefer_decoder", action="store_false")
 
     args = parser.parse_args()
 
@@ -310,5 +316,6 @@ def main():
         args.input_folder, args.output_folder, args.pattern,
         embedding_path=args.embedding_path, model_type=args.model_type,
         tile_shape=args.tile_shape, halo=args.halo, precompute_amg_state=args.precompute_amg_state,
-        checkpoint_path=args.checkpoint, device=args.device, is_volumetric=args.is_volumetric
+        checkpoint_path=args.checkpoint, device=args.device, is_volumetric=args.is_volumetric,
+        prefer_decoder=args.prefer_decoder,
     )
