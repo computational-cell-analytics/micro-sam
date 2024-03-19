@@ -127,7 +127,7 @@ def main():
     checkpoint_name = "sam_hela"
 
     # Train an additional convolutional decoder for end-to-end automatic instance segmentation
-    train_instance_segmentation = False
+    train_instance_segmentation = True
 
     run_training(checkpoint_name, model_type, train_instance_segmentation)
     export_model(checkpoint_name, model_type)
