@@ -11,7 +11,7 @@ import elf.segmentation as seg_utils
 
 from segment_anything.predictor import SamPredictor
 from scipy.ndimage import binary_closing
-from skimage.measure import label
+from skimage.measure import label, regionprops
 from skimage.segmentation import relabel_sequential
 
 try:
@@ -263,6 +263,7 @@ def merge_instance_segmentation_3d(
     beta: float = 0.5,
     with_background: bool = True,
     gap_closing: Optional[int] = None,
+    min_z_extent: Optional[int] = None,
     verbose: bool = True,
 ) -> np.ndarray:
     """Merge stacked 2d instance segmentations into a consistent 3d segmentation.
@@ -278,6 +279,8 @@ def merge_instance_segmentation_3d(
             In that case all edges connecting to the background are set to be repulsive.
         gap_closing: If given, gaps in the segmentation are closed with a binary closing
             operation. The value is used to determine the number of iterations for the closing.
+        min_z_extent: Require a minimal extent in z for the segmented objects.
+            This can help to prevent segmentation artifacts.
         verbose: Verbosity flag.
 
     Returns:
@@ -305,6 +308,18 @@ def merge_instance_segmentation_3d(
     node_labels = seg_utils.multicut.multicut_decomposition(graph, 1.0 - costs, beta=beta)
 
     segmentation = nifty.tools.take(node_labels, slice_segmentation)
+
+    if min_z_extent is not None and min_z_extent > 0:
+        props = regionprops(segmentation)
+        filter_ids = []
+        for prop in props:
+            box = prop.bbox
+            z_extent = box[3] - box[0]
+            if z_extent < min_z_extent:
+                filter_ids.append(prop.label)
+        if filter_ids:
+            segmentation[np.isin(segmentation, filter_ids)] = 0
+
     return segmentation
 
 
@@ -316,6 +331,7 @@ def automatic_3d_segmentation(
     embedding_path: Optional[Union[str, os.PathLike]] = None,
     with_background: bool = True,
     gap_closing: Optional[int] = None,
+    min_z_extent: Optional[int] = None,
     verbose: bool = True,
     **kwargs,
 ) -> np.ndarray:
@@ -332,6 +348,8 @@ def automatic_3d_segmentation(
         with_background: Whether the segmentation has background.
         gap_closing: If given, gaps in the segmentation are closed with a binary closing
             operation. The value is used to determine the number of iterations for the closing.
+        min_z_extent: Require a minimal extent in z for the segmented objects.
+            This can help to prevent segmentation artifacts.
         verbose: Verbosity flag.
         kwargs: Keyword arguments for the 'generate' method of the 'segmentor'.
 
@@ -356,6 +374,7 @@ def automatic_3d_segmentation(
         segmentation[i] = seg
 
     segmentation = merge_instance_segmentation_3d(
-        segmentation, beta=0.5, with_background=with_background, gap_closing=gap_closing,
+        segmentation, beta=0.5, with_background=with_background, gap_closing=gap_closing, min_z_extent=min_z_extent
     )
+
     return segmentation

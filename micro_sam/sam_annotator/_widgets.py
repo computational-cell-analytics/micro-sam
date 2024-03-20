@@ -677,7 +677,7 @@ def _instance_segmentation_impl(viewer, with_background, min_object_size, i=None
     return seg
 
 
-def _segment_volume(viewer, with_background, min_object_size, gap_closing, **kwargs):
+def _segment_volume(viewer, with_background, min_object_size, gap_closing, min_extent, **kwargs):
     segmentation = np.zeros_like(viewer.layers["auto_segmentation"].data)
 
     offset = 0
@@ -692,6 +692,7 @@ def _segment_volume(viewer, with_background, min_object_size, gap_closing, **kwa
 
     segmentation = merge_instance_segmentation_3d(
         segmentation, beta=0.5, with_background=with_background, gap_closing=gap_closing,
+        min_z_extent=min_extent,
     )
 
     viewer.layers["auto_segmentation"].data = segmentation
@@ -752,6 +753,7 @@ def amg_3d(
     with_background: bool = True,
     apply_to_volume: bool = False,
     gap_closing: int = 2,
+    min_extent: int = 2,
 ) -> None:
     if apply_to_volume:
         # We refuse to run 3D segmentation with the AMG unless we have a GPU or all embeddings
@@ -767,7 +769,7 @@ def amg_3d(
         _segment_volume(
             viewer, with_background, min_object_size, gap_closing,
             pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
-            box_nms_thresh=box_nms_thresh,
+            box_nms_thresh=box_nms_thresh, min_extent=min_extent,
         )
     else:
         i = int(viewer.cursor.position[0])
@@ -792,11 +794,12 @@ def instance_seg_3d(
     with_background: bool = True,
     apply_to_volume: bool = False,
     gap_closing: int = 2,
+    min_extent: int = 2,
 ) -> None:
     if apply_to_volume:
         _segment_volume(
             viewer, with_background, min_object_size, gap_closing,
-            min_size=min_object_size,
+            min_extent=min_extent, min_size=min_object_size,
             center_distance_threshold=center_distance_threshold,
             boundary_distance_threshold=boundary_distance_threshold,
         )
