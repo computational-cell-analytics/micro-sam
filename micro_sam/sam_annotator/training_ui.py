@@ -1,3 +1,4 @@
+import warnings
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -6,15 +7,14 @@ from magicgui import magic_factory
 from torch.utils.data import random_split
 
 import micro_sam.util as util
-from micro_sam.training import default_sam_dataset, train_sam_for_setting
+from micro_sam.training import default_sam_dataset, train_sam_for_setting, SETTINGS
 
 
 # TODO rethink some of the names
-# TODO set and get checkpoint path
 # TODO add optional val paths
 @magic_factory(call_button="Start Training")
 def sam_training(
-    # TODO make the setting a choice
+    # TODO make the setting a choice and see if we can auto-detect it.
     setting: str,
     raw_path: Path,
     label_path: Path,
@@ -23,23 +23,19 @@ def sam_training(
     train_instance_segmentation: bool = True,
     name: Optional[str] = None,
     patch_shape: Tuple[int, int] = (512, 512),
+    # TODO make this setting a choice
     initial_model_name: Optional[str] = None,
     checkpoint_path: Optional[Path] = None,
 ) -> None:
-
-    # TODO set this depending on the settings.
     batch_size = 1
-    num_workers = 1
-
-    # TODO check if the data is 3dim and add a singleton to the patch shape
+    num_workers = 1 if setting == "CPU" else 4
 
     # TODO these should become optional params
     raw_path_val, label_path_val = None, None
     if raw_path_val is None:
         dataset = default_sam_dataset(
-            raw_path, raw_key, label_path, label_key,
-            patch_shape=patch_shape, batch_size=batch_size,
-            with_segmentation_decoder=train_instance_segmentation,
+            str(raw_path), raw_key, str(label_path), label_key,
+            patch_shape=patch_shape, with_segmentation_decoder=train_instance_segmentation,
         )
         # TODO better heuristic for the split?
         train_dataset, val_dataset = random_split(dataset, lengths=[len(dataset) - 1, 1])
@@ -56,10 +52,22 @@ def sam_training(
         val_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers,
     )
 
-    # TODO consolidate initial model name, the checkpoint path and the model type according to the settings.
+    # Consolidate initial model name, the checkpoint path and the model type according to the settings.
+    if initial_model_name is None or initial_model_name == "None" or initial_model_name == "":
+        model_type = SETTINGS[setting]["model_type"]
+    else:
+        model_type = initial_model_name[:5]
+        if model_type != SETTINGS[setting]["model_type"]:
+            warnings.warn(
+                f"You have changed the model type for your chosen setting {setting} "
+                f"from {SETTINGS[setting]['model_type']} to {model_type}. "
+                "The training may be very slow or not work at all."
+            )
+    assert model_type is not None
+
     if checkpoint_path is None:
         model_registry = util.models()
-        checkpoint_path = model_registry.fetch()
+        checkpoint_path = model_registry.fetch(model_type)
 
     # TODO set napari pbar in torch_em
     train_sam_for_setting(
@@ -67,4 +75,5 @@ def sam_training(
         train_loader=train_loader, val_loader=val_loader,
         checkpoint_path=checkpoint_path,
         with_segmentation_decoder=train_instance_segmentation,
+        model_type=model_type,
     )

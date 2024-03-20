@@ -76,7 +76,7 @@ class TestTraining(unittest.TestCase):
 
         batch_size = 1
         n_sub_iteration = 3
-        patch_shape = (1, 512, 512)
+        patch_shape = (512, 512)
         n_objects_per_batch = 2
 
         # Get the dataloaders.

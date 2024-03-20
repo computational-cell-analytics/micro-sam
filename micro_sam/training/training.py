@@ -1,8 +1,11 @@
 import os
 from typing import List, Optional, Tuple, Union
 
+import imageio.v3 as imageio
 import torch
 import torch_em
+from elf.io import open_file
+
 from torch_em.transform.label import PerObjectDistanceTransform
 from torch.utils.data import DataLoader, Dataset
 from torch.optim.lr_scheduler import _LRScheduler
@@ -203,6 +206,30 @@ def train_sam(
     trainer.fit(epochs=n_epochs)
 
 
+def _update_patch_shape(patch_shape, raw_paths, raw_key, with_channels):
+    if not isinstance(raw_paths, (str, os.PathLike)):
+        path = raw_paths[0]
+    else:
+        path = raw_paths
+    assert isinstance(raw_paths, (str, os.PathLike))
+
+    if raw_key is None:
+        ndim = imageio.imread(path).ndim
+    else:
+        with open_file(path, "r") as f:
+            ndim = f[raw_key].ndim
+
+    if ndim == 2:
+        assert len(patch_shape) == 2
+        return patch_shape
+    elif ndim == 3 and len(patch_shape) == 2 and not with_channels:
+        return (1,) + patch_shape
+    elif ndim == 4 and len(patch_shape) == 2 and with_channels:
+        return (1,) + patch_shape
+    else:
+        return patch_shape
+
+
 def default_sam_dataset(
     raw_paths: Union[List[FilePath], FilePath],
     raw_key: Optional[str],
@@ -224,6 +251,7 @@ def default_sam_dataset(
         The dataloader.
     """
 
+    # Set the data transformations.
     raw_transform = identity
     if with_segmentation_decoder:
         label_transform = PerObjectDistanceTransform(
@@ -233,11 +261,16 @@ def default_sam_dataset(
     else:
         label_transform = torch_em.transform.label.connected_components
 
-    # set a default sampler
+    # Set a default sampler if none was passed.
     if sampler is None:
         sampler = torch_em.data.sampler.MinInstanceSampler(3)
 
-    # set min n-sample
+    # Check the patch shape to add a singleton if required.
+    patch_shape = _update_patch_shape(
+        patch_shape, raw_paths, raw_key, with_channels
+    )
+
+    # Set a minimum number of samples per epoch.
     if n_samples is None:
         loader = torch_em.default_segmentation_loader(
             raw_paths, raw_key, label_paths, label_key,
@@ -263,9 +296,8 @@ def default_sam_loader(**kwargs) -> DataLoader:
     return loader
 
 
-# TODO extend this
 SETTINGS = {
-    "Minimal": {"model_type": "vit_t", "n_objets_per_batch": 4, "n_sub_iterations": 4},
+    "Minimal": {"model_type": "vit_t", "n_objects_per_batch": 4, "n_sub_iteration": 4},
     "CPU": {"model_type": "vit_b", "n_objects_per_batch": 10},
     "gtx1080": {"model_type": "vit_t", "n_objects_per_batch": 5},
     "rtx5000": {"model_type": "vit_b", "n_objects_per_batch": 10},
