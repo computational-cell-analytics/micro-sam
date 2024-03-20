@@ -4,7 +4,7 @@ from torch_em.data import datasets
 from torch_em.transform.label import connected_components
 
 from micro_sam.evaluation.model_comparison import (
-    generate_data_for_model_comparison, model_comparison, model_comparison_with_napari
+    generate_data_for_model_comparison, model_comparison
 )
 
 
@@ -36,6 +36,7 @@ def compare_experiments_for_dataset(
         outline_dilation=0
     )
     if view_napari:
+        from micro_sam.evaluation.model_comparison import model_comparison_with_napari
         model_comparison_with_napari(output_folder, show_points=True)
 
 
@@ -64,6 +65,91 @@ def fetch_data_loaders(dataset_name):
     elif dataset_name == "plantseg_root":
         loader = datasets.get_plantseg_loader(
             os.path.join(ROOT, "plantseg"), "root", "test", (1, 512, 512), 1, ndim=2, download=True
+        )
+
+    elif dataset_name == "neurips_cellseg":
+        loader = datasets.get_neurips_cellseg_supervised_loader(
+            os.path.join(ROOT, "neurips_cellseg"), "test", (512, 512), 1
+        )
+
+    elif dataset_name == "covid_if":
+        loader = datasets.get_covid_if_loader(
+            os.path.join(ROOT, "covid_if"), (512, 512), 1, ndim=2, download=True
+        )
+
+    elif dataset_name == "plantseg_ovules":
+        loader = datasets.get_plantseg_loader(
+            os.path.join(ROOT, "plantseg"), "ovules", "test", (1, 512, 512), 1, ndim=2, download=True
+        )
+
+    elif dataset_name == "hpa":
+        loader = datasets.get_hpa_segmentation_loader(
+            os.path.join(ROOT, "hpa"), "test", (512, 512), 1, download=True
+        )
+
+    elif dataset_name == "lizard":
+        loader = datasets.get_lizard_loader(
+            os.path.join(ROOT, "lizard"), (512, 512), 1, download=True
+        )
+
+    elif dataset_name == "mouse_embryo":
+        loader = datasets.get_mouse_embryo_loader(
+            os.path.join(ROOT, "mouse_embryo"), "membrane", "test", (1, 512, 512), download=True, ndim=2
+        )
+
+    elif dataset_name == "dsb":
+        loader = datasets.get_dsb_loader(
+            os.path.join(ROOT, "dsb"), "val", (256, 256), 1, download=True
+        )
+
+    elif dataset_name == "dynamicnuclearnet":
+        loader = datasets.get_dynamicnuclearnet_loader(
+            os.path.join(ROOT, "dynamicnuclearnet"), "test", (512, 512), 1
+        )
+
+    elif dataset_name == "mitoem_rat":
+        loader = datasets.get_mitoem_loader(
+            os.path.join(ROOT, "mitoem"), "test", (1, 512, 512), 1, "rat"
+        )
+
+    elif dataset_name == "mitoem_human":
+        loader = datasets.get_mitoem_loader(
+            os.path.join(ROOT, "mitoem"), "test", (1, 512, 512), 1, "human"
+        )
+
+    elif dataset_name == "platy_nuclei":
+        loader = datasets.get_platynereis_nuclei_loader(
+            os.path.join(ROOT, "platynereis"), (512, 512), 1, ndim=2, download=True
+        )
+
+    elif dataset_name == "platy_cilia":
+        loader = datasets.get_platynereis_cilia_loader(
+            os.path.join(ROOT, "platynereis"), (512, 512), 1, ndim=2, download=True
+        )
+
+    elif dataset_name == "uro_cell":
+        loader = datasets.get_uro_cell_loader(
+            os.path.join(ROOT, "uro_cell"), "mito", (512, 512), 1, download=True
+        )
+
+    elif dataset_name == "nuc_mm_mouse":
+        loader = datasets.get_nuc_mm_loader(
+            os.path.join(ROOT, "nuc_mm"), "mouse", "val", (512, 512), 1, download=True
+        )
+
+    elif dataset_name == "nuc_mm_zebrafish":
+        loader = datasets.get_nuc_mm_loader(
+            os.path.join(ROOT, "nuc_mm"), "zebrafish", "val", (512, 512), 1, download=True
+        )
+
+    elif dataset_name == "sponge_em":
+        loader = datasets.get_sponge_em_loader(
+            os.path.join(ROOT, "sponge_em"), "instances", (512, 512), 1, download=True
+        )
+
+    elif dataset_name == "asem":
+        loader = datasets.get_asem_loader(
+            ...
         )
 
     return loader

@@ -12,6 +12,14 @@ def compare_lm(
     compare_experiments_for_dataset("plantseg_root", standard_model, finetuned_model)
 
     # compare_experiments_for_dataset("tissuenet", standard_model, finetuned_model)
+    compare_experiments_for_dataset("neurips_cellseg", standard_model, finetuned_model)
+    compare_experiments_for_dataset("covid_if", standard_model, finetuned_model)
+    compare_experiments_for_dataset("plantseg_ovules", standard_model, finetuned_model)
+    compare_experiments_for_dataset("hpa", standard_model, finetuned_model)
+    compare_experiments_for_dataset("lizard", standard_model, finetuned_model)
+    compare_experiments_for_dataset("mouse_embryo", standard_model, finetuned_model)
+    compare_experiments_for_dataset("dsb", standard_model, finetuned_model)
+    compare_experiments_for_dataset("dynamicnuclearnet", standard_model, finetuned_model)
 
 
 def main():
