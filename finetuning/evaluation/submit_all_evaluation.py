@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 from glob import glob
+from pathlib import Path
 from datetime import datetime
 
 
@@ -19,10 +20,12 @@ def write_batch_script(
     batch_script = f"""#!/bin/bash
 #SBATCH -c 8
 #SBATCH --mem 64G
-#SBATCH -t 2-00:00:00
+#SBATCH -t 4-00:00:00
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
 #SBATCH -A gzz0001
+#SBATCH --constraint=80gb
+#SBATCH --qos=96h
 #SBATCH --job-name={inference_setup}
 
 source ~/.bashrc
@@ -32,7 +35,8 @@ mamba activate {env_name} \n"""
         batch_script += f"sleep {delay} \n"
 
     # python script
-    python_script = f"python {inference_setup}.py "
+    inference_script_path = os.path.join(Path(__file__).parent, f"{inference_setup}.py")
+    python_script = f"python {inference_script_path} "
 
     _op = out_path[:-3] + f"_{inference_setup}.sh"
 
@@ -199,7 +203,7 @@ if __name__ == "__main__":
     # the parameters to use the default models
     parser.add_argument("-d", "--dataset_name", type=str, required=True)
     parser.add_argument("-m", "--model_type", type=str, required=True)
-    parser.add_argument("-e", "--experiment_set", type=str, required=True)
+    parser.add_argument("-e", "--experiment_set", type=str)
     # optional argument to specify for the experiment root folder automatically
     parser.add_argument("-r", "--roi", type=str)
     parser.add_argument("--use_masks", action="store_true")

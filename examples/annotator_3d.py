@@ -24,8 +24,7 @@ def em_3d_annotator(finetuned_model):
     else:
         assert finetuned_model in ("organelles", "boundaries")
         embedding_path = os.path.join(EMBEDDING_CACHE, f"embeddings-lucchi-vit_b_em_{finetuned_model}.zarr")
-        model_type = f"vit_b_em_{finetuned_model}"
-        print(embedding_path)
+        model_type = f"vit_b_{finetuned_model}"
 
     # start the annotator, cache the embeddings
     annotator_3d(raw, embedding_path, model_type=model_type)
@@ -37,7 +36,7 @@ def main():
     # - None / False (will use the vanilla model)
     # - "organelles": will use the model for mitochondria and other organelles
     # - "boundaries": will use the model for boundary based structures
-    finetuned_model = None
+    finetuned_model = "organelles"
 
     em_3d_annotator(finetuned_model)
 

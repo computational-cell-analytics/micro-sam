@@ -7,11 +7,15 @@ import subprocess
 ROOT = "/scratch/usr/nimanwai"
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/new_models/test/"
 
-CMD = "python submit_experiment_evaluation.py "
+CMD = "python ../../evaluation/submit_all_evaluation.py "
 
 
 def run_eval_process(cmd):
-    proc = subprocess.Popen(cmd)
+    print(f"Running the command: {cmd} \n")
+
+    _cmd = re.split(r"\s", cmd)
+
+    proc = subprocess.Popen(_cmd)
     try:
         outs, errs = proc.communicate(timeout=60)
     except subprocess.TimeoutExpired:
@@ -19,38 +23,29 @@ def run_eval_process(cmd):
         outs, errs = proc.communicate()
 
 
-def for_vit_t():
-    checkpoint = os.path.join(
-        ROOT, "experiments", "test", "micro-sam", "vit_t", "checkpoints", "vit_t", "livecell_sam", "best.pt"
-    )
-    experiment_folder = os.path.join(EXPERIMENT_ROOT, "vit_t")
+def _submit_scripts(model, checkpoint, experiment_folder, specific_script):
+    cmd = CMD + f"-m {model} " + "-d livecell "
+    cmd += f"--checkpoint_path {checkpoint} "
+    cmd += f"--experiment_path {experiment_folder}"
+    if specific_script is not None:
+        cmd += f" -s {specific_script}"
 
-    cmd = CMD + "-m vit_t " + f"-c {checkpoint} " + f"-e {experiment_folder}"
-    print(f"Running the command: {cmd} \n")
-
-    _cmd = re.split(r"\s", cmd)
-
-    run_eval_process(_cmd)
+    run_eval_process(cmd)
 
 
-def for_n_objects(max_objects=45):
+def for_n_objects(model, max_objects=45, specific_script=None):
     ckpt_root = os.path.join(ROOT, "experiments", "micro-sam", "n_objects_per_batch")
     exp_root = os.path.join(EXPERIMENT_ROOT, "n_objects_per_batch")
     for i in range(1, max_objects+1):
-        checkpoint = os.path.join(ckpt_root, f"{i}", "checkpoints", "vit_b", "livecell_sam", "best.pt")
+        checkpoint = os.path.join(ckpt_root, f"{i}", "freeze-None", "checkpoints", model, "livecell_sam", "best.pt")
         experiment_folder = os.path.join(exp_root, f"{i}")
 
-        cmd = CMD + "-m vit_b " + f"-c {checkpoint} " + f"-e {experiment_folder}"
-        print(f"Running the command: {cmd} \n")
-
-        _cmd = re.split(r"\s", cmd)
-
-        run_eval_process(_cmd)
+        _submit_scripts(model, checkpoint, experiment_folder, specific_script)
 
 
-def for_freezing_backbones():
-    ckpt_root = os.path.join(ROOT, "experiments", "micro-sam", "partial-finetuning")
-    exp_root = os.path.join(EXPERIMENT_ROOT, "partial-finetuning")
+def for_freezing_backbones(model, specific_script=None):
+    ckpt_root = os.path.join(ROOT, "experiments", "micro-sam", "freezing-livecell")
+    exp_root = os.path.join(EXPERIMENT_ROOT, "freezing-livecell")
 
     # let's get all combinations need for the freezing backbone experiments
     backbone_combinations = ["image_encoder", "prompt_encoder", "mask_decoder"]
@@ -77,18 +72,14 @@ def for_freezing_backbones():
             checkpoint = os.path.join(ckpt_root, f"freeze-{_setup}")
             experiment_folder = os.path.join(exp_root, f"freeze-{_setup}")
 
-        checkpoint = os.path.join(checkpoint, "checkpoints", "vit_b", "livecell_sam", "best.pt")
+        checkpoint = os.path.join(checkpoint, "checkpoints", model, "livecell_sam", "best.pt")
 
-        cmd = CMD + "-m vit_b " + f"-c {checkpoint} " + f"-e {experiment_folder}"
-        print(f"Running the command: {cmd} \n")
-
-        _cmd = re.split(r"\s", cmd)
-
-        run_eval_process(_cmd)
+        _submit_scripts(model, checkpoint, experiment_folder, specific_script)
 
 
 def main():
-    for_freezing_backbones()
+    for_freezing_backbones("vit_l")
+    for_n_objects("vit_b")
 
 
 if __name__ == "__main__":
