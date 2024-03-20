@@ -54,7 +54,7 @@ def finetune_livecell(args):
 
     # all the stuff we need for training
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
-    scheduler_params = {"patience": 10}
+    scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10, "verbose": True}
 
     # Run training.
     sam_training.train_sam(
@@ -70,8 +70,7 @@ def finetune_livecell(args):
         lr=1e-5,
         n_iterations=args.iterations,
         save_root=args.save_root,
-        scheduler_kwargs=scheduler_params,
-        export_path=args.export_path,
+        scheduler_kwargs=scheduler_kwargs,
         save_every_kth_epoch=args.save_every_kth_epoch,
     )
 
