@@ -68,7 +68,7 @@ def _get_livecell_paths(input_folder, split="test", n_val_per_cell_type=None):
             gt_paths.append(os.path.join(gt_dir, cell_type, img_name))
             count_per_cell_type[cell_type] += 1
 
-    return image_paths, gt_paths
+    return sorted(image_paths), sorted(gt_paths)
 
 
 def livecell_inference(
