@@ -170,10 +170,8 @@ def train_sam(
     else:
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    scheduler_params = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
-    if scheduler_kwargs is not None:
-        for k, v in scheduler_kwargs.items():
-            scheduler_params[k] = v
+    if scheduler_kwargs is None:
+        scheduler_params = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
 
     scheduler = scheduler_class(optimizer=optimizer, **scheduler_params)
 
