@@ -5,7 +5,6 @@ from glob import glob
 from shutil import rmtree
 
 import imageio.v3 as imageio
-import torch_em
 
 from micro_sam.sample_data import synthetic_data
 from micro_sam.util import VIT_T_SUPPORT, get_sam_model, SamPredictor
@@ -22,21 +21,21 @@ class TestTraining(unittest.TestCase):
         label_root = os.path.join(self.tmp_folder, "synthetic-data", "labels")
 
         shape = (512, 512)
-        n_images_train = 4
-        n_images_val = 1
-        n_images_test = 1
+        self.n_images_train = 4
+        self.n_images_val = 1
+        self.n_images_test = 1
 
-        n_images = n_images_train + n_images_val + n_images_test
+        n_images = self.n_images_train + self.n_images_val + self.n_images_test
         for i in range(n_images):
-            if i < n_images_train:
+            if i < self.n_images_train:
                 image_dir, label_dir = os.path.join(image_root, "train"), os.path.join(label_root, "train")
                 idx = i
-            elif i < n_images_train + n_images_val:
+            elif i < self.n_images_train + self.n_images_val:
                 image_dir, label_dir = os.path.join(image_root, "val"), os.path.join(label_root, "val")
-                idx = i - n_images_train
+                idx = i - self.n_images_train
             else:
                 image_dir, label_dir = os.path.join(image_root, "test"), os.path.join(label_root, "test")
-                idx = i - n_images_train - n_images_val
+                idx = i - self.n_images_train - self.n_images_val
 
             os.makedirs(image_dir, exist_ok=True)
             os.makedirs(label_dir, exist_ok=True)
@@ -62,13 +61,13 @@ class TestTraining(unittest.TestCase):
         label_root = os.path.join(self.tmp_folder, "synthetic-data", "labels", split)
         raw_key, label_key = "*.tif", "*.tif"
 
-        loader = torch_em.default_segmentation_loader(
+        loader = sam_training.default_sam_loader(
             raw_paths=image_root, raw_key=raw_key,
             label_paths=label_root, label_key=label_key,
             patch_shape=patch_shape, batch_size=batch_size,
-            label_transform=torch_em.transform.label.connected_components,
-            shuffle=True, num_workers=2, ndim=2, is_seg_dataset=False,
-            raw_transform=sam_training.identity,
+            with_segmentation_decoder=False,
+            shuffle=True, num_workers=1,
+            n_samples=self.n_images_train if split == "train" else self.n_images_val
         )
         return loader
 
