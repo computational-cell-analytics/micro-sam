@@ -2,6 +2,7 @@ import warnings
 from pathlib import Path
 from typing import Optional, Tuple
 
+import torch
 import torch_em
 from magicgui import magic_factory
 from torch.utils.data import random_split
@@ -10,20 +11,30 @@ import micro_sam.util as util
 from micro_sam.training import default_sam_dataset, train_sam_for_setting, SETTINGS
 
 
+def _find_best_setting():
+    if torch.cuda.is_available():
+        # can we check the GPU type and use it to match the setting?
+        return "rtx5000"
+    else:
+        return "CPU"
+
+
 # TODO rethink some of the names
 # TODO add optional val paths
-@magic_factory(call_button="Start Training")
+@magic_factory(
+    call_button="Start Training",
+    setting={"choices": list(SETTINGS.keys())},
+    initial_model_name={"choices": list(util.models().urls.keys())}
+)
 def sam_training(
-    # TODO make the setting a choice and see if we can auto-detect it.
-    setting: str,
     raw_path: Path,
     label_path: Path,
     raw_key: Optional[str] = None,
     label_key: Optional[str] = None,
+    setting: str = _find_best_setting(),
     train_instance_segmentation: bool = True,
     name: Optional[str] = None,
     patch_shape: Tuple[int, int] = (512, 512),
-    # TODO make this setting a choice
     initial_model_name: Optional[str] = None,
     checkpoint_path: Optional[Path] = None,
 ) -> None:
