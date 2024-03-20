@@ -263,7 +263,11 @@ def default_sam_loader(**kwargs) -> DataLoader:
     return loader
 
 
-RESSOURCE_SETTINGS = ("A100", "Minimal")
+# TODO extend this
+SETTINGS = {
+    "Minimal": {"model_type": "vit_t", "n_objets_per_batch": 4, "n_sub_iterations": 4},
+    "A100": {"model_type": "vit_h"},
+}
 
 
 def train_sam_for_setting(
@@ -290,13 +294,10 @@ def train_sam_for_setting(
             for automatic instance segmentation.
         kwargs: TODO
     """
-    if setting == "A100":
-        train_kwargs = {"model_type": "vit_h"}
-    elif setting == "Minimal":
-        # TODO raise a warning that this is only for testing
-        train_kwargs = {"model_type": "vit_t", "n_objets_per_batch": 4, "n_sub_iterations": 4}
+    if setting in SETTINGS:
+        train_kwargs = SETTINGS[setting]
     else:
-        raise ValueError(f"Invalid ressource setting {setting}")
+        raise ValueError(f"Invalid setting {setting} expect one of {list(SETTINGS.keys())}")
 
     train_kwargs.update(**kwargs)
     train_sam(
