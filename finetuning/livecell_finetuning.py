@@ -1,3 +1,4 @@
+import os
 import argparse
 
 import torch
@@ -6,6 +7,7 @@ from torch_em.data.datasets import get_livecell_loader
 from torch_em.transform.label import PerObjectDistanceTransform
 
 import micro_sam.training as sam_training
+from micro_sam.util import export_custom_sam_model
 
 
 def get_dataloaders(patch_shape, data_path, cell_type=None):
@@ -72,6 +74,14 @@ def finetune_livecell(args):
         export_path=args.export_path,
         save_every_kth_epoch=args.save_every_kth_epoch,
     )
+
+    if args.export_path is not None:
+        checkpoint_path = os.path.join(
+            "" if args.save_root is None else args.save_root, "checkpoints", checkpoint_name, "best.pt"
+        )
+        export_custom_sam_model(
+            checkpoint_path=checkpoint_path, model_type=model_type, save_path=args.export_path,
+        )
 
 
 def main():

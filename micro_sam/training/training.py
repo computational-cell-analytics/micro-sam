@@ -3,12 +3,14 @@ from typing import List, Optional, Union, Any, Dict
 
 import torch
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import _LRScheduler, ReduceLROnPlateau
+
 from torch_em.loss import DiceBasedDistanceLoss
 
+from ..util import get_device
 from . import sam_trainer as trainers
 from ..instance_segmentation import get_unetr
 from . import joint_sam_trainer as joint_trainers
-from ..util import get_device, export_custom_sam_model
 from .util import get_trainable_sam_model, ConvertToSamInputs
 
 
@@ -96,8 +98,8 @@ def train_sam(
     save_root: Optional[Union[str, os.PathLike]] = None,
     mask_prob: float = 0.5,
     n_iterations: Optional[int] = None,
+    scheduler_class: Optional[_LRScheduler] = ReduceLROnPlateau,
     scheduler_kwargs: Optional[Dict[str, Any]] = None,
-    export_path: Optional[Union[str, os.PathLike]] = None,
     save_every_kth_epoch: Optional[int] = None,
 ) -> None:
     """Run training for a SAM model.
@@ -127,10 +129,10 @@ def train_sam(
             If not given the current working directory is used.
         mask_prob: The probability for using a mask as input in a given training sub-iteration.
         n_iterations: The number of iterations to use for training. This will over-ride n_epochs if given.
+        scheduler_class: The learning rate scheduler to update the learning rate.
+            By default, ReduceLROnPlateau is used.
         scheduler_kwargs: The learning rate scheduler parameters.
             If passed None, the chosen default parameters are used in ReduceLROnPlateau.
-        export_path: Export a finetuned segment anything model to the standard model format.
-            The exported model can be used by the interactive annotation tools in `micro_sam.annotator`.
         save_every_kth_epoch: Save checkpoints after every kth epoch separately.
     """
     _check_loader(train_loader, with_segmentation_decoder)
@@ -173,7 +175,7 @@ def train_sam(
         for k, v in scheduler_kwargs.items():
             scheduler_params[k] = v
 
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **scheduler_params)
+    scheduler = scheduler_class(optimizer=optimizer, **scheduler_params)
 
     # The trainer which performs training and validation.
     if with_segmentation_decoder:
@@ -230,11 +232,3 @@ def train_sam(
         trainer_fit_params["save_every_kth_epoch"] = save_every_kth_epoch
 
     trainer.fit(**trainer_fit_params)
-
-    if export_path is not None:
-        checkpoint_path = os.path.join(
-            "" if save_root is None else save_root, "checkpoints", name, "best.pt"
-        )
-        export_custom_sam_model(
-            checkpoint_path=checkpoint_path, model_type=model_type, save_path=export_path,
-        )
