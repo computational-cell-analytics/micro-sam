@@ -63,11 +63,21 @@ def _instance_segmentation_with_decoder(args):
 
     import numpy as np
     from elf.evaluation import mean_segmentation_accuracy
-    msa = mean_segmentation_accuracy(instances, labels)
-    print("mSA for 3d volume is:", msa)
 
-    msa = [mean_segmentation_accuracy(_instance, _label) for _instance, _label in zip(instances, labels)]
-    print("mSA for mean over each 2d slice is:", np.mean(msa))
+    msa, sa = mean_segmentation_accuracy(instances, labels, return_accuracies=True)
+    print("mSA for 3d volume is:", msa)
+    print("SA50 for 3d volume is:", sa[0])
+    print()
+
+    per_slice_msa, per_slice_sa50 = [], []
+    for _instance, _label in zip(instances, labels):
+        msa, sa = mean_segmentation_accuracy(_instance, _label, return_accuracies=True)
+        per_slice_msa.append(msa)
+        per_slice_sa50.append(sa[0])
+
+    print("mSA for mean over each 2d slice is:", np.mean(per_slice_msa))
+    print("SA50 for mean over each 2d slice is:", np.mean(per_slice_sa50))
+    print()
 
     import napari
     v = napari.Viewer()
