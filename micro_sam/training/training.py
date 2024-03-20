@@ -266,6 +266,10 @@ def default_sam_loader(**kwargs) -> DataLoader:
 # TODO extend this
 SETTINGS = {
     "Minimal": {"model_type": "vit_t", "n_objets_per_batch": 4, "n_sub_iterations": 4},
+    "CPU": {"model_type": "vit_b", "n_objects_per_batch": 10},
+    "gtx1080": {"model_type": "vit_t", "n_objects_per_batch": 5},
+    "rtx5000": {"model_type": "vit_b", "n_objects_per_batch": 10},
+    "V100": {"model_type": "vit_b"},
     "A100": {"model_type": "vit_h"},
 }
 
