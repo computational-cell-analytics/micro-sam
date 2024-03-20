@@ -43,8 +43,8 @@ def _instance_segmentation_with_decoder(args):
     labels = label(labels)
 
     model_type = "vit_b"
-    checkpoint_path = "/scratch/usr/nimanwai/micro-sam/checkpoints/vit_b/mito_nuc_em_generalist_sam/best.pt"
-    embedding_path = "/scratch/usr/nimanwai/test/lucchi_automatic_segmentation/vit_b_em_organelles_v2"
+    checkpoint_path = "/home/anwai/models/micro-sam/vit_b/em_organelles/best.pt"
+    embedding_path = "/home/anwai/embeddings/lucchi_r2_embeddings/embeddings_vit_b_finetuned_v2"
 
     predictor, decoder = instance_segmentation.get_predictor_and_decoder(model_type, checkpoint_path)
     segmentor = instance_segmentation.InstanceSegmentationWithDecoder(predictor, decoder)
@@ -61,9 +61,20 @@ def _instance_segmentation_with_decoder(args):
         gap_closing=2,
     )
 
+    import numpy as np
     from elf.evaluation import mean_segmentation_accuracy
     msa = mean_segmentation_accuracy(instances, labels)
-    print(msa)
+    print("mSA for 3d volume is:", msa)
+
+    msa = [mean_segmentation_accuracy(_instance, _label) for _instance, _label in zip(instances, labels)]
+    print("mSA for mean over each 2d slice is:", np.mean(msa))
+
+    import napari
+    v = napari.Viewer()
+    v.add_image(volume)
+    v.add_labels(labels, visible=False)
+    v.add_labels(instances)
+    napari.run()
 
 
 def main(args):
