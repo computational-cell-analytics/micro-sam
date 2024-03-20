@@ -15,7 +15,6 @@ except ImportError:
     from segment_anything import sam_model_registry
 
 
-# TODO we need to accept and return an additional tensor for the image sizes to support embeddings
 class PredictorAdaptor(nn.Module):
     """Wrapper around the SamPredictor.
 
@@ -40,14 +39,19 @@ class PredictorAdaptor(nn.Module):
         self,
         image: torch.Tensor,
         box_prompts: Optional[torch.Tensor] = None,
-        # TODO add point and mask prompts
+        point_prompts: Optional[torch.Tensor] = None,
+        point_labels: Optional[torch.Tensor] = None,
+        mask_prompts: Optional[torch.Tensor] = None,
         embeddings: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
 
         Args:
             image: torch inputs of dimensions B x C x H x W
-            box_prompts: box prompts of dimensions B x OBJECTS x 4
+            box_prompts: box coordinates of dimensions B x OBJECTS x 4
+            point_prompts: point coordinates of dimension B x OBJECTS x POINTS x 2
+            point_labels: point labels of dimension B x OBJECTS x POINTS
+            mask_prompts: mask prompts of dimension B x OBJECTS x 256 x 256
             embeddings: precomputed image embeddings B x 256 x 64 x 64
 
         Returns:
@@ -67,17 +71,38 @@ class PredictorAdaptor(nn.Module):
             self.sam.input_h, self.sam.input_w = self.sam.transform.apply_image_torch(image).shape[2:]
             self.sam.is_image_set = True
 
-        # We don't have image embeddings set and they were not apassed
+        # We don't have image embeddings set and they were not passed.
         elif not self.sam.is_image_set:
             image = self.sam.transform.apply_image_torch(image)
             self.sam.set_torch_image(image, original_image_size=image.numpy().shape[2:])
+            self.sam.orig_h, self.sam.orig_w = self.sam.original_size
+            self.sam.input_h, self.sam.input_w = self.sam.input_size
 
-        boxes = self.sam.transform.apply_boxes_torch(box_prompts, original_size=image.numpy().shape[2:])
+        # Ensure input size and original size are set.
+        self.sam.input_size = (self.sam.input_h, self.sam.input_w)
+        self.sam.original_size = (self.sam.orig_h, self.sam.orig_w)
 
+        if box_prompts is None:
+            boxes = None
+        else:
+            boxes = self.sam.transform.apply_boxes_torch(box_prompts, original_size=self.sam.original_size)
+
+        if point_prompts is None:
+            point_coords = None
+        else:
+            assert point_labels is not None
+            point_coords = self.sam.transform.apply_coords_torch(point_prompts, original_size=self.sam.original_size)[0]
+            point_labels = point_labels[0]
+
+        print()
+        print(point_coords.shape)
+        print(point_labels.shape)
+        print(boxes.shape)
         masks, scores, _ = self.sam.predict_torch(
-            point_coords=None,
-            point_labels=None,
+            point_coords=point_coords,
+            point_labels=point_labels,
             boxes=boxes,
+            mask_input=mask_prompts,
             multimask_output=False
         )
 

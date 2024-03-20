@@ -4,7 +4,6 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Union
 
-# FIXME import fails
 import bioimageio.core
 import bioimageio.spec.model.v0_5 as spec
 import matplotlib.pyplot as plt
@@ -42,27 +41,42 @@ def _create_test_inputs_and_outputs(
 ):
 
     # For now we just generate a single box prompt here, but we could also generate more input prompts.
-    generator = PointAndBoxPromptGenerator(0, 0, 4, False, True)
+    generator = PointAndBoxPromptGenerator(
+        n_positive_points=1,
+        n_negative_points=2,
+        dilation_strength=2,
+        get_point_prompts=True,
+        get_box_prompts=True,
+    )
     centers, bounding_boxes = util.get_centers_and_bounding_boxes(labels)
     masks = util.segmentation_to_one_hot(labels.astype("int64"), segmentation_ids=[1, 2])  # type: ignore
-    _, _, box_prompts, _ = generator(masks, [bounding_boxes[1], bounding_boxes[2]])
+    point_prompts, point_labels, box_prompts, _ = generator(masks, [bounding_boxes[1], bounding_boxes[2]])
+
     box_prompts = box_prompts.numpy()[None]
+    point_prompts = point_prompts.numpy()[None]
+    point_labels = point_labels.numpy()[None]
 
     predictor = PredictorAdaptor(model_type=model_type)
     predictor.load_state_dict(torch.load(checkpoint_path))
 
-    save_box_prompt_path = os.path.join(tmp_dir, "box_prompts.npy")
-    np.save(save_box_prompt_path, box_prompts)
-
     input_ = util._to_image(image).transpose(2, 0, 1)[None]
-    save_image_path = os.path.join(tmp_dir, "input.npy")
-    np.save(save_image_path, input_)
+    image_path = os.path.join(tmp_dir, "input.npy")
+    np.save(image_path, input_)
 
     masks, scores, embeddings = predictor(
         image=torch.from_numpy(input_),
         embeddings=None,
-        box_prompts=torch.from_numpy(box_prompts)
+        box_prompts=torch.from_numpy(box_prompts),
+        point_prompts=torch.from_numpy(point_prompts),
+        point_labels=torch.from_numpy(point_labels),
     )
+
+    box_prompt_path = os.path.join(tmp_dir, "box_prompts.npy")
+    point_prompt_path = os.path.join(tmp_dir, "point_prompts.npy")
+    point_label_path = os.path.join(tmp_dir, "point_labels.npy")
+    np.save(box_prompt_path, box_prompts)
+    np.save(point_prompt_path, point_prompts)
+    np.save(point_label_path, point_labels)
 
     mask_path = os.path.join(tmp_dir, "mask.npy")
     score_path = os.path.join(tmp_dir, "scores.npy")
@@ -71,11 +85,11 @@ def _create_test_inputs_and_outputs(
     np.save(score_path, scores.numpy())
     np.save(embed_path, embeddings.numpy())
 
-    # TODO autogenerate the cover and return it too.
-
     inputs = {
-        "image": save_image_path,
-        "box_prompts": save_box_prompt_path,
+        "image": image_path,
+        "box_prompts": box_prompt_path,
+        "point_prompts": point_prompt_path,
+        "point_labels": point_label_path,
     }
     outputs = {
         "mask": mask_path,
@@ -154,24 +168,26 @@ def _generate_covers(input_paths, result_paths, tmp_dir):
 
 
 def _check_model(model_description, input_paths, result_paths):
-    model = bioimageio.core.load_resource_description(model_description)
-
     # Load inputs and outputs.
     image = xarray.DataArray(np.load(input_paths["image"]), dims=tuple("bcyx"))
     embeddings = xarray.DataArray(np.load(result_paths["embeddings"]), dims=tuple("bcyx"))
-    box_prompts = np.load(input_paths["box_prompts"], dims=tuple("bic"))
+    box_prompts = xarray.DataArray(np.load(input_paths["box_prompts"]), dims=tuple("bic"))
+    point_prompts = xarray.DataArray(np.load(input_paths["point_prompts"]), dims=tuple("biic"))
+    point_labels = xarray.DataArray(np.load(input_paths["point_labels"]), dims=tuple("bic"))
     mask = np.load(result_paths["mask"])
 
-    breakpoint()
-
-    # Check with box prompt.
-    with bioimageio.core.create_prediction_pipeline(model) as pp:
+    # Check with box and point prompts.
+    with bioimageio.core.create_prediction_pipeline(model_description) as pp:
         prediction = pp.forward(
             image=image,
             embeddings=embeddings,
             box_prompts=box_prompts,
+            point_prompts=point_prompts,
+            point_labels=point_labels,
         )
-    breakpoint()
+    assert len(prediction) == 3
+    predicted_mask = prediction[0]
+    assert np.allclose(mask, predicted_mask)
 
 
 def export_sam_model(
@@ -235,13 +251,49 @@ def export_sam_model(
                 data=spec.IntervalOrRatioDataDescr(type="int64")
             ),
 
-            # TODO
-            # Third input: the point prompts (optional)
+            # Third input: the point prompt coordinates (optional)
+            spec.InputTensorDescr(
+                id=spec.TensorId("point_prompts"),
+                optional=True,
+                axes=[
+                    spec.BatchAxis(),
+                    spec.IndexInputAxis(
+                        id=spec.AxisId("object"),
+                        size=spec.ARBITRARY_SIZE
+                    ),
+                    spec.IndexInputAxis(
+                        id=spec.AxisId("point"),
+                        size=spec.ARBITRARY_SIZE
+                    ),
+                    spec.ChannelAxis(channel_names=[spec.Identifier(bname) for bname in "xy"]),
+                ],
+                test_tensor=spec.FileDescr(source=input_paths["point_prompts"]),
+                data=spec.IntervalOrRatioDataDescr(type="int64")
+            ),
+
+            # Fourth input: the point prompt labels (optional)
+            spec.InputTensorDescr(
+                id=spec.TensorId("point_labels"),
+                optional=True,
+                axes=[
+                    spec.BatchAxis(),
+                    spec.IndexInputAxis(
+                        id=spec.AxisId("object"),
+                        size=spec.ARBITRARY_SIZE
+                    ),
+                    spec.IndexInputAxis(
+                        id=spec.AxisId("point"),
+                        size=spec.ARBITRARY_SIZE
+                    ),
+                ],
+                test_tensor=spec.FileDescr(source=input_paths["point_labels"]),
+                data=spec.IntervalOrRatioDataDescr(type="int64")
+            ),
 
             # TODO
-            # Fourth input: the mask prompts (optional)
+            # Fifth input: the mask prompts (optional)
 
-            # Fifth input: the image embeddings (optional)
+            # Sixth input: the image embeddings (optional)
             spec.InputTensorDescr(
                 id=spec.TensorId("embeddings"),
                 optional=True,
