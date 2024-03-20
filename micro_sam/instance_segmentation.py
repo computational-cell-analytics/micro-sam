@@ -875,15 +875,14 @@ class InstanceSegmentationWithDecoder:
         if image_embeddings is None:
             image_embeddings = util.precompute_image_embeddings(self._predictor, image)
 
-        # This could be made more versatile to also support other decoder inputs,
-        # e.g. the UNETR with skip connections.
-        if isinstance(image_embeddings["features"], torch.Tensor):
-            embeddings = image_embeddings["features"]
-        else:
-            embeddings = torch.from_numpy(image_embeddings["features"])
-
+        # Get the embeddings.
+        embeddings = image_embeddings["features"]
+        # Select the current slice if given.
         if i is not None:
             embeddings = embeddings[i]
+        # Ensure that the embeddings are tensors and send to device.
+        if not isinstance(embeddings, torch.Tensor):
+            embeddings = torch.from_numpy(embeddings[:])
         embeddings = embeddings.to(self._predictor.device)
 
         input_shape = tuple(image_embeddings["input_size"])
