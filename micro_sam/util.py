@@ -379,7 +379,7 @@ def _to_image(input_):
     return image
 
 
-def _precompute_tiled_2d(predictor, input_, tile_shape, halo, f, verbose=True):
+def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, verbose=True):
     tiling = blocking([0, 0], input_.shape[:2], tile_shape)
     n_tiles = tiling.numberOfBlocks
 
@@ -411,7 +411,7 @@ def _precompute_tiled_2d(predictor, input_, tile_shape, halo, f, verbose=True):
     return features
 
 
-def _precompute_tiled_3d(predictor, input_, tile_shape, halo, f, verbose=True):
+def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, verbose=True):
     assert input_.ndim == 3
 
     shape = input_.shape[1:]
@@ -459,120 +459,136 @@ def _precompute_tiled_3d(predictor, input_, tile_shape, halo, f, verbose=True):
     return features
 
 
-def _compute_2d(input_, predictor):
-    image = _to_image(input_)
-    predictor.set_image(image)
-    features = predictor.get_image_embedding()
+def _compute_2d(input_, predictor, f, save_path):
+    # Check if the embeddings are already cached.
+    if save_path is not None and "input_size" in f.attrs:
+        # In this case we load the embeddings..
+        features = f["features"][:]
+        original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
+        image_embeddings = {
+            "features": features, "input_size": input_size, "original_size": original_size,
+        }
+        # Also set the embeddings.
+        set_precomputed(predictor, image_embeddings)
+        return image_embeddings
+
+    # Otherwise we have to compute the embeddings.
+    predictor.reset_image()
+    predictor.set_image(_to_image(input_))
+    features = predictor.get_image_embedding().cpu().numpy()
     original_size = predictor.original_size
     input_size = predictor.input_size
-    image_embeddings = {
-        "features": features.cpu().numpy(), "input_size": input_size, "original_size": original_size,
-    }
-    return image_embeddings
 
-
-def _precompute_2d(input_, predictor, save_path, tile_shape, halo):
-    f = zarr.open(save_path, "a")
-
-    use_tiled_prediction = tile_shape is not None
-    set_embeddings = False
-
-    if "input_size" in f.attrs:  # the embeddings have already been precomputed
-        features = f["features"][:] if tile_shape is None else f["features"]
-        original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
-        set_embeddings = not use_tiled_prediction
-
-    elif use_tiled_prediction:  # the embeddings have not been computed yet and we use tiled prediction
-        features = _precompute_tiled_2d(predictor, input_, tile_shape, halo, f)
-        original_size, input_size = None, None
-
-    else:  # the embeddings have not been computed yet and we use normal prediction
-        image = _to_image(input_)
-        predictor.set_image(image)
-        features = predictor.get_image_embedding()
-        original_size, input_size = predictor.original_size, predictor.input_size
-        f.create_dataset("features", data=features.cpu().numpy(), chunks=features.shape)
+    # Save the embeddings if we have a save_path.
+    if save_path is not None:
+        f.create_dataset(
+            "features", data=features, compression="gzip", chunks=features.shape
+        )
         f.attrs["input_size"] = input_size
         f.attrs["original_size"] = original_size
 
     image_embeddings = {
         "features": features, "input_size": input_size, "original_size": original_size,
     }
-
-    # Make sure that the embeddings are set if we load normal 2d embeddings.
-    if set_embeddings:
-        set_precomputed(predictor, image_embeddings)
-
     return image_embeddings
 
 
-def _compute_3d(input_, predictor):
-    features = []
+def _compute_tiled_2d(input_, predictor, tile_shape, halo, f):
+    # Check if the features are already computed.
+    if "input_size" in f.attrs:
+        features = f["features"]
+        original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
+        image_embeddings = {
+            "features": features, "input_size": input_size, "original_size": original_size,
+        }
+        return image_embeddings
+
+    # Otherwise compute them. Note: saving happens automatically because we
+    # always write the features to zarr. If no save path is given we use an in-memory zarr.
+    features = _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f)
     original_size, input_size = None, None
 
-    for z_slice in tqdm(input_, desc="Precompute Image Embeddings"):
-        predictor.reset_image()
-
-        image = _to_image(z_slice)
-        predictor.set_image(image)
-        embedding = predictor.get_image_embedding()
-        features.append(embedding[None])
-
-        if original_size is None:
-            original_size = predictor.original_size
-        if input_size is None:
-            input_size = predictor.input_size
-
-    # concatenate across the z axis
-    features = torch.cat(features)
-
     image_embeddings = {
-        "features": features.cpu().numpy(), "input_size": input_size, "original_size": original_size,
+        "features": features, "input_size": input_size, "original_size": original_size,
     }
     return image_embeddings
 
 
-def _precompute_3d(input_, predictor, save_path, lazy_loading, tile_shape=None, halo=None):
-    f = zarr.open(save_path, "a")
-
-    use_tiled_prediction = tile_shape is not None
-    if "input_size" in f.attrs:  # the embeddings have already been precomputed
-        features = f["features"]
+def _compute_3d(input_, predictor, f, save_path, lazy_loading):
+    # Check if the embeddings are already fully cached.
+    if save_path is not None and "input_size" in f.attrs:
+        # In this case we load the embeddings.
+        features = f["features"] if lazy_loading else f["features"][:]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
+        image_embeddings = {
+            "features": features, "input_size": input_size, "original_size": original_size,
+        }
+        return image_embeddings
 
-    elif use_tiled_prediction:  # the embeddings have not been computed yet and we use tiled prediction
-        features = _precompute_tiled_3d(predictor, input_, tile_shape, halo, f)
-        original_size, input_size = None, None
+    # Otherwise we have to compute the embeddings.
 
-    else:  # the embeddings have not been computed yet and we use normal prediction
-        features = f["features"] if "features" in f else None
-        original_size, input_size = None, None
+    # First check if we have a save path or not and set things up accordingly.
+    if save_path is None:
+        features = []
+        save_features = False
+        partial_features = False
+    else:
+        save_features = True
+        embed_shape = (1, 256, 64, 64)
+        shape = (input_.shape[0],) + embed_shape
+        chunks = (1,) + embed_shape
+        if "features" in f:
+            partial_features = True
+            features = f["features"]
+            if features.shape != shape or features.chunks != chunks:
+                raise RuntimeError("Invalid partial features")
+        else:
+            partial_features = False
+            features = f.create_dataset("features", shape=shape, chunks=chunks, dtype="float32")
 
-        for z, z_slice in tqdm(enumerate(input_), total=input_.shape[0], desc="Precompute Image Embeddings"):
-            if features is not None:
-                emb = features[z]
-                if np.count_nonzero(emb) != 0:
-                    continue
+    # Compute the embeddings for each slice.
+    for z, z_slice in tqdm(enumerate(input_), total=input_.shape[0], desc="Precompute Image Embeddings"):
+        # Skip feature computation in case of partial features in non-zero slice.
+        if partial_features and np.count_nonzero(features[z]) != 0:
+            continue
 
-            predictor.reset_image()
-            image = _to_image(z_slice)
-            predictor.set_image(image)
-            embedding = predictor.get_image_embedding()
+        predictor.reset_image()
+        predictor.set_image(_to_image(z_slice))
+        embedding = predictor.get_image_embedding()
+        original_size, input_size = predictor.original_size, predictor.input_size
 
-            original_size, input_size = predictor.original_size, predictor.input_size
-            if features is None:
-                shape = (input_.shape[0],) + embedding.shape
-                chunks = (1,) + embedding.shape
-                features = f.create_dataset("features", shape=shape, chunks=chunks, dtype="float32")
+        if save_features:
             features[z] = embedding.cpu().numpy()
+        else:
+            features.append(embedding[None])
 
+    if save_features:
         f.attrs["input_size"] = input_size
         f.attrs["original_size"] = original_size
+    else:
+        # Concatenate across the z axis.
+        features = torch.cat(features).cpu().numpy()
 
-    # we load the data into memory if lazy loading was not specified
-    # and if we do not use tiled prediction (we cannot load the full tiled data structure into memory)
-    if not lazy_loading and not use_tiled_prediction:
-        features = features[:]
+    image_embeddings = {
+        "features": features, "input_size": input_size, "original_size": original_size,
+    }
+    return image_embeddings
+
+
+def _compute_tiled_3d(input_, predictor, tile_shape, halo, f):
+    # Check if the features are already computed.
+    if "input_size" in f.attrs:
+        features = f["features"]
+        original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
+        image_embeddings = {
+            "features": features, "input_size": input_size, "original_size": original_size,
+        }
+        return image_embeddings
+
+    # Otherwise compute them. Note: saving happens automatically because we
+    # always write the features to zarr. If no save path is given we use an in-memory zarr.
+    features = _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f)
+    original_size, input_size = None, None
 
     image_embeddings = {
         "features": features, "input_size": input_size, "original_size": original_size,
@@ -585,10 +601,48 @@ def _compute_data_signature(input_):
     return data_signature
 
 
+def _check_existing_embeddings(
+    input_,
+    predictor,
+    f,
+    save_path=None,
+    tile_shape=None,
+    halo=None,
+    wrong_file_callback=None,
+) -> zarr.Group:
+    data_signature = _compute_data_signature(input_)
+    key_vals = [
+        ("data_signature", data_signature),
+        ("tile_shape", tile_shape if tile_shape is None else list(tile_shape)),
+        ("halo", halo if halo is None else list(halo)),
+        ("model_type", predictor.model_type)
+    ]
+    if "input_size" in f.attrs:  # we have computed the embeddings already and perform checks
+        for key, val in key_vals:
+            if val is None:
+                continue
+            # check whether the key signature does not match or is not in the file
+            if key not in f.attrs or f.attrs[key] != val:
+                raise RuntimeError(
+                    f"Embeddings file {save_path} is invalid due to unmatching {key}: "
+                    f"{f.attrs.get(key)} != {val}.Please recompute embeddings in a new file."
+                )
+            if wrong_file_callback is not None:
+                save_path = wrong_file_callback(save_path)
+                f = zarr.open(save_path, "a")
+            break
+
+    for key, val in key_vals:
+        if key not in f.attrs:
+            f.attrs[key] = val
+
+    return f
+
+
 def precompute_image_embeddings(
     predictor: SamPredictor,
     input_: np.ndarray,
-    save_path: Optional[str] = None,
+    save_path: Optional[Union[str, os.PathLike]] = None,
     lazy_loading: bool = False,
     ndim: Optional[int] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
@@ -615,46 +669,21 @@ def precompute_image_embeddings(
             where the return value is the (potentially updated) embedding save path.
     """
     ndim = input_.ndim if ndim is None else ndim
-    if tile_shape is not None:
-        assert save_path is not None, "Tiled prediction is only supported when the embeddings are saved to file."
 
-    if save_path is not None:
+    if save_path is None:
+        f = zarr.group()
+    else:
         save_path = str(save_path)
-        data_signature = _compute_data_signature(input_)
-
         f = zarr.open(save_path, "a")
-        key_vals = [
-            ("data_signature", data_signature),
-            ("tile_shape", tile_shape if tile_shape is None else list(tile_shape)),
-            ("halo", halo if halo is None else list(halo)),
-            ("model_type", predictor.model_type)
-        ]
-        if "input_size" in f.attrs:  # we have computed the embeddings already and perform checks
-            for key, val in key_vals:
-                if val is None:
-                    continue
-                # check whether the key signature does not match or is not in the file
-                if key not in f.attrs or f.attrs[key] != val:
-                    raise RuntimeError(
-                        f"Embeddings file {save_path} is invalid due to unmatching {key}: "
-                        f"{f.attrs.get(key)} != {val}.Please recompute embeddings in a new file."
-                    )
-                    if wrong_file_callback is not None:
-                        save_path = wrong_file_callback(save_path)
-                        f = zarr.open(save_path, "a")
-                    break
-
-        for key, val in key_vals:
-            if key not in f.attrs:
-                f.attrs[key] = val
+        f = _check_existing_embeddings(input_, predictor, f, save_path, tile_shape, halo, wrong_file_callback)
 
     if ndim == 2:
-        image_embeddings = _compute_2d(input_, predictor) if save_path is None else\
-            _precompute_2d(input_, predictor, save_path, tile_shape, halo)
+        image_embeddings = _compute_2d(input_, predictor, f, save_path) if tile_shape is None else\
+            _compute_tiled_2d(input_, predictor, tile_shape, halo, f)
 
     elif ndim == 3:
-        image_embeddings = _compute_3d(input_, predictor) if save_path is None else\
-            _precompute_3d(input_, predictor, save_path, lazy_loading, tile_shape, halo)
+        image_embeddings = _compute_3d(input_, predictor, f, save_path, lazy_loading) if tile_shape is None else\
+            _compute_tiled_3d(input_, predictor, tile_shape, halo, f)
 
     else:
         raise ValueError(f"Invalid dimesionality {input_.ndim}, expect 2 or 3 dim data.")
@@ -665,19 +694,32 @@ def precompute_image_embeddings(
 def set_precomputed(
     predictor: SamPredictor,
     image_embeddings: ImageEmbeddings,
-    i: Optional[int] = None
-):
+    i: Optional[int] = None,
+    tile_id: Optional[int] = None,
+) -> SamPredictor:
     """Set the precomputed image embeddings for a predictor.
 
-    Arguments:
+    Args:
         predictor: The SegmentAnything predictor.
         image_embeddings: The precomputed image embeddings computed by `precompute_image_embeddings`.
         i: Index for the image data. Required if `image` has three spatial dimensions
             or a time dimension and two spatial dimensions.
+        tile_id: Index for the tile. This is required if the embeddings are tiled.
+
+    Returns:
+        The predictor with set features.
     """
+    if tile_id is not None:
+        tile_features = image_embeddings["features"][tile_id]
+        tile_image_embeddings = {
+            "features": tile_features,
+            "input_size": tile_features.attrs["input_size"],
+            "original_size": tile_features.attrs["original_size"]
+        }
+        return set_precomputed(predictor, tile_image_embeddings, i=i)
+
     device = predictor.device
     features = image_embeddings["features"]
-
     assert features.ndim in (4, 5), f"{features.ndim}"
     if features.ndim == 5 and i is None:
         raise ValueError("The data is 3D so an index i is needed.")

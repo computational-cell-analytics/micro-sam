@@ -227,13 +227,7 @@ def _initialize_predictor(predictor, image_embeddings, i, prompts, to_tile):
         features = image_embeddings["features"]
         shape, tile_shape, halo = features.attrs["shape"], features.attrs["tile_shape"], features.attrs["halo"]
         tile_id, tile, prompts = to_tile(prompts, shape, tile_shape, halo)
-        features = features[tile_id]
-        tile_image_embeddings = {
-            "features": features,
-            "input_size": features.attrs["input_size"],
-            "original_size": features.attrs["original_size"]
-        }
-        util.set_precomputed(predictor, tile_image_embeddings, i)
+        util.set_precomputed(predictor, image_embeddings, i, tile_id=tile_id)
 
     # Set the precomputed state for normal prediction.
     elif image_embeddings is not None:
