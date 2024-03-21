@@ -4,7 +4,7 @@
 #
 # NOTE:
 # IMPORTANT: ideally, we need to stay consistent with 2d inference
-#   1. plantseg ovules:
+#   1. plantseg root:
 #       a. for validation: I'll take the first volume from sorted glob.
 #           - shape: 100, 620, 768; 56 instances
 #       b. for testing: I'll take the first volume from sorted glob
@@ -41,7 +41,7 @@ def get_raw_and_label_volumes(data_dir, species, split):
         if split == "val":
             raw, labels = raw[:, :, :768], labels[:, :, :768]
         else:  # test
-            raw, labels = raw[:, :, :768], labels[:, :, :768]
+            raw, labels = raw[:100, :, :768], labels[:100, :, :768]
 
     elif species == "ovules":
         if split == "val":
@@ -58,7 +58,6 @@ def get_raw_and_label_volumes(data_dir, species, split):
 
 
 def for_plantseg(args):
-    val_raw, val_labels = get_raw_and_label_volumes(args.input_path, args.species, "val")
     test_raw, test_labels = get_raw_and_label_volumes(args.input_path, args.species, "test")
 
     if args.ais:
@@ -83,6 +82,7 @@ def for_plantseg(args):
         )
 
     if args.int:
+        val_raw, val_labels = get_raw_and_label_volumes(args.input_path, args.species, "val")
         _3d_interactive_instance_segmentation(
             val_raw=val_raw,
             val_labels=val_labels,

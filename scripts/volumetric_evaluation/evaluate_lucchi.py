@@ -42,7 +42,6 @@ def get_raw_and_label_volumes(data_dir, split):
 
 
 def for_lucchi(args):
-    val_raw, val_labels = get_raw_and_label_volumes(args.input_path, "val")
     test_raw, test_labels = get_raw_and_label_volumes(args.input_path, "test")
 
     if args.ais:
@@ -66,6 +65,7 @@ def for_lucchi(args):
         )
 
     if args.int:
+        val_raw, val_labels = get_raw_and_label_volumes(args.input_path, "val")
         _3d_interactive_instance_segmentation(
             val_raw=val_raw,
             val_labels=val_labels,

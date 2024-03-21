@@ -100,7 +100,6 @@ def get_raw_and_label_volumes(volume_path, split):
 def for_one_species(args):
     volume_path = create_raw_and_label_volumes(args.input_path, args.species)
 
-    val_raw, val_labels = get_raw_and_label_volumes(volume_path, "val")
     test_raw, test_labels = get_raw_and_label_volumes(volume_path, "test")
 
     if args.ais:
@@ -125,6 +124,7 @@ def for_one_species(args):
         )
 
     if args.int:
+        val_raw, val_labels = get_raw_and_label_volumes(volume_path, "val")
         _3d_interactive_instance_segmentation(
             val_raw=val_raw,
             val_labels=val_labels,
