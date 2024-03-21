@@ -1,6 +1,6 @@
 import warnings
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 import torch_em
@@ -86,11 +86,15 @@ def sam_training(
         model_registry = util.models()
         checkpoint_path = model_registry.fetch(model_type)
 
+    # We use the CPU if a GPU cannot be found.
+    # Note that using MPS on MAC is slower than training with the CPU!
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     # TODO set napari pbar in torch_em
     train_sam_for_setting(
         name=name, setting=setting,
         train_loader=train_loader, val_loader=val_loader,
         checkpoint_path=checkpoint_path,
         with_segmentation_decoder=train_instance_segmentation,
-        model_type=model_type,
+        model_type=model_type, device=device
     )
