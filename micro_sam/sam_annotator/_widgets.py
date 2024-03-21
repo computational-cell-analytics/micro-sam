@@ -686,8 +686,11 @@ def _segment_volume(viewer, with_background, min_object_size, gap_closing, min_e
         seg = _instance_segmentation_impl(
             viewer, with_background, min_object_size, i=i, skip_update=True, **kwargs
         )
+        seg_max = seg.max()
+        if seg_max == 0:
+            continue
         seg[seg != 0] += offset
-        offset = seg.max()
+        offset = seg_max + offset
         segmentation[i] = seg
 
     segmentation = merge_instance_segmentation_3d(
