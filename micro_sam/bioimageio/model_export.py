@@ -17,6 +17,7 @@ from bioimageio.spec import save_bioimageio_package
 from .. import util
 from ..prompt_generators import PointAndBoxPromptGenerator
 from ..evaluation.model_comparison import _enhance_image, _overlay_outline, _overlay_box
+from ..prompt_based_segmentation import _compute_logits_from_mask
 from .predictor_adaptor import PredictorAdaptor
 
 DEFAULTS = {
@@ -56,6 +57,14 @@ def _create_test_inputs_and_outputs(
     point_prompts = point_prompts.numpy()[None]
     point_labels = point_labels.numpy()[None]
 
+    # Generate logits from the two
+    mask_prompts = np.stack(
+        [
+            _compute_logits_from_mask(labels == 1),
+            _compute_logits_from_mask(labels == 2),
+        ]
+    )[None]
+
     predictor = PredictorAdaptor(model_type=model_type)
     predictor.load_state_dict(torch.load(checkpoint_path))
 
@@ -69,14 +78,17 @@ def _create_test_inputs_and_outputs(
         box_prompts=torch.from_numpy(box_prompts),
         point_prompts=torch.from_numpy(point_prompts),
         point_labels=torch.from_numpy(point_labels),
+        mask_prompts=torch.from_numpy(mask_prompts),
     )
 
     box_prompt_path = os.path.join(tmp_dir, "box_prompts.npy")
     point_prompt_path = os.path.join(tmp_dir, "point_prompts.npy")
     point_label_path = os.path.join(tmp_dir, "point_labels.npy")
+    mask_prompt_path = os.path.join(tmp_dir, "mask_prompts.npy")
     np.save(box_prompt_path, box_prompts)
     np.save(point_prompt_path, point_prompts)
     np.save(point_label_path, point_labels)
+    np.save(mask_prompt_path, mask_prompts)
 
     mask_path = os.path.join(tmp_dir, "mask.npy")
     score_path = os.path.join(tmp_dir, "scores.npy")
@@ -90,6 +102,7 @@ def _create_test_inputs_and_outputs(
         "box_prompts": box_prompt_path,
         "point_prompts": point_prompt_path,
         "point_labels": point_label_path,
+        "mask_prompts": mask_prompt_path,
     }
     outputs = {
         "mask": mask_path,
@@ -168,26 +181,56 @@ def _generate_covers(input_paths, result_paths, tmp_dir):
 
 
 def _check_model(model_description, input_paths, result_paths):
-    # Load inputs and outputs.
+    # Load inputs.
     image = xarray.DataArray(np.load(input_paths["image"]), dims=tuple("bcyx"))
     embeddings = xarray.DataArray(np.load(result_paths["embeddings"]), dims=tuple("bcyx"))
     box_prompts = xarray.DataArray(np.load(input_paths["box_prompts"]), dims=tuple("bic"))
     point_prompts = xarray.DataArray(np.load(input_paths["point_prompts"]), dims=tuple("biic"))
     point_labels = xarray.DataArray(np.load(input_paths["point_labels"]), dims=tuple("bic"))
+    mask_prompts = xarray.DataArray(np.load(input_paths["mask_prompts"]), dims=tuple("bicyx"))
+
+    # Load outputs.
     mask = np.load(result_paths["mask"])
 
-    # Check with box and point prompts.
     with bioimageio.core.create_prediction_pipeline(model_description) as pp:
+
+        # Check with all prompts. We only check the result for this setting,
+        # because this was used to generate the test data.
         prediction = pp.forward(
             image=image,
-            embeddings=embeddings,
             box_prompts=box_prompts,
             point_prompts=point_prompts,
             point_labels=point_labels,
+            mask_prompts=mask_prompts,
+            embeddings=embeddings,
         )
-    assert len(prediction) == 3
-    predicted_mask = prediction[0]
-    assert np.allclose(mask, predicted_mask)
+
+        assert len(prediction) == 3
+        predicted_mask = prediction[0]
+        assert np.allclose(mask, predicted_mask)
+
+        # FIXME this fails due to errors with optional inputs
+        # Check with partial prompts.
+        prompt_kwargs = [
+            # With boxes.
+            {"box_prompts": box_prompts},
+            # With point prompts.
+            {"point_prompts": point_prompts, "point_labels": point_labels},
+            # With masks.
+            {"mask_prompts": mask_prompts},
+            # With boxes and points.
+            {"box_prompts": box_prompts, "point_prompts": point_prompts, "point_labels": point_labels},
+            # With boxes and masks.
+            {"box_prompts": box_prompts, "mask_prompts": mask_prompts},
+            # With points and masks.
+            {"mask_prompts": mask_prompts, "point_prompts": point_prompts, "point_labels": point_labels},
+        ]
+
+        for kwargs in prompt_kwargs:
+            prediction = pp.forward(image=image, embeddings=embeddings, **kwargs)
+            assert len(prediction) == 3
+            predicted_mask = prediction[0]
+            assert predicted_mask.shape == mask.shape
 
 
 def export_sam_model(
@@ -290,8 +333,23 @@ def export_sam_model(
                 data=spec.IntervalOrRatioDataDescr(type="int64")
             ),
 
-            # TODO
             # Fifth input: the mask prompts (optional)
+            spec.InputTensorDescr(
+                id=spec.TensorId("mask_prompts"),
+                optional=True,
+                axes=[
+                    spec.BatchAxis(),
+                    spec.IndexInputAxis(
+                        id=spec.AxisId("object"),
+                        size=spec.ARBITRARY_SIZE
+                    ),
+                    spec.ChannelAxis(channel_names=["channel"]),
+                    spec.SpaceInputAxis(id=spec.AxisId("y"), size=256),
+                    spec.SpaceInputAxis(id=spec.AxisId("x"), size=256),
+                ],
+                test_tensor=spec.FileDescr(source=input_paths["mask_prompts"]),
+                data=spec.IntervalOrRatioDataDescr(type="float32")
+            ),
 
             # Sixth input: the image embeddings (optional)
             spec.InputTensorDescr(

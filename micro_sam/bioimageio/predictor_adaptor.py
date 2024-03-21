@@ -78,6 +78,8 @@ class PredictorAdaptor(nn.Module):
             self.sam.orig_h, self.sam.orig_w = self.sam.original_size
             self.sam.input_h, self.sam.input_w = self.sam.input_size
 
+        assert self.sam.is_image_set, "The predictor has not yet been initialized."
+
         # Ensure input size and original size are set.
         self.sam.input_size = (self.sam.input_h, self.sam.input_w)
         self.sam.original_size = (self.sam.orig_h, self.sam.orig_w)
@@ -94,15 +96,16 @@ class PredictorAdaptor(nn.Module):
             point_coords = self.sam.transform.apply_coords_torch(point_prompts, original_size=self.sam.original_size)[0]
             point_labels = point_labels[0]
 
-        print()
-        print(point_coords.shape)
-        print(point_labels.shape)
-        print(boxes.shape)
+        if mask_prompts is None:
+            mask_input = None
+        else:
+            mask_input = mask_prompts[0]
+
         masks, scores, _ = self.sam.predict_torch(
             point_coords=point_coords,
             point_labels=point_labels,
             boxes=boxes,
-            mask_input=mask_prompts,
+            mask_input=mask_input,
             multimask_output=False
         )
 
