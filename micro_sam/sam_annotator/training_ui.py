@@ -24,7 +24,9 @@ def _find_best_setting():
 @magic_factory(
     call_button="Start Training",
     setting={"choices": list(SETTINGS.keys())},
-    initial_model_name={"choices": list(util.models().urls.keys())}
+    initial_model_name={"choices": list(util.models().urls.keys())},
+    patch_shape_x={"min": 0, "max": 2048},
+    patch_shape_y={"min": 0, "max": 2048},
 )
 def sam_training(
     raw_path: Path,
@@ -34,13 +36,17 @@ def sam_training(
     setting: str = _find_best_setting(),
     train_instance_segmentation: bool = True,
     name: Optional[str] = None,
-    patch_shape: Tuple[int, int] = (512, 512),
+    # Can't set the max
+    # patch_shape: Tuple[int, int] = (512, 512),
+    patch_shape_x: int = 512,
+    patch_shape_y: int = 512,
     initial_model_name: Optional[str] = None,
     checkpoint_path: Optional[Path] = None,
 ) -> None:
     batch_size = 1
     num_workers = 1 if setting == "CPU" else 4
 
+    patch_shape = (patch_shape_x, patch_shape_y)
     # TODO these should become optional params
     raw_path_val, label_path_val = None, None
     if raw_path_val is None:
