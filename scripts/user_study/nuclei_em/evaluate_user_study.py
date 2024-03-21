@@ -74,11 +74,11 @@ def evaluate_annotation_times():
             "time_per_object [min]": np.round(time_per_object, 1),
             "total_time": total_time_,
             "total_objects": total_objects_,
-            "sa50": sa50s,
+            # "sa50": sa50s,
         }
     )
-
     print(table)
+    table.to_csv("../results_em_nuclei.csv", index=False)
 
 
 def main():

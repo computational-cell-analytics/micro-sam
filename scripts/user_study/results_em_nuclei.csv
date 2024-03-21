@@ -1,0 +1,4 @@
+annotation_method,time_per_object [min],total_time,total_objects
+default,1.4,63.0,45
+finetuned,0.4,24.0,60
+ilastik,2.0,73.0,36
