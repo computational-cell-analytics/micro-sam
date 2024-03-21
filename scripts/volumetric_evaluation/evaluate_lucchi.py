@@ -1,106 +1,81 @@
+# out-of-domain case for electron microscopy experiments
+#
+# NOTE:
+# IMPORTANT: ideally, we need to stay consistent with 2d inference
+#  1. for validation: we take the train set and sample a crop of the volume with most instances
+#       - shape: (X, 768, 1024)
+#  2. for testing: we take the entire test volume
+#      - shape: (165, 768, 1024)
+
+
 import os
 
 import h5py
 from skimage.measure import label
 
-from micro_sam import instance_segmentation
-from micro_sam.multi_dimensional_segmentation import automatic_3d_segmentation
-from micro_sam.evaluation.multi_dimensional_segmentation import run_multi_dimensional_segmentation_grid_search
+from util import (
+    _3d_automatic_instance_segmentation_with_decoder,
+    _3d_interactive_instance_segmentation,
+    _get_default_args
+)
 
 
-def get_raw_and_label_volumes(volume_path):
+def get_raw_and_label_volumes(data_dir, split):
+    volume_path = os.path.join(data_dir, f"lucchi_{split}.h5")
     with h5py.File(volume_path, "r") as f:
         raw = f["raw"][:]
         labels = f["labels"][:]
 
+    print(raw.shape, labels.shape)
+    assert raw.shape == labels.shape
+
+    # applying connected components to get instances
+    labels = label(labels)
+
     return raw, labels
 
 
-def _interactive_segmentation(args):
-    test_volume_path = os.path.join(args.input_path, "lucchi_test.h5")
-    volume, labels = get_raw_and_label_volumes(test_volume_path)
+def for_lucchi(args):
+    val_raw, val_labels = get_raw_and_label_volumes(args.input_path, "val")
+    test_raw, test_labels = get_raw_and_label_volumes(args.input_path, "test")
 
-    # applying connected components to get instances
-    labels = label(labels)
+    if args.ais:
+        # this should be experiment specific, so Lucchi in this case
+        auto_3d_seg_kwargs = {
+            "center_distance_threshold": 0.3,
+            "boundary_distance_threshold": 0.4,
+            "distance_smoothing": 2.2,
+            "min_size": 200,
+            "gap_closing": 2,
+            "min_z_extent": 2
+        }
+        _3d_automatic_instance_segmentation_with_decoder(
+            test_raw=test_raw,
+            test_labels=test_labels,
+            model_type=args.model_type,
+            checkpoint_path=args.checkpoint,
+            result_dir=args.resdir,
+            embedding_dir=args.embedding_path,
+            auto_3d_seg_kwargs=auto_3d_seg_kwargs,
+        )
 
-    grid_search_values = {
-        "iou_threshold": [0.5],
-        "projection": [{'use_box': False, 'use_mask': False, 'use_points': True}],
-        "box_extension": [0.075],
-        "criterion_choice": [1, 2, 3]
-    }
-
-    run_multi_dimensional_segmentation_grid_search(
-        volume=volume,
-        ground_truth=labels,
-        model_type=args.model_type,
-        checkpoint_path=args.checkpoint,
-        embedding_path=args.embedding_path,
-        result_dir=args.resdir,
-        interactive_seg_mode="box",
-        verbose=False,
-        grid_search_values=grid_search_values
-    )
-
-
-def _instance_segmentation_with_decoder(args):
-    test_volume_path = os.path.join(args.input_path, "lucchi_test.h5")
-    volume, labels = get_raw_and_label_volumes(test_volume_path)
-
-    # applying connected components to get instances
-    labels = label(labels)
-
-    model_type = "vit_b"
-    checkpoint_path = "/home/anwai/models/micro-sam/vit_b/em_organelles/best.pt"
-    embedding_path = "/home/anwai/embeddings/lucchi_r2_embeddings/embeddings_vit_b_finetuned_v2"
-
-    predictor, decoder = instance_segmentation.get_predictor_and_decoder(model_type, checkpoint_path)
-    segmentor = instance_segmentation.InstanceSegmentationWithDecoder(predictor, decoder)
-
-    instances = automatic_3d_segmentation(
-        volume=volume,
-        predictor=predictor,
-        segmentor=segmentor,
-        embedding_path=embedding_path,
-        center_distance_threshold=0.3,
-        boundary_distance_threshold=0.4,
-        distance_smoothing=2.2,
-        min_size=200,
-        gap_closing=2,
-    )
-
-    import numpy as np
-    from elf.evaluation import mean_segmentation_accuracy
-
-    msa, sa = mean_segmentation_accuracy(instances, labels, return_accuracies=True)
-    print("mSA for 3d volume is:", msa)
-    print("SA50 for 3d volume is:", sa[0])
-    print()
-
-    per_slice_msa, per_slice_sa50 = [], []
-    for _instance, _label in zip(instances, labels):
-        msa, sa = mean_segmentation_accuracy(_instance, _label, return_accuracies=True)
-        per_slice_msa.append(msa)
-        per_slice_sa50.append(sa[0])
-
-    print("mSA for mean over each 2d slice is:", np.mean(per_slice_msa))
-    print("SA50 for mean over each 2d slice is:", np.mean(per_slice_sa50))
-    print()
-
-    import napari
-    v = napari.Viewer()
-    v.add_image(volume)
-    v.add_labels(labels, visible=False)
-    v.add_labels(instances)
-    napari.run()
+    if args.int:
+        _3d_interactive_instance_segmentation(
+            val_raw=val_raw,
+            val_labels=val_labels,
+            test_raw=test_raw,
+            test_labels=test_labels,
+            model_type=args.model_type,
+            checkpoint_path=args.checkpoint,
+            result_dir=args.resdir,
+            embedding_dir=args.embedding_path,
+        )
 
 
 def main(args):
-    # _interactive_segmentation(args)
-    _instance_segmentation_with_decoder(args)
+    for_lucchi(args)
 
 
 if __name__ == "__main__":
-    from util import _get_default_args
     args = _get_default_args("/scratch/projects/nim00007/sam/data/lucchi")
     main(args)

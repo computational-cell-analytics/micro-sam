@@ -1,1 +1,0 @@
-# in-domain case for light microscopy generalist
