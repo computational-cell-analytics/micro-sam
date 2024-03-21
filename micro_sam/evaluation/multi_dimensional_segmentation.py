@@ -75,7 +75,6 @@ def segment_slices_from_ground_truth(
     verbose: bool = False,
     return_segmentation: bool = False,
     min_size: int = 0,
-    criterion_choice: int = 1  # TODO: clean up
 ) -> Union[float, Tuple[np.ndarray, float]]:
     """Segment all objects in a volume by prompt-based segmentation in one slice per object.
 
@@ -176,7 +175,6 @@ def segment_slices_from_ground_truth(
             projection=projection,
             box_extension=box_extension,
             verbose=verbose,
-            criterion_choice=criterion_choice
         )
 
         # Store the entire segmented object
@@ -196,8 +194,17 @@ def segment_slices_from_ground_truth(
         return msa
 
 
-def _get_best_parameters_from_grid_search_combinations(result_dir, grid_search_values):
+def _get_best_parameters_from_grid_search_combinations(result_dir, best_params_path, grid_search_values):
+    if os.path.exists(best_params_path):
+        print("The best parameters are already savved at:", best_params_path)
+
     best_kwargs, best_msa = evaluate_instance_segmentation_grid_search(result_dir, list(grid_search_values.keys()))
+
+    # let's save the best parameters
+    best_kwargs["mSA"] = best_msa
+    best_param_df = pd.DataFrame.from_dict([best_kwargs])
+    best_param_df.to_csv(best_params_path)
+
     best_param_str = ", ".join(f"{k} = {v}" for k, v in best_kwargs.items())
     print("Best grid-search result:", best_msa, "with parmeters:\n", best_param_str)
 
@@ -249,10 +256,11 @@ def run_multi_dimensional_segmentation_grid_search(
     assert len(grid_search_values.keys()) == 3, "There must be three grid-search parameters. See above for details."
 
     os.makedirs(result_dir, exist_ok=True)
-    result_path = os.path.join(result_dir, "grid_search_multi_dimensional_segmentation.csv")
+    result_path = os.path.join(result_dir, "all_grid_search_results.csv")
+    best_params_path = os.path.join(result_dir, "grid_search_params_multi_dimensional_segmentation.csv")
     if os.path.exists(result_path):
-        _get_best_parameters_from_grid_search_combinations(result_dir, grid_search_values)
-        return
+        _get_best_parameters_from_grid_search_combinations(result_dir, best_params_path, grid_search_values)
+        return best_params_path
 
     # Compute all combinations of grid search values.
     gs_combinations = product(*grid_search_values.values())
@@ -284,4 +292,6 @@ def run_multi_dimensional_segmentation_grid_search(
     res_df = pd.concat(net_list, ignore_index=True)
     res_df.to_csv(result_path)
 
-    _get_best_parameters_from_grid_search_combinations(result_dir, grid_search_values)
+    _get_best_parameters_from_grid_search_combinations(result_dir, best_params_path, grid_search_values)
+    print("The best grid-search parameters have been computed and stored at:", best_params_path)
+    return best_params_path
