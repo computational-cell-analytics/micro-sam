@@ -2,8 +2,8 @@
 #
 # NOTE:
 # IMPORTANT: ideally, we need to stay consistent with 2d inference
-#  1. for validation: we take the train set and sample a crop of the volume with most instances
-#       - shape: (X, 768, 1024)
+#  1. for validation: we take the entire train volume
+#       - shape: (165, 768, 1024)
 #  2. for testing: we take the entire test volume
 #      - shape: (165, 768, 1024)
 
@@ -21,12 +21,18 @@ from util import (
 
 
 def get_raw_and_label_volumes(data_dir, split):
-    volume_path = os.path.join(data_dir, f"lucchi_{split}.h5")
+    if split == "val":
+        chosen_set = "train"
+    elif split == "test":
+        chosen_set = "test"
+    else:
+        raise ValueError
+
+    volume_path = os.path.join(data_dir, f"lucchi_{chosen_set}.h5")
     with h5py.File(volume_path, "r") as f:
         raw = f["raw"][:]
         labels = f["labels"][:]
 
-    print(raw.shape, labels.shape)
     assert raw.shape == labels.shape
 
     # applying connected components to get instances

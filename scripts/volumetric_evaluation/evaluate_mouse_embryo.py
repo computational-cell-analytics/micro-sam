@@ -3,9 +3,9 @@
 # NOTE:
 # IMPORTANT: ideally, we need to stay consistent with 2d inference
 #  1. for validation: we take the first volume of the test set
-#       - shape: Z, Y, X
+#       - shape: (112, 691, 520)
 #  2. for testing: we take the entire first volume of the train set
-#       - shape: Z, Y, X
+#       - shape: (115, 951, 544)
 
 
 import os
@@ -22,8 +22,6 @@ from util import (
 
 
 def get_raw_and_label_volumes(data_dir, split):
-    # TODO: check for volume shapes, keep val smaller
-    # TODO: define splits, it's confusing now
     if split == "val":
         chosen_set = "test"
     elif split == "test":
@@ -38,6 +36,11 @@ def get_raw_and_label_volumes(data_dir, split):
         raw = f["raw"][:]
         labels = f["label"][:]
 
+    assert raw.shape == labels.shape
+
+    # applying connected components to get instances
+    labels = label(labels)
+
     return raw, labels
 
 
@@ -49,11 +52,11 @@ def for_mouse_embryo(args):
         # this should be experiment specific, so Mouse Embryo in this case
         auto_3d_seg_kwargs = {
             "center_distance_threshold": 0.3,
-            "boundary_distance_threshold": 0.4,
-            "distance_smoothing": 2.2,
-            "min_size": 200,
+            "boundary_distance_threshold": 0.3,
+            "distance_smoothing": 1.0,
+            "min_size": 0,
             "gap_closing": 2,
-            "min_z_extent": 2
+            "min_z_extent": None
         }
         _3d_automatic_instance_segmentation_with_decoder(
             test_raw=test_raw,
@@ -75,6 +78,7 @@ def for_mouse_embryo(args):
             checkpoint_path=args.checkpoint,
             result_dir=args.resdir,
             embedding_dir=args.embedding_path,
+            min_size=50,
         )
 
 

@@ -16,7 +16,7 @@ def _3d_automatic_instance_segmentation_with_decoder(
     result_dir, embedding_dir, auto_3d_seg_kwargs, species=None
 ):
     # let's run ais on the test volume
-    res_dir = os.path.join(result_dir, "auto")
+    res_dir = os.path.join(result_dir, "" if species is None else species, "auto")
     res_path = os.path.join(res_dir, "ais.csv")
     if os.path.exists(res_dir):
         # we assume that the inference has completed
@@ -28,11 +28,7 @@ def _3d_automatic_instance_segmentation_with_decoder(
     predictor, decoder = instance_segmentation.get_predictor_and_decoder(model_type, checkpoint_path)
     segmentor = instance_segmentation.InstanceSegmentationWithDecoder(predictor, decoder)
 
-    _embedding_path = os.path.join(
-        embedding_dir,
-        "" if species is None else species,
-        "test"
-    )
+    _embedding_path = os.path.join(embedding_dir, "" if species is None else species, "test")
 
     instances = automatic_3d_segmentation(
         volume=test_raw,
@@ -54,21 +50,22 @@ def _3d_automatic_instance_segmentation_with_decoder(
 
 
 def _3d_interactive_instance_segmentation(
-    val_raw, val_labels, test_raw, test_labels, model_type,
-    checkpoint, result_dir, embedding_dir, species=None
+    val_raw, val_labels, test_raw, test_labels, model_type, checkpoint_path,
+    result_dir, embedding_dir, species=None, min_size=0
 ):
     # let's do grid-search on the val set
     _val_embedding_path = os.path.join(embedding_dir, "" if species is None else species, "val")
-    _val_res_dir = os.path.join(result_dir, species, "val")
+    _val_res_dir = os.path.join(result_dir, "" if species is None else species, "interactive", "val")
     best_params_path = run_multi_dimensional_segmentation_grid_search(
         volume=val_raw,
         ground_truth=val_labels,
         model_type=model_type,
-        checkpoint_path=checkpoint,
+        checkpoint_path=checkpoint_path,
         embedding_path=_val_embedding_path,
         result_dir=_val_res_dir,
         interactive_seg_mode="box",
         verbose=False,
+        min_size=min_size,
     )
 
     best_params = {}
@@ -80,17 +77,18 @@ def _3d_interactive_instance_segmentation(
 
     # now let's use the best parameters on the test set
     _test_embedding_path = os.path.join(embedding_dir, "" if species is None else species, "test")
-    _test_res_dir = os.path.join(result_dir, species, "test")
+    _test_res_dir = os.path.join(result_dir, "" if species is None else species, "interactive", "test")
     run_multi_dimensional_segmentation_grid_search(
         volume=test_raw,
         ground_truth=test_labels,
         model_type=model_type,
-        checkpoint_path=checkpoint,
+        checkpoint_path=checkpoint_path,
         embedding_path=_test_embedding_path,
         result_dir=_test_res_dir,
         interactive_seg_mode="box",
         verbose=False,
-        grid_search_values=best_params
+        grid_search_values=best_params,
+        min_size=min_size,
     )
 
 

@@ -6,20 +6,21 @@
 # IMPORTANT: ideally, we need to stay consistent with 2d inference
 #   1. plantseg ovules:
 #       a. for validation: I'll take the first volume from sorted glob.
-#           - shape: Z, Y, X
+#           - shape: 100, 620, 768; 56 instances
 #       b. for testing: I'll take the first volume from sorted glob
-#           - shape: Z, Y, X
+#           - shape: 486, 620, 768; 61 instances
 #   2. plantseg ovules:
 #       a. for validation: I'll take the first volume from sorted glob.
-#           - shape: Z, Y, X
+#           - shape: 25, 768, 768; 237 instances
 #       b. for testing: I'll take the first volume from sorted glob
-#           - shape: Z, Y, X
+#           - shape: 320, 768, 768; 2638 instances
 
 
 import os
 from glob import glob
 
 import h5py
+from skimage.measure import label
 
 from util import (
     _3d_automatic_instance_segmentation_with_decoder,
@@ -31,10 +32,27 @@ from util import (
 def get_raw_and_label_volumes(data_dir, species, split):
     volume_paths = sorted(glob(os.path.join(data_dir, f"{species}_{split}", "*")))
     chosen_volume_path = volume_paths[0]  # we choose the first path
-    # TODO: we still need to crop a small portion for val, else it will take ages
     with h5py.File(chosen_volume_path, "r") as f:
         raw = f["raw"][:]
         labels = f["label"][:]
+
+    # let's take a crop
+    if species == "root":
+        if split == "val":
+            raw, labels = raw[:, :, :768], labels[:, :, :768]
+        else:  # test
+            raw, labels = raw[:, :, :768], labels[:, :, :768]
+
+    elif species == "ovules":
+        if split == "val":
+            raw, labels = raw[175:200, :768, :768], labels[175:200, :768, :768]
+        else:  # test
+            raw, labels = raw[:, :768, :768], labels[:, :768, :768]
+
+    assert raw.shape == labels.shape
+
+    # applying connected components to get instances
+    labels = label(labels)
 
     return raw, labels
 
