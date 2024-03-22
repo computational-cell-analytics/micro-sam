@@ -1,4 +1,5 @@
 import os
+from glob import glob
 
 import h5py
 
@@ -53,8 +54,25 @@ def check_plantseg_volume(volume_path, set_name, crop_values=None, view=False, s
             f.create_dataset("volume/cropped/labels", data=labels, compression="gzip")
 
 
+def _just_view_volumes():
+    all_volume_paths = glob(os.path.join(ROOT, "for_micro_sam", "*.h5"))
+    for volume_path in all_volume_paths:
+        with h5py.File(volume_path, "r") as f:
+            raw = f["volume/cropped/raw"][:]
+            labels = f["volume/cropped/labels"][:]
+
+            import napari
+            v = napari.Viewer()
+            v.add_image(raw)
+            v.add_labels(labels)
+            napari.run()
+
+
 def main():
     view = False
+
+    _just_view_volumes()
+    return
 
     # for root - val
     #  - cropped volume shape: (50, 340, 500)
