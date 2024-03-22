@@ -41,7 +41,7 @@ def get_raw_and_label_volumes(data_dir, species, split):
         if split == "val":
             raw, labels = raw[:, :, :768], labels[:, :, :768]
         else:  # test
-            raw, labels = raw[:, :, :768], labels[:, :, :768]
+            raw, labels = raw[:400, :, :768], labels[:400, :, :768]
 
     elif species == "ovules":
         if split == "val":
