@@ -47,6 +47,10 @@ def get_raw_and_label_volumes(data_dir, split):
 def for_mouse_embryo(args):
     test_raw, test_labels = get_raw_and_label_volumes(args.input_path, "test")
 
+    experiment_folder = args.experiment_folder
+    embedding_path = os.path.join(experiment_folder, "embeddings")
+    result_dir = os.path.join(experiment_folder, "results")
+
     if args.ais:
         # this should be experiment specific, so Mouse Embryo in this case
         auto_3d_seg_kwargs = {
@@ -62,8 +66,8 @@ def for_mouse_embryo(args):
             test_labels=test_labels,
             model_type=args.model_type,
             checkpoint_path=args.checkpoint,
-            result_dir=args.resdir,
-            embedding_dir=args.embedding_path,
+            result_dir=result_dir,
+            embedding_dir=embedding_path,
             auto_3d_seg_kwargs=auto_3d_seg_kwargs,
         )
 
@@ -76,8 +80,8 @@ def for_mouse_embryo(args):
             test_labels=test_labels,
             model_type=args.model_type,
             checkpoint_path=args.checkpoint,
-            result_dir=args.resdir,
-            embedding_dir=args.embedding_path,
+            result_dir=result_dir,
+            embedding_dir=embedding_path,
             min_size=50,
         )
 

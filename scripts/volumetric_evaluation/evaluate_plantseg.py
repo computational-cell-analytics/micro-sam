@@ -4,16 +4,8 @@
 #
 # NOTE:
 # IMPORTANT: ideally, we need to stay consistent with 2d inference
-#   1. plantseg root:
-#       a. for validation: I'll take the first volume from sorted glob.
-#           - shape: 100, 620, 768; 56 instances
-#       b. for testing: I'll take the first volume from sorted glob
-#           - shape: 486, 620, 768; 61 instances
-#   2. plantseg ovules:
-#       a. for validation: I'll take the first volume from sorted glob.
-#           - shape: 25, 768, 768; 237 instances
-#       b. for testing: I'll take the first volume from sorted glob
-#           - shape: 320, 768, 768; 2638 instances
+#   1. plantseg root (see `./check_volumes.py` for details)
+#   2. plantseg ovules (see `./check_volumes.py` for details)
 
 
 import os
@@ -29,25 +21,23 @@ from util import (
 )
 
 
-def get_raw_and_label_volumes(data_dir, species, split):
-    volume_paths = sorted(glob(os.path.join(data_dir, f"{species}_{split}", "*")))
-    chosen_volume_path = volume_paths[0]  # we choose the first path
-    with h5py.File(chosen_volume_path, "r") as f:
-        raw = f["raw"][:]
-        labels = f["label"][:]
+VOLUME_CHOICE = {
+    "plantseg_ovules_val": "plantseg_ovules_val_N_420_ds2x.h5",
+    "plantseg_ovules_test": "plantseg_ovules_test_N_435_final_crop_ds2.h5",
+    "plantseg_root_val": "plantseg_root_val_Movie1_t00040_crop_gt.h5",
+    "plantseg_root_test": "plantseg_root_test_Movie1_t00045_crop_gt.h5"
 
-    # let's take a crop
-    if species == "root":
-        if split == "val":
-            raw, labels = raw[:, :, :768], labels[:, :, :768]
-        else:  # test
-            raw, labels = raw[:400, :, :768], labels[:400, :, :768]
+}
 
-    elif species == "ovules":
-        if split == "val":
-            raw, labels = raw[175:200, :768, :768], labels[175:200, :768, :768]
-        else:  # test
-            raw, labels = raw[:, :768, :768], labels[:, :768, :768]
+
+def get_raw_and_label_volumes(volume_path):
+    if isinstance(volume_path, list):
+        assert len(volume_path) == 1
+        volume_path = volume_path[0]
+
+    with h5py.File(volume_path, "r") as f:
+        raw = f["volume/cropped/raw"][:]
+        labels = f["volume/cropped/labels"][:]
 
     assert raw.shape == labels.shape
 
@@ -58,7 +48,13 @@ def get_raw_and_label_volumes(data_dir, species, split):
 
 
 def for_plantseg(args):
-    test_raw, test_labels = get_raw_and_label_volumes(args.input_path, args.species, "test")
+    test_raw, test_labels = get_raw_and_label_volumes(
+        glob(os.path.join(args.input_path, f"plantseg_{args.species}_test_*.h5"))
+    )
+
+    experiment_folder = args.experiment_folder
+    embedding_path = os.path.join(experiment_folder, "embeddings")
+    result_dir = os.path.join(experiment_folder, "results")
 
     if args.ais:
         # this should be experiment specific, so PlantSeg Ovules and PlantSeg Root in this case
@@ -75,14 +71,16 @@ def for_plantseg(args):
             test_labels=test_labels,
             model_type=args.model_type,
             checkpoint_path=args.checkpoint,
-            result_dir=args.resdir,
-            embedding_dir=args.embedding_path,
+            result_dir=result_dir,
+            embedding_dir=embedding_path,
             auto_3d_seg_kwargs=auto_3d_seg_kwargs,
             species=args.species
         )
 
     if args.int:
-        val_raw, val_labels = get_raw_and_label_volumes(args.input_path, args.species, "val")
+        val_raw, val_labels = get_raw_and_label_volumes(
+            glob(os.path.join(args.input_path, f"plantseg_{args.species}_val_*.h5"))
+        )
         _3d_interactive_instance_segmentation(
             val_raw=val_raw,
             val_labels=val_labels,
@@ -90,9 +88,9 @@ def for_plantseg(args):
             test_labels=test_labels,
             model_type=args.model_type,
             checkpoint_path=args.checkpoint,
-            result_dir=args.resdir,
-            embedding_dir=args.embedding_path,
-            species=args.species
+            result_dir=result_dir,
+            embedding_dir=embedding_path,
+            species=args.species,
         )
 
 
@@ -102,5 +100,5 @@ def main(args):
 
 
 if __name__ == "__main__":
-    args = _get_default_args("/scratch/projects/nim00007/sam/data/plantseg/")
+    args = _get_default_args("/scratch/usr/nimanwai/data/for_micro_sam/")
     main(args)
