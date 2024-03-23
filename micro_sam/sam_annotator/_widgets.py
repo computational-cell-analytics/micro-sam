@@ -40,12 +40,13 @@ def _reset_tracking_state(viewer):
     state.current_track_id = 1
     state.lineage = {1: []}
 
-    # Reset the choices in the track_id menu.
-    track_ids = list(map(str, state.lineage.keys()))
-    state.tracking_widget[1].choices = track_ids
-
+    # Reset the layer properties.
     viewer.layers["point_prompts"].property_choices["track_id"] = ["1"]
     viewer.layers["prompts"].property_choices["track_id"] = ["1"]
+
+    # Reset the choices in the track_id menu.
+    state.tracking_widget[1].value = "1"
+    state.tracking_widget[1].choices = ["1"]
 
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
@@ -238,14 +239,6 @@ def commit_track(
 
     # Reset the tracking state.
     _reset_tracking_state(viewer)
-
-
-@magic_factory(call_button="Save Lineage")
-def save_lineage(viewer: "napari.viewer.Viewer", path: Path) -> None:
-    state = AnnotatorState()
-    path = path.with_suffix(".json")
-    with open(path, "w") as f:
-        json.dump(state.committed_lineages, f)
 
 
 def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="label"):

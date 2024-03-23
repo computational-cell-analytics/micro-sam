@@ -63,7 +63,12 @@ def create_tracking_menu(points_layer, box_layer, states, track_ids):
     def track_id_changed(new_track_id):
         current_properties = points_layer.current_properties
         current_properties["track_id"] = np.array([new_track_id])
-        points_layer.current_properties = current_properties
+        # Note: this fails with a key error after committing a lineage with multiple tracks.
+        # I think this does not cause any further errors, so we just skip this.
+        try:
+            points_layer.current_properties = current_properties
+        except KeyError:
+            pass
         state.current_track_id = int(new_track_id)
 
     # def state_changed_boxes(new_state):
@@ -157,9 +162,8 @@ class AnnotatorTracking(_AnnotatorBase):
             self._point_prompt_layer, self._box_prompt_layer,
             states=self._track_state_labels, track_ids=list(state.lineage.keys()),
         )
-        self._save_lineage_widget = widgets.save_lineage()
-        # Add the two widgets to the docked widgets.
-        self.extend([self._tracking_widget, self._save_lineage_widget])
+        # Add the tracking widget to the docked widgets.
+        self.extend([self._tracking_widget])
 
         # Add the tracking widget to the state so that it can be accessed from within widgets
         # in order to update it when the tracking state changes.
