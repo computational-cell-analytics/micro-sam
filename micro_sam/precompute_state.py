@@ -143,7 +143,7 @@ def cache_is_state(
 
 
 def _precompute_state_for_file(
-    predictor, input_path, output_path, key, ndim, tile_shape, halo, precompute_amg_state, decoder=None,
+    predictor, input_path, output_path, key, ndim, tile_shape, halo, precompute_amg_state, decoder,
 ):
     if isinstance(input_path, np.ndarray):
         image_data = input_path

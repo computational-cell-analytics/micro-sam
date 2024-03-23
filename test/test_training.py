@@ -5,11 +5,10 @@ from glob import glob
 from shutil import rmtree
 
 import imageio.v3 as imageio
-import torch
 import torch_em
 
 from micro_sam.sample_data import synthetic_data
-from micro_sam.util import VIT_T_SUPPORT, get_custom_sam_model, SamPredictor
+from micro_sam.util import VIT_T_SUPPORT, get_sam_model, SamPredictor
 
 
 @unittest.skipUnless(VIT_T_SUPPORT, "Integration test is only run with vit_t support, otherwise it takes too long.")
@@ -85,31 +84,19 @@ class TestTraining(unittest.TestCase):
         train_loader = self._get_dataloader("train", patch_shape, batch_size)
         val_loader = self._get_dataloader("val", patch_shape, batch_size)
 
-        model = sam_training.get_trainable_sam_model(model_type=model_type, device=device)
-        convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.05)
-        optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode="min", factor=0.9, patience=10, verbose=True
-        )
-
-        trainer = sam_training.SamTrainer(
+        # Run the training.
+        sam_training.train_sam(
             name="test",
+            model_type=model_type,
             train_loader=train_loader,
             val_loader=val_loader,
-            model=model,
-            optimizer=optimizer,
-            lr_scheduler=scheduler,
-            device=device,
-            logger=sam_training.SamLogger,
-            log_image_interval=100,
-            mixed_precision=False,
-            convert_inputs=convert_inputs,
+            n_epochs=1,
             n_objects_per_batch=n_objects_per_batch,
             n_sub_iteration=n_sub_iteration,
-            compile_model=False,
-            save_root=self.tmp_folder,
+            with_segmentation_decoder=False,
+            device=device,
+            save_root=self.tmp_folder
         )
-        trainer.fit(epochs=1)
 
     def _export_model(self, checkpoint_path, export_path, model_type):
         from micro_sam.util import export_custom_sam_model
@@ -125,7 +112,7 @@ class TestTraining(unittest.TestCase):
     ):
         import micro_sam.evaluation as evaluation
 
-        predictor = evaluation.get_predictor(model_path, model_type)
+        predictor = get_sam_model(model_type=model_type, checkpoint_path=model_path)
 
         image_paths = sorted(glob(os.path.join(self.tmp_folder, "synthetic-data", "images", "test", "*.tif")))
         label_paths = sorted(glob(os.path.join(self.tmp_folder, "synthetic-data", "labels", "test", "*.tif")))
@@ -155,7 +142,7 @@ class TestTraining(unittest.TestCase):
         self.assertTrue(os.path.exists(checkpoint_path))
 
         # Check that the model can be loaded from a custom checkpoint.
-        predictor = get_custom_sam_model(checkpoint_path, model_type=model_type, device=device)
+        predictor = get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path, device=device)
         self.assertTrue(isinstance(predictor, SamPredictor))
 
         # Export the model.

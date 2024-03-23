@@ -11,7 +11,6 @@ from .evaluation import (
     run_evaluation_for_iterative_prompting,
 )
 from .inference import (
-    get_predictor,
     run_inference_with_iterative_prompting,
     run_inference_with_prompts,
     precompute_all_embeddings,

@@ -5,6 +5,7 @@ from subprocess import run
 
 import pandas as pd
 
+from micro_sam.util import get_sam_model
 from micro_sam.evaluation import (
     inference,
     evaluation,
@@ -42,7 +43,7 @@ def evaluate_model(model_id):
     model_type = "vit_b"
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        predictor = inference.get_predictor(checkpoint, model_type=model_type)
+        predictor = get_sam_model(model_type=model_type, checkpoint_path=checkpoint)
 
     experiment_dir = os.path.join(EXPERIMENT_ROOT, model_name)
 

@@ -227,21 +227,15 @@ def _initialize_predictor(predictor, image_embeddings, i, prompts, to_tile):
         features = image_embeddings["features"]
         shape, tile_shape, halo = features.attrs["shape"], features.attrs["tile_shape"], features.attrs["halo"]
         tile_id, tile, prompts = to_tile(prompts, shape, tile_shape, halo)
-        features = features[tile_id]
-        tile_image_embeddings = {
-            "features": features,
-            "input_size": features.attrs["input_size"],
-            "original_size": features.attrs["original_size"]
-        }
-        util.set_precomputed(predictor, tile_image_embeddings, i)
+        util.set_precomputed(predictor, image_embeddings, i, tile_id=tile_id)
 
     # Set the precomputed state for normal prediction.
     elif image_embeddings is not None:
-        shape = image_embeddings["input_size"]
+        shape = image_embeddings["original_size"]
         util.set_precomputed(predictor, image_embeddings, i)
 
     else:
-        shape = predictor.input_size
+        shape = predictor.original_size
 
     return predictor, tile, prompts, shape
 
@@ -319,7 +313,6 @@ def segment_from_points(
         return mask
 
 
-# use original_size if the mask is downscaled w.r.t. the original image size
 def segment_from_mask(
     predictor: SamPredictor,
     mask: np.ndarray,
@@ -350,7 +343,8 @@ def segment_from_mask(
         use_box: Whether to derive the bounding box prompt from the mask.
         use_mask: Whether to use the mask itself as prompt.
         use_points: Whether to derive point prompts from the mask.
-        original_size: Full image shape.
+        original_size: Full image shape. Use this if the mask that is being passed
+            downsampled compared to the original image.
         multimask_output: Whether to return multiple or just a single mask.
         return_all: Whether to return the score and logits in addition to the mask.
         box_extension: Relative factor used to enlarge the bounding box prompt.
@@ -401,7 +395,7 @@ def segment_from_mask(
             mask, original_size=original_size, box_extension=box_extension
         ) if use_box else None
     else:
-        box = _process_box(box, mask.shape, original_size, box_extension=box_extension)
+        box = _process_box(box, mask.shape, original_size=original_size, box_extension=box_extension)
 
     logits = _compute_logits_from_mask(mask) if use_mask else None
 
@@ -425,7 +419,6 @@ def segment_from_box(
     box: np.ndarray,
     image_embeddings: Optional[util.ImageEmbeddings] = None,
     i: Optional[int] = None,
-    original_size: Optional[Tuple[int, ...]] = None,
     multimask_output: bool = False,
     return_all: bool = False,
     box_extension: float = 0.0,
@@ -439,7 +432,6 @@ def segment_from_box(
             Has to be passed if the predictor is not yet initialized.
          i: Index for the image data. Required if the input data has three spatial dimensions
              or a time dimension and two spatial dimensions.
-        original_size: The original image shape.
         multimask_output: Whether to return multiple or just a single mask.
         return_all: Whether to return the score and logits in addition to the mask.
         box_extension: Relative factor used to enlarge the bounding box prompt.
@@ -451,7 +443,7 @@ def segment_from_box(
         predictor, image_embeddings, i, box, _box_to_tile
     )
     mask, scores, logits = predictor.predict(
-        box=_process_box(box, shape, original_size, box_extension), multimask_output=multimask_output
+        box=_process_box(box, shape, box_extension=box_extension), multimask_output=multimask_output
     )
 
     if tile is not None:
@@ -470,7 +462,6 @@ def segment_from_box_and_points(
     labels: np.ndarray,
     image_embeddings: Optional[util.ImageEmbeddings] = None,
     i: Optional[int] = None,
-    original_size: Optional[Tuple[int, ...]] = None,
     multimask_output: bool = False,
     return_all: bool = False,
 ):
@@ -485,7 +476,6 @@ def segment_from_box_and_points(
             Has to be passed if the predictor is not yet initialized.
          i: Index for the image data. Required if the input data has three spatial dimensions
              or a time dimension and two spatial dimensions.
-        original_size: The original image shape.
         multimask_output: Whether to return multiple or just a single mask.
         return_all: Whether to return the score and logits in addition to the mask.
 
@@ -509,7 +499,7 @@ def segment_from_box_and_points(
     mask, scores, logits = predictor.predict(
         point_coords=points[:, ::-1],  # SAM has reversed XY conventions
         point_labels=labels,
-        box=_process_box(box, shape, original_size),
+        box=_process_box(box, shape),
         multimask_output=multimask_output
     )
 
