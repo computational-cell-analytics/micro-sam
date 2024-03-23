@@ -114,7 +114,7 @@ def for_custom_livecell(specific_script):
 
 
 def for_variance_in_livecell(run_set):
-    EXP_ROOT = "/scratch/projects/nim00007/sam/experiments/new_models/test/"
+    EXP_ROOT = "/scratch/projects/nim00007/sam/experiments/new_models/test"
 
     def _run_custom_livecell(model_type, experiment_set):
         cmd = CMD
@@ -141,11 +141,11 @@ def main(args):
 
     # for_custom_livecell(specific_script="iterative_prompting")
 
-    # for_variance_in_livecell("run_1")
+    for_variance_in_livecell("run_1")
     for_variance_in_livecell("run_2")
-    # for_variance_in_livecell("run_3")
-    # for_variance_in_livecell("run_4")
-    # for_variance_in_livecell("run_5")
+    for_variance_in_livecell("run_3")
+    for_variance_in_livecell("run_4")
+    for_variance_in_livecell("run_5")
 
 
 if __name__ == "__main__":
