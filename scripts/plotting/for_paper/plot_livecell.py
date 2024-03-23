@@ -14,6 +14,12 @@ TOP_BAR_COLOR, BOTTOM_BAR_COLOR = "#F0746E", "#01B3B7"
 MODEL_CHOICE = "vit_l"
 ALL_MODELS = ["vit_t", "vit_b", "vit_l", "vit_h"]
 COMPARE_WITH = "specialist"
+MODEL_NAME_MAP = {
+    "vit_t": "ViT Tiny",
+    "vit_b": "ViT Base",
+    "vit_l": "ViT Large",
+    "vit_h": "ViT Huge"
+}
 
 
 def gather_livecell_results(model_type, experiment_name, benchmark_choice, result_type="default"):
@@ -72,7 +78,10 @@ def gather_livecell_results(model_type, experiment_name, benchmark_choice, resul
 
 def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
     sns.barplot(x="iteration", y="result", hue="name", data=ib_data, ax=ax, palette=[TOP_BAR_COLOR])
-    ax.errorbar(x=ib_data['iteration'], y=ib_data['result'], yerr=ib_data['error'], fmt='none', c='black', capsize=10)
+    if "error" in ib_data:
+        ax.errorbar(
+            x=ib_data['iteration'], y=ib_data['result'], yerr=ib_data['error'], fmt='none', c='black', capsize=10
+        )
 
     # NOTE: this is the snippet which creates hatches on the iterative prompting starting with box.
     # all_containers = ax.containers[-1]
@@ -81,7 +90,10 @@ def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
     #     ax.patches[k].set_edgecolor('k')
 
     sns.barplot(x="iteration", y="result", hue="name", data=ip_data, ax=ax, palette=[BOTTOM_BAR_COLOR])
-    ax.errorbar(x=ip_data['iteration'], y=ip_data['result'], yerr=ip_data['error'], fmt='none', c='black', capsize=10)
+    if "error" in ip_data:
+        ax.errorbar(
+            x=ip_data['iteration'], y=ip_data['result'], yerr=ip_data['error'], fmt='none', c='black', capsize=10
+        )
     ax.set(xlabel=None, ylabel=None)
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
     ax.set_title(name, fontsize=13, fontweight="bold")
@@ -189,6 +201,7 @@ def plot_all_livecell(benchmark_choice, model_type):
     plt.show()
     plt.tight_layout()
     plt.subplots_adjust(top=0.865, right=0.95, left=0.075, bottom=0.05)
+    fig.suptitle(MODEL_NAME_MAP[model_type], fontsize=26, x=0.515, y=0.95)
     plt.savefig(f"livecell_{model_type}.png")
     plt.close()
 
@@ -196,8 +209,8 @@ def plot_all_livecell(benchmark_choice, model_type):
 def main(args):
     # plot_for_livecell(benchmark_choice="livecell", results_with_logits=args.use_masks)
 
-    # plot_all_livecell(benchmark_choice="livecell", model_type="vit_t")
-    plot_all_livecell(benchmark_choice="livecell", model_type="vit_b")
+    plot_all_livecell(benchmark_choice="livecell", model_type="vit_t")
+    # plot_all_livecell(benchmark_choice="livecell", model_type="vit_b")
     # plot_all_livecell(benchmark_choice="livecell", model_type="vit_l")
     # plot_all_livecell(benchmark_choice="livecell", model_type="vit_h")
 
