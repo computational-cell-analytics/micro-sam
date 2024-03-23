@@ -23,7 +23,7 @@ from zarr.errors import PathNotFoundError
 from ._state import AnnotatorState
 from . import util as vutil
 from .. import instance_segmentation, util
-from ..multi_dimensional_segmentation import segment_mask_in_volume, merge_instance_segmentation_3d
+from ..multi_dimensional_segmentation import segment_mask_in_volume, merge_instance_segmentation_3d, PROJECTION_MODES
 
 if TYPE_CHECKING:
     import napari
@@ -40,12 +40,13 @@ def _reset_tracking_state(viewer):
     state.current_track_id = 1
     state.lineage = {1: []}
 
-    # Reset the choices in the track_id menu.
-    track_ids = list(map(str, state.lineage.keys()))
-    state.tracking_widget[1].choices = track_ids
-
+    # Reset the layer properties.
     viewer.layers["point_prompts"].property_choices["track_id"] = ["1"]
     viewer.layers["prompts"].property_choices["track_id"] = ["1"]
+
+    # Reset the choices in the track_id menu.
+    state.tracking_widget[1].value = "1"
+    state.tracking_widget[1].choices = ["1"]
 
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
@@ -238,14 +239,6 @@ def commit_track(
 
     # Reset the tracking state.
     _reset_tracking_state(viewer)
-
-
-@magic_factory(call_button="Save Lineage")
-def save_lineage(viewer: "napari.viewer.Viewer", path: Path) -> None:
-    state = AnnotatorState()
-    path = path.with_suffix(".json")
-    with open(path, "w") as f:
-        json.dump(state.committed_lineages, f)
 
 
 def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="label"):
@@ -464,7 +457,7 @@ def segment_slice(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) ->
 # See https://github.com/computational-cell-analytics/micro-sam/issues/334
 @magic_factory(
     call_button="Segment All Slices [Shift-S]",
-    projection={"choices": ["box", "mask", "points", "points_and_mask", "single_point"]},
+    projection={"choices": PROJECTION_MODES},
 )
 def segment_object(
     viewer: "napari.viewer.Viewer",
@@ -500,7 +493,7 @@ def segment_object(
 
 def _update_lineage(viewer):
     """Updated the lineage after recording a division event.
-    This helper function is needed by 'track_object_widget'.
+    This helper function is needed by 'track_object'.
     """
     state = AnnotatorState()
     tracking_widget = state.tracking_widget
@@ -557,20 +550,16 @@ def segment_frame(viewer: "napari.viewer.Viewer") -> None:
 
 
 # TODO should probably be wrappred in a thread worker
-@magic_factory(call_button="Track Object [Shift-S]", projection={"choices": ["default", "bounding_box", "mask"]})
+@magic_factory(call_button="Track Object [Shift-S]", projection={"choices": PROJECTION_MODES})
 def track_object(
     viewer: "napari.viewer.Viewer",
     iou_threshold: float = 0.5,
-    projection: str = "default",
+    projection: str = "points",
     motion_smoothing: float = 0.5,
     box_extension: float = 0.1,
 ) -> None:
     state = AnnotatorState()
     shape = state.image_shape
-
-    # we use the bounding box projection method as default which generally seems to work better for larger changes
-    # between frames (which is pretty tyipical for tracking compared to 3d segmentation)
-    projection_ = "mask" if projection == "default" else projection
 
     with progress(total=shape[0]) as progress_bar:
         # step 1: segment all slices with prompts
@@ -584,7 +573,7 @@ def track_object(
         seg, has_division = vutil.track_from_prompts(
             viewer.layers["point_prompts"], viewer.layers["prompts"], seg,
             state.predictor, slices, state.image_embeddings, stop_upper,
-            threshold=iou_threshold, projection=projection_,
+            threshold=iou_threshold, projection=projection,
             progress_bar=progress_bar, motion_smoothing=motion_smoothing,
             box_extension=box_extension,
         )
