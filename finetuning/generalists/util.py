@@ -6,6 +6,7 @@ from glob import glob
 from pathlib import Path
 
 import pandas as pd
+from micro_sam.util import get_sam_model
 from micro_sam.evaluation import (
     automatic_mask_generation, inference, evaluation,
     default_experiment_settings, get_experiment_setting_name
@@ -69,28 +70,27 @@ def get_data_paths(dataset, split, max_num_images=None):
 ###
 
 
-def get_generalist_predictor(checkpoint, model_type, is_custom_model, return_state=False):
+def get_generalist_predictor(checkpoint, model_type, return_state=False):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        return inference.get_predictor(
-            checkpoint, model_type=model_type,
-            return_state=return_state, is_custom_model=is_custom_model
+        return get_sam_model(
+            model_type=model_type, checkpoint_path=checkpoint, return_state=return_state,
         )
 
 
 def evaluate_checkpoint_for_dataset(
     checkpoint, model_type, dataset, experiment_folder,
-    run_default_evaluation, run_amg, is_custom_model,
+    run_default_evaluation, do_amg,
     predictor=None, max_num_val_images=None,
 ):
     """Evaluate a generalist checkpoint for a given dataset.
     """
-    assert run_default_evaluation or run_amg
+    assert run_default_evaluation or do_amg
 
     prompt_dir = os.path.join(PROMPT_ROOT, dataset)
 
     if predictor is None:
-        predictor = get_generalist_predictor(checkpoint, model_type, is_custom_model)
+        predictor = get_generalist_predictor(checkpoint, model_type)
     test_image_paths, test_gt_paths = get_data_paths(dataset, "test")
 
     embedding_dir = os.path.join(experiment_folder, "test", "embeddings")
@@ -128,7 +128,7 @@ def evaluate_checkpoint_for_dataset(
             result.insert(0, "setting", [setting_name])
             results.append(result)
 
-    if run_amg:
+    if do_amg:
         val_embedding_dir = os.path.join(experiment_folder, "val", "embeddings")
         val_result_dir = os.path.join(experiment_folder, "val", "results")
         os.makedirs(val_embedding_dir, exist_ok=True)
@@ -174,11 +174,11 @@ def evaluate_checkpoint_for_dataset(
 
 def evaluate_checkpoint_for_datasets(
     checkpoint, model_type, experiment_root, datasets,
-    run_default_evaluation, run_amg, is_custom_model,
+    run_default_evaluation, do_amg,
     predictor=None, max_num_val_images=None,
 ):
     if predictor is None:
-        predictor = get_generalist_predictor(checkpoint, model_type, is_custom_model)
+        predictor = get_generalist_predictor(checkpoint, model_type)
 
     results = []
     for dataset in datasets:
@@ -187,8 +187,7 @@ def evaluate_checkpoint_for_datasets(
         result = evaluate_checkpoint_for_dataset(
             None, None, dataset, experiment_folder,
             run_default_evaluation=run_default_evaluation,
-            run_amg=run_amg, is_custom_model=is_custom_model,
-            predictor=predictor, max_num_val_images=max_num_val_images,
+            do_amg=do_amg, predictor=predictor, max_num_val_images=max_num_val_images,
         )
         results.append(result)
 

@@ -1,11 +1,11 @@
 import warnings
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import napari
 import numpy as np
+import torch
 
 from magicgui.widgets import ComboBox, Container
-from segment_anything import SamPredictor
 
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
@@ -63,7 +63,12 @@ def create_tracking_menu(points_layer, box_layer, states, track_ids):
     def track_id_changed(new_track_id):
         current_properties = points_layer.current_properties
         current_properties["track_id"] = np.array([new_track_id])
-        points_layer.current_properties = current_properties
+        # Note: this fails with a key error after committing a lineage with multiple tracks.
+        # I think this does not cause any further errors, so we just skip this.
+        try:
+            points_layer.current_properties = current_properties
+        except KeyError:
+            pass
         state.current_track_id = int(new_track_id)
 
     # def state_changed_boxes(new_state):
@@ -92,7 +97,7 @@ class AnnotatorTracking(_AnnotatorBase):
     # The tracking annotator needs different settings for the prompt layers
     # to support the additional tracking state.
     # That's why we over-ride this function.
-    def _create_layers(self, segmentation_result):
+    def _create_layers(self):
         self._point_labels = ["positive", "negative"]
         self._track_state_labels = ["track", "division"]
 
@@ -125,7 +130,7 @@ class AnnotatorTracking(_AnnotatorBase):
             name="prompts",
             edge_color="green",
             property_choices={"track_id": ["1"]},
-            # properties={"track_id": ["1", "1"], "state": state_labels},
+            # property_choces={"track_id": ["1"], "state": self._track_state_labels},
             # edge_color_cycle=STATE_COLOR_CYCLE,
         )
         # self._box_prompt_layer.edge_color_mode = "cycle"
@@ -134,25 +139,18 @@ class AnnotatorTracking(_AnnotatorBase):
         dummy_data = np.zeros(self._shape, dtype="uint32")
         self._viewer.add_labels(data=dummy_data, name="current_object")
         self._viewer.add_labels(data=dummy_data, name="auto_segmentation")
-        self._viewer.add_labels(
-            data=dummy_data if segmentation_result is None else segmentation_result, name="committed_objects"
-        )
+        self._viewer.add_labels(data=dummy_data, name="committed_objects")
         # Randomize colors so it is easy to see when object committed.
         self._viewer.layers["committed_objects"].new_colormap()
 
-    def __init__(
-        self,
-        viewer: "napari.viewer.Viewer",
-        # segmentation_result: Optional[np.ndarray] = None,
-    ) -> None:
+    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
         super().__init__(
             viewer=viewer,
             ndim=3,
-            segment_widget=widgets.segment_frame_widget,
-            segment_nd_widget=widgets.track_object_widget,
-            commit_widget=widgets.commit_tracking_widget,
-            clear_widget=widgets.clear_tracking_widget,
-            # segmentation_result=segmentation_result,
+            segment_widget=widgets.segment_frame,
+            segment_nd_widget=widgets.track_object,
+            commit_widget=widgets.commit_track,
+            clear_widget=widgets.clear_track,
         )
 
         # Initialize the state for tracking.
@@ -164,9 +162,8 @@ class AnnotatorTracking(_AnnotatorBase):
             self._point_prompt_layer, self._box_prompt_layer,
             states=self._track_state_labels, track_ids=list(state.lineage.keys()),
         )
-        self._save_lineage_widget = widgets.save_lineage_widget()
-        # Add the two widgets to the docked widgets.
-        self.extend([self._tracking_widget, self._save_lineage_widget])
+        # Add the tracking widget to the docked widgets.
+        self.extend([self._tracking_widget])
 
         # Add the tracking widget to the state so that it can be accessed from within widgets
         # in order to update it when the tracking state changes.
@@ -198,7 +195,8 @@ def annotator_tracking(
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
     viewer: Optional["napari.viewer.Viewer"] = None,
-    predictor: Optional[SamPredictor] = None,
+    checkpoint_path: Optional[str] = None,
+    device: Optional[Union[str, torch.device]] = None,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the tracking annotation tool fora given timeseries.
 
@@ -213,8 +211,8 @@ def annotator_tracking(
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
         viewer: The viewer to which the SegmentAnything functionality should be added.
             This enables using a pre-initialized viewer.
-        predictor: The Segment Anything model. Passing this enables using fully custom models.
-            If you pass `predictor` then `model_type` will be ignored.
+        checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
+        device: The computational device to use for the SAM model.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -224,7 +222,8 @@ def annotator_tracking(
     state = AnnotatorState()
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path,
-        halo=halo, tile_shape=tile_shape, predictor=predictor,
+        halo=halo, tile_shape=tile_shape, prefer_decoder=False,
+        ndim=3, checkpoint_path=checkpoint_path, device=device,
     )
     state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
 
@@ -251,6 +250,7 @@ def main():
     parser = vutil._initialize_parser(
         description="Run interactive segmentation for an image volume.",
         with_segmentation_result=False,
+        with_instance_segmentation=False,
     )
 
     # Tracking result is not yet supported, we need to also deserialize the lineage.
@@ -275,4 +275,5 @@ def main():
     annotator_tracking(
         image, embedding_path=args.embedding_path, model_type=args.model_type,
         tile_shape=args.tile_shape, halo=args.halo,
+        checkpoint_path=args.checkpoint, device=args.device,
     )

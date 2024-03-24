@@ -9,6 +9,7 @@ from scipy.ndimage import shift
 from skimage import draw
 
 from .. import prompt_based_segmentation, util
+from ..multi_dimensional_segmentation import _validate_projection
 
 # Green and Red
 LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
@@ -32,7 +33,7 @@ def toggle_label(prompts):
     prompts.refresh_colors()
 
 
-def _initialize_parser(description, with_segmentation_result=True, with_show_embeddings=True):
+def _initialize_parser(description, with_segmentation_result=True, with_instance_segmentation=True):
 
     available_models = list(util.get_model_names())
     available_models = ", ".join(available_models)
@@ -71,15 +72,38 @@ def _initialize_parser(description, with_segmentation_result=True, with_show_emb
         )
 
     parser.add_argument(
-        "--model_type", default=util._DEFAULT_MODEL,
+        "-m", "--model_type", default=util._DEFAULT_MODEL,
         help=f"The segment anything model that will be used, one of {available_models}."
     )
+    parser.add_argument(
+        "-c", "--checkpoint", default=None,
+        help="Checkpoint from which the SAM model will be loaded loaded."
+    )
+    parser.add_argument(
+        "-d", "--device", default=None,
+        help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
+        "By default the most performant available device will be selected."
+    )
+
     parser.add_argument(
         "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
     )
     parser.add_argument(
         "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
     )
+
+    if with_instance_segmentation:
+        parser.add_argument(
+            "--precompute_amg_state", action="store_true",
+            help="Whether to precompute the state for automatic instance segmentation. "
+            "This will lead to a longer start-up time, but the automatic instance segmentation can "
+            "be run directly once the tool has started."
+        )
+        parser.add_argument(
+            "--prefer_decoder", action="store_false",
+            help="Whether to use decoder based instance segmentation if the model "
+            "being used has an additional decoder for that purpose."
+        )
 
     return parser
 
@@ -94,6 +118,23 @@ def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:
     if not clear_segmentations:
         return
     viewer.layers["current_object"].data = np.zeros(viewer.layers["current_object"].data.shape, dtype="uint32")
+    viewer.layers["current_object"].refresh()
+
+
+def clear_annotations_slice(viewer: napari.Viewer, i: int, clear_segmentations=True) -> None:
+    """@private"""
+    point_prompts = viewer.layers["point_prompts"].data
+    point_prompts = point_prompts[point_prompts[:, 0] != i]
+    viewer.layers["point_prompts"].data = point_prompts
+    viewer.layers["point_prompts"].refresh()
+    if "prompts" in viewer.layers:
+        prompts = viewer.layers["prompts"].data
+        prompts = [prompt for prompt in prompts if not (prompt[:, 0] == i).all()]
+        viewer.layers["prompts"].data = prompts
+        viewer.layers["prompts"].refresh()
+    if not clear_segmentations:
+        return
+    viewer.layers["current_object"].data[i] = 0
     viewer.layers["current_object"].refresh()
 
 
@@ -364,7 +405,7 @@ def segment_slices_with_prompts(
 
 def prompt_segmentation(
     predictor, points, labels, boxes, masks, shape, multiple_box_prompts,
-    image_embeddings=None, i=None, box_extension=0,
+    image_embeddings=None, i=None, box_extension=0, multiple_point_prompts=None,
 ):
     """@private"""
     assert len(points) == len(labels)
@@ -373,6 +414,14 @@ def prompt_segmentation(
 
     # no prompts were given, return None
     if not have_points and not have_boxes:
+        return
+
+    # we use the batched point prompt segmentation mode, but
+    # have a box prompt -> this does not work
+    elif multiple_point_prompts and have_boxes:
+        print("You have activated batched point segmentation but have passed a box prompt.")
+        print("This setting is currently not supported.")
+        print("Provide a single positive point prompt per object when using batched point segmentation.")
         return
 
     # box and point prompts were given
@@ -394,9 +443,32 @@ def prompt_segmentation(
 
     # only point prompts were given
     elif have_points and not have_boxes:
-        seg = prompt_based_segmentation.segment_from_points(
-            predictor, points, labels, image_embeddings=image_embeddings, i=i
-        ).squeeze()
+
+        if multiple_point_prompts:
+            seg = np.zeros(shape, dtype="uint32")
+            batched_points, batched_labels = [], []
+            negative_points, negative_labels = [], []
+            for j in range(len(points)):
+                if labels[j] == 1:  # positive point
+                    batched_points.append(points[j:j+1])
+                    batched_labels.append(labels[j:j+1])
+                else:  # negative points
+                    negative_points.append(points[j:j+1])
+                    negative_labels.append(labels[j:j+1])
+
+            # Batch this?
+            for seg_id, (point, label) in enumerate(zip(batched_points, batched_labels), 1):
+                if len(negative_points) > 0:
+                    point = np.concatenate([point] + negative_points)
+                    label = np.concatenate([label] + negative_labels)
+                prediction = prompt_based_segmentation.segment_from_points(
+                    predictor, point, label, image_embeddings=image_embeddings, i=i
+                ).squeeze()
+                seg[prediction] = seg_id
+        else:
+            seg = prompt_based_segmentation.segment_from_points(
+                predictor, points, labels, image_embeddings=image_embeddings, i=i
+            ).squeeze()
 
     # only box prompts were given
     elif not have_points and have_boxes:
@@ -407,6 +479,7 @@ def prompt_segmentation(
             print("You can only segment one object at a time in 3d.")
             return
 
+        # Batch this?
         for seg_id, (box, mask) in enumerate(zip(boxes, masks), 1):
             if mask is None:
                 prediction = prompt_based_segmentation.segment_from_box(
@@ -450,11 +523,7 @@ def track_from_prompts(
 ):
     """@private
     """
-    assert projection in ("mask", "bounding_box")
-    if projection == "mask":
-        use_mask, use_box = True, True
-    else:
-        use_mask, use_box = False, True
+    use_box, use_mask, use_points, use_single_point = _validate_projection(projection)
 
     def _update_progress():
         if progress_bar is not None:
@@ -505,7 +574,8 @@ def track_from_prompts(
 
             seg_t = prompt_based_segmentation.segment_from_mask(
                 predictor, seg_prev, image_embeddings=image_embeddings, i=t,
-                use_mask=use_mask, use_box=use_box, box_extension=box_extension
+                use_mask=use_mask, use_box=use_box, use_points=use_points,
+                box_extension=box_extension, use_single_point=use_single_point,
             )
             track_state = "track"
 

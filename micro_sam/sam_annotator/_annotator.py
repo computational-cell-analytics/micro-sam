@@ -18,7 +18,7 @@ class _AnnotatorBase(Container):
     The annotators differ in their data dimensionality and the widgets.
     """
 
-    def _create_layers(self, segmentation_result):
+    def _create_layers(self):
         # Add the point layer for point prompts.
         self._point_labels = ["positive", "negative"]
         self._point_prompt_layer = self._viewer.add_points(
@@ -43,14 +43,12 @@ class _AnnotatorBase(Container):
         dummy_data = np.zeros(self._shape, dtype="uint32")
         self._viewer.add_labels(data=dummy_data, name="current_object")
         self._viewer.add_labels(data=dummy_data, name="auto_segmentation")
-        self._viewer.add_labels(
-            data=dummy_data if segmentation_result is None else segmentation_result, name="committed_objects"
-        )
+        self._viewer.add_labels(data=dummy_data, name="committed_objects")
         # Randomize colors so it is easy to see when object committed.
         self._viewer.layers["committed_objects"].new_colormap()
 
     def _create_widgets(self, segment_widget, segment_nd_widget, autosegment_widget, commit_widget, clear_widget):
-        self._embedding_widget = widgets.embedding_widget()
+        self._embedding_widget = widgets.embedding()
         # Connect the call button of the embedding widget with a function
         # that updates all relevant layers when the image changes.
         self._embedding_widget.call_button.changed.connect(self._update_image)
@@ -75,24 +73,24 @@ class _AnnotatorBase(Container):
         self.extend(widget_list)
 
     def _create_keybindings(self):
-        @self._viewer.bind_key("s")
+        @self._viewer.bind_key("s", overwrite=True)
         def _segment(viewer):
             self._segment_widget(viewer)
 
-        @self._viewer.bind_key("c")
+        @self._viewer.bind_key("c", overwrite=True)
         def _commit(viewer):
             self._commit_widget(viewer)
 
-        @self._viewer.bind_key("t")
+        @self._viewer.bind_key("t", overwrite=True)
         def _toggle_label(event=None):
             vutil.toggle_label(self._point_prompt_layer)
 
-        @self._viewer.bind_key("Shift-C")
+        @self._viewer.bind_key("Shift-C", overwrite=True)
         def _clear_annotations(viewer):
             self._clear_widget(viewer)
 
         if hasattr(self, "_segment_nd_widget"):
-            @self._viewer.bind_key("Shift-S")
+            @self._viewer.bind_key("Shift-S", overwrite=True)
             def _seg_nd(viewer):
                 self._segment_nd_widget(viewer)
 
@@ -108,9 +106,8 @@ class _AnnotatorBase(Container):
         segment_widget: Widget,
         segment_nd_widget: Optional[Widget] = None,
         autosegment_widget: Optional[Widget] = None,
-        commit_widget: Widget = widgets.commit_segmentation_widget,
-        clear_widget: Widget = widgets.clear_widget,
-        segmentation_result: Optional[np.ndarray] = None,
+        commit_widget: Widget = widgets.commit,
+        clear_widget: Widget = widgets.clear,
     ) -> None:
         """
         Args:
@@ -121,7 +118,6 @@ class _AnnotatorBase(Container):
             autosegment_widget:
             commit_widget:
             clear_widget:
-            segmentation_result:
         """
         super().__init__()
         self._viewer = viewer
@@ -131,7 +127,7 @@ class _AnnotatorBase(Container):
         # correct shape once an image is set.
         self._ndim = ndim
         self._shape = (256, 256) if ndim == 2 else (16, 256, 256)
-        self._create_layers(segmentation_result)
+        self._create_layers()
 
         # Add the widgets in common between all annotators.
         self._create_widgets(
@@ -141,7 +137,7 @@ class _AnnotatorBase(Container):
         # Add the key bindings in common between all annotators.
         self._create_keybindings()
 
-    def _update_image(self):
+    def _update_image(self, segmentation_result=None):
         state = AnnotatorState()
 
         # Update the image shape if it has changed.
@@ -154,7 +150,11 @@ class _AnnotatorBase(Container):
 
         # Reset all layers.
         self._viewer.layers["current_object"].data = np.zeros(self._shape, dtype="uint32")
-        self._viewer.layers["committed_objects"].data = np.zeros(self._shape, dtype="uint32")
         self._viewer.layers["auto_segmentation"].data = np.zeros(self._shape, dtype="uint32")
+        if segmentation_result is None:
+            self._viewer.layers["committed_objects"].data = np.zeros(self._shape, dtype="uint32")
+        else:
+            assert segmentation_result.shape == self._shape
+            self._viewer.layers["committed_objects"].data = segmentation_result
 
         vutil.clear_annotations(self._viewer, clear_segmentations=False)

@@ -17,7 +17,11 @@ from segment_anything import SamPredictor
 
 from .. import util as util
 from ..inference import batched_inference
-from ..instance_segmentation import mask_data_to_segmentation
+from ..instance_segmentation import (
+    mask_data_to_segmentation, get_predictor_and_decoder,
+    AutomaticMaskGenerator, InstanceSegmentationWithDecoder,
+)
+from . import instance_segmentation
 from ..prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
 
 
@@ -132,42 +136,6 @@ def _run_inference_with_prompts_for_image(
     )
 
     return instance_labels, prompts
-
-
-def get_predictor(
-    checkpoint_path: Union[str, os.PathLike],
-    model_type: str,
-    device: Optional[Union[str, torch.device]] = None,
-    return_state: bool = False,
-    is_custom_model: Optional[bool] = None,
-) -> SamPredictor:
-    """Get the segment anything predictor from an exported or custom checkpoint.
-
-    Args:
-        checkpoint_path: The checkpoint filepath.
-        model_type: The type of the model, either vit_h, vit_b or vit_l.
-        device: The device to use.
-        return_state: Whether to return the complete state of the checkpoint in addtion to the predictor.
-        is_custom_model: Whether this is a custom model or not.
-    Returns:
-        The segment anything predictor.
-    """
-    device = util.get_device(device)
-
-    # By default we check if the model follows the torch_em checkpint naming scheme to check whether it is a
-    # custom model or not. This can be over-ridden by passing True or False for is_custom_model.
-    is_custom_model = checkpoint_path.split("/")[-1] == "best.pt" if is_custom_model is None else is_custom_model
-
-    if is_custom_model:  # Finetuned SAM model
-        predictor = util.get_custom_sam_model(
-            checkpoint_path=checkpoint_path, model_type=model_type, device=device, return_state=return_state
-        )
-    else:  # Vanilla SAM model
-        assert not return_state
-        predictor = util.get_sam_model(
-            model_type=model_type, device=device, checkpoint_path=checkpoint_path
-        )  # type: ignore
-    return predictor
 
 
 def precompute_all_embeddings(
@@ -386,7 +354,7 @@ def run_inference_with_prompts(
 
 def _save_segmentation(masks, prediction_path):
     # masks to segmentation
-    masks = masks.cpu().numpy().squeeze().astype("bool")
+    masks = masks.cpu().numpy().squeeze(1).astype("bool")
     masks = [{"segmentation": mask, "area": mask.sum()} for mask in masks]
     segmentation = mask_data_to_segmentation(masks, with_background=True)
     imageio.imwrite(prediction_path, segmentation, compression=5)
@@ -402,7 +370,8 @@ def _run_inference_with_iterative_prompting_for_image(
     batch_size,
     embedding_path,
     n_iterations,
-    prediction_paths
+    prediction_paths,
+    use_masks=False
 ) -> None:
     prompt_generator = IterativePromptGenerator()
 
@@ -430,11 +399,17 @@ def _run_inference_with_iterative_prompting_for_image(
     sampled_binary_gt = util.segmentation_to_one_hot(gt.astype("int64"), gt_ids)
 
     for iteration in range(n_iterations):
+        if iteration == 0:  # logits mask can not be used for the first iteration.
+            logits_masks = None
+        else:
+            if not use_masks:  # logits mask should not be used when not desired.
+                logits_masks = None
+
         batched_outputs = batched_inference(
             predictor, image, batch_size,
             boxes=boxes, points=points, point_labels=point_labels,
             multimasking=multimasking, embedding_path=embedding_path,
-            return_instance_segmentation=False
+            return_instance_segmentation=False, logits_masks=logits_masks
         )
 
         # switching off multimasking after first iter, as next iters (with multiple prompts) don't expect multimasking
@@ -455,6 +430,9 @@ def _run_inference_with_iterative_prompting_for_image(
         else:
             point_labels = next_labels
 
+        if use_masks:
+            logits_masks = torch.stack([m["logits"] for m in batched_outputs])
+
         _save_segmentation(masks, prediction_paths[iteration])
 
 
@@ -468,6 +446,7 @@ def run_inference_with_iterative_prompting(
     dilation: int = 5,
     batch_size: int = 32,
     n_iterations: int = 8,
+    use_masks: bool = False
 ) -> None:
     """Run segment anything inference for multiple images using prompts iteratively
         derived from model outputs and groundtruth
@@ -479,10 +458,11 @@ def run_inference_with_iterative_prompting(
         embedding_dir: The directory where the image embeddings will be saved or are already saved.
         prediction_dir: The directory where the predictions from SegmentAnything will be saved per iteration.
         start_with_box_prompt: Whether to use the first prompt as bounding box or a single point
-        dilation: The dilation factor for the radius around the ground-truth obkect
+        dilation: The dilation factor for the radius around the ground-truth object
             around which points will not be sampled.
         batch_size: The batch size used for batched predictions.
         n_iterations: The number of iterations for iterative prompting.
+        use_masks: Whether to make use of logits from previous prompt-based segmentation
     """
     if len(image_paths) != len(gt_paths):
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
@@ -490,6 +470,9 @@ def run_inference_with_iterative_prompting(
     # create all prediction folders for all intermediate iterations
     for i in range(n_iterations):
         os.makedirs(os.path.join(prediction_dir, f"iteration{i:02}"), exist_ok=True)
+
+    if use_masks:
+        print("The iterative prompting will make use of logits masks from previous iterations.")
 
     for image_path, gt_path in tqdm(
         zip(image_paths, gt_paths), total=len(image_paths), desc="Run inference with iterative prompting for all images"
@@ -513,5 +496,87 @@ def run_inference_with_iterative_prompting(
         _run_inference_with_iterative_prompting_for_image(
             predictor, image, gt, start_with_box_prompt=start_with_box_prompt,
             dilation=dilation, batch_size=batch_size, embedding_path=embedding_path,
-            n_iterations=n_iterations, prediction_paths=prediction_paths
+            n_iterations=n_iterations, prediction_paths=prediction_paths, use_masks=use_masks
         )
+
+
+#
+# AMG FUNCTION
+#
+
+
+def run_amg(
+    checkpoint: Union[str, os.PathLike],
+    model_type: str,
+    experiment_folder: Union[str, os.PathLike],
+    val_image_paths: List[Union[str, os.PathLike]],
+    val_gt_paths: List[Union[str, os.PathLike]],
+    test_image_paths: List[Union[str, os.PathLike]],
+    iou_thresh_values: Optional[List[float]] = None,
+    stability_score_values: Optional[List[float]] = None,
+) -> str:
+    embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
+    os.makedirs(embedding_folder, exist_ok=True)
+
+    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint)
+    amg = AutomaticMaskGenerator(predictor)
+    amg_prefix = "amg"
+
+    # where the predictions are saved
+    prediction_folder = os.path.join(experiment_folder, amg_prefix, "inference")
+    os.makedirs(prediction_folder, exist_ok=True)
+
+    # where the grid-search results are saved
+    gs_result_folder = os.path.join(experiment_folder, amg_prefix, "grid_search")
+    os.makedirs(gs_result_folder, exist_ok=True)
+
+    grid_search_values = instance_segmentation.default_grid_search_values_amg(
+        iou_thresh_values=iou_thresh_values,
+        stability_score_values=stability_score_values,
+    )
+
+    instance_segmentation.run_instance_segmentation_grid_search_and_inference(
+        amg, grid_search_values,
+        val_image_paths, val_gt_paths, test_image_paths,
+        embedding_folder, prediction_folder, gs_result_folder,
+    )
+    return prediction_folder
+
+
+#
+# INSTANCE SEGMENTATION FUNCTION
+#
+
+
+def run_instance_segmentation_with_decoder(
+    checkpoint: Union[str, os.PathLike],
+    model_type: str,
+    experiment_folder: Union[str, os.PathLike],
+    val_image_paths: List[Union[str, os.PathLike]],
+    val_gt_paths: List[Union[str, os.PathLike]],
+    test_image_paths: List[Union[str, os.PathLike]],
+) -> str:
+    embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
+    os.makedirs(embedding_folder, exist_ok=True)
+
+    predictor, decoder = get_predictor_and_decoder(model_type=model_type, checkpoint_path=checkpoint)
+    segmenter = InstanceSegmentationWithDecoder(predictor, decoder)
+    seg_prefix = "instance_segmentation_with_decoder"
+
+    # where the predictions are saved
+    prediction_folder = os.path.join(experiment_folder, seg_prefix, "inference")
+    os.makedirs(prediction_folder, exist_ok=True)
+
+    # where the grid-search results are saved
+    gs_result_folder = os.path.join(experiment_folder, seg_prefix, "grid_search")
+    os.makedirs(gs_result_folder, exist_ok=True)
+
+    grid_search_values = instance_segmentation.default_grid_search_values_instance_segmentation_with_decoder()
+
+    instance_segmentation.run_instance_segmentation_grid_search_and_inference(
+        segmenter, grid_search_values,
+        val_image_paths, val_gt_paths, test_image_paths,
+        embedding_dir=embedding_folder, prediction_dir=prediction_folder,
+        result_dir=gs_result_folder,
+    )
+    return prediction_folder

@@ -21,7 +21,7 @@ def evaluate_checkpoint_slurm(model_type, job_id, checkpoints):
     checkpoint = checkpoints[job_id]
 
     predictor, state = get_generalist_predictor(
-        checkpoint, model_type, is_custom_model=True, return_state=True
+        checkpoint, model_type, return_state=True
     )
     epoch = state["epoch"] + 1
 
@@ -29,8 +29,8 @@ def evaluate_checkpoint_slurm(model_type, job_id, checkpoints):
     experiment_root = os.path.join(EXPERIMENT_ROOT, f"{model_type}-epoch-{epoch}")
     result = evaluate_checkpoint_for_datasets(
         None, None, experiment_root, EVAL_DATASETS,
-        run_default_evaluation=True, run_amg=False,
-        is_custom_model=True, predictor=predictor,
+        run_default_evaluation=True, do_amg=False,
+        predictor=predictor,
     )
 
     result.insert(0, "epoch", [epoch] * result.shape[0])
