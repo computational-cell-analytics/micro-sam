@@ -1,16 +1,16 @@
 import os
+from glob import glob
 
 import numpy as np
+import pandas as pd
 import imageio.v3 as imageio
+
+from elf.evaluation import mean_segmentation_accuracy
 
 from util import get_paths, DATASETS
 
 
 SAVE_ROOT = "/scratch/projects/nim00007/sam/data/for_mitonet/"
-
-
-def evaluate_mitonet_predictions(dataset_name, gt_paths):
-    raise NotImplementedError
 
 
 def make_stack_from_inputs(dataset_name):
@@ -63,8 +63,52 @@ def make_stacks(specific_dataset=None):
         make_stack_from_inputs(specific_dataset)
 
 
+def _evaluate_mitonet_predictions(view=False):
+    all_inputs_dir = sorted(glob("/media/anwai/ANWAI/data/for_mitonet/*"))
+    tem_dir = "/media/anwai/ANWAI/data/for_mitonet/tem"
+    all_inputs_dir = [
+        input_dir for input_dir in all_inputs_dir if input_dir != tem_dir
+    ]
+    for this_dir in all_inputs_dir:
+        name = os.path.split(this_dir)[-1]
+        raw_path = glob(os.path.join(this_dir, "*_raw.tif"))[0]
+        label_path = glob(os.path.join(this_dir, "*_labels.tif"))[0]
+        seg_path = glob(os.path.join(this_dir, "*_mitonet_seg.tif"))[0]
+
+        raw = imageio.imread(raw_path)
+        labels = imageio.imread(label_path)
+        segmentation = imageio.imread(seg_path)
+
+        assert raw.shape == labels.shape == segmentation.shape
+
+        if view:
+            import napari
+            v = napari.Viewer()
+            v.add_image(raw)
+            v.add_labels(labels, visible=False)
+            v.add_labels(segmentation)
+            napari.run()
+
+        # let's compute slice-wise msa
+        msa_list, sa50_list, sa75_list = [], [], []
+        for _seg, _label in zip(segmentation, labels):
+            msa, sa = mean_segmentation_accuracy(_seg, _label, return_accuracies=True)
+            msa_list.append(msa)
+            sa50_list.append(sa[0])
+            sa75_list.append(sa[4])
+
+        res_dict = {
+            "msa": np.mean(msa_list),
+            "sa50": np.mean(sa50_list),
+            "sa75": np.mean(sa75_list)
+        }
+        res_df = pd.DataFrame.from_dict([res_dict])
+        res_df.to_csv(f"./mitonet_{name}.csv")
+
+
 def main():
-    make_stacks()
+    # make_stacks()
+    _evaluate_mitonet_predictions()
 
 
 if __name__ == "__main__":
