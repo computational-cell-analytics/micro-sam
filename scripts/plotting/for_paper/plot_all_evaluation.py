@@ -35,7 +35,7 @@ TITLE = {
     "platynereis/nuclei": "Platynereis (Nuclei)",
     "mitolab/c_elegans": "MitoLab (C. elegans)",
     "mitolab/fly_brain": "MitoLab (Fly Brain)",
-    "mitolab/glycotic_muscle": "MitoLab (Glycotic Muscle)",
+    "mitolab/glycolytic_muscle": "MitoLab (Glycolytic Muscle)",
     "mitolab/hela_cell": "MitoLab (HeLa Cell)",
     "mitolab/lucchi_pp": "MitoLab (Lucchi++)",
     "mitolab/salivary_gland": "MitoLab (Salivary Gland: Rat)",
@@ -98,18 +98,25 @@ def get_benchmark_results(dataset_name, benchmark_name, benchmark_choice):
     filename = f"{benchmark_name}-{benchmark_choice}.csv"
     if benchmark_name == "cellpose":
         filename = f"{benchmark_name}-{benchmark_choice}.csv"
-    else:
-        filename = f"{benchmark_name}.csv"
+        if dataset_name == "plantseg_root":
+            _splits = dataset_name.split("_")
+            dataset_name = f"{_splits[0]}/{_splits[1]}"
+        res_path = os.path.join(EXPERIMENT_ROOT, "benchmarking", benchmark_name, dataset_name, "results", filename)
 
-    if dataset_name == "plantseg_root":
-        _splits = dataset_name.split("_")
-        dataset_name = f"{_splits[0]}/{_splits[1]}"
+    elif benchmark_name == "mitonet":
+        dname_split = dataset_name.split("/")
+        if len(dname_split) > 1:
+            _name = f"{dname_split[0]}_{dname_split[1]}"
+        else:
+            _name = dataset_name
+        filename = f"{benchmark_name}_{_name}.csv"
+        res_path = os.path.join(EXPERIMENT_ROOT, "benchmarking", benchmark_name, filename)
 
-    res_path = os.path.join(
-        EXPERIMENT_ROOT, "benchmarking", benchmark_name, dataset_name, "results", filename
-    )
-    res = pd.read_csv(res_path)
-    return res["msa"][0]
+    try:
+        res = pd.read_csv(res_path)
+        return res["msa"][0]
+    except FileNotFoundError:
+        return None
 
 
 def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice=None):
@@ -128,10 +135,11 @@ def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice=None):
     ax.title.set_color("#212427")
     ax.set_title(TITLE[dataset_name], fontweight="bold", fontsize=13)
 
-    if dataset_name != "ctc" and modality != "em":  # HACK: as we don't have mitonet results now
+    if dataset_name != "ctc":
         benchmark_name = "cellpose" if modality == "lm" else "mitonet"
         benchmark_res = get_benchmark_results(dataset_name, benchmark_name, benchmark_choice)
-        ax.axhline(y=benchmark_res, label=benchmark_name, color="#DC3977")
+        if benchmark_res is not None:
+            ax.axhline(y=benchmark_res, label=benchmark_name, color="#DC3977")
 
 
 def _get_plot_postprocessing(fig, experiment_title, save_path):
@@ -166,7 +174,8 @@ def plot_evaluation_for_lm_datasets(model_type):
 
     # choices:
     # "livecell", "tissuenet", "deepbacs", "covid_if", "plantseg/root", "hpa",
-    # "ctc", "plantseg/ovules", "neurips-cell-seg", "lizard", "mouse-embryo"
+    # "plantseg/ovules", "neurips-cell-seg", "lizard", "mouse-embryo"
+    # TODO: dsb, dynamicnuclearnet, pannuke
 
     get_barplots(ax[0, 0], "livecell", modality, model_type, benchmark_choice="livecell")
     get_barplots(ax[0, 1], "deepbacs", modality, model_type, benchmark_choice="cyto")
@@ -192,6 +201,7 @@ def plot_evaluation_for_em_datasets(model_type):
     #    "mitoem/rat", "mitoem/human", "platynereis/nuclei", "mitolab/c_elegans", "mitolab/fly_brain",
     #    "mitolab/glycolytic_muscle", "mitolab/hela_cell", "mitolab/lucchi_pp", "mitolab/salivary_gland",
     #    "mitolab/tem", "lucchi", "nuc-mm/mouse", "nuc-mm/zebrafish", "uro_cell", "sponge_em",
+    # TODO: vnc, asem (mito)
 
     # for boundaries
     #    "platynereis/cilia", "cremi", "platynereis/cells", "axondeepseg", "snemi", "isbi"
@@ -211,9 +221,46 @@ def plot_evaluation_for_em_datasets(model_type):
     )
 
 
+def plot_evaluation_for_all_em_datasets(model_type):
+    modality = "em"
+    fig, ax = plt.subplots(4, 4, figsize=(20, 15))
+
+    # choices:
+    # for mito-nuc
+    #    "mitoem/rat", "mitoem/human", "platynereis/nuclei", "mitolab/c_elegans", "mitolab/fly_brain",
+    #    "mitolab/glycolytic_muscle", "mitolab/hela_cell", "mitolab/lucchi_pp", "mitolab/salivary_gland",
+    #    "mitolab/tem", "lucchi", "nuc-mm/mouse", "nuc-mm/zebrafish", "uro_cell", "sponge_em",
+
+    # for boundaries
+    #    "platynereis/cilia", "cremi", "platynereis/cells", "axondeepseg", "snemi", "isbi"
+
+    get_barplots(ax[0, 0], "mitoem/rat", modality, model_type)
+    get_barplots(ax[0, 1], "mitoem/human", modality, model_type)
+    get_barplots(ax[0, 2], "platynereis/nuclei", modality, model_type)
+    get_barplots(ax[0, 3], "mitolab/c_elegans", modality, model_type)
+    get_barplots(ax[1, 0], "mitolab/fly_brain", modality, model_type)
+    get_barplots(ax[1, 1], "mitolab/glycolytic_muscle", modality, model_type)
+    get_barplots(ax[1, 2], "mitolab/hela_cell", modality, model_type)
+    get_barplots(ax[1, 3], "mitolab/salivary_gland", modality, model_type)
+    get_barplots(ax[2, 0], "mitolab/tem", modality, model_type)
+    get_barplots(ax[2, 1], "lucchi", modality, model_type)
+    get_barplots(ax[2, 2], "nuc_mm/mouse", modality, model_type)
+    get_barplots(ax[2, 3], "nuc_mm/zebrafish", modality, model_type)
+    get_barplots(ax[3, 0], "uro_cell", modality, model_type)
+    get_barplots(ax[3, 1], "sponge_em", modality, model_type)
+    get_barplots(ax[3, 2], "sponge_em", modality, model_type)
+    get_barplots(ax[3, 3], "sponge_em", modality, model_type)
+
+    _get_plot_postprocessing(
+        fig=fig, experiment_title="Electron Microscopy", save_path=f"em_{model_type}_all_evaluation.png"
+    )
+
+
 def main():
     plot_evaluation_for_lm_datasets("vit_h")
     plot_evaluation_for_em_datasets("vit_b")
+
+    plot_evaluation_for_all_em_datasets("vit_h")
 
 
 if __name__ == "__main__":

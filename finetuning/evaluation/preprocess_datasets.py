@@ -769,6 +769,26 @@ def for_deepbacs(save_dir):
             shutil.copy(src_label_path, dst_label_path)
 
 
+def for_asem_mito():
+    pass
+
+
+def for_vnc():
+    pass
+
+
+def for_dsb():
+    pass
+
+
+def for_dynamicnuclearnet():
+    pass
+
+
+def for_pannuke():
+    pass
+
+
 def preprocess_lm_datasets():
     for_covid_if(os.path.join(ROOT, "covid_if", "slices"))
     for_tissuenet(os.path.join(ROOT, "tissuenet", "slices"))
