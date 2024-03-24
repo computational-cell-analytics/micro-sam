@@ -40,14 +40,7 @@ def default_grid_search_values_multi_dimensional_segmentation(
 
     if projection_method_values is None:
         projection_method_values = [
-            {"use_box": True, "use_mask": False, "use_points": False},
-            {"use_box": False, "use_mask": True, "use_points": False},
-            {"use_box": False, "use_mask": False, "use_points": True},
-            {"use_box": True, "use_mask": True, "use_points": False},
-            {"use_box": True, "use_mask": False, "use_points": True},
-            {"use_box": False, "use_mask": True, "use_points": True},
-            {"use_box": True, "use_mask": True, "use_points": True},
-            "single_point"
+            "mask", "points", "box", "points_and_mask", "single_point"
         ]
 
     if box_extension_values is None:
@@ -196,7 +189,8 @@ def segment_slices_from_ground_truth(
 
 def _get_best_parameters_from_grid_search_combinations(result_dir, best_params_path, grid_search_values):
     if os.path.exists(best_params_path):
-        print("The best parameters are already savved at:", best_params_path)
+        print("The best parameters are already saved at:", best_params_path)
+        return
 
     best_kwargs, best_msa = evaluate_instance_segmentation_grid_search(result_dir, list(grid_search_values.keys()))
 
