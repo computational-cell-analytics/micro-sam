@@ -2,6 +2,7 @@ import os
 from glob import glob
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -24,9 +25,9 @@ MODEL_NAME_MAP = {
 
 def gather_livecell_results(model_type, experiment_name, benchmark_choice, result_type="default"):
     if result_type == "default":
-        sub_dir_experiment = "new_models/test/input_logits"
-    elif result_type == "with_logits":
         sub_dir_experiment = "new_models/v2"
+    elif result_type == "with_logits":
+        sub_dir_experiment = "new_models/test/input_logits"
     elif result_type.startswith("run"):
         sub_dir_experiment = f"new_models/test/{result_type}"
 
@@ -36,7 +37,7 @@ def gather_livecell_results(model_type, experiment_name, benchmark_choice, resul
         )
     )
 
-    ais_score = None
+    amg_score, ais_score, ib_score, ip_score = None, None, None, None
     for result_path in sorted(result_paths):
         if os.path.split(result_path)[-1].startswith("grid_search_"):
             continue
@@ -98,7 +99,8 @@ def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
     ax.set_title(name, fontsize=13, fontweight="bold")
 
-    ax.axhline(y=amg, label="amg", color="#DC3977")
+    if amg is not None:
+        ax.axhline(y=amg, label="amg", color="#DC3977")
     if ais is not None:
         ax.axhline(y=ais, label="ais", color="#E19951")
     ax.axhline(y=cellpose, label="cellpose", color="#5454DA")
@@ -139,7 +141,8 @@ def plot_for_livecell(benchmark_choice, results_with_logits):
     plt.tight_layout()
     plt.subplots_adjust(top=0.865, right=0.95, left=0.075, bottom=0.05)
     fig.suptitle("LIVECell", fontsize=26, x=0.515, y=0.95)
-    plt.savefig("livecell.png")
+    _path = "livecell_with_logits.svg" if results_with_logits else "livecell.svg"
+    plt.savefig(_path)
     plt.close()
 
 
@@ -185,8 +188,13 @@ def plot_all_livecell(benchmark_choice, model_type):
     ib_res = _create_res_from_list(ib_list)
     ip_res = _create_res_from_list(ip_list)
 
-    get_barplots("Default SAM", ax[0], ib_vanilla_res, ip_vanilla_res, amg_vanilla, cellpose_res)
-    get_barplots("Finetuned SAM", ax[1], ib_res, ip_res, amg, cellpose_res, ais)
+    ais_res = np.mean([res for res in ais_list if res is not None])
+    cellpose_res = np.mean([res for res in cellpose_res_list if res is not None])
+    amg_vanilla_res = np.mean([res for res in amg_vanilla_list if res is not None])
+    amg_res = np.mean([res for res in amg_list if res is not None])
+
+    get_barplots("Default SAM", ax[0], ib_vanilla_res, ip_vanilla_res, amg_vanilla_res, cellpose_res)
+    get_barplots("Finetuned SAM", ax[1], ib_res, ip_res, amg_res, cellpose_res, ais_res)
 
     # here, we remove the legends for each subplot, and get one common legend for all
     all_lines, all_labels = [], []
@@ -202,22 +210,19 @@ def plot_all_livecell(benchmark_choice, model_type):
     plt.tight_layout()
     plt.subplots_adjust(top=0.865, right=0.95, left=0.075, bottom=0.05)
     fig.suptitle(MODEL_NAME_MAP[model_type], fontsize=26, x=0.515, y=0.95)
-    plt.savefig(f"livecell_{model_type}.png")
+    plt.savefig(f"livecell_supplementary_{model_type}.svg")
     plt.close()
 
 
-def main(args):
-    # plot_for_livecell(benchmark_choice="livecell", results_with_logits=args.use_masks)
+def main():
+    plot_for_livecell(benchmark_choice="livecell", results_with_logits=False)
+    plot_for_livecell(benchmark_choice="livecell", results_with_logits=True)
 
     plot_all_livecell(benchmark_choice="livecell", model_type="vit_t")
-    # plot_all_livecell(benchmark_choice="livecell", model_type="vit_b")
-    # plot_all_livecell(benchmark_choice="livecell", model_type="vit_l")
-    # plot_all_livecell(benchmark_choice="livecell", model_type="vit_h")
+    plot_all_livecell(benchmark_choice="livecell", model_type="vit_b")
+    plot_all_livecell(benchmark_choice="livecell", model_type="vit_l")
+    plot_all_livecell(benchmark_choice="livecell", model_type="vit_h")
 
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--use_masks", action="store_true")
-    args = parser.parse_args()
-    main(args)
+    main()
