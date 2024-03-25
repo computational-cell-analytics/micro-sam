@@ -3,11 +3,18 @@ import argparse
 
 import torch
 
+from torch_em.transform.raw import normalize
 from torch_em.data.datasets import get_dynamicnuclearnet_loader
 from torch_em.transform.label import PerObjectDistanceTransform
 
 import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
+
+
+def to_8bit(raw):
+    raw = normalize(raw)
+    raw = raw * 255
+    return raw
 
 
 def get_dataloaders(patch_shape, data_path):
@@ -25,17 +32,16 @@ def get_dataloaders(patch_shape, data_path):
     label_transform = PerObjectDistanceTransform(
         distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=25
     )
-    raw_transform = sam_training.identity  # the current workflow avoids rescaling the inputs to [-1, 1]
+    raw_transform = to_8bit  # the current workflow avoids rescaling the inputs to [-1, 1]
     train_loader = get_dynamicnuclearnet_loader(
-        path=data_path, split="train", patch_shape=patch_shape, batch_size=2, label_dtype=torch.float32,
+        path=data_path, split="train", patch_shape=patch_shape, batch_size=2, label_dtype=torch.float32, download=False,
         label_transform=label_transform, raw_transform=raw_transform, num_workers=16, shuffle=True, n_samples=71,
     )
 
     val_loader = get_dynamicnuclearnet_loader(
-        path=data_path, split="val", patch_shape=patch_shape, batch_size=1, label_dtype=torch.float32,
+        path=data_path, split="val", patch_shape=patch_shape, batch_size=1, label_dtype=torch.float32, download=False,
         label_transform=label_transform, raw_transform=raw_transform, num_workers=16, shuffle=True,
     )
-
     return train_loader, val_loader
 
 
@@ -47,14 +53,14 @@ def finetune_dynamicnuclearnet(args):
     # training settings:
     model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
-    patch_shape = (520, 704)  # the patch shape for training
+    patch_shape = (512, 512)  # the patch shape for training
     n_objects_per_batch = args.n_objects  # the number of objects per batch that will be sampled (default: 25)
     freeze_parts = args.freeze  # override this to freeze different parts of the model
     checkpoint_name = f"{args.model_type}/dynamicnuclearnet_sam"
 
     # all the stuff we need for training
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
-    scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10, "verbose": True}
+    scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 100, "verbose": True}
 
     # Run training.
     sam_training.train_sam(
