@@ -122,19 +122,19 @@ def submit_all_scripts():
         species="rat", do_interactive=True, do_auto=True
     )
     submit_3d_segmentation(
-        dataset_name="lucchi", model_type="vit_b_em_organelles",
+        dataset_name="mitoem", model_type="vit_b_em_organelles",
         outpath=get_batch_script_name(tmp_folder),
         species="rat", do_interactive=True, do_auto=True
     )
 
     # for mitoem human
     submit_3d_segmentation(
-        dataset_name="lucchi", model_type="vit_b",
+        dataset_name="mitoem", model_type="vit_b",
         outpath=get_batch_script_name(tmp_folder),
         species="human", do_interactive=True, do_auto=True
     )
     submit_3d_segmentation(
-        dataset_name="lucchi", model_type="vit_b_em_organelles",
+        dataset_name="mitoem", model_type="vit_b_em_organelles",
         outpath=get_batch_script_name(tmp_folder),
         species="human", do_interactive=True, do_auto=True
     )

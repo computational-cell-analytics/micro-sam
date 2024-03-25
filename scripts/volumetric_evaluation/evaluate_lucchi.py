@@ -83,6 +83,7 @@ def for_lucchi(args):
 
 
 def main(args):
+    assert args.species is None
     for_lucchi(args)
 
 

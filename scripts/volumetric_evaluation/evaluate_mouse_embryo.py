@@ -87,6 +87,7 @@ def for_mouse_embryo(args):
 
 
 def main(args):
+    assert args.species is None
     for_mouse_embryo(args)
 
 
