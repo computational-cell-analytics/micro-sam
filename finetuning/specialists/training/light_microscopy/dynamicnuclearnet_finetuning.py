@@ -40,7 +40,7 @@ def get_dataloaders(patch_shape, data_path):
 
     val_loader = get_dynamicnuclearnet_loader(
         path=data_path, split="val", patch_shape=patch_shape, batch_size=1, label_dtype=torch.float32, download=False,
-        label_transform=label_transform, raw_transform=raw_transform, num_workers=16, shuffle=True,
+        label_transform=label_transform, raw_transform=raw_transform, num_workers=16, shuffle=True, n_samples=50,
     )
     return train_loader, val_loader
 
