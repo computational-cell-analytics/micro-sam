@@ -23,6 +23,8 @@ from . import util
 from .instance_segmentation import AMGBase, mask_data_to_segmentation
 from .prompt_based_segmentation import segment_from_mask
 
+PROJECTION_MODES = ("box", "mask", "points", "points_and_mask", "single_point")
+
 
 def _validate_projection(projection):
     use_single_point = False
@@ -253,7 +255,9 @@ def _preprocess_closing(slice_segmentation, gap_closing, verbose):
             seg_new[initial_mask] = relabel_sequential(seg_z[initial_mask], offset=seg_new.max() + 1)[0]
 
         seg_new, _, _ = relabel_sequential(seg_new, offset=offset)
-        offset = int(seg_new.max()) + 1
+        max_z = seg_new.max()
+        if max_z > 0:
+            offset = int(max_z) + 1
 
         return seg_new, offset
 
@@ -373,11 +377,14 @@ def automatic_3d_segmentation(
         segmentor.initialize(volume[i], image_embeddings=image_embeddings, verbose=False, i=i)
         seg = segmentor.generate(**kwargs)
         if len(seg) == 0:
-            seg = np.zeros(volume.shape[1:], dtype="uint32")
+            continue
         else:
             seg = mask_data_to_segmentation(seg, with_background=with_background, min_object_size=min_object_size)
+            max_z = seg.max()
+            if max_z == 0:
+                continue
             seg[seg != 0] += offset
-            offset = seg.max()
+            offset = max_z + offset
         segmentation[i] = seg
 
     segmentation = merge_instance_segmentation_3d(

@@ -9,6 +9,7 @@ from scipy.ndimage import shift
 from skimage import draw
 
 from .. import prompt_based_segmentation, util
+from ..multi_dimensional_segmentation import _validate_projection
 
 # Green and Red
 LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
@@ -522,11 +523,7 @@ def track_from_prompts(
 ):
     """@private
     """
-    assert projection in ("mask", "bounding_box")
-    if projection == "mask":
-        use_mask, use_box = True, True
-    else:
-        use_mask, use_box = False, True
+    use_box, use_mask, use_points, use_single_point = _validate_projection(projection)
 
     def _update_progress():
         if progress_bar is not None:
@@ -577,7 +574,8 @@ def track_from_prompts(
 
             seg_t = prompt_based_segmentation.segment_from_mask(
                 predictor, seg_prev, image_embeddings=image_embeddings, i=t,
-                use_mask=use_mask, use_box=use_box, box_extension=box_extension
+                use_mask=use_mask, use_box=use_box, use_points=use_points,
+                box_extension=box_extension, use_single_point=use_single_point,
             )
             track_state = "track"
 
