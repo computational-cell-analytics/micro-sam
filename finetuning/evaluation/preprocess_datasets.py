@@ -1,20 +1,22 @@
 import os
 import shutil
-import numpy as np
 from glob import glob
 from tqdm import tqdm
 from pathlib import Path
 
 import h5py
 import z5py
+import numpy as np
 import imageio.v3 as imageio
-
 from skimage.measure import label
 
 from elf.wrapper import RoiWrapper
 
 from torch_em.data import datasets
 from torch_em.transform.raw import normalize, normalize_percentile
+from torch_em.data import MinForegroundSampler
+
+from micro_sam.training import identity
 
 from util import download_all_datasets, ROOT
 
@@ -474,7 +476,7 @@ def for_isbi(save_dir):
 def for_axondeepseg(save_dir):
     """
     (we use the tem modality)
-    for validation: first 10 slices
+    for validation: first 15 slices
     for testing: rest all
     """
     vol_paths = sorted(glob(os.path.join(ROOT, "axondeepseg", "tem", "*.h5")))
@@ -493,6 +495,66 @@ def for_axondeepseg(save_dir):
         )
 
     make_custom_splits(15, save_dir)
+
+
+def for_vnc(save_dir):
+    """
+    for validation: first 5 slices
+    for testing: rest
+    """
+    vol_path = os.path.join(ROOT, "vnc", "vnc_train.h5")
+
+    from_h5_to_tif(
+        h5_vol_path=vol_path,
+        raw_key="raw",
+        raw_dir=os.path.join(save_dir, "raw"),
+        labels_key="labels/mitochondria",
+        labels_dir=os.path.join(save_dir, "labels"),
+        slice_prefix_name="vnc_train",
+    )
+
+    make_custom_splits(5, save_dir)
+
+
+def for_asem_mito(save_dir, choice="mito"):
+    """
+    for simplicity, I will use the dataloader to get the samples.
+    for validation: 100 samples
+    for testing: 900 samples
+    """
+    loader = datasets.get_asem_loader(
+        os.path.join(ROOT, "asem"),
+        patch_shape=(1, 768, 768),
+        batch_size=1,
+        ndim=2,
+        organelles=choice,
+        volume_ids="cell_2",
+        sampler=MinForegroundSampler(min_fraction=0.01),
+        raw_transform=identity,
+        num_workers=16,
+        shuffle=True
+    )
+
+    n_desired = 1000
+
+    for i, (x, y) in enumerate(loader):
+        image = x.squeeze().numpy()
+        labels = y.squeeze().numpy()
+
+        image_path = os.path.join(save_dir, "raw", f"asem_mito_{i:05}.tif")
+        label_path = os.path.join(save_dir, "labels", f"asem_mito_{i:05}.tif")
+
+        os.makedirs(os.path.split(image_path)[0], exist_ok=True)
+        os.makedirs(os.path.split(label_path)[0], exist_ok=True)
+
+        imageio.imwrite(image_path, image, compression="zlib")
+        imageio.imwrite(label_path, labels, compression="zlib")
+
+        if i > n_desired:
+            # it's not needed to run the loader further, hence ciao
+            break
+
+    make_custom_splits(100, save_dir)
 
 
 #
@@ -656,8 +718,6 @@ def for_ctc(save_dir):
     We only infer on DIC-HeLa for now.
     for validation: first 10 slices from `train`
     for testing: rest slices from `train`
-
-    TODO: add all datasets later for inference, ideally get dataloaders in torch-em for all of them.
     """
     all_hela_image_paths = sorted(
         glob(os.path.join(ROOT, "ctc", "hela_samples", "DIC-C2DH-HeLa.zip.unzip", "DIC-C2DH-HeLa", "01", "*"))
@@ -769,24 +829,64 @@ def for_deepbacs(save_dir):
             shutil.copy(src_label_path, dst_label_path)
 
 
-def for_asem_mito():
-    pass
+def for_dynamicnuclearnet(save_dir):
+    """
+    for validation: take first 100 images from the validation set
+    for testing: take all images from the test set
+    """
+    all_val_paths = sorted(glob(os.path.join(ROOT, "dynamicnuclearnet", "val", "*.zarr")))
+    all_test_paths = sorted(glob(os.path.join(ROOT, "dynamicnuclearnet", "test", "*.zarr")))
+
+    def save_slices_per_split(all_vol_paths, split):
+        for vol_path in all_vol_paths:
+            vol_id = Path(vol_path).stem
+
+            from_h5_to_tif(
+                h5_vol_path=vol_path,
+                raw_key="raw",
+                raw_dir=os.path.join(save_dir, split, "raw"),
+                labels_key="labels",
+                labels_dir=os.path.join(save_dir, split, "labels"),
+                slice_prefix_name=f"dynamicnuclearnet_{split}_{vol_id}",
+                interface=z5py
+            )
+
+    save_slices_per_split(all_val_paths[:100], "val")
+    save_slices_per_split(all_test_paths, "test")
 
 
-def for_vnc():
-    pass
+def for_pannuke(save_dir):
+    """
+    take 500 samples per fold (total - 1500)
+    for validation: first 50 images per fold
+    for testing: rest all
+    """
+    all_vol_paths = sorted(glob(os.path.join(ROOT, "pannuke", "*.h5")))
 
+    for vol_path in tqdm(all_vol_paths, desc="Processing the pannuke folds"):
+        fold_name = Path(vol_path).stem
 
-def for_dsb():
-    pass
+        with h5py.File(vol_path, "r") as f:
+            raw = f["images"][:]
+            labels = f["labels/instances"][:]
 
+            raw = raw.transpose(1, 2, 3, 0)  # transpose it to B * H * W * C (to use rgb images in SAM)
 
-def for_dynamicnuclearnet():
-    pass
+            def _save_per_split(raw_here, labels_here, split):
+                for i, (s_raw, s_labels) in enumerate(zip(raw_here, labels_here)):
+                    fname = f"{fold_name}_{i:04}.tif"
+                    image_path = os.path.join(save_dir, split, "raw", fname)
+                    labels_path = os.path.join(save_dir, split, "labels", fname)
 
+                    os.makedirs(os.path.split(image_path)[0], exist_ok=True)
+                    os.makedirs(os.path.split(labels_path)[0], exist_ok=True)
 
-def for_pannuke():
-    pass
+                    if has_foreground(s_labels):
+                        imageio.imwrite(image_path, s_raw, compression="zlib")
+                        imageio.imwrite(labels_path, s_labels, compression="zlib")
+
+            _save_per_split(raw[:50], labels[:50], "val")  # choose first 50 samples per fold
+            _save_per_split(raw[50: 500], labels[50: 500], "test")  # choose next 450 samples per fold
 
 
 def preprocess_lm_datasets():
@@ -799,6 +899,8 @@ def preprocess_lm_datasets():
     for_ctc((os.path.join(ROOT, "ctc/hela_samples", "slices")))
     for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"))
     for_deepbacs(os.path.join(ROOT, "deepbacs", "slices"))
+    for_dynamicnuclearnet(os.path.join(ROOT, "dynamicnuclearnet", "slices"))
+    for_pannuke(os.path.join(ROOT, "pannuke", "slices"))
 
 
 def preprocess_em_datasets():
@@ -815,6 +917,8 @@ def preprocess_em_datasets():
     for_isbi(os.path.join(ROOT, "isbi", "slices"))
     for_axondeepseg(os.path.join(ROOT, "axondeepseg", "slices"))
     for_cremi(os.path.join(ROOT, "cremi", "slices"))
+    for_vnc(os.path.join(ROOT, "vnc", "slices"))
+    for_asem_mito(os.path.join(ROOT, "asem", "slices"), choice="mito")
 
 
 def main():
@@ -822,8 +926,8 @@ def main():
     download_all_datasets(ROOT)
 
     # now let's save the slices as tif
-    preprocess_lm_datasets()
-    preprocess_em_datasets()
+    # preprocess_lm_datasets()
+    # preprocess_em_datasets()
 
 
 if __name__ == "__main__":

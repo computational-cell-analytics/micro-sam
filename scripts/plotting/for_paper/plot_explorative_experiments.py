@@ -113,7 +113,7 @@ def get_partial_finetuning_plots():
 
     plt.subplots_adjust(top=0.9, right=0.95, left=0.1, bottom=0.1)
 
-    save_path = "livecell_vit_l_partial_finetuning.png"
+    save_path = "livecell_vit_l_partial_finetuning.svg"
     plt.savefig(save_path)
     print(f"Plot saved at {save_path}")
 
@@ -161,7 +161,10 @@ def get_n_objects_plots(max_objects=45):
     norm = plt.Normalize(1, max_objects)
     sm = plt.cm.ScalarMappable(cmap="viridis", norm=norm)
     sm.set_array([])
-    plt.colorbar(sm, ax=plt.gca(), alpha=.5, aspect=20)
+    colorbar = plt.colorbar(sm, ax=plt.gca(), alpha=.5, aspect=20)
+    ticks = np.arange(0, max_objects+1, 5)[1:]
+    ticks = [1, *ticks]
+    colorbar.set_ticks(ticks)
 
     def _get_all_interval_fills(name, color):
         interval_data = res_df.groupby('name')[name].agg(['mean', 'std'])
@@ -187,11 +190,11 @@ def get_n_objects_plots(max_objects=45):
 
     ax.set_xlim(-0.5, len(res_df.columns[1:]) - 0.5)
 
-    plt.suptitle("n_objects", fontsize=26, x=0.45, y=0.945)
+    plt.suptitle("Number of Objects per Batch", fontsize=26, x=0.45, y=0.945)
     plt.xlabel("Inference Settings", fontdict={"fontsize": 13}, labelpad=15)
     plt.ylabel("Segmentation Quality", fontdict={"fontsize": 13}, labelpad=15)
 
-    save_path = "livecell_vit_b_n_objects.png"
+    save_path = "livecell_vit_b_n_objects.svg"
     plt.savefig(save_path)
     plt.close()
     print(f"Plot saved at {save_path}")

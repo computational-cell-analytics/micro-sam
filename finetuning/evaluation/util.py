@@ -36,14 +36,14 @@ DATASETS = [
     # in-domain (LM)
     "tissuenet", "deepbacs", "plantseg/root", "livecell", "neurips-cell-seg",
     # out-of-domain (LM)
-    "covid_if", "plantseg/ovules", "hpa", "lizard", "mouse-embryo", "ctc/hela_samples",
+    "covid_if", "plantseg/ovules", "hpa", "lizard", "mouse-embryo", "ctc/hela_samples", "dynamicnuclearnet", "pannuke"
     # organelles (EM)
     #   - in-domain
     "mitoem/rat", "mitoem/human", "platynereis/nuclei",
     #   - out-of-domain
     "mitolab/c_elegans", "mitolab/fly_brain", "mitolab/glycolytic_muscle", "mitolab/hela_cell",
     "mitolab/lucchi_pp", "mitolab/salivary_gland", "mitolab/tem", "lucchi", "nuc_mm/mouse",
-    "nuc_mm/zebrafish", "uro_cell", "sponge_em", "platynereis/cilia",
+    "nuc_mm/zebrafish", "uro_cell", "sponge_em", "platynereis/cilia", "vnc",
     # boundaries - EM
     #   - in-domain
     "cremi", "platynereis/cells",
