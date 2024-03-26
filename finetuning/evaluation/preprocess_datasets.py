@@ -326,8 +326,8 @@ def for_mitolab(save_dir):
     - glycotic_muscle (302, 383, 765)
     - hela_cell (256, 256, 256)
     - lucchi_pp (165, 768, 1024)
-    - salivary gland (1260, 1081, 1200) (TODO: take a closer look later)
-    - tem:
+    - salivary gland (1260, 1081, 1200) (cropped to: 1024, 1024)
+    - tem: crop to (768, 768)
     """
     all_dataset_ids = []
 
@@ -352,6 +352,10 @@ def for_mitolab(save_dir):
         for i, (slice_em, slice_mito) in tqdm(
             enumerate(zip(vem, vmito)), total=vem.shape[0], desc=f"Processing {dataset_id}"
         ):
+            if Path(em_path).stem.startswith("salivary_gland"):
+                slice_em = make_center_crop(slice_em, (1024, 1024))
+                slice_mito = make_center_crop(slice_mito, (1024, 1024))
+
             if has_foreground(slice_mito):
                 instances = label(slice_mito)
 
@@ -374,8 +378,12 @@ def for_mitolab(save_dir):
         image_dst = os.path.join(save_dir, "tem", "raw", sample_id)
         mask_dst = os.path.join(save_dir, "tem", "labels", sample_id)
 
-        shutil.copy(image_path, image_dst)
-        shutil.copy(mask_path, mask_dst)
+        tem_image = make_center_crop(imageio.imread(image_path), (768, 768))
+        tem_mask = make_center_crop(imageio.imread(mask_path), (768, 768))
+
+        if has_foreground(tem_mask):
+            imageio.imwrite(image_dst, tem_image)
+            imageio.imwrite(mask_dst, tem_mask)
 
     all_dataset_ids.append("tem")
 
