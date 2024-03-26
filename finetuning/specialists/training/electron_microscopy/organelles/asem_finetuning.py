@@ -1,6 +1,8 @@
 import os
 import argparse
 
+from scipy.ndimage import binary_closing
+
 import torch
 
 from torch_em.model import UNETR
@@ -13,12 +15,25 @@ import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
 
 
-def _get_label_transform(label):
-    label_transform = PerObjectDistanceTransform(
-        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=50
-    )
-    label = label_transform(label)
-    return label
+class FilterObjectsLabelTrafo:
+    def __init__(self, min_size=0, gap_closing=0):
+        self.min_size = min_size
+        self.gap_closing = gap_closing
+
+    def __call__(self, labels):
+        if self.gap_closing > 0:
+            labels = binary_closing(labels, iterations=self.gap_closing)
+
+        distance_transform = PerObjectDistanceTransform(
+            distances=True,
+            boundary_distances=True,
+            directed_distances=False,
+            foreground=True,
+            instances=True,
+            min_size=self.min_size
+        )
+        labels = distance_transform(labels)
+        return labels
 
 
 def get_dataloaders(patch_shape, data_path):
@@ -27,8 +42,8 @@ def get_dataloaders(patch_shape, data_path):
     It will automatically download the asem data.
 
     Experimental split:
-        - Training: `cell_1`, `cell_2`
-        - Validation: `cell_3`
+        - Training: `cell_1`
+        - Validation: `cell_2`
         - Testing: `cell_6`
 
     Note: to replace this with another data loader you need to return a torch data loader
@@ -37,17 +52,17 @@ def get_dataloaders(patch_shape, data_path):
     I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
     Important: the ID 0 is reseved for background, and the IDs must be consecutive
     """
-    label_transform = _get_label_transform
+    label_transform = FilterObjectsLabelTrafo(min_size=100, gap_closing=3)
     raw_transform = sam_training.identity  # the current workflow avoids rescaling the inputs to [-1, 1]
     sampler = MinForegroundSampler(min_fraction=0.01)
     train_loader = get_asem_loader(
         path=data_path, patch_shape=patch_shape, batch_size=2, ndim=2, download=True,
-        organelles="er", volume_ids=["cell_1", "cell_2"], raw_transform=raw_transform, n_samples=1500,
+        organelles="er", volume_ids=["cell_1"], raw_transform=raw_transform,
         label_transform=label_transform, num_workers=16, sampler=sampler, shuffle=True,
     )
     val_loader = get_asem_loader(
         path=data_path, patch_shape=patch_shape, batch_size=1, ndim=2, download=True,
-        organelles="er", volume_ids=["cell_3"], raw_transform=raw_transform, n_samples=500,
+        organelles="er", volume_ids=["cell_2"], raw_transform=raw_transform,
         label_transform=label_transform, num_workers=16, sampler=sampler, shuffle=True,
     )
 
@@ -104,7 +119,7 @@ def finetune_asem(args):
         transform=model.transform, box_distortion_factor=0.025
     )
 
-    checkpoint_name = f"{args.model_type}/asem_sam"
+    checkpoint_name = f"{args.model_type}/asem_er_sam"
 
     # the trainer which performs the joint training and validation (implemented using "torch_em")
     trainer = sam_training.JointSamTrainer(
