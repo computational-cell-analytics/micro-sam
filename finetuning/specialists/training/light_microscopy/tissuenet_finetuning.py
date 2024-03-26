@@ -16,7 +16,8 @@ from micro_sam.training.util import ResizeRawTrafo, ResizeLabelTrafo
 def get_dataloaders(patch_shape, data_path):
     """This returns the tissuenet data loaders implemented in torch_em:
     https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/tissuenet.py
-    It will automatically download the tissuenet data.
+    It will not automatically download the tissuenet data.
+    See `torch_em.data.datasets.tissuenet.get_tissuenet_dataset` for details.
 
     Note: to replace this with another data loader you need to return a torch data loader
     that retuns `x, y` tensors, where `x` is the image data and `y` are the labels.
