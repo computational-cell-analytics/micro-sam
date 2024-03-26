@@ -5,9 +5,7 @@ from elf.io import open_file
 
 from micro_sam.util import get_sam_model
 from micro_sam.instance_segmentation import (
-    mask_data_to_segmentation,
-    load_instance_segmentation_with_decoder_from_checkpoint,
-    get_amg
+    mask_data_to_segmentation, get_amg, get_predictor_and_decoder
 )
 
 
@@ -41,8 +39,16 @@ def load_amg(model_type):
     return get_amg(predictor, is_tiled=False)
 
 
+def load_instance_segmentation_with_decoder_from_checkpoint(model, checkpoint):
+    predictor, decoder = get_predictor_and_decoder(
+        model_type=model, checkpoint_path=checkpoint, device="cpu"
+    )
+    segmenter = get_amg(predictor=predictor, is_tiled=False, decoder=decoder)
+    return segmenter
+
+
 def instance_segmentation_lucchi():
-    data_path = "/home/pape/.cache/micro_sam/sample_data/lucchi_pp.zip.unzip/Lucchi++/Test_In"
+    data_path = "/media/anwai/ANWAI/data/lucchi/Lucchi++/Test_In"
     with open_file(data_path, "r") as f:
         image = f["*.png"][0]
 
@@ -50,7 +56,7 @@ def instance_segmentation_lucchi():
         "vit_b_amg": load_amg("vit_b"),
         "vit_b_em_amg": load_amg("vit_b_em_organelles"),
         "vit_b_em_ais": load_instance_segmentation_with_decoder_from_checkpoint(
-            "../new_models/vit_b_em_organelles.pt", "vit_b"
+            "vit_b", "/home/anwai/models/micro-sam/vit_b/em_organelles/best.pt"
         ),
     }
     segmenter_kwargs = {
@@ -70,14 +76,14 @@ def instance_segmentation_lucchi():
 
 
 def instance_segmentation_livecell():
-    data_path = "/home/pape/.cache/micro_sam/sample_data/hela-2d-image.png"
+    data_path = "/home/anwai/.cache/micro_sam/sample_data/hela-2d-image.png"
     image = imageio.imread(data_path)
 
     segmenters = {
         "vit_b_amg": load_amg("vit_b"),
         "vit_b_em_amg": load_amg("vit_b_lm"),
         "vit_b_em_ais": load_instance_segmentation_with_decoder_from_checkpoint(
-            "../new_models/vit_b_lm.pt", "vit_b"
+            "vit_b", "/home/anwai/models/micro-sam/vit_b/lm_generalist/best.pt"
         ),
     }
     # TODO update the params!!
@@ -97,13 +103,25 @@ def instance_segmentation_livecell():
     compare_instance_segmentation(image, segmenters, segmenter_kwargs)
 
 
-# Times Lucchi:
+# Times Lucchi: @ CP
 # vit_b_amg : 84.40151119232178 s
 # vit_b_em_amg : 82.40972113609314 s
 # vit_b_em_ais : 13.019227027893066 s
+
+# Times Lucchi: @ AA
+# vit_b_amg : 48.53724002838135 s
+# vit_b_em_amg : 49.28683686256409 s
+# vit_b_em_ais : 8.000006437301636 s
+
+# Times CTC DIC-HeLa: @ AA
+# vit_b_amg : 42.097354888916016 s
+# vit_b_em_amg : 47.52872157096863 s
+# vit_b_em_ais : 8.633260250091553 s
+
+
 def main():
-    # instance_segmentation_lucchi()
-    instance_segmentation_livecell()
+    instance_segmentation_lucchi()
+    # instance_segmentation_livecell()
 
 
 if __name__ == "__main__":
