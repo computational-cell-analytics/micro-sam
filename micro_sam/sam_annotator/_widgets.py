@@ -23,12 +23,7 @@ from zarr.errors import PathNotFoundError
 from ._state import AnnotatorState
 from . import util as vutil
 from .. import instance_segmentation, util
-from ..multi_dimensional_segmentation import segment_mask_in_volume, merge_instance_segmentation_3d
-
-try:
-    from napari.utils import progress as tqdm
-except ImportError:
-    from tqdm import tqdm
+from ..multi_dimensional_segmentation import segment_mask_in_volume, merge_instance_segmentation_3d, PROJECTION_MODES
 
 if TYPE_CHECKING:
     import napari
@@ -45,12 +40,13 @@ def _reset_tracking_state(viewer):
     state.current_track_id = 1
     state.lineage = {1: []}
 
-    # Reset the choices in the track_id menu.
-    track_ids = list(map(str, state.lineage.keys()))
-    state.tracking_widget[1].choices = track_ids
-
+    # Reset the layer properties.
     viewer.layers["point_prompts"].property_choices["track_id"] = ["1"]
     viewer.layers["prompts"].property_choices["track_id"] = ["1"]
+
+    # Reset the choices in the track_id menu.
+    state.tracking_widget[1].value = "1"
+    state.tracking_widget[1].choices = ["1"]
 
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
@@ -204,6 +200,11 @@ def commit(
 
     if layer == "current_object":
         vutil.clear_annotations(viewer)
+    else:
+        viewer.layers["auto_segmentation"].data = np.zeros(
+            viewer.layers["auto_segmentation"].data.shape, dtype="uint32"
+        )
+        viewer.layers["auto_segmentation"].refresh()
 
 
 @magic_factory(
@@ -238,14 +239,6 @@ def commit_track(
 
     # Reset the tracking state.
     _reset_tracking_state(viewer)
-
-
-@magic_factory(call_button="Save Lineage")
-def save_lineage(viewer: "napari.viewer.Viewer", path: Path) -> None:
-    state = AnnotatorState()
-    path = path.with_suffix(".json")
-    with open(path, "w") as f:
-        json.dump(state.committed_lineages, f)
 
 
 def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="label"):
@@ -464,7 +457,7 @@ def segment_slice(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) ->
 # See https://github.com/computational-cell-analytics/micro-sam/issues/334
 @magic_factory(
     call_button="Segment All Slices [Shift-S]",
-    projection={"choices": ["box", "mask", "points", "points_and_mask", "single_point"]},
+    projection={"choices": PROJECTION_MODES},
 )
 def segment_object(
     viewer: "napari.viewer.Viewer",
@@ -500,7 +493,7 @@ def segment_object(
 
 def _update_lineage(viewer):
     """Updated the lineage after recording a division event.
-    This helper function is needed by 'track_object_widget'.
+    This helper function is needed by 'track_object'.
     """
     state = AnnotatorState()
     tracking_widget = state.tracking_widget
@@ -557,20 +550,16 @@ def segment_frame(viewer: "napari.viewer.Viewer") -> None:
 
 
 # TODO should probably be wrappred in a thread worker
-@magic_factory(call_button="Track Object [Shift-S]", projection={"choices": ["default", "bounding_box", "mask"]})
+@magic_factory(call_button="Track Object [Shift-S]", projection={"choices": PROJECTION_MODES})
 def track_object(
     viewer: "napari.viewer.Viewer",
     iou_threshold: float = 0.5,
-    projection: str = "default",
+    projection: str = "points",
     motion_smoothing: float = 0.5,
     box_extension: float = 0.1,
 ) -> None:
     state = AnnotatorState()
     shape = state.image_shape
-
-    # we use the bounding box projection method as default which generally seems to work better for larger changes
-    # between frames (which is pretty tyipical for tracking compared to 3d segmentation)
-    projection_ = "mask" if projection == "default" else projection
 
     with progress(total=shape[0]) as progress_bar:
         # step 1: segment all slices with prompts
@@ -584,7 +573,7 @@ def track_object(
         seg, has_division = vutil.track_from_prompts(
             viewer.layers["point_prompts"], viewer.layers["prompts"], seg,
             state.predictor, slices, state.image_embeddings, stop_upper,
-            threshold=iou_threshold, projection=projection_,
+            threshold=iou_threshold, projection=projection,
             progress_bar=progress_bar, motion_smoothing=motion_smoothing,
             box_extension=box_extension,
         )
@@ -619,6 +608,7 @@ def _instance_segmentation_impl(viewer, with_background, min_object_size, i=None
 
     shape = state.image_shape
 
+    # Further optimization: refactor parts of this so that we can also use it in the automatic 3d segmentation fucnction
     # For 3D we store the amg state in a dict and check if it is computed already.
     if state.amg_state is not None:
         assert i is not None
@@ -676,31 +666,26 @@ def _instance_segmentation_impl(viewer, with_background, min_object_size, i=None
     return seg
 
 
-def _segment_volume(viewer, with_background, min_object_size, **kwargs):
+def _segment_volume(viewer, with_background, min_object_size, gap_closing, min_extent, **kwargs):
     segmentation = np.zeros_like(viewer.layers["auto_segmentation"].data)
 
     offset = 0
-    for i in tqdm(range(segmentation.shape[0])):
+    # Further optimization: parallelize if state is precomputed for all slices
+    for i in progress(range(segmentation.shape[0]), desc="Segment slices"):
         seg = _instance_segmentation_impl(
             viewer, with_background, min_object_size, i=i, skip_update=True, **kwargs
         )
+        seg_max = seg.max()
+        if seg_max == 0:
+            continue
         seg[seg != 0] += offset
-        offset = seg.max()
+        offset = seg_max + offset
         segmentation[i] = seg
 
     segmentation = merge_instance_segmentation_3d(
-        segmentation, beta=0.5, with_background=with_background
+        segmentation, beta=0.5, with_background=with_background, gap_closing=gap_closing,
+        min_z_extent=min_extent,
     )
-
-    # TODO we need one more refinement step to bridge gaps due to a few missing slices
-    # Implement in multi-dimensional-seg
-
-    # Idea:
-    # - go over all objects
-    # - if object is full slice range then don't do anything
-    # - continue objects that don't with projection
-    # - build potential merge pairs of objects that don't overlap within z, but are within certain range
-    # - merge objects that are > some overlap threshold + fill in the gaps from projections
 
     viewer.layers["auto_segmentation"].data = segmentation
     viewer.layers["auto_segmentation"].refresh()
@@ -716,27 +701,33 @@ def amg_2d(
     pred_iou_thresh: float = 0.88,
     stability_score_thresh: float = 0.95,
     min_object_size: int = 100,
+    box_nms_thresh: float = 0.7,
     with_background: bool = True,
 ) -> None:
     _instance_segmentation_impl(
         viewer, with_background, min_object_size,
-        pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh
+        pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
+        box_nms_thresh=box_nms_thresh,
     )
 
 
+# TODO do we expose additional params?
 # TODO should be wrapped in a threadworker
-# TODO more parameters
 @magic_factory(
     call_button="Automatic Segmentation",
     min_object_size={"min": 0, "max": 10000},
 )
 def instance_seg_2d(
     viewer: "napari.viewer.Viewer",
+    center_distance_threshold: float = 0.5,
+    boundary_distance_threshold: float = 0.5,
     min_object_size: int = 100,
     with_background: bool = True,
 ) -> None:
     _instance_segmentation_impl(
         viewer, with_background, min_object_size, min_size=min_object_size,
+        center_distance_threshold=center_distance_threshold,
+        boundary_distance_threshold=boundary_distance_threshold,
     )
 
 
@@ -750,8 +741,11 @@ def amg_3d(
     pred_iou_thresh: float = 0.88,
     stability_score_thresh: float = 0.95,
     min_object_size: int = 100,
+    box_nms_thresh: float = 0.7,
     with_background: bool = True,
     apply_to_volume: bool = False,
+    gap_closing: int = 2,
+    min_extent: int = 2,
 ) -> None:
     if apply_to_volume:
         # We refuse to run 3D segmentation with the AMG unless we have a GPU or all embeddings
@@ -765,18 +759,20 @@ def amg_3d(
                 print("Volumetric segmentation with AMG is only supported if you have a GPU.")
                 return
         _segment_volume(
-            viewer, with_background, min_object_size,
-            pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh
+            viewer, with_background, min_object_size, gap_closing,
+            pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
+            box_nms_thresh=box_nms_thresh, min_extent=min_extent,
         )
     else:
         i = int(viewer.cursor.position[0])
         _instance_segmentation_impl(
             viewer, with_background, min_object_size, i=i,
-            pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh
+            pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
+            box_nms_thresh=box_nms_thresh,
         )
 
 
-# TODO more parameters
+# TODO do we expose additional params?
 # TODO should be wrapped in a threadworker
 @magic_factory(
     call_button="Automatic Segmentation",
@@ -784,17 +780,26 @@ def amg_3d(
 )
 def instance_seg_3d(
     viewer: "napari.viewer.Viewer",
+    center_distance_threshold: float = 0.5,
+    boundary_distance_threshold: float = 0.5,
     min_object_size: int = 100,
     with_background: bool = True,
     apply_to_volume: bool = False,
+    gap_closing: int = 2,
+    min_extent: int = 2,
 ) -> None:
     if apply_to_volume:
         _segment_volume(
-            viewer, with_background, min_object_size, min_size=min_object_size,
+            viewer, with_background, min_object_size, gap_closing,
+            min_extent=min_extent, min_size=min_object_size,
+            center_distance_threshold=center_distance_threshold,
+            boundary_distance_threshold=boundary_distance_threshold,
         )
     else:
         i = int(viewer.cursor.position[0])
         _instance_segmentation_impl(
             viewer, with_background, min_object_size, i=i,
             min_size=min_object_size,
+            center_distance_threshold=center_distance_threshold,
+            boundary_distance_threshold=boundary_distance_threshold,
         )

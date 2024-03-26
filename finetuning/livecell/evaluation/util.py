@@ -2,7 +2,7 @@ import os
 import argparse
 from glob import glob
 
-from micro_sam.evaluation import get_predictor
+from micro_sam.util import get_sam_model
 from micro_sam.evaluation.livecell import _get_livecell_paths
 
 # FIXME make sure this uses the corrected ground-truth!!!
@@ -22,7 +22,7 @@ def get_paths(split="test"):
 def get_model(model_type=None, ckpt=None):
     if ckpt is None:
         ckpt = VANILLA_MODELS[model_type]
-    predictor = get_predictor(ckpt, model_type)
+    predictor = get_sam_model(model_type=model_type, checkpoint_path=ckpt)
     return predictor
 
 

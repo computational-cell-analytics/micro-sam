@@ -9,6 +9,7 @@ from scipy.ndimage import shift
 from skimage import draw
 
 from .. import prompt_based_segmentation, util
+from ..multi_dimensional_segmentation import _validate_projection
 
 # Green and Red
 LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
@@ -32,7 +33,7 @@ def toggle_label(prompts):
     prompts.refresh_colors()
 
 
-def _initialize_parser(description, with_segmentation_result=True, with_show_embeddings=True):
+def _initialize_parser(description, with_segmentation_result=True, with_instance_segmentation=True):
 
     available_models = list(util.get_model_names())
     available_models = ", ".join(available_models)
@@ -90,6 +91,19 @@ def _initialize_parser(description, with_segmentation_result=True, with_show_emb
     parser.add_argument(
         "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
     )
+
+    if with_instance_segmentation:
+        parser.add_argument(
+            "--precompute_amg_state", action="store_true",
+            help="Whether to precompute the state for automatic instance segmentation. "
+            "This will lead to a longer start-up time, but the automatic instance segmentation can "
+            "be run directly once the tool has started."
+        )
+        parser.add_argument(
+            "--prefer_decoder", action="store_false",
+            help="Whether to use decoder based instance segmentation if the model "
+            "being used has an additional decoder for that purpose."
+        )
 
     return parser
 
@@ -509,11 +523,7 @@ def track_from_prompts(
 ):
     """@private
     """
-    assert projection in ("mask", "bounding_box")
-    if projection == "mask":
-        use_mask, use_box = True, True
-    else:
-        use_mask, use_box = False, True
+    use_box, use_mask, use_points, use_single_point = _validate_projection(projection)
 
     def _update_progress():
         if progress_bar is not None:
@@ -564,7 +574,8 @@ def track_from_prompts(
 
             seg_t = prompt_based_segmentation.segment_from_mask(
                 predictor, seg_prev, image_embeddings=image_embeddings, i=t,
-                use_mask=use_mask, use_box=use_box, box_extension=box_extension
+                use_mask=use_mask, use_box=use_box, use_points=use_points,
+                box_extension=box_extension, use_single_point=use_single_point,
             )
             track_state = "track"
 

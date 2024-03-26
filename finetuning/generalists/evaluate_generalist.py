@@ -39,7 +39,6 @@ def evaluate_dataset_slurm(model_name, dataset):
         do_amg = True
         max_num_val_images = 64
 
-    is_custom_model = model_name not in ("vit_h", "vit_b")
     checkpoint = CHECKPOINTS[model_name]
     model_type = model_name[:5]
 
@@ -47,7 +46,6 @@ def evaluate_dataset_slurm(model_name, dataset):
     evaluate_checkpoint_for_dataset(
         checkpoint, model_type, dataset, experiment_folder,
         run_default_evaluation=True, do_amg=do_amg,
-        is_custom_model=is_custom_model,
         max_num_val_images=max_num_val_images,
     )
 

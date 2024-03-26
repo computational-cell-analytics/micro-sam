@@ -5,7 +5,7 @@ from glob import glob
 
 from torch_em.data import datasets
 
-from micro_sam.evaluation import get_predictor
+from micro_sam.util import get_sam_model
 from micro_sam.evaluation.livecell import _get_livecell_paths
 
 
@@ -82,7 +82,7 @@ def get_dataset_paths(dataset_name, split_choice):
 def get_model(model_type, ckpt):
     if ckpt is None:
         ckpt = VANILLA_MODELS[model_type]
-    predictor = get_predictor(ckpt, model_type)
+    predictor = get_sam_model(model_type=model_type, checkpoint_path=ckpt)
     return predictor
 
 
