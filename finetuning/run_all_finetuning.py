@@ -76,6 +76,7 @@ def submit_slurm(args):
         "plantseg_root_specialist": "specialists/training/light_microscopy/plantseg_root_finetuning",
         "neurips_cellseg_specialist": "specialists/training/light_microscopy/neurips_cellseg_finetuning",
         "lm_generalist": "generalists/training/light_microscopy/train_lm_generalist",
+        "asem_specialist": "specialists/training/electron_microscopy/organelles/asem_finetuning",
         "em_mito_nuc_generalist": "generalists/training/electron_microscopy/mito_nuc/train_mito_nuc_em_generalist",
         "em_boundaries_generalist": "generalists/training/electron_microscopy/boundaries/train_boundaries_em_generalist"
     }
