@@ -35,12 +35,12 @@ def get_dataloaders(patch_shape, data_path):
     raw_transform = to_8bit  # the current workflow avoids rescaling the inputs to [-1, 1]
     train_loader = get_dynamicnuclearnet_loader(
         path=data_path, split="train", patch_shape=patch_shape, batch_size=2, label_dtype=torch.float32, download=False,
-        label_transform=label_transform, raw_transform=raw_transform, num_workers=16, shuffle=True, n_samples=71,
+        label_transform=label_transform, raw_transform=raw_transform, num_workers=16, shuffle=True, n_samples=100,
     )
 
     val_loader = get_dynamicnuclearnet_loader(
         path=data_path, split="val", patch_shape=patch_shape, batch_size=1, label_dtype=torch.float32, download=False,
-        label_transform=label_transform, raw_transform=raw_transform, num_workers=16, shuffle=True, n_samples=50,
+        label_transform=label_transform, raw_transform=raw_transform, num_workers=16, n_samples=100,
     )
     return train_loader, val_loader
 
@@ -52,15 +52,20 @@ def finetune_dynamicnuclearnet(args):
 
     # training settings:
     model_type = args.model_type
-    checkpoint_path = None  # override this to start training from a custom checkpoint
     patch_shape = (512, 512)  # the patch shape for training
     n_objects_per_batch = args.n_objects  # the number of objects per batch that will be sampled (default: 25)
     freeze_parts = args.freeze  # override this to freeze different parts of the model
     checkpoint_name = f"{args.model_type}/dynamicnuclearnet_sam"
 
+    if model_type.endswith("lm"):
+        model_type = model_type[:5]
+        checkpoint_path = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/lm_generalist_sam/best.pt"
+    else:
+        checkpoint_path = None  # override this to start training from a custom checkpoint
+
     # all the stuff we need for training
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
-    scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 100, "verbose": True}
+    scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10, "verbose": True}
 
     # Run training.
     sam_training.train_sam(
@@ -68,7 +73,7 @@ def finetune_dynamicnuclearnet(args):
         model_type=model_type,
         train_loader=train_loader,
         val_loader=val_loader,
-        early_stopping=10,
+        early_stopping=20,
         n_objects_per_batch=n_objects_per_batch,
         checkpoint_path=checkpoint_path,
         freeze=freeze_parts,
