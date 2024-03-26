@@ -23,6 +23,8 @@ from . import util
 from .instance_segmentation import AMGBase, mask_data_to_segmentation
 from .prompt_based_segmentation import segment_from_mask
 
+PROJECTION_MODES = ("box", "mask", "points", "points_and_mask", "single_point")
+
 
 def _validate_projection(projection):
     use_single_point = False
