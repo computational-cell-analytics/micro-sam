@@ -57,12 +57,12 @@ def get_dataloaders(patch_shape, data_path):
     sampler = MinForegroundSampler(min_fraction=0.01)
     train_loader = get_asem_loader(
         path=data_path, patch_shape=patch_shape, batch_size=2, ndim=2, download=True,
-        organelles="er", volume_ids=["cell_1"], raw_transform=raw_transform,
+        organelles="er", volume_ids=["cell_1"], raw_transform=raw_transform, n_samples=1500,
         label_transform=label_transform, num_workers=16, sampler=sampler, shuffle=True,
     )
     val_loader = get_asem_loader(
         path=data_path, patch_shape=patch_shape, batch_size=1, ndim=2, download=True,
-        organelles="er", volume_ids=["cell_2"], raw_transform=raw_transform,
+        organelles="er", volume_ids=["cell_2"], raw_transform=raw_transform, n_samples=500,
         label_transform=label_transform, num_workers=16, sampler=sampler, shuffle=True,
     )
 
@@ -115,9 +115,7 @@ def finetune_asem(args):
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
-    convert_inputs = sam_training.ConvertToSamInputs(
-        transform=model.transform, box_distortion_factor=0.025
-    )
+    convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
 
     checkpoint_name = f"{args.model_type}/asem_er_sam"
 
