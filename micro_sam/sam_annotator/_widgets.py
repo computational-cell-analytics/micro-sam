@@ -691,6 +691,10 @@ def _segment_volume(viewer, with_background, min_object_size, gap_closing, min_e
     viewer.layers["auto_segmentation"].refresh()
 
 
+def _select_layer(viewer, layer_name):
+    viewer.layers.selection.select_only(viewer.layers[layer_name])
+
+
 # TODO should be wrapped in a threadworker
 @magic_factory(
     call_button="Automatic Segmentation",
@@ -709,6 +713,7 @@ def amg_2d(
         pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
         box_nms_thresh=box_nms_thresh,
     )
+    _select_layer(viewer, "auto_segmentation")
 
 
 # TODO do we expose additional params?
@@ -729,6 +734,7 @@ def instance_seg_2d(
         center_distance_threshold=center_distance_threshold,
         boundary_distance_threshold=boundary_distance_threshold,
     )
+    _select_layer(viewer, "auto_segmentation")
 
 
 # TODO should be wrapped in a threadworker
@@ -770,6 +776,7 @@ def amg_3d(
             pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
             box_nms_thresh=box_nms_thresh,
         )
+    _select_layer(viewer, "auto_segmentation")
 
 
 # TODO do we expose additional params?
@@ -803,3 +810,4 @@ def instance_seg_3d(
             center_distance_threshold=center_distance_threshold,
             boundary_distance_threshold=boundary_distance_threshold,
         )
+    _select_layer(viewer, "auto_segmentation")
