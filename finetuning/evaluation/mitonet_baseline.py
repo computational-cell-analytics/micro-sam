@@ -13,7 +13,7 @@ from util import get_paths, DATASETS
 SAVE_ROOT = "/scratch/projects/nim00007/sam/data/for_mitonet/"
 
 
-def make_stack_from_inputs(dataset_name):
+def make_stack_from_inputs(dataset_name, data_type=None):
     assert dataset_name in DATASETS
     print("Creating the volumes for:", dataset_name)
     test_image_paths, test_gt_paths = get_paths(dataset_name, "test")
@@ -40,6 +40,9 @@ def make_stack_from_inputs(dataset_name):
 
     assert image_stack.shape == gt_stack.shape
 
+    if data_type is not None:
+        image_stack = image_stack.astype(data_type)
+
     imageio.imwrite(raw_volume_path, image_stack, compression="zlib")
     imageio.imwrite(labels_volume_path, gt_stack, compression="zlib")
 
@@ -50,7 +53,7 @@ def make_stacks(specific_dataset=None):
         make_stack_from_inputs("lucchi")
         make_stack_from_inputs("mitoem/rat")
         make_stack_from_inputs("mitoem/human")
-        make_stack_from_inputs("uro_cell")
+        make_stack_from_inputs("uro_cell", data_type="uint8")
         make_stack_from_inputs("mitolab/c_elegans")
         make_stack_from_inputs("mitolab/fly_brain")
         make_stack_from_inputs("mitolab/glycolytic_muscle")
@@ -58,7 +61,7 @@ def make_stacks(specific_dataset=None):
         make_stack_from_inputs("mitolab/lucchi_pp")
         make_stack_from_inputs("mitolab/salivary_gland")
         make_stack_from_inputs("vnc")
-        make_stack_from_inputs("asem/mito")
+        make_stack_from_inputs("asem/mito", data_type="uint8")
     else:
         make_stack_from_inputs(specific_dataset)
 
