@@ -40,14 +40,7 @@ def default_grid_search_values_multi_dimensional_segmentation(
 
     if projection_method_values is None:
         projection_method_values = [
-            {"use_box": True, "use_mask": False, "use_points": False},
-            {"use_box": False, "use_mask": True, "use_points": False},
-            {"use_box": False, "use_mask": False, "use_points": True},
-            {"use_box": True, "use_mask": True, "use_points": False},
-            {"use_box": True, "use_mask": False, "use_points": True},
-            {"use_box": False, "use_mask": True, "use_points": True},
-            {"use_box": True, "use_mask": True, "use_points": True},
-            "single_point"
+            "mask", "points", "box", "points_and_mask", "single_point"
         ]
 
     if box_extension_values is None:
@@ -95,7 +88,7 @@ def segment_slices_from_ground_truth(
         interactive_seg_mode: Method for guiding prompt-based instance segmentation.
         verbose: Whether to get the trace for projected segmentations.
         return_segmentation: Whether to return the segmented volume.
-        min_size: The minimal size for evaluating an object in the gt.
+        min_size: The minimal size for evaluating an object in the ground-truth.
             The size is measured within the central slice.
     """
     assert volume.ndim == 3
@@ -117,7 +110,7 @@ def segment_slices_from_ground_truth(
     skipped_label_ids = []
     for label_id in label_ids:
         # Binary label volume per instance (also referred to as object)
-        this_seg = ground_truth == label_id
+        this_seg = (ground_truth == label_id).astype("int")
 
         # Let's search the slices where we have the current object
         slice_range = np.where(this_seg)[0]
@@ -129,6 +122,7 @@ def segment_slices_from_ground_truth(
         if min_size > 0 and this_slice_seg.sum() < min_size:
             skipped_label_ids.append(label_id)
             continue
+
         if verbose:
             print(f"The object with id {label_id} lies in slice range: {slice_range}")
 
@@ -150,7 +144,7 @@ def segment_slices_from_ground_truth(
             get_point_prompts=_get_points,
             get_box_prompts=_get_box
         )
-        _, box_coords = util.get_centers_and_bounding_boxes(this_seg[slice_choice])
+        _, box_coords = util.get_centers_and_bounding_boxes(this_slice_seg)
         point_prompts, point_labels, box_prompts, _ = prompt_generator(this_slice_seg, [box_coords[1]])
 
         # Prompt-based segmentation on middle slice of the current object
@@ -173,7 +167,7 @@ def segment_slices_from_ground_truth(
             iou_threshold=iou_threshold,
             projection=projection,
             box_extension=box_extension,
-            verbose=verbose
+            verbose=verbose,
         )
 
         # Store the entire segmented object
@@ -193,8 +187,18 @@ def segment_slices_from_ground_truth(
         return msa
 
 
-def _get_best_parameters_from_grid_search_combinations(result_dir, grid_search_values):
+def _get_best_parameters_from_grid_search_combinations(result_dir, best_params_path, grid_search_values):
+    if os.path.exists(best_params_path):
+        print("The best parameters are already saved at:", best_params_path)
+        return
+
     best_kwargs, best_msa = evaluate_instance_segmentation_grid_search(result_dir, list(grid_search_values.keys()))
+
+    # let's save the best parameters
+    best_kwargs["mSA"] = best_msa
+    best_param_df = pd.DataFrame.from_dict([best_kwargs])
+    best_param_df.to_csv(best_params_path)
+
     best_param_str = ", ".join(f"{k} = {v}" for k, v in best_kwargs.items())
     print("Best grid-search result:", best_msa, "with parmeters:\n", best_param_str)
 
@@ -208,7 +212,8 @@ def run_multi_dimensional_segmentation_grid_search(
     result_dir: Union[str, os.PathLike],
     interactive_seg_mode: str = "box",
     verbose: bool = False,
-    grid_search_values: Optional[Dict[str, List]] = None
+    grid_search_values: Optional[Dict[str, List]] = None,
+    min_size: int = 0
 ):
     """Run grid search for prompt-based multi-dimensional instance segmentation.
 
@@ -236,6 +241,8 @@ def run_multi_dimensional_segmentation_grid_search(
         interactive_seg_mode: Method for guiding prompt-based instance segmentation.
         verbose: Whether to get the trace for projected segmentations.
         grid_search_values: The grid search values for parameters of the `segment_slices_from_ground_truth` function.
+        min_size: The minimal size for evaluating an object in the ground-truth.
+            The size is measured within the central slice.
     """
     if grid_search_values is None:
         grid_search_values = default_grid_search_values_multi_dimensional_segmentation()
@@ -243,10 +250,11 @@ def run_multi_dimensional_segmentation_grid_search(
     assert len(grid_search_values.keys()) == 3, "There must be three grid-search parameters. See above for details."
 
     os.makedirs(result_dir, exist_ok=True)
-    result_path = os.path.join(result_dir, "grid_search_multi_dimensional_segmentation.csv")
+    result_path = os.path.join(result_dir, "all_grid_search_results.csv")
+    best_params_path = os.path.join(result_dir, "grid_search_params_multi_dimensional_segmentation.csv")
     if os.path.exists(result_path):
-        _get_best_parameters_from_grid_search_combinations(result_dir, grid_search_values)
-        return
+        _get_best_parameters_from_grid_search_combinations(result_dir, best_params_path, grid_search_values)
+        return best_params_path
 
     # Compute all combinations of grid search values.
     gs_combinations = product(*grid_search_values.values())
@@ -267,6 +275,7 @@ def run_multi_dimensional_segmentation_grid_search(
             interactive_seg_mode=interactive_seg_mode,
             verbose=verbose,
             return_segmentation=False,
+            min_size=min_size,
             **gs_kwargs
         )
 
@@ -277,4 +286,6 @@ def run_multi_dimensional_segmentation_grid_search(
     res_df = pd.concat(net_list, ignore_index=True)
     res_df.to_csv(result_path)
 
-    _get_best_parameters_from_grid_search_combinations(result_dir, grid_search_values)
+    _get_best_parameters_from_grid_search_combinations(result_dir, best_params_path, grid_search_values)
+    print("The best grid-search parameters have been computed and stored at:", best_params_path)
+    return best_params_path
