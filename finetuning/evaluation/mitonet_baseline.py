@@ -107,9 +107,6 @@ def _evaluate_mitonet_predictions(view=False):
     res_df = pd.DataFrame.from_dict([res_dict])
     res_df.to_csv("./mitonet_tem.csv")
 
-    return
-
-    # TODO: do this for asem-mito and vnc as well.
     # let's do this for all other datasets
     for this_dir in all_inputs_dir:
         name = os.path.split(this_dir)[-1]
@@ -127,7 +124,7 @@ def _evaluate_mitonet_predictions(view=False):
             import napari
             v = napari.Viewer()
             v.add_image(raw)
-            v.add_labels(labels, visible=False)
+            v.add_labels(labels.astype("uint8"), visible=False)
             v.add_labels(segmentation)
             napari.run()
 
@@ -149,8 +146,8 @@ def _evaluate_mitonet_predictions(view=False):
 
 
 def main():
-    make_stacks()
-    # _evaluate_mitonet_predictions()
+    # make_stacks()
+    _evaluate_mitonet_predictions()
 
 
 if __name__ == "__main__":
