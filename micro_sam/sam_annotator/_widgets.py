@@ -45,8 +45,8 @@ def _reset_tracking_state(viewer):
     viewer.layers["prompts"].property_choices["track_id"] = ["1"]
 
     # Reset the choices in the track_id menu.
-    state.tracking_widget[1].value = "1"
-    state.tracking_widget[1].choices = ["1"]
+    state.widgets["tracking_widget"][1].value = "1"
+    state.widgets["tracking_widget"][1].choices = ["1"]
 
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
@@ -496,7 +496,7 @@ def _update_lineage(viewer):
     This helper function is needed by 'track_object'.
     """
     state = AnnotatorState()
-    tracking_widget = state.tracking_widget
+    tracking_widget = state.widgets["tracking_widget"]
 
     mother = state.current_track_id
     assert mother in state.lineage

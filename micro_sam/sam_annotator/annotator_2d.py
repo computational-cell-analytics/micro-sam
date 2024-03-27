@@ -89,6 +89,12 @@ def annotator_2d(
     # And initialize the 'committed_objects' with the segmentation result if it was given.
     annotator._update_image(segmentation_result=segmentation_result)
 
+    # TODO
+    # - we need to update more values here (tile_shape, halo, embedding_path, all if given)
+    # - refactor this into a util function so that it can be used in the other annotator functions
+    # Update the embedding widget to reflect the parameters given to the function.
+    state.widgets["embedding_widget"][2].value = model_type
+
     # Add the annotator widget to the viewer.
     viewer.window.add_dock_widget(annotator)
 
