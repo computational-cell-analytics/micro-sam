@@ -470,14 +470,14 @@ def segment_object(
 
     with progress(total=shape[0]) as progress_bar:
 
-        # step 1: segment all slices with prompts
+        # Step 1: Segment all slices with prompts.
         seg, slices, stop_lower, stop_upper = vutil.segment_slices_with_prompts(
             state.predictor, viewer.layers["point_prompts"], viewer.layers["prompts"],
             state.image_embeddings, shape,
             progress_bar=progress_bar,
         )
 
-        # step 2: segment the rest of the volume based on smart prompting
+        # Step 2: Segment the rest of the volume based on projecting prompts.
         seg, (z_min, z_max) = segment_mask_in_volume(
             seg, state.predictor, state.image_embeddings, slices,
             stop_lower, stop_upper,
@@ -562,14 +562,14 @@ def track_object(
     shape = state.image_shape
 
     with progress(total=shape[0]) as progress_bar:
-        # step 1: segment all slices with prompts
+        # Step 1: Segment all slices with prompts.
         seg, slices, _, stop_upper = vutil.segment_slices_with_prompts(
             state.predictor, viewer.layers["point_prompts"], viewer.layers["prompts"],
             state.image_embeddings, shape,
             progress_bar=progress_bar, track_id=state.current_track_id
         )
 
-        # step 2: track the object starting from the lowest annotated slice
+        # Step 2: Track the object starting from the lowest annotated slice.
         seg, has_division = vutil.track_from_prompts(
             viewer.layers["point_prompts"], viewer.layers["prompts"], seg,
             state.predictor, slices, state.image_embeddings, stop_upper,

@@ -373,14 +373,20 @@ def segment_slices_with_prompts(
         # do we end the segmentation at the outer slices?
         if points_i is None:
 
-            if i == slices[0]:
+            if i == slices[0]:  # The bottom slice is a stop slice.
                 stop_lower = True
-            elif i == slices[-1]:
+                seg[i] = 0
+            elif i == slices[-1]:  # The top sloce is a stop slice.
                 stop_upper = True
-            else:
-                raise RuntimeError("Stop slices can only be at the start or end")
+                seg[i] = 0
+            else:  # We have a stop annotation somewhere in the middle. Ignore this.
+                # Remove this slice from the annotated slices, so that it is segmented via
+                # projection in the next step.
+                slices = np.setdiff1d(slices, i)
+                print(f"You have provided a stop annotation (single red point) in slice {i},")
+                print("but you have annotated slices above or below it. This stop annotation will")
+                print(f"be ignored and the slice {i} will be segmented normally.")
 
-            seg[i] = 0
             _update_progress()
             continue
 
