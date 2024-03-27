@@ -29,6 +29,10 @@ if TYPE_CHECKING:
     import napari
 
 
+def _select_layer(viewer, layer_name):
+    viewer.layers.selection.select_only(viewer.layers[layer_name])
+
+
 def _reset_tracking_state(viewer):
     """Reset the tracking state.
 
@@ -205,6 +209,7 @@ def commit(
             viewer.layers["auto_segmentation"].data.shape, dtype="uint32"
         )
         viewer.layers["auto_segmentation"].refresh()
+        _select_layer(viewer, "committed_objects")
 
 
 @magic_factory(
@@ -689,10 +694,6 @@ def _segment_volume(viewer, with_background, min_object_size, gap_closing, min_e
 
     viewer.layers["auto_segmentation"].data = segmentation
     viewer.layers["auto_segmentation"].refresh()
-
-
-def _select_layer(viewer, layer_name):
-    viewer.layers.selection.select_only(viewer.layers[layer_name])
 
 
 # TODO should be wrapped in a threadworker
