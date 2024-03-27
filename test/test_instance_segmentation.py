@@ -157,6 +157,38 @@ class TestInstanceSegmentation(unittest.TestCase):
         predicted3 = mask_data_to_segmentation(predicted3, with_background=True)
         self.assertTrue(np.array_equal(predicted, predicted3))
 
+    @unittest.skipUnless(os.path.exists(CHECKPOINT_LM), "Require finetuned model")
+    def test_tiled_instance_segmentation_with_decoder(self):
+        from micro_sam.instance_segmentation import TiledInstanceSegmentationWithDecoder, mask_data_to_segmentation
+
+        mask, image = self.large_mask, self.large_image
+        predictor, decoder, image_embeddings = self._get_model(
+            image, self.model_type_ais, with_decoder=True, with_tiling=True, checkpoint=CHECKPOINT_LM
+        )
+
+        amg = TiledInstanceSegmentationWithDecoder(predictor, decoder)
+        amg.initialize(image, image_embeddings=image_embeddings, verbose=False)
+
+        # VIT_T behaves a bit weirdly, that's why we need these specific settings
+        generate_kwargs = dict(foreground_threshold=0.8, min_size=100)
+        predicted = amg.generate(**generate_kwargs)
+        predicted = mask_data_to_segmentation(predicted, with_background=True)
+
+        self.assertGreater(matching(predicted, mask, threshold=0.75)["segmentation_accuracy"], 0.99)
+
+        # check that regenerating the segmentation works
+        predicted2 = amg.generate(**generate_kwargs)
+        predicted2 = mask_data_to_segmentation(predicted2, with_background=True)
+        self.assertTrue(np.array_equal(predicted, predicted2))
+
+        # check that serializing and reserializing the state works
+        state = amg.get_state()
+        amg = TiledInstanceSegmentationWithDecoder(predictor, decoder)
+        amg.set_state(state)
+        predicted3 = amg.generate(**generate_kwargs)
+        predicted3 = mask_data_to_segmentation(predicted3, with_background=True)
+        self.assertTrue(np.array_equal(predicted, predicted3))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,7 +5,6 @@ https://computational-cell-analytics.github.io/micro-sam/micro_sam.html
 """
 
 import os
-import warnings
 from abc import ABC
 from collections import OrderedDict
 from copy import deepcopy
@@ -547,33 +546,27 @@ class AutomaticMaskGenerator(AMGBase):
         return masks
 
 
-def _compute_tiled_embeddings(predictor, image, image_embeddings, embedding_save_path, tile_shape, halo):
-    have_tiling_params = (tile_shape is not None) and (halo is not None)
-    if image_embeddings is None and have_tiling_params:
-        if embedding_save_path is None:
-            raise ValueError(
-                "You have passed neither pre-computed embeddings nor a path for saving embeddings."
-                "Embeddings with tiling can only be computed if a save path is given."
-            )
-        image_embeddings = util.precompute_image_embeddings(
-            predictor, image, tile_shape=tile_shape, halo=halo, save_path=embedding_save_path
-        )
-    elif image_embeddings is None and not have_tiling_params:
-        raise ValueError("You passed neither pre-computed embeddings nor tiling parameters (tile_shape and halo)")
-    else:
-        feats = image_embeddings["features"]
-        tile_shape_, halo_ = feats.attrs["tile_shape"], feats.attrs["halo"]
-        if have_tiling_params and (
-            (list(tile_shape) != list(tile_shape_)) or
-            (list(halo) != list(halo_))
-        ):
-            warnings.warn(
-                "You have passed both pre-computed embeddings and tiling parameters (tile_shape and halo) and"
-                "the values of the tiling parameters from the embeddings disagree with the ones that were passed."
-                "The tiling parameters you have passed wil be ignored."
-            )
+# Helper function for tiled embedding computation and checking consistent state.
+def _process_tiled_embeddings(predictor, image, image_embeddings, tile_shape, halo):
+    if image_embeddings is None:
+        if tile_shape is None or halo is None:
+            raise ValueError("To compute tiled embeddings the parameters tile_shape and halo have to be passed.")
+        image_embeddings = util.precompute_image_embeddings(predictor, image, tile_shape=tile_shape, halo=halo)
+
+    # Use tile shape and halo from the precomputed embeddings if not given.
+    # Otherwise check that they are consistent.
+    feats = image_embeddings["features"]
+    tile_shape_, halo_ = feats.attrs["tile_shape"], feats.attrs["halo"]
+    if tile_shape is None:
         tile_shape = tile_shape_
+    elif tile_shape != tile_shape_:
+        raise ValueError(
+            f"Inconsistent tile_shape parameter {tile_shape} with precomputed embeedings: {tile_shape_}."
+        )
+    if halo is None:
         halo = halo_
+    elif halo != halo_:
+        raise ValueError(f"Inconsistent halo parameter {halo} with precomputed embeedings: {halo_}.")
 
     return image_embeddings, tile_shape, halo
 
@@ -622,7 +615,6 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         tile_shape: Optional[Tuple[int, int]] = None,
         halo: Optional[Tuple[int, int]] = None,
         verbose: bool = False,
-        embedding_save_path: Optional[str] = None,
     ) -> None:
         """Initialize image embeddings and masks for an image.
 
@@ -635,13 +627,12 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
             tile_shape: The tile shape for embedding prediction.
             halo: The overlap of between tiles.
             verbose: Whether to print computation progress.
-            embedding_save_path: Where to save the image embeddings.
         """
         original_size = image.shape[:2]
         self._original_size = original_size
 
-        image_embeddings, tile_shape, halo = _compute_tiled_embeddings(
-            self._predictor, image, image_embeddings, embedding_save_path, tile_shape, halo
+        image_embeddings, tile_shape, halo = _process_tiled_embeddings(
+            self._predictor, image, image_embeddings, tile_shape, halo
         )
 
         tiling = blocking([0, 0], original_size, tile_shape)
@@ -875,28 +866,20 @@ class InstanceSegmentationWithDecoder:
         if image_embeddings is None:
             image_embeddings = util.precompute_image_embeddings(self._predictor, image)
 
-        # Get the embeddings.
-        embeddings = image_embeddings["features"]
-        # Select the current slice if given.
-        if i is not None:
-            embeddings = embeddings[i]
-        # Ensure that the embeddings are tensors and send to device.
-        if not isinstance(embeddings, torch.Tensor):
-            embeddings = torch.from_numpy(embeddings[:])
-        embeddings = embeddings.to(self._predictor.device)
+        # Get the image embeddings from the predictor.
+        self._predictor = util.set_precomputed(self._predictor, image_embeddings, i=i)
+        embeddings = self._predictor.features
+        input_shape = tuple(self._predictor.input_size)
+        original_shape = tuple(self._predictor.original_size)
 
-        input_shape = tuple(image_embeddings["input_size"])
-        original_shape = tuple(image_embeddings["original_size"])
-        output = self._decoder(
-            embeddings, input_shape, original_shape
-        ).cpu().numpy().squeeze(0)
-
+        # Run prediction with the UNETR decoder.
+        output = self._decoder(embeddings, input_shape, original_shape).cpu().numpy().squeeze(0)
         assert output.shape[0] == 3, f"{output.shape}"
 
+        # Set the state.
         self._foreground = output[0]
         self._center_distances = output[1]
         self._boundary_distances = output[2]
-
         self._is_initialized = True
 
     def _to_masks(self, segmentation, output_mode):
@@ -974,6 +957,8 @@ class InstanceSegmentationWithDecoder:
             foreground = vigra.filters.gaussianSmoothing(self._foreground, foreground_smoothing)
         else:
             foreground = self._foreground
+        # Further optimization: parallel implementation using elf.parallel functionality.
+        # (Make sure to expose n_threads to avoid over-subscription in case of outer parallelization)
         segmentation = watershed_from_center_and_boundary_distances(
             self._center_distances, self._boundary_distances, foreground,
             center_distance_threshold=center_distance_threshold,
@@ -1021,6 +1006,70 @@ class InstanceSegmentationWithDecoder:
         self._is_initialized = False
 
 
+class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
+    """Same as `InstanceSegmentationWithDecoder` but for tiled image embeddings.
+    """
+
+    @torch.no_grad()
+    def initialize(
+        self,
+        image: np.ndarray,
+        image_embeddings: Optional[util.ImageEmbeddings] = None,
+        i: Optional[int] = None,
+        tile_shape: Optional[Tuple[int, int]] = None,
+        halo: Optional[Tuple[int, int]] = None,
+        verbose: bool = False,
+    ) -> None:
+        """Initialize image embeddings and decoder predictions for an image.
+
+        Args:
+            image: The input image, volume or timeseries.
+            image_embeddings: Optional precomputed image embeddings.
+                See `util.precompute_image_embeddings` for details.
+            i: Index for the image data. Required if `image` has three spatial dimensions
+                or a time dimension and two spatial dimensions.
+            verbose: Dummy input to be compatible with other function signatures.
+        """
+        original_size = image.shape[:2]
+        image_embeddings, tile_shape, halo = _process_tiled_embeddings(
+            self._predictor, image, image_embeddings, tile_shape, halo
+        )
+        tiling = blocking([0, 0], original_size, tile_shape)
+
+        foreground = np.zeros(original_size, dtype="float32")
+        center_distances = np.zeros(original_size, dtype="float32")
+        boundary_distances = np.zeros(original_size, dtype="float32")
+
+        for tile_id in tqdm(range(tiling.numberOfBlocks), disable=not verbose):
+
+            # Get the image embeddings from the predictor for this tile.
+            self._predictor = util.set_precomputed(self._predictor, image_embeddings, i=i, tile_id=tile_id)
+            embeddings = self._predictor.features
+            input_shape = tuple(self._predictor.input_size)
+            original_shape = tuple(self._predictor.original_size)
+
+            # Predict with the UNETR decoder for this tile.
+            output = self._decoder(embeddings, input_shape, original_shape).cpu().numpy().squeeze(0)
+            assert output.shape[0] == 3, f"{output.shape}"
+
+            # Set the predictions in the output for this tile.
+            block = tiling.getBlockWithHalo(tile_id, halo=list(halo))
+            local_bb = tuple(
+                slice(beg, end) for beg, end in zip(block.innerBlockLocal.begin, block.innerBlockLocal.end)
+            )
+            inner_bb = tuple(slice(beg, end) for beg, end in zip(block.innerBlock.begin, block.innerBlock.end))
+
+            foreground[inner_bb] = output[0][local_bb]
+            center_distances[inner_bb] = output[1][local_bb]
+            boundary_distances[inner_bb] = output[2][local_bb]
+
+        # Set the state.
+        self._foreground = foreground
+        self._center_distances = center_distances
+        self._boundary_distances = boundary_distances
+        self._is_initialized = True
+
+
 def get_amg(
     predictor: SamPredictor,
     is_tiled: bool,
@@ -1042,7 +1091,6 @@ def get_amg(
         segmenter = TiledAutomaticMaskGenerator(predictor, **kwargs) if is_tiled else\
             AutomaticMaskGenerator(predictor, **kwargs)
     else:
-        if is_tiled:
-            raise NotImplementedError
-        segmenter = InstanceSegmentationWithDecoder(predictor, decoder, **kwargs)
+        segmenter = TiledInstanceSegmentationWithDecoder(predictor, decoder, **kwargs) if is_tiled else\
+            InstanceSegmentationWithDecoder(predictor, decoder, **kwargs)
     return segmenter
