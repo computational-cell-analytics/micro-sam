@@ -44,7 +44,7 @@ DATASETS = [
     #   - out-of-domain
     "mitolab/c_elegans", "mitolab/fly_brain", "mitolab/glycolytic_muscle", "mitolab/hela_cell",
     "mitolab/lucchi_pp", "mitolab/salivary_gland", "mitolab/tem", "lucchi", "nuc_mm/mouse",
-    "nuc_mm/zebrafish", "uro_cell", "sponge_em", "platynereis/cilia", "vnc", "asem/mito"
+    "nuc_mm/zebrafish", "uro_cell", "sponge_em", "platynereis/cilia", "vnc", "asem/mito",
     # boundaries - EM
     #   - in-domain
     "cremi", "platynereis/cells",

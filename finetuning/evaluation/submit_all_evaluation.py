@@ -105,7 +105,7 @@ def get_checkpoint_path(experiment_set, dataset_name, model_type, region):
             dataset_name = f"{_split[0]}_{_split[1]}"
 
         # HACK:
-        if dataset_name == "neurips-cell-seg":
+        if dataset_name.startswith("neurips-cell-seg"):
             dataset_name = "neurips_cellseg"
         checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/{dataset_name}_sam/best.pt"
 

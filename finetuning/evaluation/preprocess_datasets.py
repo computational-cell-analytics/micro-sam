@@ -780,17 +780,17 @@ def for_neurips_cellseg(save_dir, chosen_set):
         os.path.join(ROOT, "neurips-cell-seg"), split="val", val_fraction=0.1
     )
 
-    os.makedirs(os.path.join(save_dir, "val", "raw"), exist_ok=True)
-    os.makedirs(os.path.join(save_dir, "val", "labels"), exist_ok=True)
+    os.makedirs(os.path.join(save_dir, chosen_set, "val", "raw"), exist_ok=True)
+    os.makedirs(os.path.join(save_dir, chosen_set, "val", "labels"), exist_ok=True)
 
-    for image_path, label_path in tqdm(zip(val_label_paths, val_label_paths), total=len(val_image_paths)):
-        image_id = os.path.split(image_path)[-1]
-        dst_image_path = os.path.join(save_dir, "val", "raw", image_id)
+    for image_path, label_path in tqdm(zip(val_image_paths, val_label_paths), total=len(val_image_paths)):
+        image_id = Path(image_path).stem
+        dst_image_path = os.path.join(save_dir, chosen_set, "val", "raw", f"val_{image_id}.tif")
         # converting all images to one channel image - same as generalist training logic
         imageio.imwrite(dst_image_path, neurips_raw_trafo(imageio.imread(image_path)))
 
         label_id = os.path.split(label_path)[-1]
-        dst_label_path = os.path.join(save_dir, "val", "labels", label_id)
+        dst_label_path = os.path.join(save_dir, chosen_set, "val", "labels", f"val_{label_id}")
         shutil.copy(label_path, dst_label_path)
 
     # now, let's get the test slices
@@ -817,12 +817,12 @@ def for_neurips_cellseg(save_dir, chosen_set):
 
     for image_path, label_path in tqdm(zip(test_image_paths, test_label_paths), total=len(test_image_paths)):
         image_id = Path(image_path).stem
-        dst_image_path = os.path.join(save_dir, chosen_set, "test", "raw", f"{image_id}.tif")
+        dst_image_path = os.path.join(save_dir, chosen_set, "test", "raw", f"test_{image_id}.tif")
         # converting all images to one channel image - same as generalist training logic
         imageio.imwrite(dst_image_path, neurips_raw_trafo(imageio.imread(image_path)))
 
         label_id = os.path.split(label_path)[-1]
-        dst_label_path = os.path.join(save_dir, chosen_set, "test", "labels", label_id)
+        dst_label_path = os.path.join(save_dir, chosen_set, "test", "labels", f"test_{label_id}")
         shutil.copy(label_path, dst_label_path)
 
 
@@ -915,7 +915,9 @@ def preprocess_lm_datasets():
     for_lizard(os.path.join(ROOT, "lizard", "slices"))
     for_mouse_embryo(os.path.join(ROOT, "mouse-embryo", "slices"))
     for_ctc((os.path.join(ROOT, "ctc/hela_samples", "slices")))
-    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"))
+    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"), chosen_set="all")
+    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"), chosen_set="self")
+    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"), chosen_set="tuning")
     for_deepbacs(os.path.join(ROOT, "deepbacs", "slices"))
     for_dynamicnuclearnet(os.path.join(ROOT, "dynamicnuclearnet", "slices"))
     for_pannuke(os.path.join(ROOT, "pannuke", "slices"))
@@ -942,6 +944,10 @@ def preprocess_em_datasets():
 def main():
     # TODO: check results how rgb results are, else run for mono-channel once
     # for_pannuke(os.path.join(ROOT, "pannuke", "slices"))
+
+    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"), chosen_set="all")
+    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"), chosen_set="self")
+    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"), chosen_set="tuning")
 
     # let's ensure all the data is downloaded
     download_all_datasets(ROOT)

@@ -33,6 +33,7 @@ def run_one_setup(all_dataset_list, all_model_list, all_experiment_set_list, roi
                     continue
 
                 run_specific_experiment(dataset_name, model_type, experiment_set, roi, specific_script)
+                breakpoint()
 
 
 def for_all_lm(specific_script):
@@ -136,17 +137,21 @@ def for_variance_in_livecell(run_set):
 
 def for_additional_datasets(specific_script):
     # let's run for lm
+    # TODO: pannuke for one channel images
     run_one_setup(
-        all_dataset_list=[
-            "pannuke", "neurips-cell-seg/all", "neurips-cell-seg/tuning", "neurips-cell-seg/self", "dynamicnuclearnet"
-        ],
+        all_dataset_list=["dynamicnuclearnet", "pannuke"],
         all_model_list=ALl_MODELS,
         all_experiment_set_list=["vanilla", "generalist"],
         roi="lm",
         specific_script=specific_script
     )
-
-    return
+    run_one_setup(
+        all_dataset_list=["neurips-cell-seg/all", "neurips-cell-seg/tuning", "neurips-cell-seg/self"],
+        all_model_list=ALl_MODELS,
+        all_experiment_set_list=["vanilla", "generalist", "specialist"],
+        roi="lm",
+        specific_script=specific_script
+    )
 
     # let's run for em organelles
     run_one_setup(
