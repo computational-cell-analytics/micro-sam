@@ -169,7 +169,7 @@ class AnnotatorTracking(_AnnotatorBase):
         # in order to update it when the tracking state changes.
         # NOTE: it would be more elegant to do this by emmitting and connecting events,
         # but I don't know how to create custom events.
-        state.tracking_widget = self._tracking_widget
+        state.widgets["tracking_widget"] = self._tracking_widget
 
         # Go to t=0.
         self._viewer.dims.current_step = (0, 0, 0) + tuple(sh // 2 for sh in self._shape[1:])
