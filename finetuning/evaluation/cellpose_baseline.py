@@ -13,9 +13,10 @@ EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/benchmarking/cellp
 
 LM_DATASETS = [
     # in-domain (LM)
-    "tissuenet", "deepbacs", "plantseg/root", "livecell", "neurips-cell-seg",
+    "tissuenet", "deepbacs", "plantseg/root", "livecell",
+    "neurips-cell-seg/all", "neurips-cell-seg/tuning", "neurips-cell-seg/self",
     # out-of-domain (LM)
-    "covid_if", "plantseg/ovules", "hpa", "lizard", "mouse-embryo", "ctc/hela_samples"
+    "covid_if", "plantseg/ovules", "hpa", "lizard", "mouse-embryo", "ctc/hela_samples", "dynamicnuclearnet", "pannuke"
 ]
 
 
@@ -93,7 +94,7 @@ def main(args):
         assert datasets in LM_DATASETS
 
     if args.model_type is None:
-        model_types = ["cyto", "cyto2", "nuclei", "livecell", "tissuenet"]
+        model_types = ["cyto", "cyto2", "cyto3", "nuclei", "livecell", "livecell_cp3", "tissuenet"]
     else:
         model_types = args.model_type
 
