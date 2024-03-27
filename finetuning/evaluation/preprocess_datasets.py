@@ -530,6 +530,7 @@ def for_asem_mito(save_dir, choice="mito"):
     for validation: 100 samples
     for testing: 900 samples
     """
+    save_dir = os.path.join(save_dir, choice)
     loader = datasets.get_asem_loader(
         os.path.join(ROOT, "asem"),
         patch_shape=(1, 768, 768),
@@ -546,6 +547,7 @@ def for_asem_mito(save_dir, choice="mito"):
     n_desired = 1000
 
     for i, (x, y) in enumerate(loader):
+        print(i)
         image = x.squeeze().numpy()
         labels = y.squeeze().numpy()
 
@@ -752,7 +754,7 @@ def for_ctc(save_dir):
     make_custom_splits(10, save_dir)
 
 
-def for_neurips_cellseg(save_dir, use_tuning_set=False):
+def for_neurips_cellseg(save_dir, chosen_set):
     """
     we infer on the `TuningSet` - the data for open-evaluation on grand-challenge
 
@@ -792,28 +794,35 @@ def for_neurips_cellseg(save_dir, use_tuning_set=False):
         shutil.copy(label_path, dst_label_path)
 
     # now, let's get the test slices
-    test_image_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "TestForSam", "images", "*")))
-    test_label_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "TestForSam", "labels", "*")))
+    self_test_image_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "TestForSam", "images", "*")))
+    self_test_label_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "TestForSam", "labels", "*")))
 
-    if use_tuning_set:
-        test_image_paths.extend(
-            sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "new", "Tuning", "images", "*")))
-        )
-        test_label_paths.extend(
-            sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "new", "Tuning", "labels", "*")))
-        )
+    tuning_image_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "new", "Tuning", "images", "*")))
+    tuning_label_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "new", "Tuning", "labels", "*")))
 
-    os.makedirs(os.path.join(save_dir, "test", "raw"), exist_ok=True)
-    os.makedirs(os.path.join(save_dir, "test", "labels"), exist_ok=True)
+    if chosen_set == "all":
+        test_image_paths = [*self_test_image_paths, *tuning_image_paths]
+        test_label_paths = [*self_test_label_paths, *tuning_label_paths]
+    elif chosen_set == "self":
+        test_image_paths = self_test_image_paths
+        test_label_paths = self_test_label_paths
+    elif chosen_set == "tuning":
+        test_image_paths = tuning_image_paths
+        test_label_paths = tuning_label_paths
+    else:
+        raise ValueError("Choose from 'all' / 'self' / 'tuning'.")
+
+    os.makedirs(os.path.join(save_dir, chosen_set, "test", "raw"), exist_ok=True)
+    os.makedirs(os.path.join(save_dir, chosen_set, "test", "labels"), exist_ok=True)
 
     for image_path, label_path in tqdm(zip(test_image_paths, test_label_paths), total=len(test_image_paths)):
         image_id = Path(image_path).stem
-        dst_image_path = os.path.join(save_dir, "test", "raw", f"{image_id}.tif")
+        dst_image_path = os.path.join(save_dir, chosen_set, "test", "raw", f"{image_id}.tif")
         # converting all images to one channel image - same as generalist training logic
         imageio.imwrite(dst_image_path, neurips_raw_trafo(imageio.imread(image_path)))
 
         label_id = os.path.split(label_path)[-1]
-        dst_label_path = os.path.join(save_dir, "test", "labels", label_id)
+        dst_label_path = os.path.join(save_dir, chosen_set, "test", "labels", label_id)
         shutil.copy(label_path, dst_label_path)
 
 
@@ -880,8 +889,9 @@ def for_pannuke(save_dir):
 
             raw = raw.transpose(1, 2, 3, 0)  # transpose it to B * H * W * C (to use rgb images in SAM)
 
-            def _save_per_split(raw_here, labels_here, split):
+            def _save_per_split(raw_here, labels_here, split, offset=0):
                 for i, (s_raw, s_labels) in enumerate(zip(raw_here, labels_here)):
+                    i += offset
                     fname = f"{fold_name}_{i:04}.tif"
                     image_path = os.path.join(save_dir, split, "raw", fname)
                     labels_path = os.path.join(save_dir, split, "labels", fname)
@@ -894,7 +904,7 @@ def for_pannuke(save_dir):
                         imageio.imwrite(labels_path, s_labels, compression="zlib")
 
             _save_per_split(raw[:50], labels[:50], "val")  # choose first 50 samples per fold
-            _save_per_split(raw[50: 500], labels[50: 500], "test")  # choose next 450 samples per fold
+            _save_per_split(raw[50: 500], labels[50: 500], "test", offset=50)  # choose next 450 samples per fold
 
 
 def preprocess_lm_datasets():
@@ -930,6 +940,9 @@ def preprocess_em_datasets():
 
 
 def main():
+    # TODO: check results how rgb results are, else run for mono-channel once
+    # for_pannuke(os.path.join(ROOT, "pannuke", "slices"))
+
     # let's ensure all the data is downloaded
     download_all_datasets(ROOT)
 

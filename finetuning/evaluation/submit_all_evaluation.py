@@ -139,7 +139,7 @@ def submit_slurm(args):
 
     if args.experiment_path is None:
         modality = region if region == "lm" else "em"
-        experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/v2/"
+        experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/v3/"
         experiment_folder += f"{experiment_set}/{modality}/{dataset_name}/{model_type}/"
     else:
         experiment_folder = args.experiment_path

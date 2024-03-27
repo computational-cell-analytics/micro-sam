@@ -134,6 +134,30 @@ def for_variance_in_livecell(run_set):
             _run_custom_livecell(model_type, experiment_set)
 
 
+def for_additional_datasets(specific_script):
+    # let's run for lm
+    run_one_setup(
+        all_dataset_list=[
+            "pannuke", "neurips-cell-seg/all", "neurips-cell-seg/tuning", "neurips-cell-seg/self", "dynamicnuclearnet"
+        ],
+        all_model_list=ALl_MODELS,
+        all_experiment_set_list=["vanilla", "generalist"],
+        roi="lm",
+        specific_script=specific_script
+    )
+
+    return
+
+    # let's run for em organelles
+    run_one_setup(
+        all_dataset_list=["mitolab/salivary_gland", "mitolab/tem", "vnc", "asem/mito", "uro_cell"],
+        all_model_list=ALl_MODELS,
+        all_experiment_set_list=["vanilla", "generalist"],
+        roi="organelles",
+        specific_script=specific_script
+    )
+
+
 def main(args):
     # for_all_lm(specific_script=args.specific_script)
     # for_all_em(specific_script=args.specific_script)
@@ -141,11 +165,13 @@ def main(args):
 
     # for_custom_livecell(specific_script="iterative_prompting")
 
-    for_variance_in_livecell("run_1")
-    for_variance_in_livecell("run_2")
-    for_variance_in_livecell("run_3")
-    for_variance_in_livecell("run_4")
-    for_variance_in_livecell("run_5")
+    # for_variance_in_livecell("run_1")
+    # for_variance_in_livecell("run_2")
+    # for_variance_in_livecell("run_3")
+    # for_variance_in_livecell("run_4")
+    # for_variance_in_livecell("run_5")
+
+    for_additional_datasets(specific_script=args.specific_script)
 
 
 if __name__ == "__main__":
