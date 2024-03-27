@@ -105,7 +105,7 @@ def get_checkpoint_path(experiment_set, dataset_name, model_type, region):
             dataset_name = f"{_split[0]}_{_split[1]}"
 
         # HACK:
-        if dataset_name == "neurips-cell-seg":
+        if dataset_name.startswith("neurips-cell-seg"):
             dataset_name = "neurips_cellseg"
         checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/{dataset_name}_sam/best.pt"
 
@@ -139,7 +139,7 @@ def submit_slurm(args):
 
     if args.experiment_path is None:
         modality = region if region == "lm" else "em"
-        experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/v2/"
+        experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/v3/"
         experiment_folder += f"{experiment_set}/{modality}/{dataset_name}/{model_type}/"
     else:
         experiment_folder = args.experiment_path

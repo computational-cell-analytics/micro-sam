@@ -1,20 +1,22 @@
 import os
 import shutil
-import numpy as np
 from glob import glob
 from tqdm import tqdm
 from pathlib import Path
 
 import h5py
 import z5py
+import numpy as np
 import imageio.v3 as imageio
-
 from skimage.measure import label
 
 from elf.wrapper import RoiWrapper
 
 from torch_em.data import datasets
 from torch_em.transform.raw import normalize, normalize_percentile
+from torch_em.data import MinForegroundSampler
+
+from micro_sam.training import identity
 
 from util import download_all_datasets, ROOT
 
@@ -482,7 +484,7 @@ def for_isbi(save_dir):
 def for_axondeepseg(save_dir):
     """
     (we use the tem modality)
-    for validation: first 10 slices
+    for validation: first 15 slices
     for testing: rest all
     """
     vol_paths = sorted(glob(os.path.join(ROOT, "axondeepseg", "tem", "*.h5")))
@@ -501,6 +503,68 @@ def for_axondeepseg(save_dir):
         )
 
     make_custom_splits(15, save_dir)
+
+
+def for_vnc(save_dir):
+    """
+    for validation: first 5 slices
+    for testing: rest
+    """
+    vol_path = os.path.join(ROOT, "vnc", "vnc_train.h5")
+
+    from_h5_to_tif(
+        h5_vol_path=vol_path,
+        raw_key="raw",
+        raw_dir=os.path.join(save_dir, "raw"),
+        labels_key="labels/mitochondria",
+        labels_dir=os.path.join(save_dir, "labels"),
+        slice_prefix_name="vnc_train",
+    )
+
+    make_custom_splits(5, save_dir)
+
+
+def for_asem_mito(save_dir, choice="mito"):
+    """
+    for simplicity, I will use the dataloader to get the samples.
+    for validation: 100 samples
+    for testing: 900 samples
+    """
+    save_dir = os.path.join(save_dir, choice)
+    loader = datasets.get_asem_loader(
+        os.path.join(ROOT, "asem"),
+        patch_shape=(1, 768, 768),
+        batch_size=1,
+        ndim=2,
+        organelles=choice,
+        volume_ids="cell_2",
+        sampler=MinForegroundSampler(min_fraction=0.01),
+        raw_transform=identity,
+        num_workers=16,
+        shuffle=True
+    )
+
+    n_desired = 1000
+
+    for i, (x, y) in enumerate(loader):
+        print(i)
+        image = x.squeeze().numpy()
+        labels = y.squeeze().numpy()
+
+        image_path = os.path.join(save_dir, "raw", f"asem_mito_{i:05}.tif")
+        label_path = os.path.join(save_dir, "labels", f"asem_mito_{i:05}.tif")
+
+        os.makedirs(os.path.split(image_path)[0], exist_ok=True)
+        os.makedirs(os.path.split(label_path)[0], exist_ok=True)
+
+        imageio.imwrite(image_path, image, compression="zlib")
+        imageio.imwrite(label_path, labels, compression="zlib")
+
+        if i > n_desired:
+            # it's not needed to run the loader further, hence ciao
+            break
+
+    make_custom_splits(100, save_dir)
 
 
 #
@@ -664,8 +728,6 @@ def for_ctc(save_dir):
     We only infer on DIC-HeLa for now.
     for validation: first 10 slices from `train`
     for testing: rest slices from `train`
-
-    TODO: add all datasets later for inference, ideally get dataloaders in torch-em for all of them.
     """
     all_hela_image_paths = sorted(
         glob(os.path.join(ROOT, "ctc", "hela_samples", "DIC-C2DH-HeLa.zip.unzip", "DIC-C2DH-HeLa", "01", "*"))
@@ -692,7 +754,7 @@ def for_ctc(save_dir):
     make_custom_splits(10, save_dir)
 
 
-def for_neurips_cellseg(save_dir, use_tuning_set=False):
+def for_neurips_cellseg(save_dir, chosen_set):
     """
     we infer on the `TuningSet` - the data for open-evaluation on grand-challenge
 
@@ -718,42 +780,49 @@ def for_neurips_cellseg(save_dir, use_tuning_set=False):
         os.path.join(ROOT, "neurips-cell-seg"), split="val", val_fraction=0.1
     )
 
-    os.makedirs(os.path.join(save_dir, "val", "raw"), exist_ok=True)
-    os.makedirs(os.path.join(save_dir, "val", "labels"), exist_ok=True)
+    os.makedirs(os.path.join(save_dir, chosen_set, "val", "raw"), exist_ok=True)
+    os.makedirs(os.path.join(save_dir, chosen_set, "val", "labels"), exist_ok=True)
 
-    for image_path, label_path in tqdm(zip(val_label_paths, val_label_paths), total=len(val_image_paths)):
-        image_id = os.path.split(image_path)[-1]
-        dst_image_path = os.path.join(save_dir, "val", "raw", image_id)
+    for image_path, label_path in tqdm(zip(val_image_paths, val_label_paths), total=len(val_image_paths)):
+        image_id = Path(image_path).stem
+        dst_image_path = os.path.join(save_dir, chosen_set, "val", "raw", f"val_{image_id}.tif")
         # converting all images to one channel image - same as generalist training logic
         imageio.imwrite(dst_image_path, neurips_raw_trafo(imageio.imread(image_path)))
 
         label_id = os.path.split(label_path)[-1]
-        dst_label_path = os.path.join(save_dir, "val", "labels", label_id)
+        dst_label_path = os.path.join(save_dir, chosen_set, "val", "labels", f"val_{label_id}")
         shutil.copy(label_path, dst_label_path)
 
     # now, let's get the test slices
-    test_image_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "TestForSam", "images", "*")))
-    test_label_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "TestForSam", "labels", "*")))
+    self_test_image_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "TestForSam", "images", "*")))
+    self_test_label_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "TestForSam", "labels", "*")))
 
-    if use_tuning_set:
-        test_image_paths.extend(
-            sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "new", "Tuning", "images", "*")))
-        )
-        test_label_paths.extend(
-            sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "new", "Tuning", "labels", "*")))
-        )
+    tuning_image_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "new", "Tuning", "images", "*")))
+    tuning_label_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "new", "Tuning", "labels", "*")))
 
-    os.makedirs(os.path.join(save_dir, "test", "raw"), exist_ok=True)
-    os.makedirs(os.path.join(save_dir, "test", "labels"), exist_ok=True)
+    if chosen_set == "all":
+        test_image_paths = [*self_test_image_paths, *tuning_image_paths]
+        test_label_paths = [*self_test_label_paths, *tuning_label_paths]
+    elif chosen_set == "self":
+        test_image_paths = self_test_image_paths
+        test_label_paths = self_test_label_paths
+    elif chosen_set == "tuning":
+        test_image_paths = tuning_image_paths
+        test_label_paths = tuning_label_paths
+    else:
+        raise ValueError("Choose from 'all' / 'self' / 'tuning'.")
+
+    os.makedirs(os.path.join(save_dir, chosen_set, "test", "raw"), exist_ok=True)
+    os.makedirs(os.path.join(save_dir, chosen_set, "test", "labels"), exist_ok=True)
 
     for image_path, label_path in tqdm(zip(test_image_paths, test_label_paths), total=len(test_image_paths)):
         image_id = Path(image_path).stem
-        dst_image_path = os.path.join(save_dir, "test", "raw", f"{image_id}.tif")
+        dst_image_path = os.path.join(save_dir, chosen_set, "test", "raw", f"test_{image_id}.tif")
         # converting all images to one channel image - same as generalist training logic
         imageio.imwrite(dst_image_path, neurips_raw_trafo(imageio.imread(image_path)))
 
         label_id = os.path.split(label_path)[-1]
-        dst_label_path = os.path.join(save_dir, "test", "labels", label_id)
+        dst_label_path = os.path.join(save_dir, chosen_set, "test", "labels", f"test_{label_id}")
         shutil.copy(label_path, dst_label_path)
 
 
@@ -777,6 +846,67 @@ def for_deepbacs(save_dir):
             shutil.copy(src_label_path, dst_label_path)
 
 
+def for_dynamicnuclearnet(save_dir):
+    """
+    for validation: take first 100 images from the validation set
+    for testing: take all images from the test set
+    """
+    all_val_paths = sorted(glob(os.path.join(ROOT, "dynamicnuclearnet", "val", "*.zarr")))
+    all_test_paths = sorted(glob(os.path.join(ROOT, "dynamicnuclearnet", "test", "*.zarr")))
+
+    def save_slices_per_split(all_vol_paths, split):
+        for vol_path in all_vol_paths:
+            vol_id = Path(vol_path).stem
+
+            from_h5_to_tif(
+                h5_vol_path=vol_path,
+                raw_key="raw",
+                raw_dir=os.path.join(save_dir, split, "raw"),
+                labels_key="labels",
+                labels_dir=os.path.join(save_dir, split, "labels"),
+                slice_prefix_name=f"dynamicnuclearnet_{split}_{vol_id}",
+                interface=z5py
+            )
+
+    save_slices_per_split(all_val_paths[:100], "val")
+    save_slices_per_split(all_test_paths, "test")
+
+
+def for_pannuke(save_dir):
+    """
+    take 500 samples per fold (total - 1500)
+    for validation: first 50 images per fold
+    for testing: rest all
+    """
+    all_vol_paths = sorted(glob(os.path.join(ROOT, "pannuke", "*.h5")))
+
+    for vol_path in tqdm(all_vol_paths, desc="Processing the pannuke folds"):
+        fold_name = Path(vol_path).stem
+
+        with h5py.File(vol_path, "r") as f:
+            raw = f["images"][:]
+            labels = f["labels/instances"][:]
+
+            raw = raw.transpose(1, 2, 3, 0)  # transpose it to B * H * W * C (to use rgb images in SAM)
+
+            def _save_per_split(raw_here, labels_here, split, offset=0):
+                for i, (s_raw, s_labels) in enumerate(zip(raw_here, labels_here)):
+                    i += offset
+                    fname = f"{fold_name}_{i:04}.tif"
+                    image_path = os.path.join(save_dir, split, "raw", fname)
+                    labels_path = os.path.join(save_dir, split, "labels", fname)
+
+                    os.makedirs(os.path.split(image_path)[0], exist_ok=True)
+                    os.makedirs(os.path.split(labels_path)[0], exist_ok=True)
+
+                    if has_foreground(s_labels):
+                        imageio.imwrite(image_path, s_raw, compression="zlib")
+                        imageio.imwrite(labels_path, s_labels, compression="zlib")
+
+            _save_per_split(raw[:50], labels[:50], "val")  # choose first 50 samples per fold
+            _save_per_split(raw[50: 500], labels[50: 500], "test", offset=50)  # choose next 450 samples per fold
+
+
 def preprocess_lm_datasets():
     for_covid_if(os.path.join(ROOT, "covid_if", "slices"))
     for_tissuenet(os.path.join(ROOT, "tissuenet", "slices"))
@@ -785,8 +915,12 @@ def preprocess_lm_datasets():
     for_lizard(os.path.join(ROOT, "lizard", "slices"))
     for_mouse_embryo(os.path.join(ROOT, "mouse-embryo", "slices"))
     for_ctc((os.path.join(ROOT, "ctc/hela_samples", "slices")))
-    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"))
+    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"), chosen_set="all")
+    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"), chosen_set="self")
+    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"), chosen_set="tuning")
     for_deepbacs(os.path.join(ROOT, "deepbacs", "slices"))
+    for_dynamicnuclearnet(os.path.join(ROOT, "dynamicnuclearnet", "slices"))
+    for_pannuke(os.path.join(ROOT, "pannuke", "slices"))
 
 
 def preprocess_em_datasets():
@@ -803,15 +937,24 @@ def preprocess_em_datasets():
     for_isbi(os.path.join(ROOT, "isbi", "slices"))
     for_axondeepseg(os.path.join(ROOT, "axondeepseg", "slices"))
     for_cremi(os.path.join(ROOT, "cremi", "slices"))
+    for_vnc(os.path.join(ROOT, "vnc", "slices"))
+    for_asem_mito(os.path.join(ROOT, "asem", "slices"), choice="mito")
 
 
 def main():
+    # TODO: check results how rgb results are, else run for mono-channel once
+    # for_pannuke(os.path.join(ROOT, "pannuke", "slices"))
+
+    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"), chosen_set="all")
+    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"), chosen_set="self")
+    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"), chosen_set="tuning")
+
     # let's ensure all the data is downloaded
     download_all_datasets(ROOT)
 
     # now let's save the slices as tif
-    preprocess_lm_datasets()
-    preprocess_em_datasets()
+    # preprocess_lm_datasets()
+    # preprocess_em_datasets()
 
 
 if __name__ == "__main__":

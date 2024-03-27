@@ -6,17 +6,52 @@ from glob import glob
 import matplotlib.pyplot as plt
 
 
-EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments"
+EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/"
 
 # adding a fixed color palette to each experiments, for consistency in plotting the legends
-PALETTE = {"ais": "#045275", "amg": "#089099", "point": "#7CCBA2", "i_p": "#FCDE9C", "box": "#F0746E", "i_b": "#7C1D6F"}
+PALETTE = {
+    "ais": "#045275",
+    "amg": "#089099",
+    "point": "#7CCBA2",
+    r"i$_{p}$": "#FCDE9C",
+    "box": "#F0746E",
+    r"i$_{b}$": "#90477F"
+}
+
+TITLE = {
+    "livecell": "$\it{LIVECell}$",
+    "tissuenet": "$\it{TissueNet}$",
+    "deepbacs": "$\it{DeepBacs}$",
+    "covid_if": "Covid IF",
+    "plantseg/root": "$\it{PlantSeg}$ $\it{(Root)}$",
+    "hpa": "HPA",
+    "ctc": "Cell Tracking Challenge",
+    "plantseg/ovules": "PlantSeg (Ovules)",
+    "neurips-cell-seg": "$\it{NeurIPS}$ $\it{CellSeg}$",
+    "lizard": "Lizard",
+    "mouse-embryo": "Mouse Embryo",
+    "mitoem/rat": "MitoEM (Rat)",
+    "mitoem/human": "MitoEM (Human)",
+    "platynereis/nuclei": "Platynereis (Nuclei)",
+    "mitolab/c_elegans": "MitoLab (C. elegans)",
+    "mitolab/fly_brain": "MitoLab (Fly Brain)",
+    "mitolab/glycolytic_muscle": "MitoLab (Glycolytic Muscle)",
+    "mitolab/hela_cell": "MitoLab (HeLa Cell)",
+    "mitolab/lucchi_pp": "MitoLab (Lucchi++)",
+    "mitolab/salivary_gland": "MitoLab (Salivary Gland: Rat)",
+    "mitolab/tem": "MitoLab (TEM)",
+    "lucchi": "Lucchi",
+    "nuc_mm/mouse": "NucMM (Mouse)",
+    "nuc_mm/zebrafish": "NucMM (Zebrafish)",
+    "uro_cell": "UroCell",
+    "sponge_em": "Sponge EM"
+    }
 
 
 def gather_all_results(dataset, modality, model_type):
     res_list_per_dataset = []
-    for experiment_dir in glob(os.path.join(EXPERIMENT_ROOT, "new_models", "*", modality, dataset)):
+    for experiment_dir in glob(os.path.join(EXPERIMENT_ROOT, "new_models", "v2", "*", modality, dataset)):
         experiment_name = os.path.split(experiment_dir[:experiment_dir.find(f"/{modality}")])[-1]
-
         res_list_per_experiment = []
         for i, result_path in enumerate(sorted(glob(os.path.join(experiment_dir, model_type, "results", "*")))):
             # avoid using the grid-search parameters' files
@@ -42,7 +77,11 @@ def gather_all_results(dataset, modality, model_type):
                             index=[i]
                         ),
                         pd.DataFrame(
-                            {"name": experiment_name, "type": f"i_{prompt_name[0]}", "results": res.iloc[-1]["msa"]},
+                            {
+                                "name": experiment_name,
+                                "type": r"i$_{p}$" if prompt_name[0] == "p" else r"i$_{b}$",
+                                "results": res.iloc[-1]["msa"]
+                            },
                             index=[i]
                         )
                     ], ignore_index=True
@@ -59,18 +98,25 @@ def get_benchmark_results(dataset_name, benchmark_name, benchmark_choice):
     filename = f"{benchmark_name}-{benchmark_choice}.csv"
     if benchmark_name == "cellpose":
         filename = f"{benchmark_name}-{benchmark_choice}.csv"
-    else:
-        filename = f"{benchmark_name}.csv"
+        if dataset_name == "plantseg_root":
+            _splits = dataset_name.split("_")
+            dataset_name = f"{_splits[0]}/{_splits[1]}"
+        res_path = os.path.join(EXPERIMENT_ROOT, "benchmarking", benchmark_name, dataset_name, "results", filename)
 
-    if dataset_name == "plantseg_root":
-        _splits = dataset_name.split("_")
-        dataset_name = f"{_splits[0]}/{_splits[1]}"
+    elif benchmark_name == "mitonet":
+        dname_split = dataset_name.split("/")
+        if len(dname_split) > 1:
+            _name = f"{dname_split[0]}_{dname_split[1]}"
+        else:
+            _name = dataset_name
+        filename = f"{benchmark_name}_{_name}.csv"
+        res_path = os.path.join(EXPERIMENT_ROOT, "benchmarking", benchmark_name, filename)
 
-    res_path = os.path.join(
-        EXPERIMENT_ROOT, "benchmarking", benchmark_name, dataset_name, "results", filename
-    )
-    res = pd.read_csv(res_path)
-    return res["msa"][0]
+    try:
+        res = pd.read_csv(res_path)
+        return res["msa"][0]
+    except FileNotFoundError:
+        return None
 
 
 def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice=None):
@@ -86,32 +132,17 @@ def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice=None):
 
     ax.set(xlabel=None, ylabel=None)
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
-    ax.title.set_text(dataset_name)
+    ax.title.set_color("#212427")
+    ax.set_title(TITLE[dataset_name], fontweight="bold", fontsize=13)
 
-    if dataset_name != "ctc" and modality != "em":  # HACK: as we don't have mitonet results now
+    if dataset_name != "ctc":
         benchmark_name = "cellpose" if modality == "lm" else "mitonet"
         benchmark_res = get_benchmark_results(dataset_name, benchmark_name, benchmark_choice)
-        ax.axhline(y=benchmark_res, label=benchmark_name, color="#E31A1C")
+        if benchmark_res is not None:
+            ax.axhline(y=benchmark_res, label=benchmark_name, color="#DC3977")
 
 
-def plot_evaluation_for_lm_datasets(model_type):
-    modality = "lm"
-    fig, ax = plt.subplots(3, 3, figsize=(20, 15))
-
-    # choices:
-    # "livecell", "tissuenet", "deepbacs", "covid_if", "plantseg_root", "hpa",
-    # "ctc", "plantseg_ovules", "neurips-cell-seg", "lizard", "mouse-embryo"
-
-    get_barplots(ax[0, 0], "livecell", modality, model_type, benchmark_choice="livecell")
-    get_barplots(ax[0, 1], "deepbacs", modality, model_type, benchmark_choice="cyto")
-    get_barplots(ax[0, 2], "tissuenet", modality, model_type, benchmark_choice="cyto")
-    get_barplots(ax[1, 0], "plantseg_root", modality, model_type, benchmark_choice="cyto")
-    get_barplots(ax[1, 1], "covid_if", modality, model_type, benchmark_choice="cyto")
-    get_barplots(ax[1, 2], "neurips-cell-seg", modality, model_type, benchmark_choice="cyto")
-    get_barplots(ax[2, 0], "ctc", modality, model_type, benchmark_choice="cyto")
-    get_barplots(ax[2, 1], "lizard", modality, model_type, benchmark_choice="cyto")
-    get_barplots(ax[2, 2], "hpa", modality, model_type, benchmark_choice="cyto")
-
+def _get_plot_postprocessing(fig, experiment_title, save_path):
     # here, we remove the legends for each subplot, and get one common legend for all
     all_lines, all_labels = [], []
     for ax in fig.axes:
@@ -124,15 +155,41 @@ def plot_evaluation_for_lm_datasets(model_type):
 
     fig.legend(all_lines, all_labels, loc="upper left")
 
-    fig.text(0.5, 0.01, 'Models', ha='center', fontdict={"size": 22})
-    fig.text(0.01, 0.5, 'Segmentation Quality', va='center', rotation='vertical', fontdict={"size": 22})
+    plt.text(
+        x=0.59, y=3.6, s=" X-Axis: Models \n Y-Axis: Segmentation Quality ", ha='left',
+        transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#D6D6D6", "boxstyle": "round"}
+    )
 
     plt.show()
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.90, right=0.95, left=0.05, bottom=0.05)
-    fig.suptitle("Light Microscopy", fontsize=20)
-    plt.savefig(f"lm_{model_type}_evaluation.png", transparent=True)
+    plt.subplots_adjust(top=0.879, right=0.95, left=0.075, bottom=0.05)
+    fig.suptitle(experiment_title, fontsize=26, x=0.52, y=0.948)
+    plt.savefig(save_path)  # transparent=True
     plt.close()
+    print(f"Plots saved at {save_path}")
+
+
+def plot_evaluation_for_lm_datasets(model_type):
+    modality = "lm"
+    fig, ax = plt.subplots(3, 3, figsize=(20, 15))
+
+    # choices:
+    # "livecell", "tissuenet", "deepbacs", "covid_if", "plantseg/root", "hpa",
+    # "plantseg/ovules", "neurips-cell-seg", "lizard", "mouse-embryo"
+    # TODO: dsb, dynamicnuclearnet, pannuke
+
+    get_barplots(ax[0, 0], "livecell", modality, model_type, benchmark_choice="livecell")
+    get_barplots(ax[0, 1], "deepbacs", modality, model_type, benchmark_choice="cyto")
+    get_barplots(ax[0, 2], "tissuenet", modality, model_type, benchmark_choice="cyto")
+    get_barplots(ax[1, 0], "plantseg/root", modality, model_type, benchmark_choice="cyto")
+    get_barplots(ax[1, 1], "neurips-cell-seg", modality, model_type, benchmark_choice="cyto")
+    get_barplots(ax[1, 2], "covid_if", modality, model_type, benchmark_choice="cyto")
+    get_barplots(ax[2, 0], "plantseg/ovules", modality, model_type, benchmark_choice="cyto")
+    get_barplots(ax[2, 1], "lizard", modality, model_type, benchmark_choice="cyto")
+    get_barplots(ax[2, 2], "hpa", modality, model_type, benchmark_choice="cyto")
+
+    _get_plot_postprocessing(
+        fig=fig, experiment_title="Light Microscopy", save_path=f"lm_{model_type}_evaluation.svg"
+    )
 
 
 def plot_evaluation_for_em_datasets(model_type):
@@ -153,37 +210,55 @@ def plot_evaluation_for_em_datasets(model_type):
     get_barplots(ax[0, 2], "platynereis/nuclei", modality, model_type)
     get_barplots(ax[1, 0], "lucchi", modality, model_type)
     get_barplots(ax[1, 1], "mitolab/fly_brain", modality, model_type)
-    get_barplots(ax[1, 2], "uro_cell", modality, model_type)
-    get_barplots(ax[2, 0], "nuc-mm/mouse", modality, model_type)
-    get_barplots(ax[2, 1], "sponge_em", modality, model_type)
-    get_barplots(ax[2, 2], "mitolab/c_elegans", modality, model_type)
+    get_barplots(ax[1, 2], "mitolab/c_elegans", modality, model_type)
+    get_barplots(ax[2, 0], "uro_cell", modality, model_type)
+    get_barplots(ax[2, 1], "nuc_mm/mouse", modality, model_type)
+    get_barplots(ax[2, 2], "sponge_em", modality, model_type)
 
-    # here, we remove the legends for each subplot, and get one common legend for all
-    all_lines, all_labels = [], []
-    for ax in fig.axes:
-        lines, labels = ax.get_legend_handles_labels()
-        for line, label in zip(lines, labels):
-            if label not in all_labels:
-                all_lines.append(line)
-                all_labels.append(label)
-        ax.get_legend().remove()
+    _get_plot_postprocessing(
+        fig=fig, experiment_title="Electron Microscopy", save_path=f"em_{model_type}_evaluation.svg"
+    )
 
-    fig.legend(all_lines, all_labels, loc="upper left")
 
-    fig.text(0.5, 0.01, 'Models', ha='center', fontdict={"size": 22})
-    fig.text(0.01, 0.5, 'Segmentation Quality', va='center', rotation='vertical', fontdict={"size": 22})
+def plot_evaluation_for_all_em_datasets(model_type):
+    modality = "em"
+    fig, ax = plt.subplots(4, 4, figsize=(20, 15))
 
-    plt.show()
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.90, right=0.95, left=0.05, bottom=0.05)
-    fig.suptitle("Electron Microscopy", fontsize=20)
-    plt.savefig(f"em_{model_type}_evaluation.png", transparent=True)
-    plt.close()
+    # choices:
+    # for mito-nuc
+    #    "mitoem/rat", "mitoem/human", "platynereis/nuclei", "mitolab/c_elegans", "mitolab/fly_brain",
+    #    "mitolab/glycolytic_muscle", "mitolab/hela_cell", "mitolab/lucchi_pp", "mitolab/salivary_gland",
+    #    "mitolab/tem", "lucchi", "nuc-mm/mouse", "nuc-mm/zebrafish", "uro_cell", "sponge_em",
+    # TODO: vnc, asem (mito)
+
+    get_barplots(ax[0, 0], "mitoem/rat", modality, model_type)
+    get_barplots(ax[0, 1], "mitoem/human", modality, model_type)
+    get_barplots(ax[0, 2], "platynereis/nuclei", modality, model_type)
+    get_barplots(ax[0, 3], "mitolab/c_elegans", modality, model_type)
+    get_barplots(ax[1, 0], "mitolab/fly_brain", modality, model_type)
+    get_barplots(ax[1, 1], "mitolab/glycolytic_muscle", modality, model_type)
+    get_barplots(ax[1, 2], "mitolab/hela_cell", modality, model_type)
+    get_barplots(ax[1, 3], "mitolab/salivary_gland", modality, model_type)
+    get_barplots(ax[2, 0], "mitolab/tem", modality, model_type)
+    get_barplots(ax[2, 1], "lucchi", modality, model_type)
+    get_barplots(ax[2, 2], "nuc_mm/mouse", modality, model_type)
+    get_barplots(ax[2, 3], "nuc_mm/zebrafish", modality, model_type)
+    get_barplots(ax[3, 0], "uro_cell", modality, model_type)
+    get_barplots(ax[3, 1], "sponge_em", modality, model_type)
+    get_barplots(ax[3, 2], "sponge_em", modality, model_type)
+    get_barplots(ax[3, 3], "sponge_em", modality, model_type)
+
+    _get_plot_postprocessing(
+        fig=fig, experiment_title="Electron Microscopy", save_path=f"em_{model_type}_all_evaluation.png"
+    )
 
 
 def main():
-    plot_evaluation_for_lm_datasets("vit_h")
-    plot_evaluation_for_em_datasets("vit_h")
+    # plot_evaluation_for_lm_datasets("vit_l")
+    plot_evaluation_for_em_datasets("vit_l")
+
+    # plot_evaluation_for_all_em_datasets("vit_h")
+    # TODO: plot for all lm datasets
 
 
 if __name__ == "__main__":
