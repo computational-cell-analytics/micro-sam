@@ -69,6 +69,45 @@ def _evaluate_mitonet_predictions(view=False):
     all_inputs_dir = [
         input_dir for input_dir in all_inputs_dir if input_dir != tem_dir
     ]
+
+    # let's do evaluation for the tem dataset
+    image_paths = sorted(glob(os.path.join(tem_dir, "raw", "*")))
+    gt_paths = sorted(glob(os.path.join(tem_dir, "labels", "*")))
+    seg_paths = sorted(glob(os.path.join(tem_dir, "segmentations", "*")))
+
+    assert len(image_paths) == len(gt_paths) == len(seg_paths)
+
+    msa_list, sa50_list, sa75_list = [], [], []
+    for image_path, gt_path, seg_path in zip(image_paths, gt_paths, seg_paths):
+        image = imageio.imread(image_path)
+        gt = imageio.imread(gt_path)
+        seg = imageio.imread(seg_path)
+
+        if view:
+            import napari
+            v = napari.Viewer()
+            v.add_image(image)
+            v.add_labels(gt, visible=False)
+            v.add_labels(seg)
+            napari.run()
+
+        msa, sa = mean_segmentation_accuracy(seg, gt, return_accuracies=True)
+        msa_list.append(msa)
+        sa50_list.append(sa[0])
+        sa75_list.append(sa[4])
+
+    res_dict = {
+        "msa": np.mean(msa_list),
+        "sa50": np.mean(sa50_list),
+        "sa75": np.mean(sa75_list)
+    }
+    res_df = pd.DataFrame.from_dict([res_dict])
+    res_df.to_csv("./mitonet_tem.csv")
+
+    return
+
+    # TODO: do this for asem-mito and vnc as well.
+    # let's do this for all other datasets
     for this_dir in all_inputs_dir:
         name = os.path.split(this_dir)[-1]
         raw_path = glob(os.path.join(this_dir, "*_raw.tif"))[0]
