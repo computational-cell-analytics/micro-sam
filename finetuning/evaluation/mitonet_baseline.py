@@ -18,13 +18,6 @@ def make_stack_from_inputs(dataset_name):
     print("Creating the volumes for:", dataset_name)
     test_image_paths, test_gt_paths = get_paths(dataset_name, "test")
 
-    print([imageio.imread(image_path).shape for image_path in test_image_paths])
-
-    image_stack = np.stack([imageio.imread(image_path) for image_path in test_image_paths])
-    gt_stack = np.stack([imageio.imread(gt_path) for gt_path in test_gt_paths])
-
-    assert image_stack.shape == gt_stack.shape
-
     dname_split = dataset_name.split("/")
     if len(dname_split) > 1:
         _save_fname = f"{dname_split[0]}_{dname_split[1]}"
@@ -41,6 +34,11 @@ def make_stack_from_inputs(dataset_name):
         return
     else:
         os.makedirs(_save_root, exist_ok=True)
+
+    image_stack = np.stack([imageio.imread(image_path) for image_path in test_image_paths])
+    gt_stack = np.stack([imageio.imread(gt_path) for gt_path in test_gt_paths])
+
+    assert image_stack.shape == gt_stack.shape
 
     imageio.imwrite(raw_volume_path, image_stack, compression="zlib")
     imageio.imwrite(labels_volume_path, gt_stack, compression="zlib")
@@ -59,6 +57,8 @@ def make_stacks(specific_dataset=None):
         make_stack_from_inputs("mitolab/hela_cell")
         make_stack_from_inputs("mitolab/lucchi_pp")
         make_stack_from_inputs("mitolab/salivary_gland")
+        make_stack_from_inputs("vnc")
+        make_stack_from_inputs("asem/mito")
     else:
         make_stack_from_inputs(specific_dataset)
 
@@ -146,8 +146,8 @@ def _evaluate_mitonet_predictions(view=False):
 
 
 def main():
-    # make_stacks()
-    _evaluate_mitonet_predictions()
+    make_stacks()
+    # _evaluate_mitonet_predictions()
 
 
 if __name__ == "__main__":
