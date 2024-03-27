@@ -16,6 +16,10 @@ from micro_sam.instance_segmentation import (
 
 
 ROOT = "/media/anwai/ANWAI/data/neurips-cell-seg/Tuning"
+# ROOT = "/scratch/projects/nim00007/sam/data/neurips-cell-seg/new/Tuning/"
+
+MODEL_TYPE = "vit_b"
+CHECKPOINT_PATH = "/home/anwai/models/micro-sam/vit_b/lm_generalist/best.pt"
 
 
 def get_model_for_ais(
@@ -43,8 +47,8 @@ def ais_with_tiling(image_path, gt_path, view=False):
     image = imageio.imread(image_path)
     gt = imageio.imread(gt_path)
 
-    model_type = "vit_b"
-    checkpoint_path = "/home/anwai/models/micro-sam/vit_b/lm_generalist/best.pt"
+    model_type = MODEL_TYPE
+    checkpoint_path = CHECKPOINT_PATH
 
     predictor, decoder, image_embeddings, do_tiling = get_model_for_ais(
         image=image, model_type=model_type, checkpoint_path=checkpoint_path,
