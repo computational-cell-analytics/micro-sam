@@ -43,7 +43,7 @@ def _initialize_parser(description, with_segmentation_result=True, with_instance
     parser.add_argument(
         "-i", "--input", required=True,
         help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
-        "or elf.io.open_file (e.g. hdf5, zarr, mrc) For the latter you also need to pass the 'key' parameter."
+        "or elf.io.open_file (e.g. hdf5, zarr, mrc). For the latter you also need to pass the 'key' parameter."
     )
     parser.add_argument(
         "-k", "--key",
@@ -54,8 +54,8 @@ def _initialize_parser(description, with_segmentation_result=True, with_instance
     parser.add_argument(
         "-e", "--embedding_path",
         help="The filepath for saving/loading the pre-computed image embeddings. "
-        "NOTE: It is recommended to pass this argument and store the embeddings, "
-        "otherwise they will be recomputed every time (which can take a long time)."
+        "It is recommended to pass this argument and store the embeddings if you want to open the annotator "
+        "multiple times for this image. Otherwise the embeddings will be recomputed every time."
     )
 
     if with_segmentation_result:

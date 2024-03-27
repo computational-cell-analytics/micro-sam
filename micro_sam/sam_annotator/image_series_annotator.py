@@ -1,5 +1,4 @@
 import os
-import warnings
 
 from glob import glob
 from pathlib import Path
@@ -308,9 +307,6 @@ def main():
     parser.add_argument("--prefer_decoder", action="store_false")
 
     args = parser.parse_args()
-
-    if args.embedding_path is None:
-        warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
 
     image_folder_annotator(
         args.input_folder, args.output_folder, args.pattern,

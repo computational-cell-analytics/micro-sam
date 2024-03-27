@@ -237,24 +237,50 @@ def main():
     """@private"""
     import argparse
 
+    available_models = list(util.get_model_names())
+    available_models = ", ".join(available_models)
+
     parser = argparse.ArgumentParser(description="Compute the embeddings for an image.")
-    parser.add_argument("-i", "--input_path", required=True)
-    parser.add_argument("-o", "--output_path", required=True)
-    parser.add_argument("-m", "--model_type", default=util._DEFAULT_MODEL)
-    parser.add_argument("-c", "--checkpoint_path", default=None)
-    parser.add_argument("-k", "--key")
     parser.add_argument(
-        "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
+        "-i", "--input_path", required=True,
+        help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
+        "or elf.io.open_file (e.g. hdf5, zarr, mrc). For the latter you also need to pass the 'key' parameter."
     )
     parser.add_argument(
-        "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
+        "-e", "--embedding_path", required=True, help="The path where the embeddings will be saved."
     )
-    parser.add_argument("-n", "--ndim", type=int)
-    parser.add_argument("-p", "--precompute_amg_state", action="store_true")
+    parser.add_argument(
+        "-k", "--key",
+        help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
+        "for a image series it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
+    )
+    parser.add_argument(
+        "-m", "--model_type", default=util._DEFAULT_MODEL,
+        help=f"The segment anything model that will be used, one of {available_models}."
+    )
+    parser.add_argument(
+        "-c", "--checkpoint", default=None,
+        help="Checkpoint from which the SAM model will be loaded loaded."
+    )
+    parser.add_argument(
+        "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction.", default=None
+    )
+    parser.add_argument(
+        "--halo", nargs="+", type=int, help="The halo for using tiled prediction.", default=None
+    )
+    parser.add_argument(
+        "-n", "--ndim", type=int, default=None,
+        help="The number of spatial dimensions in the data. "
+        "Please specify this if your data has a channel dimension."
+    )
+    parser.add_argument(
+        "-p", "--precompute_amg_state", action="store_true",
+        help="Whether to precompute the state for automatic instance segmentation."
+    )
 
     args = parser.parse_args()
     precompute_state(
-        args.input_path, args.output_path, args.model_type, args.checkpoint_path,
+        args.input_path, args.output_path, args.model_type, args.checkpoint,
         key=args.key, tile_shape=args.tile_shape, halo=args.halo, ndim=args.ndim,
         precompute_amg_state=args.precompute_amg_state,
     )
