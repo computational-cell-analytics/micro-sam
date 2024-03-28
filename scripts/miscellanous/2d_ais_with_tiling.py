@@ -1,6 +1,8 @@
 import os
 from glob import glob
+from tqdm import tqdm
 
+import z5py
 import numpy as np
 import imageio.v3 as imageio
 
@@ -15,8 +17,8 @@ from micro_sam.instance_segmentation import (
 )
 
 
-ROOT = "/media/anwai/ANWAI/data/neurips-cell-seg/Tuning"
-# ROOT = "/scratch/projects/nim00007/sam/data/neurips-cell-seg/new/Tuning/"
+NIPS_ROOT = "/media/anwai/ANWAI/data/neurips-cell-seg/Tuning"
+# NIPS_ROOT = "/scratch/projects/nim00007/sam/data/neurips-cell-seg/new/Tuning/"
 
 MODEL_TYPE = "vit_b"
 CHECKPOINT_PATH = "/home/anwai/models/micro-sam/vit_b/lm_generalist/best.pt"
@@ -43,9 +45,12 @@ def get_model_for_ais(
     return predictor, decoder, image_embeddings, do_tiling
 
 
-def ais_with_tiling(image_path, gt_path, view=False):
-    image = imageio.imread(image_path)
-    gt = imageio.imread(gt_path)
+def ais_with_tiling(image, gt, view=False):
+    if isinstance(image, str):
+        image = imageio.imread(image)
+
+    if isinstance(gt, str):
+        gt = imageio.imread(gt)
 
     model_type = MODEL_TYPE
     checkpoint_path = CHECKPOINT_PATH
@@ -73,7 +78,7 @@ def ais_with_tiling(image_path, gt_path, view=False):
     if view:
         import napari
         v = napari.Viewer()
-        v.add_image(image)
+        v.add_image(image if image.ndim == 2 else image.transpose(2, 0, 1))  # making channels first
         v.add_labels(prediction)
         v.add_labels(gt, visible=False)
         napari.run()
@@ -83,26 +88,43 @@ def ais_with_tiling(image_path, gt_path, view=False):
 
 
 def for_neurips_tuning_set(view=False):
-    image_paths = sorted(glob(os.path.join(ROOT, "images", "*")))
-    gt_paths = sorted(glob(os.path.join(ROOT, "labels", "*")))
+    image_paths = sorted(glob(os.path.join(NIPS_ROOT, "images", "*")))
+    gt_paths = sorted(glob(os.path.join(NIPS_ROOT, "labels", "*")))
 
     assert len(image_paths) == len(gt_paths)
 
     msa_list, sa50_list = [], []
-    for image_path, gt_path in zip(image_paths, gt_paths):
+    for image_path, gt_path in tqdm(zip(image_paths, gt_paths), total=len(image_paths)):
         msa, sa50 = ais_with_tiling(
-            image_path=image_path, gt_path=gt_path, view=view
+            image=image_path, gt=gt_path, view=view
         )
         msa_list.append(msa)
         sa50_list.append(sa50)
 
-    msa_score = np.mean(msa_list)
-    sa50_score = np.mean(sa50_list)
-    print(f"mSA: {msa_score}, SA50: {sa50_score}")
+    print(f"mSA: {np.mean(msa_list)}, SA50: {np.mean(sa50_list)}")
+
+
+def for_tissuenet_test_set(data_dir, view=False):
+    all_sample_paths = sorted(glob(os.path.join(data_dir, "*.zarr")))
+
+    msa_list, sa50_list = [], []
+    for sample_path in tqdm(all_sample_paths):
+        with z5py.File(sample_path, "r") as f:
+            raw = f["raw/rgb"][:]
+            labels = f["labels/cell"][:]
+
+            msa, sa50 = ais_with_tiling(
+                image=raw.transpose(1, 2, 0), gt=labels, view=view
+            )
+            msa_list.append(msa)
+            sa50_list.append(sa50)
+
+    print(f"mSA: {np.mean(msa_list)}, SA50: {np.mean(sa50_list)}")
 
 
 def main():
-    for_neurips_tuning_set(view=True)
+    # for_neurips_tuning_set(view=True)
+    for_tissuenet_test_set("/media/anwai/ANWAI/data/tissuenet/test/", view=False)
 
 
 if __name__ == "__main__":
