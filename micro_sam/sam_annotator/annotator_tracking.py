@@ -217,6 +217,7 @@ def annotator_tracking(
         The napari viewer, only returned if `return_viewer=True`.
     """
 
+    # TODO update this to match the new annotator design
     # Initialize the predictor state.
     state = AnnotatorState()
     state.initialize_predictor(
