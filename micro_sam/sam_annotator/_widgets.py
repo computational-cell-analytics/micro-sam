@@ -14,7 +14,17 @@ import numpy as np
 import zarr
 import z5py
 
-from magicgui import magic_factory, widgets
+from qtpy.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QComboBox,
+    QPushButton,
+)
+from superqt import QCollapsible
+from magicgui import magicgui, magic_factory, widgets
 from magicgui.widgets import ComboBox, Container
 from napari.qt.threading import thread_worker
 from napari.utils import progress
@@ -303,18 +313,19 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
     return tile_shape, halo
 
 
-# TODO add options for tiling, see https://github.com/computational-cell-analytics/micro-sam/issues/331
-@magic_factory(
-    pbar={"visible": False, "max": 0, "value": 0, "label": "working..."},
-    call_button="Compute image embeddings",
-    save_path={"mode": "d"},  # choose a directory
-    tile_shape_x={"min": 0, "max": 2048},
-    tile_shape_y={"min": 0, "max": 2048},
-    halo_x={"min": 0, "max": 2048},
-    halo_y={"min": 0, "max": 2048},
+# # TODO add options for tiling, see https://github.com/computational-cell-analytics/micro-sam/issues/331
+# @magic_factory(
+#     pbar={"visible": False, "max": 0, "value": 0, "label": "working..."},
+#     call_button="Compute image embeddings",
+#     save_path={"mode": "d"},  # choose a directory
+#     tile_shape_x={"min": 0, "max": 2048},
+#     tile_shape_y={"min": 0, "max": 2048},
+#     halo_x={"min": 0, "max": 2048},
+#     halo_y={"min": 0, "max": 2048},
 
-)
-def embedding(
+# )
+
+def get_image_embeddings(
     pbar: widgets.ProgressBar,
     image: "napari.layers.Image",
     model: Literal[tuple(util.models().urls.keys())] = util._DEFAULT_MODEL,
@@ -325,7 +336,7 @@ def embedding(
     tile_shape_y: int = None,
     halo_x: int = None,
     halo_y: int = None,
-) -> util.ImageEmbeddings:
+):
     """Widget to compute the embeddings for a napari image layer."""
     state = AnnotatorState()
     state.reset_state()
@@ -341,7 +352,7 @@ def embedding(
     # process tile_shape and halo to tuples or None
     tile_shape, halo = _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y)
 
-    @thread_worker(connect={"started": pbar.show, "finished": pbar.hide})
+    #@thread_worker(connect={"started": pbar.show, "finished": pbar.hide})
     def _compute_image_embedding(
         state, image_data, save_path, ndim=None,
         device="auto", model=util._DEFAULT_MODEL,
@@ -373,6 +384,97 @@ def embedding(
         state, image.data, save_path, ndim=ndim, device=device, model=model,
         custom_weights=custom_weights, tile_shape=tile_shape, halo=halo
     )
+
+
+class CollapsibleWidget(QWidget):
+    def __init__(self, title, parent=None):
+        super().__init__(parent)
+        self.setLayout(QVBoxLayout())
+
+        self._collapse = QCollapsible(title, self)
+
+    def add_widget(self, widget):
+        """
+        Adds a widget to the inner layout of the collapsible section.
+
+        Args:
+            widget (QWidget): The widget to be added.
+        """
+        widget = magicgui(widget)
+        self._collapse.addWidget(widget.native)
+        self.layout().addWidget(self._collapse)
+
+
+class EmbeddingWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.layout = QVBoxLayout(self)
+        self.setLayout(self.layout)
+
+        main_label = QLabel("Embeddings")
+        self.layout.addWidget(main_label)
+
+        # Create a nested layout for the sections
+        sections_layout = QVBoxLayout()
+        self.layout.addLayout(sections_layout)
+
+        # Section 1 (Image and Model)
+        section1_layout = QHBoxLayout()
+        section1_layout.addLayout(self._create_image_section())
+        section1_layout.addLayout(self._create_model_section())
+        sections_layout.addLayout(section1_layout)
+
+        # Section 2 (Advanced, Collapsible)
+        self.advanced_section = QHBoxLayout()
+        self.advanced_section.addLayout(self._create_advanced_section())
+        sections_layout.addLayout(self.advanced_section)
+
+    def _create_image_section(self):
+        image_section = QVBoxLayout()
+        image_label = QLabel("Image:")
+        image_section.addWidget(image_label)
+
+        # Replace with a QLineEdit
+        image_path_input = QLineEdit()
+        image_path_input.setReadOnly(True)  # User cannot directly edit the path
+        image_section.addWidget(image_path_input)
+
+        return image_section
+
+    def _create_model_section(self):
+        model_section = QVBoxLayout()
+        model_label = QLabel("Model:")
+        model_section.addWidget(model_label)
+
+        # Replace with a QComboBox to display model options
+        model_options = ["Model A", "Model B"]  # Replace with your options
+        model_dropdown = QComboBox()
+        model_dropdown.addItems(model_options)
+        model_section.addWidget(model_dropdown)
+
+        # Store the selected model (replace with your logic)
+        self.selected_model = None
+
+        def handle_model_selection(index):
+            self.selected_model = model_options[index]
+
+        model_dropdown.currentIndexChanged.connect(handle_model_selection)
+
+        return model_section
+
+    def _create_advanced_section(self):
+
+        advanced_layout = QVBoxLayout()
+        collapsible_section = CollapsibleWidget("Advanced")
+        collapsible_section.add_widget(get_image_embeddings)
+        advanced_layout.addWidget(collapsible_section)
+
+        return advanced_layout
+
+
+def embedding():
+    embedding_widget = EmbeddingWidget()
+    return embedding_widget
 
 
 @magic_factory(

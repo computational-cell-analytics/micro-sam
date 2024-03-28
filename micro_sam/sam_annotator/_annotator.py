@@ -51,7 +51,7 @@ class _AnnotatorBase(QtWidgets.QWidget):
         self._embedding_widget = widgets.embedding()
         # Connect the call button of the embedding widget with a function
         # that updates all relevant layers when the image changes.
-        self._embedding_widget.call_button.changed.connect(self._update_image)
+        #self._embedding_widget.call_button.changed.connect(self._update_image)
 
         self._prompt_widget = widgets.create_prompt_menu(self._point_prompt_layer, self._point_labels)
         self._segment_widget = segment_widget()
