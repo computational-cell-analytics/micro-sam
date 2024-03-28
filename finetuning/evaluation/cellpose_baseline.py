@@ -1,10 +1,13 @@
 import os
-import pandas as pd
 from tqdm import tqdm
 from glob import glob
 
 import z5py
+import numpy as np
+import pandas as pd
 import imageio.v3 as imageio
+
+from elf.evaluation import mean_segmentation_accuracy
 
 from micro_sam.evaluation.evaluation import run_evaluation
 
@@ -88,25 +91,39 @@ def run_cellpose_baseline(datasets, model_types):
             evaluate_dataset(prediction_folder, dataset, model_type)
 
 
-def test_cellpose(model_type):
-    data_dir = "/scratch/projects/nim00007/sam/data/tissuenet/test"
+def test_cellpose(model_type, view=False):
+    # data_dir = "/scratch/projects/nim00007/sam/data/tissuenet/test"
+    data_dir = "/media/anwai/ANWAI/data/tissuenet/test"
     all_tissunet_paths = sorted(glob(os.path.join(data_dir, "*.zarr")))
 
     model = load_cellpose_model(model_type)
 
-    for chosen_vol_path in all_tissunet_paths:
+    msa13_list, msa23_list = [], []
+    for chosen_vol_path in tqdm(all_tissunet_paths):
         with z5py.File(chosen_vol_path, "a", use_zarr_format=True) as f:
             raw = f["raw/rgb"][:]
             labels = f["labels/cell"][:]
+            prediction13 = model.eval(raw, diameter=None, flow_threshold=None, channels=[1, 3])[0]
+            prediction23 = model.eval(raw, diameter=None, flow_threshold=None, channels=[2, 3])[0]  # NOTE: BETTER
 
-            prediction = model.eval(raw, diameter=None, flow_threshold=None, channels=[2, 3])[0]
+            msa13_list.append(mean_segmentation_accuracy(prediction13, labels))
+            msa23_list.append(mean_segmentation_accuracy(prediction23, labels))
 
-            import napari
-            v = napari.Viewer()
-            v.add_image(raw)
-            v.add_labels(labels, visible=False),
-            v.add_labels(prediction)
-            napari.run()
+            if view:
+                import napari
+                v = napari.Viewer()
+                v.add_image(raw)
+                v.add_labels(labels)
+                v.add_labels(prediction13)
+                v.add_labels(prediction23)
+                napari.run()
+
+    print("mSA score for inference at channel [1, 3]:", np.mean(msa13_list))
+    print("mSA score for inference at channel [2, 3]:", np.mean(msa23_list))
+
+    # RESULTS:
+    # mSA score for inference at channel [1, 3]: 0.28846337471846234
+    # mSA score for inference at channel [2, 3]: 0.4309667789626076
 
 
 def main(args):
@@ -122,7 +139,7 @@ def main(args):
         model_types = args.model_type
 
     if args.custom:
-        test_cellpose(model_types)
+        test_cellpose(model_types, view=False)
     else:
         run_cellpose_baseline(datasets, model_types)
 
