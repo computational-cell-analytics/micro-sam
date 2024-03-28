@@ -16,17 +16,23 @@ from micro_sam.instance_segmentation import (
     mask_data_to_segmentation
 )
 
+import torch
+
 
 NIPS_ROOT = "/media/anwai/ANWAI/data/neurips-cell-seg/Tuning"
 # NIPS_ROOT = "/scratch/projects/nim00007/sam/data/neurips-cell-seg/new/Tuning/"
 
 MODEL_TYPE = "vit_b"
-CHECKPOINT_PATH = "/home/anwai/models/micro-sam/vit_b/lm_generalist/best.pt"
+
+# CHECKPOINT_PATH = "/home/anwai/models/micro-sam/vit_b/lm_generalist/best.pt"
+CHECKPOINT_PATH = "/scratch/usr/nimanwai/micro-sam/checkpoints/vit_b/lm_generalist_sam/best.pt"
+# CHECKPOINT_PATH = "/scratch/usr/nimanwai/micro-sam/checkpoints/vit_b/tissuenet_sam/best.pt"
 
 
 def get_model_for_ais(
-    image, model_type, checkpoint_path, tile_shape=(512, 512), halo=(128, 128), device="cpu"
+    image, model_type, checkpoint_path, tile_shape=(512, 512), halo=(128, 128),
 ):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     predictor, decoder = get_predictor_and_decoder(
         model_type=model_type, checkpoint_path=checkpoint_path, device=device
     )
@@ -108,7 +114,7 @@ def for_neurips_tuning_set(view=False):
 
 
 def for_tissuenet_test_set(data_dir, view=False):
-    all_sample_paths = sorted(glob(os.path.join(data_dir, "*.zarr")))[::-1]
+    all_sample_paths = sorted(glob(os.path.join(data_dir, "*.zarr")))
 
     msa1_list, sa501_list = [], []
     msa2_list, sa502_list = [], []
@@ -147,14 +153,17 @@ def for_tissuenet_test_set(data_dir, view=False):
             sa504_list.append(sa504)
 
     print(f"mSA 1: {np.mean(msa1_list)}, SA50 1: {np.mean(sa501_list)}")
-    print(f"mSA 1: {np.mean(msa2_list)}, SA50 1: {np.mean(sa502_list)}")
-    print(f"mSA 1: {np.mean(msa3_list)}, SA50 1: {np.mean(sa503_list)}")
-    print(f"mSA 1: {np.mean(msa4_list)}, SA50 1: {np.mean(sa504_list)}")
+    print(f"mSA 2: {np.mean(msa2_list)}, SA50 2: {np.mean(sa502_list)}")
+    print(f"mSA 3: {np.mean(msa3_list)}, SA50 3: {np.mean(sa503_list)}")
+    print(f"mSA 4: {np.mean(msa4_list)}, SA50 4: {np.mean(sa504_list)}")
 
 
 def main():
     # for_neurips_tuning_set(view=True)
-    for_tissuenet_test_set("/media/anwai/ANWAI/data/tissuenet/test/", view=False)
+
+    # tissuenet_dir = "/media/anwai/ANWAI/data/tissuenet/test/"
+    tissuenet_dir = "/scratch/projects/nim00007/sam/data/tissuenet/test"
+    for_tissuenet_test_set(tissuenet_dir, view=False)
 
 
 if __name__ == "__main__":
