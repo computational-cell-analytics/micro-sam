@@ -73,7 +73,10 @@ def ais_with_tiling(image, gt, view=False):
         foreground_smoothing=3,
         min_size=200 if do_tiling else 100
     )
-    prediction = mask_data_to_segmentation(prediction, with_background=True)
+    if len(prediction) == 0:
+        prediction = np.zeros_like(gt, dtype="uint8")
+    else:
+        prediction = mask_data_to_segmentation(prediction, with_background=True)
 
     if view:
         import napari
@@ -105,24 +108,48 @@ def for_neurips_tuning_set(view=False):
 
 
 def for_tissuenet_test_set(data_dir, view=False):
-    all_sample_paths = sorted(glob(os.path.join(data_dir, "*.zarr")))
+    all_sample_paths = sorted(glob(os.path.join(data_dir, "*.zarr")))[::-1]
 
-    msa_list, sa50_list = [], []
+    msa1_list, sa501_list = [], []
+    msa2_list, sa502_list = [], []
+    msa3_list, sa503_list = [], []
+    msa4_list, sa504_list = [], []
     for sample_path in tqdm(all_sample_paths):
         with z5py.File(sample_path, "r") as f:
             raw = f["raw/rgb"][:]
             labels = f["labels/cell"][:]
 
-            # raw = raw.transpose(1, 2, 0)
-            raw = raw.mean(axis=-1)
+            # OPTION 1: use the tissuenet inputs as it is (0: zeros, 1: nuclei, 2: cells)
+            msa1, sa501 = ais_with_tiling(image=raw.transpose(1, 2, 0), gt=labels, view=view)
 
-            msa, sa50 = ais_with_tiling(
-                image=raw, gt=labels, view=view
+            # OPTION 2: use mono-channel image (mean over all channels)
+            msa2, sa502 = ais_with_tiling(image=raw.mean(axis=0), gt=labels, view=view)
+
+            # OPTION 3: use mono-channel image (mean over only valid channels, i.e. 1 and 2)
+            msa3, sa503 = ais_with_tiling(image=raw[1:].mean(axis=0), gt=labels, view=view)
+
+            # OPTION 4: use 3 channel inputs, but the first chan is replaced by the mean over the other 2 channels
+            msa4, sa504 = ais_with_tiling(
+                image=np.concatenate([np.mean(raw[1:], axis=0)[None], raw[1:]], axis=0).transpose(1, 2, 0),
+                gt=labels, view=view
             )
-            msa_list.append(msa)
-            sa50_list.append(sa50)
 
-    print(f"mSA: {np.mean(msa_list)}, SA50: {np.mean(sa50_list)}")
+            msa1_list.append(msa1)
+            sa501_list.append(sa501)
+
+            msa2_list.append(msa2)
+            sa502_list.append(sa502)
+
+            msa3_list.append(msa3)
+            sa503_list.append(sa503)
+
+            msa4_list.append(msa4)
+            sa504_list.append(sa504)
+
+    print(f"mSA 1: {np.mean(msa1_list)}, SA50 1: {np.mean(sa501_list)}")
+    print(f"mSA 1: {np.mean(msa2_list)}, SA50 1: {np.mean(sa502_list)}")
+    print(f"mSA 1: {np.mean(msa3_list)}, SA50 1: {np.mean(sa503_list)}")
+    print(f"mSA 1: {np.mean(msa4_list)}, SA50 1: {np.mean(sa504_list)}")
 
 
 def main():
