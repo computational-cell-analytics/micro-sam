@@ -113,8 +113,11 @@ def for_tissuenet_test_set(data_dir, view=False):
             raw = f["raw/rgb"][:]
             labels = f["labels/cell"][:]
 
+            # raw = raw.transpose(1, 2, 0)
+            raw = raw.mean(axis=-1)
+
             msa, sa50 = ais_with_tiling(
-                image=raw.transpose(1, 2, 0), gt=labels, view=view
+                image=raw, gt=labels, view=view
             )
             msa_list.append(msa)
             sa50_list.append(sa50)
