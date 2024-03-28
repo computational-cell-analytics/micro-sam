@@ -1,7 +1,9 @@
 import os
 import pandas as pd
 from tqdm import tqdm
+from glob import glob
 
+import z5py
 import imageio.v3 as imageio
 
 from micro_sam.evaluation.evaluation import run_evaluation
@@ -86,6 +88,27 @@ def run_cellpose_baseline(datasets, model_types):
             evaluate_dataset(prediction_folder, dataset, model_type)
 
 
+def test_cellpose(model_type):
+    data_dir = "/scratch/projects/nim00007/sam/data/tissuenet/test"
+    all_tissunet_paths = sorted(glob(os.path.join(data_dir, "*.zarr")))
+
+    model = load_cellpose_model(model_type)
+
+    for chosen_vol_path in all_tissunet_paths:
+        with z5py.File(chosen_vol_path, "a", use_zarr_format=True) as f:
+            raw = f["raw/rgb"][:]
+            labels = f["labels/cell"][:]
+
+            prediction = model.eval(raw, diameter=None, flow_threshold=None, channels=[2, 3])[0]
+
+            import napari
+            v = napari.Viewer()
+            v.add_image(raw)
+            v.add_labels(labels, visible=False),
+            v.add_labels(prediction)
+            napari.run()
+
+
 def main(args):
     if args.dataset is None:
         datasets = LM_DATASETS
@@ -94,11 +117,14 @@ def main(args):
         assert datasets in LM_DATASETS
 
     if args.model_type is None:
-        model_types = ["cyto", "cyto2", "cyto3", "nuclei", "livecell", "livecell_cp3", "tissuenet"]
+        model_types = ["cyto", "cyto2", "cyto3", "nuclei", "livecell", "tissuenet"]
     else:
         model_types = args.model_type
 
-    run_cellpose_baseline(datasets, model_types)
+    if args.custom:
+        test_cellpose(model_types)
+    else:
+        run_cellpose_baseline(datasets, model_types)
 
 
 if __name__ == "__main__":
@@ -106,5 +132,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--dataset", type=str, default=None)
     parser.add_argument("-m", "--model_type", type=str, default=None)
+    parser.add_argument("--custom", action="store_true")
     args = parser.parse_args()
     main(args)
