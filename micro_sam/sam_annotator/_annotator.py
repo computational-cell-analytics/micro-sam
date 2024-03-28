@@ -1,6 +1,7 @@
 import numpy as np
 
-from magicgui.widgets import Container, Widget
+from magicgui.widgets import Widget, Container, FunctionGui
+from qtpy import QtWidgets
 
 from . import _widgets as widgets
 from . import util as vutil
@@ -11,13 +12,12 @@ if TYPE_CHECKING:
     import napari
 
 
-class _AnnotatorBase(Container):
+class _AnnotatorBase(QtWidgets.QWidget):
     """Base class for micro_sam annotation plugins.
 
     Implements the logic for the 2d, 3d and tracking annotator.
     The annotators differ in their data dimensionality and the widgets.
     """
-
     def _create_layers(self):
         # Add the point layer for point prompts.
         self._point_labels = ["positive", "negative"]
@@ -68,9 +68,7 @@ class _AnnotatorBase(Container):
         self._commit_widget = commit_widget()
         self._clear_widget = clear_widget()
         widget_list.extend([self._commit_widget, self._clear_widget])
-
-        # Add the widgets to the container.
-        self.extend(widget_list)
+        return widget_list
 
     def _create_keybindings(self):
         @self._viewer.bind_key("s", overwrite=True)
@@ -130,9 +128,19 @@ class _AnnotatorBase(Container):
         self._create_layers()
 
         # Add the widgets in common between all annotators.
-        self._create_widgets(
+        widget_list = self._create_widgets(
             segment_widget, segment_nd_widget, autosegment_widget, commit_widget, clear_widget,
         )
+        layout = QtWidgets.QVBoxLayout()
+        for widget in widget_list:
+            # Add the widget to the layout.
+            if isinstance(widget, (Container, FunctionGui, Widget)):
+                # This is a magicgui type and we need to get the native qt widget.
+                layout.addWidget(widget.native)
+            else:
+                # This is a qt type and we add the widget directly.
+                layout.addWidget(widget)
+        self.setLayout(layout)
 
         # Add the key bindings in common between all annotators.
         self._create_keybindings()
