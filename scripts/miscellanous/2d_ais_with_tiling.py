@@ -25,8 +25,8 @@ NIPS_ROOT = "/media/anwai/ANWAI/data/neurips-cell-seg/Tuning"
 MODEL_TYPE = "vit_b"
 
 # CHECKPOINT_PATH = "/home/anwai/models/micro-sam/vit_b/lm_generalist/best.pt"
-CHECKPOINT_PATH = "/scratch/usr/nimanwai/micro-sam/checkpoints/vit_b/lm_generalist_sam/best.pt"
-# CHECKPOINT_PATH = "/scratch/usr/nimanwai/micro-sam/checkpoints/vit_b/tissuenet_sam/best.pt"
+# CHECKPOINT_PATH = "/scratch/usr/nimanwai/micro-sam/checkpoints/vit_b/lm_generalist_sam/best.pt"
+CHECKPOINT_PATH = "/scratch/usr/nimanwai/micro-sam/checkpoints/vit_b/tissuenet_sam/best.pt"
 
 
 def get_model_for_ais(
@@ -151,6 +151,11 @@ def for_tissuenet_test_set(data_dir, view=False):
 
             msa4_list.append(msa4)
             sa504_list.append(sa504)
+
+            # mSA 1: 0.12127891062264558, SA50 1: 0.28421753449100295
+            # mSA 2: 0.09484694513022068, SA50 2: 0.22151359989916541
+            # mSA 3: 0.09484766414686455, SA50 3: 0.22152046443548926
+            # mSA 4: 0.12875632076886206, SA50 4: 0.2897684912727994
 
     print(f"mSA 1: {np.mean(msa1_list)}, SA50 1: {np.mean(sa501_list)}")
     print(f"mSA 2: {np.mean(msa2_list)}, SA50 2: {np.mean(sa502_list)}")
