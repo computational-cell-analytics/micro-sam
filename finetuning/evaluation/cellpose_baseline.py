@@ -104,7 +104,7 @@ def test_cellpose(model_type, view=False):
             raw = f["raw/rgb"][:]
             labels = f["labels/cell"][:]
             prediction13 = model.eval(raw, diameter=None, flow_threshold=None, channels=[1, 3])[0]
-            prediction23 = model.eval(raw, diameter=None, flow_threshold=None, channels=[2, 3])[0]  # NOTE: BETTER
+            prediction23 = model.eval(raw, diameter=None, flow_threshold=None, channels=[2, 3])[0]
 
             msa13_list.append(mean_segmentation_accuracy(prediction13, labels))
             msa23_list.append(mean_segmentation_accuracy(prediction23, labels))
@@ -121,9 +121,13 @@ def test_cellpose(model_type, view=False):
     print("mSA score for inference at channel [1, 3]:", np.mean(msa13_list))
     print("mSA score for inference at channel [2, 3]:", np.mean(msa23_list))
 
-    # RESULTS:
+    # RESULTS (tissuenet specialist):
     # mSA score for inference at channel [1, 3]: 0.28846337471846234
-    # mSA score for inference at channel [2, 3]: 0.4309667789626076
+    # mSA score for inference at channel [2, 3]: 0.4309667789626076 (!!!)
+
+    # RESULTS (cyto2 specialist):
+    # mSA score for inference at channel [1, 3]: 0.013506463934033066
+    # mSA score for inference at channel [2, 3]: 0.14076119450800934 (!!!)
 
 
 def main(args):
