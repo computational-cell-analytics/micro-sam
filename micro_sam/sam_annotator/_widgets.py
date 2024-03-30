@@ -19,7 +19,7 @@ from qtpy import QtWidgets
 from superqt import QCollapsible
 from magicgui import magic_factory
 from magicgui.widgets import ComboBox, Container, create_widget
-# from napari.qt.threading import thread_worker
+from napari.qt.threading import thread_worker
 from napari.utils import progress
 from zarr.errors import PathNotFoundError
 
@@ -533,19 +533,19 @@ class EmbeddingWidget(_WidgetBase):
         return image_section
 
     def _update_model(self, index):
-        self.model_selection = self.model_options[index]
+        self.model_type = self.model_options[index]
         state = AnnotatorState()
         if "autosegment" in state.widgets:
-            vutil._sync_autosegment_widget(state.widgets["autosegment"], self.model_selection, self.custom_weights)
+            vutil._sync_autosegment_widget(state.widgets["autosegment"], self.model_type, self.custom_weights)
         if "segment_nd" in state.widgets:
-            vutil._sync_ndsegment_widget(state.widgets["segment_nd"], self.model_selection, self.custom_weights)
+            vutil._sync_ndsegment_widget(state.widgets["segment_nd"], self.model_type, self.custom_weights)
 
     def _create_model_section(self):
-        self.selected_model = util._DEFAULT_MODEL
+        self.model_type = util._DEFAULT_MODEL
         self.model_options = list(util.models().urls.keys())
         layout = QtWidgets.QVBoxLayout()
         self.model_dropdown, layout = self._add_choice_param(
-            "selected_model", self.selected_model, self.model_options, title="Model:",
+            "model_type", self.model_type, self.model_options, title="Model:",
             layout=layout, update=self._update_model
         )
         return layout
@@ -589,7 +589,6 @@ class EmbeddingWidget(_WidgetBase):
 
         # Get the image and model.
         image = self.image_selection.get_value()
-        model = self.selected_model
 
         # TODO Do a check if we actually need to recompute the embeddings.
 
@@ -609,12 +608,10 @@ class EmbeddingWidget(_WidgetBase):
         # Process tile_shape and halo.
         tile_shape, halo = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
 
-        # TODO Reactivate the threadworker and make use of a better progress bar.
-        # Progress bar: Enable passing a progress bar to state.initialize_predictor -> util.precompute_image_embedding
-        # and then use it to display the actual progress.
-        # @thread_worker(connect={"started": pbar.show, "finished": pbar.hide})
-        def _compute_image_embedding(
-            state, image_data, save_path, ndim, device, model, custom_weights, tile_shape, halo,
+        # TODO handle pbar in thread correctly
+        @thread_worker()
+        def compute_image_embedding(
+            state, image_data, save_path, ndim, device, model_type, custom_weights, tile_shape, halo,
         ):
             # Make sure save directory exists and is an empty directory
             if save_path is not None:
@@ -633,15 +630,19 @@ class EmbeddingWidget(_WidgetBase):
                         )
 
             state.initialize_predictor(
-                image_data, model_type=model, save_path=save_path, ndim=ndim, device=device,
+                image_data, model_type=model_type, save_path=save_path, ndim=ndim, device=device,
                 checkpoint_path=custom_weights, tile_shape=tile_shape, halo=halo,
             )
-            return state  # returns napari._qt.qthreading.FunctionWorker
 
-        return _compute_image_embedding(
-            state, image.data, self.save_path, ndim=ndim, device=self.device, model=model,
+        worker = compute_image_embedding(
+            state, image.data, self.save_path, ndim=ndim, device=self.device, model_type=self.model_type,
             custom_weights=self.custom_weights, tile_shape=tile_shape, halo=halo
         )
+        worker.start()
+        # Note: this is how we can handle the worker when it's done.
+        # We can use this e.g. to add an indicator that the embeddings are computed or not.
+        # worker.returned.connect(lambda _: print("Done!!!!!!"))
+        return worker
 
 
 #

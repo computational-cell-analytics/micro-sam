@@ -28,14 +28,13 @@ def test_embedding_widget(make_napari_viewer, tmp_path):
 
     # Set the widget parameters
     my_widget.image = layer
-    my_widget.model_selection = "vit_t"
+    my_widget.model_type = "vit_t"
     my_widget.device = "cpu"
     my_widget.save_path = tmp_path
 
     # Run image embedding widget.
-    my_widget._compute_image_embeddings()
-    # worker = my_widget(image=layer, model="vit_t", device="cpu", save_path=tmp_path)
-    # worker.await_workers()  # blocks until thread worker is finished the embedding
+    worker = my_widget._compute_image_embeddings()
+    worker.await_workers()  # blocks until thread worker is finished the embedding
 
     # Check in-memory state for predictor and embeddings.
     assert isinstance(AnnotatorState().predictor, (SamPredictor, MobileSamPredictor))

@@ -620,7 +620,7 @@ def track_from_prompts(
 
 
 def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, device, tile_shape, halo):
-    widget.model_selection = model_type
+    widget.model_type = model_type
     index = widget.model_dropdown.findText(model_type)
     if index > 0:
         widget.model_dropdown.setCurrentIndex(index)
