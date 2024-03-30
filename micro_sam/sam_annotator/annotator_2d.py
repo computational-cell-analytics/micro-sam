@@ -7,7 +7,7 @@ import torch
 from . import _widgets as widgets
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
-from .util import _initialize_parser
+from .util import _initialize_parser, _sync_widgets
 from .. import util
 
 
@@ -88,6 +88,12 @@ def annotator_2d(
 
     # Add the annotator widget to the viewer.
     viewer.window.add_dock_widget(annotator)
+
+    _sync_widgets(
+        state.widgets, model_type,
+        save_path=embedding_path, checkpoint_path=checkpoint_path,
+        device=device, tile_shape=tile_shape, halo=halo
+    )
 
     if return_viewer:
         return viewer

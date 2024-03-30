@@ -617,3 +617,22 @@ def track_from_prompts(
             break
 
     return seg, has_division
+
+
+def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, device, tile_shape, halo):
+    widget.model_selection = model_type
+    index = widget.model_dropdown.findText(model_type)
+    if index > 0:
+        widget.model_dropdown.setCurrentIndex(index)
+    # TODO update the rest
+
+
+def _sync_widgets(
+    widgets, model_type, save_path, checkpoint_path, device, tile_shape, halo,
+):
+    """Sync the settings in the widgets with the script inputs and the defaults for the model.
+    """
+    # Sync the embedding widget.
+    _sync_embedding_widget(widgets["embeddings"], model_type, save_path, checkpoint_path, device, tile_shape, halo)
+
+    # TODO sync the defaults in the segmentation and autosegmentation widgets depending on which widgets we have.

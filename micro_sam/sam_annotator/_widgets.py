@@ -385,25 +385,28 @@ class EmbeddingWidget(QtWidgets.QWidget):
 
         return image_section
 
-    # TODO Embedding: Set util.DEFAULT_MODEL as default in the dropdown.
     def _create_model_section(self):
         model_section = QtWidgets.QVBoxLayout()
         model_label = QtWidgets.QLabel("Model:")
         model_section.addWidget(model_label)
 
-        # Replace with a QComboBox to display model options
-        model_options = tuple(util.models().urls.keys())
-        model_dropdown = QtWidgets.QComboBox()
-        model_dropdown.addItems(model_options)
-        model_section.addWidget(model_dropdown)
+        # Create the model dropdown menu via QComboBox, set the available values.
+        self.model_dropdown = QtWidgets.QComboBox()
+        model_options = list(util.models().urls.keys())
+        self.model_dropdown.addItems(model_options)
+        model_section.addWidget(self.model_dropdown)
 
-        # Store the selected model (replace with your logic)
-        self.selected_model = util._DEFAULT_MODEL
+        default_model = util._DEFAULT_MODEL
+        self.selected_model = default_model
 
-        def handle_model_selection(index):
+        def update_selection(index):
             self.selected_model = model_options[index]
 
-        model_dropdown.currentIndexChanged.connect(handle_model_selection)
+        self.model_dropdown.currentIndexChanged.connect(update_selection)
+
+        # Set the correct index for the default model.
+        index = self.model_dropdown.findText(default_model)
+        self.model_dropdown.setCurrentIndex(index)
 
         return model_section
 
