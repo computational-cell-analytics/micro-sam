@@ -48,10 +48,13 @@ class _AnnotatorBase(QtWidgets.QWidget):
         self._viewer.layers["committed_objects"].new_colormap()
 
     def _create_widgets(self, segment_widget, segment_nd_widget, autosegment_widget, commit_widget, clear_widget):
-        self._embedding_widget = widgets.embedding()
-        # Connect the call button of the embedding widget with a function
-        # that updates all relevant layers when the image changes.
-        self._embedding_widget.call_button.changed.connect(self._update_image)
+        # Create the embedding widget and connect all events related to it.
+        self._embedding_widget = widgets.EmbeddingWidget()
+        # Connect events for the image selection box.
+        self._viewer.layers.events.inserted.connect(self._embedding_widget.image_selection.reset_choices)
+        self._viewer.layers.events.removed.connect(self._embedding_widget.image_selection.reset_choices)
+        # Connect the run button with the fundtion to update the image.
+        self._embedding_widget.run_button.clicked.connect(self._update_image)
 
         self._prompt_widget = widgets.create_prompt_menu(self._point_prompt_layer, self._point_labels)
         self._segment_widget = segment_widget()
@@ -159,7 +162,7 @@ class _AnnotatorBase(QtWidgets.QWidget):
         # Reset all layers.
         self._viewer.layers["current_object"].data = np.zeros(self._shape, dtype="uint32")
         self._viewer.layers["auto_segmentation"].data = np.zeros(self._shape, dtype="uint32")
-        if segmentation_result is None:
+        if segmentation_result is None or segmentation_result is False:
             self._viewer.layers["committed_objects"].data = np.zeros(self._shape, dtype="uint32")
         else:
             assert segmentation_result.shape == self._shape
