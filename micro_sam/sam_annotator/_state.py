@@ -3,7 +3,7 @@ The singleton is implemented following the metaclass design described here:
 https://itnext.io/deciding-the-best-singleton-approach-in-python-65c61e90cdc4
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from typing import Dict, List, Optional, Tuple
 
@@ -13,9 +13,9 @@ import torch.nn as nn
 import micro_sam.util as util
 from micro_sam.instance_segmentation import AMGBase, get_decoder
 from micro_sam.precompute_state import cache_amg_state, cache_is_state
+from qtpy.QtWidgets import QWidget
 
 from segment_anything import SamPredictor
-from magicgui.widgets import Container
 
 try:
     from napari.utils import progress as tqdm
@@ -49,12 +49,14 @@ class AnnotatorState(metaclass=Singleton):
     amg_state: Optional[Dict] = None
     decoder: Optional[nn.Module] = None
 
-    # current_track_id, lineage, committed_lineages, tracking_widget:
+    # current_track_id, lineage, committed_lineages:
     # State for the tracking annotator to keep track of lineage information.
     current_track_id: Optional[int] = None
     lineage: Optional[Dict] = None
     committed_lineages: Optional[List[Dict]] = None
-    tracking_widget: Optional[Container] = None
+
+    # Dict to keep track of all widgets, so that we can update their states.
+    widgets: Dict[str, QWidget] = field(default_factory=dict)
 
     # z-range to limit the data being committed in 3d / tracking.
     z_range: Optional[Tuple[int, int]] = None
@@ -155,7 +157,7 @@ class AnnotatorState(metaclass=Singleton):
         have_current_track_id = self.current_track_id is not None
         have_lineage = self.lineage is not None
         have_committed_lineages = self.committed_lineages is not None
-        have_tracking_widget = self.tracking_widget is not None
+        have_tracking_widget = "tracking" in self.widgets
         init_sum = sum((have_current_track_id, have_lineage, have_committed_lineages, have_tracking_widget))
         if init_sum == 4:
             return True
@@ -164,7 +166,7 @@ class AnnotatorState(metaclass=Singleton):
         else:
             miss_vars = [
                 name for name, have_name in zip(
-                    ["current_track_id", "lineage", "committed_lineages", "tracking_widget"],
+                    ["current_track_id", "lineage", "committed_lineages", "widgets['tracking']"],
                     [have_current_track_id, have_lineage, have_committed_lineages, have_tracking_widget]
                 )
                 if not have_name
@@ -184,5 +186,5 @@ class AnnotatorState(metaclass=Singleton):
         self.current_track_id = None
         self.lineage = None
         self.committed_lineages = None
-        self.tracking_widget = None
         self.z_range = None
+        # Note: we don't clear the widgets here, because they are fixed for a viewer session.

@@ -123,6 +123,9 @@ class _AnnotatorBase(QtWidgets.QWidget):
                 layout.addWidget(widget)
         self.setLayout(layout)
 
+        # Add the widgets to the state.
+        AnnotatorState().widgets = self._widgets
+
         # Add the key bindings in common between all annotators.
         self._create_keybindings()
 
