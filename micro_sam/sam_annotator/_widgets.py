@@ -6,27 +6,20 @@ import multiprocessing as mp
 import os
 import pickle
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Literal
+from typing import Optional, Literal
 
 import elf.parallel
 import h5py
+import napari
 import numpy as np
 import zarr
 import z5py
 
-from qtpy.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QComboBox,
-    QPushButton,
-)
+from qtpy import QtWidgets
 from superqt import QCollapsible
-from magicgui import magicgui, magic_factory, widgets
-from magicgui.widgets import ComboBox, Container
-from napari.qt.threading import thread_worker
+from magicgui import magicgui, magic_factory
+from magicgui.widgets import ComboBox, Container, create_widget
+# from napari.qt.threading import thread_worker
 from napari.utils import progress
 from zarr.errors import PathNotFoundError
 
@@ -34,9 +27,6 @@ from ._state import AnnotatorState
 from . import util as vutil
 from .. import instance_segmentation, util
 from ..multi_dimensional_segmentation import segment_mask_in_volume, merge_instance_segmentation_3d, PROJECTION_MODES
-
-if TYPE_CHECKING:
-    import napari
 
 
 def _select_layer(viewer, layer_name):
@@ -313,83 +303,10 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
     return tile_shape, halo
 
 
-# # TODO add options for tiling, see https://github.com/computational-cell-analytics/micro-sam/issues/331
-# @magic_factory(
-#     pbar={"visible": False, "max": 0, "value": 0, "label": "working..."},
-#     call_button="Compute image embeddings",
-#     save_path={"mode": "d"},  # choose a directory
-#     tile_shape_x={"min": 0, "max": 2048},
-#     tile_shape_y={"min": 0, "max": 2048},
-#     halo_x={"min": 0, "max": 2048},
-#     halo_y={"min": 0, "max": 2048},
-
-# )
-
-def get_image_embeddings(
-    pbar: widgets.ProgressBar,
-    image: "napari.layers.Image",
-    model: Literal[tuple(util.models().urls.keys())] = util._DEFAULT_MODEL,
-    device: Literal[tuple(["auto"] + util._available_devices())] = "auto",
-    save_path: Optional[Path] = None,  # where embeddings for this image are cached (optional)
-    custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
-    tile_shape_x: int = None,
-    tile_shape_y: int = None,
-    halo_x: int = None,
-    halo_y: int = None,
-):
-    """Widget to compute the embeddings for a napari image layer."""
-    state = AnnotatorState()
-    state.reset_state()
-
-    # Get image dimensions.
-    if image.rgb:
-        ndim = image.data.ndim - 1
-        state.image_shape = image.data.shape[:-1]
-    else:
-        ndim = image.data.ndim
-        state.image_shape = image.data.shape
-
-    # process tile_shape and halo to tuples or None
-    tile_shape, halo = _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y)
-
-    #@thread_worker(connect={"started": pbar.show, "finished": pbar.hide})
-    def _compute_image_embedding(
-        state, image_data, save_path, ndim=None,
-        device="auto", model=util._DEFAULT_MODEL,
-        custom_weights=None, tile_shape=None, halo=None,
-    ):
-        # Make sure save directory exists and is an empty directory
-        if save_path is not None:
-            os.makedirs(save_path, exist_ok=True)
-            if not save_path.is_dir():
-                raise NotADirectoryError(
-                    f"The user selected 'save_path' is not a direcotry: {save_path}"
-                )
-            if len(os.listdir(save_path)) > 0:
-                try:
-                    zarr.open(save_path, "r")
-                except PathNotFoundError:
-                    raise RuntimeError(
-                        "The user selected 'save_path' is not a zarr array "
-                        f"or empty directory: {save_path}"
-                    )
-
-        state.initialize_predictor(
-            image_data, model_type=model, save_path=save_path, ndim=ndim, device=device,
-            checkpoint_path=custom_weights, tile_shape=tile_shape, halo=halo,
-        )
-        return state  # returns napari._qt.qthreading.FunctionWorker
-
-    return _compute_image_embedding(
-        state, image.data, save_path, ndim=ndim, device=device, model=model,
-        custom_weights=custom_weights, tile_shape=tile_shape, halo=halo
-    )
-
-
-class CollapsibleWidget(QWidget):
+class CollapsibleWidget(QtWidgets.QWidget):
     def __init__(self, title, parent=None):
         super().__init__(parent)
-        self.setLayout(QVBoxLayout())
+        self.setLayout(QtWidgets.QVBoxLayout())
 
         self._collapse = QCollapsible(title, self)
 
@@ -401,59 +318,87 @@ class CollapsibleWidget(QWidget):
             widget (QWidget): The widget to be added.
         """
         widget = magicgui(widget)
+        # TODO the .native is only necessary for magicgui widgets, we need to generalize!
         self._collapse.addWidget(widget.native)
         self.layout().addWidget(self._collapse)
 
 
-class EmbeddingWidget(QWidget):
+# Update this to integrate all elements properly with the gui.
+# @magic_factory(
+#     save_path={"mode": "d"},  # choose a directory
+#     tile_shape_x={"min": 0, "max": 2048},
+#     tile_shape_y={"min": 0, "max": 2048},
+#     halo_x={"min": 0, "max": 2048},
+#     halo_y={"min": 0, "max": 2048},
+# )
+def _embedding_settings(
+    device: Literal[tuple(["auto"] + util._available_devices())] = "auto",
+    save_path: Optional[Path] = None,  # where embeddings for this image are cached (optional)
+    custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
+    tile_shape_x: int = None,
+    tile_shape_y: int = None,
+    halo_x: int = None,
+    halo_y: int = None,
+):
+    pass
+
+
+class EmbeddingWidget(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.layout = QVBoxLayout(self)
+        self.layout = QtWidgets.QVBoxLayout(self)
         self.setLayout(self.layout)
 
-        main_label = QLabel("Embeddings")
+        main_label = QtWidgets.QLabel("Embeddings")
         self.layout.addWidget(main_label)
 
         # Create a nested layout for the sections
-        sections_layout = QVBoxLayout()
+        sections_layout = QtWidgets.QVBoxLayout()
         self.layout.addLayout(sections_layout)
 
         # Section 1 (Image and Model)
-        section1_layout = QHBoxLayout()
+        section1_layout = QtWidgets.QHBoxLayout()
         section1_layout.addLayout(self._create_image_section())
         section1_layout.addLayout(self._create_model_section())
         sections_layout.addLayout(section1_layout)
 
         # Section 2 (Advanced, Collapsible)
-        self.advanced_section = QHBoxLayout()
+        self.advanced_section = QtWidgets.QHBoxLayout()
         self.advanced_section.addLayout(self._create_advanced_section())
         sections_layout.addLayout(self.advanced_section)
 
+        # Section 3: The button to trigger the embedding computation.
+        self.run_button = QtWidgets.QPushButton("Run")
+        self.run_button.clicked.connect(self._compute_image_embeddings)
+        sections_layout.addWidget(self.run_button)
+
+    # TODO Embedding: Get napari layer.
     def _create_image_section(self):
-        image_section = QVBoxLayout()
-        image_label = QLabel("Image:")
+        image_section = QtWidgets.QVBoxLayout()
+        image_label = QtWidgets.QLabel("Image Layer:")
         image_section.addWidget(image_label)
 
-        # Replace with a QLineEdit
-        image_path_input = QLineEdit()
-        image_path_input.setReadOnly(True)  # User cannot directly edit the path
-        image_section.addWidget(image_path_input)
+        # Setting a napari layer in QT, see:
+        # https://github.com/pyapp-kit/magicgui/blob/main/docs/examples/napari/napari_combine_qt.py
+        self.image_selection = create_widget(annotation=napari.layers.Image)
+        image_section.addWidget(self.image_selection.native)
 
         return image_section
 
+    # TODO Embedding: Set util.DEFAULT_MODEL as default in the dropdown.
     def _create_model_section(self):
-        model_section = QVBoxLayout()
-        model_label = QLabel("Model:")
+        model_section = QtWidgets.QVBoxLayout()
+        model_label = QtWidgets.QLabel("Model:")
         model_section.addWidget(model_label)
 
         # Replace with a QComboBox to display model options
-        model_options = ["Model A", "Model B"]  # Replace with your options
-        model_dropdown = QComboBox()
+        model_options = tuple(util.models().urls.keys())
+        model_dropdown = QtWidgets.QComboBox()
         model_dropdown.addItems(model_options)
         model_section.addWidget(model_dropdown)
 
         # Store the selected model (replace with your logic)
-        self.selected_model = None
+        self.selected_model = util._DEFAULT_MODEL
 
         def handle_model_selection(index):
             self.selected_model = model_options[index]
@@ -464,17 +409,83 @@ class EmbeddingWidget(QWidget):
 
     def _create_advanced_section(self):
 
-        advanced_layout = QVBoxLayout()
-        collapsible_section = CollapsibleWidget("Advanced")
-        collapsible_section.add_widget(get_image_embeddings)
+        # TODO Embedding: this is just a placeholder for the embedding settings.
+        # Create a proper GUI for all these settings.
+        setting_widget = _embedding_settings
+
+        advanced_layout = QtWidgets.QVBoxLayout()
+        collapsible_section = CollapsibleWidget("Settings")
+        collapsible_section.add_widget(setting_widget)
         advanced_layout.addWidget(collapsible_section)
 
         return advanced_layout
 
+    def _compute_image_embeddings(self):
 
-def embedding():
-    embedding_widget = EmbeddingWidget()
-    return embedding_widget
+        # Get the image and model.
+        image = self.image_selection.get_value()
+        model = self.selected_model
+
+        # TODO Do a check if we actually need to recompute the embeddings.
+
+        # Update the image embeddings:
+        # Reset the state.
+        state = AnnotatorState()
+        state.reset_state()
+
+        # Get image dimensions.
+        if image.rgb:
+            ndim = image.data.ndim - 1
+            state.image_shape = image.data.shape[:-1]
+        else:
+            ndim = image.data.ndim
+            state.image_shape = image.data.shape
+
+        # TODO Embedding: get these from the actual widgets instead of dummy values.
+        # Get the advanced parameters.
+        tile_shape_x, tile_shape_y = 0, 0
+        halo_x, halo_y = 0, 0
+        save_path = None
+        custom_weights = None
+        device = "auto"
+
+        # Process tile_shape and halo.
+        tile_shape, halo = _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y)
+
+        # TODO Embedding: Reactivate the threadworker and make use of a better progress bar.
+        # Progress bar: Enable passing a progress bar to state.initialize_predictor -> util.precompute_image_embedding
+        # and then use it to display the actual progress.
+        # @thread_worker(connect={"started": pbar.show, "finished": pbar.hide})
+        def _compute_image_embedding(
+            state, image_data, save_path, ndim, device, model, custom_weights, tile_shape, halo,
+        ):
+            # Make sure save directory exists and is an empty directory
+            if save_path is not None:
+                os.makedirs(save_path, exist_ok=True)
+                if not save_path.is_dir():
+                    raise NotADirectoryError(
+                        f"The user selected 'save_path' is not a direcotry: {save_path}"
+                    )
+                if len(os.listdir(save_path)) > 0:
+                    try:
+                        zarr.open(save_path, "r")
+                    except PathNotFoundError:
+                        raise RuntimeError(
+                            "The user selected 'save_path' is not a zarr array "
+                            f"or empty directory: {save_path}"
+                        )
+
+            state.initialize_predictor(
+                image_data, model_type=model, save_path=save_path, ndim=ndim, device=device,
+                checkpoint_path=custom_weights, tile_shape=tile_shape, halo=halo,
+            )
+            return state  # returns napari._qt.qthreading.FunctionWorker
+
+        print("Compute embeddings with", model, "!")
+        return _compute_image_embedding(
+            state, image.data, save_path, ndim=ndim, device=device, model=model,
+            custom_weights=custom_weights, tile_shape=tile_shape, halo=halo
+        )
 
 
 @magic_factory(
