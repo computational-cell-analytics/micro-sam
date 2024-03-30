@@ -6,7 +6,7 @@ import multiprocessing as mp
 import os
 import pickle
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Optional
 
 import elf.parallel
 import h5py
@@ -17,7 +17,7 @@ import z5py
 
 from qtpy import QtWidgets
 from superqt import QCollapsible
-from magicgui import magicgui, magic_factory
+from magicgui import magic_factory
 from magicgui.widgets import ComboBox, Container, create_widget
 # from napari.qt.threading import thread_worker
 from napari.utils import progress
@@ -29,8 +29,98 @@ from .. import instance_segmentation, util
 from ..multi_dimensional_segmentation import segment_mask_in_volume, merge_instance_segmentation_3d, PROJECTION_MODES
 
 
+#
+# Convenience functionality for creating QT UI and manipulating the napari viewer.
+#
+
+
 def _select_layer(viewer, layer_name):
     viewer.layers.selection.select_only(viewer.layers[layer_name])
+
+
+# Create a collapsible around the widget
+def _make_collapsible(widget, title):
+    parent_widget = QtWidgets.QWidget()
+    parent_widget.setLayout(QtWidgets.QVBoxLayout())
+    collapsible = QCollapsible(title, parent_widget)
+    collapsible.addWidget(widget)
+    parent_widget.layout().addWidget(collapsible)
+    return parent_widget
+
+
+# Base class for a widget with convenience functionality for adding parameters.
+class _WidgetBase(QtWidgets.QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setLayout(QtWidgets.QVBoxLayout())
+
+    def _add_boolean_param(self, name, value, title=None):
+        checkbox = QtWidgets.QCheckBox(name if title is None else title)
+        checkbox.setChecked(value)
+        checkbox.stateChanged.connect(lambda val: setattr(self, name, val))
+        return checkbox
+
+    def _add_float_param(self, name, value, title=None, min_val=0.0, max_val=1.0, decimals=2, step=0.01, layout=None):
+        if layout is None:
+            layout = QtWidgets.QHBoxLayout()
+        layout = QtWidgets.QHBoxLayout()
+        layout.addWidget(QtWidgets.QLabel(name if title is None else title))
+        param = QtWidgets.QDoubleSpinBox()
+        param.setRange(min_val, max_val)
+        param.setDecimals(decimals)
+        param.setValue(value)
+        param.setSingleStep(step)
+        param.valueChanged.connect(lambda val: setattr(self, name, val))
+        layout.addWidget(param)
+        return param, layout
+
+    def _add_int_param(self, name, value, min_val, max_val, title=None, step=1, layout=None):
+        if layout is None:
+            layout = QtWidgets.QHBoxLayout()
+        layout.addWidget(QtWidgets.QLabel(name if title is None else title))
+        param = QtWidgets.QSpinBox()
+        param.setRange(min_val, max_val)
+        param.setValue(value)
+        param.setSingleStep(step)
+        param.valueChanged.connect(lambda val: setattr(self, name, val))
+        layout.addWidget(param)
+        return param, layout
+
+    def _add_choice_param(self, name, value, options, title=None, layout=None, update=None):
+        if layout is None:
+            layout = QtWidgets.QHBoxLayout()
+        layout.addWidget(QtWidgets.QLabel(name if title is None else title))
+
+        # Create the dropdown menu via QComboBox, set the available values.
+        dropdown = QtWidgets.QComboBox()
+        dropdown.addItems(options)
+        if update is None:
+            dropdown.currentIndexChanged.connect(lambda index: setattr(self, name, options[index]))
+        else:
+            dropdown.currentIndexChanged.connect(update)
+
+        # Set the correct value for the value.
+        dropdown.setCurrentIndex(dropdown.findText(value))
+
+        layout.addWidget(dropdown)
+        return dropdown, layout
+
+    def _add_shape_param(self, names, values, min_val, max_val, step=1):
+        layout = QtWidgets.QHBoxLayout()
+
+        x_layout = QtWidgets.QVBoxLayout()
+        x_param, _ = self._add_int_param(
+            names[0], values[0], min_val=min_val, max_val=max_val, layout=x_layout, step=step
+        )
+        layout.addLayout(x_layout)
+
+        y_layout = QtWidgets.QVBoxLayout()
+        y_param, _ = self._add_int_param(
+            names[1], values[1], min_val=min_val, max_val=max_val, layout=y_layout, step=step
+        )
+        layout.addLayout(y_layout)
+
+        return x_param, y_param, layout
 
 
 def _reset_tracking_state(viewer):
@@ -51,6 +141,11 @@ def _reset_tracking_state(viewer):
     # Reset the choices in the track_id menu.
     state.widgets["tracking"][1].value = "1"
     state.widgets["tracking"][1].choices = ["1"]
+
+
+#
+# Widgets implemented with magicgui.
+#
 
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
@@ -269,228 +364,6 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
     return label_widget
 
 
-def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
-    tile_shape = (tile_shape_x, tile_shape_y)
-    halo = (halo_x, halo_y)
-    # check if tile_shape/halo are not set: (0, 0)
-    if all(item == 0 for item in tile_shape):
-        tile_shape = None
-    # check if at least 1 param is given
-    elif tile_shape[0] == 0 or tile_shape[1] == 0:
-        max_val = max(tile_shape[0], tile_shape[1])
-        if max_val < 256:  # at least tile shape >256
-            max_val = 256
-        tile_shape = (max_val, max_val)
-    # if both inputs given, check if smaller than 256
-    elif tile_shape[0] != 0 and tile_shape[1] != 0:
-        if tile_shape[0] < 256:
-            tile_shape = (256, tile_shape[1])  # Create a new tuple
-        if tile_shape[1] < 256:
-            tile_shape = (tile_shape[0], 256)  # Create a new tuple with modified value
-    if all(item == 0 for item in halo):
-        if tile_shape is not None:
-            halo = (0, 0)
-        else:
-            halo = None
-    # check if at least 1 param is given
-    elif halo[0] != 0 or halo[1] != 0:
-        max_val = max(halo[0], halo[1])
-        # don't apply halo if there is no tiling
-        if tile_shape is None:
-            halo = None
-        else:
-            halo = (max_val, max_val)
-    return tile_shape, halo
-
-
-class CollapsibleWidget(QtWidgets.QWidget):
-    def __init__(self, title, parent=None):
-        super().__init__(parent)
-        self.setLayout(QtWidgets.QVBoxLayout())
-
-        self._collapse = QCollapsible(title, self)
-
-    def add_widget(self, widget):
-        """
-        Adds a widget to the inner layout of the collapsible section.
-
-        Args:
-            widget (QWidget): The widget to be added.
-        """
-        widget = magicgui(widget)
-        # TODO the .native is only necessary for magicgui widgets, we need to generalize!
-        self._collapse.addWidget(widget.native)
-        self.layout().addWidget(self._collapse)
-
-
-# Update this to integrate all elements properly with the gui.
-# @magic_factory(
-#     save_path={"mode": "d"},  # choose a directory
-#     tile_shape_x={"min": 0, "max": 2048},
-#     tile_shape_y={"min": 0, "max": 2048},
-#     halo_x={"min": 0, "max": 2048},
-#     halo_y={"min": 0, "max": 2048},
-# )
-def _embedding_settings(
-    device: Literal[tuple(["auto"] + util._available_devices())] = "auto",
-    save_path: Optional[Path] = None,  # where embeddings for this image are cached (optional)
-    custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
-    tile_shape_x: int = None,
-    tile_shape_y: int = None,
-    halo_x: int = None,
-    halo_y: int = None,
-):
-    pass
-
-
-class EmbeddingWidget(QtWidgets.QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.layout = QtWidgets.QVBoxLayout(self)
-        self.setLayout(self.layout)
-
-        main_label = QtWidgets.QLabel("Embeddings")
-        self.layout.addWidget(main_label)
-
-        # Create a nested layout for the sections
-        sections_layout = QtWidgets.QVBoxLayout()
-        self.layout.addLayout(sections_layout)
-
-        # Section 1 (Image and Model)
-        section1_layout = QtWidgets.QHBoxLayout()
-        section1_layout.addLayout(self._create_image_section())
-        section1_layout.addLayout(self._create_model_section())
-        sections_layout.addLayout(section1_layout)
-
-        # Section 2 (Advanced, Collapsible)
-        self.advanced_section = QtWidgets.QHBoxLayout()
-        self.advanced_section.addLayout(self._create_advanced_section())
-        sections_layout.addLayout(self.advanced_section)
-
-        # Section 3: The button to trigger the embedding computation.
-        self.run_button = QtWidgets.QPushButton("Run")
-        self.run_button.clicked.connect(self._compute_image_embeddings)
-        sections_layout.addWidget(self.run_button)
-
-    # TODO Embedding: Get napari layer.
-    def _create_image_section(self):
-        image_section = QtWidgets.QVBoxLayout()
-        image_label = QtWidgets.QLabel("Image Layer:")
-        image_section.addWidget(image_label)
-
-        # Setting a napari layer in QT, see:
-        # https://github.com/pyapp-kit/magicgui/blob/main/docs/examples/napari/napari_combine_qt.py
-        self.image_selection = create_widget(annotation=napari.layers.Image)
-        image_section.addWidget(self.image_selection.native)
-
-        return image_section
-
-    def _create_model_section(self):
-        model_section = QtWidgets.QVBoxLayout()
-        model_label = QtWidgets.QLabel("Model:")
-        model_section.addWidget(model_label)
-
-        # Create the model dropdown menu via QComboBox, set the available values.
-        self.model_dropdown = QtWidgets.QComboBox()
-        model_options = list(util.models().urls.keys())
-        self.model_dropdown.addItems(model_options)
-        model_section.addWidget(self.model_dropdown)
-
-        default_model = util._DEFAULT_MODEL
-        self.selected_model = default_model
-
-        def update_selection(index):
-            self.selected_model = model_options[index]
-
-        self.model_dropdown.currentIndexChanged.connect(update_selection)
-
-        # Set the correct index for the default model.
-        index = self.model_dropdown.findText(default_model)
-        self.model_dropdown.setCurrentIndex(index)
-
-        return model_section
-
-    def _create_advanced_section(self):
-
-        # TODO Embedding: this is just a placeholder for the embedding settings.
-        # Create a proper GUI for all these settings.
-        setting_widget = _embedding_settings
-
-        advanced_layout = QtWidgets.QVBoxLayout()
-        collapsible_section = CollapsibleWidget("Settings")
-        collapsible_section.add_widget(setting_widget)
-        advanced_layout.addWidget(collapsible_section)
-
-        return advanced_layout
-
-    def _compute_image_embeddings(self):
-
-        # Get the image and model.
-        image = self.image_selection.get_value()
-        model = self.selected_model
-
-        # TODO Do a check if we actually need to recompute the embeddings.
-
-        # Update the image embeddings:
-        # Reset the state.
-        state = AnnotatorState()
-        state.reset_state()
-
-        # Get image dimensions.
-        if image.rgb:
-            ndim = image.data.ndim - 1
-            state.image_shape = image.data.shape[:-1]
-        else:
-            ndim = image.data.ndim
-            state.image_shape = image.data.shape
-
-        # TODO Embedding: get these from the actual widgets instead of dummy values.
-        # Get the advanced parameters.
-        tile_shape_x, tile_shape_y = 0, 0
-        halo_x, halo_y = 0, 0
-        save_path = None
-        custom_weights = None
-        device = "auto"
-
-        # Process tile_shape and halo.
-        tile_shape, halo = _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y)
-
-        # TODO Embedding: Reactivate the threadworker and make use of a better progress bar.
-        # Progress bar: Enable passing a progress bar to state.initialize_predictor -> util.precompute_image_embedding
-        # and then use it to display the actual progress.
-        # @thread_worker(connect={"started": pbar.show, "finished": pbar.hide})
-        def _compute_image_embedding(
-            state, image_data, save_path, ndim, device, model, custom_weights, tile_shape, halo,
-        ):
-            # Make sure save directory exists and is an empty directory
-            if save_path is not None:
-                os.makedirs(save_path, exist_ok=True)
-                if not save_path.is_dir():
-                    raise NotADirectoryError(
-                        f"The user selected 'save_path' is not a direcotry: {save_path}"
-                    )
-                if len(os.listdir(save_path)) > 0:
-                    try:
-                        zarr.open(save_path, "r")
-                    except PathNotFoundError:
-                        raise RuntimeError(
-                            "The user selected 'save_path' is not a zarr array "
-                            f"or empty directory: {save_path}"
-                        )
-
-            state.initialize_predictor(
-                image_data, model_type=model, save_path=save_path, ndim=ndim, device=device,
-                checkpoint_path=custom_weights, tile_shape=tile_shape, halo=halo,
-            )
-            return state  # returns napari._qt.qthreading.FunctionWorker
-
-        print("Compute embeddings with", model, "!")
-        return _compute_image_embedding(
-            state, image.data, save_path, ndim=ndim, device=device, model=model,
-            custom_weights=custom_weights, tile_shape=tile_shape, halo=halo
-        )
-
-
 @magic_factory(
     call_button="Update settings",
     cache_directory={"mode": "d"},  # choose a directory
@@ -501,18 +374,6 @@ def settings_widget(
     """Widget to update global micro_sam settings."""
     os.environ["MICROSAM_CACHEDIR"] = str(cache_directory)
     print(f"micro-sam cache directory set to: {cache_directory}")
-
-
-# TODO fail more gracefully in all widgets if image embeddings have not been initialized
-# See https://github.com/computational-cell-analytics/micro-sam/issues/332
-#
-# Widgets for interactive segmentation:
-# - segment: for the 2d annotation tool
-# - segment_slice: segment object a single slice for the 3d annotation tool
-# - segment_volume: segment object in 3d for the 3d annotation tool
-# - segment_frame: segment object in frame for the tracking annotation tool
-# - track_object: track object over time for the tracking annotation tool
-#
 
 
 @magic_factory(call_button="Segment Object [S]")
@@ -540,7 +401,7 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
 
 
 @magic_factory(call_button="Segment Slice [S]")
-def segment_slice(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) -> None:
+def segment_slice(viewer: "napari.viewer.Viewer") -> None:
     shape = viewer.layers["current_object"].data.shape[1:]
     position = viewer.cursor.position
     z = int(position[0])
@@ -556,7 +417,7 @@ def segment_slice(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) ->
     state = AnnotatorState()
     seg = vutil.prompt_segmentation(
         state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
-        image_embeddings=state.image_embeddings, i=z, box_extension=box_extension,
+        image_embeddings=state.image_embeddings, i=z,
     )
 
     # no prompts were given or prompts were invalid, skip segmentation
@@ -566,68 +427,6 @@ def segment_slice(viewer: "napari.viewer.Viewer", box_extension: float = 0.1) ->
 
     viewer.layers["current_object"].data[z] = seg
     viewer.layers["current_object"].refresh()
-
-
-# TODO should probably be wrappred in a thread worker
-# See https://github.com/computational-cell-analytics/micro-sam/issues/334
-@magic_factory(
-    call_button="Segment All Slices [Shift-S]",
-    projection={"choices": PROJECTION_MODES},
-)
-def segment_object(
-    viewer: "napari.viewer.Viewer",
-    iou_threshold: float = 0.5,
-    projection: str = "points",
-    box_extension: float = 0.05,
-) -> None:
-    state = AnnotatorState()
-    shape = state.image_shape
-
-    with progress(total=shape[0]) as progress_bar:
-
-        # Step 1: Segment all slices with prompts.
-        seg, slices, stop_lower, stop_upper = vutil.segment_slices_with_prompts(
-            state.predictor, viewer.layers["point_prompts"], viewer.layers["prompts"],
-            state.image_embeddings, shape,
-            progress_bar=progress_bar,
-        )
-
-        # Step 2: Segment the rest of the volume based on projecting prompts.
-        seg, (z_min, z_max) = segment_mask_in_volume(
-            seg, state.predictor, state.image_embeddings, slices,
-            stop_lower, stop_upper,
-            iou_threshold=iou_threshold, projection=projection,
-            progress_bar=progress_bar, box_extension=box_extension,
-        )
-
-    state.z_range = (z_min, z_max)
-
-    viewer.layers["current_object"].data = seg
-    viewer.layers["current_object"].refresh()
-
-
-def _update_lineage(viewer):
-    """Updated the lineage after recording a division event.
-    This helper function is needed by 'track_object'.
-    """
-    state = AnnotatorState()
-    tracking_widget = state.widgets["tracking"]
-
-    mother = state.current_track_id
-    assert mother in state.lineage
-    assert len(state.lineage[mother]) == 0
-
-    daughter1, daughter2 = state.current_track_id + 1, state.current_track_id + 2
-    state.lineage[mother] = [daughter1, daughter2]
-    state.lineage[daughter1] = []
-    state.lineage[daughter2] = []
-
-    # Update the choices in the track_id menu so that it contains the new track ids.
-    track_ids = list(map(str, state.lineage.keys()))
-    tracking_widget[1].choices = track_ids
-
-    viewer.layers["point_prompts"].property_choices["track_id"] = [str(track_id) for track_id in track_ids]
-    viewer.layers["prompts"].property_choices["track_id"] = [str(track_id) for track_id in track_ids]
 
 
 @magic_factory(call_button="Segment Frame [S]")
@@ -664,53 +463,329 @@ def segment_frame(viewer: "napari.viewer.Viewer") -> None:
     viewer.layers["current_object"].refresh()
 
 
-# TODO should probably be wrappred in a thread worker
-@magic_factory(call_button="Track Object [Shift-S]", projection={"choices": PROJECTION_MODES})
-def track_object(
-    viewer: "napari.viewer.Viewer",
-    iou_threshold: float = 0.5,
-    projection: str = "points",
-    motion_smoothing: float = 0.5,
-    box_extension: float = 0.1,
-) -> None:
-    state = AnnotatorState()
-    shape = state.image_shape
+#
+# Functionality and widget to compute the image embeddings.
+#
 
-    with progress(total=shape[0]) as progress_bar:
-        # Step 1: Segment all slices with prompts.
-        seg, slices, _, stop_upper = vutil.segment_slices_with_prompts(
-            state.predictor, viewer.layers["point_prompts"], viewer.layers["prompts"],
-            state.image_embeddings, shape,
-            progress_bar=progress_bar, track_id=state.current_track_id
+
+def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
+    tile_shape = (tile_shape_x, tile_shape_y)
+    halo = (halo_x, halo_y)
+    # check if tile_shape/halo are not set: (0, 0)
+    if all(item == 0 for item in tile_shape):
+        tile_shape = None
+    # check if at least 1 param is given
+    elif tile_shape[0] == 0 or tile_shape[1] == 0:
+        max_val = max(tile_shape[0], tile_shape[1])
+        if max_val < 256:  # at least tile shape >256
+            max_val = 256
+        tile_shape = (max_val, max_val)
+    # if both inputs given, check if smaller than 256
+    elif tile_shape[0] != 0 and tile_shape[1] != 0:
+        if tile_shape[0] < 256:
+            tile_shape = (256, tile_shape[1])  # Create a new tuple
+        if tile_shape[1] < 256:
+            tile_shape = (tile_shape[0], 256)  # Create a new tuple with modified value
+    if all(item == 0 for item in halo):
+        if tile_shape is not None:
+            halo = (0, 0)
+        else:
+            halo = None
+    # check if at least 1 param is given
+    elif halo[0] != 0 or halo[1] != 0:
+        max_val = max(halo[0], halo[1])
+        # don't apply halo if there is no tiling
+        if tile_shape is None:
+            halo = None
+        else:
+            halo = (max_val, max_val)
+    return tile_shape, halo
+
+
+class EmbeddingWidget(_WidgetBase):
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+
+        # Create a nested layout for the sections.
+        # Section 1: Image and Model.
+        section1_layout = QtWidgets.QHBoxLayout()
+        section1_layout.addLayout(self._create_image_section())
+        section1_layout.addLayout(self._create_model_section())
+        self.layout().addLayout(section1_layout)
+
+        # Section 2: Settings (collapsible).
+        self.layout().addWidget(self._create_settings_widget())
+
+        # Section 3: The button to trigger the embedding computation.
+        self.run_button = QtWidgets.QPushButton("Compute Embeddings")
+        self.run_button.clicked.connect(self._compute_image_embeddings)
+        self.layout().addWidget(self.run_button)
+
+    def _create_image_section(self):
+        image_section = QtWidgets.QVBoxLayout()
+        image_section.addWidget(QtWidgets.QLabel("Image Layer:"))
+
+        # Setting a napari layer in QT, see:
+        # https://github.com/pyapp-kit/magicgui/blob/main/docs/examples/napari/napari_combine_qt.py
+        self.image_selection = create_widget(annotation=napari.layers.Image)
+        image_section.addWidget(self.image_selection.native)
+
+        return image_section
+
+    def _update_model(self, index):
+        self.model_selection = self.model_options[index]
+        state = AnnotatorState()
+        if "autosegment" in state.widgets:
+            vutil._sync_autosegment_widget(state.widgets["autosegment"], self.model_selection, self.custom_weights)
+        if "segment_nd" in state.widgets:
+            vutil._sync_ndsegment_widget(state.widgets["segment_nd"], self.model_selection, self.custom_weights)
+
+    def _create_model_section(self):
+        self.selected_model = util._DEFAULT_MODEL
+        self.model_options = list(util.models().urls.keys())
+        layout = QtWidgets.QVBoxLayout()
+        self.model_dropdown, layout = self._add_choice_param(
+            "selected_model", self.selected_model, self.model_options, title="Model:",
+            layout=layout, update=self._update_model
         )
+        return layout
 
-        # Step 2: Track the object starting from the lowest annotated slice.
-        seg, has_division = vutil.track_from_prompts(
-            viewer.layers["point_prompts"], viewer.layers["prompts"], seg,
-            state.predictor, slices, state.image_embeddings, stop_upper,
-            threshold=iou_threshold, projection=projection,
-            progress_bar=progress_bar, motion_smoothing=motion_smoothing,
-            box_extension=box_extension,
+    def _create_settings_widget(self):
+        setting_values = QtWidgets.QWidget()
+        setting_values.setLayout(QtWidgets.QVBoxLayout())
+
+        # Create UI for the device.
+        self.device = "auto"
+        device_options = ["auto"] + util._available_devices()
+        self.device_dropdown, layout = self._add_choice_param("device", self.device, device_options)
+        setting_values.layout().addLayout(layout)
+
+        # TODO
+        # save_path: Optional[Path] = None,  # where embeddings for this image are cached (optional, zarr file = folder)
+        # custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
+        # Create UI for the save path.
+        self.save_path = None
+        # Create UI for the custom weights.
+        self.custom_weights = None
+
+        # Create UI for the tile shape.
+        self.tile_x, self.tile_y = 0, 0
+        self.tile_x_param, self.tile_y_param, layout = self._add_shape_param(
+            ("tile_x", "tile_y"), (self.tile_x, self.tile_y), min_val=0, max_val=2048, step=16
         )
+        setting_values.layout().addLayout(layout)
 
-    # If a division has occurred and it's the first time it occurred for this track
-    # then we need to create the two daughter tracks and update the lineage.
-    if has_division and (len(state.lineage[state.current_track_id]) == 0):
-        _update_lineage(viewer)
+        # Create UI for the halo.
+        self.halo_x, self.halo_y = 0, 0
+        self.halo_x_param, self.halo_y_param, layout = self._add_shape_param(
+            ("halo_x", "halo_y"), (self.halo_x, self.halo_y), min_val=0, max_val=512
+        )
+        setting_values.layout().addLayout(layout)
 
-    # clear the old track mask
-    viewer.layers["current_object"].data[viewer.layers["current_object"].data == state.current_track_id] = 0
-    # set the new object mask
-    viewer.layers["current_object"].data[seg == 1] = state.current_track_id
-    viewer.layers["current_object"].refresh()
+        settings = _make_collapsible(setting_values, title="Settings")
+        return settings
+
+    def _compute_image_embeddings(self):
+
+        # Get the image and model.
+        image = self.image_selection.get_value()
+        model = self.selected_model
+
+        # TODO Do a check if we actually need to recompute the embeddings.
+
+        # Update the image embeddings:
+        # Reset the state.
+        state = AnnotatorState()
+        state.reset_state()
+
+        # Get image dimensions.
+        if image.rgb:
+            ndim = image.data.ndim - 1
+            state.image_shape = image.data.shape[:-1]
+        else:
+            ndim = image.data.ndim
+            state.image_shape = image.data.shape
+
+        # Process tile_shape and halo.
+        tile_shape, halo = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
+
+        # TODO Reactivate the threadworker and make use of a better progress bar.
+        # Progress bar: Enable passing a progress bar to state.initialize_predictor -> util.precompute_image_embedding
+        # and then use it to display the actual progress.
+        # @thread_worker(connect={"started": pbar.show, "finished": pbar.hide})
+        def _compute_image_embedding(
+            state, image_data, save_path, ndim, device, model, custom_weights, tile_shape, halo,
+        ):
+            # Make sure save directory exists and is an empty directory
+            if save_path is not None:
+                os.makedirs(save_path, exist_ok=True)
+                if not save_path.is_dir():
+                    raise NotADirectoryError(
+                        f"The user selected 'save_path' is not a direcotry: {save_path}"
+                    )
+                if len(os.listdir(save_path)) > 0:
+                    try:
+                        zarr.open(save_path, "r")
+                    except PathNotFoundError:
+                        raise RuntimeError(
+                            "The user selected 'save_path' is not a zarr array "
+                            f"or empty directory: {save_path}"
+                        )
+
+            state.initialize_predictor(
+                image_data, model_type=model, save_path=save_path, ndim=ndim, device=device,
+                checkpoint_path=custom_weights, tile_shape=tile_shape, halo=halo,
+            )
+            return state  # returns napari._qt.qthreading.FunctionWorker
+
+        return _compute_image_embedding(
+            state, image.data, self.save_path, ndim=ndim, device=self.device, model=model,
+            custom_weights=self.custom_weights, tile_shape=tile_shape, halo=halo
+        )
 
 
 #
-# Widgets for automatic segmentation:
-# - amg_2d: AMG widget for the 2d annotation tool
-# - instace_seg_2d: Widget for instance segmentation with decoder (2d)
-# - amg_3d: AMG widget for the 3d annotation tool
-# - instace_seg_3d: Widget for instance segmentation with decoder (3d)
+# Functionality and widget for nd segmentation.
+#
+
+
+def _update_lineage(viewer):
+    """Updated the lineage after recording a division event.
+    This helper function is needed by 'track_object'.
+    """
+    state = AnnotatorState()
+    tracking_widget = state.widgets["tracking"]
+
+    mother = state.current_track_id
+    assert mother in state.lineage
+    assert len(state.lineage[mother]) == 0
+
+    daughter1, daughter2 = state.current_track_id + 1, state.current_track_id + 2
+    state.lineage[mother] = [daughter1, daughter2]
+    state.lineage[daughter1] = []
+    state.lineage[daughter2] = []
+
+    # Update the choices in the track_id menu so that it contains the new track ids.
+    track_ids = list(map(str, state.lineage.keys()))
+    tracking_widget[1].choices = track_ids
+
+    viewer.layers["point_prompts"].property_choices["track_id"] = [str(track_id) for track_id in track_ids]
+    viewer.layers["prompts"].property_choices["track_id"] = [str(track_id) for track_id in track_ids]
+
+
+class SegmentNDWidget(_WidgetBase):
+    def __init__(self, viewer, tracking, parent=None):
+        super().__init__(parent=parent)
+        self._viewer = viewer
+        self.tracking = tracking
+
+        # Add the settings.
+        self.settings = self._create_settings()
+        self.layout().addWidget(self.settings)
+
+        # Add the run button.
+        button_title = "Segment All Frames [Shift-S]" if self.tracking else "Segment All Slices [Shift-S]"
+        self.run_button = QtWidgets.QPushButton(button_title)
+        self.run_button.clicked.connect(self._run_segmentation)
+        self.layout().addWidget(self.run_button)
+
+    def _create_settings(self):
+        setting_values = QtWidgets.QWidget()
+        setting_values.setLayout(QtWidgets.QVBoxLayout())
+
+        # Create the UI for the projection modes.
+        self.projection = "points"
+        self.projection_dropdown, layout = self._add_choice_param("projection", self.projection, PROJECTION_MODES)
+        setting_values.layout().addLayout(layout)
+
+        # Create the UI element for the IOU threshold.
+        self.iou_threshold = 0.5
+        self.iou_threshold_param, layout = self._add_float_param("iou_threshold", self.iou_threshold)
+        setting_values.layout().addLayout(layout)
+
+        # Create the UI element for the box extension.
+        self.box_extension = 0.05
+        self.box_extension_param, layout = self._add_float_param("box_extension", self.box_extension)
+        setting_values.layout().addLayout(layout)
+
+        # Create the UI element for the motion smoothing (if we have the tracking widget).
+        if self.tracking:
+            self.motion_smoothing = 0.5
+            self.motion_smoothing_param, layout = self._add_float_param("motion_smoothing", self.motion_smoothing)
+            setting_values.layout().addLayout(layout)
+
+        settings = _make_collapsible(setting_values, title="Settings")
+        return settings
+
+    def _run_tracking(self):
+        state = AnnotatorState()
+        shape = state.image_shape
+
+        with progress(total=shape[0]) as progress_bar:
+            # Step 1: Segment all slices with prompts.
+            seg, slices, _, stop_upper = vutil.segment_slices_with_prompts(
+                state.predictor, self._viewer.layers["point_prompts"], self._viewer.layers["prompts"],
+                state.image_embeddings, shape,
+                progress_bar=progress_bar, track_id=state.current_track_id
+            )
+
+            # Step 2: Track the object starting from the lowest annotated slice.
+            seg, has_division = vutil.track_from_prompts(
+                self._viewer.layers["point_prompts"], self._viewer.layers["prompts"], seg,
+                state.predictor, slices, state.image_embeddings, stop_upper,
+                threshold=self.iou_threshold, projection=self.projection,
+                progress_bar=progress_bar, motion_smoothing=self.motion_smoothing,
+                box_extension=self.box_extension,
+            )
+
+        # If a division has occurred and it's the first time it occurred for this track
+        # then we need to create the two daughter tracks and update the lineage.
+        if has_division and (len(state.lineage[state.current_track_id]) == 0):
+            _update_lineage(self._viewer)
+
+        # Clear the old track mask.
+        self._viewer.layers["current_object"].data[
+            self._viewer.layers["current_object"].data == state.current_track_id
+        ] = 0
+        # Set the new object mask.
+        self._viewer.layers["current_object"].data[seg == 1] = state.current_track_id
+        self._viewer.layers["current_object"].refresh()
+
+    def _run_volumetric_segmentation(self):
+        state = AnnotatorState()
+        shape = state.image_shape
+
+        with progress(total=shape[0]) as progress_bar:
+
+            # Step 1: Segment all slices with prompts.
+            seg, slices, stop_lower, stop_upper = vutil.segment_slices_with_prompts(
+                state.predictor, self.viewer.layers["point_prompts"], self.viewer.layers["prompts"],
+                state.image_embeddings, shape,
+                progress_bar=progress_bar,
+            )
+
+            # Step 2: Segment the rest of the volume based on projecting prompts.
+            seg, (z_min, z_max) = segment_mask_in_volume(
+                seg, state.predictor, state.image_embeddings, slices,
+                stop_lower, stop_upper,
+                iou_threshold=self.iou_threshold, projection=self.projection,
+                progress_bar=progress_bar, box_extension=self.box_extension,
+            )
+
+        state.z_range = (z_min, z_max)
+        self._viewer.layers["current_object"].data = seg
+        self._viewer.layers["current_object"].refresh()
+
+    # TODO: computation should be wrapped in a thread worker and connect pbar.
+    def _run_segmentation(self):
+        if self.tracking:
+            self._run_tracking()
+        else:
+            self._run_volumetric_segmentation()
+
+
+#
+# The functionality and widgets for automatic segmentation.
 #
 
 
@@ -806,119 +881,146 @@ def _segment_volume(viewer, with_background, min_object_size, gap_closing, min_e
     viewer.layers["auto_segmentation"].refresh()
 
 
-# TODO should be wrapped in a threadworker
-@magic_factory(
-    call_button="Automatic Segmentation",
-    min_object_size={"min": 0, "max": 10000},
-)
-def amg_2d(
-    viewer: "napari.viewer.Viewer",
-    pred_iou_thresh: float = 0.88,
-    stability_score_thresh: float = 0.95,
-    min_object_size: int = 100,
-    box_nms_thresh: float = 0.7,
-    with_background: bool = True,
-) -> None:
-    _instance_segmentation_impl(
-        viewer, with_background, min_object_size,
-        pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
-        box_nms_thresh=box_nms_thresh,
-    )
-    _select_layer(viewer, "auto_segmentation")
+class AutoSegmentWidget(_WidgetBase):
+    def __init__(self, viewer, with_decoder, volumetric, parent=None):
+        super().__init__(parent)
 
+        self._viewer = viewer
+        self.with_decoder = with_decoder
+        self.volumetric = volumetric
 
-# TODO do we expose additional params?
-# TODO should be wrapped in a threadworker
-@magic_factory(
-    call_button="Automatic Segmentation",
-    min_object_size={"min": 0, "max": 10000},
-)
-def instance_seg_2d(
-    viewer: "napari.viewer.Viewer",
-    center_distance_threshold: float = 0.5,
-    boundary_distance_threshold: float = 0.5,
-    min_object_size: int = 100,
-    with_background: bool = True,
-) -> None:
-    _instance_segmentation_impl(
-        viewer, with_background, min_object_size, min_size=min_object_size,
-        center_distance_threshold=center_distance_threshold,
-        boundary_distance_threshold=boundary_distance_threshold,
-    )
-    _select_layer(viewer, "auto_segmentation")
+        # Add the switch for segmenting the slice vs. the volume if we have a volume.
+        if self.volumetric:
+            self.layout().addWidget(self._create_volumetric_switch())
 
+        # Add the nested settings widget.
+        self.settings = self._create_settings()
+        self.layout().addWidget(self.settings)
 
-# TODO should be wrapped in a threadworker
-@magic_factory(
-    call_button="Automatic Segmentation",
-    min_object_size={"min": 0, "max": 10000}
-)
-def amg_3d(
-    viewer: "napari.viewer.Viewer",
-    pred_iou_thresh: float = 0.88,
-    stability_score_thresh: float = 0.95,
-    min_object_size: int = 100,
-    box_nms_thresh: float = 0.7,
-    with_background: bool = True,
-    apply_to_volume: bool = False,
-    gap_closing: int = 2,
-    min_extent: int = 2,
-) -> None:
-    if apply_to_volume:
-        # We refuse to run 3D segmentation with the AMG unless we have a GPU or all embeddings
-        # are precomputed. Otherwise this would take too long.
-        state = AnnotatorState()
-        predictor = state.predictor
-        if str(predictor.device) == "cpu" or str(predictor.device) == "mps":
-            n_slices = viewer.layers["auto_segmentation"].data.shape[0]
-            embeddings_are_precomputed = len(state.amg_state) > n_slices
-            if not embeddings_are_precomputed:
-                print("Volumetric segmentation with AMG is only supported if you have a GPU.")
-                return
-        _segment_volume(
-            viewer, with_background, min_object_size, gap_closing,
-            pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
-            box_nms_thresh=box_nms_thresh, min_extent=min_extent,
+        # Add the run button.
+        self.run_button = QtWidgets.QPushButton("Automatic Segmentation")
+        self.run_button.clicked.connect(self._run_segmentation)
+        self.layout().addWidget(self.run_button)
+
+    def _create_volumetric_switch(self):
+        self.apply_to_volume = False
+        return self._add_boolean_param("apply_to_volume", self.apply_to_volume, title="Apply to Volume")
+
+    def _add_common_settings(self, settings):
+        # Create the UI element for min object size.
+        self.min_object_size = 100
+        self.min_obbject_size_param, layout = self._add_int_param(
+            "min_object_size", self.min_object_size, min_val=0, max_val=int(1e4)
         )
-    else:
-        i = int(viewer.cursor.position[0])
-        _instance_segmentation_impl(
-            viewer, with_background, min_object_size, i=i,
-            pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
-            box_nms_thresh=box_nms_thresh,
-        )
-    _select_layer(viewer, "auto_segmentation")
+        settings.layout().addLayout(layout)
 
+        # Create the UI element for with background.
+        self.with_background = True
+        settings.layout().addWidget(self._add_boolean_param("with_background", self.with_background))
 
-# TODO do we expose additional params?
-# TODO should be wrapped in a threadworker
-@magic_factory(
-    call_button="Automatic Segmentation",
-    min_object_size={"min": 0, "max": 10000},
-)
-def instance_seg_3d(
-    viewer: "napari.viewer.Viewer",
-    center_distance_threshold: float = 0.5,
-    boundary_distance_threshold: float = 0.5,
-    min_object_size: int = 100,
-    with_background: bool = True,
-    apply_to_volume: bool = False,
-    gap_closing: int = 2,
-    min_extent: int = 2,
-) -> None:
-    if apply_to_volume:
-        _segment_volume(
-            viewer, with_background, min_object_size, gap_closing,
-            min_extent=min_extent, min_size=min_object_size,
-            center_distance_threshold=center_distance_threshold,
-            boundary_distance_threshold=boundary_distance_threshold,
+        # Add extra settings for volumetric segmentation: gap_closing and min_extent.
+        if self.volumetric:
+            self.gap_closing = 2
+            self.gap_closing_param, layout = self._add_int_param("gap_closing", self.gap_closing, min_val=0, max_val=10)
+            settings.layout().addLayout(layout)
+
+            self.min_extent = 2
+            self.min_extent_param, layout = self._add_int_param("min_extent", self.min_extent, min_val=0, max_val=10)
+            settings.layout().addLayout(layout)
+
+    def _ais_settings(self):
+        settings = QtWidgets.QWidget()
+        settings.setLayout(QtWidgets.QVBoxLayout())
+
+        # Create the UI element for center_distance_threshold.
+        self.center_distance_thresh = 0.5
+        self.center_distance_thresh_param, layout = self._add_float_param(
+            "center_distance_thresh", self.center_distance_thresh
         )
-    else:
-        i = int(viewer.cursor.position[0])
-        _instance_segmentation_impl(
-            viewer, with_background, min_object_size, i=i,
-            min_size=min_object_size,
-            center_distance_threshold=center_distance_threshold,
-            boundary_distance_threshold=boundary_distance_threshold,
+        settings.layout().addLayout(layout)
+
+        # Create the UI element for boundary_distance_threshold.
+        self.boundary_distance_thresh = 0.5
+        self.boundary_distance_thresh_param, layout = self._add_float_param(
+            "boundary_distance_thresh", self.boundary_distance_thresh
         )
-    _select_layer(viewer, "auto_segmentation")
+        settings.layout().addLayout(layout)
+
+        # Add min_object_size and with_background
+        self._add_common_settings(settings)
+
+        return settings
+
+    def _amg_settings(self):
+        settings = QtWidgets.QWidget()
+        settings.setLayout(QtWidgets.QVBoxLayout())
+
+        # Create the UI element for pred_iou_thresh.
+        self.pred_iou_thresh = 0.88
+        self.pred_iou_thresh_param, layout = self._add_float_param("pred_iou_thresh", self.pred_iou_thresh)
+        settings.layout().addLayout(layout)
+
+        # Create the UI element for stability score thresh.
+        self.stability_score_thresh = 0.95
+        self.stability_score_thresh_param, layout = self._add_float_param(
+            "stability_score_thresh", self.stability_score_thresh
+        )
+        settings.layout().addLayout(layout)
+
+        # Create the UI element for box nms thresh.
+        self.box_nms_thresh = 0.7
+        self.box_nms_thresh_param, layout = self._add_float_param("box_nms_thresh", self.box_nms_thresh)
+        settings.layout().addLayout(layout)
+
+        # Add min_object_size and with_background
+        self._add_common_settings(settings)
+
+        return settings
+
+    def _create_settings(self):
+        setting_values = self._ais_settings() if self.with_decoder else self._amg_settings()
+        settings = _make_collapsible(setting_values, title="Settings")
+        return settings
+
+    def _run_segmentation_2d(self, kwargs):
+        _instance_segmentation_impl(self._viewer, self.with_background, self.min_object_size, **kwargs)
+
+    def _run_segmentation_3d(self, kwargs):
+        if self.apply_to_volume:
+            # We refuse to run 3D segmentation with the AMG unless we have a GPU or all embeddings
+            # are precomputed. Otherwise this would take too long.
+            state = AnnotatorState()
+            predictor = state.predictor
+            if str(predictor.device) == "cpu" or str(predictor.device) == "mps":
+                n_slices = self._viewer.layers["auto_segmentation"].data.shape[0]
+                embeddings_are_precomputed = len(state.amg_state) > n_slices
+                if not embeddings_are_precomputed:
+                    print("Volumetric segmentation with AMG is only supported if you have a GPU.")
+                    return
+
+            kwargs.update({"gap_closing": self.gap_closing, "min_extent": self.min_extent})
+            _segment_volume(self._viewer, self.with_background, self.min_object_size, **kwargs)
+
+        else:
+            i = int(self._viewer.cursor.position[0])
+            _instance_segmentation_impl(self._viewer, self.with_background, self.min_object_size, i=i, **kwargs)
+
+    # TODO wrap the computation in a threadworker
+    def _run_segmentation(self):
+        if self.with_decoder:
+            kwargs = {
+                "center_distance_threshold": self.center_distance_thresh,
+                "boundary_distance_threshold": self.boundary_distance_thresh,
+                "min_size": self.min_object_size,
+            }
+        else:
+            kwargs = {
+                "pred_iou_thresh": self.pred_iou_thresh,
+                "stability_score_thresh": self.stability_score_thresh,
+                "box_nms_thresh": self.box_nms_thresh,
+            }
+        if self.volumetric:
+            self._run_segmentation_3d(kwargs)
+        else:
+            self._run_segmentation_2d(kwargs)
+        _select_layer(self._viewer, "auto_segmentation")

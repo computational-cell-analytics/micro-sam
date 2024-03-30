@@ -624,28 +624,47 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
     index = widget.model_dropdown.findText(model_type)
     if index > 0:
         widget.model_dropdown.setCurrentIndex(index)
-    # TODO update the rest
+
+    # TODO update save path and checkpoint path
+
+    if device is not None:
+        widget.device = device
+        index = widget.device_dropdown.findText(device)
+        widget.device_dropdown.setCurrentIndex(index)
+
+    if tile_shape is not None:
+        widget.tile_x_param.setValue(tile_shape[0])
+        widget.tile_y_param.setValue(tile_shape[1])
+
+    if halo is not None:
+        widget.halo_x_param.setValue(halo[0])
+        widget.halo_y_param.setValue(halo[1])
 
 
+# TODO
 def _sync_autosegment_widget(widget, model_type, checkpoint_path):
-    pass
+    if widget.with_decoder:
+        # Here's how to set the relevant params:
+        # widget.center_distance_thresh_param.setValue(0.5)
+        # widget.boundary_distance_thresh_param.setValue(0.5)
+        pass
+    else:
+        # Here's how to set the relevant values:
+        # widget.pred_iou_thresh_param.setValue(0.88)
+        # widget.stability_score_thresh_param.setValue(0.95)
+        # widget.min_object_size_param.setValue(100)
+        pass
 
 
+# TODO
 def _sync_ndsegment_widget(widget, model_type, checkpoint_path):
+    # Here's how to set the relevant parameters:
+
+    # widget.projection = projection_mode
+    # index = widget.projection_dropdown.findText(projection_mode)
+    # if index > 0:
+    #   widget.projection_dropdown.setCurrentIndex(index)
+
+    # widget.iou_threshold_param.setValue(0.5)
+    # widget.box_extension_param.setValue(0.05)
     pass
-
-
-def _sync_widgets(
-    widgets, model_type, save_path, checkpoint_path, device, tile_shape, halo,
-):
-    """Sync the settings in the widgets with the script inputs and the defaults for the model.
-    """
-    # Sync the embedding widget.
-    _sync_embedding_widget(widgets["embeddings"], model_type, save_path, checkpoint_path, device, tile_shape, halo)
-
-    # Sync autosegment and nd segment widget if they are part of the widgets.
-    if "autosegment" in widgets:
-        _sync_autosegment_widget(widgets["autosegment"], model_type, checkpoint_path)
-
-    if "segment_nd" in widgets:
-        _sync_ndsegment_widget(widgets["segment_nd"], model_type, checkpoint_path)

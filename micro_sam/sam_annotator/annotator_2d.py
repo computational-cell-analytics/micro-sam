@@ -7,16 +7,18 @@ import torch
 from . import _widgets as widgets
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
-from .util import _initialize_parser, _sync_widgets
+from .util import _initialize_parser, _sync_embedding_widget
 from .. import util
 
 
 class Annotator2d(_AnnotatorBase):
     def _get_widgets(self):
-        autosegment = widgets.amg_2d if AnnotatorState().decoder is None else widgets.instance_seg_2d
+        autosegment = widgets.AutoSegmentWidget(
+            self._viewer, with_decoder=AnnotatorState().decoder is not None, volumetric=False
+        )
         return {
             "segment": widgets.segment(),
-            "autosegment": autosegment(),
+            "autosegment": autosegment,
             "commit": widgets.commit(),
             "clear": widgets.clear(),
         }
@@ -88,8 +90,8 @@ def annotator_2d(
 
     # Add the annotator widget to the viewer and sync widgets.
     viewer.window.add_dock_widget(annotator)
-    _sync_widgets(
-        state.widgets, model_type,
+    _sync_embedding_widget(
+        state.widgets["embeddings"], model_type,
         save_path=embedding_path, checkpoint_path=checkpoint_path,
         device=device, tile_shape=tile_shape, halo=halo
     )

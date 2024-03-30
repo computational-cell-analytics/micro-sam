@@ -17,7 +17,7 @@ from ..instance_segmentation import get_decoder
 from .annotator_2d import Annotator2d
 from .annotator_3d import Annotator3d
 from ._state import AnnotatorState
-from .util import _sync_widgets
+from .util import _sync_embedding_widget
 
 
 def _precompute(
@@ -156,8 +156,8 @@ def image_series_annotator(
 
     # Add the annotator widget to the viewer and sync widgets.
     viewer.window.add_dock_widget(annotator)
-    _sync_widgets(
-        state.widgets, model_type,
+    _sync_embedding_widget(
+        state.widgets["embeddings"], model_type,
         save_path=embedding_path, checkpoint_path=checkpoint_path,
         device=device, tile_shape=tile_shape, halo=halo
     )

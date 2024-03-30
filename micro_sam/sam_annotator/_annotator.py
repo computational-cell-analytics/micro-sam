@@ -103,6 +103,7 @@ class _AnnotatorBase(QtWidgets.QWidget):
         """
         super().__init__()
         self._viewer = viewer
+        self.setLayout(QtWidgets.QVBoxLayout())
 
         # Add the layers for prompts and segmented obejcts.
         # Initialize with a dummy shape, which is reset to the correct shape once an image is set.
@@ -112,16 +113,17 @@ class _AnnotatorBase(QtWidgets.QWidget):
 
         # Create all the widgets and add them to the layout.
         self._create_widgets()
-        layout = QtWidgets.QVBoxLayout()
         for widget in self._widgets.values():
-            # Add the widget to the layout.
+            widget_frame = QtWidgets.QGroupBox()
+            widget_layout = QtWidgets.QVBoxLayout()
             if isinstance(widget, (Container, FunctionGui, Widget)):
                 # This is a magicgui type and we need to get the native qt widget.
-                layout.addWidget(widget.native)
+                widget_layout.addWidget(widget.native)
             else:
                 # This is a qt type and we add the widget directly.
-                layout.addWidget(widget)
-        self.setLayout(layout)
+                widget_layout.addWidget(widget)
+            widget_frame.setLayout(widget_layout)
+            self.layout().addWidget(widget_frame)
 
         # Add the widgets to the state.
         AnnotatorState().widgets = self._widgets

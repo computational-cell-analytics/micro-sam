@@ -149,10 +149,11 @@ class AnnotatorTracking(_AnnotatorBase):
             self._point_prompt_layer, self._box_prompt_layer,
             states=self._track_state_labels, track_ids=list(state.lineage.keys()),
         )
+        segment_nd = widgets.SegmentNDWidget(self._viewer, tracking=True)
         return {
             "tracking": self._tracking_widget,
             "segment": widgets.segment_frame(),
-            "segment_nd": widgets.track_object(),
+            "segment_nd": segment_nd,
             "commit": widgets.commit_track(),
             "clear": widgets.clear_track(),
         }
@@ -228,8 +229,8 @@ def annotator_tracking(
 
     # Add the annotator widget to the viewer and sync widgets.
     viewer.window.add_dock_widget(annotator)
-    vutil._sync_widgets(
-        state.widgets, model_type,
+    vutil._sync_embedding_widget(
+        state.widgets["embeddings"], model_type,
         save_path=embedding_path, checkpoint_path=checkpoint_path,
         device=device, tile_shape=tile_shape, halo=halo
     )
