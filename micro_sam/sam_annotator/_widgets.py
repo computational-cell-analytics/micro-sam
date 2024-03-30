@@ -516,7 +516,7 @@ def settings_widget(
 
 
 @magic_factory(call_button="Segment Object [S]")
-def segment(viewer: "napari.viewer.Viewer", box_extension: float = 0.05, batched: bool = False) -> None:
+def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
     shape = viewer.layers["current_object"].data.shape
 
     # get the current box and point prompts
@@ -525,16 +525,10 @@ def segment(viewer: "napari.viewer.Viewer", box_extension: float = 0.05, batched
 
     predictor = AnnotatorState().predictor
     image_embeddings = AnnotatorState().image_embeddings
-    if image_embeddings["original_size"] is None:  # tiled prediction
-        seg = vutil.prompt_segmentation(
-            predictor, points, labels, boxes, masks, shape, image_embeddings=image_embeddings,
-            multiple_box_prompts=True, box_extension=box_extension, multiple_point_prompts=batched,
-        )
-    else:  # normal prediction
-        seg = vutil.prompt_segmentation(
-            predictor, points, labels, boxes, masks, shape, multiple_box_prompts=True, box_extension=box_extension,
-            multiple_point_prompts=batched,
-        )
+    seg = vutil.prompt_segmentation(
+        predictor, points, labels, boxes, masks, shape, image_embeddings=image_embeddings,
+        multiple_box_prompts=True, multiple_point_prompts=batched,
+    )
 
     # no prompts were given or prompts were invalid, skip segmentation
     if seg is None:

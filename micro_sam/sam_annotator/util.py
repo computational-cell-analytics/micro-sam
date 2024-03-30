@@ -424,7 +424,7 @@ def prompt_segmentation(
 
     # we use the batched point prompt segmentation mode, but
     # have a box prompt -> this does not work
-    elif multiple_point_prompts and have_boxes:
+    elif have_points and multiple_point_prompts and have_boxes:
         print("You have activated batched point segmentation but have passed a box prompt.")
         print("This setting is currently not supported.")
         print("Provide a single positive point prompt per object when using batched point segmentation.")
@@ -627,6 +627,14 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
     # TODO update the rest
 
 
+def _sync_autosegment_widget(widget, model_type, checkpoint_path):
+    pass
+
+
+def _sync_ndsegment_widget(widget, model_type, checkpoint_path):
+    pass
+
+
 def _sync_widgets(
     widgets, model_type, save_path, checkpoint_path, device, tile_shape, halo,
 ):
@@ -635,4 +643,9 @@ def _sync_widgets(
     # Sync the embedding widget.
     _sync_embedding_widget(widgets["embeddings"], model_type, save_path, checkpoint_path, device, tile_shape, halo)
 
-    # TODO sync the defaults in the segmentation and autosegmentation widgets depending on which widgets we have.
+    # Sync autosegment and nd segment widget if they are part of the widgets.
+    if "autosegment" in widgets:
+        _sync_autosegment_widget(widgets["autosegment"], model_type, checkpoint_path)
+
+    if "segment_nd" in widgets:
+        _sync_ndsegment_widget(widgets["segment_nd"], model_type, checkpoint_path)

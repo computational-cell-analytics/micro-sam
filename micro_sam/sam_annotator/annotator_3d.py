@@ -12,7 +12,7 @@ import torch
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
 from . import _widgets as widgets
-from .util import _initialize_parser
+from .util import _initialize_parser, _sync_widgets
 from .. import util
 
 
@@ -139,8 +139,13 @@ def annotator_3d(
     # And initialize the 'committed_objects' with the segmentation result if it was given.
     annotator._update_image(segmentation_result=segmentation_result)
 
-    # Add the annotator widget to the viewer.
+    # Add the annotator widget to the viewer and sync widgets.
     viewer.window.add_dock_widget(annotator)
+    _sync_widgets(
+        state.widgets, model_type,
+        save_path=embedding_path, checkpoint_path=checkpoint_path,
+        device=device, tile_shape=tile_shape, halo=halo
+    )
 
     if return_viewer:
         return viewer

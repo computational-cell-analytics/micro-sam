@@ -226,8 +226,13 @@ def annotator_tracking(
     # Trigger layer update of the annotator so that layers have the correct shape.
     annotator._update_image()
 
-    # Add the annotator widget to the viewer.
+    # Add the annotator widget to the viewer and sync widgets.
     viewer.window.add_dock_widget(annotator)
+    vutil._sync_widgets(
+        state.widgets, model_type,
+        save_path=embedding_path, checkpoint_path=checkpoint_path,
+        device=device, tile_shape=tile_shape, halo=halo
+    )
 
     if return_viewer:
         return viewer
