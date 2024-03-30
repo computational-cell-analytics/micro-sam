@@ -142,28 +142,28 @@ class AnnotatorTracking(_AnnotatorBase):
         # Randomize colors so it is easy to see when object committed.
         self._viewer.layers["committed_objects"].new_colormap()
 
-    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
-        super().__init__(
-            viewer=viewer,
-            ndim=3,
-            segment_widget=widgets.segment_frame,
-            segment_nd_widget=widgets.track_object,
-            commit_widget=widgets.commit_track,
-            clear_widget=widgets.clear_track,
-        )
-
-        # Initialize the state for tracking.
+    def _get_widgets(self):
         state = AnnotatorState()
-        self._init_track_state(state)
-
         # Create the tracking state menu.
         self._tracking_widget = create_tracking_menu(
             self._point_prompt_layer, self._box_prompt_layer,
             states=self._track_state_labels, track_ids=list(state.lineage.keys()),
         )
-        # Add the tracking widget to the docked widgets.
-        self.extend([self._tracking_widget])
+        return {
+            "tracking": self._tracking_widget,
+            "segment": widgets.segment_frame(),
+            "segment_nd": widgets.track_object(),
+            "commit": widgets.commit_track(),
+            "clear": widgets.clear_track(),
+        }
 
+    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
+        # Initialize the state for tracking.
+        state = AnnotatorState()
+        self._init_track_state(state)
+        super().__init__(viewer=viewer, ndim=3)
+
+        # TODO we can remove this as soon as state is solved more elegantly
         # Add the tracking widget to the state so that it can be accessed from within widgets
         # in order to update it when the tracking state changes.
         # NOTE: it would be more elegant to do this by emmitting and connecting events,

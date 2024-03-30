@@ -54,17 +54,19 @@ def _load_is_state(embedding_path):
 
 
 class Annotator3d(_AnnotatorBase):
+    def _get_widgets(self):
+        autosegment = widgets.instance_seg_3d if self._with_decoder else widgets.amg_3d
+        return {
+            "segment": widgets.segment_slice(),
+            "segment_nd": widgets.segment_object(),
+            "autosegment": autosegment(),
+            "commit": widgets.commit(),
+            "clear": widgets.clear(),
+        }
+
     def __init__(self, viewer: "napari.viewer.Viewer") -> None:
         self._with_decoder = AnnotatorState().decoder is not None
-        autosegment_widget = widgets.instance_seg_3d if self._with_decoder else widgets.amg_3d
-        super().__init__(
-            viewer=viewer,
-            ndim=3,
-            segment_widget=widgets.segment_slice,
-            segment_nd_widget=widgets.segment_object,
-            autosegment_widget=autosegment_widget,
-            clear_widget=widgets.clear_volume,
-        )
+        super().__init__(viewer=viewer, ndim=3)
 
     def _update_image(self, segmentation_result=None):
         super()._update_image(segmentation_result=segmentation_result)

@@ -4,27 +4,25 @@ import napari
 import numpy as np
 import torch
 
+from . import _widgets as widgets
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
-from ._widgets import segment, amg_2d, instance_seg_2d
 from .util import _initialize_parser
 from .. import util
 
 
 class Annotator2d(_AnnotatorBase):
-    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
-        state = AnnotatorState()
-        if state.decoder is None:
-            autosegment = amg_2d
-        else:
-            autosegment = instance_seg_2d
+    def _get_widgets(self):
+        autosegment = widgets.amg_2d if AnnotatorState().decoder is None else widgets.instance_seg_2d
+        return {
+            "segment": widgets.segment(),
+            "autosegment": autosegment(),
+            "commit": widgets.commit(),
+            "clear": widgets.clear(),
+        }
 
-        super().__init__(
-            viewer=viewer,
-            ndim=2,
-            segment_widget=segment,
-            autosegment_widget=autosegment,
-        )
+    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
+        super().__init__(viewer=viewer, ndim=2)
 
 
 def annotator_2d(
