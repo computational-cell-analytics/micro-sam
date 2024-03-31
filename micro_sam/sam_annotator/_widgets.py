@@ -29,6 +29,10 @@ if TYPE_CHECKING:
     import napari
 
 
+def _select_layer(viewer, layer_name):
+    viewer.layers.selection.select_only(viewer.layers[layer_name])
+
+
 def _reset_tracking_state(viewer):
     """Reset the tracking state.
 
@@ -205,6 +209,7 @@ def commit(
             viewer.layers["auto_segmentation"].data.shape, dtype="uint32"
         )
         viewer.layers["auto_segmentation"].refresh()
+        _select_layer(viewer, "committed_objects")
 
 
 @magic_factory(
@@ -470,14 +475,14 @@ def segment_object(
 
     with progress(total=shape[0]) as progress_bar:
 
-        # step 1: segment all slices with prompts
+        # Step 1: Segment all slices with prompts.
         seg, slices, stop_lower, stop_upper = vutil.segment_slices_with_prompts(
             state.predictor, viewer.layers["point_prompts"], viewer.layers["prompts"],
             state.image_embeddings, shape,
             progress_bar=progress_bar,
         )
 
-        # step 2: segment the rest of the volume based on smart prompting
+        # Step 2: Segment the rest of the volume based on projecting prompts.
         seg, (z_min, z_max) = segment_mask_in_volume(
             seg, state.predictor, state.image_embeddings, slices,
             stop_lower, stop_upper,
@@ -562,14 +567,14 @@ def track_object(
     shape = state.image_shape
 
     with progress(total=shape[0]) as progress_bar:
-        # step 1: segment all slices with prompts
+        # Step 1: Segment all slices with prompts.
         seg, slices, _, stop_upper = vutil.segment_slices_with_prompts(
             state.predictor, viewer.layers["point_prompts"], viewer.layers["prompts"],
             state.image_embeddings, shape,
             progress_bar=progress_bar, track_id=state.current_track_id
         )
 
-        # step 2: track the object starting from the lowest annotated slice
+        # Step 2: Track the object starting from the lowest annotated slice.
         seg, has_division = vutil.track_from_prompts(
             viewer.layers["point_prompts"], viewer.layers["prompts"], seg,
             state.predictor, slices, state.image_embeddings, stop_upper,
@@ -709,6 +714,7 @@ def amg_2d(
         pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
         box_nms_thresh=box_nms_thresh,
     )
+    _select_layer(viewer, "auto_segmentation")
 
 
 # TODO do we expose additional params?
@@ -729,6 +735,7 @@ def instance_seg_2d(
         center_distance_threshold=center_distance_threshold,
         boundary_distance_threshold=boundary_distance_threshold,
     )
+    _select_layer(viewer, "auto_segmentation")
 
 
 # TODO should be wrapped in a threadworker
@@ -770,6 +777,7 @@ def amg_3d(
             pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh,
             box_nms_thresh=box_nms_thresh,
         )
+    _select_layer(viewer, "auto_segmentation")
 
 
 # TODO do we expose additional params?
@@ -803,3 +811,4 @@ def instance_seg_3d(
             center_distance_threshold=center_distance_threshold,
             boundary_distance_threshold=boundary_distance_threshold,
         )
+    _select_layer(viewer, "auto_segmentation")

@@ -1,4 +1,3 @@
-import warnings
 from typing import Optional, Tuple, Union
 
 import napari
@@ -268,9 +267,6 @@ def main():
 
     args = parser.parse_args()
     image = util.load_image_data(args.input, key=args.key)
-
-    if args.embedding_path is None:
-        warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
 
     annotator_tracking(
         image, embedding_path=args.embedding_path, model_type=args.model_type,

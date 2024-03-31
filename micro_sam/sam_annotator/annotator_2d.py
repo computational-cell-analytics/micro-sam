@@ -1,4 +1,3 @@
-import warnings
 from typing import Optional, Tuple, Union
 
 import napari
@@ -108,9 +107,6 @@ def main():
         segmentation_result = None
     else:
         segmentation_result = util.load_image_data(args.segmentation_result, key=args.segmentation_key)
-
-    if args.embedding_path is None:
-        warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
 
     annotator_2d(
         image, embedding_path=args.embedding_path,

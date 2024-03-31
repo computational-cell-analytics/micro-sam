@@ -1,6 +1,5 @@
 import os
 import pickle
-import warnings
 from glob import glob
 from pathlib import Path
 from typing import Optional, Tuple, Union
@@ -157,9 +156,6 @@ def main():
         segmentation_result = None
     else:
         segmentation_result = util.load_image_data(args.segmentation_result, key=args.segmentation_key)
-
-    if args.embedding_path is None:
-        warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
 
     annotator_3d(
         image, embedding_path=args.embedding_path,
