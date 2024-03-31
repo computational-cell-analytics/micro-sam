@@ -608,10 +608,17 @@ class EmbeddingWidget(_WidgetBase):
         # Process tile_shape and halo.
         tile_shape, halo = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
 
-        # TODO handle pbar in thread correctly
+        # TODO to handle the progress more gracefully we have to sub-class from the napari FunctionWorker
+        # and then implement callbacks via custom sigals for the initialization
+        # (setting the total in the pbar) and the
+        # update of the pbar. Then pass on these callbacks to the underlying functions and change their
+        # design so that they use them (with default options that implement simple callbacks that feed a
+        # normal pbar).
+        # See https://napari.org/0.4.15/guides/threading.html#syntactic-sugar and onwards.
+
         @thread_worker()
         def compute_image_embedding(
-            state, image_data, save_path, ndim, device, model_type, custom_weights, tile_shape, halo,
+            state, image_data, save_path, ndim, device, model_type, custom_weights, tile_shape, halo
         ):
             # Make sure save directory exists and is an empty directory
             if save_path is not None:
@@ -631,17 +638,17 @@ class EmbeddingWidget(_WidgetBase):
 
             state.initialize_predictor(
                 image_data, model_type=model_type, save_path=save_path, ndim=ndim, device=device,
-                checkpoint_path=custom_weights, tile_shape=tile_shape, halo=halo,
+                checkpoint_path=custom_weights, tile_shape=tile_shape, halo=halo, verbose=False,
             )
 
         worker = compute_image_embedding(
             state, image.data, self.save_path, ndim=ndim, device=self.device, model_type=self.model_type,
             custom_weights=self.custom_weights, tile_shape=tile_shape, halo=halo
         )
-        worker.start()
         # Note: this is how we can handle the worker when it's done.
         # We can use this e.g. to add an indicator that the embeddings are computed or not.
-        # worker.returned.connect(lambda _: print("Done!!!!!!"))
+        worker.returned.connect(lambda _: print("Embeddings for", self.model_type, "have been computed."))
+        worker.start()
         return worker
 
 
