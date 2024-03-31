@@ -754,7 +754,7 @@ def for_ctc(save_dir):
     make_custom_splits(10, save_dir)
 
 
-def for_neurips_cellseg(save_dir, chosen_set):
+def for_neurips_cellseg(save_dir, chosen_set, desired_shape=(1024, 1024)):
     """
     we infer on the `TuningSet` - the data for open-evaluation on grand-challenge
 
@@ -785,13 +785,21 @@ def for_neurips_cellseg(save_dir, chosen_set):
 
     for image_path, label_path in tqdm(zip(val_image_paths, val_label_paths), total=len(val_image_paths)):
         image_id = Path(image_path).stem
-        dst_image_path = os.path.join(save_dir, chosen_set, "val", "raw", f"val_{image_id}.tif")
-        # converting all images to one channel image - same as generalist training logic
-        imageio.imwrite(dst_image_path, neurips_raw_trafo(imageio.imread(image_path)))
-
         label_id = os.path.split(label_path)[-1]
+        dst_image_path = os.path.join(save_dir, chosen_set, "val", "raw", f"val_{image_id}.tif")
         dst_label_path = os.path.join(save_dir, chosen_set, "val", "labels", f"val_{label_id}")
-        shutil.copy(label_path, dst_label_path)
+
+        raw = neurips_raw_trafo(imageio.imread(image_path))
+        gt = imageio.imread(label_path)
+
+        if gt.shape > desired_shape:
+            if has_foreground(make_center_crop(gt, desired_shape)):
+                imageio.imwrite(dst_image_path, make_center_crop(raw, desired_shape))
+                imageio.imwrite(dst_label_path, make_center_crop(gt, desired_shape))
+        else:
+            # converting all images to one channel image - same as generalist training logic
+            imageio.imwrite(dst_image_path, neurips_raw_trafo(imageio.imread(image_path)))
+            shutil.copy(label_path, dst_label_path)
 
     # now, let's get the test slices
     self_test_image_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "TestForSam", "images", "*")))
@@ -817,13 +825,21 @@ def for_neurips_cellseg(save_dir, chosen_set):
 
     for image_path, label_path in tqdm(zip(test_image_paths, test_label_paths), total=len(test_image_paths)):
         image_id = Path(image_path).stem
-        dst_image_path = os.path.join(save_dir, chosen_set, "test", "raw", f"test_{image_id}.tif")
-        # converting all images to one channel image - same as generalist training logic
-        imageio.imwrite(dst_image_path, neurips_raw_trafo(imageio.imread(image_path)))
-
         label_id = os.path.split(label_path)[-1]
+        dst_image_path = os.path.join(save_dir, chosen_set, "test", "raw", f"test_{image_id}.tif")
         dst_label_path = os.path.join(save_dir, chosen_set, "test", "labels", f"test_{label_id}")
-        shutil.copy(label_path, dst_label_path)
+
+        raw = neurips_raw_trafo(imageio.imread(image_path))
+        gt = imageio.imread(label_path)
+
+        if gt.shape > desired_shape:
+            if has_foreground(make_center_crop(gt, desired_shape)):
+                imageio.imwrite(dst_image_path, make_center_crop(raw, desired_shape))
+                imageio.imwrite(dst_label_path, make_center_crop(gt, desired_shape))
+        else:
+            # converting all images to one channel image - same as generalist training logic
+            imageio.imwrite(dst_image_path, neurips_raw_trafo(imageio.imread(image_path)))
+            shutil.copy(label_path, dst_label_path)
 
 
 def for_deepbacs(save_dir):
@@ -898,6 +914,8 @@ def for_pannuke(save_dir):
 
                     os.makedirs(os.path.split(image_path)[0], exist_ok=True)
                     os.makedirs(os.path.split(labels_path)[0], exist_ok=True)
+
+                    s_raw = s_raw.mean(axis=-1)
 
                     if has_foreground(s_labels):
                         imageio.imwrite(image_path, s_raw, compression="zlib")
