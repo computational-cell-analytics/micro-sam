@@ -960,19 +960,12 @@ def preprocess_em_datasets():
 
 
 def main():
-    # TODO: check results how rgb results are, else run for mono-channel once
-    # for_pannuke(os.path.join(ROOT, "pannuke", "slices"))
-
-    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"), chosen_set="all")
-    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"), chosen_set="self")
-    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"), chosen_set="tuning")
-
     # let's ensure all the data is downloaded
     download_all_datasets(ROOT)
 
     # now let's save the slices as tif
-    # preprocess_lm_datasets()
-    # preprocess_em_datasets()
+    preprocess_lm_datasets()
+    preprocess_em_datasets()
 
 
 if __name__ == "__main__":
