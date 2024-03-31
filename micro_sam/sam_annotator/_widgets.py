@@ -16,6 +16,7 @@ import zarr
 import z5py
 
 from qtpy import QtWidgets
+from qtpy.QtCore import QObject, Signal
 from superqt import QCollapsible
 from magicgui import magic_factory
 from magicgui.widgets import ComboBox, Container, create_widget
@@ -121,6 +122,27 @@ class _WidgetBase(QtWidgets.QWidget):
         layout.addLayout(y_layout)
 
         return x_param, y_param, layout
+
+
+# Custom signals for managing progress updates.
+class PBarSignals(QObject):
+    pbar_total = Signal(int)
+    pbar_update = Signal(int)
+    pbar_description = Signal(str)
+    pbar_stop = Signal()
+
+
+# Set up the progress bar. We handle this via custom signals that are passed as callbacks to the
+# function that does the actual work. We need callbacks for initializing the progress bar,
+# updating it and for stopping the progress bar.
+def _create_pbar_for_threadworker():
+    pbar = progress()
+    pbar_signals = PBarSignals()
+    pbar_signals.pbar_total.connect(lambda total: setattr(pbar, "total", total))
+    pbar_signals.pbar_update.connect(lambda update: pbar.update(update))
+    pbar_signals.pbar_description.connect(lambda description: pbar.set_description(description))
+    pbar_signals.pbar_stop.connect(lambda: pbar.close())
+    return pbar, pbar_signals
 
 
 def _reset_tracking_state(viewer):
@@ -608,13 +630,8 @@ class EmbeddingWidget(_WidgetBase):
         # Process tile_shape and halo.
         tile_shape, halo = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
 
-        # TODO to handle the progress more gracefully we have to sub-class from the napari FunctionWorker
-        # and then implement callbacks via custom sigals for the initialization
-        # (setting the total in the pbar) and the
-        # update of the pbar. Then pass on these callbacks to the underlying functions and change their
-        # design so that they use them (with default options that implement simple callbacks that feed a
-        # normal pbar).
-        # See https://napari.org/0.4.15/guides/threading.html#syntactic-sugar and onwards.
+        # Set up progress bar and signals for using it within a threadworker.
+        pbar, pbar_signals = _create_pbar_for_threadworker()
 
         @thread_worker()
         def compute_image_embedding(
@@ -636,9 +653,16 @@ class EmbeddingWidget(_WidgetBase):
                             f"or empty directory: {save_path}"
                         )
 
+            def pbar_init(total, description):
+                pbar_signals.pbar_total.emit(total)
+                pbar_signals.pbar_description.emit(description)
+
             state.initialize_predictor(
                 image_data, model_type=model_type, save_path=save_path, ndim=ndim, device=device,
-                checkpoint_path=custom_weights, tile_shape=tile_shape, halo=halo, verbose=False,
+                checkpoint_path=custom_weights, tile_shape=tile_shape, halo=halo,
+                pbar_init=pbar_init,
+                pbar_update=lambda update: pbar_signals.pbar_update.emit(update),
+                pbar_stop=lambda: pbar_signals.pbar_stop.emit()
             )
 
         worker = compute_image_embedding(
@@ -763,6 +787,9 @@ class SegmentNDWidget(_WidgetBase):
         state = AnnotatorState()
         shape = state.image_shape
 
+        # TODO
+        # pbar, pbar_signals = _create_pbar_for_threadworker()
+
         with progress(total=shape[0]) as progress_bar:
 
             # Step 1: Segment all slices with prompts.
@@ -784,7 +811,6 @@ class SegmentNDWidget(_WidgetBase):
         self._viewer.layers["current_object"].data = seg
         self._viewer.layers["current_object"].refresh()
 
-    # TODO: computation should be wrapped in a thread worker and connect pbar.
     def _run_segmentation(self):
         if self.tracking:
             self._run_tracking()

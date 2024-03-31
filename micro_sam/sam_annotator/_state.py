@@ -75,7 +75,9 @@ class AnnotatorState(metaclass=Singleton):
         halo=None,
         precompute_amg_state=False,
         prefer_decoder=True,
-        verbose=True,
+        pbar_init=None,
+        pbar_update=None,
+        pbar_stop=None,
     ):
         assert ndim in (2, 3)
 
@@ -104,7 +106,10 @@ class AnnotatorState(metaclass=Singleton):
             ndim=ndim,
             tile_shape=tile_shape,
             halo=halo,
-            verbose=verbose,
+            verbose=True,
+            pbar_init=pbar_init,
+            pbar_update=pbar_update,
+            pbar_stop=pbar_stop,
         )
         self.embedding_path = save_path
 

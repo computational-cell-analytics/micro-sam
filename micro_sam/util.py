@@ -379,7 +379,7 @@ def _to_image(input_):
     return image
 
 
-def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, verbose):
+def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update):
     tiling = blocking([0, 0], input_.shape[:2], tile_shape)
     n_tiles = tiling.numberOfBlocks
 
@@ -391,7 +391,8 @@ def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, verbose):
     features.attrs["tile_shape"] = tile_shape
     features.attrs["halo"] = halo
 
-    for tile_id in tqdm(range(n_tiles), total=n_tiles, desc="Predict image embeddings for tiles", disable=not verbose):
+    pbar_init(n_tiles, "Compute Image Embeddings 2D tiled.")
+    for tile_id in range(n_tiles):
         tile = tiling.getBlockWithHalo(tile_id, list(halo))
         outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end))
 
@@ -407,11 +408,12 @@ def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, verbose):
         )
         ds.attrs["original_size"] = original_size
         ds.attrs["input_size"] = input_size
+        pbar_update(1)
 
     return features
 
 
-def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, verbose):
+def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update):
     assert input_.ndim == 3
 
     shape = input_.shape[1:]
@@ -427,7 +429,7 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, verbose):
     features.attrs["halo"] = halo
 
     n_slices = input_.shape[0]
-    pbar = tqdm(total=n_tiles * n_slices, desc="Predict image embeddings for tiles and slices", disable=not verbose)
+    pbar_init(n_tiles * n_slices, "Compute Image Embeddings 3D tiled.")
 
     for tile_id in range(n_tiles):
         tile = tiling.getBlockWithHalo(tile_id, list(halo))
@@ -448,7 +450,7 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, verbose):
                 )
 
             ds[z] = tile_features.cpu().numpy()
-            pbar.update(1)
+            pbar_update(1)
 
         original_size = predictor.original_size
         input_size = predictor.input_size
@@ -459,7 +461,7 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, verbose):
     return features
 
 
-def _compute_2d(input_, predictor, f, save_path):
+def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
     # Check if the embeddings are already cached.
     if save_path is not None and "input_size" in f.attrs:
         # In this case we load the embeddings..
@@ -472,12 +474,14 @@ def _compute_2d(input_, predictor, f, save_path):
         set_precomputed(predictor, image_embeddings)
         return image_embeddings
 
+    pbar_init(1, "Compute Image Embeddings 2D.")
     # Otherwise we have to compute the embeddings.
     predictor.reset_image()
     predictor.set_image(_to_image(input_))
     features = predictor.get_image_embedding().cpu().numpy()
     original_size = predictor.original_size
     input_size = predictor.input_size
+    pbar_update(1)
 
     # Save the embeddings if we have a save_path.
     if save_path is not None:
@@ -493,7 +497,7 @@ def _compute_2d(input_, predictor, f, save_path):
     return image_embeddings
 
 
-def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, verbose):
+def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update):
     # Check if the features are already computed.
     if "input_size" in f.attrs:
         features = f["features"]
@@ -505,7 +509,7 @@ def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, verbose):
 
     # Otherwise compute them. Note: saving happens automatically because we
     # always write the features to zarr. If no save path is given we use an in-memory zarr.
-    features = _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, verbose)
+    features = _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update)
     original_size, input_size = None, None
 
     image_embeddings = {
@@ -514,7 +518,7 @@ def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, verbose):
     return image_embeddings
 
 
-def _compute_3d(input_, predictor, f, save_path, lazy_loading, verbose):
+def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_update):
     # Check if the embeddings are already fully cached.
     if save_path is not None and "input_size" in f.attrs:
         # In this case we load the embeddings.
@@ -546,10 +550,11 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, verbose):
             partial_features = False
             features = f.create_dataset("features", shape=shape, chunks=chunks, dtype="float32")
 
+    # Initialize the pbar.
+    pbar_init(input_.shape[0], "Compute Image Embeddings 3D")
+
     # Compute the embeddings for each slice.
-    for z, z_slice in tqdm(
-        enumerate(input_), total=input_.shape[0], desc="Precompute Image Embeddings", disable=not verbose
-    ):
+    for z, z_slice in enumerate(input_):
         # Skip feature computation in case of partial features in non-zero slice.
         if partial_features and np.count_nonzero(features[z]) != 0:
             continue
@@ -563,6 +568,7 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, verbose):
             features[z] = embedding.cpu().numpy()
         else:
             features.append(embedding[None])
+        pbar_update(1)
 
     if save_features:
         f.attrs["input_size"] = input_size
@@ -577,7 +583,7 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, verbose):
     return image_embeddings
 
 
-def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, verbose):
+def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update):
     # Check if the features are already computed.
     if "input_size" in f.attrs:
         features = f["features"]
@@ -589,7 +595,7 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, verbose):
 
     # Otherwise compute them. Note: saving happens automatically because we
     # always write the features to zarr. If no save path is given we use an in-memory zarr.
-    features = _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, verbose)
+    features = _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update)
     original_size, input_size = None, None
 
     image_embeddings = {
@@ -651,6 +657,9 @@ def precompute_image_embeddings(
     halo: Optional[Tuple[int, int]] = None,
     wrong_file_callback: Optional[Callable] = None,
     verbose: bool = True,
+    pbar_init: Optional[callable] = None,
+    pbar_update: Optional[callable] = None,
+    pbar_stop: Optional[callable] = None,
 ) -> ImageEmbeddings:
     """Compute the image embeddings (output of the encoder) for the input.
 
@@ -671,6 +680,11 @@ def precompute_image_embeddings(
             The callback ,ust have the signature 'def callback(save_path: str) -> str',
             where the return value is the (potentially updated) embedding save path.
         verbose: Whether to be verbose in the computation.
+        pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
+            Can be used together with pbar_update and pbar_stop to handle napari progress bar in other thread.
+            To enables using this function within a threadworker.
+        pbar_update: Callback to update an external progress bar.
+        pbar_stop: Callback to stop an external progress bar.
 
     Returns:
         The image embeddings.
@@ -684,16 +698,42 @@ def precompute_image_embeddings(
         f = zarr.open(save_path, "a")
         f = _check_existing_embeddings(input_, predictor, f, save_path, tile_shape, halo, wrong_file_callback)
 
-    if ndim == 2:
-        embeddings = _compute_2d(input_, predictor, f, save_path) if tile_shape is None else\
-            _compute_tiled_2d(input_, predictor, tile_shape, halo, f, verbose)
+    # Handle the progress bar correctly.
+    if verbose and pbar_init is None:  # we are verbose and don't have an external progress bar.
+        assert pbar_update is None  # avoid inconsistent state of callbacks
 
-    elif ndim == 3:
-        embeddings = _compute_3d(input_, predictor, f, save_path, lazy_loading, verbose) if tile_shape is None else\
-            _compute_tiled_3d(input_, predictor, tile_shape, halo, f, verbose)
+        # Create our own progress bar and callbacks
+        pbar = tqdm()
 
+        def pbar_init(total, description):
+            pbar.total = total
+            pbar.set_description(description)
+
+        def pbar_update(update):
+            pbar.update(update)
+
+    elif verbose and pbar_init is not None:  # external pbar -> we don't have to do anything
+        assert pbar_update is not None
+
+    else:  # we are not verbose, do nothing
+        def noop(*args):
+            pass
+
+        pbar_init, pbar_update = noop, noop
+
+    if ndim == 2 and tile_shape is None:
+        embeddings = _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update)
+    elif ndim == 2 and tile_shape is not None:
+        embeddings = _compute_tiled_2d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update)
+    elif ndim == 3 and tile_shape is None:
+        embeddings = _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_update)
+    elif ndim == 3 and tile_shape is not None:
+        embeddings = _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update)
     else:
         raise ValueError(f"Invalid dimesionality {input_.ndim}, expect 2 or 3 dim data.")
+
+    if pbar_stop is not None:
+        pbar_stop()
 
     return embeddings
 
