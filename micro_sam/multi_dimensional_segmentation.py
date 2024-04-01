@@ -212,7 +212,7 @@ def segment_mask_in_volume(
     return segmentation, (z_min, z_max)
 
 
-def _preprocess_closing(slice_segmentation, gap_closing, verbose):
+def _preprocess_closing(slice_segmentation, gap_closing, pbar_update):
     binarized = slice_segmentation > 0
     closed_segmentation = binary_closing(binarized, iterations=gap_closing)
 
@@ -264,8 +264,9 @@ def _preprocess_closing(slice_segmentation, gap_closing, verbose):
 
     # Further optimization: parallelize
     offset = 1
-    for z in tqdm(range(n_slices), desc="Close gap in slices", disable=not verbose):
+    for z in range(n_slices):
         new_segmentation[z], offset = process_slice(z, offset)
+        pbar_update(1)
 
     return new_segmentation
 
@@ -277,6 +278,8 @@ def merge_instance_segmentation_3d(
     gap_closing: Optional[int] = None,
     min_z_extent: Optional[int] = None,
     verbose: bool = True,
+    pbar_init: Optional[callable] = None,
+    pbar_update: Optional[callable] = None,
 ) -> np.ndarray:
     """Merge stacked 2d instance segmentations into a consistent 3d segmentation.
 
@@ -294,12 +297,21 @@ def merge_instance_segmentation_3d(
         min_z_extent: Require a minimal extent in z for the segmented objects.
             This can help to prevent segmentation artifacts.
         verbose: Verbosity flag.
+        pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
+            Can be used together with pbar_update to handle napari progress bar in other thread.
+            To enables using this function within a threadworker.
+        pbar_update: Callback to update an external progress bar.
 
     Returns:
         The merged segmentation.
     """
+    _, pbar_init, pbar_update = util.handle_pbar(verbose, pbar_init, pbar_update)
+
     if gap_closing is not None and gap_closing > 0:
-        slice_segmentation = _preprocess_closing(slice_segmentation, gap_closing, verbose=verbose)
+        pbar_init(slice_segmentation.shape[0] + 1, "Merge segmentation")
+        slice_segmentation = _preprocess_closing(slice_segmentation, gap_closing, pbar_update)
+    else:
+        pbar_init(1, "Merge segmentation")
 
     # Extract the overlap between slices.
     edges = track_utils.compute_edges_from_overlap(slice_segmentation, verbose=False)
@@ -331,6 +343,7 @@ def merge_instance_segmentation_3d(
                 filter_ids.append(prop.label)
         if filter_ids:
             segmentation[np.isin(segmentation, filter_ids)] = 0
+    pbar_update(1)
 
     return segmentation
 

@@ -130,6 +130,7 @@ class PBarSignals(QObject):
     pbar_update = Signal(int)
     pbar_description = Signal(str)
     pbar_stop = Signal()
+    pbar_reset = Signal()
 
 
 # Set up the progress bar. We handle this via custom signals that are passed as callbacks to the
@@ -142,6 +143,7 @@ def _create_pbar_for_threadworker():
     pbar_signals.pbar_update.connect(lambda update: pbar.update(update))
     pbar_signals.pbar_description.connect(lambda description: pbar.set_description(description))
     pbar_signals.pbar_stop.connect(lambda: pbar.close())
+    pbar_signals.pbar_reset.connect(lambda: pbar.reset())
     return pbar, pbar_signals
 
 
@@ -664,8 +666,8 @@ class EmbeddingWidget(_WidgetBase):
                 device=self.device, checkpoint_path=self.custom_weights, tile_shape=tile_shape, halo=halo,
                 pbar_init=pbar_init,
                 pbar_update=lambda update: pbar_signals.pbar_update.emit(update),
-                pbar_stop=lambda: pbar_signals.pbar_stop.emit()
             )
+            pbar_signals.pbar_stop.emit()
 
         worker = compute_image_embedding()
         # Note: this is how we can handle the worker when it's done.
@@ -841,9 +843,9 @@ class SegmentNDWidget(_WidgetBase):
 
     def __call__(self):
         if self.tracking:
-            self._run_tracking()
+            return self._run_tracking()
         else:
-            self._run_volumetric_segmentation()
+            return self._run_volumetric_segmentation()
 
 
 #
@@ -851,9 +853,8 @@ class SegmentNDWidget(_WidgetBase):
 #
 
 
-def _instance_segmentation_impl(viewer, with_background, min_object_size, i=None, skip_update=False, **kwargs):
-    state = AnnotatorState()
-
+# Messy amg state handling, would be good to refactor this properly at some point.
+def _handle_amg_state(state, i, pbar_init, pbar_update):
     if state.amg is None:
         is_tiled = state.image_embeddings["input_size"] is None
         state.amg = instance_segmentation.get_amg(state.predictor, is_tiled, decoder=state.decoder)
@@ -870,7 +871,10 @@ def _instance_segmentation_impl(viewer, with_background, min_object_size, i=None
 
         else:
             dummy_image = np.zeros(shape[-2:], dtype="uint8")
-            state.amg.initialize(dummy_image, image_embeddings=state.image_embeddings, verbose=True, i=i)
+            state.amg.initialize(
+                dummy_image, image_embeddings=state.image_embeddings, i=i,
+                verbose=pbar_init is not None, pbar_init=pbar_init, pbar_update=pbar_update,
+            )
             amg_state_i = state.amg.get_state()
             state.amg_state[i] = amg_state_i
 
@@ -895,52 +899,27 @@ def _instance_segmentation_impl(viewer, with_background, min_object_size, i=None
         # We don't need to pass the actual image data here, since the embeddings are passed.
         # (The image data is only used by the amg to compute image embeddings, so not needed here.)
         dummy_image = np.zeros(shape, dtype="uint8")
-        state.amg.initialize(dummy_image, image_embeddings=state.image_embeddings, verbose=True)
+        state.amg.initialize(
+            dummy_image, image_embeddings=state.image_embeddings,
+            verbose=pbar_init is not None, pbar_init=pbar_init, pbar_update=pbar_update
+        )
+
+
+def _instance_segmentation_impl(with_background, min_object_size, i=None, pbar_init=None, pbar_update=None, **kwargs):
+    state = AnnotatorState()
+    _handle_amg_state(state, i, pbar_init, pbar_update)
 
     seg = state.amg.generate(**kwargs)
     if len(seg) == 0:
-        seg = np.zeros(shape[-2:], dtype=viewer.layers["auto_segmentation"].data.dtype)
+        shape = state.image_shape
+        seg = np.zeros(shape[-2:], dtype="uint32")
     else:
         seg = instance_segmentation.mask_data_to_segmentation(
             seg, with_background=with_background, min_object_size=min_object_size
         )
     assert isinstance(seg, np.ndarray)
 
-    if skip_update:
-        return seg
-
-    if i is None:
-        viewer.layers["auto_segmentation"].data = seg
-    else:
-        viewer.layers["auto_segmentation"].data[i] = seg
-    viewer.layers["auto_segmentation"].refresh()
-
     return seg
-
-
-def _segment_volume(viewer, with_background, min_object_size, gap_closing, min_extent, **kwargs):
-    segmentation = np.zeros_like(viewer.layers["auto_segmentation"].data)
-
-    offset = 0
-    # Further optimization: parallelize if state is precomputed for all slices
-    for i in progress(range(segmentation.shape[0]), desc="Segment slices"):
-        seg = _instance_segmentation_impl(
-            viewer, with_background, min_object_size, i=i, skip_update=True, **kwargs
-        )
-        seg_max = seg.max()
-        if seg_max == 0:
-            continue
-        seg[seg != 0] += offset
-        offset = seg_max + offset
-        segmentation[i] = seg
-
-    segmentation = merge_instance_segmentation_3d(
-        segmentation, beta=0.5, with_background=with_background, gap_closing=gap_closing,
-        min_z_extent=min_extent,
-    )
-
-    viewer.layers["auto_segmentation"].data = segmentation
-    viewer.layers["auto_segmentation"].refresh()
 
 
 class AutoSegmentWidget(_WidgetBase):
@@ -961,7 +940,7 @@ class AutoSegmentWidget(_WidgetBase):
 
         # Add the run button.
         self.run_button = QtWidgets.QPushButton("Automatic Segmentation")
-        self.run_button.clicked.connect(self._run_segmentation)
+        self.run_button.clicked.connect(self.__call__)
         self.layout().addWidget(self.run_button)
 
     def _create_volumetric_switch(self):
@@ -1044,31 +1023,99 @@ class AutoSegmentWidget(_WidgetBase):
         settings = _make_collapsible(setting_values, title="Settings")
         return settings
 
-    def _run_segmentation_2d(self, kwargs):
-        _instance_segmentation_impl(self._viewer, self.with_background, self.min_object_size, **kwargs)
+    def _run_segmentation_2d(self, kwargs, i=None):
+        pbar, pbar_signals = _create_pbar_for_threadworker()
+
+        @thread_worker
+        def seg_impl():
+            def pbar_init(total, description):
+                pbar_signals.pbar_total.emit(total)
+                pbar_signals.pbar_description.emit(description)
+
+            seg = _instance_segmentation_impl(
+                self.with_background, self.min_object_size, i=i,
+                pbar_init=pbar_init,
+                pbar_update=lambda update: pbar_signals.pbar_update.emit(update),
+                **kwargs
+            )
+            pbar_signals.pbar_stop.emit()
+            return seg
+
+        def update_segmentation(seg):
+            if i is None:
+                self._viewer.layers["auto_segmentation"].data = seg
+            else:
+                self._viewer.layers["auto_segmentation"].data[i] = seg
+            self._viewer.layers["auto_segmentation"].refresh()
+
+        worker = seg_impl()
+        worker.returned.connect(update_segmentation)
+        worker.start()
+        return worker
+
+    # We refuse to run 3D segmentation with the AMG unless we have a GPU or all embeddings
+    # are precomputed. Otherwise this would take too long.
+    def _allow_segment_3d(self):
+        if self.with_decoder:
+            return True
+        state = AnnotatorState()
+        predictor = state.predictor
+        if str(predictor.device) == "cpu" or str(predictor.device) == "mps":
+            n_slices = self._viewer.layers["auto_segmentation"].data.shape[0]
+            embeddings_are_precomputed = (state.amg_state is not None) and (len(state.amg_state) > n_slices)
+            if not embeddings_are_precomputed:
+                return False
+        return True
 
     def _run_segmentation_3d(self, kwargs):
-        if self.apply_to_volume:
-            # We refuse to run 3D segmentation with the AMG unless we have a GPU or all embeddings
-            # are precomputed. Otherwise this would take too long.
-            state = AnnotatorState()
-            predictor = state.predictor
-            if str(predictor.device) == "cpu" or str(predictor.device) == "mps":
-                n_slices = self._viewer.layers["auto_segmentation"].data.shape[0]
-                embeddings_are_precomputed = len(state.amg_state) > n_slices
-                if not embeddings_are_precomputed:
-                    print("Volumetric segmentation with AMG is only supported if you have a GPU.")
-                    return
+        if not self._allow_segment_3d():
+            print("Volumetric segmentation with AMG is only supported if you have a GPU.")
+            return
 
-            kwargs.update({"gap_closing": self.gap_closing, "min_extent": self.min_extent})
-            _segment_volume(self._viewer, self.with_background, self.min_object_size, **kwargs)
+        pbar, pbar_signals = _create_pbar_for_threadworker()
 
-        else:
-            i = int(self._viewer.cursor.position[0])
-            _instance_segmentation_impl(self._viewer, self.with_background, self.min_object_size, i=i, **kwargs)
+        @thread_worker
+        def seg_impl():
+            segmentation = np.zeros_like(self._viewer.layers["auto_segmentation"].data)
+            offset = 0
 
-    # TODO wrap the computation in a threadworker
-    def _run_segmentation(self):
+            def pbar_init(total, description):
+                pbar_signals.pbar_total.emit(total)
+                pbar_signals.pbar_description.emit(description)
+
+            pbar_init(segmentation.shape[0], "Segment volume")
+
+            # Further optimization: parallelize if state is precomputed for all slices
+            for i in range(segmentation.shape[0]):
+                seg = _instance_segmentation_impl(self.with_background, self.min_object_size, i=i, **kwargs)
+                seg_max = seg.max()
+                if seg_max == 0:
+                    continue
+                seg[seg != 0] += offset
+                offset = seg_max + offset
+                segmentation[i] = seg
+                pbar_signals.pbar_update.emit(1)
+
+            pbar_signals.pbar_reset.emit()
+            segmentation = merge_instance_segmentation_3d(
+                segmentation, beta=0.5, with_background=self.with_background,
+                gap_closing=self.gap_closing, min_z_extent=self.min_extent,
+                verbose=True, pbar_init=pbar_init,
+                pbar_update=lambda update: pbar_signals.pbar_update.emit(1),
+            )
+            pbar_signals.pbar_stop.emit()
+            return segmentation
+
+        def update_segmentation(segmentation):
+            self._viewer.layers["auto_segmentation"].data = segmentation
+            self._viewer.layers["auto_segmentation"].refresh()
+
+        worker = seg_impl()
+        worker.returned.connect(update_segmentation)
+        worker.start()
+        return worker
+
+    def __call__(self):
         if self.with_decoder:
             kwargs = {
                 "center_distance_threshold": self.center_distance_thresh,
@@ -1081,8 +1128,12 @@ class AutoSegmentWidget(_WidgetBase):
                 "stability_score_thresh": self.stability_score_thresh,
                 "box_nms_thresh": self.box_nms_thresh,
             }
-        if self.volumetric:
-            self._run_segmentation_3d(kwargs)
+        if self.volumetric and self.apply_to_volume:
+            worker = self._run_segmentation_3d(kwargs)
+        elif self.volumetric and not self.apply_to_volume:
+            i = int(self._viewer.cursor.position[0])
+            worker = self._run_segmentation_2d(kwargs, i=i)
         else:
-            self._run_segmentation_2d(kwargs)
+            worker = self._run_segmentation_2d(kwargs)
         _select_layer(self._viewer, "auto_segmentation")
+        return worker

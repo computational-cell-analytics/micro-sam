@@ -647,6 +647,36 @@ def _check_existing_embeddings(
     return f
 
 
+# Helper function for optional external progress bars.
+def handle_pbar(verbose, pbar_init, pbar_update):
+    """@private"""
+    if verbose and pbar_init is None:  # we are verbose and don't have an external progress bar.
+        assert pbar_update is None  # avoid inconsistent state of callbacks
+
+        # Create our own progress bar and callbacks
+        pbar = tqdm()
+
+        def pbar_init(total, description):
+            pbar.total = total
+            pbar.set_description(description)
+
+        def pbar_update(update):
+            pbar.update(update)
+
+    elif verbose and pbar_init is not None:  # external pbar -> we don't have to do anything
+        assert pbar_update is not None
+        pbar = None
+
+    else:  # we are not verbose, do nothing
+        def noop(*args):
+            pass
+
+        pbar = None
+        pbar_init, pbar_update = noop, noop
+
+    return pbar, pbar_init, pbar_update
+
+
 def precompute_image_embeddings(
     predictor: SamPredictor,
     input_: np.ndarray,
@@ -659,7 +689,6 @@ def precompute_image_embeddings(
     verbose: bool = True,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
-    pbar_stop: Optional[callable] = None,
 ) -> ImageEmbeddings:
     """Compute the image embeddings (output of the encoder) for the input.
 
@@ -681,10 +710,9 @@ def precompute_image_embeddings(
             where the return value is the (potentially updated) embedding save path.
         verbose: Whether to be verbose in the computation.
         pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
-            Can be used together with pbar_update and pbar_stop to handle napari progress bar in other thread.
+            Can be used together with pbar_update to handle napari progress bar in other thread.
             To enables using this function within a threadworker.
         pbar_update: Callback to update an external progress bar.
-        pbar_stop: Callback to stop an external progress bar.
 
     Returns:
         The image embeddings.
@@ -698,28 +726,7 @@ def precompute_image_embeddings(
         f = zarr.open(save_path, "a")
         f = _check_existing_embeddings(input_, predictor, f, save_path, tile_shape, halo, wrong_file_callback)
 
-    # Handle the progress bar correctly.
-    if verbose and pbar_init is None:  # we are verbose and don't have an external progress bar.
-        assert pbar_update is None  # avoid inconsistent state of callbacks
-
-        # Create our own progress bar and callbacks
-        pbar = tqdm()
-
-        def pbar_init(total, description):
-            pbar.total = total
-            pbar.set_description(description)
-
-        def pbar_update(update):
-            pbar.update(update)
-
-    elif verbose and pbar_init is not None:  # external pbar -> we don't have to do anything
-        assert pbar_update is not None
-
-    else:  # we are not verbose, do nothing
-        def noop(*args):
-            pass
-
-        pbar_init, pbar_update = noop, noop
+    _, pbar_init, pbar_update = handle_pbar(verbose, pbar_init, pbar_update)
 
     if ndim == 2 and tile_shape is None:
         embeddings = _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update)
@@ -731,9 +738,6 @@ def precompute_image_embeddings(
         embeddings = _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update)
     else:
         raise ValueError(f"Invalid dimesionality {input_.ndim}, expect 2 or 3 dim data.")
-
-    if pbar_stop is not None:
-        pbar_stop()
 
     return embeddings
 
