@@ -33,7 +33,7 @@ def test_embedding_widget(make_napari_viewer, tmp_path):
     my_widget.save_path = tmp_path
 
     # Run image embedding widget.
-    worker = my_widget._compute_image_embeddings()
+    worker = my_widget()
     worker.await_workers()  # blocks until thread worker is finished the embedding
 
     # Check in-memory state for predictor and embeddings.
