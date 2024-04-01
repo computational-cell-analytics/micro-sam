@@ -2,7 +2,7 @@
 """
 
 import os
-from typing import Any, Optional, Union, Tuple
+from typing import Optional, Union, Tuple
 
 import numpy as np
 import nifty
@@ -92,7 +92,7 @@ def segment_mask_in_volume(
     stop_upper: bool,
     iou_threshold: float,
     projection: Union[str, dict],
-    progress_bar: Optional[Any] = None,
+    update_progress: Optional[callable] = None,
     box_extension: float = 0.0,
     verbose: bool = False,
 ) -> Tuple[np.ndarray, Tuple[int, int]]:
@@ -108,8 +108,9 @@ def segment_mask_in_volume(
         iou_threshold: The IOU threshold for continuing segmentation across 3d.
         projection: The projection method to use. One of 'box', 'mask', 'points', 'points_and_mask' or 'single point'.
             Pass a dictionary to choose the excact combination of projection modes.
-        progress_bar: Optional progress bar.
+        update_progress: Callback to update an external progress bar.
         box_extension: Extension factor for increasing the box size after projection.
+        verbose: Whether to print details about the segmentation steps.
 
     Returns:
         Array with the volumetric segmentation.
@@ -117,9 +118,9 @@ def segment_mask_in_volume(
     """
     use_box, use_mask, use_points, use_single_point = _validate_projection(projection)
 
-    def update_progress():
-        if progress_bar is not None:
-            progress_bar.update(1)
+    if update_progress is None:
+        def update_progress(*args):
+            pass
 
     def segment_range(z_start, z_stop, increment, stopping_criterion, threshold=None, verbose=False):
         z = z_start + increment
@@ -145,7 +146,7 @@ def segment_mask_in_volume(
                 if verbose:
                     print(f"Segment {z_start} to {z_stop}: stop at slice {z}")
                 break
-            update_progress()
+            update_progress(1)
 
         return z - increment
 
@@ -186,7 +187,7 @@ def segment_mask_in_volume(
                     use_mask=use_mask, use_box=use_box, use_points=use_points,
                     box_extension=box_extension
                 )
-                update_progress()
+                update_progress(1)
 
             else:  # there is a range of more than 2 slices in between -> segment ranges
                 # segment from bottom
@@ -206,7 +207,7 @@ def segment_mask_in_volume(
                         use_mask=use_mask, use_box=use_box, use_points=use_points,
                         box_extension=box_extension
                     )
-                    update_progress()
+                    update_progress(1)
 
     return segmentation, (z_min, z_max)
 

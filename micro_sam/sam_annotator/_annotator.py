@@ -87,7 +87,7 @@ class _AnnotatorBase(QtWidgets.QWidget):
         if "segment_nd" in self._widgets:
             @self._viewer.bind_key("Shift-S", overwrite=True)
             def _seg_nd(viewer):
-                self._widgets["segment_nd"](viewer)
+                self._widgets["segment_nd"]()
 
     # TODO
     # We could implement a better way of initializing the segmentation result,

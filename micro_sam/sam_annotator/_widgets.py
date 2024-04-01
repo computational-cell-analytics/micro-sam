@@ -540,7 +540,7 @@ class EmbeddingWidget(_WidgetBase):
 
         # Section 3: The button to trigger the embedding computation.
         self.run_button = QtWidgets.QPushButton("Compute Embeddings")
-        self.run_button.clicked.connect(self._compute_image_embeddings)
+        self.run_button.clicked.connect(self.__call__)
         self.layout().addWidget(self.run_button)
 
     def _create_image_section(self):
@@ -607,12 +607,13 @@ class EmbeddingWidget(_WidgetBase):
         settings = _make_collapsible(setting_values, title="Settings")
         return settings
 
-    def _compute_image_embeddings(self):
+    def __call__(self):
 
-        # Get the image and model.
+        # Get the image.
         image = self.image_selection.get_value()
 
         # TODO Do a check if we actually need to recompute the embeddings.
+        # Unify this with the checks that are currently in the thread worker.
 
         # Update the image embeddings:
         # Reset the state.
@@ -627,16 +628,17 @@ class EmbeddingWidget(_WidgetBase):
             ndim = image.data.ndim
             state.image_shape = image.data.shape
 
-        # Process tile_shape and halo.
+        # Process tile_shape and halo, set other data.
         tile_shape, halo = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
+        save_path = self.save_path
+        image_data = image.data
 
         # Set up progress bar and signals for using it within a threadworker.
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
         @thread_worker()
-        def compute_image_embedding(
-            state, image_data, save_path, ndim, device, model_type, custom_weights, tile_shape, halo
-        ):
+        def compute_image_embedding():
+            # TODO these checks should probably not happen in the threadworker
             # Make sure save directory exists and is an empty directory
             if save_path is not None:
                 os.makedirs(save_path, exist_ok=True)
@@ -658,17 +660,14 @@ class EmbeddingWidget(_WidgetBase):
                 pbar_signals.pbar_description.emit(description)
 
             state.initialize_predictor(
-                image_data, model_type=model_type, save_path=save_path, ndim=ndim, device=device,
-                checkpoint_path=custom_weights, tile_shape=tile_shape, halo=halo,
+                image_data, model_type=self.model_type, save_path=save_path, ndim=ndim,
+                device=self.device, checkpoint_path=self.custom_weights, tile_shape=tile_shape, halo=halo,
                 pbar_init=pbar_init,
                 pbar_update=lambda update: pbar_signals.pbar_update.emit(update),
                 pbar_stop=lambda: pbar_signals.pbar_stop.emit()
             )
 
-        worker = compute_image_embedding(
-            state, image.data, self.save_path, ndim=ndim, device=self.device, model_type=self.model_type,
-            custom_weights=self.custom_weights, tile_shape=tile_shape, halo=halo
-        )
+        worker = compute_image_embedding()
         # Note: this is how we can handle the worker when it's done.
         # We can use this e.g. to add an indicator that the embeddings are computed or not.
         worker.returned.connect(lambda _: print("Embeddings for", self.model_type, "have been computed."))
@@ -718,7 +717,7 @@ class SegmentNDWidget(_WidgetBase):
         # Add the run button.
         button_title = "Segment All Frames [Shift-S]" if self.tracking else "Segment All Slices [Shift-S]"
         self.run_button = QtWidgets.QPushButton(button_title)
-        self.run_button.clicked.connect(self._run_segmentation)
+        self.run_button.clicked.connect(self.__call__)
         self.layout().addWidget(self.run_button)
 
     def _create_settings(self):
@@ -751,14 +750,20 @@ class SegmentNDWidget(_WidgetBase):
 
     def _run_tracking(self):
         state = AnnotatorState()
-        shape = state.image_shape
+        pbar, pbar_signals = _create_pbar_for_threadworker()
 
-        with progress(total=shape[0]) as progress_bar:
+        @thread_worker
+        def tracking_impl():
+            shape = state.image_shape
+
+            pbar_signals.pbar_total.emit(shape[0])
+            pbar_signals.pbar_description.emit("Track object")
+
             # Step 1: Segment all slices with prompts.
             seg, slices, _, stop_upper = vutil.segment_slices_with_prompts(
                 state.predictor, self._viewer.layers["point_prompts"], self._viewer.layers["prompts"],
-                state.image_embeddings, shape,
-                progress_bar=progress_bar, track_id=state.current_track_id
+                state.image_embeddings, shape, track_id=state.current_track_id,
+                update_progress=lambda update: pbar_signals.pbar_update.emit(update),
             )
 
             # Step 2: Track the object starting from the lowest annotated slice.
@@ -766,37 +771,50 @@ class SegmentNDWidget(_WidgetBase):
                 self._viewer.layers["point_prompts"], self._viewer.layers["prompts"], seg,
                 state.predictor, slices, state.image_embeddings, stop_upper,
                 threshold=self.iou_threshold, projection=self.projection,
-                progress_bar=progress_bar, motion_smoothing=self.motion_smoothing,
+                motion_smoothing=self.motion_smoothing,
                 box_extension=self.box_extension,
+                update_progress=lambda update: pbar_signals.pbar_update.emit(update),
             )
 
-        # If a division has occurred and it's the first time it occurred for this track
-        # then we need to create the two daughter tracks and update the lineage.
-        if has_division and (len(state.lineage[state.current_track_id]) == 0):
-            _update_lineage(self._viewer)
+            pbar_signals.pbar_stop.emit()
+            return seg, has_division
 
-        # Clear the old track mask.
-        self._viewer.layers["current_object"].data[
-            self._viewer.layers["current_object"].data == state.current_track_id
-        ] = 0
-        # Set the new object mask.
-        self._viewer.layers["current_object"].data[seg == 1] = state.current_track_id
-        self._viewer.layers["current_object"].refresh()
+        def update_segmentation(ret_val):
+            seg, has_division = ret_val
+            # If a division has occurred and it's the first time it occurred for this track
+            # then we need to create the two daughter tracks and update the lineage.
+            if has_division and (len(state.lineage[state.current_track_id]) == 0):
+                _update_lineage(self._viewer)
+
+            # Clear the old track mask.
+            self._viewer.layers["current_object"].data[
+                self._viewer.layers["current_object"].data == state.current_track_id
+            ] = 0
+            # Set the new object mask.
+            self._viewer.layers["current_object"].data[seg == 1] = state.current_track_id
+            self._viewer.layers["current_object"].refresh()
+
+        worker = tracking_impl()
+        worker.returned.connect(update_segmentation)
+        worker.start()
+        return worker
 
     def _run_volumetric_segmentation(self):
-        state = AnnotatorState()
-        shape = state.image_shape
+        pbar, pbar_signals = _create_pbar_for_threadworker()
 
-        # TODO
-        # pbar, pbar_signals = _create_pbar_for_threadworker()
+        @thread_worker
+        def volumetric_segmentation_impl():
+            state = AnnotatorState()
+            shape = state.image_shape
 
-        with progress(total=shape[0]) as progress_bar:
+            pbar_signals.pbar_total.emit(shape[0])
+            pbar_signals.pbar_description.emit("Segment object")
 
             # Step 1: Segment all slices with prompts.
             seg, slices, stop_lower, stop_upper = vutil.segment_slices_with_prompts(
-                state.predictor, self.viewer.layers["point_prompts"], self.viewer.layers["prompts"],
+                state.predictor, self._viewer.layers["point_prompts"], self._viewer.layers["prompts"],
                 state.image_embeddings, shape,
-                progress_bar=progress_bar,
+                update_progress=lambda update: pbar_signals.pbar_update.emit(update),
             )
 
             # Step 2: Segment the rest of the volume based on projecting prompts.
@@ -804,14 +822,24 @@ class SegmentNDWidget(_WidgetBase):
                 seg, state.predictor, state.image_embeddings, slices,
                 stop_lower, stop_upper,
                 iou_threshold=self.iou_threshold, projection=self.projection,
-                progress_bar=progress_bar, box_extension=self.box_extension,
+                box_extension=self.box_extension,
+                update_progress=lambda update: pbar_signals.pbar_update.emit(update),
             )
+            pbar_signals.pbar_stop.emit()
 
-        state.z_range = (z_min, z_max)
-        self._viewer.layers["current_object"].data = seg
-        self._viewer.layers["current_object"].refresh()
+            state.z_range = (z_min, z_max)
+            return seg
 
-    def _run_segmentation(self):
+        def update_segmentation(seg):
+            self._viewer.layers["current_object"].data = seg
+            self._viewer.layers["current_object"].refresh()
+
+        worker = volumetric_segmentation_impl()
+        worker.returned.connect(update_segmentation)
+        worker.start()
+        return worker
+
+    def __call__(self):
         if self.tracking:
             self._run_tracking()
         else:

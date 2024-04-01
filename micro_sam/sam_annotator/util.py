@@ -339,7 +339,7 @@ def prompt_layers_to_state(
 
 
 def segment_slices_with_prompts(
-    predictor, point_prompts, box_prompts, image_embeddings, shape, progress_bar=None, track_id=None
+    predictor, point_prompts, box_prompts, image_embeddings, shape, track_id=None, update_progress=None,
 ):
     """@private"""
     assert len(shape) == 3
@@ -363,9 +363,9 @@ def segment_slices_with_prompts(
     slices = np.unique(np.concatenate([z_values, z_values_boxes])).astype("int")
     stop_lower, stop_upper = False, False
 
-    def _update_progress():
-        if progress_bar is not None:
-            progress_bar.update(1)
+    if update_progress is None:
+        def update_progress(*args):
+            pass
 
     for i in slices:
         points_i = point_layer_to_prompts(point_prompts, i, track_id)
@@ -387,7 +387,7 @@ def segment_slices_with_prompts(
                 print("but you have annotated slices above or below it. This stop annotation will")
                 print(f"be ignored and the slice {i} will be segmented normally.")
 
-            _update_progress()
+            update_progress(1)
             continue
 
         boxes, masks = shape_layer_to_prompts(box_prompts, image_shape, i=i, track_id=track_id)
@@ -404,7 +404,7 @@ def segment_slices_with_prompts(
             continue
 
         seg[i] = seg_i
-        _update_progress()
+        update_progress(1)
 
     return seg, slices, stop_lower, stop_upper
 
@@ -525,15 +525,15 @@ def _shift_object(mask, motion_model):
 def track_from_prompts(
     point_prompts, box_prompts, seg, predictor, slices, image_embeddings,
     stop_upper, threshold, projection,
-    progress_bar=None, motion_smoothing=0.5, box_extension=0,
+    motion_smoothing=0.5, box_extension=0, update_progress=None,
 ):
     """@private
     """
     use_box, use_mask, use_points, use_single_point = _validate_projection(projection)
 
-    def _update_progress():
-        if progress_bar is not None:
-            progress_bar.update(1)
+    if update_progress is None:
+        def update_progress(*args):
+            pass
 
     # shift the segmentation based on the motion model and update the motion model
     def _update_motion_model(seg, t, t0, motion_model):
@@ -591,7 +591,7 @@ def track_from_prompts(
             if t < slices[-1]:
                 seg_prev = None
 
-            _update_progress()
+            update_progress(1)
 
         if (threshold is not None) and (seg_prev is not None):
             iou = util.compute_iou(seg_prev, seg_t)
