@@ -9,14 +9,14 @@ Scripts for evaluating Segment Anything models and the finetuned models.
 
 ## Evaluation Code
 
-NOTE: To run the evaluations on your custom dataset, you need to adapt* the scripts a bit.
+To run the evaluations on your custom dataset, you need to adapt* the scripts a bit.
 
 - `precompute_embeddings.py`: Script to precompute the image embeddings and store it for following evaluation scripts.
 - `evaluate_amg.py`: Script to run Automatic Mask Generation (AMG), the "Segment Anything" feature.
 - `evaluate_instance_segmentation`: Script to run Automatic Instance Segmentation (AIS), the new feature in micro-sam with added decoder to perform instance segmentation.
 - `iterative_prompting.py`: Script to run iterative prompting** (interactive instance segmentation) with respect to the true labels.
 
-To know more about the scripts above and the expected arguments, you can check it out using `<SCRIPT>.py -h`.
+Know more about the scripts above and the expected arguments using `<SCRIPT>.py -h`.
 
 TLDR: The most important arguments to be passed are the hinted below:
 ```bash
@@ -43,5 +43,6 @@ python <SCRIPT>.py -m <MODEL_NAME>  # the segment anything model type
         return image_paths, gt_paths
 
     ```
+    - We also need the validation set to perform grid-search for the automatic segmentation methods. It's essential to obtain the post-processing parameters for the specific dataset. Make sure to have a validation set (you can choose the validation set subjected to your finetuning, or just make a very small split out of the available dataset)
 
 - **iterative prompting: The method to start interactive segmentation with initial prompts (could be either a positive point or a box), and continuing to (automatically) add point prompts (8 times) to: a) rectify where the model makes mistakes (using negative point prompt) and b) indicate an expected region missed out by the model (using a positive point prompt).

@@ -2,6 +2,8 @@
 
 All the fullscale experiment in `micro-sam` have been performed on A100s. Can we finetune Segment Anything on limited resources?
 
+TLDR: Finetuning `vit_b` is the best bet on most workstation / cluster-level GPUs. Reduce the number of objects per batch to fit to your desired resource. Let us know if you want more specifics on this.
+
 ## Available Resource Combinations:
 - `xps13` (CPU - local)
 - `medium` (CPU - SCC)
@@ -78,10 +80,3 @@ All jobs are tested on `medium` partition.
 4. RAM: 8GB, Cores: 8
     - `vit_t`: freeze `image_encoder`
     - `n_objects`: 1
-
-5. `XPS13`:
-    - TODO
-
-## Scripts:
-
- TODO: need to explain what are the purpose of the scripts in brief.
