@@ -1,22 +1,21 @@
 import os
-from typing import List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import imageio.v3 as imageio
 import torch
 import torch_em
-from elf.io import open_file
 
-from torch_em.transform.label import PerObjectDistanceTransform
-from torch.utils.data import DataLoader, Dataset
+from elf.io import open_file
 from torch.optim.lr_scheduler import _LRScheduler
-from torch_em.loss import DiceBasedDistanceLoss
+from torch.utils.data import DataLoader, Dataset
 from torch_em.data.datasets.util import split_kwargs
 
 from ..util import get_device
 from ..instance_segmentation import get_unetr
 from .util import get_trainable_sam_model, ConvertToSamInputs, identity
-from . import sam_trainer as trainers
-from . import joint_sam_trainer as joint_trainers
+from . import sam_trainers as trainers
+from . import joint_sam_trainers as joint_trainers
+
 
 FilePath = Union[str, os.PathLike]
 
@@ -109,11 +108,13 @@ def train_sam(
     freeze: Optional[List[str]] = None,
     device: Optional[Union[str, torch.device]] = None,
     lr: float = 1e-5,
-    scheduler: Optional[_LRScheduler] = None,
     n_sub_iteration: int = 8,
     save_root: Optional[Union[str, os.PathLike]] = None,
     mask_prob: float = 0.5,
     n_iterations: Optional[int] = None,
+    scheduler_class: Optional[_LRScheduler] = torch.optim.lr_scheduler.ReduceLROnPlateau,
+    scheduler_kwargs: Optional[Dict[str, Any]] = None,
+    save_every_kth_epoch: Optional[int] = None,
 ) -> None:
     """Run training for a SAM model.
 
@@ -137,12 +138,16 @@ def train_sam(
             By default nothing is frozen and the full model is updated.
         device: The device to use for training.
         lr: The learning rate.
-        scheduler: The learning rate scheduler. By default ReduceLROnPlateau is used.
         n_sub_iteration: The number of iterative prompts per training iteration.
         save_root: Optional root directory for saving the checkpoints and logs.
             If not given the current working directory is used.
         mask_prob: The probability for using a mask as input in a given training sub-iteration.
         n_iterations: The number of iterations to use for training. This will over-ride n_epochs if given.
+        scheduler_class: The learning rate scheduler to update the learning rate.
+            By default, ReduceLROnPlateau is used.
+        scheduler_kwargs: The learning rate scheduler parameters.
+            If passed None, the chosen default parameters are used in ReduceLROnPlateau.
+        save_every_kth_epoch: Save checkpoints after every kth epoch separately.
     """
     _check_loader(train_loader, with_segmentation_decoder)
     _check_loader(val_loader, with_segmentation_decoder)
@@ -179,31 +184,66 @@ def train_sam(
     else:
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    if scheduler is None:
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode="min", factor=0.9, patience=3, verbose=True
-        )
+    if scheduler_kwargs is None:
+        scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
+
+    scheduler = scheduler_class(optimizer=optimizer, **scheduler_kwargs)
 
     # The trainer which performs training and validation.
     if with_segmentation_decoder:
-        instance_seg_loss = DiceBasedDistanceLoss(mask_distances_in_bg=True)
+        instance_seg_loss = torch_em.loss.DiceBasedDistanceLoss(mask_distances_in_bg=True)
         trainer = joint_trainers.JointSamTrainer(
-            name=name, train_loader=train_loader, val_loader=val_loader, model=model,
-            optimizer=optimizer, device=device, lr_scheduler=scheduler, logger=joint_trainers.JointSamLogger,
-            log_image_interval=100, mixed_precision=True, convert_inputs=convert_inputs,
-            n_objects_per_batch=n_objects_per_batch, n_sub_iteration=n_sub_iteration, compile_model=False, unetr=unetr,
-            instance_loss=instance_seg_loss, instance_metric=instance_seg_loss,
-            early_stopping=early_stopping, mask_prob=mask_prob, save_root=save_root,
+            name=name,
+            save_root=save_root,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            model=model,
+            optimizer=optimizer,
+            device=device,
+            lr_scheduler=scheduler,
+            logger=joint_trainers.JointSamLogger,
+            log_image_interval=100,
+            mixed_precision=True,
+            convert_inputs=convert_inputs,
+            n_objects_per_batch=n_objects_per_batch,
+            n_sub_iteration=n_sub_iteration,
+            compile_model=False,
+            unetr=unetr,
+            instance_loss=instance_seg_loss,
+            instance_metric=instance_seg_loss,
+            early_stopping=early_stopping,
+            mask_prob=mask_prob,
         )
     else:
         trainer = trainers.SamTrainer(
-            name=name, train_loader=train_loader, val_loader=val_loader, model=model,
-            optimizer=optimizer, device=device, lr_scheduler=scheduler, logger=trainers.SamLogger,
-            log_image_interval=100, mixed_precision=True, convert_inputs=convert_inputs,
-            n_objects_per_batch=n_objects_per_batch, n_sub_iteration=n_sub_iteration, compile_model=False,
-            early_stopping=early_stopping, mask_prob=mask_prob, save_root=save_root,
+            name=name,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            model=model,
+            optimizer=optimizer,
+            device=device,
+            lr_scheduler=scheduler,
+            logger=trainers.SamLogger,
+            log_image_interval=100,
+            mixed_precision=True,
+            convert_inputs=convert_inputs,
+            n_objects_per_batch=n_objects_per_batch,
+            n_sub_iteration=n_sub_iteration,
+            compile_model=False,
+            early_stopping=early_stopping,
+            mask_prob=mask_prob,
+            save_root=save_root,
         )
-    trainer.fit(epochs=n_epochs)
+
+    if n_iterations is None:
+        trainer_fit_params = {"epochs": n_epochs}
+    else:
+        trainer_fit_params = {"iterations": n_iterations}
+
+    if save_every_kth_epoch is not None:
+        trainer_fit_params["save_every_kth_epoch"] = save_every_kth_epoch
+
+    trainer.fit(**trainer_fit_params)
 
 
 def _update_patch_shape(patch_shape, raw_paths, raw_key, with_channels):
@@ -254,7 +294,7 @@ def default_sam_dataset(
     # Set the data transformations.
     raw_transform = identity
     if with_segmentation_decoder:
-        label_transform = PerObjectDistanceTransform(
+        label_transform = torch_em.transform.label.PerObjectDistanceTransform(
             distances=True, boundary_distances=True, directed_distances=False,
             foreground=True, instances=True, min_size=25,
         )

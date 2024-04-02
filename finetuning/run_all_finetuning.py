@@ -39,7 +39,7 @@ source activate {env_name} \n"""
     python_script += f"-m {model_type} "
 
     # choice of the number of objects
-    python_script += f"--n_objects {N_OBJECTS[model_type]} "
+    python_script += f"--n_objects {N_OBJECTS[model_type[:5]]} "
 
     # let's add the python script to the bash script
     batch_script += python_script
@@ -75,7 +75,10 @@ def submit_slurm(args):
         "tissuenet_specialist": "specialists/training/light_microscopy/tissuenet_finetuning",
         "plantseg_root_specialist": "specialists/training/light_microscopy/plantseg_root_finetuning",
         "neurips_cellseg_specialist": "specialists/training/light_microscopy/neurips_cellseg_finetuning",
+        "dynamicnuclearnet_specialist": "specialists/training/light_microscopy/dynamicnuclearnet_finetuning",
         "lm_generalist": "generalists/training/light_microscopy/train_lm_generalist",
+        "cremi_specialist": "specialists/training/electron_microscopy/boundaries/cremi_finetuning",
+        "asem_specialist": "specialists/training/electron_microscopy/organelles/asem_finetuning",
         "em_mito_nuc_generalist": "generalists/training/electron_microscopy/mito_nuc/train_mito_nuc_em_generalist",
         "em_boundaries_generalist": "generalists/training/electron_microscopy/boundaries/train_boundaries_em_generalist"
     }
