@@ -24,11 +24,6 @@ from torchvision.ops.boxes import batched_nms, box_area
 from torch_em.model import UNETR
 from torch_em.util.segmentation import watershed_from_center_and_boundary_distances
 
-try:
-    from napari.utils import progress as tqdm
-except ImportError:
-    from tqdm import tqdm
-
 from . import util
 from ._vendored import batched_mask_to_box, mask_to_rle_pytorch
 
@@ -410,8 +405,8 @@ class AutomaticMaskGenerator(AMGBase):
         del masks
         return data
 
-    def _process_crop(self, image, crop_box, crop_layer_idx, verbose, precomputed_embeddings):
-        # crop the image and calculate embeddings
+    def _process_crop(self, image, crop_box, crop_layer_idx, precomputed_embeddings, pbar_init=None, pbar_update=None):
+        # Crop the image and calculate embeddings.
         x0, y0, x1, y1 = crop_box
         cropped_im = image[y0:y1, x0:x1, :]
         cropped_im_size = cropped_im.shape[:2]
@@ -419,22 +414,23 @@ class AutomaticMaskGenerator(AMGBase):
         if not precomputed_embeddings:
             self._predictor.set_image(cropped_im)
 
-        # get the points for this crop
+        # Get the points for this crop.
         points_scale = np.array(cropped_im_size)[None, ::-1]
         points_for_image = self.point_grids[crop_layer_idx] * points_scale
 
-        # generate masks for this crop in batches
+        # Generate masks for this crop in batches.
         data = amg_utils.MaskData()
         n_batches = len(points_for_image) // self._points_per_batch +\
             int(len(points_for_image) % self._points_per_batch != 0)
-        for (points,) in tqdm(
-            amg_utils.batch_iterator(self._points_per_batch, points_for_image),
-            disable=not verbose, total=n_batches,
-            desc="Predict masks for point grid prompts",
-        ):
+        if pbar_init is not None:
+            pbar_init(n_batches, "Predict masks for point grid prompts")
+
+        for (points,) in amg_utils.batch_iterator(self._points_per_batch, points_for_image):
             batch_data = self._process_batch(points, cropped_im_size, crop_box, self.original_size)
             data.cat(batch_data)
             del batch_data
+            if pbar_update is not None:
+                pbar_update(1)
 
         if not precomputed_embeddings:
             self._predictor.reset_image()
@@ -447,7 +443,9 @@ class AutomaticMaskGenerator(AMGBase):
         image: np.ndarray,
         image_embeddings: Optional[util.ImageEmbeddings] = None,
         i: Optional[int] = None,
-        verbose: bool = False
+        verbose: bool = False,
+        pbar_init: Optional[callable] = None,
+        pbar_update: Optional[callable] = None,
     ) -> None:
         """Initialize image embeddings and masks for an image.
 
@@ -458,6 +456,10 @@ class AutomaticMaskGenerator(AMGBase):
             i: Index for the image data. Required if `image` has three spatial dimensions
                 or a time dimension and two spatial dimensions.
             verbose: Whether to print computation progress.
+            pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
+                Can be used together with pbar_update to handle napari progress bar in other thread.
+                To enables using this function within a threadworker.
+            pbar_update: Callback to update an external progress bar.
         """
         original_size = image.shape[:2]
         self._original_size = original_size
@@ -466,9 +468,8 @@ class AutomaticMaskGenerator(AMGBase):
             original_size, self._crop_n_layers, self._crop_overlap_ratio
         )
 
-        # we can set fixed image embeddings if we only have a single crop box
-        # (which is the default setting)
-        # otherwise we have to recompute the embeddings for each crop and can't precompute
+        # We can set fixed image embeddings if we only have a single crop box (the default setting).
+        # Otherwise we have to recompute the embeddings for each crop and can't precompute.
         if len(crop_boxes) == 1:
             if image_embeddings is None:
                 image_embeddings = util.precompute_image_embeddings(self._predictor, image)
@@ -480,10 +481,14 @@ class AutomaticMaskGenerator(AMGBase):
         # we need to cast to the image representation that is compatible with SAM
         image = util._to_image(image)
 
+        _, pbar_init, pbar_update = util.handle_pbar(verbose, pbar_init, pbar_update)
+
         crop_list = []
         for crop_box, layer_idx in zip(crop_boxes, layer_idxs):
             crop_data = self._process_crop(
-                image, crop_box, layer_idx, verbose=verbose, precomputed_embeddings=precomputed_embeddings
+                image, crop_box, layer_idx,
+                precomputed_embeddings=precomputed_embeddings,
+                pbar_init=pbar_init, pbar_update=pbar_update,
             )
             crop_list.append(crop_data)
 
@@ -615,6 +620,8 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         tile_shape: Optional[Tuple[int, int]] = None,
         halo: Optional[Tuple[int, int]] = None,
         verbose: bool = False,
+        pbar_init: Optional[callable] = None,
+        pbar_update: Optional[callable] = None,
     ) -> None:
         """Initialize image embeddings and masks for an image.
 
@@ -627,6 +634,10 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
             tile_shape: The tile shape for embedding prediction.
             halo: The overlap of between tiles.
             verbose: Whether to print computation progress.
+            pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
+                Can be used together with pbar_update to handle napari progress bar in other thread.
+                To enables using this function within a threadworker.
+            pbar_update: Callback to update an external progress bar.
         """
         original_size = image.shape[:2]
         self._original_size = original_size
@@ -638,15 +649,18 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         tiling = blocking([0, 0], original_size, tile_shape)
         n_tiles = tiling.numberOfBlocks
 
-        # the crop box is always the full local tile
+        # The crop box is always the full local tile.
         tiles = [tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock for tile_id in range(n_tiles)]
         crop_boxes = [[tile.begin[1], tile.begin[0], tile.end[1], tile.end[0]] for tile in tiles]
 
-        # we need to cast to the image representation that is compatible with SAM
+        _, pbar_init, pbar_update = util.handle_pbar(verbose, pbar_init, pbar_update)
+        pbar_init(n_tiles, "Compute masks for tile")
+
+        # We need to cast to the image representation that is compatible with SAM.
         image = util._to_image(image)
 
         mask_data = []
-        for tile_id in tqdm(range(n_tiles), total=n_tiles, desc="Compute masks for tile", disable=not verbose):
+        for tile_id in range(n_tiles):
             # set the pre-computed embeddings for this tile
             features = image_embeddings["features"][tile_id]
             tile_embeddings = {
@@ -658,9 +672,10 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
 
             # compute the mask data for this tile and append it
             this_mask_data = self._process_crop(
-                image, crop_box=crop_boxes[tile_id], crop_layer_idx=0, verbose=verbose, precomputed_embeddings=True
+                image, crop_box=crop_boxes[tile_id], crop_layer_idx=0, precomputed_embeddings=True
             )
             mask_data.append(this_mask_data)
+            pbar_update(1)
 
         # set the initialized data
         self._is_initialized = True
@@ -852,6 +867,8 @@ class InstanceSegmentationWithDecoder:
         image_embeddings: Optional[util.ImageEmbeddings] = None,
         i: Optional[int] = None,
         verbose: bool = False,
+        pbar_init: Optional[callable] = None,
+        pbar_update: Optional[callable] = None,
     ) -> None:
         """Initialize image embeddings and decoder predictions for an image.
 
@@ -861,8 +878,15 @@ class InstanceSegmentationWithDecoder:
                 See `util.precompute_image_embeddings` for details.
             i: Index for the image data. Required if `image` has three spatial dimensions
                 or a time dimension and two spatial dimensions.
-            verbose: Dummy input to be compatible with other function signatures.
+            verbose: Whether to be verbose.
+            pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
+                Can be used together with pbar_update to handle napari progress bar in other thread.
+                To enables using this function within a threadworker.
+            pbar_update: Callback to update an external progress bar.
         """
+        _, pbar_init, pbar_update = util.handle_pbar(verbose, pbar_init, pbar_update)
+        pbar_init(1, "Initialize instannce segmentation with decoder")
+
         if image_embeddings is None:
             image_embeddings = util.precompute_image_embeddings(self._predictor, image)
 
@@ -875,6 +899,7 @@ class InstanceSegmentationWithDecoder:
         # Run prediction with the UNETR decoder.
         output = self._decoder(embeddings, input_shape, original_shape).cpu().numpy().squeeze(0)
         assert output.shape[0] == 3, f"{output.shape}"
+        pbar_update(1)
 
         # Set the state.
         self._foreground = output[0]
@@ -1019,6 +1044,8 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         tile_shape: Optional[Tuple[int, int]] = None,
         halo: Optional[Tuple[int, int]] = None,
         verbose: bool = False,
+        pbar_init: Optional[callable] = None,
+        pbar_update: Optional[callable] = None,
     ) -> None:
         """Initialize image embeddings and decoder predictions for an image.
 
@@ -1029,6 +1056,10 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
             i: Index for the image data. Required if `image` has three spatial dimensions
                 or a time dimension and two spatial dimensions.
             verbose: Dummy input to be compatible with other function signatures.
+            pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
+                Can be used together with pbar_update to handle napari progress bar in other thread.
+                To enables using this function within a threadworker.
+            pbar_update: Callback to update an external progress bar.
         """
         original_size = image.shape[:2]
         image_embeddings, tile_shape, halo = _process_tiled_embeddings(
@@ -1036,11 +1067,14 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         )
         tiling = blocking([0, 0], original_size, tile_shape)
 
+        _, pbar_init, pbar_update = util.handle_pbar(verbose, pbar_init, pbar_update)
+        pbar_init(tiling.numberOfBlocks, "Initialize tiled instannce segmentation with decoder")
+
         foreground = np.zeros(original_size, dtype="float32")
         center_distances = np.zeros(original_size, dtype="float32")
         boundary_distances = np.zeros(original_size, dtype="float32")
 
-        for tile_id in tqdm(range(tiling.numberOfBlocks), disable=not verbose):
+        for tile_id in range(tiling.numberOfBlocks):
 
             # Get the image embeddings from the predictor for this tile.
             self._predictor = util.set_precomputed(self._predictor, image_embeddings, i=i, tile_id=tile_id)
