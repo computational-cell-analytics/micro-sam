@@ -1,13 +1,15 @@
 from util import compare_experiments_for_dataset
 
 
-ROOT = "/media/anwai/ANWAI/data"
-
-
 def compare_em(
-    standard_model, finetuned_model, checkpoint1=None, checkpoint2=None
+    experiment_folder, standard_model, finetuned_model, checkpoint1=None, checkpoint2=None
 ):
-    compare_experiments_for_dataset("lucchi", standard_model, finetuned_model)
+    # for figure 1
+    all_datasets = ["mitoem_rat", "lucchi", "platy_nuclei"]
+    for dataset in all_datasets:
+        compare_experiments_for_dataset(
+            dataset, experiment_folder, standard_model, finetuned_model, checkpoint1, checkpoint2
+        )
 
     # TODO:
     # mitoem_rat, mitoem_human, platy_nuclei, mitolab (see what's relevant),
@@ -20,7 +22,13 @@ def compare_em(
 
 
 def main():
-    compare_em("vit_b", "vit_b_em_organelles")
+    compare_em(
+        experiment_folder="/scratch/projects/nim00007/sam/experiments/new_models/qualitative",
+        standard_model="vit_b",
+        finetuned_model="vit_b_em_organelles_v2",
+        checkpoint1=None,
+        checkpoint2="/scratch/usr/nimanwai/micro-sam/checkpoints/vit_b/mito_nuc_em_generalist_sam/best.pt"
+    )
 
 
 if __name__ == "__main__":
