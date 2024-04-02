@@ -19,6 +19,8 @@ PALETTE = {
     r"i$_{b}$": "#90477F"
 }
 
+plt.rcParams.update({'font.size': 18})
+
 
 def _open_csv_file(csv_path):
     try:
@@ -106,14 +108,13 @@ def get_partial_finetuning_plots():
                 line.patches[k].set_hatch('///')
                 line.patches[k].set_edgecolor('white')
 
-    plt.xlabel("Finetuned Parts", fontdict={"fontsize": 13}, labelpad=15)
-    plt.ylabel("Segmentation Quality", fontdict={"fontsize": 13}, labelpad=15)
-    plt.legend(title="Settings", bbox_to_anchor=(-0.05, 1.01))
-    plt.suptitle("Partial Finetuning", fontsize=26)
+    plt.xlabel("Finetuned Parts", labelpad=15)
+    plt.ylabel("Segmentation Quality", labelpad=15)
+    plt.legend(title="Settings", bbox_to_anchor=(-0.07, 1.02))
 
-    plt.subplots_adjust(top=0.9, right=0.95, left=0.1, bottom=0.1)
+    plt.subplots_adjust(top=0.9, right=0.95, left=0.15, bottom=0.1)
 
-    save_path = "livecell_vit_l_partial_finetuning.svg"
+    save_path = "livecell_vit_l_partial_finetuning.pdf"
     plt.savefig(save_path)
     print(f"Plot saved at {save_path}")
 
@@ -202,7 +203,7 @@ def get_n_objects_plots(max_objects=45):
 
 def main():
     get_partial_finetuning_plots()
-    get_n_objects_plots()
+    # get_n_objects_plots()
 
 
 if __name__ == "__main__":

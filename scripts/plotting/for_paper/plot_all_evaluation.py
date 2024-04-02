@@ -30,9 +30,9 @@ TITLE = {
     "neurips-cell-seg": "$\it{NeurIPS}$ $\it{CellSeg}$",
     "lizard": "Lizard",
     "mouse-embryo": "Mouse Embryo",
-    "mitoem/rat": "MitoEM (Rat)",
-    "mitoem/human": "MitoEM (Human)",
-    "platynereis/nuclei": "Platynereis (Nuclei)",
+    "mitoem/rat": "$\it{MitoEM}$ $\it{(Rat)}$",
+    "mitoem/human": "$\it{MitoEM}$ $\it{(Human)}$",
+    "platynereis/nuclei": "$\it{Platynereis}$ $\it{(Nuclei)}$",
     "mitolab/c_elegans": "MitoLab (C. elegans)",
     "mitolab/fly_brain": "MitoLab (Fly Brain)",
     "mitolab/glycolytic_muscle": "MitoLab (Glycolytic Muscle)",
@@ -46,6 +46,9 @@ TITLE = {
     "uro_cell": "UroCell",
     "sponge_em": "Sponge EM"
     }
+
+
+plt.rcParams.update({'font.size': 18})
 
 
 def gather_all_results(dataset, modality, model_type):
@@ -133,7 +136,7 @@ def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice=None):
     ax.set(xlabel=None, ylabel=None)
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
     ax.title.set_color("#212427")
-    ax.set_title(TITLE[dataset_name], fontweight="bold", fontsize=13)
+    ax.set_title(TITLE[dataset_name], fontweight="bold")
 
     if dataset_name != "ctc":
         benchmark_name = "cellpose" if modality == "lm" else "mitonet"
@@ -156,13 +159,12 @@ def _get_plot_postprocessing(fig, experiment_title, save_path):
     fig.legend(all_lines, all_labels, loc="upper left")
 
     plt.text(
-        x=0.59, y=3.6, s=" X-Axis: Models \n Y-Axis: Segmentation Quality ", ha='left',
+        x=0.25, y=3.8, s=" X-Axis: Models \n Y-Axis: Segmentation Quality ", ha='left',
         transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#D6D6D6", "boxstyle": "round"}
     )
 
+    plt.subplots_adjust(top=0.8, right=0.95, left=0.11, bottom=0.05, hspace=0.3)
     plt.show()
-    plt.subplots_adjust(top=0.879, right=0.95, left=0.075, bottom=0.05)
-    fig.suptitle(experiment_title, fontsize=26, x=0.52, y=0.948)
     plt.savefig(save_path)  # transparent=True
     plt.close()
     print(f"Plots saved at {save_path}")
@@ -254,7 +256,7 @@ def plot_evaluation_for_all_em_datasets(model_type):
 
 
 def main():
-    # plot_evaluation_for_lm_datasets("vit_l")
+    plot_evaluation_for_lm_datasets("vit_l")
     plot_evaluation_for_em_datasets("vit_l")
 
     # plot_evaluation_for_all_em_datasets("vit_h")

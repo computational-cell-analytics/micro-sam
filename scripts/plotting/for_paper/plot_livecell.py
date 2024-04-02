@@ -22,6 +22,9 @@ MODEL_NAME_MAP = {
     "vit_h": "ViT Huge"
 }
 
+# increase the font size globally
+plt.rcParams.update({'font.size': 18})
+
 
 def gather_livecell_results(model_type, experiment_name, benchmark_choice, result_type="default"):
     if result_type == "default":
@@ -57,13 +60,13 @@ def gather_livecell_results(model_type, experiment_name, benchmark_choice, resul
 
     ip_score = pd.concat([
         pd.DataFrame(
-            [{"iteration": idx + 1, "name": "point", "result": ip}]
+            [{"iteration": idx, "name": "point", "result": ip}]
         ) for idx, ip in enumerate(ip_score)
     ], ignore_index=True)
 
     ib_score = pd.concat([
         pd.DataFrame(
-            [{"iteration": idx + 1, "name": "box", "result": ib}]
+            [{"iteration": idx, "name": "box", "result": ib}]
         ) for idx, ib in enumerate(ib_score)
     ], ignore_index=True)
 
@@ -97,7 +100,7 @@ def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
         )
     ax.set(xlabel=None, ylabel=None)
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
-    ax.set_title(name, fontsize=13, fontweight="bold")
+    ax.set_title(name, fontweight="bold")
 
     if amg is not None:
         ax.axhline(y=amg, label="amg", color="#DC3977")
@@ -132,15 +135,18 @@ def plot_for_livecell(benchmark_choice, results_with_logits):
 
     fig.legend(all_lines, all_labels, loc="upper left")
 
+    ax.set_yticks(np.linspace(0.1, 0.8, 8))
+    for ax in fig.axes:
+        ax.set_xticks(np.linspace(1, 7, 7))
+
     plt.text(
-        x=0.872, y=1.05, s=" X-Axis: Models \n Y-Axis: Segmentation Quality ", ha='center', va='center',
+        x=0.8, y=1.12, s=" X-Axis: Iterative Prompting \n Y-Axis: Segmentation Quality ", ha='center', va='center',
         transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#045275", "boxstyle": "round"}
     )
 
     plt.show()
     plt.tight_layout()
-    plt.subplots_adjust(top=0.865, right=0.95, left=0.075, bottom=0.05)
-    fig.suptitle("LIVECell", fontsize=26, x=0.515, y=0.95)
+    plt.subplots_adjust(top=0.78, right=0.95, left=0.13, bottom=0.05)
     _path = "livecell_with_logits.svg" if results_with_logits else "livecell.svg"
     plt.savefig(_path)
     plt.close()
@@ -206,10 +212,14 @@ def plot_all_livecell(benchmark_choice, model_type):
                 all_labels.append(label)
         ax.get_legend().remove()
 
+    ax.set_yticks(np.linspace(0.1, 0.8, 8))
+    for ax in fig.axes:
+        ax.set_xticks(np.linspace(1, 7, 7))
+
     plt.show()
     plt.tight_layout()
     plt.subplots_adjust(top=0.865, right=0.95, left=0.075, bottom=0.05)
-    fig.suptitle(MODEL_NAME_MAP[model_type], fontsize=26, x=0.515, y=0.95)
+    fig.suptitle(MODEL_NAME_MAP[model_type], fontsize=26, x=0.515, y=0.97)
     plt.savefig(f"livecell_supplementary_{model_type}.svg")
     plt.close()
 
