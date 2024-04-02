@@ -103,12 +103,14 @@ def fetch_data_loaders(dataset_name):
 
     elif dataset_name == "covid_if":
         loader = datasets.get_covid_if_loader(
-            os.path.join(ROOT, "covid_if"), (512, 512), 1, ndim=2, download=True
+            path=os.path.join(ROOT, "covid_if"), patch_shape=(512, 512),
+            batch_size=1, ndim=2, shuffle=True, sampler=sampler,
         )
 
     elif dataset_name == "plantseg_ovules":
         loader = datasets.get_plantseg_loader(
-            os.path.join(ROOT, "plantseg"), "ovules", "test", (1, 512, 512), 1, ndim=2, download=True
+            path=os.path.join(ROOT, "plantseg"), name="ovules", split="train", patch_shape=(1, 512, 512),
+            batch_size=1, ndim=2, sampler=sampler, shuffle=True,
         )
 
     elif dataset_name == "hpa":
@@ -118,12 +120,14 @@ def fetch_data_loaders(dataset_name):
 
     elif dataset_name == "lizard":
         loader = datasets.get_lizard_loader(
-            os.path.join(ROOT, "lizard"), (512, 512), 1, download=True
+            path=os.path.join(ROOT, "lizard"), patch_shape=(512, 512),
+            batch_size=1, shuffle=True, sampler=sampler
         )
 
     elif dataset_name == "mouse_embryo":
         loader = datasets.get_mouse_embryo_loader(
-            os.path.join(ROOT, "mouse_embryo"), "membrane", "test", (1, 512, 512), download=True, ndim=2
+            path=os.path.join(ROOT, "mouse-embryo"), name="membrane", split="train",
+            patch_shape=(1, 512, 512), batch_size=1, ndim=2, shuffle=True, sampler=sampler,
         )
 
     elif dataset_name == "dsb":
@@ -184,22 +188,32 @@ def fetch_data_loaders(dataset_name):
 
     elif dataset_name == "uro_cell":
         loader = datasets.get_uro_cell_loader(
-            os.path.join(ROOT, "uro_cell"), "mito", (512, 512), 1, download=True
+            path=os.path.join(ROOT, "uro_cell"), target="mito", patch_shape=(1, 512, 512),
+            ndim=2, batch_size=1, sampler=sampler, shuffle=True,
         )
 
     elif dataset_name == "nuc_mm_mouse":
         loader = datasets.get_nuc_mm_loader(
-            os.path.join(ROOT, "nuc_mm"), "mouse", "val", (512, 512), 1, download=True
+            path=os.path.join(ROOT, "nuc_mm"), sample="mouse", split="train", patch_shape=(1, 512, 512),
+            batch_size=1, ndim=2, sampler=sampler, shuffle=True,
         )
 
     elif dataset_name == "nuc_mm_zebrafish":
         loader = datasets.get_nuc_mm_loader(
-            os.path.join(ROOT, "nuc_mm"), "zebrafish", "val", (512, 512), 1, download=True
+            path=os.path.join(ROOT, "nuc_mm"), sample="zebrafish", split="train", patch_shape=(1, 256, 256),
+            ndim=2, batch_size=1, sampler=sampler, shuffle=True,
         )
 
     elif dataset_name == "sponge_em":
         loader = datasets.get_sponge_em_loader(
-            os.path.join(ROOT, "sponge_em"), "instances", (512, 512), 1, download=True
+            path=os.path.join(ROOT, "sponge_em"), mode="instances", patch_shape=(1, 512, 512),
+            ndim=2, batch_size=1, sampler=sampler, shuffle=True,
+        )
+
+    elif dataset_name == "mitolab_tem":
+        loader = datasets.cem.get_benchmark_loader(
+            path=os.path.join(ROOT, "mitolab"), dataset_id=7, batch_size=1, patch_shape=(512, 512),
+            sampler=sampler, shuffle=True,
         )
 
     elif dataset_name == "asem":

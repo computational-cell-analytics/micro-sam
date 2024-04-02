@@ -1,32 +1,45 @@
 from util import compare_experiments_for_dataset
 
 
-def compare_lm(
-    experiment_folder, standard_model, finetuned_model, checkpoint1=None, checkpoint2=None
-):
-    # for figure 1
-    all_datasets = ["livecell", "deepbacs", "dynamicnuclearnet", "plantseg_root"]
+VIT_B_PARAMS = {
+    "experiment_folder": "/scratch/projects/nim00007/sam/experiments/new_models/qualitative",
+    "standard_model": "vit_b",
+    "finetuned_model": "vit_b_lm_v2",
+    "checkpoint1": None,
+    "checkpoint2": "/scratch/usr/nimanwai/micro-sam/checkpoints/vit_b/lm_generalist_sam/best.pt"
+}
 
-    # TODO: for all datasets
+
+VIT_L_PARAMS = {
+    "experiment_folder": "/scratch/projects/nim00007/sam/experiments/new_models/qualitative",
+    "standard_model": "vit_l",
+    "finetuned_model": "vit_l_lm_v2",
+    "checkpoint1": None,
+    "checkpoint2": "/scratch/usr/nimanwai/micro-sam/checkpoints/vit_l/lm_generalist_sam/best.pt"
+}
+
+
+def compare_lm():
+    # for figure 1 (we use 'vit_b')
+    # all_datasets = ["livecell", "deepbacs", "dynamicnuclearnet", "plantseg_root"]
+    # params = VIT_B_PARAMS
+
+    # for figure 3 (we use 'vit_l')
+    all_datasets = ["covid_if", "lizard", "mouse_embryo", "plantseg_ovules"]
+    params = VIT_L_PARAMS
+
+    # TODO: for all datasets (we use 'vit_l')
     # all_datasets = [
     #     "livecell", "deepbacs", "tissuenet", "neurips_cellseg", "covid_if", "hpa",
     #     "plantseg_ovules", "lizard", "mouse_embryo", "dynamicnuclearnet", "pannuke"
     # ]
 
     for dataset in all_datasets:
-        compare_experiments_for_dataset(
-            dataset, experiment_folder, standard_model, finetuned_model, checkpoint1, checkpoint2
-        )
+        compare_experiments_for_dataset(dataset, **params)
 
 
 def main():
-    compare_lm(
-        experiment_folder="/scratch/projects/nim00007/sam/experiments/new_models/qualitative",
-        standard_model="vit_b",
-        finetuned_model="vit_b_lm_v2",
-        checkpoint1=None,
-        checkpoint2="/scratch/usr/nimanwai/micro-sam/checkpoints/vit_b/lm_generalist_sam/best.pt"
-    )
+    compare_lm()
 
 
 if __name__ == "__main__":
