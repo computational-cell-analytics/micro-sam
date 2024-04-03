@@ -113,7 +113,7 @@ def plot_perf_over_epochs():
     fig.legend(all_lines, [MODELS[l] for l in labels], loc="upper left")
     plt.tight_layout()
 
-    fig.text(0.78,0.97, 'X-Axis: Epoch \nY-Axis: Segmentation Quality', verticalalignment='top', 
+    fig.text(0.78,0.97, 'X-Axis: Epoch \nY-Axis: Segmentation Accuracy', verticalalignment='top', 
              horizontalalignment='left', bbox=dict(boxstyle='round', edgecolor='lightgrey', facecolor='None'))
 
     plt.show()

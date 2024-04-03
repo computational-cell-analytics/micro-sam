@@ -21,9 +21,10 @@ MODEL_NAME_MAP = {
     "vit_l": "ViT Large",
     "vit_h": "ViT Huge"
 }
+FIG_ASPECT = (30, 15)
 
 # increase the font size globally
-plt.rcParams.update({'font.size': 18})
+plt.rcParams.update({'font.size': 24})
 
 
 def gather_livecell_results(model_type, experiment_name, benchmark_choice, result_type="default"):
@@ -112,7 +113,7 @@ def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
 def plot_for_livecell(benchmark_choice, results_with_logits):
     result_type = "with_logits" if results_with_logits else "default"
 
-    fig, ax = plt.subplots(1, 2, figsize=(20, 10), sharex="col", sharey="row")
+    fig, ax = plt.subplots(1, 2, figsize=FIG_ASPECT, sharex="col", sharey="row")
     amg_vanilla, _, ib_vanilla, ip_vanilla, cellpose_res = gather_livecell_results(
         MODEL_CHOICE, "vanilla", benchmark_choice, result_type
     )
@@ -140,8 +141,8 @@ def plot_for_livecell(benchmark_choice, results_with_logits):
         ax.set_xticks(np.linspace(1, 7, 7))
 
     plt.text(
-        x=0.8, y=1.12, s=" X-Axis: Iterative Prompting \n Y-Axis: Segmentation Quality ", ha='center', va='center',
-        transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#045275", "boxstyle": "round"}
+        x=0.8, y=1.12, s=" X-Axis: Iterative Prompting \n Y-Axis: Segmentation Accuracy ", ha='center', va='center',
+        transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#D6D6D6", "boxstyle": "round"}
     )
 
     plt.show()
@@ -149,6 +150,7 @@ def plot_for_livecell(benchmark_choice, results_with_logits):
     plt.subplots_adjust(top=0.78, right=0.95, left=0.13, bottom=0.05)
     _path = "livecell_with_logits.svg" if results_with_logits else "livecell.svg"
     plt.savefig(_path)
+    plt.savefig(Path(_path).with_suffix(".pdf"))
     plt.close()
 
 
@@ -157,7 +159,7 @@ def plot_all_livecell(benchmark_choice, model_type):
     cellpose_res_list = []
     amg_list, ais_list, ib_list, ip_list = [], [], [], []
     for current_run in range(1, 6):
-        fig, ax = plt.subplots(1, 2, figsize=(20, 10), sharex="col", sharey="row")
+        fig, ax = plt.subplots(1, 2, figsize=FIG_ASPECT, sharex="col", sharey="row")
         amg_vanilla, _, ib_vanilla, ip_vanilla, cellpose_res = gather_livecell_results(
             model_type, "vanilla", benchmark_choice, f"run_{current_run}"
         )
@@ -220,7 +222,9 @@ def plot_all_livecell(benchmark_choice, model_type):
     plt.tight_layout()
     plt.subplots_adjust(top=0.865, right=0.95, left=0.075, bottom=0.05)
     fig.suptitle(MODEL_NAME_MAP[model_type], fontsize=26, x=0.515, y=0.97)
-    plt.savefig(f"livecell_supplementary_{model_type}.svg")
+    _path = f"livecell_supplementary_{model_type}.svg"
+    plt.savefig(_path)
+    plt.savefig(Path(_path).with_suffix(".pdf"))
     plt.close()
 
 

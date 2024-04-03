@@ -47,8 +47,9 @@ TITLE = {
     "sponge_em": "Sponge EM"
     }
 
+FIG_ASPECT = (25, 22)
 
-plt.rcParams.update({'font.size': 18})
+plt.rcParams.update({'font.size': 24})
 
 
 def gather_all_results(dataset, modality, model_type):
@@ -159,20 +160,21 @@ def _get_plot_postprocessing(fig, experiment_title, save_path):
     fig.legend(all_lines, all_labels, loc="upper left")
 
     plt.text(
-        x=0.25, y=3.8, s=" X-Axis: Models \n Y-Axis: Segmentation Quality ", ha='left',
+        x=0.25, y=4.1, s=" X-Axis: Models \n Y-Axis: Segmentation Accuracy ", ha='left',
         transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#D6D6D6", "boxstyle": "round"}
     )
 
-    plt.subplots_adjust(top=0.8, right=0.95, left=0.11, bottom=0.05, hspace=0.3)
+    plt.subplots_adjust(top=0.8, right=0.95, left=0.11, bottom=0.05, hspace=0.4)
     plt.show()
-    plt.savefig(save_path)  # transparent=True
+    plt.savefig(Path(save_path).with_suffix(".pdf"))
+    plt.savefig(save_path)
     plt.close()
     print(f"Plots saved at {save_path}")
 
 
 def plot_evaluation_for_lm_datasets(model_type):
     modality = "lm"
-    fig, ax = plt.subplots(3, 3, figsize=(20, 15))
+    fig, ax = plt.subplots(3, 3, figsize=FIG_ASPECT)
 
     # choices:
     # "livecell", "tissuenet", "deepbacs", "covid_if", "plantseg/root", "hpa",
@@ -196,7 +198,7 @@ def plot_evaluation_for_lm_datasets(model_type):
 
 def plot_evaluation_for_em_datasets(model_type):
     modality = "em"
-    fig, ax = plt.subplots(3, 3, figsize=(20, 15))
+    fig, ax = plt.subplots(3, 3, figsize=FIG_ASPECT)
 
     # choices:
     # for mito-nuc
@@ -224,7 +226,7 @@ def plot_evaluation_for_em_datasets(model_type):
 
 def plot_evaluation_for_all_em_datasets(model_type):
     modality = "em"
-    fig, ax = plt.subplots(4, 4, figsize=(20, 15))
+    fig, ax = plt.subplots(4, 4, figsize=FIG_ASPECT)
 
     # choices:
     # for mito-nuc

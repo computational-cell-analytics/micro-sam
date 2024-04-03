@@ -1,5 +1,6 @@
 import os
 import itertools
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -109,13 +110,14 @@ def get_partial_finetuning_plots():
                 line.patches[k].set_edgecolor('white')
 
     plt.xlabel("Finetuned Parts", labelpad=15)
-    plt.ylabel("Segmentation Quality", labelpad=15)
+    plt.ylabel("Segmentation Accuracy", labelpad=15)
     plt.legend(title="Settings", bbox_to_anchor=(-0.07, 1.02))
 
     plt.subplots_adjust(top=0.9, right=0.95, left=0.15, bottom=0.1)
 
-    save_path = "livecell_vit_l_partial_finetuning.pdf"
+    save_path = "livecell_vit_l_partial_finetuning.svg"
     plt.savefig(save_path)
+    plt.savefig(Path(save_path).with_suffix(".pdf"))
     print(f"Plot saved at {save_path}")
 
 
@@ -193,10 +195,11 @@ def get_n_objects_plots(max_objects=45):
 
     plt.suptitle("Number of Objects per Batch", fontsize=26, x=0.45, y=0.945)
     plt.xlabel("Inference Settings", fontdict={"fontsize": 13}, labelpad=15)
-    plt.ylabel("Segmentation Quality", fontdict={"fontsize": 13}, labelpad=15)
+    plt.ylabel("Segmentation Accuracy", fontdict={"fontsize": 13}, labelpad=15)
 
     save_path = "livecell_vit_b_n_objects.svg"
     plt.savefig(save_path)
+    plt.savefig(Path(save_path).with_suffix(".pdf"))
     plt.close()
     print(f"Plot saved at {save_path}")
 
