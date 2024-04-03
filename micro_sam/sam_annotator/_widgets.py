@@ -123,21 +123,7 @@ class _WidgetBase(QtWidgets.QWidget):
 
         return x_param, y_param, layout
 
-    #     # New method for directory selection
-    # def _add_directory_param(self, name, value, title=None):
-    #     layout = QtWidgets.QHBoxLayout()
-    #     layout.addWidget(QtWidgets.QLabel(name if title is None else title))
-
-    #     directory_textbox = QtWidgets.QLineEdit()
-    #     directory_textbox.setText(value)
-    #     layout.addWidget(directory_textbox)
-
-    #     directory_button = QtWidgets.QPushButton("Browse")
-    #     directory_button.clicked.connect(lambda: self._get_directory(name, directory_textbox))
-    #     layout.addWidget(directory_button)
-
-    #     return layout
-    def _add_directory_param(self, name, value, title=None, select_file=False):
+    def _add_path_param(self, name, value, title=None, select_file=False):
         layout = QtWidgets.QHBoxLayout()
         layout.addWidget(QtWidgets.QLabel(name if title is None else title))
 
@@ -145,7 +131,7 @@ class _WidgetBase(QtWidgets.QWidget):
         directory_textbox.setText(value)
         layout.addWidget(directory_textbox)
 
-        button_text = "Browse Directory" if not select_file else "Browse File"  # Adjust button text
+        button_text = "Browse File" if select_file else "Browse Directory"  # Adjust button text
         directory_button = QtWidgets.QPushButton(button_text)
         # Call appropriate function based on select_file
         directory_button.clicked.connect(lambda: getattr(self, "_get_{}_path".format(
@@ -154,7 +140,7 @@ class _WidgetBase(QtWidgets.QWidget):
 
         return layout
 
-    def _get_directory(self, name, directory_textbox):
+    def _get_directory_path(self, name, directory_textbox):
         directory = QtWidgets.QFileDialog.getExistingDirectory(
             self, "Select Directory", "", QtWidgets.QFileDialog.ShowDirsOnly)
         if directory:
@@ -642,13 +628,13 @@ class EmbeddingWidget(_WidgetBase):
 
         # Create UI for the save path.
         self.embeddings_save_path = None
-        layout = self._add_directory_param(
+        layout = self._add_path_param(
             "embeddings_save_path", self.embeddings_save_path, title="embeddings save path:")
         setting_values.layout().addLayout(layout)
 
         # Create UI for the custom weights.
         self.custom_weights = None  # select_file
-        layout = self._add_directory_param(
+        layout = self._add_path_param(
             "custom_weights", self.custom_weights, title="custom weights path:", select_file=True)
         setting_values.layout().addLayout(layout)
 
