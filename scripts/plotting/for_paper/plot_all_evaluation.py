@@ -27,7 +27,7 @@ TITLE = {
     "hpa": "HPA",
     "ctc": "Cell Tracking Challenge",
     "plantseg/ovules": "PlantSeg (Ovules)",
-    "neurips-cell-seg": "$\it{NeurIPS}$ $\it{CellSeg}$",
+    "neurips-cell-seg/tuning": "$\it{NeurIPS}$ $\it{CellSeg}$",
     "lizard": "Lizard",
     "mouse-embryo": "Mouse Embryo",
     "mitoem/rat": "$\it{MitoEM}$ $\it{(Rat)}$",
@@ -178,18 +178,18 @@ def plot_evaluation_for_lm_datasets(model_type):
 
     # choices:
     # "livecell", "tissuenet", "deepbacs", "covid_if", "plantseg/root", "hpa",
-    # "plantseg/ovules", "neurips-cell-seg", "lizard", "mouse-embryo"
-    # TODO: dsb, dynamicnuclearnet, pannuke
+    # "plantseg/ovules", "neurips-cell-seg/tuning" (/all; /self), "lizard", "mouse-embryo"
+    # "dynamicnuclearnet", "pannuke"
 
     get_barplots(ax[0, 0], "livecell", modality, model_type, benchmark_choice="livecell")
-    get_barplots(ax[0, 1], "deepbacs", modality, model_type, benchmark_choice="cyto")
-    get_barplots(ax[0, 2], "tissuenet", modality, model_type, benchmark_choice="cyto")
-    get_barplots(ax[1, 0], "plantseg/root", modality, model_type, benchmark_choice="cyto")
-    get_barplots(ax[1, 1], "neurips-cell-seg", modality, model_type, benchmark_choice="cyto")
-    get_barplots(ax[1, 2], "covid_if", modality, model_type, benchmark_choice="cyto")
-    get_barplots(ax[2, 0], "plantseg/ovules", modality, model_type, benchmark_choice="cyto")
-    get_barplots(ax[2, 1], "lizard", modality, model_type, benchmark_choice="cyto")
-    get_barplots(ax[2, 2], "hpa", modality, model_type, benchmark_choice="cyto")
+    get_barplots(ax[0, 1], "deepbacs", modality, model_type, benchmark_choice="cyto2")
+    get_barplots(ax[0, 2], "tissuenet", modality, model_type, benchmark_choice="cyto2")
+    get_barplots(ax[1, 0], "plantseg/root", modality, model_type, benchmark_choice="cyto2")
+    get_barplots(ax[1, 1], "neurips-cell-seg/tuning", modality, model_type, benchmark_choice="cyto2")
+    get_barplots(ax[1, 2], "covid_if", modality, model_type, benchmark_choice="cyto2")
+    get_barplots(ax[2, 0], "plantseg/ovules", modality, model_type, benchmark_choice="cyto2")
+    get_barplots(ax[2, 1], "lizard", modality, model_type, benchmark_choice="cyto2")
+    get_barplots(ax[2, 2], "hpa", modality, model_type, benchmark_choice="cyto2")
 
     _get_plot_postprocessing(
         fig=fig, experiment_title="Light Microscopy", save_path=f"lm_{model_type}_evaluation.svg"
@@ -233,7 +233,7 @@ def plot_evaluation_for_all_em_datasets(model_type):
     #    "mitoem/rat", "mitoem/human", "platynereis/nuclei", "mitolab/c_elegans", "mitolab/fly_brain",
     #    "mitolab/glycolytic_muscle", "mitolab/hela_cell", "mitolab/lucchi_pp", "mitolab/salivary_gland",
     #    "mitolab/tem", "lucchi", "nuc-mm/mouse", "nuc-mm/zebrafish", "uro_cell", "sponge_em",
-    # TODO: vnc, asem (mito)
+    #    "vnc", "asem/mito"
 
     get_barplots(ax[0, 0], "mitoem/rat", modality, model_type)
     get_barplots(ax[0, 1], "mitoem/human", modality, model_type)

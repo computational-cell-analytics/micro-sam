@@ -34,6 +34,8 @@ def run_one_setup(all_dataset_list, all_model_list, all_experiment_set_list, roi
 
                 run_specific_experiment(dataset_name, model_type, experiment_set, roi, specific_script)
 
+        breakpoint()  # check per dataset briefly
+
 
 def for_all_lm(specific_script):
     # let's run for in-domain
@@ -135,31 +137,39 @@ def for_variance_in_livecell(run_set):
 
 
 def for_additional_datasets(specific_script):
+    # let's run for tissuenet
+    # run_one_setup(
+    #     all_dataset_list=["tissuenet/one_chan", "tissuenet/multi_chan"],
+    #     all_model_list=ALl_MODELS,
+    #     all_experiment_set_list=["vanilla", "specialist", "generalist"],
+    #     roi="lm",
+    #     specific_script=specific_script
+    # )
+
+    # let's run for cremi and asem er
     run_one_setup(
-        all_dataset_list=["neurips-cell-seg/all", "neurips-cell-seg/tuning", "neurips-cell-seg/self"],
+        all_dataset_list=["cremi", "asem/er"],
         all_model_list=ALl_MODELS,
-        all_experiment_set_list=["vanilla", "generalist", "specialist"],
-        roi="lm",
+        all_experiment_set_list=["vanilla", "specialist", "generalist"],
+        roi="organelles",
         specific_script=specific_script
     )
 
-    return
-
-    # let's run for lm
+    # let's run for platy nuclei and asem mito
     run_one_setup(
-        all_dataset_list=["dynamicnuclearnet", "pannuke"],
-        all_model_list=ALl_MODELS,
-        all_experiment_set_list=["vanilla", "generalist"],
-        roi="lm",
-        specific_script=specific_script
-    )
-
-    # let's run for em organelles
-    run_one_setup(
-        all_dataset_list=["mitolab/salivary_gland", "mitolab/tem", "vnc", "asem/mito", "uro_cell"],
+        all_dataset_list=["asem/mito", "platynereis/nuclei"],
         all_model_list=ALl_MODELS,
         all_experiment_set_list=["vanilla", "generalist"],
         roi="organelles",
+        specific_script=specific_script
+    )
+
+    # let's run for pannuke
+    run_one_setup(
+        all_dataset_list=["pannuke"],
+        all_model_list=ALl_MODELS,
+        all_experiment_set_list=["vanilla", "generalist"],
+        roi="lm",
         specific_script=specific_script
     )
 

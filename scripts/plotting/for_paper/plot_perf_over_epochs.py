@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/from_carolin/perf_over_epochs/"
 
 # adding a fixed color palette to each experiments, for consistency in plotting the legends
-PALETTE = {"vit_t": "#089099", "vit_b": "#7CCBA2", "vit_l": "#7C1D6F", "vit_h": "#F0746E"}
+PALETTE = {"vit_t": "#DC3977", "vit_b": "#E19951", "vit_l": "#5454DA", "vit_h": "#41EAD4"}
 
 plt.rcParams.update({"font.size": 24})
 
@@ -74,7 +74,7 @@ def get_plots(ax, data, experiment_name):
 
     sns.lineplot(
         data=data, x='epoch', y='result', ax=ax, hue='model', palette=PALETTE, errorbar='pi', err_style='band',
-        markers=['H', 'P', 'p', '*'], style='model', linestyle='', alpha=0.75, markersize=10,
+        alpha=0.75,
     )
 
     ax.set(xlabel=None, ylabel=None)

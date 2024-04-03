@@ -34,7 +34,7 @@ FILE_SPECS = {
 # good spot to track all datasets we use atm
 DATASETS = [
     # in-domain (LM)
-    "tissuenet", "deepbacs", "plantseg/root", "livecell",
+    "tissuenet/one_chan", "tissuenet/multi_chan", "deepbacs", "plantseg/root", "livecell",
     "neurips-cell-seg/all", "neurips-cell-seg/tuning", "neurips-cell-seg/self",
     # out-of-domain (LM)
     "covid_if", "plantseg/ovules", "hpa", "lizard", "mouse-embryo", "ctc/hela_samples", "dynamicnuclearnet", "pannuke",
@@ -44,12 +44,12 @@ DATASETS = [
     #   - out-of-domain
     "mitolab/c_elegans", "mitolab/fly_brain", "mitolab/glycolytic_muscle", "mitolab/hela_cell",
     "mitolab/lucchi_pp", "mitolab/salivary_gland", "mitolab/tem", "lucchi", "nuc_mm/mouse",
-    "nuc_mm/zebrafish", "uro_cell", "sponge_em", "platynereis/cilia", "vnc", "asem/mito",
+    "nuc_mm/zebrafish", "uro_cell", "sponge_em", "platynereis/cilia", "vnc", "asem/mito", "asem/er",
     # boundaries - EM
     #   - in-domain
     "cremi", "platynereis/cells",
     #   - out-of-domain
-    "axondeepseg", "snemi", "isbi"
+    "axondeepseg", "snemi", "isbi",
 ]
 
 
