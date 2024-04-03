@@ -123,8 +123,21 @@ class _WidgetBase(QtWidgets.QWidget):
 
         return x_param, y_param, layout
 
-        # New method for directory selection
-    def _add_directory_param(self, name, value, title=None):
+    #     # New method for directory selection
+    # def _add_directory_param(self, name, value, title=None):
+    #     layout = QtWidgets.QHBoxLayout()
+    #     layout.addWidget(QtWidgets.QLabel(name if title is None else title))
+
+    #     directory_textbox = QtWidgets.QLineEdit()
+    #     directory_textbox.setText(value)
+    #     layout.addWidget(directory_textbox)
+
+    #     directory_button = QtWidgets.QPushButton("Browse")
+    #     directory_button.clicked.connect(lambda: self._get_directory(name, directory_textbox))
+    #     layout.addWidget(directory_button)
+
+    #     return layout
+    def _add_directory_param(self, name, value, title=None, select_file=False):
         layout = QtWidgets.QHBoxLayout()
         layout.addWidget(QtWidgets.QLabel(name if title is None else title))
 
@@ -132,8 +145,11 @@ class _WidgetBase(QtWidgets.QWidget):
         directory_textbox.setText(value)
         layout.addWidget(directory_textbox)
 
-        directory_button = QtWidgets.QPushButton("Browse")
-        directory_button.clicked.connect(lambda: self._get_directory(name, directory_textbox))
+        button_text = "Browse Directory" if not select_file else "Browse File"  # Adjust button text
+        directory_button = QtWidgets.QPushButton(button_text)
+        # Call appropriate function based on select_file
+        directory_button.clicked.connect(lambda: getattr(self, "_get_{}_path".format(
+            "directory" if not select_file else "file"))(name, directory_textbox))
         layout.addWidget(directory_button)
 
         return layout
@@ -150,6 +166,14 @@ class _WidgetBase(QtWidgets.QWidget):
             else:
                 # Handle the case where the selected path is not a directory
                 print("Invalid directory selected. Please try again.")
+
+    def _get_file_path(self, name, directory_textbox):
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select File", "", "All Files (*)"
+        )
+        if file_path:
+            directory_textbox.setText(file_path)
+            setattr(self, name, file_path)
 
 
 # Custom signals for managing progress updates.
@@ -621,8 +645,12 @@ class EmbeddingWidget(_WidgetBase):
         layout = self._add_directory_param(
             "embeddings_save_path", self.embeddings_save_path, title="embeddings save path:")
         setting_values.layout().addLayout(layout)
+
         # Create UI for the custom weights.
-        self.custom_weights = None
+        self.custom_weights = None  # select_file
+        layout = self._add_directory_param(
+            "custom_weights", self.custom_weights, title="custom weights path:", select_file=True)
+        setting_values.layout().addLayout(layout)
 
         # Create UI for the tile shape.
         self.tile_x, self.tile_y = 0, 0

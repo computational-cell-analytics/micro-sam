@@ -499,7 +499,7 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
 
 def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update):
     # Check if the features are already computed.
-    if "input_size" in f.attrs and "features" in f.attrs:
+    if "input_size" in f.attrs:
         features = f["features"]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
         image_embeddings = {
