@@ -111,7 +111,7 @@ def get_partial_finetuning_plots():
 
     plt.xlabel("Finetuned Parts", labelpad=15)
     plt.ylabel("Segmentation Accuracy", labelpad=15)
-    plt.legend(title="Settings", bbox_to_anchor=(-0.07, 1.02))
+    plt.legend(bbox_to_anchor=(-0.07, 1.02))
 
     plt.subplots_adjust(top=0.9, right=0.95, left=0.15, bottom=0.1)
 
