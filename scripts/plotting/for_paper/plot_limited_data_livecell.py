@@ -1,5 +1,6 @@
 import os
 from glob import glob
+from pathlib import Path
 from natsort import natsorted
 
 import pandas as pd
@@ -83,16 +84,24 @@ def get_vanilla_and_finetuned_results(res_root, model):
     return res_df
 
 
-def get_plots(res_root, model):
+def get_plots(res_root, model, for_supp=None):
+    plt.figure(figsize=(20, 10))
     res = get_vanilla_and_finetuned_results(res_root, model)
     sns.lineplot(
         data=pd.melt(res, "experiment"), x="experiment", y="value", hue="variable", marker="d", palette=PALETTE
     )
-    plt.ylabel("Segmentation Accuracy")
-    plt.xlabel("Percent of Data")
+    plt.ylabel("Segmentation Accuracy", labelpad=15)
+    plt.xlabel("Percent of Data", labelpad=15)
     plt.legend(loc="lower center", ncol=6)
-    plt.title("Finetuning with Reduced Data")
-    plt.show()
+    if for_supp is None:
+        plt.title("Finetuning with Reduced Data")
+        save_path = f"livecell_{model}_reduce_data.svg"
+    else:
+        plt.title(for_supp)
+        save_path = f"livecell_supplementary_{model}_reduce_data.svg"
+
+    plt.savefig(save_path)
+    plt.savefig(Path(save_path).with_suffix(".pdf"))
 
 
 def main():
@@ -100,8 +109,9 @@ def main():
     get_plots(ROOT, "vit_l")
 
     # for supplementary figure 1
-    # get_plots(ROOT, "vit_b")
-    # get_plots(ROOT, "vit_h")
+    get_plots(ROOT, "vit_b", "ViT Base")
+    get_plots(ROOT, "vit_l", "ViT Large")
+    get_plots(ROOT, "vit_h", "ViT Huge")
 
 
 if __name__ == "__main__":
