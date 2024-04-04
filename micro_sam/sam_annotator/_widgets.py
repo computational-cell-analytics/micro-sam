@@ -146,13 +146,21 @@ class _WidgetBase(QtWidgets.QWidget):
             path_textbox.setPlaceholderText(placeholder)
         layout.addWidget(path_textbox)
 
-        # Adjust button text.
-        button_text = "Brose Directory or File" if select_type == "both" else f"Browse {select_type.capital()}"
-        path_button = QtWidgets.QPushButton(button_text)
+        def add_path_button(select_type):
+            # Adjust button text.
+            button_text = f"Select {select_type.capitalize()}"
+            path_button = QtWidgets.QPushButton(button_text)
 
-        # Call appropriate function based on select_type.
-        path_button.clicked.connect(lambda: getattr(self, f"_get_{select_type}_path")(name, path_textbox))
-        layout.addWidget(path_button)
+            # Call appropriate function based on select_type.
+            path_button.clicked.connect(lambda: getattr(self, f"_get_{select_type}_path")(name, path_textbox))
+            layout.addWidget(path_button)
+
+        if select_type == "both":
+            add_path_button("file")
+            add_path_button("directory")
+
+        else:
+            add_path_button(select_type)
 
         return path_textbox, layout
 
@@ -174,20 +182,6 @@ class _WidgetBase(QtWidgets.QWidget):
             self, "Select File", "", "All Files (*)"
         )
         if file_path:
-            textbox.setText(file_path)
-            setattr(self, name, file_path)
-
-    # FIXME selecting dirs with this dialog does not work yet.
-    def _get_both_path(self, name, textbox):
-        dialog = QtWidgets.QFileDialog(self)
-        dialog.setFileMode(QtWidgets.QFileDialog.AnyFile)  # Allows selection of both files and directories.
-
-        # Option for selecting directories. If you want a separate button for directories, comment this out.
-        # dialog.setOption(QtWidgets.QFileDialog.ShowDirsOnly, False)
-
-        # If the user selects a file or directory, update the QLineEdit widget
-        if dialog.exec_():
-            file_path = dialog.selectedFiles()[0]  # Gets the first selected path
             textbox.setText(file_path)
             setattr(self, name, file_path)
 
