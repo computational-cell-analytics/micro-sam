@@ -16,7 +16,7 @@ import zarr
 import z5py
 
 from qtpy import QtWidgets
-from qtpy.QtCore import QObject, Signal, QFileInfo
+from qtpy.QtCore import QObject, Signal
 from superqt import QCollapsible
 from magicgui import magic_factory
 from magicgui.widgets import ComboBox, Container, create_widget
@@ -61,10 +61,21 @@ class _WidgetBase(QtWidgets.QWidget):
         checkbox.stateChanged.connect(lambda val: setattr(self, name, val))
         return checkbox
 
+    def _add_string_param(self, name, value, title=None, placeholder=None, layout=None):
+        if layout is None:
+            layout = QtWidgets.QHBoxLayout()
+        layout.addWidget(QtWidgets.QLabel(name if title is None else title))
+        param = QtWidgets.QLineEdit()
+        param.setText(value)
+        if placeholder is not None:
+            param.setPlaceholderText(placeholder)
+        param.textChanged.connect(lambda val: setattr(self, name, val))
+        layout.addWidget(param)
+        return param, layout
+
     def _add_float_param(self, name, value, title=None, min_val=0.0, max_val=1.0, decimals=2, step=0.01, layout=None):
         if layout is None:
             layout = QtWidgets.QHBoxLayout()
-        layout = QtWidgets.QHBoxLayout()
         layout.addWidget(QtWidgets.QLabel(name if title is None else title))
         param = QtWidgets.QDoubleSpinBox()
         param.setRange(min_val, max_val)
@@ -123,42 +134,61 @@ class _WidgetBase(QtWidgets.QWidget):
 
         return x_param, y_param, layout
 
-    def _add_path_param(self, name, value, title=None, select_file=False):
+    def _add_path_param(self, name, value, select_type, title=None, placeholder=None):
+        assert select_type in ("directory", "file", "both")
+
         layout = QtWidgets.QHBoxLayout()
         layout.addWidget(QtWidgets.QLabel(name if title is None else title))
 
-        directory_textbox = QtWidgets.QLineEdit()
-        directory_textbox.setText(value)
-        layout.addWidget(directory_textbox)
+        path_textbox = QtWidgets.QLineEdit()
+        path_textbox.setText(value)
+        if placeholder is not None:
+            path_textbox.setPlaceholderText(placeholder)
+        layout.addWidget(path_textbox)
 
-        button_text = "Browse File" if select_file else "Browse Directory"  # Adjust button text
-        directory_button = QtWidgets.QPushButton(button_text)
-        # Call appropriate function based on select_file
-        directory_button.clicked.connect(lambda: getattr(self, "_get_{}_path".format(
-            "directory" if not select_file else "file"))(name, directory_textbox))
-        layout.addWidget(directory_button)
+        # Adjust button text.
+        button_text = "Brose Directory or File" if select_type == "both" else f"Browse {select_type.capital()}"
+        path_button = QtWidgets.QPushButton(button_text)
 
-        return layout
+        # Call appropriate function based on select_type.
+        path_button.clicked.connect(lambda: getattr(self, f"_get_{select_type}_path")(name, path_textbox))
+        layout.addWidget(path_button)
 
-    def _get_directory_path(self, name, directory_textbox):
+        return path_textbox, layout
+
+    def _get_directory_path(self, name, textbox):
         directory = QtWidgets.QFileDialog.getExistingDirectory(
             self, "Select Directory", "", QtWidgets.QFileDialog.ShowDirsOnly)
         if directory:
             path = Path(directory)  # Create a Path object from the string
 
             if path.is_dir():  # Check if it's a valid directory
-                directory_textbox.setText(directory)
+                textbox.setText(directory)
                 setattr(self, name, path)
             else:
                 # Handle the case where the selected path is not a directory
                 print("Invalid directory selected. Please try again.")
 
-    def _get_file_path(self, name, directory_textbox):
+    def _get_file_path(self, name, textbox):
         file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self, "Select File", "", "All Files (*)"
         )
         if file_path:
-            directory_textbox.setText(file_path)
+            textbox.setText(file_path)
+            setattr(self, name, file_path)
+
+    # FIXME selecting dirs with this dialog does not work yet.
+    def _get_both_path(self, name, textbox):
+        dialog = QtWidgets.QFileDialog(self)
+        dialog.setFileMode(QtWidgets.QFileDialog.AnyFile)  # Allows selection of both files and directories.
+
+        # Option for selecting directories. If you want a separate button for directories, comment this out.
+        # dialog.setOption(QtWidgets.QFileDialog.ShowDirsOnly, False)
+
+        # If the user selects a file or directory, update the QLineEdit widget
+        if dialog.exec_():
+            file_path = dialog.selectedFiles()[0]  # Gets the first selected path
+            textbox.setText(file_path)
             setattr(self, name, file_path)
 
 
@@ -622,20 +652,18 @@ class EmbeddingWidget(_WidgetBase):
         self.device_dropdown, layout = self._add_choice_param("device", self.device, device_options)
         setting_values.layout().addLayout(layout)
 
-        # TODO
-        # save_path: Optional[Path] = None,  # where embeddings for this image are cached (optional, zarr file = folder)
-        # custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
-
         # Create UI for the save path.
         self.embeddings_save_path = None
-        layout = self._add_path_param(
-            "embeddings_save_path", self.embeddings_save_path, title="embeddings save path:")
+        _, layout = self._add_path_param(
+            "embeddings_save_path", self.embeddings_save_path, "directory", title="embeddings save path:"
+        )
         setting_values.layout().addLayout(layout)
 
         # Create UI for the custom weights.
         self.custom_weights = None  # select_file
-        layout = self._add_path_param(
-            "custom_weights", self.custom_weights, title="custom weights path:", select_file=True)
+        _, layout = self._add_path_param(
+            "custom_weights", self.custom_weights, "file", title="custom weights path:"
+        )
         setting_values.layout().addLayout(layout)
 
         # Create UI for the tile shape.

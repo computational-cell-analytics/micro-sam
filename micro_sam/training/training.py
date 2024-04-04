@@ -6,15 +6,17 @@ import torch
 import torch_em
 
 from elf.io import open_file
+from qtpy.QtCore import QObject
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.utils.data import DataLoader, Dataset
 from torch_em.data.datasets.util import split_kwargs
 
 from ..util import get_device
 from ..instance_segmentation import get_unetr
-from .util import get_trainable_sam_model, ConvertToSamInputs, identity
-from . import sam_trainers as trainers
-from . import joint_sam_trainers as joint_trainers
+
+from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit
+from . import sam_trainer as trainers
+from . import joint_sam_trainer as joint_trainers
 
 
 FilePath = Union[str, os.PathLike]
@@ -95,6 +97,28 @@ def _check_loader(loader, with_segmentation_decoder):
         check_instance_channel(y)
 
 
+# Make the progress bar callbacks compatible with a tqdm progress bar interface.
+class _ProgressBarWrapper:
+    def __init__(self, signals):
+        self._signals = signals
+        self._total = None
+
+    @property
+    def total(self):
+        return self._total
+
+    @total.setter
+    def total(self, value):
+        self._signals.pbar_total.emit(value)
+        self._total = value
+
+    def update(self, steps):
+        self._signals.pbar_update.emit(steps)
+
+    def set_description(self, desc, **kwargs):
+        self._signals.pbar_description.emit(desc)
+
+
 def train_sam(
     name: str,
     model_type: str,
@@ -115,6 +139,7 @@ def train_sam(
     scheduler_class: Optional[_LRScheduler] = torch.optim.lr_scheduler.ReduceLROnPlateau,
     scheduler_kwargs: Optional[Dict[str, Any]] = None,
     save_every_kth_epoch: Optional[int] = None,
+    pbar_signals: Optional[QObject] = None,
 ) -> None:
     """Run training for a SAM model.
 
@@ -148,6 +173,7 @@ def train_sam(
         scheduler_kwargs: The learning rate scheduler parameters.
             If passed None, the chosen default parameters are used in ReduceLROnPlateau.
         save_every_kth_epoch: Save checkpoints after every kth epoch separately.
+        pbar_signals: Controls for napari progress bar.
     """
     _check_loader(train_loader, with_segmentation_decoder)
     _check_loader(val_loader, with_segmentation_decoder)
@@ -243,6 +269,10 @@ def train_sam(
     if save_every_kth_epoch is not None:
         trainer_fit_params["save_every_kth_epoch"] = save_every_kth_epoch
 
+    if pbar_signals is not None:
+        progress_bar_wrapper = _ProgressBarWrapper(pbar_signals)
+        trainer_fit_params["progress"] = progress_bar_wrapper
+
     trainer.fit(**trainer_fit_params)
 
 
@@ -292,7 +322,7 @@ def default_sam_dataset(
     """
 
     # Set the data transformations.
-    raw_transform = identity
+    raw_transform = require_8bit
     if with_segmentation_decoder:
         label_transform = torch_em.transform.label.PerObjectDistanceTransform(
             distances=True, boundary_distances=True, directed_distances=False,
