@@ -15,7 +15,7 @@ import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
 
 
-class FilterObjectsLabelTrafo:
+class ForERLabelTrafo:
     def __init__(self, min_size=0, gap_closing=0):
         self.min_size = min_size
         self.gap_closing = gap_closing
@@ -52,7 +52,7 @@ def get_dataloaders(patch_shape, data_path):
     I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
     Important: the ID 0 is reseved for background, and the IDs must be consecutive
     """
-    label_transform = FilterObjectsLabelTrafo(min_size=100, gap_closing=3)
+    label_transform = ForERLabelTrafo(min_size=100, gap_closing=3)
     raw_transform = sam_training.identity  # the current workflow avoids rescaling the inputs to [-1, 1]
     sampler = MinForegroundSampler(min_fraction=0.01)
     train_loader = get_asem_loader(
