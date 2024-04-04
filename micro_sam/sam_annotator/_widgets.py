@@ -16,6 +16,7 @@ import zarr
 import z5py
 
 from qtpy import QtWidgets
+from qtpy.QtWidgets import QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
 from qtpy.QtCore import QObject, Signal, QFileInfo
 from superqt import QCollapsible
 from magicgui import magic_factory
@@ -564,6 +565,56 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
     return tile_shape, halo
 
 
+# class InfoDialog(QDialog):
+#     def __init__(self, title, message):
+#         super().__init__()
+#         self.setWindowTitle(title)
+
+#         layout = QVBoxLayout()
+#         layout.addWidget(QLabel(message))
+
+#         # Add buttons
+#         button_box = QHBoxLayout()  # Use QHBoxLayout for buttons side-by-side
+#         dismiss_button = QPushButton("OK")
+#         dismiss_button.clicked.connect(self.close)
+#         button_box.addWidget(dismiss_button)
+
+#         cancel_button = QPushButton("Cancel")
+#         cancel_button.clicked.connect(self.close)  # Connect to same close slot
+#         button_box.addWidget(cancel_button)
+
+#         layout.addLayout(button_box)
+#         self.setLayout(layout)
+
+class InfoDialog(QDialog):
+    def __init__(self, title, message):
+        super().__init__()
+        self.setWindowTitle(title)
+        self.user_cancelled = False  # Initialize flag
+
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel(message))
+
+        # Add buttons
+        button_box = QHBoxLayout()  # Use QHBoxLayout for buttons side-by-side
+        accept_button = QPushButton("OK") 
+        accept_button.clicked.connect(lambda: self.button_clicked(accept_button))  # Connect to clicked signal
+        button_box.addWidget(accept_button)
+
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(lambda: self.button_clicked(cancel_button))  # Connect to clicked signal
+        button_box.addWidget(cancel_button)
+
+        layout.addLayout(button_box)
+        self.setLayout(layout)
+
+    def button_clicked(self, button):
+        if button.text() == "OK":
+            self.accept()  # Accept the dialog
+        else:
+            self.reject()  # Reject the dialog (Cancel)
+
+
 class EmbeddingWidget(_WidgetBase):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
@@ -622,10 +673,6 @@ class EmbeddingWidget(_WidgetBase):
         self.device_dropdown, layout = self._add_choice_param("device", self.device, device_options)
         setting_values.layout().addLayout(layout)
 
-        # TODO
-        # save_path: Optional[Path] = None,  # where embeddings for this image are cached (optional, zarr file = folder)
-        # custom_weights: Optional[Path] = None,  # A filepath or URL to custom model weights.
-
         # Create UI for the save path.
         self.embeddings_save_path = None
         layout = self._add_path_param(
@@ -655,7 +702,71 @@ class EmbeddingWidget(_WidgetBase):
         settings = _make_collapsible(setting_values, title="Settings")
         return settings
 
+    def _validate_inputs(self):
+        """Validates inputs and returns a dictionary for message generation."""
+
+        if self.embeddings_save_path is not None:
+            # Validate image data signature
+            image = self.image_selection.get_value()
+            img_signature = util._compute_data_signature(image)
+
+            # Check for existing embeddings
+            if os.listdir(self.embeddings_save_path):
+                try:
+                    with zarr.open(self.embeddings_save_path, "a") as f:
+                        # If data_signature exists, compare and return validation message
+                        # if "data_signature" in f.attrs:
+                        #     if img_signature != f.attrs["data_signature"]:
+                        #         return {
+                        #             "message_type": "error",
+                        #             "message": f"The embeddings don't match with the image: {img_signature} {f.attrs['data_signature']}"
+                        #         }
+
+                        # Load existing parameters
+                        if "tile_shape" in f.attrs:
+                            self.tile_x, self.tile_y = f.attrs["tile_shape"]
+                            self.halo_x, self.halo_y = f.attrs["halo"]
+                            self.model_type = f.attrs["model_type"]
+                            return {
+                                "message_type": "info",
+                                "message": f"Embeddings loaded with tile shape: {self.tile_x}, {self.tile_y} and halo: {self.halo_x}, {self.halo_y} and model: {self.model_type}."
+                            }
+                except RuntimeError as e:
+                    return {
+                        "message_type": "error",
+                        "message": f"Failed to load image embeddings: {e}"
+                    }
+            else:
+                return {"message_type": "info", "message": "No existing embeddings found at the specified path."}
+        else:
+            return None  # No embeddings path specified
+
+    def generate_message(self, message_type, message):
+
+        # Set button text and behavior based on message type
+        if message_type == "error":
+            self.user_cancelled = True
+            return "error"
+        elif message_type == "info":
+            info_dialog = InfoDialog(title="Validation Message", message=message)
+
+        result = info_dialog.exec_()
+        if result == QDialog.Rejected:  # Check for cancel
+            self.user_cancelled = True  # Set flag directly in calling function
+
     def __call__(self):
+
+        #  validate inputs
+        #  test dialogue
+        self.user_cancelled = False  # Flag to track cancellation
+        validation_result = self._validate_inputs()
+        if validation_result is not None:
+            self.generate_message(validation_result["message_type"], validation_result["message"])
+            # info_dialog = InfoDialog(title="Validation Dialog", message=val)
+            # result = info_dialog.exec_()  # Store return value
+
+        if self.user_cancelled:
+            return
 
         # Get the image.
         image = self.image_selection.get_value()
