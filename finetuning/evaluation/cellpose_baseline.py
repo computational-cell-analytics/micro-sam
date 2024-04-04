@@ -16,7 +16,7 @@ LM_DATASETS = [
     "tissuenet/one_chan", "tissuenet/multi_chan", "deepbacs", "plantseg/root", "livecell",
     "neurips-cell-seg/all", "neurips-cell-seg/tuning", "neurips-cell-seg/self",
     # out-of-domain (LM)
-    "covid_if", "plantseg/ovules", "hpa", "lizard", "mouse-embryo", "ctc/hela_samples", "dynamicnuclearnet", "pannuke"
+    "covid_if", "plantseg/ovules", "hpa", "lizard", "mouse-embryo", "dynamicnuclearnet", "pannuke"
 ]
 
 FOR_MULTICHAN = ["tissuenet/multi_chan"]
