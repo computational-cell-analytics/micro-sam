@@ -67,8 +67,11 @@ def make_stacks(specific_dataset=None):
 
 
 def _evaluate_mitonet_predictions(view=False):
-    all_inputs_dir = sorted(glob("/media/anwai/ANWAI/data/for_mitonet/*"))
-    tem_dir = "/media/anwai/ANWAI/data/for_mitonet/tem"
+    # ROOT = "/media/anwai/ANWAI/data/"
+    ROOT = "/scratch/projects/nim00007/sam/data"
+
+    all_inputs_dir = sorted(glob(os.path.join(ROOT, "for_mitonet", "*")))
+    tem_dir = os.path.join(ROOT, "for_mitonet", "tem")
     all_inputs_dir = [
         input_dir for input_dir in all_inputs_dir if input_dir != tem_dir
     ]
