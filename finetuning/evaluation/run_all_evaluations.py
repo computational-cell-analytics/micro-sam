@@ -147,31 +147,39 @@ def for_additional_datasets(specific_script):
     # )
 
     # let's run for cremi and asem er
+    # run_one_setup(
+    #     all_dataset_list=["cremi", "asem/er"],
+    #     all_model_list=ALl_MODELS,
+    #     all_experiment_set_list=["vanilla", "specialist", "generalist"],
+    #     roi="organelles",
+    #     specific_script=specific_script
+    # )
+
     run_one_setup(
-        all_dataset_list=["cremi", "asem/er"],
+        all_dataset_list=["asem/er"],
         all_model_list=ALl_MODELS,
-        all_experiment_set_list=["vanilla", "specialist", "generalist"],
+        all_experiment_set_list=["specialist"],
         roi="organelles",
         specific_script=specific_script
     )
 
     # let's run for platy nuclei and asem mito
-    run_one_setup(
-        all_dataset_list=["asem/mito", "platynereis/nuclei"],
-        all_model_list=ALl_MODELS,
-        all_experiment_set_list=["vanilla", "generalist"],
-        roi="organelles",
-        specific_script=specific_script
-    )
+    # run_one_setup(
+    #     all_dataset_list=["asem/mito", "platynereis/nuclei"],
+    #     all_model_list=ALl_MODELS,
+    #     all_experiment_set_list=["vanilla", "generalist"],
+    #     roi="organelles",
+    #     specific_script=specific_script
+    # )
 
     # let's run for pannuke
-    run_one_setup(
-        all_dataset_list=["pannuke"],
-        all_model_list=ALl_MODELS,
-        all_experiment_set_list=["vanilla", "generalist"],
-        roi="lm",
-        specific_script=specific_script
-    )
+    # run_one_setup(
+    #     all_dataset_list=["pannuke"],
+    #     all_model_list=ALl_MODELS,
+    #     all_experiment_set_list=["vanilla", "generalist"],
+    #     roi="lm",
+    #     specific_script=specific_script
+    # )
 
 
 def main(args):
