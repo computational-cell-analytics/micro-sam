@@ -144,6 +144,8 @@ class _WidgetBase(QtWidgets.QWidget):
         path_textbox.setText(value)
         if placeholder is not None:
             path_textbox.setPlaceholderText(placeholder)
+        path_textbox.textChanged.connect(lambda val: setattr(self, name, val))
+
         layout.addWidget(path_textbox)
 
         def add_path_button(select_type):
@@ -166,24 +168,23 @@ class _WidgetBase(QtWidgets.QWidget):
 
     def _get_directory_path(self, name, textbox):
         directory = QtWidgets.QFileDialog.getExistingDirectory(
-            self, "Select Directory", "", QtWidgets.QFileDialog.ShowDirsOnly)
-        if directory:
-            path = Path(directory)  # Create a Path object from the string
-
-            if path.is_dir():  # Check if it's a valid directory
-                textbox.setText(directory)
-                setattr(self, name, path)
-            else:
-                # Handle the case where the selected path is not a directory
-                print("Invalid directory selected. Please try again.")
+            self, "Select Directory", "", QtWidgets.QFileDialog.ShowDirsOnly
+        )
+        if directory and Path(directory).is_dir():
+            textbox.setText(directory)
+        else:
+            # Handle the case where the selected path is not a directory
+            print("Invalid directory selected. Please try again.")
 
     def _get_file_path(self, name, textbox):
         file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self, "Select File", "", "All Files (*)"
         )
-        if file_path:
+        if file_path and Path(file_path).is_file():
             textbox.setText(file_path)
-            setattr(self, name, file_path)
+        else:
+            # Handle the case where the selected path is not a file
+            print("Invalid file selected. Please try again.")
 
 
 # Custom signals for managing progress updates.
