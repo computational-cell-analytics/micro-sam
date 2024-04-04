@@ -1,5 +1,4 @@
 import os
-import warnings
 
 from glob import glob
 from pathlib import Path
@@ -18,6 +17,7 @@ from ..instance_segmentation import get_decoder
 from .annotator_2d import Annotator2d
 from .annotator_3d import Annotator3d
 from ._state import AnnotatorState
+from .util import _sync_embedding_widget
 
 
 def _precompute(
@@ -154,7 +154,13 @@ def image_series_annotator(
 
     annotator._update_image()
 
+    # Add the annotator widget to the viewer and sync widgets.
     viewer.window.add_dock_widget(annotator)
+    _sync_embedding_widget(
+        state.widgets["embeddings"], model_type,
+        save_path=embedding_path, checkpoint_path=checkpoint_path,
+        device=device, tile_shape=tile_shape, halo=halo
+    )
 
     def _save_segmentation(image_path, current_idx, segmentation):
         if have_inputs_as_arrays:
@@ -308,9 +314,6 @@ def main():
     parser.add_argument("--prefer_decoder", action="store_false")
 
     args = parser.parse_args()
-
-    if args.embedding_path is None:
-        warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
 
     image_folder_annotator(
         args.input_folder, args.output_folder, args.pattern,

@@ -43,7 +43,7 @@ def _initialize_parser(description, with_segmentation_result=True, with_instance
     parser.add_argument(
         "-i", "--input", required=True,
         help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
-        "or elf.io.open_file (e.g. hdf5, zarr, mrc) For the latter you also need to pass the 'key' parameter."
+        "or elf.io.open_file (e.g. hdf5, zarr, mrc). For the latter you also need to pass the 'key' parameter."
     )
     parser.add_argument(
         "-k", "--key",
@@ -54,8 +54,8 @@ def _initialize_parser(description, with_segmentation_result=True, with_instance
     parser.add_argument(
         "-e", "--embedding_path",
         help="The filepath for saving/loading the pre-computed image embeddings. "
-        "NOTE: It is recommended to pass this argument and store the embeddings, "
-        "otherwise they will be recomputed every time (which can take a long time)."
+        "It is recommended to pass this argument and store the embeddings if you want to open the annotator "
+        "multiple times for this image. Otherwise the embeddings will be recomputed every time."
     )
 
     if with_segmentation_result:
@@ -339,7 +339,7 @@ def prompt_layers_to_state(
 
 
 def segment_slices_with_prompts(
-    predictor, point_prompts, box_prompts, image_embeddings, shape, progress_bar=None, track_id=None
+    predictor, point_prompts, box_prompts, image_embeddings, shape, track_id=None, update_progress=None,
 ):
     """@private"""
     assert len(shape) == 3
@@ -363,9 +363,9 @@ def segment_slices_with_prompts(
     slices = np.unique(np.concatenate([z_values, z_values_boxes])).astype("int")
     stop_lower, stop_upper = False, False
 
-    def _update_progress():
-        if progress_bar is not None:
-            progress_bar.update(1)
+    if update_progress is None:
+        def update_progress(*args):
+            pass
 
     for i in slices:
         points_i = point_layer_to_prompts(point_prompts, i, track_id)
@@ -373,15 +373,21 @@ def segment_slices_with_prompts(
         # do we end the segmentation at the outer slices?
         if points_i is None:
 
-            if i == slices[0]:
+            if i == slices[0]:  # The bottom slice is a stop slice.
                 stop_lower = True
-            elif i == slices[-1]:
+                seg[i] = 0
+            elif i == slices[-1]:  # The top sloce is a stop slice.
                 stop_upper = True
-            else:
-                raise RuntimeError("Stop slices can only be at the start or end")
+                seg[i] = 0
+            else:  # We have a stop annotation somewhere in the middle. Ignore this.
+                # Remove this slice from the annotated slices, so that it is segmented via
+                # projection in the next step.
+                slices = np.setdiff1d(slices, i)
+                print(f"You have provided a stop annotation (single red point) in slice {i},")
+                print("but you have annotated slices above or below it. This stop annotation will")
+                print(f"be ignored and the slice {i} will be segmented normally.")
 
-            seg[i] = 0
-            _update_progress()
+            update_progress(1)
             continue
 
         boxes, masks = shape_layer_to_prompts(box_prompts, image_shape, i=i, track_id=track_id)
@@ -398,7 +404,7 @@ def segment_slices_with_prompts(
             continue
 
         seg[i] = seg_i
-        _update_progress()
+        update_progress(1)
 
     return seg, slices, stop_lower, stop_upper
 
@@ -418,7 +424,7 @@ def prompt_segmentation(
 
     # we use the batched point prompt segmentation mode, but
     # have a box prompt -> this does not work
-    elif multiple_point_prompts and have_boxes:
+    elif have_points and multiple_point_prompts and have_boxes:
         print("You have activated batched point segmentation but have passed a box prompt.")
         print("This setting is currently not supported.")
         print("Provide a single positive point prompt per object when using batched point segmentation.")
@@ -519,15 +525,15 @@ def _shift_object(mask, motion_model):
 def track_from_prompts(
     point_prompts, box_prompts, seg, predictor, slices, image_embeddings,
     stop_upper, threshold, projection,
-    progress_bar=None, motion_smoothing=0.5, box_extension=0,
+    motion_smoothing=0.5, box_extension=0, update_progress=None,
 ):
     """@private
     """
     use_box, use_mask, use_points, use_single_point = _validate_projection(projection)
 
-    def _update_progress():
-        if progress_bar is not None:
-            progress_bar.update(1)
+    if update_progress is None:
+        def update_progress(*args):
+            pass
 
     # shift the segmentation based on the motion model and update the motion model
     def _update_motion_model(seg, t, t0, motion_model):
@@ -585,7 +591,7 @@ def track_from_prompts(
             if t < slices[-1]:
                 seg_prev = None
 
-            _update_progress()
+            update_progress(1)
 
         if (threshold is not None) and (seg_prev is not None):
             iou = util.compute_iou(seg_prev, seg_t)
@@ -611,3 +617,54 @@ def track_from_prompts(
             break
 
     return seg, has_division
+
+
+def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, device, tile_shape, halo):
+    widget.model_type = model_type
+    index = widget.model_dropdown.findText(model_type)
+    if index > 0:
+        widget.model_dropdown.setCurrentIndex(index)
+
+    # TODO update save path and checkpoint path
+
+    if device is not None:
+        widget.device = device
+        index = widget.device_dropdown.findText(device)
+        widget.device_dropdown.setCurrentIndex(index)
+
+    if tile_shape is not None:
+        widget.tile_x_param.setValue(tile_shape[0])
+        widget.tile_y_param.setValue(tile_shape[1])
+
+    if halo is not None:
+        widget.halo_x_param.setValue(halo[0])
+        widget.halo_y_param.setValue(halo[1])
+
+
+# TODO
+def _sync_autosegment_widget(widget, model_type, checkpoint_path):
+    if widget.with_decoder:
+        # Here's how to set the relevant params:
+        # widget.center_distance_thresh_param.setValue(0.5)
+        # widget.boundary_distance_thresh_param.setValue(0.5)
+        pass
+    else:
+        # Here's how to set the relevant values:
+        # widget.pred_iou_thresh_param.setValue(0.88)
+        # widget.stability_score_thresh_param.setValue(0.95)
+        # widget.min_object_size_param.setValue(100)
+        pass
+
+
+# TODO
+def _sync_ndsegment_widget(widget, model_type, checkpoint_path):
+    # Here's how to set the relevant parameters:
+
+    # widget.projection = projection_mode
+    # index = widget.projection_dropdown.findText(projection_mode)
+    # if index > 0:
+    #   widget.projection_dropdown.setCurrentIndex(index)
+
+    # widget.iou_threshold_param.setValue(0.5)
+    # widget.box_extension_param.setValue(0.05)
+    pass

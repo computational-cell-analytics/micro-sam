@@ -1,4 +1,3 @@
-import warnings
 from typing import Optional, Tuple, Union
 
 import napari
@@ -143,47 +142,38 @@ class AnnotatorTracking(_AnnotatorBase):
         # Randomize colors so it is easy to see when object committed.
         self._viewer.layers["committed_objects"].new_colormap()
 
-    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
-        super().__init__(
-            viewer=viewer,
-            ndim=3,
-            segment_widget=widgets.segment_frame,
-            segment_nd_widget=widgets.track_object,
-            commit_widget=widgets.commit_track,
-            clear_widget=widgets.clear_track,
-        )
-
-        # Initialize the state for tracking.
+    def _get_widgets(self):
         state = AnnotatorState()
-        self._init_track_state(state)
-
         # Create the tracking state menu.
         self._tracking_widget = create_tracking_menu(
             self._point_prompt_layer, self._box_prompt_layer,
             states=self._track_state_labels, track_ids=list(state.lineage.keys()),
         )
-        # Add the tracking widget to the docked widgets.
-        self.extend([self._tracking_widget])
+        segment_nd = widgets.SegmentNDWidget(self._viewer, tracking=True)
+        return {
+            "tracking": self._tracking_widget,
+            "segment": widgets.segment_frame(),
+            "segment_nd": segment_nd,
+            "commit": widgets.commit_track(),
+            "clear": widgets.clear_track(),
+        }
 
-        # Add the tracking widget to the state so that it can be accessed from within widgets
-        # in order to update it when the tracking state changes.
-        # NOTE: it would be more elegant to do this by emmitting and connecting events,
-        # but I don't know how to create custom events.
-        state.tracking_widget = self._tracking_widget
-
+    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
+        # Initialize the state for tracking.
+        self._init_track_state()
+        super().__init__(viewer=viewer, ndim=3)
         # Go to t=0.
         self._viewer.dims.current_step = (0, 0, 0) + tuple(sh // 2 for sh in self._shape[1:])
 
-    def _init_track_state(self, state):
+    def _init_track_state(self):
+        state = AnnotatorState()
         state.current_track_id = 1
         state.lineage = {1: []}
         state.committed_lineages = []
 
     def _update_image(self):
         super()._update_image()
-        # Reset the state for tracking.
-        state = AnnotatorState()
-        self._init_track_state(state)
+        self._init_track_state()
 
 
 def annotator_tracking(
@@ -218,6 +208,7 @@ def annotator_tracking(
         The napari viewer, only returned if `return_viewer=True`.
     """
 
+    # TODO update this to match the new annotator design
     # Initialize the predictor state.
     state = AnnotatorState()
     state.initialize_predictor(
@@ -236,8 +227,13 @@ def annotator_tracking(
     # Trigger layer update of the annotator so that layers have the correct shape.
     annotator._update_image()
 
-    # Add the annotator widget to the viewer.
+    # Add the annotator widget to the viewer and sync widgets.
     viewer.window.add_dock_widget(annotator)
+    vutil._sync_embedding_widget(
+        state.widgets["embeddings"], model_type,
+        save_path=embedding_path, checkpoint_path=checkpoint_path,
+        device=device, tile_shape=tile_shape, halo=halo
+    )
 
     if return_viewer:
         return viewer
@@ -268,9 +264,6 @@ def main():
 
     args = parser.parse_args()
     image = util.load_image_data(args.input, key=args.key)
-
-    if args.embedding_path is None:
-        warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
 
     annotator_tracking(
         image, embedding_path=args.embedding_path, model_type=args.model_type,
