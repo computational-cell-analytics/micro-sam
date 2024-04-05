@@ -31,9 +31,12 @@ TITLE = {
     "neurips-cell-seg/tuning": "$\it{NeurIPS}$ $\it{CellSeg}$",
     "lizard": "Lizard",
     "mouse-embryo": "Mouse Embryo",
+    "dynamicnuclearnet": "DynamicNuclearNet",
+    "pannuke": "PanNuke",
     "mitoem/rat": "$\it{MitoEM}$ $\it{(Rat)}$",
     "mitoem/human": "$\it{MitoEM}$ $\it{(Human)}$",
     "platynereis/nuclei": "$\it{Platynereis}$ $\it{(Nuclei)}$",
+    "platynereis/cilia": "Platynereis (Cilia)",
     "mitolab/c_elegans": "MitoLab (C. elegans)",
     "mitolab/fly_brain": "MitoLab (Fly Brain)",
     "mitolab/glycolytic_muscle": "MitoLab (Glycolytic Muscle)",
@@ -45,8 +48,19 @@ TITLE = {
     "nuc_mm/mouse": "NucMM (Mouse)",
     "nuc_mm/zebrafish": "NucMM (Zebrafish)",
     "uro_cell": "UroCell",
-    "sponge_em": "Sponge EM"
-    }
+    "sponge_em": "Sponge EM",
+    "vnc": "VNC",
+    "asem/mito": "ASEM (Mito)",
+    "cremi": "CREMI",
+    "asem/er": "ASEM (ER)",
+}
+
+MODELS = {
+    "vit_h": 'ViT Huge',
+    "vit_l": 'ViT Large',
+    "vit_b": 'ViT Base',
+    "vit_t": 'ViT Tiny'
+}
 
 FIG_ASPECT = (25, 22)
 
@@ -151,7 +165,7 @@ def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice=None):
             ax.axhline(y=benchmark_res, label=benchmark_name, color="#DC3977")
 
 
-def _get_plot_postprocessing(fig, experiment_title, save_path):
+def _get_plot_postprocessing(fig, experiment_title, save_path, ignore_legends=False, title_loc=0.93):
     # here, we remove the legends for each subplot, and get one common legend for all
     all_lines, all_labels = [], []
     for ax in fig.axes:
@@ -162,14 +176,18 @@ def _get_plot_postprocessing(fig, experiment_title, save_path):
                 all_labels.append(label)
         ax.get_legend().remove()
 
-    fig.legend(all_lines, all_labels, loc="upper left")
+    adjust_params = {}
+    if not ignore_legends:
+        fig.legend(all_lines, all_labels, loc="upper left")
+        plt.text(
+            x=0.25, y=4.1, s=" X-Axis: Models \n Y-Axis: Segmentation Accuracy ", ha='left',
+            transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#D6D6D6", "boxstyle": "round"}
+        )
+        adjust_params = {"top": 0.8, "right": 0.95, "left": 0.11, "bottom": 0.05}
+    else:
+        plt.suptitle(experiment_title, fontsize=36, y=title_loc)
 
-    plt.text(
-        x=0.25, y=4.1, s=" X-Axis: Models \n Y-Axis: Segmentation Accuracy ", ha='left',
-        transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#D6D6D6", "boxstyle": "round"}
-    )
-
-    plt.subplots_adjust(top=0.8, right=0.95, left=0.11, bottom=0.05, hspace=0.4)
+    plt.subplots_adjust(hspace=0.4, **adjust_params)
     plt.show()
     plt.savefig(Path(save_path).with_suffix(".pdf"))
     plt.savefig(save_path)
@@ -198,6 +216,36 @@ def plot_evaluation_for_lm_datasets(model_type):
 
     _get_plot_postprocessing(
         fig=fig, experiment_title="Light Microscopy", save_path=f"lm_{model_type}_evaluation.svg"
+    )
+
+
+def plot_evaluation_for_all_lm_datasets(model_type):
+    modality = "lm"
+    fig, ax = plt.subplots(6, 2, figsize=(17.5, 30))
+
+    # choices:
+    # "livecell", "tissuenet" (one_chan OR multi_chan), "deepbacs", "covid_if", "plantseg/root", "hpa",
+    # "plantseg/ovules", "neurips-cell-seg/tuning" (/all; /self), "lizard", "mouse-embryo"
+    # "dynamicnuclearnet", "pannuke"
+
+    get_barplots(ax[0, 0], "livecell", modality, model_type, benchmark_choice="livecell")
+    get_barplots(ax[0, 1], "deepbacs", modality, model_type, benchmark_choice="cyto2")
+    get_barplots(ax[1, 0], "tissuenet/multi_chan", modality, model_type, benchmark_choice="tissuenet")
+    get_barplots(ax[1, 1], "plantseg/root", modality, model_type, benchmark_choice="cyto2")
+    get_barplots(ax[2, 0], "neurips-cell-seg/tuning", modality, model_type, benchmark_choice="cyto2")
+    get_barplots(ax[2, 1], "covid_if", modality, model_type, benchmark_choice="cyto2")
+    get_barplots(ax[3, 0], "dynamicnuclearnet", modality, model_type, benchmark_choice="cyto2")
+    get_barplots(ax[3, 1], "plantseg/ovules", modality, model_type, benchmark_choice="cyto2")
+    get_barplots(ax[4, 0], "mouse-embryo", modality, model_type, benchmark_choice="cyto2")
+    get_barplots(ax[4, 1], "hpa", modality, model_type, benchmark_choice="cyto2")
+    get_barplots(ax[5, 0], "pannuke", modality, model_type, benchmark_choice="cyto2")
+    get_barplots(ax[5, 1], "lizard", modality, model_type, benchmark_choice="cyto2")
+
+    _get_plot_postprocessing(
+        fig=fig,
+        experiment_title=MODELS[model_type],
+        save_path=f"lm_all_{model_type}_evaluation.svg",
+        ignore_legends=True,
     )
 
 
@@ -231,7 +279,7 @@ def plot_evaluation_for_em_datasets(model_type):
 
 def plot_evaluation_for_all_em_datasets(model_type):
     modality = "em"
-    fig, ax = plt.subplots(4, 4, figsize=FIG_ASPECT)
+    fig, ax = plt.subplots(5, 3, figsize=(25, 30))
 
     # choices:
     # for mito-nuc
@@ -243,31 +291,52 @@ def plot_evaluation_for_all_em_datasets(model_type):
     get_barplots(ax[0, 0], "mitoem/rat", modality, model_type)
     get_barplots(ax[0, 1], "mitoem/human", modality, model_type)
     get_barplots(ax[0, 2], "platynereis/nuclei", modality, model_type)
-    get_barplots(ax[0, 3], "mitolab/c_elegans", modality, model_type)
-    get_barplots(ax[1, 0], "mitolab/fly_brain", modality, model_type)
-    get_barplots(ax[1, 1], "mitolab/glycolytic_muscle", modality, model_type)
-    get_barplots(ax[1, 2], "mitolab/hela_cell", modality, model_type)
-    get_barplots(ax[1, 3], "mitolab/salivary_gland", modality, model_type)
-    get_barplots(ax[2, 0], "mitolab/tem", modality, model_type)
-    get_barplots(ax[2, 1], "lucchi", modality, model_type)
-    get_barplots(ax[2, 2], "nuc_mm/mouse", modality, model_type)
-    get_barplots(ax[2, 3], "nuc_mm/zebrafish", modality, model_type)
-    get_barplots(ax[3, 0], "uro_cell", modality, model_type)
-    get_barplots(ax[3, 1], "sponge_em", modality, model_type)
+    get_barplots(ax[1, 0], "mitolab/c_elegans", modality, model_type)
+    get_barplots(ax[1, 1], "mitolab/fly_brain", modality, model_type)
+    get_barplots(ax[1, 2], "mitolab/glycolytic_muscle", modality, model_type)
+    get_barplots(ax[2, 0], "mitolab/hela_cell", modality, model_type)
+    get_barplots(ax[2, 1], "mitolab/tem", modality, model_type)
+    get_barplots(ax[2, 2], "lucchi", modality, model_type)
+    get_barplots(ax[3, 0], "nuc_mm/mouse", modality, model_type)
+    get_barplots(ax[3, 1], "uro_cell", modality, model_type)
     get_barplots(ax[3, 2], "sponge_em", modality, model_type)
-    get_barplots(ax[3, 3], "sponge_em", modality, model_type)
+    get_barplots(ax[4, 0], "vnc", modality, model_type)
+    get_barplots(ax[4, 1], "asem/mito", modality, model_type)
+    get_barplots(ax[4, 2], "platynereis/cilia", modality, model_type)
 
     _get_plot_postprocessing(
-        fig=fig, experiment_title="Electron Microscopy", save_path=f"em_{model_type}_all_evaluation.png"
+        fig=fig,
+        experiment_title=MODELS[model_type],
+        save_path=f"em_all_{model_type}_evaluation.svg",
+        ignore_legends=True,
+    )
+
+
+def plot_em_specialists(model_type):
+    modality = "em"
+    fig, ax = plt.subplots(1, 2, figsize=(20, 10))
+
+    get_barplots(ax[0], "cremi", modality, model_type)
+    get_barplots(ax[1], "asem/er", modality, model_type)
+
+    _get_plot_postprocessing(
+        fig=fig,
+        experiment_title=MODELS[model_type],
+        save_path=f"em_specialist_{model_type}_evaluation.svg",
+        ignore_legends=True,
+        title_loc=0.97
     )
 
 
 def main():
-    plot_evaluation_for_lm_datasets("vit_l")
-    plot_evaluation_for_em_datasets("vit_l")
+    # plot_evaluation_for_lm_datasets("vit_l")
+    # plot_evaluation_for_em_datasets("vit_l")
 
-    # plot_evaluation_for_all_em_datasets("vit_h")
-    # TODO: plot for all lm datasets
+    all_models = ["vit_t", "vit_b", "vit_l", "vit_h"]
+    for model in all_models:
+        # plot_evaluation_for_all_em_datasets(model)
+        # plot_evaluation_for_all_lm_datasets(model)
+        plot_em_specialists(model)
 
 
 if __name__ == "__main__":
