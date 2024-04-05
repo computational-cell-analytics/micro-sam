@@ -110,17 +110,17 @@ def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
     ax.axhline(y=cellpose, label="cellpose", color="#5454DA")
 
 
-def plot_for_livecell(benchmark_choice, results_with_logits):
+def plot_for_livecell(benchmark_choice, results_with_logits, model_choice=MODEL_CHOICE):
     result_type = "with_logits" if results_with_logits else "default"
 
     fig, ax = plt.subplots(1, 2, figsize=FIG_ASPECT, sharex="col", sharey="row")
     amg_vanilla, _, ib_vanilla, ip_vanilla, cellpose_res = gather_livecell_results(
-        MODEL_CHOICE, "vanilla", benchmark_choice, result_type
+        model_choice, "vanilla", benchmark_choice, result_type
     )
     get_barplots("Default SAM", ax[0], ib_vanilla, ip_vanilla, amg_vanilla, cellpose_res)
 
     amg, ais, ib, ip, cellpose_res = gather_livecell_results(
-        MODEL_CHOICE, COMPARE_WITH, benchmark_choice, result_type
+        model_choice, COMPARE_WITH, benchmark_choice, result_type
     )
     get_barplots("Finetuned SAM", ax[1], ib, ip, amg, cellpose_res, ais)
 
@@ -147,8 +147,10 @@ def plot_for_livecell(benchmark_choice, results_with_logits):
 
     plt.show()
     plt.tight_layout()
-    plt.subplots_adjust(top=0.78, right=0.95, left=0.13, bottom=0.05)
-    _path = "livecell_with_logits.svg" if results_with_logits else "livecell.svg"
+    fig.suptitle(MODEL_NAME_MAP[model_choice], fontsize=36, x=0.54, y=0.9)
+    if results_with_logits:
+        plt.subplots_adjust(top=0.78, right=0.95, left=0.13, bottom=0.05)
+    _path = f"livecell_{model_choice}_with_logits.svg" if results_with_logits else f"livecell_{model_choice}.svg"
     plt.savefig(_path)
     plt.savefig(Path(_path).with_suffix(".pdf"))
     plt.close()
@@ -229,13 +231,11 @@ def plot_all_livecell(benchmark_choice, model_type):
 
 
 def main():
-    plot_for_livecell(benchmark_choice="livecell", results_with_logits=False)
-    plot_for_livecell(benchmark_choice="livecell", results_with_logits=True)
+    # plot_for_livecell(benchmark_choice="livecell", results_with_logits=False)
 
-    plot_all_livecell(benchmark_choice="livecell", model_type="vit_t")
-    plot_all_livecell(benchmark_choice="livecell", model_type="vit_b")
-    plot_all_livecell(benchmark_choice="livecell", model_type="vit_l")
-    plot_all_livecell(benchmark_choice="livecell", model_type="vit_h")
+    for model in ALL_MODELS:
+        plot_for_livecell(benchmark_choice="livecell", results_with_logits=True, model_choice=model)
+        plot_all_livecell(benchmark_choice="livecell", model_type=model)
 
 
 if __name__ == "__main__":
