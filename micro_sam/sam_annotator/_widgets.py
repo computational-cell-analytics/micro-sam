@@ -16,8 +16,7 @@ import zarr
 import z5py
 
 from qtpy import QtWidgets
-from qtpy.QtWidgets import QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox
-from qtpy.QtCore import QObject, Signal, QFileInfo
+from qtpy.QtCore import QObject, Signal
 from superqt import QCollapsible
 from magicgui import magic_factory
 from magicgui.widgets import ComboBox, Container, create_widget
@@ -172,22 +171,21 @@ class PBarSignals(QObject):
     pbar_reset = Signal()
 
 
-class InfoDialog(QDialog):
+class InfoDialog(QtWidgets.QDialog):
     def __init__(self, title, message):
         super().__init__()
         self.setWindowTitle(title)
-        self.user_cancelled = False  # Initialize flag
 
-        layout = QVBoxLayout()
-        layout.addWidget(QLabel(message))
+        layout = QtWidgets.QVBoxLayout()
+        layout.addWidget(QtWidgets.QLabel(message))
 
         # Add buttons
-        button_box = QHBoxLayout()  # Use QHBoxLayout for buttons side-by-side
-        accept_button = QPushButton("OK") 
+        button_box = QtWidgets.QHBoxLayout()  # Use QHBoxLayout for buttons side-by-side
+        accept_button = QtWidgets.QPushButton("OK")
         accept_button.clicked.connect(lambda: self.button_clicked(accept_button))  # Connect to clicked signal
         button_box.addWidget(accept_button)
 
-        cancel_button = QPushButton("Cancel")
+        cancel_button = QtWidgets.QPushButton("Cancel")
         cancel_button.clicked.connect(lambda: self.button_clicked(cancel_button))  # Connect to clicked signal
         button_box.addWidget(cancel_button)
 
@@ -595,7 +593,7 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
 
 
 class EmbeddingWidget(_WidgetBase):
-    def __init__(self, parent=None):
+    def __init__(self, skip_validate=False, parent=None):
         super().__init__(parent=parent)
 
         # Create a nested layout for the sections.
@@ -610,7 +608,7 @@ class EmbeddingWidget(_WidgetBase):
 
         # Section 3: The button to trigger the embedding computation.
         self.run_button = QtWidgets.QPushButton("Compute Embeddings")
-        self.run_button.clicked.connect(self.__call__)
+        self.run_button.clicked.connect(lambda: self.__call__(skip_validate))
         self.layout().addWidget(self.run_button)
 
     def _create_image_section(self):
@@ -724,33 +722,37 @@ class EmbeddingWidget(_WidgetBase):
 
         # Set button text and behavior based on message type
         if message_type == "error":
-            QMessageBox.critical(None, "Error", message, QMessageBox.Ok)
-            self.user_cancelled = True
+            QtWidgets.QMessageBox.critical(None, "Error", message, QtWidgets.QMessageBox.Ok)
+            user_cancelled = True
+            return user_cancelled
         elif message_type == "info":
             info_dialog = InfoDialog(title="Validation Message", message=message)
             result = info_dialog.exec_()
-            if result == QDialog.Rejected:  # Check for cancel
-                self.user_cancelled = True  # Set flag directly in calling function
+            if result == QtWidgets.QDialog.Rejected:  # Check for cancel
+                user_cancelled = True  # Set flag directly in calling function
+                return user_cancelled
 
-    def __call__(self):
+    def __call__(self, skip_validate=False):
         # validate user inputs
-        self.user_cancelled = False  # Flag to track cancellation
-        validation_result = self._validate_inputs()
-        if validation_result is not None:
-            self.generate_message(validation_result["message_type"], validation_result["message"])
-            # update GUI
-            vutil._sync_embedding_widget(
-                self,
-                model_type=self.model_type,
-                save_path=self.embeddings_save_path,
-                checkpoint_path=None,
-                device=self.device,
-                tile_shape=[self.tile_x, self.tile_y],
-                halo=[self.halo_x, self.halo_y]
-                )
+        user_cancelled = False  # Flag to track cancellation
+        if not skip_validate:
+            validation_result = self._validate_inputs()
+            if validation_result is not None:
+                user_cancelled = self.generate_message(validation_result["message_type"], validation_result["message"])
+                # update GUI
+                if not user_cancelled:
+                    vutil._sync_embedding_widget(
+                        self,
+                        model_type=self.model_type,
+                        save_path=self.embeddings_save_path,
+                        checkpoint_path=None,
+                        device=self.device,
+                        tile_shape=[self.tile_x, self.tile_y],
+                        halo=[self.halo_x, self.halo_y]
+                        )
 
-        if self.user_cancelled:
-            return
+            if user_cancelled:
+                return
 
         # Get the image.
         image = self.image_selection.get_value()

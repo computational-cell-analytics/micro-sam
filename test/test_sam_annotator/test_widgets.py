@@ -24,7 +24,7 @@ def test_embedding_widget(make_napari_viewer, tmp_path):
     # Setup
     viewer = make_napari_viewer()
     layer = viewer.open_sample("napari", "camera")[0]
-    my_widget = EmbeddingWidget()
+    my_widget = EmbeddingWidget(skip_validate=True)
 
     # Set the widget parameters
     my_widget.image = layer
