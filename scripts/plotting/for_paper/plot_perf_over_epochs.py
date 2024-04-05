@@ -9,7 +9,15 @@ import matplotlib.pyplot as plt
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/from_carolin/perf_over_epochs/"
 
 # adding a fixed color palette to each experiments, for consistency in plotting the legends
-PALETTE = {"vit_t": "#DC3977", "vit_b": "#E19951", "vit_l": "#5454DA", "vit_h": "#41EAD4"}
+# PALETTE = {"vit_t": "#DC3977", "vit_b": "#E19951", "vit_l": "#5454DA", "vit_h": "#41EAD4"}
+PALETTE = {"vit_t": "#089099", "vit_b": "#7CCBA2", "vit_l": "#7C1D6F", "vit_h": "#F0746E"}
+
+MODELS = {
+    "vit_h": 'ViT Huge',
+    "vit_l": 'ViT Large',
+    "vit_b": 'ViT Base',
+    "vit_t": 'ViT Tiny'
+}
 
 plt.rcParams.update({"font.size": 24})
 
@@ -110,6 +118,7 @@ def plot_perf_over_epochs():
                 all_labels.append(label)
         ax.get_legend().remove()
 
+    labels = [MODELS[_l] for _l in labels]
     fig.legend(all_lines, labels, loc="upper left")
     plt.tight_layout()
 
@@ -119,10 +128,12 @@ def plot_perf_over_epochs():
     )
 
     plt.show()
-    plt.subplots_adjust(top=0.9, right=0.9, left=0.1, bottom=0.05, hspace=0.3, wspace=0.2)
+    plt.subplots_adjust(top=0.9, right=0.9, left=0.15, bottom=0.05, hspace=0.3, wspace=0.2)
 
     # fig.suptitle("Performance over Epochs", y=0.97, fontsize=26)
-    plt.savefig("plot_perf_over_epochs.svg")
+    save_path = "plot_perf_over_epochs.svg"
+    plt.savefig(save_path)
+    plt.savefig(Path(save_path).with_suffix(".pdf"))
     plt.close()
 
 
