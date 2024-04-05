@@ -450,7 +450,7 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
     image_embeddings = AnnotatorState().image_embeddings
     seg = vutil.prompt_segmentation(
         predictor, points, labels, boxes, masks, shape, image_embeddings=image_embeddings,
-        multiple_box_prompts=True, multiple_point_prompts=batched,
+        multiple_box_prompts=True, batched=batched, previous_segmentation=viewer.layers["current_object"].data,
     )
 
     # no prompts were given or prompts were invalid, skip segmentation
