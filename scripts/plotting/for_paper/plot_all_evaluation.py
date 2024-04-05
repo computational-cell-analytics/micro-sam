@@ -20,7 +20,8 @@ PALETTE = {
 
 TITLE = {
     "livecell": "$\it{LIVECell}$",
-    "tissuenet": "$\it{TissueNet}$",
+    "tissuenet/one_chan": "$\it{TissueNet}$",
+    "tissuenet/multi_chan": "$\it{TissueNet}$",
     "deepbacs": "$\it{DeepBacs}$",
     "covid_if": "Covid IF",
     "plantseg/root": "$\it{PlantSeg}$ $\it{(Root)}$",
@@ -56,6 +57,10 @@ def gather_all_results(dataset, modality, model_type):
     res_list_per_dataset = []
     for experiment_dir in glob(os.path.join(EXPERIMENT_ROOT, "new_models", "v2", "*", modality, dataset)):
         experiment_name = os.path.split(experiment_dir[:experiment_dir.find(f"/{modality}")])[-1]
+
+        if experiment_name == "vanilla":  # easy fix to alter the name
+            experiment_name = "default"
+
         res_list_per_experiment = []
         for i, result_path in enumerate(sorted(glob(os.path.join(experiment_dir, model_type, "results", "*")))):
             # avoid using the grid-search parameters' files
@@ -177,13 +182,13 @@ def plot_evaluation_for_lm_datasets(model_type):
     fig, ax = plt.subplots(3, 3, figsize=FIG_ASPECT)
 
     # choices:
-    # "livecell", "tissuenet", "deepbacs", "covid_if", "plantseg/root", "hpa",
+    # "livecell", "tissuenet" (one_chan OR multi_chan), "deepbacs", "covid_if", "plantseg/root", "hpa",
     # "plantseg/ovules", "neurips-cell-seg/tuning" (/all; /self), "lizard", "mouse-embryo"
     # "dynamicnuclearnet", "pannuke"
 
     get_barplots(ax[0, 0], "livecell", modality, model_type, benchmark_choice="livecell")
     get_barplots(ax[0, 1], "deepbacs", modality, model_type, benchmark_choice="cyto2")
-    get_barplots(ax[0, 2], "tissuenet", modality, model_type, benchmark_choice="cyto2")
+    get_barplots(ax[0, 2], "tissuenet/multi_chan", modality, model_type, benchmark_choice="tissuenet")
     get_barplots(ax[1, 0], "plantseg/root", modality, model_type, benchmark_choice="cyto2")
     get_barplots(ax[1, 1], "neurips-cell-seg/tuning", modality, model_type, benchmark_choice="cyto2")
     get_barplots(ax[1, 2], "covid_if", modality, model_type, benchmark_choice="cyto2")
