@@ -39,6 +39,9 @@ contributions:
     - id: micro-sam.settings
       python_name: micro_sam.sam_annotator._widgets:settings_widget
       title: Set cache directory
+    - id: micro-sam.training
+      python_name: micro_sam.sam_annotator.training_ui:TrainingWidget
+      title: Finetune SAM model
 
   sample_data:
     - command: micro-sam.sample_data_image_series
@@ -72,3 +75,5 @@ contributions:
       display_name: Annotator Tracking
     - command: micro-sam.settings
       display_name: Settings
+    - command: micro-sam.training
+      display_name: Finetuning
