@@ -36,12 +36,15 @@ contributions:
     - id: micro-sam.annotator_tracking
       python_name: micro_sam.sam_annotator.annotator_tracking:AnnotatorTracking
       title: Start the tracking annotator
-    - id: micro-sam.settings
-      python_name: micro_sam.sam_annotator._widgets:settings_widget
-      title: Set cache directory
+    - id: micro-sam.folder_annotator
+      python_name: micro_sam.sam_annotator.image_series_annotator:ImageFolderAnnotator
+      title: Run the annotator for multiple images
     - id: micro-sam.training
       python_name: micro_sam.sam_annotator.training_ui:TrainingWidget
       title: Finetune SAM model
+    - id: micro-sam.settings
+      python_name: micro_sam.sam_annotator._widgets:settings_widget
+      title: Set cache directory
 
   sample_data:
     - command: micro-sam.sample_data_image_series
@@ -73,7 +76,9 @@ contributions:
       display_name: Annotator 3d
     - command: micro-sam.annotator_tracking
       display_name: Annotator Tracking
-    - command: micro-sam.settings
-      display_name: Settings
+    - command: micro-sam.folder_annotator
+      display_name: Folder Annotator
     - command: micro-sam.training
       display_name: Finetuning
+    - command: micro-sam.settings
+      display_name: Settings
