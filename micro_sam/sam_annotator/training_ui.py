@@ -162,8 +162,8 @@ class TrainingWidget(widgets._WidgetBase):
         assert model_type is not None
         return model_type
 
-    # TODO
-    def _validate_paths(self):
+    # TODO re-use functionality from Luca's embedding validation
+    def _validate_inputs(self):
         # Check the raw_path and label_path: both have to be given and have to exist.
         print(self.raw_path)
         print(self.label_path)
@@ -171,7 +171,7 @@ class TrainingWidget(widgets._WidgetBase):
         pass
 
     def __call__(self):
-        self._validate_paths()
+        self._validate_inputs()
 
         # Set up progress bar and signals for using it within a threadworker.
         pbar, pbar_signals = widgets._create_pbar_for_threadworker()
