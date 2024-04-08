@@ -24,7 +24,7 @@ def test_embedding_widget(make_napari_viewer, tmp_path):
     # Setup
     viewer = make_napari_viewer()
     layer = viewer.open_sample("napari", "camera")[0]
-    my_widget = EmbeddingWidget(skip_validate=True)
+    my_widget = EmbeddingWidget()
 
     # Set the widget parameters
     my_widget.image = layer
@@ -33,7 +33,7 @@ def test_embedding_widget(make_napari_viewer, tmp_path):
     my_widget.embeddings_save_path = tmp_path
 
     # Run image embedding widget.
-    worker = my_widget()
+    worker = my_widget(skip_validate=True)
     worker.await_workers()  # blocks until thread worker is finished the embedding
 
     # Check in-memory state for predictor and embeddings.

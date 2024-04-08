@@ -22,7 +22,6 @@ from magicgui import magic_factory
 from magicgui.widgets import ComboBox, Container, create_widget
 from napari.qt.threading import thread_worker
 from napari.utils import progress
-from zarr.errors import PathNotFoundError
 
 from ._state import AnnotatorState
 from . import util as vutil
@@ -498,59 +497,63 @@ def _generate_message(message_type, message) -> bool:
             return abort
 
 
-def _validate_data_signatures(viewer: "napari.viewer.Viewer", dummy=False):
-    # dummy flag to skip calculations and to prevent excessive utilization of resources
-    if dummy:
+def _validate_embeddings(viewer: "napari.viewer.Viewer"):
+    state = AnnotatorState()
+    if state.image_embeddings is None:
+        msg = "Image embeddings are not yet computed. Press 'Compute Embeddings' to compute them for your image."
+        return _generate_message("error", msg)
+    else:
         return False
 
-    val_results = None
-    state = AnnotatorState()
-    embeddings_save_path = state.embedding_path
-    embedding_data_signature = None
-    image = None
-    if isinstance(viewer.layers[0], napari.layers.Image):  # Assuming the image layer is at index 0
-        image = viewer.layers[0]
-    else:
-        # Handle the case where the first layer isn't an Image layer
-        raise ValueError("Expected an Image layer in viewer.layers")
-    img_signature = util._compute_data_signature(image.data)
-    if embeddings_save_path is not None:
-        # Check for existing embeddings
-        if os.listdir(embeddings_save_path):
-            try:
-                with zarr.open(embeddings_save_path, "a") as f:
-                    # If data_signature exists, compare and return validation message
-                    if "data_signature" in f.attrs:
-                        embedding_data_signature = f.attrs["data_signature"]
-            except RuntimeError as e:
-                val_results = {
-                    "message_type": "error",
-                    "message": f"Failed to load image embeddings: {e}"
-                }
-        else:
-            val_results = {"message_type": "info", "message": "No existing embeddings found at the specified path."}
-    else:  # load from state object
-        embedding_data_signature = state.data_signature
-    # compare image data signature with embedding data signature
-    if img_signature != embedding_data_signature:
-        val_results = {
-            "message_type": "error",
-            "message": f"The embeddings don't match with the image: {img_signature} {embedding_data_signature}"
-        }
-    else:
-        val_results = None
-    if val_results:
-        return _generate_message(val_results["message_type"], val_results["message"])
-    else:
-        return False
+    # This code is for checking the data signature of the current image layer and the data signature
+    # of the embeddings. However, the code has some disadvantages, for example assuming the position of the
+    # image layer and also having to compute the data signature every time.
+    # That's why we are not using this for now, but may want to revisit this in the future. See:
+    # https://github.com/computational-cell-analytics/micro-sam/issues/504
+
+    # embeddings_save_path = state.embedding_path
+    # embedding_data_signature = None
+    # image = None
+    # if isinstance(viewer.layers[0], napari.layers.Image):  # Assuming the image layer is at index 0
+    #     image = viewer.layers[0]
+    # else:
+    #     # Handle the case where the first layer isn't an Image layer
+    #     raise ValueError("Expected an Image layer in viewer.layers")
+    # img_signature = util._compute_data_signature(image.data)
+    # if embeddings_save_path is not None:
+    #     # Check for existing embeddings
+    #     if os.listdir(embeddings_save_path):
+    #         try:
+    #             with zarr.open(embeddings_save_path, "a") as f:
+    #                 # If data_signature exists, compare and return validation message
+    #                 if "data_signature" in f.attrs:
+    #                     embedding_data_signature = f.attrs["data_signature"]
+    #         except RuntimeError as e:
+    #             val_results = {
+    #                 "message_type": "error",
+    #                 "message": f"Failed to load image embeddings: {e}"
+    #             }
+    #     else:
+    #         val_results = {"message_type": "info", "message": "No existing embeddings found at the specified path."}
+    # else:  # load from state object
+    #     embedding_data_signature = state.data_signature
+    # # compare image data signature with embedding data signature
+    # if img_signature != embedding_data_signature:
+    #     val_results = {
+    #         "message_type": "error",
+    #         "message": f"The embeddings don't match with the image: {img_signature} {embedding_data_signature}"
+    #     }
+    # else:
+    #     val_results = None
+    # if val_results:
+    #     return _generate_message(val_results["message_type"], val_results["message"])
+    # else:
+    #     return False
 
 
 @magic_factory(call_button="Segment Object [S]")
 def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
-    # validate if image signature and embedding signature match
-    abort = False
-    abort = _validate_data_signatures(viewer, dummy=False)  # dummy=True deactivates the validation function
-    if abort:
+    if _validate_embeddings(viewer):
         return None
 
     shape = viewer.layers["current_object"].data.shape
@@ -577,6 +580,9 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
 
 @magic_factory(call_button="Segment Slice [S]")
 def segment_slice(viewer: "napari.viewer.Viewer") -> None:
+    if _validate_embeddings(viewer):
+        return None
+
     shape = viewer.layers["current_object"].data.shape[1:]
     position = viewer.cursor.position
     z = int(position[0])
@@ -606,6 +612,9 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
 
 @magic_factory(call_button="Segment Frame [S]")
 def segment_frame(viewer: "napari.viewer.Viewer") -> None:
+    if _validate_embeddings(viewer):
+        return None
+
     state = AnnotatorState()
     shape = state.image_shape[1:]
     position = viewer.cursor.position
@@ -789,72 +798,82 @@ class EmbeddingWidget(_WidgetBase):
                 - False if no message generation is required.
         """
 
-        if self.embeddings_save_path is not None:
-            # Validate image data signature
-            image = self.image_selection.get_value()
-            img_signature = util._compute_data_signature(image.data)
+        # Check if we have an existing embedding path.
+        # If yes we check the data signature of these embeddings against the selected image
+        # and we ask the user if they want to load these embeddings.
+        if (self.embeddings_save_path is not None) and os.listdir(self.embeddings_save_path):
+            try:
+                f = zarr.open(self.embeddings_save_path, "a")
 
-            # Check for existing embeddings
-            if os.listdir(self.embeddings_save_path):
-                try:
-                    with zarr.open(self.embeddings_save_path, "a") as f:
-                        # If data_signature exists, compare and return validation message
-                        if "data_signature" in f.attrs:
-                            if img_signature != f.attrs["data_signature"]:
-                                val_results = {
-                                    "message_type": "error",
-                                    "message": f"The embeddings don't match with the image: {img_signature} {f.attrs['data_signature']}"
-                                }
+                # Validate that the embeddings are complete.
+                # Note: 'input_size' is the last value set in the attrs of f,
+                # so we can use it as a proxy to check if the embeddings are fully computed
+                if "input_size" not in f.attrs:
+                    msg = f"The embeddings at {self.embeddings_save_path} are incomplete. Specify a different path or remove them."
+                    return _generate_message("error", msg)
 
-                        # Load existing parameters
-                        if "tile_shape" in f.attrs:
-                            self.tile_x, self.tile_y = f.attrs["tile_shape"]
-                            self.halo_x, self.halo_y = f.attrs["halo"]
-                            self.model_type = f.attrs["model_type"]
-                            val_results = {
-                                "message_type": "info",
-                                "message": f"Embeddings loaded with tile shape: {self.tile_x}, {self.tile_y} and halo: {self.halo_x}, {self.halo_y} and model: {self.model_type}."
-                            }
-                except RuntimeError as e:
+                # Validate image data signature.
+                if "data_signature" in f.attrs:
+                    image = self.image_selection.get_value()
+                    img_signature = util._compute_data_signature(image.data)
+                    if img_signature != f.attrs["data_signature"]:
+                        msg = f"The embeddings don't match with the image: {img_signature} {f.attrs['data_signature']}"
+                        return _generate_message("error", msg)
+
+                # Load existing parameters.
+                self.model_type = f.attrs["model_type"]
+                if "tile_shape" in f.attrs:
+                    self.tile_x, self.tile_y = f.attrs["tile_shape"]
+                    self.halo_x, self.halo_y = f.attrs["halo"]
                     val_results = {
-                        "message_type": "error",
-                        "message": f"Failed to load image embeddings: {e}"
+                        "message_type": "info",
+                        "message": f"Load embeddings for model: {self.model_type} with tile shape: {self.tile_x}, {self.tile_y} and halo: {self.halo_x}, {self.halo_y}."
                     }
-            else:
-                val_results = {"message_type": "info", "message": "No existing embeddings found at the specified path."}
-        else:
-            val_results = None  # No embeddings path specified
+                else:
+                    self.tile_x, self.tile_y = None, None
+                    self.halo_x, self.halo_y = None, None
+                    val_results = {
+                        "message_type": "info",
+                        "message": f"Load embeddings for model: {self.model_type}."
+                    }
 
-        if val_results:
-            return _generate_message(val_results["message_type"], val_results["message"])
-        else:
-            return False
+                return _generate_message(val_results["message_type"], val_results["message"])
+
+            except RuntimeError as e:
+                val_results = {
+                    "message_type": "error",
+                    "message": f"Failed to load image embeddings: {e}"
+                }
+                return _generate_message(val_results["message_type"], val_results["message"])
+
+        # Otherwise we either don't have an embedding path or it is empty. We can proceed in both cases.
+        return False
 
     def __call__(self, skip_validate=False):
-        # validate user inputs
+        # Validate user inputs.
         abort = False  # Flag to track cancellation
         if not skip_validate:
             abort = self._validate_inputs()
-            if not abort:
-                # update GUI
-                vutil._sync_embedding_widget(
-                    self,
-                    model_type=self.model_type,
-                    save_path=self.embeddings_save_path,
-                    checkpoint_path=None,
-                    device=self.device,
-                    tile_shape=[self.tile_x, self.tile_y],
-                    halo=[self.halo_x, self.halo_y]
-                    )
 
             if abort:
                 return
 
+            else:
+                # Update the GUI. This is necessary because we may have
+                # loaded some settings from the embedding file and want to
+                # reflect those settings in the values shown in the GUI.
+                vutil._sync_embedding_widget(
+                    self,
+                    model_type=self.model_type,
+                    save_path=self.embeddings_save_path,
+                    checkpoint_path=self.custom_weights,
+                    device=self.device,
+                    tile_shape=[self.tile_x, self.tile_y],
+                    halo=[self.halo_x, self.halo_y]
+                )
+
         # Get the image.
         image = self.image_selection.get_value()
-
-        # TODO Do a check if we actually need to recompute the embeddings.
-        # Unify this with the checks that are currently in the thread worker.
 
         # Update the image embeddings:
         # Reset the state.
@@ -879,22 +898,6 @@ class EmbeddingWidget(_WidgetBase):
 
         @thread_worker()
         def compute_image_embedding():
-            # TODO these checks should probably not happen in the threadworker
-            # Make sure save directory exists and is an empty directory
-            if save_path is not None:
-                os.makedirs(save_path, exist_ok=True)
-                if not save_path.is_dir():
-                    raise NotADirectoryError(
-                        f"The user selected 'save_path' is not a direcotry: {save_path}"
-                    )
-                if len(os.listdir(save_path)) > 0:
-                    try:
-                        zarr.open(save_path, "r")
-                    except PathNotFoundError:
-                        raise RuntimeError(
-                            "The user selected 'save_path' is not a zarr array "
-                            f"or empty directory: {save_path}"
-                        )
 
             def pbar_init(total, description):
                 pbar_signals.pbar_total.emit(total)
@@ -1081,6 +1084,8 @@ class SegmentNDWidget(_WidgetBase):
         return worker
 
     def __call__(self):
+        if _validate_embeddings(self._viewer):
+            return None
         if self.tracking:
             return self._run_tracking()
         else:
@@ -1355,6 +1360,9 @@ class AutoSegmentWidget(_WidgetBase):
         return worker
 
     def __call__(self):
+        if _validate_embeddings(self._viewer):
+            return None
+
         if self.with_decoder:
             kwargs = {
                 "center_distance_threshold": self.center_distance_thresh,
