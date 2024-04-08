@@ -466,8 +466,93 @@ def settings_widget(
     print(f"micro-sam cache directory set to: {cache_directory}")
 
 
+def _generate_message(message_type, message) -> bool:
+    """
+    Displays a message dialog based on the provided message type.
+
+    Args:
+        message_type (str): The type of message to display. Valid options are:
+            - "error": Displays a critical error message with an "Ok" button.
+            - "info": Displays an informational message in a separate dialog box.
+                 The user can dismiss it by either clicking "Ok" or closing the dialog.
+        message (str): The message content to be displayed in the dialog.
+
+    Returns:
+        bool: A flag indicating whether the user aborted the operation based on the
+              message type. This flag is only set for "info" messages where the user
+              can choose to cancel (rejected).
+
+    Raises:
+        ValueError: If an invalid message type is provided.
+    """
+    # Set button text and behavior based on message type
+    if message_type == "error":
+        QtWidgets.QMessageBox.critical(None, "Error", message, QtWidgets.QMessageBox.Ok)
+        abort = True
+        return abort
+    elif message_type == "info":
+        info_dialog = InfoDialog(title="Validation Message", message=message)
+        result = info_dialog.exec_()
+        if result == QtWidgets.QDialog.Rejected:  # Check for cancel
+            abort = True  # Set flag directly in calling function
+            return abort
+
+
+def _validate_data_signatures(viewer: "napari.viewer.Viewer", dummy=False):
+    # dummy flag to skip calculations and to prevent excessive utilization of resources
+    if dummy:
+        return False
+    
+    val_results = None
+    state = AnnotatorState()
+    embeddings_save_path = state.embedding_path
+    embedding_data_signature = None
+    image = None
+    if isinstance(viewer.layers[0], napari.layers.Image):  # Assuming the image layer is at index 0
+        image = viewer.layers[0]
+    else:
+        # Handle the case where the first layer isn't an Image layer
+        raise ValueError("Expected an Image layer in viewer.layers")
+    img_signature = util._compute_data_signature(image.data)
+    if embeddings_save_path is not None:
+        # Check for existing embeddings
+        if os.listdir(embeddings_save_path):
+            try:
+                with zarr.open(embeddings_save_path, "a") as f:
+                    # If data_signature exists, compare and return validation message
+                    if "data_signature" in f.attrs:
+                        embedding_data_signature = f.attrs["data_signature"]
+            except RuntimeError as e:
+                val_results = {
+                    "message_type": "error",
+                    "message": f"Failed to load image embeddings: {e}"
+                }
+        else:
+            val_results = {"message_type": "info", "message": "No existing embeddings found at the specified path."}
+    else:  # load from state object
+        embedding_data_signature = state.data_signature
+    # compare image data signature with embedding data signature
+    if img_signature != embedding_data_signature:
+        val_results = {
+            "message_type": "error",
+            "message": f"The embeddings don't match with the image: {img_signature} {embedding_data_signature}"
+        }
+    else:
+        val_results = None
+    if val_results:
+        return _generate_message(val_results["message_type"], val_results["message"])
+    else:
+        return False
+
+
 @magic_factory(call_button="Segment Object [S]")
 def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
+    # validate if image signature and embedding signature match
+    abort = False
+    abort = _validate_data_signatures(viewer, dummy=False)
+    if abort:
+        return None
+
     shape = viewer.layers["current_object"].data.shape
 
     # get the current box and point prompts
@@ -694,7 +779,7 @@ class EmbeddingWidget(_WidgetBase):
                         # If data_signature exists, compare and return validation message
                         if "data_signature" in f.attrs:
                             if img_signature != f.attrs["data_signature"]:
-                                return {
+                                val_results = {
                                     "message_type": "error",
                                     "message": f"The embeddings don't match with the image: {img_signature} {f.attrs['data_signature']}"
                                 }
@@ -704,54 +789,43 @@ class EmbeddingWidget(_WidgetBase):
                             self.tile_x, self.tile_y = f.attrs["tile_shape"]
                             self.halo_x, self.halo_y = f.attrs["halo"]
                             self.model_type = f.attrs["model_type"]
-                            return {
+                            val_results = {
                                 "message_type": "info",
                                 "message": f"Embeddings loaded with tile shape: {self.tile_x}, {self.tile_y} and halo: {self.halo_x}, {self.halo_y} and model: {self.model_type}."
                             }
                 except RuntimeError as e:
-                    return {
+                    val_results = {
                         "message_type": "error",
                         "message": f"Failed to load image embeddings: {e}"
                     }
             else:
-                return {"message_type": "info", "message": "No existing embeddings found at the specified path."}
+                val_results = {"message_type": "info", "message": "No existing embeddings found at the specified path."}
         else:
-            return None  # No embeddings path specified
+            val_results = None  # No embeddings path specified
 
-    def generate_message(self, message_type, message):
-
-        # Set button text and behavior based on message type
-        if message_type == "error":
-            QtWidgets.QMessageBox.critical(None, "Error", message, QtWidgets.QMessageBox.Ok)
-            user_cancelled = True
-            return user_cancelled
-        elif message_type == "info":
-            info_dialog = InfoDialog(title="Validation Message", message=message)
-            result = info_dialog.exec_()
-            if result == QtWidgets.QDialog.Rejected:  # Check for cancel
-                user_cancelled = True  # Set flag directly in calling function
-                return user_cancelled
+        if val_results:
+            return _generate_message(val_results["message_type"], val_results["message"])
+        else:
+            return False
 
     def __call__(self, skip_validate=False):
         # validate user inputs
-        user_cancelled = False  # Flag to track cancellation
+        abort = False  # Flag to track cancellation
         if not skip_validate:
-            validation_result = self._validate_inputs()
-            if validation_result is not None:
-                user_cancelled = self.generate_message(validation_result["message_type"], validation_result["message"])
+            abort = self._validate_inputs()
+            if not abort:
                 # update GUI
-                if not user_cancelled:
-                    vutil._sync_embedding_widget(
-                        self,
-                        model_type=self.model_type,
-                        save_path=self.embeddings_save_path,
-                        checkpoint_path=None,
-                        device=self.device,
-                        tile_shape=[self.tile_x, self.tile_y],
-                        halo=[self.halo_x, self.halo_y]
-                        )
+                vutil._sync_embedding_widget(
+                    self,
+                    model_type=self.model_type,
+                    save_path=self.embeddings_save_path,
+                    checkpoint_path=None,
+                    device=self.device,
+                    tile_shape=[self.tile_x, self.tile_y],
+                    halo=[self.halo_x, self.halo_y]
+                    )
 
-            if user_cancelled:
+            if abort:
                 return
 
         # Get the image.
