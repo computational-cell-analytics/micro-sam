@@ -1,31 +1,30 @@
-import warnings
 from typing import Optional, Tuple, Union
 
 import napari
 import numpy as np
 import torch
 
+from . import _widgets as widgets
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
-from ._widgets import segment, amg_2d, instance_seg_2d
-from .util import _initialize_parser
+from .util import _initialize_parser, _sync_embedding_widget
 from .. import util
 
 
 class Annotator2d(_AnnotatorBase):
-    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
-        state = AnnotatorState()
-        if state.decoder is None:
-            autosegment = amg_2d
-        else:
-            autosegment = instance_seg_2d
-
-        super().__init__(
-            viewer=viewer,
-            ndim=2,
-            segment_widget=segment,
-            autosegment_widget=autosegment,
+    def _get_widgets(self):
+        autosegment = widgets.AutoSegmentWidget(
+            self._viewer, with_decoder=AnnotatorState().decoder is not None, volumetric=False
         )
+        return {
+            "segment": widgets.segment(),
+            "autosegment": autosegment,
+            "commit": widgets.commit(),
+            "clear": widgets.clear(),
+        }
+
+    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
+        super().__init__(viewer=viewer, ndim=2)
 
 
 def annotator_2d(
@@ -89,8 +88,13 @@ def annotator_2d(
     # And initialize the 'committed_objects' with the segmentation result if it was given.
     annotator._update_image(segmentation_result=segmentation_result)
 
-    # Add the annotator widget to the viewer.
+    # Add the annotator widget to the viewer and sync widgets.
     viewer.window.add_dock_widget(annotator)
+    _sync_embedding_widget(
+        state.widgets["embeddings"], model_type,
+        save_path=embedding_path, checkpoint_path=checkpoint_path,
+        device=device, tile_shape=tile_shape, halo=halo
+    )
 
     if return_viewer:
         return viewer
@@ -108,9 +112,6 @@ def main():
         segmentation_result = None
     else:
         segmentation_result = util.load_image_data(args.segmentation_result, key=args.segmentation_key)
-
-    if args.embedding_path is None:
-        warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
 
     annotator_2d(
         image, embedding_path=args.embedding_path,

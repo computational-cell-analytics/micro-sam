@@ -28,6 +28,14 @@ def identity(x):
     return x
 
 
+def require_8bit(x):
+    """Transformation to require 8bit input data range (0-255).
+    """
+    if x.max() < 1:
+        x = x * 255
+    return x
+
+
 def get_trainable_sam_model(
     model_type: str = _DEFAULT_MODEL,
     device: Optional[Union[str, torch.device]] = None,

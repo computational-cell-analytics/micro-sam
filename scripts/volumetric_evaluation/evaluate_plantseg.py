@@ -1,14 +1,15 @@
-# out-of-domain case for electron microscopy experiments
+# we have two datasets here for the light microscopy experiments:
+# - PlantSeg (Root): in-domain case
+# - PlantSeg (Ovules): out-of-domain case
 #
 # NOTE:
 # IMPORTANT: ideally, we need to stay consistent with 2d inference
-#  1. for validation: we take the entire train volume
-#       - shape: (165, 768, 1024)
-#  2. for testing: we take the entire test volume
-#      - shape: (165, 768, 1024)
+#   1. plantseg root (see `./check_volumes.py` for details)
+#   2. plantseg ovules (see `./check_volumes.py` for details)
 
 
 import os
+from glob import glob
 
 import h5py
 from skimage.measure import label
@@ -20,18 +21,23 @@ from util import (
 )
 
 
-def get_raw_and_label_volumes(data_dir, split):
-    if split == "val":
-        chosen_set = "train"
-    elif split == "test":
-        chosen_set = "test"
-    else:
-        raise ValueError
+VOLUME_CHOICE = {
+    "plantseg_ovules_val": "plantseg_ovules_val_N_420_ds2x.h5",
+    "plantseg_ovules_test": "plantseg_ovules_test_N_435_final_crop_ds2.h5",
+    "plantseg_root_val": "plantseg_root_val_Movie1_t00040_crop_gt.h5",
+    "plantseg_root_test": "plantseg_root_test_Movie1_t00045_crop_gt.h5"
 
-    volume_path = os.path.join(data_dir, f"lucchi_{chosen_set}.h5")
+}
+
+
+def get_raw_and_label_volumes(volume_path):
+    if isinstance(volume_path, list):
+        assert len(volume_path) == 1
+        volume_path = volume_path[0]
+
     with h5py.File(volume_path, "r") as f:
-        raw = f["raw"][:]
-        labels = f["labels"][:]
+        raw = f["volume/cropped/raw"][:]
+        labels = f["volume/cropped/labels"][:]
 
     assert raw.shape == labels.shape
 
@@ -41,15 +47,17 @@ def get_raw_and_label_volumes(data_dir, split):
     return raw, labels
 
 
-def for_lucchi(args):
-    test_raw, test_labels = get_raw_and_label_volumes(args.input_path, "test")
+def for_plantseg(args):
+    test_raw, test_labels = get_raw_and_label_volumes(
+        glob(os.path.join(args.input_path, f"plantseg_{args.species}_test_*.h5"))
+    )
 
     experiment_folder = args.experiment_folder
     embedding_path = os.path.join(experiment_folder, "embeddings")
     result_dir = os.path.join(experiment_folder, "results")
 
     if args.ais:
-        # this should be experiment specific, so Lucchi in this case
+        # this should be experiment specific, so PlantSeg Ovules and PlantSeg Root in this case
         auto_3d_seg_kwargs = {
             "center_distance_threshold": 0.3,
             "boundary_distance_threshold": 0.4,
@@ -66,10 +74,13 @@ def for_lucchi(args):
             result_dir=result_dir,
             embedding_dir=embedding_path,
             auto_3d_seg_kwargs=auto_3d_seg_kwargs,
+            species=args.species
         )
 
     if args.int:
-        val_raw, val_labels = get_raw_and_label_volumes(args.input_path, "val")
+        val_raw, val_labels = get_raw_and_label_volumes(
+            glob(os.path.join(args.input_path, f"plantseg_{args.species}_val_*.h5"))
+        )
         _3d_interactive_instance_segmentation(
             val_raw=val_raw,
             val_labels=val_labels,
@@ -79,14 +90,15 @@ def for_lucchi(args):
             checkpoint_path=args.checkpoint,
             result_dir=result_dir,
             embedding_dir=embedding_path,
+            species=args.species,
         )
 
 
 def main(args):
-    assert args.species is None
-    for_lucchi(args)
+    assert args.species is not None, "Choose from 'root' / 'ovules'"
+    for_plantseg(args)
 
 
 if __name__ == "__main__":
-    args = _get_default_args("/scratch/projects/nim00007/sam/data/lucchi")
+    args = _get_default_args("/scratch/usr/nimanwai/data/for_micro_sam/")
     main(args)

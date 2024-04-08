@@ -2,7 +2,7 @@
 """
 
 import os
-from typing import Any, Optional, Union, Tuple
+from typing import Optional, Union, Tuple
 
 import numpy as np
 import nifty
@@ -11,7 +11,7 @@ import elf.segmentation as seg_utils
 
 from segment_anything.predictor import SamPredictor
 from scipy.ndimage import binary_closing
-from skimage.measure import label
+from skimage.measure import label, regionprops
 from skimage.segmentation import relabel_sequential
 
 try:
@@ -22,6 +22,8 @@ except ImportError:
 from . import util
 from .instance_segmentation import AMGBase, mask_data_to_segmentation
 from .prompt_based_segmentation import segment_from_mask
+
+PROJECTION_MODES = ("box", "mask", "points", "points_and_mask", "single_point")
 
 
 def _validate_projection(projection):
@@ -51,6 +53,36 @@ def _validate_projection(projection):
     return use_box, use_mask, use_points, use_single_point
 
 
+# Advanced stopping criterions.
+# In practice these did not make a big difference, so we do not use this at the moment.
+# We still leave it here for reference.
+def _advanced_stopping_criteria(
+    z, seg_z, seg_prev, z_start, z_increment, segmentation, criterion_choice, score, increment
+):
+    def _compute_mean_iou_for_n_slices(z, increment, seg_z, n_slices):
+        iou_list = [
+            util.compute_iou(segmentation[z - increment * _slice], seg_z) for _slice in range(1, n_slices+1)
+        ]
+        return np.mean(iou_list)
+
+    if criterion_choice == 1:
+        # 1. current metric: iou of current segmentation and the previous slice
+        iou = util.compute_iou(seg_prev, seg_z)
+        criterion = iou
+
+    elif criterion_choice == 2:
+        # 2. combining SAM iou + iou: curr. slice & first segmented slice + iou: curr. slice vs prev. slice
+        iou = util.compute_iou(seg_prev, seg_z)
+        ff_iou = util.compute_iou(segmentation[z_start], seg_z)
+        criterion = 0.5 * iou + 0.3 * score + 0.2 * ff_iou
+
+    elif criterion_choice == 3:
+        # 3. iou of current segmented slice w.r.t the previous n slices
+        criterion = _compute_mean_iou_for_n_slices(z, increment, seg_z, min(5, abs(z - z_start)))
+
+    return criterion
+
+
 def segment_mask_in_volume(
     segmentation: np.ndarray,
     predictor: SamPredictor,
@@ -60,10 +92,9 @@ def segment_mask_in_volume(
     stop_upper: bool,
     iou_threshold: float,
     projection: Union[str, dict],
-    progress_bar: Optional[Any] = None,
+    update_progress: Optional[callable] = None,
     box_extension: float = 0.0,
     verbose: bool = False,
-    criterion_choice: int = 1,  # undocumented, we wait for evaluation
 ) -> Tuple[np.ndarray, Tuple[int, int]]:
     """Segment an object mask in in volumetric data.
 
@@ -77,8 +108,9 @@ def segment_mask_in_volume(
         iou_threshold: The IOU threshold for continuing segmentation across 3d.
         projection: The projection method to use. One of 'box', 'mask', 'points', 'points_and_mask' or 'single point'.
             Pass a dictionary to choose the excact combination of projection modes.
-        progress_bar: Optional progress bar.
+        update_progress: Callback to update an external progress bar.
         box_extension: Extension factor for increasing the box size after projection.
+        verbose: Whether to print details about the segmentation steps.
 
     Returns:
         Array with the volumetric segmentation.
@@ -86,15 +118,9 @@ def segment_mask_in_volume(
     """
     use_box, use_mask, use_points, use_single_point = _validate_projection(projection)
 
-    def update_progress():
-        if progress_bar is not None:
-            progress_bar.update(1)
-
-    def _compute_mean_iou_for_n_slices(z, increment, seg_z, n_slices):
-        iou_list = [
-            util.compute_iou(segmentation[z - increment * _slice], seg_z) for _slice in range(1, n_slices+1)
-        ]
-        return np.mean(iou_list)
+    if update_progress is None:
+        def update_progress(*args):
+            pass
 
     def segment_range(z_start, z_stop, increment, stopping_criterion, threshold=None, verbose=False):
         z = z_start + increment
@@ -108,25 +134,9 @@ def segment_mask_in_volume(
                 use_single_point=use_single_point,
             )
             if threshold is not None:
-
-                # TODO refactor / clean up after we have evaluated this!
-                if criterion_choice == 1:
-                    # 1. current metric: iou of current segmentation and the previous slice
-                    iou = util.compute_iou(seg_prev, seg_z)
-                    criterion = iou
-
-                elif criterion_choice == 2:
-                    # 2. combining SAM iou + iou: curr. slice & first segmented slice + iou: curr. slice vs prev. slice
-                    iou = util.compute_iou(seg_prev, seg_z)
-                    ff_iou = util.compute_iou(segmentation[z_start], seg_z)
-                    criterion = 0.5 * iou + 0.3 * score + 0.2 * ff_iou
-
-                elif criterion_choice == 3:
-                    # 3. iou of current segmented slice w.r.t the previous n slices
-                    criterion = _compute_mean_iou_for_n_slices(z, increment, seg_z, min(5, abs(z - z_start)))
-
-                if criterion < threshold:
-                    msg = f"Segmentation stopped at slice {z} due to IOU {criterion} < {threshold}."
+                iou = util.compute_iou(seg_prev, seg_z)
+                if iou < threshold:
+                    msg = f"Segmentation stopped at slice {z} due to IOU {iou} < {threshold}."
                     print(msg)
                     break
 
@@ -136,7 +146,7 @@ def segment_mask_in_volume(
                 if verbose:
                     print(f"Segment {z_start} to {z_stop}: stop at slice {z}")
                 break
-            update_progress()
+            update_progress(1)
 
         return z - increment
 
@@ -177,7 +187,7 @@ def segment_mask_in_volume(
                     use_mask=use_mask, use_box=use_box, use_points=use_points,
                     box_extension=box_extension
                 )
-                update_progress()
+                update_progress(1)
 
             else:  # there is a range of more than 2 slices in between -> segment ranges
                 # segment from bottom
@@ -197,12 +207,12 @@ def segment_mask_in_volume(
                         use_mask=use_mask, use_box=use_box, use_points=use_points,
                         box_extension=box_extension
                     )
-                    update_progress()
+                    update_progress(1)
 
     return segmentation, (z_min, z_max)
 
 
-def _preprocess_closing(slice_segmentation, gap_closing, verbose):
+def _preprocess_closing(slice_segmentation, gap_closing, pbar_update):
     binarized = slice_segmentation > 0
     closed_segmentation = binary_closing(binarized, iterations=gap_closing)
 
@@ -246,14 +256,17 @@ def _preprocess_closing(slice_segmentation, gap_closing, verbose):
             seg_new[initial_mask] = relabel_sequential(seg_z[initial_mask], offset=seg_new.max() + 1)[0]
 
         seg_new, _, _ = relabel_sequential(seg_new, offset=offset)
-        offset = int(seg_new.max()) + 1
+        max_z = seg_new.max()
+        if max_z > 0:
+            offset = int(max_z) + 1
 
         return seg_new, offset
 
     # Further optimization: parallelize
     offset = 1
-    for z in tqdm(range(n_slices), desc="Close gap in slices", disable=not verbose):
+    for z in range(n_slices):
         new_segmentation[z], offset = process_slice(z, offset)
+        pbar_update(1)
 
     return new_segmentation
 
@@ -263,7 +276,10 @@ def merge_instance_segmentation_3d(
     beta: float = 0.5,
     with_background: bool = True,
     gap_closing: Optional[int] = None,
+    min_z_extent: Optional[int] = None,
     verbose: bool = True,
+    pbar_init: Optional[callable] = None,
+    pbar_update: Optional[callable] = None,
 ) -> np.ndarray:
     """Merge stacked 2d instance segmentations into a consistent 3d segmentation.
 
@@ -278,13 +294,24 @@ def merge_instance_segmentation_3d(
             In that case all edges connecting to the background are set to be repulsive.
         gap_closing: If given, gaps in the segmentation are closed with a binary closing
             operation. The value is used to determine the number of iterations for the closing.
+        min_z_extent: Require a minimal extent in z for the segmented objects.
+            This can help to prevent segmentation artifacts.
         verbose: Verbosity flag.
+        pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
+            Can be used together with pbar_update to handle napari progress bar in other thread.
+            To enables using this function within a threadworker.
+        pbar_update: Callback to update an external progress bar.
 
     Returns:
         The merged segmentation.
     """
+    _, pbar_init, pbar_update = util.handle_pbar(verbose, pbar_init, pbar_update)
+
     if gap_closing is not None and gap_closing > 0:
-        slice_segmentation = _preprocess_closing(slice_segmentation, gap_closing, verbose=verbose)
+        pbar_init(slice_segmentation.shape[0] + 1, "Merge segmentation")
+        slice_segmentation = _preprocess_closing(slice_segmentation, gap_closing, pbar_update)
+    else:
+        pbar_init(1, "Merge segmentation")
 
     # Extract the overlap between slices.
     edges = track_utils.compute_edges_from_overlap(slice_segmentation, verbose=False)
@@ -305,6 +332,19 @@ def merge_instance_segmentation_3d(
     node_labels = seg_utils.multicut.multicut_decomposition(graph, 1.0 - costs, beta=beta)
 
     segmentation = nifty.tools.take(node_labels, slice_segmentation)
+
+    if min_z_extent is not None and min_z_extent > 0:
+        props = regionprops(segmentation)
+        filter_ids = []
+        for prop in props:
+            box = prop.bbox
+            z_extent = box[3] - box[0]
+            if z_extent < min_z_extent:
+                filter_ids.append(prop.label)
+        if filter_ids:
+            segmentation[np.isin(segmentation, filter_ids)] = 0
+    pbar_update(1)
+
     return segmentation
 
 
@@ -316,6 +356,7 @@ def automatic_3d_segmentation(
     embedding_path: Optional[Union[str, os.PathLike]] = None,
     with_background: bool = True,
     gap_closing: Optional[int] = None,
+    min_z_extent: Optional[int] = None,
     verbose: bool = True,
     **kwargs,
 ) -> np.ndarray:
@@ -332,6 +373,8 @@ def automatic_3d_segmentation(
         with_background: Whether the segmentation has background.
         gap_closing: If given, gaps in the segmentation are closed with a binary closing
             operation. The value is used to determine the number of iterations for the closing.
+        min_z_extent: Require a minimal extent in z for the segmented objects.
+            This can help to prevent segmentation artifacts.
         verbose: Verbosity flag.
         kwargs: Keyword arguments for the 'generate' method of the 'segmentor'.
 
@@ -348,14 +391,18 @@ def automatic_3d_segmentation(
         segmentor.initialize(volume[i], image_embeddings=image_embeddings, verbose=False, i=i)
         seg = segmentor.generate(**kwargs)
         if len(seg) == 0:
-            seg = np.zeros(volume.shape[1:], dtype="uint32")
+            continue
         else:
             seg = mask_data_to_segmentation(seg, with_background=with_background, min_object_size=min_object_size)
+            max_z = seg.max()
+            if max_z == 0:
+                continue
             seg[seg != 0] += offset
-            offset = seg.max()
+            offset = max_z + offset
         segmentation[i] = seg
 
     segmentation = merge_instance_segmentation_3d(
-        segmentation, beta=0.5, with_background=with_background, gap_closing=gap_closing,
+        segmentation, beta=0.5, with_background=with_background, gap_closing=gap_closing, min_z_extent=min_z_extent
     )
+
     return segmentation

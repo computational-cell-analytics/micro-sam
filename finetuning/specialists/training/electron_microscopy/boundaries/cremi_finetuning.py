@@ -1,23 +1,30 @@
 import os
 import argparse
 
+import numpy as np
+
 import torch
 
 from torch_em.model import UNETR
-from torch_em.data import MinInstanceSampler
 from torch_em.loss import DiceBasedDistanceLoss
-from torch_em.data.datasets import get_tissuenet_loader
+from torch_em.transform.label import PerObjectDistanceTransform
+from torch_em.data.datasets import get_cremi_dataset, get_cremi_loader
+from torch_em.data import MinInstanceSampler
 
 import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
-from micro_sam.training.util import ResizeRawTrafo, ResizeLabelTrafo
 
 
-def get_dataloaders(patch_shape, data_path):
-    """This returns the tissuenet data loaders implemented in torch_em:
-    https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/tissuenet.py
-    It will not automatically download the tissuenet data.
-    See `torch_em.data.datasets.tissuenet.get_tissuenet_dataset` for details.
+def _check_dataset_available_for_rois(path, patch_shape):
+    "This function checks whether or not all the expected datasets are available for RoI splitting."
+    get_cremi_dataset(path=os.path.join(path, "cremi"), patch_shape=patch_shape, download=True)
+    print("CREMI dataset is available for RoI splitting.")
+
+
+def get_dataloaders(patch_shape, data_path, cell_type=None):
+    """This returns the cremi data loaders implemented in torch_em:
+    https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/cremi.py
+    It will automatically download the cremi data.
 
     Note: to replace this with another data loader you need to return a torch data loader
     that retuns `x, y` tensors, where `x` is the image data and `y` are the labels.
@@ -25,36 +32,47 @@ def get_dataloaders(patch_shape, data_path):
     I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
     Important: the ID 0 is reseved for background, and the IDs must be consecutive
     """
-    raw_transform = ResizeRawTrafo(patch_shape)
-    label_transform = ResizeLabelTrafo(patch_shape)
-    sampler = MinInstanceSampler()
-    label_dtype = torch.float32
+    _check_dataset_available_for_rois(data_path, patch_shape)
 
-    train_loader = get_tissuenet_loader(
-        path=data_path, split="train", patch_shape=patch_shape, batch_size=2, raw_channel="rgb",
-        label_channel="cell", download=True, label_dtype=label_dtype, raw_transform=raw_transform,
-        label_transform=label_transform, sampler=sampler, num_workers=16, shuffle=True
+    # Choice of RoIs for different splits for finetuning
+    train_rois = {"A": np.s_[0:75, :, :], "B": np.s_[0:75, :, :], "C": np.s_[0:75, :, :]}
+    val_rois = {"A": np.s_[75:100, :, :], "B": np.s_[75:100, :, :], "C": np.s_[75:100, :, :]}
+
+    label_transform = PerObjectDistanceTransform(
+        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=25
     )
-    val_loader = get_tissuenet_loader(
-        path=data_path, split="val", patch_shape=patch_shape, batch_size=1, raw_channel="rgb",
-        label_channel="cell", download=True, label_dtype=label_dtype, raw_transform=raw_transform,
-        label_transform=label_transform, sampler=sampler, num_workers=16, shuffle=True, n_samples=1000
+    raw_transform = sam_training.identity  # the current workflow avoids rescaling the inputs to [-1, 1]
+    sampler = MinInstanceSampler()
+
+    train_loader = get_cremi_loader(
+        path=data_path, patch_shape=patch_shape, batch_size=2, ndim=2, num_workers=16,
+        rois=train_rois, sampler=sampler, defect_augmentation_kwargs=None, shuffle=True,
+        label_transform=label_transform, raw_transform=raw_transform
     )
+    val_loader = get_cremi_loader(
+        path=data_path, patch_shape=patch_shape, batch_size=1, ndim=2, num_workers=16,
+        rois=val_rois, sampler=sampler, defect_augmentation_kwargs=None, shuffle=True,
+        label_transform=label_transform, raw_transform=raw_transform
+    )
+
+    from torch_em.util.debug import check_loader
+    check_loader(train_loader, 8, False, True, False, "train_loader.png")
+    check_loader(val_loader, 8, False, True, False, "val_loader.png")
 
     return train_loader, val_loader
 
 
-def finetune_tissuenet(args):
-    """Code for finetuning SAM on TissueNet"""
+def finetune_cremi(args):
+    """Code for finetuning SAM on CREMI"""
     # override this (below) if you have some more complex set-up and need to specify the exact gpu
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # training settings:
     model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
-    patch_shape = (512, 512)  # the patch shape for training
-    n_objects_per_batch = args.n_objects  # this is the number of objects per batch that will be sampled (default: 25)
-    freeze_parts = args.freeze  # override this to freeze different parts of the model
+    patch_shape = (1, 512, 512)  # the patch shape for training
+    n_objects_per_batch = args.n_objects  # the number of objects per batch that will be sampled (default: 25)
+    freeze_parts = None  # override this to freeze different parts of the model
 
     # get the trainable segment anything model
     model = sam_training.get_trainable_sam_model(
@@ -90,11 +108,9 @@ def finetune_tissuenet(args):
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
-    convert_inputs = sam_training.ConvertToSamInputs(
-        transform=model.transform, box_distortion_factor=0.025
-    )
+    convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
 
-    checkpoint_name = f"{args.model_type}/tissuenet_sam"
+    checkpoint_name = f"{args.model_type}/cremi_sam"
 
     # the trainer which performs the joint training and validation (implemented using "torch_em")
     trainer = sam_training.JointSamTrainer(
@@ -131,10 +147,10 @@ def finetune_tissuenet(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the TissueNet dataset.")
+    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the CREMI dataset.")
     parser.add_argument(
-        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/tissuenet/",
-        help="The filepath to the TissueNet data. If the data does not exist yet it will be downloaded."
+        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/cremi/",
+        help="The filepath to the CREMI data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
@@ -145,16 +161,12 @@ def main():
         help="Where to save the checkpoint and logs. By default they will be saved where this script is run."
     )
     parser.add_argument(
-        "--iterations", type=int, default=int(25e4),
-        help="For how many iterations should the model be trained? By default 250k."
+        "--iterations", type=int, default=int(1e5),
+        help="For how many iterations should the model be trained? By default 100k."
     )
     parser.add_argument(
         "--export_path", "-e",
         help="Where to export the finetuned model to. The exported model can be used in the annotation tools."
-    )
-    parser.add_argument(
-        "--freeze", type=str, nargs="+", default=None,
-        help="Which parts of the model to freeze for finetuning."
     )
     parser.add_argument(
         "--save_every_kth_epoch", type=int, default=None,
@@ -164,7 +176,7 @@ def main():
         "--n_objects", type=int, default=25, help="The number of instances (objects) per batch used for finetuning."
     )
     args = parser.parse_args()
-    finetune_tissuenet(args)
+    finetune_cremi(args)
 
 
 if __name__ == "__main__":

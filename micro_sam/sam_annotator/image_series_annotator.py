@@ -1,5 +1,4 @@
 import os
-import warnings
 
 from glob import glob
 from pathlib import Path
@@ -11,13 +10,16 @@ import napari
 import torch
 
 from magicgui import magicgui
+from qtpy import QtWidgets
 
 from .. import util
+from . import _widgets as widgets
 from ..precompute_state import _precompute_state_for_files
 from ..instance_segmentation import get_decoder
 from .annotator_2d import Annotator2d
 from .annotator_3d import Annotator3d
 from ._state import AnnotatorState
+from .util import _sync_embedding_widget
 
 
 def _precompute(
@@ -154,7 +156,13 @@ def image_series_annotator(
 
     annotator._update_image()
 
+    # Add the annotator widget to the viewer and sync widgets.
     viewer.window.add_dock_widget(annotator)
+    _sync_embedding_widget(
+        state.widgets["embeddings"], model_type,
+        save_path=embedding_path, checkpoint_path=checkpoint_path,
+        device=device, tile_shape=tile_shape, halo=halo
+    )
 
     def _save_segmentation(image_path, current_idx, segmentation):
         if have_inputs_as_arrays:
@@ -254,6 +262,108 @@ def image_folder_annotator(
     )
 
 
+class ImageFolderAnnotator(widgets._WidgetBase):
+    def __init__(self, viewer: napari.Viewer, parent=None):
+        super().__init__(parent=parent)
+        self._viewer = viewer
+
+        # Create the UI: the general options.
+        self._create_options()
+
+        # Add the settings (collapsible).
+        self.layout().addWidget(self._create_settings())
+
+        # Add the run button to trigger the embedding computation.
+        self.run_button = QtWidgets.QPushButton("Annotate Images")
+        self.run_button.clicked.connect(self.__call__)
+        self.layout().addWidget(self.run_button)
+
+    # model_type: str = util._DEFAULT_MODEL,
+    def _create_options(self):
+        self.folder = None
+        _, layout = self._add_path_param(
+            "folder", self.folder, "directory",
+            title="Input Folder", placeholder="Folder with images ..."
+        )
+        self.layout().addLayout(layout)
+
+        self.output_folder = None
+        _, layout = self._add_path_param(
+            "output_folder", self.output_folder, "directory",
+            title="Output Folder", placeholder="Folder to save the results ..."
+        )
+        self.layout().addLayout(layout)
+
+        self.model_type = util._DEFAULT_MODEL
+        model_options = list(util.models().urls.keys())
+        _, layout = self._add_choice_param(
+            "model_type", self.model_type, model_options, title="Model:",
+        )
+        self.layout().addLayout(layout)
+
+    def _create_settings(self):
+        setting_values = QtWidgets.QWidget()
+        setting_values.setLayout(QtWidgets.QVBoxLayout())
+
+        self.pattern = "*"
+        _, layout = self._add_string_param(
+            "", self.pattern,
+        )
+        setting_values.layout().addLayout(layout)
+
+        self.is_volumetric = False
+        setting_values.layout().addWidget(self._add_boolean_param("is_volumetric", self.is_volumetric))
+
+        self.device = "auto"
+        device_options = ["auto"] + util._available_devices()
+        self.device_dropdown, layout = self._add_choice_param("device", self.device, device_options)
+        setting_values.layout().addLayout(layout)
+
+        self.embeddings_save_path = None
+        _, layout = self._add_path_param(
+            "embeddings_save_path", self.embeddings_save_path, "directory", title="embeddings save path:"
+        )
+        setting_values.layout().addLayout(layout)
+
+        self.custom_weights = None  # select_file
+        _, layout = self._add_path_param(
+            "custom_weights", self.custom_weights, "file", title="custom weights path:"
+        )
+        setting_values.layout().addLayout(layout)
+
+        self.tile_x, self.tile_y = 0, 0
+        self.tile_x_param, self.tile_y_param, layout = self._add_shape_param(
+            ("tile_x", "tile_y"), (self.tile_x, self.tile_y), min_val=0, max_val=2048, step=16
+        )
+        setting_values.layout().addLayout(layout)
+
+        self.halo_x, self.halo_y = 0, 0
+        self.halo_x_param, self.halo_y_param, layout = self._add_shape_param(
+            ("halo_x", "halo_y"), (self.halo_x, self.halo_y), min_val=0, max_val=512
+        )
+        setting_values.layout().addLayout(layout)
+
+        settings = widgets._make_collapsible(setting_values, title="Settings")
+        return settings
+
+    # TODO re-use functionality from Luca's embedding validation
+    def _validate_inputs(self):
+        pass
+
+    def __call__(self):
+        self._validate_inputs()
+        tile_shape, halo = widgets._process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
+
+        image_folder_annotator(
+            self.folder, self.output_folder, self.pattern,
+            model_type=self.model_type,
+            embedding_path=self.embeddings_save_path,
+            tile_shape=tile_shape, halo=halo, checkpoint_path=self.custom_weights,
+            device=self.device, is_volumetric=self.is_volumetric,
+            viewer=self._viewer,
+        )
+
+
 def main():
     """@private"""
     import argparse
@@ -308,9 +418,6 @@ def main():
     parser.add_argument("--prefer_decoder", action="store_false")
 
     args = parser.parse_args()
-
-    if args.embedding_path is None:
-        warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
 
     image_folder_annotator(
         args.input_folder, args.output_folder, args.pattern,

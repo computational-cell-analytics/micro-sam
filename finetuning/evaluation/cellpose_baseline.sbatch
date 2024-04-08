@@ -4,7 +4,7 @@
 #SBATCH -t 300
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
-#SBATCH -A nim00007
+#SBATCH -A gzz0001
 
 source activate cellpose
 python cellpose_baseline.py $@

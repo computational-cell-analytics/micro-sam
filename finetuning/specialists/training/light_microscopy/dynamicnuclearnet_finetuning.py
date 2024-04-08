@@ -3,17 +3,25 @@ import argparse
 
 import torch
 
-from torch_em.data.datasets import get_livecell_loader
+from torch_em.transform.raw import normalize
+from torch_em.data.datasets import get_dynamicnuclearnet_loader
 from torch_em.transform.label import PerObjectDistanceTransform
 
 import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
 
 
-def get_dataloaders(patch_shape, data_path, cell_type=None):
-    """This returns the livecell data loaders implemented in torch_em:
-    https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/livecell.py
-    It will automatically download the livecell data.
+def to_8bit(raw):
+    raw = normalize(raw)
+    raw = raw * 255
+    return raw
+
+
+def get_dataloaders(patch_shape, data_path):
+    """This returns the dynamicnuclearnet data loaders implemented in torch_em:
+    https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/dynamicnuclearnet.py
+    It will not automatically download the dynamicnuclearnet data.
+    See `torch_em.data.datasets.dynamicnuclearnet.get_dynamicnuclearnet_dataset` for details.
 
     Note: to replace this with another data loader you need to return a torch data loader
     that retuns `x, y` tensors, where `x` is the image data and `y` are the labels.
@@ -24,33 +32,36 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
     label_transform = PerObjectDistanceTransform(
         distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=25
     )
-    raw_transform = sam_training.identity  # the current workflow avoids rescaling the inputs to [-1, 1]
-    train_loader = get_livecell_loader(
-        path=data_path, patch_shape=patch_shape, split="train", batch_size=2, num_workers=16,
-        cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform, label_dtype=torch.float32
-    )
-    val_loader = get_livecell_loader(
-        path=data_path, patch_shape=patch_shape, split="val", batch_size=1, num_workers=16,
-        cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform, label_dtype=torch.float32
+    raw_transform = to_8bit  # the current workflow avoids rescaling the inputs to [-1, 1]
+    train_loader = get_dynamicnuclearnet_loader(
+        path=data_path, split="train", patch_shape=patch_shape, batch_size=2, label_dtype=torch.float32, download=False,
+        label_transform=label_transform, raw_transform=raw_transform, num_workers=16, shuffle=True, n_samples=100,
     )
 
+    val_loader = get_dynamicnuclearnet_loader(
+        path=data_path, split="val", patch_shape=patch_shape, batch_size=1, label_dtype=torch.float32, download=False,
+        label_transform=label_transform, raw_transform=raw_transform, num_workers=16, n_samples=100,
+    )
     return train_loader, val_loader
 
 
-def finetune_livecell(args):
-    """Example code for finetuning SAM on LiveCELL"""
+def finetune_dynamicnuclearnet(args):
+    """Code for finetuning SAM on DynamicNuclearNet"""
     # override this (below) if you have some more complex set-up and need to specify the exact gpu
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # training settings:
     model_type = args.model_type
-    checkpoint_path = None  # override this to start training from a custom checkpoint
-    patch_shape = (520, 704)  # the patch shape for training
+    patch_shape = (512, 512)  # the patch shape for training
     n_objects_per_batch = args.n_objects  # the number of objects per batch that will be sampled (default: 25)
     freeze_parts = args.freeze  # override this to freeze different parts of the model
-    checkpoint_name = f"{args.model_type}/livecell_sam"
+    checkpoint_name = f"{args.model_type}/dynamicnuclearnet_sam"
+
+    if model_type.endswith("lm"):
+        model_type = model_type[:5]
+        checkpoint_path = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/lm_generalist_sam/best.pt"
+    else:
+        checkpoint_path = None  # override this to start training from a custom checkpoint
 
     # all the stuff we need for training
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
@@ -62,7 +73,7 @@ def finetune_livecell(args):
         model_type=model_type,
         train_loader=train_loader,
         val_loader=val_loader,
-        early_stopping=10,
+        early_stopping=20,
         n_objects_per_batch=n_objects_per_batch,
         checkpoint_path=checkpoint_path,
         freeze=freeze_parts,
@@ -84,10 +95,10 @@ def finetune_livecell(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LiveCELL dataset.")
+    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the DynamicNuclearNet dataset.")
     parser.add_argument(
-        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/livecell/",
-        help="The filepath to the LiveCELL data. If the data does not exist yet it will be downloaded."
+        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/dynamicnuclearnet/",
+        help="The filepath to the DynamicNuclearNet data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
@@ -117,7 +128,7 @@ def main():
         "--n_objects", type=int, default=25, help="The number of instances (objects) per batch used for finetuning."
     )
     args = parser.parse_args()
-    finetune_livecell(args)
+    finetune_dynamicnuclearnet(args)
 
 
 if __name__ == "__main__":

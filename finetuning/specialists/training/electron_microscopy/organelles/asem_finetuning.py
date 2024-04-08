@@ -1,23 +1,50 @@
 import os
 import argparse
 
+from scipy.ndimage import binary_closing
+
 import torch
 
 from torch_em.model import UNETR
-from torch_em.data import MinInstanceSampler
+from torch_em.data import MinForegroundSampler
 from torch_em.loss import DiceBasedDistanceLoss
-from torch_em.data.datasets import get_tissuenet_loader
+from torch_em.data.datasets import get_asem_loader
+from torch_em.transform.label import PerObjectDistanceTransform
 
 import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
-from micro_sam.training.util import ResizeRawTrafo, ResizeLabelTrafo
+
+
+class ForERLabelTrafo:
+    def __init__(self, min_size=0, gap_closing=0):
+        self.min_size = min_size
+        self.gap_closing = gap_closing
+
+    def __call__(self, labels):
+        if self.gap_closing > 0:
+            labels = binary_closing(labels, iterations=self.gap_closing)
+
+        distance_transform = PerObjectDistanceTransform(
+            distances=True,
+            boundary_distances=True,
+            directed_distances=False,
+            foreground=True,
+            instances=True,
+            min_size=self.min_size
+        )
+        labels = distance_transform(labels)
+        return labels
 
 
 def get_dataloaders(patch_shape, data_path):
-    """This returns the tissuenet data loaders implemented in torch_em:
-    https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/tissuenet.py
-    It will not automatically download the tissuenet data.
-    See `torch_em.data.datasets.tissuenet.get_tissuenet_dataset` for details.
+    """This returns the asem data loaders implemented in torch_em:
+    https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/asem.py
+    It will automatically download the asem data.
+
+    Experimental split:
+        - Training: `cell_1`
+        - Validation: `cell_2`
+        - Testing: `cell_6`
 
     Note: to replace this with another data loader you need to return a torch data loader
     that retuns `x, y` tensors, where `x` is the image data and `y` are the labels.
@@ -25,35 +52,33 @@ def get_dataloaders(patch_shape, data_path):
     I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
     Important: the ID 0 is reseved for background, and the IDs must be consecutive
     """
-    raw_transform = ResizeRawTrafo(patch_shape)
-    label_transform = ResizeLabelTrafo(patch_shape)
-    sampler = MinInstanceSampler()
-    label_dtype = torch.float32
-
-    train_loader = get_tissuenet_loader(
-        path=data_path, split="train", patch_shape=patch_shape, batch_size=2, raw_channel="rgb",
-        label_channel="cell", download=True, label_dtype=label_dtype, raw_transform=raw_transform,
-        label_transform=label_transform, sampler=sampler, num_workers=16, shuffle=True
+    label_transform = ForERLabelTrafo(min_size=100, gap_closing=3)
+    raw_transform = sam_training.identity  # the current workflow avoids rescaling the inputs to [-1, 1]
+    sampler = MinForegroundSampler(min_fraction=0.01)
+    train_loader = get_asem_loader(
+        path=data_path, patch_shape=patch_shape, batch_size=2, ndim=2, download=True,
+        organelles="er", volume_ids=["cell_1"], raw_transform=raw_transform, n_samples=1500,
+        label_transform=label_transform, num_workers=16, sampler=sampler, shuffle=True,
     )
-    val_loader = get_tissuenet_loader(
-        path=data_path, split="val", patch_shape=patch_shape, batch_size=1, raw_channel="rgb",
-        label_channel="cell", download=True, label_dtype=label_dtype, raw_transform=raw_transform,
-        label_transform=label_transform, sampler=sampler, num_workers=16, shuffle=True, n_samples=1000
+    val_loader = get_asem_loader(
+        path=data_path, patch_shape=patch_shape, batch_size=1, ndim=2, download=True,
+        organelles="er", volume_ids=["cell_2"], raw_transform=raw_transform, n_samples=500,
+        label_transform=label_transform, num_workers=16, sampler=sampler, shuffle=True,
     )
 
     return train_loader, val_loader
 
 
-def finetune_tissuenet(args):
-    """Code for finetuning SAM on TissueNet"""
+def finetune_asem(args):
+    """Code for finetuning SAM on ASEM"""
     # override this (below) if you have some more complex set-up and need to specify the exact gpu
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # training settings:
     model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
-    patch_shape = (512, 512)  # the patch shape for training
-    n_objects_per_batch = args.n_objects  # this is the number of objects per batch that will be sampled (default: 25)
+    patch_shape = (1, 512, 512)  # the patch shape for training
+    n_objects_per_batch = args.n_objects  # the number of objects per batch that will be sampled (default: 25)
     freeze_parts = args.freeze  # override this to freeze different parts of the model
 
     # get the trainable segment anything model
@@ -90,11 +115,9 @@ def finetune_tissuenet(args):
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
-    convert_inputs = sam_training.ConvertToSamInputs(
-        transform=model.transform, box_distortion_factor=0.025
-    )
+    convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
 
-    checkpoint_name = f"{args.model_type}/tissuenet_sam"
+    checkpoint_name = f"{args.model_type}/asem_er_sam"
 
     # the trainer which performs the joint training and validation (implemented using "torch_em")
     trainer = sam_training.JointSamTrainer(
@@ -131,10 +154,10 @@ def finetune_tissuenet(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the TissueNet dataset.")
+    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the ASEM dataset.")
     parser.add_argument(
-        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/tissuenet/",
-        help="The filepath to the TissueNet data. If the data does not exist yet it will be downloaded."
+        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/asem/",
+        help="The filepath to the ASEM data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
@@ -145,8 +168,8 @@ def main():
         help="Where to save the checkpoint and logs. By default they will be saved where this script is run."
     )
     parser.add_argument(
-        "--iterations", type=int, default=int(25e4),
-        help="For how many iterations should the model be trained? By default 250k."
+        "--iterations", type=int, default=int(1e5),
+        help="For how many iterations should the model be trained? By default 100k."
     )
     parser.add_argument(
         "--export_path", "-e",
@@ -164,7 +187,7 @@ def main():
         "--n_objects", type=int, default=25, help="The number of instances (objects) per batch used for finetuning."
     )
     args = parser.parse_args()
-    finetune_tissuenet(args)
+    finetune_asem(args)
 
 
 if __name__ == "__main__":
