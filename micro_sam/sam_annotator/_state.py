@@ -194,4 +194,5 @@ class AnnotatorState(metaclass=Singleton):
         self.lineage = None
         self.committed_lineages = None
         self.z_range = None
+        self.data_signature = None
         # Note: we don't clear the widgets here, because they are fixed for a viewer session.

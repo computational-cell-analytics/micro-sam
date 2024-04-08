@@ -502,7 +502,7 @@ def _validate_data_signatures(viewer: "napari.viewer.Viewer", dummy=False):
     # dummy flag to skip calculations and to prevent excessive utilization of resources
     if dummy:
         return False
-    
+
     val_results = None
     state = AnnotatorState()
     embeddings_save_path = state.embedding_path
@@ -549,7 +549,7 @@ def _validate_data_signatures(viewer: "napari.viewer.Viewer", dummy=False):
 def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
     # validate if image signature and embedding signature match
     abort = False
-    abort = _validate_data_signatures(viewer, dummy=False)
+    abort = _validate_data_signatures(viewer, dummy=False)  # dummy=True deactivates the validation function
     if abort:
         return None
 
