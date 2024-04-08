@@ -41,6 +41,7 @@ class AnnotatorState(metaclass=Singleton):
     predictor: Optional[SamPredictor] = None
     image_shape: Optional[Tuple[int, int]] = None
     embedding_path: Optional[str] = None
+    data_signature: Optional[str] = None
 
     # amg: needs to be initialized for the automatic segmentation functionality.
     # amg_state: for storing the instance segmentation state for the 3d segmentation tool.
@@ -110,6 +111,7 @@ class AnnotatorState(metaclass=Singleton):
             pbar_update=pbar_update,
         )
         self.embedding_path = save_path
+        self.data_signature = util._compute_data_signature(image_data)
 
         # Precompute the amg state (if specified).
         if precompute_amg_state:
@@ -192,4 +194,5 @@ class AnnotatorState(metaclass=Singleton):
         self.lineage = None
         self.committed_lineages = None
         self.z_range = None
+        self.data_signature = None
         # Note: we don't clear the widgets here, because they are fixed for a viewer session.
