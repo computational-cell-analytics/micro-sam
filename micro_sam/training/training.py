@@ -7,7 +7,12 @@ import torch
 import torch_em
 
 from elf.io import open_file
-from qtpy.QtCore import QObject
+
+try:
+    from qtpy.QtCore import QObject
+except ModuleNotFoundError:
+    QObject = Any
+
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.utils.data import DataLoader, Dataset
 from torch_em.data.datasets.util import split_kwargs
