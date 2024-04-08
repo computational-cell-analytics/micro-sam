@@ -765,7 +765,29 @@ class EmbeddingWidget(_WidgetBase):
         return settings
 
     def _validate_inputs(self):
-        """Validates inputs and returns a dictionary for message generation."""
+        """
+        Validates the inputs for the annotation process and returns a dictionary
+        containing information for message generation, or False if no messages are needed.
+
+        This function performs the following checks:
+
+        - If an `embeddings_save_path` is provided:
+            - Validates the image data signature by comparing it with the signature
+            of the image data in the viewer's selection.
+            - Checks for existing embeddings at the specified path.
+                - If existing embeddings are found, it attempts to load parameters
+                like tile shape, halo, and model type from the Zarr attributes.
+                - An informational message is generated based on the loaded parameters.
+                - If loading existing embeddings fails, an error message is generated.
+                - If no existing embeddings are found, an informational message is generated.
+        - If no `embeddings_save_path` is provided, the function returns None.
+
+        Returns:
+            dict | bool:
+                - A dictionary containing "message_type" and "message" keys if a message
+                needs to be generated (e.g., for errors or informational messages).
+                - False if no message generation is required.
+        """
 
         if self.embeddings_save_path is not None:
             # Validate image data signature
