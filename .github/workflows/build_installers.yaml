@@ -30,6 +30,8 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }} 
 
       - name: setup conda
         if: matrix.os == 'windows-latest' || matrix.os == 'ubuntu-latest'
