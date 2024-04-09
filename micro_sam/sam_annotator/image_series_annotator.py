@@ -1,53 +1,77 @@
 import os
-import warnings
 
 from glob import glob
 from pathlib import Path
 from typing import List, Optional, Union, Tuple
 
+import numpy as np
 import imageio.v3 as imageio
 import napari
-import torch.nn as nn
 import torch
 
 from magicgui import magicgui
-from segment_anything import SamPredictor
+from qtpy import QtWidgets
 
 from .. import util
+from . import _widgets as widgets
 from ..precompute_state import _precompute_state_for_files
+from ..instance_segmentation import get_decoder
 from .annotator_2d import Annotator2d
+from .annotator_3d import Annotator3d
 from ._state import AnnotatorState
+from .util import _sync_embedding_widget
 
 
 def _precompute(
-    image_files, model_type, predictor, embedding_path,
-    tile_shape, halo, precompute_amg_state, decoder,
-    checkpoint_path, device,
+    images, model_type, embedding_path,
+    tile_shape, halo, precompute_amg_state,
+    checkpoint_path, device, ndim, prefer_decoder,
 ):
-    if predictor is None:
-        predictor = util.get_sam_model(
-            model_type=model_type, checkpoint_path=checkpoint_path, device=device
-        )
+    device = util.get_device(device)
+    predictor, state = util.get_sam_model(
+        model_type=model_type, checkpoint_path=checkpoint_path, device=device, return_state=True
+    )
+    if prefer_decoder and "decoder_state" in state:
+        decoder = get_decoder(predictor.model.image_encoder, state["decoder_state"], device)
+    else:
+        decoder = None
 
     if embedding_path is None:
-        embedding_paths = [None] * len(image_files)
+        embedding_paths = [None] * len(images)
     else:
         _precompute_state_for_files(
-            predictor, image_files, embedding_path, ndim=2,
-            tile_shape=tile_shape, halo=halo,
-            precompute_amg_state=precompute_amg_state,
-            decoder=decoder,
+            predictor, images, embedding_path, ndim=ndim, tile_shape=tile_shape, halo=halo,
+            precompute_amg_state=precompute_amg_state, decoder=decoder,
         )
-        embedding_paths = [
-            os.path.join(embedding_path, f"{Path(path).stem}.zarr") for path in image_files
-        ]
+        if isinstance(images[0], np.ndarray):
+            embedding_paths = [
+                os.path.join(embedding_path, f"embedding_{i:05}.zarr") for i, path in enumerate(images)
+            ]
+        else:
+            embedding_paths = [
+                os.path.join(embedding_path, f"{Path(path).stem}.zarr") for path in images
+            ]
         assert all(os.path.exists(emb_path) for emb_path in embedding_paths)
 
-    return predictor, embedding_paths
+    return predictor, decoder, embedding_paths
+
+
+def _get_input_shape(image, is_volumetric=False):
+    if image.ndim == 2:
+        image_shape = image.shape
+    elif image.ndim == 3:
+        if is_volumetric:
+            image_shape = image.shape
+        else:
+            image_shape = image.shape[:-1]
+    elif image.ndim == 4:
+        image_shape = image.shape[:-1]
+
+    return image_shape
 
 
 def image_series_annotator(
-    image_files: List[Union[os.PathLike, str]],
+    images: Union[List[Union[os.PathLike, str]], List[np.ndarray]],
     output_folder: str,
     model_type: str = util._DEFAULT_MODEL,
     embedding_path: Optional[str] = None,
@@ -55,16 +79,16 @@ def image_series_annotator(
     halo: Optional[Tuple[int, int]] = None,
     viewer: Optional["napari.viewer.Viewer"] = None,
     return_viewer: bool = False,
-    predictor: Optional[SamPredictor] = None,
-    decoder: Optional["nn.Module"] = None,
     precompute_amg_state: bool = False,
     checkpoint_path: Optional[str] = None,
+    is_volumetric: bool = False,
     device: Optional[Union[str, torch.device]] = None,
+    prefer_decoder: bool = True,
 ) -> Optional["napari.viewer.Viewer"]:
-    """Run the 2d annotation tool for a series of images.
+    """Run the annotation tool for a series of images (supported for both 2d and 3d images).
 
     Args:
-        input_files: List of the file paths for the images to be annotated.
+        images: List of the file paths or list of (set of) slices for the images to be annotated.
         output_folder: The folder where the segmentation results are saved.
         model_type: The Segment Anything model to use. For details on the available models check out
             https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
@@ -75,13 +99,13 @@ def image_series_annotator(
         viewer: The viewer to which the SegmentAnything functionality should be added.
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
-        predictor: The Segment Anything model. Passing this enables using fully custom models.
-            If you pass `predictor` then `model_type` will be ignored.
-        decoder: The instance segmentation decoder.
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
+        is_volumetric: Whether to use the 3d annotator.
+        prefer_decoder: Whether to use decoder based instance segmentation if
+            the model used has an additional decoder for instance segmentation.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -91,14 +115,21 @@ def image_series_annotator(
     next_image_id = 0
 
     # Precompute embeddings and amg state (if corresponding options set).
-    predictor, embedding_paths = _precompute(
-        image_files, model_type, predictor,
+    predictor, decoder, embedding_paths = _precompute(
+        images, model_type,
         embedding_path, tile_shape, halo, precompute_amg_state,
-        decoder=decoder, checkpoint_path=checkpoint_path, device=device,
+        checkpoint_path=checkpoint_path, device=device,
+        ndim=3 if is_volumetric else 2, prefer_decoder=prefer_decoder,
     )
 
     # Load the first image and intialize the viewer, annotator and state.
-    image = imageio.imread(image_files[next_image_id])
+    if isinstance(images[next_image_id], np.ndarray):
+        image = images[next_image_id]
+        have_inputs_as_arrays = True
+    else:
+        image = imageio.imread(images[next_image_id])
+        have_inputs_as_arrays = False
+
     image_embedding_path = embedding_paths[next_image_id]
 
     if viewer is None:
@@ -106,23 +137,40 @@ def image_series_annotator(
     viewer.add_image(image, name="image")
 
     state = AnnotatorState()
-    state.decoder = decoder
     state.initialize_predictor(
-        image, model_type=model_type, save_path=image_embedding_path,
-        halo=halo, tile_shape=tile_shape, predictor=predictor, ndim=2,
-        precompute_amg_state=precompute_amg_state,
+        image, model_type=model_type, save_path=image_embedding_path, halo=halo, tile_shape=tile_shape,
+        predictor=predictor, decoder=decoder,
+        ndim=3 if is_volumetric else 2, precompute_amg_state=precompute_amg_state,
         checkpoint_path=checkpoint_path, device=device,
     )
-    state.image_shape = image.shape[:-1] if image.ndim == 3 else image.shape
+    state.image_shape = _get_input_shape(image, is_volumetric)
 
-    annotator = Annotator2d(viewer)
+    if is_volumetric:
+        if image.ndim not in [3, 4]:
+            raise ValueError(f"Invalid image dimensions for 3d annotator, expect 3 or 4 dimensions, got {image.ndim}")
+        annotator = Annotator3d(viewer)
+    else:
+        if image.ndim not in (2, 3):
+            raise ValueError(f"Invalid image dimensions for 2d annotator, expect 2 or 3 dimensions, got {image.ndim}")
+        annotator = Annotator2d(viewer)
+
     annotator._update_image()
 
+    # Add the annotator widget to the viewer and sync widgets.
     viewer.window.add_dock_widget(annotator)
+    _sync_embedding_widget(
+        state.widgets["embeddings"], model_type,
+        save_path=embedding_path, checkpoint_path=checkpoint_path,
+        device=device, tile_shape=tile_shape, halo=halo
+    )
 
-    def _save_segmentation(image_path, segmentation):
-        fname = os.path.basename(image_path)
-        fname = os.path.splitext(fname)[0] + ".tif"
+    def _save_segmentation(image_path, current_idx, segmentation):
+        if have_inputs_as_arrays:
+            fname = f"seg_{current_idx:05}.tif"
+        else:
+            fname = os.path.basename(image_path)
+            fname = os.path.splitext(fname)[0] + ".tif"
+
         out_path = os.path.join(output_folder, fname)
         imageio.imwrite(out_path, segmentation)
 
@@ -137,29 +185,40 @@ def image_series_annotator(
             return
 
         # Save the current segmentation.
-        _save_segmentation(image_files[next_image_id], segmentation)
+        _save_segmentation(images[next_image_id], next_image_id, segmentation)
 
         # Load the next image.
         next_image_id += 1
-        if next_image_id == len(image_files):
+        if next_image_id == len(images):
             print("You have annotated the last image.")
             viewer.close()
             return
 
-        print("Loading next image from:", image_files[next_image_id])
-        image = imageio.imread(image_files[next_image_id])
+        print(
+            "Loading next image:",
+            images[next_image_id] if not have_inputs_as_arrays else f"at index {next_image_id}"
+        )
+
+        if have_inputs_as_arrays:
+            image = images[next_image_id]
+        else:
+            image = imageio.imread(images[next_image_id])
+
         image_embedding_path = embedding_paths[next_image_id]
 
         # Set the new image in the viewer, state and annotator.
         viewer.layers["image"].data = image
 
-        state.amg.clear_state()
+        if state.amg is not None:
+            state.amg.clear_state()
         state.initialize_predictor(
-            image, model_type=model_type, ndim=2, save_path=image_embedding_path,
-            halo=halo, tile_shape=tile_shape, predictor=predictor,
+            image, model_type=model_type, ndim=3 if is_volumetric else 2,
+            save_path=image_embedding_path,
+            tile_shape=tile_shape, halo=halo,
+            predictor=predictor, decoder=decoder,
             precompute_amg_state=precompute_amg_state, device=device,
         )
-        state.image_shape = image.shape[:-1] if image.ndim == 3 else image.shape
+        state.image_shape = _get_input_shape(image, is_volumetric)
 
         annotator._update_image()
 
@@ -203,6 +262,117 @@ def image_folder_annotator(
     )
 
 
+class ImageFolderAnnotator(widgets._WidgetBase):
+    def __init__(self, viewer: napari.Viewer, parent=None):
+        super().__init__(parent=parent)
+        self._viewer = viewer
+
+        # Create the UI: the general options.
+        self._create_options()
+
+        # Add the settings (collapsible).
+        self.layout().addWidget(self._create_settings())
+
+        # Add the run button to trigger the embedding computation.
+        self.run_button = QtWidgets.QPushButton("Annotate Images")
+        self.run_button.clicked.connect(self.__call__)
+        self.layout().addWidget(self.run_button)
+
+    # model_type: str = util._DEFAULT_MODEL,
+    def _create_options(self):
+        self.folder = None
+        _, layout = self._add_path_param(
+            "folder", self.folder, "directory",
+            title="Input Folder", placeholder="Folder with images ..."
+        )
+        self.layout().addLayout(layout)
+
+        self.output_folder = None
+        _, layout = self._add_path_param(
+            "output_folder", self.output_folder, "directory",
+            title="Output Folder", placeholder="Folder to save the results ..."
+        )
+        self.layout().addLayout(layout)
+
+        self.model_type = util._DEFAULT_MODEL
+        model_options = list(util.models().urls.keys())
+        _, layout = self._add_choice_param(
+            "model_type", self.model_type, model_options, title="Model:",
+        )
+        self.layout().addLayout(layout)
+
+    def _create_settings(self):
+        setting_values = QtWidgets.QWidget()
+        setting_values.setLayout(QtWidgets.QVBoxLayout())
+
+        self.pattern = "*"
+        _, layout = self._add_string_param(
+            "", self.pattern,
+        )
+        setting_values.layout().addLayout(layout)
+
+        self.is_volumetric = False
+        setting_values.layout().addWidget(self._add_boolean_param("is_volumetric", self.is_volumetric))
+
+        self.device = "auto"
+        device_options = ["auto"] + util._available_devices()
+        self.device_dropdown, layout = self._add_choice_param("device", self.device, device_options)
+        setting_values.layout().addLayout(layout)
+
+        self.embeddings_save_path = None
+        _, layout = self._add_path_param(
+            "embeddings_save_path", self.embeddings_save_path, "directory", title="embeddings save path:"
+        )
+        setting_values.layout().addLayout(layout)
+
+        self.custom_weights = None  # select_file
+        _, layout = self._add_path_param(
+            "custom_weights", self.custom_weights, "file", title="custom weights path:"
+        )
+        setting_values.layout().addLayout(layout)
+
+        self.tile_x, self.tile_y = 0, 0
+        self.tile_x_param, self.tile_y_param, layout = self._add_shape_param(
+            ("tile_x", "tile_y"), (self.tile_x, self.tile_y), min_val=0, max_val=2048, step=16
+        )
+        setting_values.layout().addLayout(layout)
+
+        self.halo_x, self.halo_y = 0, 0
+        self.halo_x_param, self.halo_y_param, layout = self._add_shape_param(
+            ("halo_x", "halo_y"), (self.halo_x, self.halo_y), min_val=0, max_val=512
+        )
+        setting_values.layout().addLayout(layout)
+
+        settings = widgets._make_collapsible(setting_values, title="Settings")
+        return settings
+
+    def _validate_inputs(self):
+        missing_data = self.folder is None or len(glob(os.path.join(self.folder, self.pattern))) == 0
+        missing_output = self.output_folder is None
+        if missing_data or missing_output:
+            msg = ""
+            if missing_data:
+                msg += "The input folder is missing or empty. "
+            if missing_output:
+                msg += "The output folder is missing."
+            return widgets._generate_message("error", msg)
+        return False
+
+    def __call__(self, skip_validate=False):
+        if not skip_validate and self._validate_inputs():
+            return
+        tile_shape, halo = widgets._process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
+
+        image_folder_annotator(
+            self.folder, self.output_folder, self.pattern,
+            model_type=self.model_type,
+            embedding_path=self.embeddings_save_path,
+            tile_shape=tile_shape, halo=halo, checkpoint_path=self.custom_weights,
+            device=self.device, is_volumetric=self.is_volumetric,
+            viewer=self._viewer,
+        )
+
+
 def main():
     """@private"""
     import argparse
@@ -243,6 +413,9 @@ def main():
         help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
         "By default the most performant available device will be selected."
     )
+    parser.add_argument(
+        "--is_volumetric", action="store_true", help="Whether to use the 3d annotator for a set of 3d volumes."
+    )
 
     parser.add_argument(
         "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
@@ -251,16 +424,14 @@ def main():
         "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
     )
     parser.add_argument("--precompute_amg_state", action="store_true")
+    parser.add_argument("--prefer_decoder", action="store_false")
 
     args = parser.parse_args()
-
-    if args.embedding_path is None:
-        warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
 
     image_folder_annotator(
         args.input_folder, args.output_folder, args.pattern,
         embedding_path=args.embedding_path, model_type=args.model_type,
-        tile_shape=args.tile_shape, halo=args.halo,
-        precompute_amg_state=args.precompute_amg_state,
-        checkpoint_path=args.checkpoint, device=args.device,
+        tile_shape=args.tile_shape, halo=args.halo, precompute_amg_state=args.precompute_amg_state,
+        checkpoint_path=args.checkpoint, device=args.device, is_volumetric=args.is_volumetric,
+        prefer_decoder=args.prefer_decoder,
     )

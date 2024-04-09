@@ -24,7 +24,7 @@ class TestState(unittest.TestCase):
         state.current_track_id = 1
         state.lineage = {1: {}}
         state.committed_lineages = []
-        state.tracking_widget = Container()
+        state.widgets = {"tracking": Container()}
         self.assertTrue(state.initialized_for_tracking())
 
 

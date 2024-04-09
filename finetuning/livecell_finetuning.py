@@ -3,8 +3,6 @@ import argparse
 
 import torch
 
-from torch_em.model import UNETR
-from torch_em.loss import DiceBasedDistanceLoss
 from torch_em.data.datasets import get_livecell_loader
 from torch_em.transform.label import PerObjectDistanceTransform
 
@@ -52,78 +50,36 @@ def finetune_livecell(args):
     patch_shape = (520, 704)  # the patch shape for training
     n_objects_per_batch = args.n_objects  # the number of objects per batch that will be sampled (default: 25)
     freeze_parts = args.freeze  # override this to freeze different parts of the model
-
-    # get the trainable segment anything model
-    model = sam_training.get_trainable_sam_model(
-        model_type=model_type,
-        device=device,
-        checkpoint_path=checkpoint_path,
-        freeze=freeze_parts
-    )
-    model.to(device)
-
-    # let's get the UNETR model for automatic instance segmentation pipeline
-    unetr = UNETR(
-        backbone="sam",
-        encoder=model.sam.image_encoder,
-        out_channels=3,
-        use_sam_stats=True,
-        final_activation="Sigmoid",
-        use_skip_connection=False,
-        resize_input=True,
-        use_conv_transpose=True,
-    )
-    unetr.to(device)
-
-    # let's get the parameters for SAM and the decoder from UNETR
-    joint_model_params = [params for params in model.parameters()]  # sam parameters
-    for name, params in unetr.named_parameters():  # unetr's decoder parameters
-        if not name.startswith("encoder"):
-            joint_model_params.append(params)
-
-    # all the stuff we need for training
-    optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10, verbose=True)
-    train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
-
-    # this class creates all the training data for a batch (inputs, prompts and labels)
-    convert_inputs = sam_training.ConvertToSamInputs(
-        transform=model.transform, box_distortion_factor=0.025
-    )
-
     checkpoint_name = f"{args.model_type}/livecell_sam"
 
-    # the trainer which performs the joint training and validation (implemented using "torch_em")
-    trainer = sam_training.JointSamTrainer(
+    # all the stuff we need for training
+    train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
+    scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10, "verbose": True}
+
+    # Run training.
+    sam_training.train_sam(
         name=checkpoint_name,
-        save_root=args.save_root,
+        model_type=model_type,
         train_loader=train_loader,
         val_loader=val_loader,
-        model=model,
-        optimizer=optimizer,
-        device=device,
-        lr_scheduler=scheduler,
-        logger=sam_training.JointSamLogger,
-        log_image_interval=100,
-        mixed_precision=True,
-        convert_inputs=convert_inputs,
+        early_stopping=10,
         n_objects_per_batch=n_objects_per_batch,
-        n_sub_iteration=8,
-        compile_model=False,
-        mask_prob=0.5,  # (optional) overwrite to provide the probability of using mask inputs while training
-        unetr=unetr,
-        instance_loss=DiceBasedDistanceLoss(mask_distances_in_bg=True),
-        instance_metric=DiceBasedDistanceLoss(mask_distances_in_bg=True)
+        checkpoint_path=checkpoint_path,
+        freeze=freeze_parts,
+        device=device,
+        lr=1e-5,
+        n_iterations=args.iterations,
+        save_root=args.save_root,
+        scheduler_kwargs=scheduler_kwargs,
+        save_every_kth_epoch=args.save_every_kth_epoch,
     )
-    trainer.fit(args.iterations, save_every_kth_epoch=args.save_every_kth_epoch)
+
     if args.export_path is not None:
         checkpoint_path = os.path.join(
             "" if args.save_root is None else args.save_root, "checkpoints", checkpoint_name, "best.pt"
         )
         export_custom_sam_model(
-            checkpoint_path=checkpoint_path,
-            model_type=model_type,
-            save_path=args.export_path,
+            checkpoint_path=checkpoint_path, model_type=model_type, save_path=args.export_path,
         )
 
 
