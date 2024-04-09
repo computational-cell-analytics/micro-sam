@@ -25,14 +25,15 @@ def compare_lm():
     # params = VIT_B_PARAMS
 
     # for figure 3 (we use 'vit_l')
-    all_datasets = ["covid_if", "lizard", "mouse_embryo", "plantseg_ovules"]
-    params = VIT_L_PARAMS
+    # all_datasets = ["covid_if", "lizard", "mouse_embryo", "plantseg_ovules"]
+    # params = VIT_L_PARAMS
 
-    # TODO: for all datasets (we use 'vit_l')
-    # all_datasets = [
-    #     "livecell", "deepbacs", "tissuenet", "neurips_cellseg", "covid_if", "hpa",
-    #     "plantseg_ovules", "lizard", "mouse_embryo", "dynamicnuclearnet", "pannuke"
-    # ]
+    # for all datasets (we use 'vit_l')
+    all_datasets = [
+        "livecell", "deepbacs", "tissuenet", "plantseg_root", "neurips_cellseg", "covid_if",
+        "dynamicnuclearnet", "plantseg_ovules", "mouse_embryo", "hpa", "pannuke", "lizard",
+    ]
+    params = VIT_L_PARAMS
 
     for dataset in all_datasets:
         compare_experiments_for_dataset(dataset, **params)

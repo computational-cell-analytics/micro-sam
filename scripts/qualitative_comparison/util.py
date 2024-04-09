@@ -72,6 +72,8 @@ def compute_platy_rois(root, sample_ids, ignore_label, file_template, label_key)
 def fetch_data_loaders(dataset_name):
     sampler = MinInstanceSampler()
 
+    # LM LOADERS
+
     if dataset_name == "livecell":
         loader = datasets.get_livecell_loader(
             path=os.path.join(ROOT, "livecell"), split="test", patch_shape=(512, 512),
@@ -86,7 +88,7 @@ def fetch_data_loaders(dataset_name):
 
     elif dataset_name == "tissuenet":
         loader = datasets.get_tissuenet_loader(
-            path=os.path.join(ROOT, "tissuenet"), split="test", raw_channel="cell",  # rgb / nucleus
+            path=os.path.join(ROOT, "tissuenet"), split="test", raw_channel="rgb",  # rgb / nucleus
             label_channel="cell", patch_shape=(256, 256), batch_size=1, shuffle=True, sampler=sampler,
         )
 
@@ -98,7 +100,8 @@ def fetch_data_loaders(dataset_name):
 
     elif dataset_name == "neurips_cellseg":
         loader = datasets.get_neurips_cellseg_supervised_loader(
-            os.path.join(ROOT, "neurips_cellseg"), "test", (512, 512), 1, shuffle=True
+            root=os.path.join(ROOT, "neurips-cell-seg", "zenodo"), split="test",
+            patch_shape=(512, 512), batch_size=1, shuffle=True, sampler=sampler,
         )
 
     elif dataset_name == "covid_if":
@@ -115,7 +118,8 @@ def fetch_data_loaders(dataset_name):
 
     elif dataset_name == "hpa":
         loader = datasets.get_hpa_segmentation_loader(
-            os.path.join(ROOT, "hpa"), "test", (512, 512), 1, download=True
+            path=os.path.join(ROOT, "hpa", "test"), split="train", patch_shape=(512, 512), download=True,
+            batch_size=1, sampler=sampler, shuffle=True, channels=["protein", "nuclei", "er"],
         )
 
     elif dataset_name == "lizard":
@@ -130,11 +134,6 @@ def fetch_data_loaders(dataset_name):
             patch_shape=(1, 512, 512), batch_size=1, ndim=2, shuffle=True, sampler=sampler,
         )
 
-    elif dataset_name == "dsb":
-        loader = datasets.get_dsb_loader(
-            os.path.join(ROOT, "dsb"), "test", (256, 256), 1, download=True
-        )
-
     elif dataset_name == "dynamicnuclearnet":
         loader = datasets.get_dynamicnuclearnet_loader(
             path=os.path.join(ROOT, "dynamicnuclearnet"), split="test", patch_shape=(512, 512),
@@ -143,8 +142,11 @@ def fetch_data_loaders(dataset_name):
 
     elif dataset_name == "pannuke":
         loader = datasets.get_pannuke_loader(
-            os.path.join(ROOT, "pannuke"), (1, 512, 512), 1, ndim=2, download=True,
+            path=os.path.join(ROOT, "pannuke"), patch_shape=(1, 512, 512),
+            batch_size=1, ndim=2, shuffle=True, sampler=sampler,
         )
+
+    # EM LOADERS
 
     elif dataset_name == "lucchi":
         loader = datasets.get_lucchi_loader(
@@ -210,15 +212,46 @@ def fetch_data_loaders(dataset_name):
             ndim=2, batch_size=1, sampler=sampler, shuffle=True,
         )
 
-    elif dataset_name == "mitolab_tem":
+    elif dataset_name == "mitolab_c_elegans":
         loader = datasets.cem.get_benchmark_loader(
-            path=os.path.join(ROOT, "mitolab"), dataset_id=7, batch_size=1, patch_shape=(512, 512),
-            sampler=sampler, shuffle=True,
+            path=os.path.join(ROOT, "mitolab"), dataset_id=1, batch_size=1,
+            patch_shape=(1, 512, 512), sampler=sampler, shuffle=True,
         )
 
-    elif dataset_name == "asem":
+    elif dataset_name == "mitolab_fly_brain":
+        loader = datasets.cem.get_benchmark_loader(
+            path=os.path.join(ROOT, "mitolab"), dataset_id=2, batch_size=1,
+            patch_shape=(1, 512, 512), sampler=sampler, shuffle=True,
+        )
+
+    elif dataset_name == "mitolab_glycotic_muscle":
+        loader = datasets.cem.get_benchmark_loader(
+            path=os.path.join(ROOT, "mitolab"), dataset_id=3, batch_size=1,
+            patch_shape=(1, 512, 512), sampler=sampler, shuffle=True,
+        )
+
+    elif dataset_name == "mitolab_hela_cell":
+        loader = datasets.cem.get_benchmark_loader(
+            path=os.path.join(ROOT, "mitolab"), dataset_id=4, batch_size=1,
+            patch_shape=(1, 512, 512), sampler=sampler, shuffle=True,
+        )
+
+    elif dataset_name == "mitolab_tem":
+        loader = datasets.cem.get_benchmark_loader(
+            path=os.path.join(ROOT, "mitolab"), dataset_id=7, batch_size=1,
+            patch_shape=(1, 512, 512), sampler=sampler, shuffle=True,
+        )
+
+    elif dataset_name == "asem_mito":
         loader = datasets.get_asem_loader(
-            os.path.join(ROOT, "asem"), (1, 512, 512), 1, ndim=2, organelles="mito"
+            path=os.path.join(ROOT, "asem"), patch_shape=(1, 512, 512), batch_size=1,
+            ndim=2, organelles="mito", sampler=sampler, shuffle=True, label_transform=connected_components
+        )
+
+    elif dataset_name == "vnc":
+        loader = datasets.get_vnc_mito_loader(
+            path=os.path.join(ROOT, "vnc"), patch_shape=(1, 512, 512),
+            ndim=2, sampler=sampler, batch_size=1,
         )
 
     else:

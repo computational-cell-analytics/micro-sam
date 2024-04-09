@@ -25,20 +25,23 @@ def compare_em():
     # params = VIT_B_PARAMS
 
     # for figure 4 (we use 'vit_l' here)
-    all_datasets = ["mitolab_tem", "nuc_mm_mouse", "platy_nuclei", "mitoem_human"]
+    # all_datasets = ["mitolab_tem", "nuc_mm_mouse", "platy_nuclei", "mitoem_human"]
+    # params = VIT_L_PARAMS
+
+    # for all datasets (we use `vit_l` here)
+    all_datasets = [
+        "mitoem_rat", "mitoem_human", "platy_nuclei", "mitolab_c_elegans",
+        "mitolab_fly_brain", "mitolab_glycotic_muscle", "mitolab_hela_cell",
+        "mitolab_tem", "lucchi", "nuc_mm_mouse", "uro_cell", "sponge_em",
+        "vnc", "asem_mito", "platy_cilia"
+    ]
     params = VIT_L_PARAMS
 
     for dataset in all_datasets:
         compare_experiments_for_dataset(dataset, **params)
 
-    # TODO:
-    # mitoem_rat, mitoem_human, platy_nuclei, mitolab (see what's relevant),
-    # nuc_mm_mouse, nuc_mm_zebrafish (?), platy_cilia, uro_cell, sponge_em, asem (mito)
-
     # proof of concept experiments:
-    # cremi specialist: see if it works for other boundary structures
-    #   - platy_cells, axondeepseg, snemi, isbi
-    # asem (er) specialist ()
+    # cremi specialist, asem (er)
 
 
 def main():
