@@ -346,12 +346,21 @@ class ImageFolderAnnotator(widgets._WidgetBase):
         settings = widgets._make_collapsible(setting_values, title="Settings")
         return settings
 
-    # TODO re-use functionality from Luca's embedding validation
     def _validate_inputs(self):
-        pass
+        missing_data = self.folder is None or len(glob(os.path.join(self.folder, self.pattern))) == 0
+        missing_output = self.output_folder is None
+        if missing_data or missing_output:
+            msg = ""
+            if missing_data:
+                msg += "The input folder is missing or empty. "
+            if missing_output:
+                msg += "The output folder is missing."
+            return widgets._generate_message("error", msg)
+        return False
 
-    def __call__(self):
-        self._validate_inputs()
+    def __call__(self, skip_validate=False):
+        if not skip_validate and self._validate_inputs():
+            return
         tile_shape, halo = widgets._process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
 
         image_folder_annotator(
