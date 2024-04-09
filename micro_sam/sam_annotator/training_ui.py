@@ -1,6 +1,5 @@
+import os
 import warnings
-# from pathlib import Path
-# from typing import Optional
 
 import torch
 import torch_em
@@ -162,16 +161,24 @@ class TrainingWidget(widgets._WidgetBase):
         assert model_type is not None
         return model_type
 
-    # TODO re-use functionality from Luca's embedding validation
+    # Make sure that raw and label path have been passed.
+    # If they haven't raise an error message.
+    # (We could do a more extensive validation here, but for now keep it minimal.)
     def _validate_inputs(self):
-        # Check the raw_path and label_path: both have to be given and have to exist.
-        print(self.raw_path)
-        print(self.label_path)
-        # Check the raw_path_val and label_path_val: either none or both have to be given.
-        pass
+        missing_raw = self.raw_path is None or not os.path.exists(self.raw_path)
+        missing_label = self.label_path is None or not os.path.exists(self.label_path)
+        if missing_raw or missing_label:
+            msg = ""
+            if missing_raw:
+                msg += "The path to raw data is missing or does not exist. "
+            if missing_label:
+                msg += "The path to label data is missing or does not exist."
+            return widgets._generate_message("error", msg)
+        return False
 
-    def __call__(self):
-        self._validate_inputs()
+    def __call__(self, skip_validate=False):
+        if not skip_validate and self._validate_inputs():
+            return
 
         # Set up progress bar and signals for using it within a threadworker.
         pbar, pbar_signals = widgets._create_pbar_for_threadworker()
