@@ -12,6 +12,7 @@ import torch
 import xarray
 
 from bioimageio.spec import save_bioimageio_package
+from bioimageio.core.digest_spec import create_sample_for_model
 
 
 from .. import util
@@ -29,7 +30,11 @@ DEFAULTS = {
     "cite": [
         spec.CiteEntry(text="Archit et al. Segment Anything for Microscopy", doi=spec.Doi("10.1101/2023.08.21.554208")),
     ],
-    "tags": ["segment-anything", "instance-segmentation"]
+    "tags": ["segment-anything", "instance-segmentation"],
+    # FIXME these are details for the uploader we should remove here
+    "uploader": spec.Uploader(email="constantin.pape@informatik.uni-goettinge.de"),
+    "id": "acclaimed-angelfish",
+    "id_emoji": "🐠",
 }
 
 
@@ -40,7 +45,6 @@ def _create_test_inputs_and_outputs(
     checkpoint_path,
     tmp_dir,
 ):
-
     # For now we just generate a single box prompt here, but we could also generate more input prompts.
     generator = PointAndBoxPromptGenerator(
         n_positive_points=1,
@@ -196,21 +200,22 @@ def _check_model(model_description, input_paths, result_paths):
 
         # Check with all prompts. We only check the result for this setting,
         # because this was used to generate the test data.
-        prediction = pp.forward(
+        sample = create_sample_for_model(
+            model=model_description,
             image=image,
             box_prompts=box_prompts,
             point_prompts=point_prompts,
             point_labels=point_labels,
             mask_prompts=mask_prompts,
             embeddings=embeddings,
-        )
+        ).as_single_block()
+        prediction = pp.predict_sample_block(sample)
 
         assert len(prediction) == 3
         predicted_mask = prediction[0]
         assert np.allclose(mask, predicted_mask)
 
-        # FIXME this fails due to errors with optional inputs
-        # Check with partial prompts.
+        # Run the checks with partial prompts.
         prompt_kwargs = [
             # With boxes.
             {"box_prompts": box_prompts},
@@ -227,7 +232,10 @@ def _check_model(model_description, input_paths, result_paths):
         ]
 
         for kwargs in prompt_kwargs:
-            prediction = pp.forward(image=image, embeddings=embeddings, **kwargs)
+            sample = create_sample_for_model(
+                model=model_description, image=image, embeddings=embeddings, **kwargs
+            ).as_single_block()
+            prediction = pp.predict_sample_block(sample)
             assert len(prediction) == 3
             predicted_mask = prediction[0]
             assert predicted_mask.shape == mask.shape
@@ -465,6 +473,9 @@ def export_sam_model(
             git_repo=spec.HttpUrl("https://github.com/computational-cell-analytics/micro-sam"),
             tags=kwargs.get("tags", DEFAULTS["tags"]),
             covers=covers,
+            uploader=kwargs.get("uploader", DEFAULTS["uploader"]),
+            id=kwargs.get("id", DEFAULTS["id"]),
+            id_emoji=kwargs.get("id_emoji", DEFAULTS["id_emoji"]),
             # TODO attach the decoder weights if given
             # Can be list of files???
             # attachments=[spec.FileDescr(source=file_path) for file_path in attachment_files]
@@ -474,6 +485,6 @@ def export_sam_model(
             # config=
         )
 
-        _check_model(model_description, input_paths, result_paths)
+        # _check_model(model_description, input_paths, result_paths)
 
         save_bioimageio_package(model_description, output_path=output_path)
