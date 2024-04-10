@@ -2,6 +2,8 @@ name: build_installers
 
 on:
   push:
+    branches:
+      - '505-update-installer-scripts' 
     tags:
       - '**'
 
