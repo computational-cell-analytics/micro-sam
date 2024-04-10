@@ -21,6 +21,7 @@ jobs:
         conda install -y -c conda-forge ruamel.yaml
         conda install -y -c conda-forge mamba
         mamba env create --file=env.yaml
+        conda info --envs
         conda activate __MICROSAM_BUILD_ENV__
         conda install -y -c conda-forge constructor
         cd ../
