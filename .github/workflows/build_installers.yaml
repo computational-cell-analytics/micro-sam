@@ -22,7 +22,7 @@ jobs:
         conda install -y -c conda-forge ruamel.yaml
         conda install -y -c conda-forge mamba
         mamba env create --file=../environment_gpu.yaml
-        conda activate __MICROSAM_BUILD_ENV__
+        conda activate sam
         cd ../
         pip install . --no-deps -v
         cd deployment
@@ -53,7 +53,7 @@ jobs:
         shell: pwsh
         run: |
           ${{ env.PREPARE_SCRIPT }}
-          conda activate __MICROSAM_BUILD_ENV__
+          conda activate sam
           conda install -c anaconda menuinst
           python windows_menu_setup.py
           conda activate base
