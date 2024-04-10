@@ -2,7 +2,7 @@ name: micro_sam
 version: 0.1.0
 license_file: ../LICENSE
 installer_type: pkg  #[osx]  # This will trigger pkg build on Mac Os. On windows and linux, native build will be done and this has no effect.
-environment: __MICROSAM_BUILD_ENV__
+environment: sam
 welcome_image: ../doc/images/micro-sam-logo.png
 header_image: ../doc/images/micro-sam-logo.png
 icon_image: ../doc/images/micro-sam-logo.png
