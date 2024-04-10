@@ -18,15 +18,15 @@ jobs:
     env:
       PREPARE_SCRIPT: |
         cd deployment
+        conda install -y -c conda-forge constructor
         conda install -y -c conda-forge ruamel.yaml
         conda install -y -c conda-forge mamba
         mamba env create --file=env.yaml
-        conda info --envs
         conda activate __MICROSAM_BUILD_ENV__
-        conda install -y -c conda-forge constructor
         cd ../
         pip install . --no-deps -v
         cd deployment
+        conda activate base
       RUN_SCRIPT: |
         python version_getter.py
         mkdir ./${{ matrix.os }}_x86_64
