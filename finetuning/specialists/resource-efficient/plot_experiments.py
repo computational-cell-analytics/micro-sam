@@ -11,7 +11,9 @@ from matplotlib.ticker import FuncFormatter
 
 ROOT = "/scratch/users/archit/experiments"
 
-PALETTE = {"ais": "#440154", "amg": "#404788", "point": "#1F968B", "box": "#73D055"}
+PALETTE = {"ais": "#7CCBA2", "amg": "#7C1D6F", "point": "#F0746E", "box": "#089099"}
+
+plt.rcParams.update({"font.size": 24})
 
 
 def _get_all_results(name, all_res_paths):
@@ -71,7 +73,7 @@ def plot_all_experiments():
 
     # now, let's get the resource efficient fine-tuning
     for exp_path in sorted(resource_experiment_paths):
-        fig, ax = plt.subplots(2, 2, figsize=(15, 10), sharey="row")
+        fig, ax = plt.subplots(2, 2, figsize=(22, 15), sharey="row")
         resource_name = os.path.split(exp_path)[-1]
         all_model_paths = glob(os.path.join(exp_path, "*"))
         idx = 0
@@ -131,19 +133,25 @@ def plot_all_experiments():
             plt.gca().yaxis.set_major_formatter(FuncFormatter(format_y_tick_label))
 
             plt.text(
-                x=0.6425, y=2.35, s=" X-Axis: Images \n Y-Axis: Segmentation Quality ", ha='left',
-                transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#D6D6D6", "boxstyle": "round"}
+                x=0.6425, y=2.35, s=" X-Axis: Number of Images \n Y-Axis: Segmentation Accuracy ", ha='left',
+                transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#D6D6D6", "boxstyle": "round"},
+                fontsize=16,
             )
 
-            plt.subplots_adjust(top=0.865, right=0.95, left=0.075, bottom=0.05)
-            fig.suptitle("Resource Efficient Finetuning (Covid IF)", fontsize=26, x=0.515, y=0.95)
+            plt.subplots_adjust(top=0.865, right=0.95, left=0.15, bottom=0.05, wspace=0.05)
+            _rname = "CPU" if resource_name.startswith("cpu") else "GPU"
+            fig.suptitle(f"Resource Efficient Finetuning ({_rname})", fontsize=26, x=0.515, y=0.95)
 
             save_path = f"./figures/{resource_name}/results.png"
             try:
                 plt.savefig(save_path)
+                plt.savefig(Path(save_path).with_suffix(".svg"))
+                plt.savefig(Path(save_path).with_suffix(".pdf"))
             except FileNotFoundError:
                 os.makedirs(os.path.split(save_path)[0])
                 plt.savefig(save_path)
+                plt.savefig(Path(save_path).with_suffix(".svg"))
+                plt.savefig(Path(save_path).with_suffix(".pdf"))
 
             plt.close()
             print()

@@ -13,7 +13,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 from segment_anything.predictor import SamPredictor
-from tqdm import tqdm
+
+try:
+    from napari.utils import progress as tqdm
+except ImportError:
+    from tqdm import tqdm
 
 from . import instance_segmentation, util
 

@@ -30,10 +30,10 @@ def test_embedding_widget(make_napari_viewer, tmp_path):
     my_widget.image = layer
     my_widget.model_type = "vit_t"
     my_widget.device = "cpu"
-    my_widget.save_path = tmp_path
+    my_widget.embeddings_save_path = tmp_path
 
     # Run image embedding widget.
-    worker = my_widget()
+    worker = my_widget(skip_validate=True)
     worker.await_workers()  # blocks until thread worker is finished the embedding
 
     # Check in-memory state for predictor and embeddings.

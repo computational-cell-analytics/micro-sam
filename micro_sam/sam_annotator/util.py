@@ -409,28 +409,100 @@ def segment_slices_with_prompts(
     return seg, slices, stop_lower, stop_upper
 
 
+# For advanced batching: match prompts to already segmented objects and continue segmentation.
+def _match_prompts(previous_segmentation, points, boxes, seg_ids):
+    # Create a mapping between ids and prompts.
+    batched_prompts = {}
+    # seg_boundaries = find_boundaries(previous_segmentation, mode="inner")
+    # indices = distance_transform_edt(seg_boundaries, return_distance=False, return_index=True)
+    return batched_prompts
+
+
+def _batched_interactive_segmentation(predictor, points, labels, boxes, image_embeddings, i, previous_segmentation):
+    prev_seg = previous_segmentation if i is None else previous_segmentation[i]
+    seg = np.zeros(prev_seg.shape, dtype="uint32")
+
+    # seg_ids = np.unique(previous_segmentation)
+    # assert seg_ids[0] == 0
+
+    batched_points, batched_labels = [], []
+    negative_points, negative_labels = [], []
+    for j in range(len(points)):
+        if labels[j] == 1:  # positive point
+            batched_points.append(points[j:j+1])
+            batched_labels.append(labels[j:j+1])
+        else:  # negative points
+            negative_points.append(points[j:j+1])
+            negative_labels.append(labels[j:j+1])
+
+    batched_prompts = [(None, point, label) for point, label in zip(batched_points, batched_labels)]
+    batched_prompts.extend([(box, None, None) for box in boxes])
+    batched_prompts = {i: prompt for i, prompt in enumerate(batched_prompts, 1)}
+
+    # For advanced batching: match prompts to already segmented objects and continue segmentation.
+    # (This is left here as a reference for how this can be implemented.
+    #  I have not decided yet if this is actually a good idea or not.)
+    # # If we have no objects: this is the first call for a batched segmentation.
+    # # We treat each positive point or box as a separate obejct.
+    # if len(seg_ids) == 1:
+    #     # Create a list of all prompts.
+    #     batched_prompts = [(None, point, label) for point, label in zip(batched_points, batched_labels)]
+    #     batched_prompts.extend([(box, None, None) for box in boxes])
+    #     batched_prompts = {i: prompt for i, prompt in enumerate(batched_prompts, 1)}
+
+    # # Otherwise we match the prompts to existing objects.
+    # else:
+    #     batched_prompts = _match_prompts(prev_seg, batched_points, boxes, seg_ids)
+
+    for seg_id, prompt in batched_prompts.items():
+        box, point, label = prompt
+        if len(negative_points) > 0:
+            if point is None:
+                point, label = negative_points, negative_labels
+            else:
+                point = np.concatenate([point] + negative_points)
+                label = np.concatenate([label] + negative_labels)
+
+        if (box is not None) and (point is not None):
+            prediction = prompt_based_segmentation.segment_from_box_and_points(
+                predictor, box, point, label, image_embeddings=image_embeddings, i=i
+            ).squeeze()
+        elif (box is not None) and (point is None):
+            prediction = prompt_based_segmentation.segment_from_box(
+                predictor, box, image_embeddings=image_embeddings, i=i
+            ).squeeze()
+        else:
+            prediction = prompt_based_segmentation.segment_from_points(
+                predictor, point, label, image_embeddings=image_embeddings, i=i
+            ).squeeze()
+
+        seg[prediction] = seg_id
+
+    return seg
+
+
 def prompt_segmentation(
     predictor, points, labels, boxes, masks, shape, multiple_box_prompts,
-    image_embeddings=None, i=None, box_extension=0, multiple_point_prompts=None,
+    image_embeddings=None, i=None, box_extension=0, batched=None,
+    previous_segmentation=None,
 ):
     """@private"""
     assert len(points) == len(labels)
     have_points = len(points) > 0
     have_boxes = len(boxes) > 0
 
-    # no prompts were given, return None
+    # No prompts were given, return None.
     if not have_points and not have_boxes:
         return
 
-    # we use the batched point prompt segmentation mode, but
-    # have a box prompt -> this does not work
-    elif have_points and multiple_point_prompts and have_boxes:
-        print("You have activated batched point segmentation but have passed a box prompt.")
-        print("This setting is currently not supported.")
-        print("Provide a single positive point prompt per object when using batched point segmentation.")
-        return
+    # Batched interactive segmentation.
+    elif batched:
+        assert previous_segmentation is not None
+        seg = _batched_interactive_segmentation(
+            predictor, points, labels, boxes, image_embeddings, i, previous_segmentation
+        )
 
-    # box and point prompts were given
+    # Box and point prompts were given.
     elif have_points and have_boxes:
         if len(boxes) > 1:
             print("You have provided point prompts and more than one box prompt.")
@@ -447,36 +519,13 @@ def prompt_segmentation(
                 predictor, mask, box=boxes[0], points=points, labels=labels, image_embeddings=image_embeddings, i=i
             ).squeeze()
 
-    # only point prompts were given
+    # Only point prompts were given.
     elif have_points and not have_boxes:
+        seg = prompt_based_segmentation.segment_from_points(
+            predictor, points, labels, image_embeddings=image_embeddings, i=i
+        ).squeeze()
 
-        if multiple_point_prompts:
-            seg = np.zeros(shape, dtype="uint32")
-            batched_points, batched_labels = [], []
-            negative_points, negative_labels = [], []
-            for j in range(len(points)):
-                if labels[j] == 1:  # positive point
-                    batched_points.append(points[j:j+1])
-                    batched_labels.append(labels[j:j+1])
-                else:  # negative points
-                    negative_points.append(points[j:j+1])
-                    negative_labels.append(labels[j:j+1])
-
-            # Batch this?
-            for seg_id, (point, label) in enumerate(zip(batched_points, batched_labels), 1):
-                if len(negative_points) > 0:
-                    point = np.concatenate([point] + negative_points)
-                    label = np.concatenate([label] + negative_labels)
-                prediction = prompt_based_segmentation.segment_from_points(
-                    predictor, point, label, image_embeddings=image_embeddings, i=i
-                ).squeeze()
-                seg[prediction] = seg_id
-        else:
-            seg = prompt_based_segmentation.segment_from_points(
-                predictor, points, labels, image_embeddings=image_embeddings, i=i
-            ).squeeze()
-
-    # only box prompts were given
+    # Only box prompts were given.
     elif not have_points and have_boxes:
         seg = np.zeros(shape, dtype="uint32")
 
