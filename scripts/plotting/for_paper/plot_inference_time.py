@@ -23,7 +23,8 @@ def get_radar_plot(ax, dfs, device, show_std=False):
     cat_labels = list(map(lambda x: x.replace('prompt-box', 'box'), cat_labels))
 
     # normalise the data to a proper scale
-    max_values = (3000, 700) if device == "CPU" else (28, 7)
+    # max_values = (3000, 700) if device == "CPU" else (28, 7)
+    max_values = (300, 70) if device == "CPU" else (2.8, 0.7)
 
     label_loc = np.linspace(start=0, stop=2 * np.pi, num=len(cat))
 
@@ -39,6 +40,10 @@ def get_radar_plot(ax, dfs, device, show_std=False):
         group_norm += group_norm[:1]
         group = list(df['runtimes'])
         group += group[:1]
+
+        # HACK
+        # we divide the numbers to get them per image
+        group_norm = np.divide(group_norm, 10)
 
         err_norm = list(errors.values())
         err_norm = np.array([*err_norm, err_norm[0]])

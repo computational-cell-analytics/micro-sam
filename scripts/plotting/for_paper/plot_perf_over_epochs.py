@@ -92,21 +92,21 @@ def get_plots(ax, data, experiment_name):
 
 def plot_perf_over_epochs():
     all_data = gather_all_results()
-    fig, ax = plt.subplots(3, 2, figsize=(25, 20))
+    fig, ax = plt.subplots(2, 2, figsize=(25, 15))
 
     amg = all_data[all_data["name"] == "amg"]
     ais = all_data[all_data["name"] == "instance_segmentation_with_decoder"]
     point = all_data[all_data["type"] == "point"]
     box = all_data[all_data["type"] == "box"]
-    i_point = all_data[all_data["type"] == "i_p"]
-    i_box = all_data[all_data["type"] == "i_b"]
+    # i_point = all_data[all_data["type"] == "i_p"]
+    # i_box = all_data[all_data["type"] == "i_b"]
 
     get_plots(ax[0, 0], point, "Point")
     get_plots(ax[0, 1], box, "Box")
     get_plots(ax[1, 0], ais, "AIS")
     get_plots(ax[1, 1], amg, "AMG")
-    get_plots(ax[2, 0], i_point, "Iterative Prompting (Start with Point)")
-    get_plots(ax[2, 1], i_box, "Iterative Prompting (Start with Box)")
+    # get_plots(ax[2, 0], i_point, "Iterative Prompting (Start with Point)")
+    # get_plots(ax[2, 1], i_box, "Iterative Prompting (Start with Box)")
 
     # here, we remove the legends for each subplot, and get one common legend for all
     all_lines, all_labels = [], []
