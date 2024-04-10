@@ -22,7 +22,7 @@ jobs:
         conda install -y -c conda-forge ruamel.yaml
         conda install -y -c conda-forge mamba
         mamba env create --file=env.yaml
-        mamba activate __MICROSAM_BUILD_ENV__
+        conda activate __MICROSAM_BUILD_ENV__
         cd ../
         pip install .
         cd deplyoment
