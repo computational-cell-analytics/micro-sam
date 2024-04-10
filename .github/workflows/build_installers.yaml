@@ -24,8 +24,8 @@ jobs:
         mamba env create --file=env.yaml
         conda activate __MICROSAM_BUILD_ENV__
         cd ../
-        pip install .
-        cd deplyoment
+        pip install . --no-deps -v
+        cd deployment
       RUN_SCRIPT: |
         python version_getter.py
         mkdir ./${{ matrix.os }}_x86_64
