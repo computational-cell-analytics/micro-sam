@@ -5,9 +5,11 @@ channels:
     - conda-forge
 dependencies:
     - imagecodecs
+    - magicgui
     - napari
     - pip
     - pooch
+    - pyqt
     - python-xxhash
     - python-elf >=0.4.8
     - pytorch
