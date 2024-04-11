@@ -325,10 +325,9 @@ def _commit_impl(viewer, layer):
     return id_offset, seg, mask, bb
 
 
-# TODO also keep track of the model being used and the micro-sam version.
 def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
 
-    # NOTE: Zarr is incredibly inefficient and writes empty blocks.
+    # NOTE: zarr-python is quite inefficient and writes empty blocks.
     # So we have to use z5py here.
 
     # Deal with issues z5py has with empty folders and require the json.
@@ -339,6 +338,22 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
                 json.dump({"zarr_format": 2}, f)
 
     f = z5py.ZarrFile(path, "a")
+
+    # Write metadata about the model that's being used etc.
+    # Only if it's not written to the file yet.
+    if "data_signature" not in f.attrs:
+        state = AnnotatorState()
+        embeds = state.widgets["embeddings"]
+        tile_shape, halo = _process_tiling_inputs(embeds.tile_x, embeds.tile_y, embeds.halo_x, embeds.halo_y)
+        signature = util._get_embedding_signature(
+            input_=None,  # We don't need this because we pass the data signature.
+            predictor=state.predictor,
+            tile_shape=tile_shape,
+            halo=halo,
+            data_signature=state.data_signature,
+        )
+        for key, val in signature.items():
+            f.attrs[key] = val
 
     # Write the segmentation.
     full_shape = viewer.layers["committed_objects"].data.shape
@@ -358,6 +373,7 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
     # If we run commit from the automatic segmentation we don't have
     # any prompts and so don't need to commit anything else.
     if layer == "auto_segmentation":
+        # TODO write the settings for the auto segmentation widget.
         return
 
     def write_prompts(object_id, prompts, point_prompts):
@@ -368,11 +384,13 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
         if point_prompts is not None and len(point_prompts) > 0:
             g.create_dataset("point_prompts", data=point_prompts, chunks=point_prompts.shape)
 
+    # TODO write the settings for the segmentation widget if necessary.
     # Commit the prompts for all the objects in the commit.
     object_ids = np.unique(seg[mask])
     if len(object_ids) == 1:  # We only have a single object.
         write_prompts(object_ids[0], viewer.layers["prompts"].data, viewer.layers["point_prompts"].data)
     else:
+        # TODO this logic has to be updated to be compatible with the new batched prompting
         have_prompts = len(viewer.layers["prompts"].data) > 0
         have_point_prompts = len(viewer.layers["point_prompts"].data) > 0
         if have_prompts and not have_point_prompts:
@@ -712,7 +730,7 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
 
 
 class EmbeddingWidget(_WidgetBase):
-    def __init__(self, skip_validate=False, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent=parent)
 
         # Create a nested layout for the sections.
@@ -727,7 +745,7 @@ class EmbeddingWidget(_WidgetBase):
 
         # Section 3: The button to trigger the embedding computation.
         self.run_button = QtWidgets.QPushButton("Compute Embeddings")
-        self.run_button.clicked.connect(lambda: self.__call__(skip_validate))
+        self.run_button.clicked.connect(self.__call__)
         self.layout().addWidget(self.run_button)
 
     def _create_image_section(self):
@@ -819,10 +837,7 @@ class EmbeddingWidget(_WidgetBase):
         - If no `embeddings_save_path` is provided, the function returns None.
 
         Returns:
-            dict | bool:
-                - A dictionary containing "message_type" and "message" keys if a message
-                needs to be generated (e.g., for errors or informational messages).
-                - False if no message generation is required.
+            bool: True if the computation should be aborted, otherwise False.
         """
 
         # Check if we have an existing embedding path.
@@ -836,7 +851,8 @@ class EmbeddingWidget(_WidgetBase):
                 # Note: 'input_size' is the last value set in the attrs of f,
                 # so we can use it as a proxy to check if the embeddings are fully computed
                 if "input_size" not in f.attrs:
-                    msg = f"The embeddings at {self.embeddings_save_path} are incomplete. Specify a different path or remove them."
+                    msg = (f"The embeddings at {self.embeddings_save_path} are incomplete. "
+                           "Specify a different path or remove them.")
                     return _generate_message("error", msg)
 
                 # Validate image data signature.
@@ -854,7 +870,8 @@ class EmbeddingWidget(_WidgetBase):
                     self.halo_x, self.halo_y = f.attrs["halo"]
                     val_results = {
                         "message_type": "info",
-                        "message": f"Load embeddings for model: {self.model_type} with tile shape: {self.tile_x}, {self.tile_y} and halo: {self.halo_x}, {self.halo_y}."
+                        "message": (f"Load embeddings for model: {self.model_type} with tile shape: "
+                                    "{self.tile_x}, {self.tile_y} and halo: {self.halo_x}, {self.halo_y}.")
                     }
                 else:
                     self.tile_x, self.tile_y = None, None

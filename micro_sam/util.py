@@ -4,23 +4,26 @@ Helper functions for downloading Segment Anything models and predicting image em
 
 import hashlib
 import os
-from pathlib import Path
 import pickle
 import warnings
 from collections import OrderedDict
-from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
+from pathlib import Path
+from typing import Any, Dict, Iterable, Optional, Tuple, Union
 
 import imageio.v3 as imageio
 import numpy as np
 import pooch
 import torch
 import vigra
+import xxhash
 import zarr
 
 from elf.io import open_file
 from nifty.tools import blocking
 from skimage.measure import regionprops
 from skimage.segmentation import relabel_sequential
+
+from .__version__ import __version__
 
 try:
     # Avoid import warnigns from mobile_sam
@@ -33,16 +36,9 @@ except ImportError:
     VIT_T_SUPPORT = False
 
 try:
-    import xxhash
-    HAS_XXH128 = hasattr(xxhash, "xxh128")
-except ImportError:
-    HAS_XXH128 = False
-
-try:
     from napari.utils import progress as tqdm
 except ImportError:
     from tqdm import tqdm
-
 
 # this is the default model used in micro_sam
 # currently set to the default vit_h
@@ -93,28 +89,12 @@ def models():
     are respected.
     """
 
-    # Provide hashes in both xxh128 (fast, but not cryptographically secure),
-    # and as sha256 (as a fallback) to validate if the file has been correctly
-    # downloaded.
+    # We use xxhash to compute the hash of the models, see
     # https://github.com/computational-cell-analytics/micro-sam/issues/283
-    # To generate the xxh128 hash
-    #
+    # (It is now a dependency, so we don't provide the sha256 fallback anymore.)
+    # To generate the xxh128 hash:
     #     xxh128sum filename
-    #
-    # You may need to install xxhash with conda or your system package manager.
-    registry_sha256 = {
-        # the default segment anything models
-        "vit_h": "sha256:a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e",
-        "vit_l": "sha256:3adcc4315b642a4d2101128f611684e8734c41232a17c648ed1693702a49a622",
-        "vit_b": "sha256:ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
-        # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
-        "vit_t": "sha256:6dbb90523a35330fedd7f1d3dfc66f995213d81b29a5ca8108dbcdd4e37d6c2f",
-        # first version of finetuned models on zenodo
-        "vit_b_lm": "sha256:e8f5feb1ad837a7507935409c7f83f7c8af11c6e39cfe3df03f8d3bd4a358449",
-        "vit_b_em_organelles": "sha256:8fabbe38a427a0c91bbe6518a5c0f103f36b73e6ee6c86fbacd32b4fc66294b4",
-        "vit_b_em_boundaries": "sha256:d87348b2adef30ab427fb787d458643300eb30624a0e808bf36af21764705f4f",
-    }
-    registry_xxh128 = {
+    registry = {
         # the default segment anything models
         "vit_h": "xxh128:97698fac30bd929c2e6d8d8cc15933c2",
         "vit_l": "xxh128:a82beb3c660661e3dd38d999cc860e9a",
@@ -130,7 +110,7 @@ def models():
     models = pooch.create(
         path=os.path.join(microsam_cachedir(), "models"),
         base_url="",
-        registry=registry_xxh128 if HAS_XXH128 else registry_sha256,
+        registry=registry,
         # Now specify custom URLs for some of the files in the registry.
         urls={
             # the default segment anything models
@@ -222,6 +202,17 @@ class _CustomUnpickler(pickle.Unpickler):
             return None
 
 
+def _compute_hash(path, chunk_size=8192):
+    hash_obj = xxhash.xxh128()
+    with open(path, "rb") as f:
+        chunk = f.read(chunk_size)
+        while chunk:
+            hash_obj.update(chunk)
+            chunk = f.read(chunk_size)
+    hash_val = hash_obj.hexdigest()
+    return f"xxh128:{hash_val}"
+
+
 def get_sam_model(
     model_type: str = _DEFAULT_MODEL,
     device: Optional[Union[str, torch.device]] = None,
@@ -275,6 +266,7 @@ def get_sam_model(
     if checkpoint_path is None:
         model_registry = models()
         checkpoint_path = model_registry.fetch(model_type)
+        model_hash = model_registry.registry[model_type]
     # checkpoint_path has been passed, we use it instead of downloading a model.
     else:
         # Check if the file exists and raise an error otherwise.
@@ -282,6 +274,7 @@ def get_sam_model(
         # (If it isn't the model creation will fail below.)
         if not os.path.exists(checkpoint_path):
             raise ValueError(f"Checkpoint at {checkpoint_path} could not be found.")
+        model_hash = _compute_hash(checkpoint_path)
 
     # Our fine-tuned model types have a suffix "_...". This suffix needs to be stripped
     # before calling sam_model_registry.
@@ -316,6 +309,7 @@ def get_sam_model(
     sam.to(device=device)
     predictor = SamPredictor(sam)
     predictor.model_type = abbreviated_model_type
+    predictor._hash = model_hash
 
     if return_sam and return_state:
         return predictor, sam, state
@@ -358,7 +352,7 @@ def get_model_names() -> Iterable:
 
 
 #
-# Functionality for precomputing embeddings and other state
+# Functionality for precomputing image embeddings.
 #
 
 
@@ -382,9 +376,6 @@ def _to_image(input_):
 def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update):
     tiling = blocking([0, 0], input_.shape[:2], tile_shape)
     n_tiles = tiling.numberOfBlocks
-
-    f.attrs["input_size"] = None
-    f.attrs["original_size"] = None
 
     features = f.require_group("features")
     features.attrs["shape"] = input_.shape[:2]
@@ -410,6 +401,9 @@ def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init
         ds.attrs["input_size"] = input_size
         pbar_update(1)
 
+    _write_embedding_signature(
+        f, input_, predictor, tile_shape, halo, input_size=None, original_size=None,
+    )
     return features
 
 
@@ -419,9 +413,6 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init
     shape = input_.shape[1:]
     tiling = blocking([0, 0], shape, tile_shape)
     n_tiles = tiling.numberOfBlocks
-
-    f.attrs["input_size"] = None
-    f.attrs["original_size"] = None
 
     features = f.require_group("features")
     features.attrs["shape"] = shape
@@ -458,13 +449,17 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init
         ds.attrs["original_size"] = original_size
         ds.attrs["input_size"] = input_size
 
+    _write_embedding_signature(
+        f, input_, predictor, tile_shape, halo, input_size=None, original_size=None,
+    )
+
     return features
 
 
 def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
     # Check if the embeddings are already cached.
     if save_path is not None and "input_size" in f.attrs:
-        # In this case we load the embeddings..
+        # In this case we load the embeddings.
         features = f["features"][:]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
         image_embeddings = {
@@ -488,8 +483,9 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
         f.create_dataset(
             "features", data=features, compression="gzip", chunks=features.shape
         )
-        f.attrs["input_size"] = input_size
-        f.attrs["original_size"] = original_size
+        _write_embedding_signature(
+            f, input_, predictor, tile_shape=None, halo=None, input_size=input_size, original_size=original_size,
+        )
 
     image_embeddings = {
         "features": features, "input_size": input_size, "original_size": original_size,
@@ -510,11 +506,7 @@ def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_up
     # Otherwise compute them. Note: saving happens automatically because we
     # always write the features to zarr. If no save path is given we use an in-memory zarr.
     features = _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update)
-    original_size, input_size = None, None
-
-    image_embeddings = {
-        "features": features, "input_size": input_size, "original_size": original_size,
-    }
+    image_embeddings = {"features": features, "input_size": None, "original_size": None}
     return image_embeddings
 
 
@@ -571,15 +563,14 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_u
         pbar_update(1)
 
     if save_features:
-        f.attrs["input_size"] = input_size
-        f.attrs["original_size"] = original_size
+        _write_embedding_signature(
+            f, input_, predictor, tile_shape=None, halo=None, input_size=input_size, original_size=original_size,
+        )
     else:
         # Concatenate across the z axis.
         features = torch.cat(features).cpu().numpy()
 
-    image_embeddings = {
-        "features": features, "input_size": input_size, "original_size": original_size,
-    }
+    image_embeddings = {"features": features, "input_size": input_size, "original_size": original_size}
     return image_embeddings
 
 
@@ -596,11 +587,7 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_up
     # Otherwise compute them. Note: saving happens automatically because we
     # always write the features to zarr. If no save path is given we use an in-memory zarr.
     features = _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update)
-    original_size, input_size = None, None
-
-    image_embeddings = {
-        "features": features, "input_size": input_size, "original_size": original_size,
-    }
+    image_embeddings = {"features": features, "input_size": None, "original_size": None}
     return image_embeddings
 
 
@@ -609,42 +596,55 @@ def _compute_data_signature(input_):
     return data_signature
 
 
-def _check_existing_embeddings(
-    input_,
-    predictor,
-    f,
-    save_path=None,
-    tile_shape=None,
-    halo=None,
-    wrong_file_callback=None,
-) -> zarr.Group:
-    data_signature = _compute_data_signature(input_)
-    key_vals = [
-        ("data_signature", data_signature),
-        ("tile_shape", tile_shape if tile_shape is None else list(tile_shape)),
-        ("halo", halo if halo is None else list(halo)),
-        ("model_type", predictor.model_type)
-    ]
-    if "input_size" in f.attrs:  # we have computed the embeddings already and perform checks
-        for key, val in key_vals:
-            if val is None:
-                continue
-            # check whether the key signature does not match or is not in the file
-            if key not in f.attrs or f.attrs[key] != val:
-                raise RuntimeError(
-                    f"Embeddings file {save_path} is invalid due to unmatching {key}: "
-                    f"{f.attrs.get(key)} != {val}.Please recompute embeddings in a new file."
+# Create all metadata that is stored along with the embeddings.
+def _get_embedding_signature(input_, predictor, tile_shape, halo, data_signature=None):
+    if data_signature is None:
+        data_signature = _compute_data_signature(input_)
+    signature = {
+        "data_signature": data_signature,
+        "tile_shape": tile_shape if tile_shape is None else list(tile_shape),
+        "halo": halo if halo is None else list(halo),
+        "model_type": predictor.model_type,
+        "micro_sam_version": __version__,
+        "model_hash": getattr(predictor, "_hash", None),
+    }
+    return signature
+
+
+# Note: the input size and orginal size are different if embeddings are tiled or not.
+# That's why we do not include them in the main signature that is being checked
+# (_get_embedding_signature), but just add it for serialization here.
+def _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size, original_size):
+    signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
+    signature.update({"input_size": input_size, "original_size": original_size})
+    for key, val in signature.items():
+        f.attrs[key] = val
+
+
+def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
+    # We may have an empty zarr file that was already created to save the embeddings in.
+    # In this case the embeddings will be computed and we don't need to perform any checks.
+    if "input_size" not in f.attrs:
+        return
+    signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
+    for key, val in signature.items():
+        # Check whether the key is missing from the attrs or if the value is not matching.
+        if key not in f.attrs or f.attrs[key] != val:
+            # These keys were recently added, so we don't want to fail yet if they don't
+            # match in order to not invalidate previous embedding files.
+            # Instead we just raise a warning. (For the version we probably also don't want to fail
+            # i the future since it should not invalidate the embeddings).
+            if key in ("micro_sam_version", "model_hash"):
+                warnings.warn(
+                    f"The signature for {key} in embeddings file {save_path} has a mismatch: "
+                    f"{f.attrs.get(key)} != {val}. This key was recently added, so your embeddings are likely correct. "
+                    "But please recompute them if model predictions don't look as expected."
                 )
-            if wrong_file_callback is not None:
-                save_path = wrong_file_callback(save_path)
-                f = zarr.open(save_path, "a")
-            break
-
-    for key, val in key_vals:
-        if key not in f.attrs:
-            f.attrs[key] = val
-
-    return f
+            else:
+                raise RuntimeError(
+                    f"Embeddings file {save_path} is invalid due to mismatch in {key}: "
+                    f"{f.attrs.get(key)} != {val}. Please recompute embeddings in a new file."
+                )
 
 
 # Helper function for optional external progress bars.
@@ -685,7 +685,6 @@ def precompute_image_embeddings(
     ndim: Optional[int] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
-    wrong_file_callback: Optional[Callable] = None,
     verbose: bool = True,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
@@ -704,10 +703,6 @@ def precompute_image_embeddings(
         ndim: The dimensionality of the data. If not given will be deduced from the input data.
         tile_shape: Shape of tiles for tiled prediction. By default prediction is run without tiling.
         halo: Overlap of the tiles for tiled prediction.
-        wrong_file_callback [callable]: Function to call when an embedding file with wrong file signature
-            is passed. If none is given a wrong file signature will cause a warning.
-            The callback ,ust have the signature 'def callback(save_path: str) -> str',
-            where the return value is the (potentially updated) embedding save path.
         verbose: Whether to be verbose in the computation.
         pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
             Can be used together with pbar_update to handle napari progress bar in other thread.
@@ -719,12 +714,21 @@ def precompute_image_embeddings(
     """
     ndim = input_.ndim if ndim is None else ndim
 
+    # Handle the embedding save_path.
+    # We don't have a save path, open in memory zarr file to hold tiled embeddings.
     if save_path is None:
         f = zarr.group()
-    else:
-        save_path = str(save_path)
+
+    # We have a save path and it already exists. Embeddings will be loaded from it,
+    # check that the saved embeddings in there match the parameters of the function call.
+    elif os.path.exists(save_path):
         f = zarr.open(save_path, "a")
-        f = _check_existing_embeddings(input_, predictor, f, save_path, tile_shape, halo, wrong_file_callback)
+        _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo)
+
+    # We have a save path and it does not exist yet. Create the zarr file to which the
+    # embeddings will then be saved.
+    else:
+        f = zarr.open(save_path, "a")
 
     _, pbar_init, pbar_update = handle_pbar(verbose, pbar_init, pbar_update)
 
