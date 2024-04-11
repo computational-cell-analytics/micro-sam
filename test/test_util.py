@@ -27,6 +27,7 @@ class TestUtil(unittest.TestCase):
         def check_predictor(predictor):
             self.assertTrue(isinstance(predictor, SamPredictor))
             self.assertEqual(predictor.model_type, self.model_type)
+            self.assertTrue(predictor._hash.startswith("xxh128"))
 
         # check predictor with download
         predictor = get_sam_model(model_type=self.model_type)
