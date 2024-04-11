@@ -21,7 +21,7 @@ jobs:
         conda install -y -c conda-forge constructor
         conda install -y -c conda-forge ruamel.yaml
         conda install -y -c conda-forge mamba
-        mamba env create --file=../environment_gpu.yaml
+        mamba env create --file=../environment_cpu.yaml
         conda activate sam
         cd ../
         pip install . --no-deps -v
