@@ -8,7 +8,7 @@ from pathlib import Path
 import pickle
 import warnings
 from collections import OrderedDict
-from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, Optional, Tuple, Union
 
 import imageio.v3 as imageio
 import numpy as np
@@ -358,7 +358,7 @@ def get_model_names() -> Iterable:
 
 
 #
-# Functionality for precomputing embeddings and other state
+# Functionality for precomputing image embeddings.
 #
 
 
@@ -382,9 +382,6 @@ def _to_image(input_):
 def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update):
     tiling = blocking([0, 0], input_.shape[:2], tile_shape)
     n_tiles = tiling.numberOfBlocks
-
-    f.attrs["input_size"] = None
-    f.attrs["original_size"] = None
 
     features = f.require_group("features")
     features.attrs["shape"] = input_.shape[:2]
@@ -419,9 +416,6 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init
     shape = input_.shape[1:]
     tiling = blocking([0, 0], shape, tile_shape)
     n_tiles = tiling.numberOfBlocks
-
-    f.attrs["input_size"] = None
-    f.attrs["original_size"] = None
 
     features = f.require_group("features")
     features.attrs["shape"] = shape
@@ -458,13 +452,17 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init
         ds.attrs["original_size"] = original_size
         ds.attrs["input_size"] = input_size
 
+    _write_embedding_signature(
+        f, input_, predictor, tile_shape, halo, input_size=None, original_size=None,
+    )
+
     return features
 
 
 def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
     # Check if the embeddings are already cached.
     if save_path is not None and "input_size" in f.attrs:
-        # In this case we load the embeddings..
+        # In this case we load the embeddings.
         features = f["features"][:]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
         image_embeddings = {
@@ -488,8 +486,9 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
         f.create_dataset(
             "features", data=features, compression="gzip", chunks=features.shape
         )
-        f.attrs["input_size"] = input_size
-        f.attrs["original_size"] = original_size
+        _write_embedding_signature(
+            f, input_, predictor, tile_shape=None, halo=None, input_size=input_size, original_size=original_size,
+        )
 
     image_embeddings = {
         "features": features, "input_size": input_size, "original_size": original_size,
@@ -510,11 +509,7 @@ def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_up
     # Otherwise compute them. Note: saving happens automatically because we
     # always write the features to zarr. If no save path is given we use an in-memory zarr.
     features = _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update)
-    original_size, input_size = None, None
-
-    image_embeddings = {
-        "features": features, "input_size": input_size, "original_size": original_size,
-    }
+    image_embeddings = {"features": features, "input_size": None, "original_size": None}
     return image_embeddings
 
 
@@ -571,15 +566,14 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_u
         pbar_update(1)
 
     if save_features:
-        f.attrs["input_size"] = input_size
-        f.attrs["original_size"] = original_size
+        _write_embedding_signature(
+            f, input_, predictor, tile_shape=None, halo=None, input_size=input_size, original_size=original_size,
+        )
     else:
         # Concatenate across the z axis.
         features = torch.cat(features).cpu().numpy()
 
-    image_embeddings = {
-        "features": features, "input_size": input_size, "original_size": original_size,
-    }
+    image_embeddings = {"features": features, "input_size": input_size, "original_size": original_size}
     return image_embeddings
 
 
@@ -596,11 +590,7 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_up
     # Otherwise compute them. Note: saving happens automatically because we
     # always write the features to zarr. If no save path is given we use an in-memory zarr.
     features = _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update)
-    original_size, input_size = None, None
-
-    image_embeddings = {
-        "features": features, "input_size": input_size, "original_size": original_size,
-    }
+    image_embeddings = {"features": features, "input_size": None, "original_size": None}
     return image_embeddings
 
 
@@ -609,42 +599,39 @@ def _compute_data_signature(input_):
     return data_signature
 
 
-def _check_existing_embeddings(
-    input_,
-    predictor,
-    f,
-    save_path=None,
-    tile_shape=None,
-    halo=None,
-    wrong_file_callback=None,
-) -> zarr.Group:
+# Create all metadata that is stored along with the embeddings.
+def _get_embedding_signature(input_, predictor, tile_shape, halo):
     data_signature = _compute_data_signature(input_)
-    key_vals = [
-        ("data_signature", data_signature),
-        ("tile_shape", tile_shape if tile_shape is None else list(tile_shape)),
-        ("halo", halo if halo is None else list(halo)),
-        ("model_type", predictor.model_type)
-    ]
-    if "input_size" in f.attrs:  # we have computed the embeddings already and perform checks
-        for key, val in key_vals:
-            if val is None:
-                continue
-            # check whether the key signature does not match or is not in the file
-            if key not in f.attrs or f.attrs[key] != val:
-                raise RuntimeError(
-                    f"Embeddings file {save_path} is invalid due to unmatching {key}: "
-                    f"{f.attrs.get(key)} != {val}.Please recompute embeddings in a new file."
-                )
-            if wrong_file_callback is not None:
-                save_path = wrong_file_callback(save_path)
-                f = zarr.open(save_path, "a")
-            break
+    # TODO add the micro sam version and the model hash
+    signature = {
+        "data_signature": data_signature,
+        "tile_shape": tile_shape if tile_shape is None else list(tile_shape),
+        "halo": halo if halo is None else list(halo),
+        "model_type": predictor.model_type,
+    }
+    return signature
 
-    for key, val in key_vals:
-        if key not in f.attrs:
-            f.attrs[key] = val
 
-    return f
+# Note: the input size and orginal size are different if embeddings are tiled or not.
+# That's why we do not include them in the main signature that is being checked
+# (_get_embedding_signature), but just add it for serialization here.
+def _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size, original_size):
+    signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
+    signature.update({"input_size": input_size, "original_size": original_size})
+    for key, val in signature.items():
+        f.attrs[key] = val
+
+
+def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
+    # TODO handle new keys
+    signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
+    for key, val in signature.items():
+        # Check whether the key is missing from the attrs or if the value is not matching.
+        if key not in f.attrs or f.attrs[key] != val:
+            raise RuntimeError(
+                f"Embeddings file {save_path} is invalid due to mismatch in {key}: "
+                f"{f.attrs.get(key)} != {val}. Please recompute embeddings in a new file."
+            )
 
 
 # Helper function for optional external progress bars.
@@ -685,7 +672,6 @@ def precompute_image_embeddings(
     ndim: Optional[int] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
-    wrong_file_callback: Optional[Callable] = None,
     verbose: bool = True,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
@@ -704,10 +690,6 @@ def precompute_image_embeddings(
         ndim: The dimensionality of the data. If not given will be deduced from the input data.
         tile_shape: Shape of tiles for tiled prediction. By default prediction is run without tiling.
         halo: Overlap of the tiles for tiled prediction.
-        wrong_file_callback [callable]: Function to call when an embedding file with wrong file signature
-            is passed. If none is given a wrong file signature will cause a warning.
-            The callback ,ust have the signature 'def callback(save_path: str) -> str',
-            where the return value is the (potentially updated) embedding save path.
         verbose: Whether to be verbose in the computation.
         pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
             Can be used together with pbar_update to handle napari progress bar in other thread.
@@ -719,12 +701,21 @@ def precompute_image_embeddings(
     """
     ndim = input_.ndim if ndim is None else ndim
 
+    # Handle the embedding save_path.
+    # We don't have a save path, open in memory zarr file to hold tiled embeddings.
     if save_path is None:
         f = zarr.group()
-    else:
-        save_path = str(save_path)
+
+    # We have a save path and it already exists. Embeddings will be loaded from it,
+    # check that the saved embeddings in there match the parameters of the function call.
+    elif os.path.exists(save_path):
         f = zarr.open(save_path, "a")
-        f = _check_existing_embeddings(input_, predictor, f, save_path, tile_shape, halo, wrong_file_callback)
+        _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo)
+
+    # We have a save path and it does not exist yet. Create the zarr file to which the
+    # embeddings will then be saved.
+    else:
+        f = zarr.open(save_path, "a")
 
     _, pbar_init, pbar_update = handle_pbar(verbose, pbar_init, pbar_update)
 

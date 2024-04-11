@@ -712,7 +712,7 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
 
 
 class EmbeddingWidget(_WidgetBase):
-    def __init__(self, skip_validate=False, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent=parent)
 
         # Create a nested layout for the sections.
@@ -727,7 +727,7 @@ class EmbeddingWidget(_WidgetBase):
 
         # Section 3: The button to trigger the embedding computation.
         self.run_button = QtWidgets.QPushButton("Compute Embeddings")
-        self.run_button.clicked.connect(lambda: self.__call__(skip_validate))
+        self.run_button.clicked.connect(self.__call__)
         self.layout().addWidget(self.run_button)
 
     def _create_image_section(self):
