@@ -1,6 +1,6 @@
 name: sam
 channels:
-#    - pytorch
+    - pytorch
     - conda-forge
 dependencies:
     - cpuonly
