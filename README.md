@@ -7,7 +7,7 @@
 
 **Attention: We are currently updating our software to a new release that will improve it and introduce new features. The documentation is not up-to-date with these changes yet, we will update it as soon as possible!**
 
-Tools for segmentation and tracking in microscopy build on top of [SegmentAnything](https://segment-anything.com/).
+Tools for segmentation and tracking in microscopy build on top of [Segment Anything](https://segment-anything.com/).
 Segment and track objects in microscopy images interactively with a few clicks!
 
 We implement napari applications for:
