@@ -597,7 +597,7 @@ def _compute_data_signature(input_):
 
 
 # Create all metadata that is stored along with the embeddings.
-def _get_embedding_signature(input_, predictor, tile_shape, halo, data_signature):
+def _get_embedding_signature(input_, predictor, tile_shape, halo, data_signature=None):
     if data_signature is None:
         data_signature = _compute_data_signature(input_)
     signature = {
