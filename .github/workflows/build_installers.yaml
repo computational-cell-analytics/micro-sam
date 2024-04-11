@@ -23,7 +23,7 @@ jobs:
         mamba install -y -c conda-forge mamba
         mamba install -y -c conda-forge conda-build
         mamba install -y -c conda-forge boa
-        boa build recipe
+        conda build recipe
         mamba create -n sam ./output/micro_sam-0.4.1.tar.gz
       RUN_SCRIPT: |
         python version_getter.py
