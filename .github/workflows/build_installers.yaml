@@ -22,15 +22,9 @@ jobs:
         mamba install -y -c conda-forge ruamel.yaml
         mamba install -y -c conda-forge mamba
         mamba install -y -c conda-forge conda-build
-        mamba build recipe
-        # Now we need to create an environment from the package we just built
+        mamba install -y -c conda-forge boa
+        boa build recipe
         mamba create -n sam ./output/micro_sam-0.4.1.tar.gz
-        # mamba env create --file=../environment_cpu.yaml
-        # conda activate sam
-        # cd ../
-        # pip install . --no-deps -v
-        # cd deployment
-        # conda activate base
       RUN_SCRIPT: |
         python version_getter.py
         mkdir ./${{ matrix.os }}_x86_64
