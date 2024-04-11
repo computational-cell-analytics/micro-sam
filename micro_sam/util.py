@@ -407,6 +407,9 @@ def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init
         ds.attrs["input_size"] = input_size
         pbar_update(1)
 
+    _write_embedding_signature(
+        f, input_, predictor, tile_shape, halo, input_size=None, original_size=None,
+    )
     return features
 
 
@@ -623,6 +626,10 @@ def _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_siz
 
 
 def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
+    # We may have an empty zarr file that was already created to save the embeddings in.
+    # In this case the embeddings will be computed and we don't need to perform any checks.
+    if "input_size" not in f.attrs:
+        return
     # TODO handle new keys
     signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
     for key, val in signature.items():
