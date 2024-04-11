@@ -1,8 +1,8 @@
-name: micro_sam
-version: 0.1.0
+name: test_micro_sam
+version: 0.4.0
 license_file: ../LICENSE
 installer_type: pkg  #[osx]  # This will trigger pkg build on Mac Os. On windows and linux, native build will be done and this has no effect.
-environment: sam
+environment: test_micro_sam
 welcome_image: ../doc/images/micro-sam-logo.png
 header_image: ../doc/images/micro-sam-logo.png
 icon_image: ../doc/images/micro-sam-logo.png
@@ -11,3 +11,4 @@ channels:
 welcome_text: Install Segment Anything for Microscopy.
 conclusion_text: Segment Anything for Microscopy has been installed.
 initialize_by_default: false
+post_install: post-install.sh

@@ -1,4 +1,4 @@
-name: sam
+name: test_micro_sam
 channels:
     - pytorch
     - conda-forge
