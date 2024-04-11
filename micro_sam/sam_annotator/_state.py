@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch.nn as nn
+import zarr
 
 import micro_sam.util as util
 from micro_sam.instance_segmentation import AMGBase, get_decoder
@@ -111,7 +112,14 @@ class AnnotatorState(metaclass=Singleton):
             pbar_update=pbar_update,
         )
         self.embedding_path = save_path
-        self.data_signature = util._compute_data_signature(image_data)
+        # If we have an embedding path the data signature has already been computed,
+        # and we can read it from there.
+        if save_path is not None:
+            with zarr.open(save_path, "r") as f:
+                self.data_signature = f.attrs["data_signature"]
+        # Otherwise we compute it here.
+        else:
+            self.data_signature = util._compute_data_signature(image_data)
 
         # Precompute the amg state (if specified).
         if precompute_amg_state:
