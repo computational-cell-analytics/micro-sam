@@ -262,7 +262,7 @@ def image_folder_annotator(
     )
 
 
-class ImageFolderAnnotator(widgets._WidgetBase):
+class ImageSeriesAnnotator(widgets._WidgetBase):
     def __init__(self, viewer: napari.Viewer, parent=None):
         super().__init__(parent=parent)
         self._viewer = viewer
