@@ -102,13 +102,13 @@ def models():
         # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
         "vit_t": "xxh128:8eadbc88aeb9d8c7e0b4b60c3db48bd0",
         # the current version of our models on zenodo
-        "vit_t_lm": "TODO",
+        "vit_t_lm": "xxh128:f90e2ba3dd3d5b935aa870cf2e48f689",
         # TODO more to come
         # "vit_b_em_organelles": "xxh128:3919c2b761beba7d3f4ece342c9f5369",
         # "vit_b_em_boundaries": "xxh128:3099fe6339f5be91ca84db889db1909f",
     }
     decoder_registry = {
-        "vit_t_lm": "TODO",
+        "vit_t_lm": "xxh128:82d3604e64f289bb66ec46a5643da169",
     }
     registry = {**encoder_registry, **decoder_registry}
 
@@ -120,13 +120,13 @@ def models():
         # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
         "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
         # the current version of our models on zenodo
-        "vit_t_lm": "TODO",
+        "vit_t_lm": "https://sandbox.zenodo.org/records/45542/files/vit_t.pt?download=1",
         # TODO more to come
         # "vit_b_em_organelles": "https://zenodo.org/records/10524828/files/vit_b_em_organelles.pth?download=1",
         # "vit_b_em_boundaries": "https://zenodo.org/records/10524894/files/vit_b_em_boundaries.pth?download=1",
     }
     decoder_urls = {
-        "vit_t_lm": "TODO"
+        "vit_t_lm": "https://sandbox.zenodo.org/records/45542/files/vit_t_decoder.pt?download=1"
     }
     urls = {**encoder_urls, **decoder_urls}
 
