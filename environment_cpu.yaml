@@ -1,4 +1,4 @@
-name: micro_sam_env
+name: sam
 channels:
     - pytorch
     - conda-forge
@@ -18,6 +18,5 @@ dependencies:
     - torch_em >=0.6.0
     - tqdm
     - timm
-    - micro_sam
     - pip:
         - git+https://github.com/ChaoningZhang/MobileSAM.git
