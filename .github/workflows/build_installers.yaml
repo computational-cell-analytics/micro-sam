@@ -1,9 +1,7 @@
 name: build_installers
 
 on:
-  push:
-    tags:
-      - '**'
+  workflow_dispatch:
 
 jobs:
   build_intaller:
@@ -20,13 +18,8 @@ jobs:
         cd deployment
         mamba install -y -c conda-forge constructor
         mamba install -y -c conda-forge ruamel.yaml
-        # TODO: create the correct env from environment_cpu.yaml
-        # mamba create -n test_micro_sam --file=environment_cpu.yaml
-        # We hopefully dont need this anymore
-        # mamba install -y -c conda-forge conda-build
-        # mamba install -y -c conda-forge boa
-        # conda build recipe
-        # mamba create -n sam ./output/micro_sam-0.4.1.tar.gz
+
+        mamba env create --file=../environment_cpu.yaml
         
       RUN_SCRIPT: |
         python version_getter.py
@@ -39,7 +32,7 @@ jobs:
         with:
           ref: ${{ github.ref }}
 
-      # chnage this to set-up with mamba 
+      # change this to set-up with mamba 
       - name: setup conda
         if: matrix.os == 'windows-latest' || matrix.os == 'ubuntu-latest'
         uses: conda-incubator/setup-miniconda@v2
