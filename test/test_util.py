@@ -29,13 +29,18 @@ class TestUtil(unittest.TestCase):
             self.assertEqual(predictor.model_type, self.model_type)
             self.assertTrue(predictor._hash.startswith("xxh128"))
 
-        # check predictor with download
+        # Check predictor with download.
         predictor = get_sam_model(model_type=self.model_type)
         check_predictor(predictor)
 
-        # check predictor with checkpoint path (using the cached model)
+        # Check predictor with checkpoint path (using the cached model).
         checkpoint_path = os.path.join(get_cache_directory(), "models", self.model_type)
         predictor = get_sam_model(model_type=self.model_type, checkpoint_path=checkpoint_path)
+        check_predictor(predictor)
+
+        # Check predictor for one of our models.
+        model_type = self.model_type + "_lm"
+        predictor = get_sam_model(model_type=model_type)
         check_predictor(predictor)
 
     def test_compute_iou(self):

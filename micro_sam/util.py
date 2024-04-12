@@ -94,36 +94,47 @@ def models():
     # (It is now a dependency, so we don't provide the sha256 fallback anymore.)
     # To generate the xxh128 hash:
     #     xxh128sum filename
-    registry = {
+    encoder_registry = {
         # the default segment anything models
         "vit_h": "xxh128:97698fac30bd929c2e6d8d8cc15933c2",
         "vit_l": "xxh128:a82beb3c660661e3dd38d999cc860e9a",
         "vit_b": "xxh128:6923c33df3637b6a922d7682bfc9a86b",
         # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
         "vit_t": "xxh128:8eadbc88aeb9d8c7e0b4b60c3db48bd0",
-        # first version of finetuned models on zenodo
-        "vit_b_lm": "xxh128:6b061eb8684d9d5f55545330d6dce50d",
-        "vit_b_em_organelles": "xxh128:3919c2b761beba7d3f4ece342c9f5369",
-        "vit_b_em_boundaries": "xxh128:3099fe6339f5be91ca84db889db1909f",
+        # the current version of our models on zenodo
+        "vit_t_lm": "xxh128:f90e2ba3dd3d5b935aa870cf2e48f689",
+        # TODO more to come
+        # "vit_b_em_organelles": "xxh128:3919c2b761beba7d3f4ece342c9f5369",
+        # "vit_b_em_boundaries": "xxh128:3099fe6339f5be91ca84db889db1909f",
     }
+    decoder_registry = {
+        "vit_t_lm_decoder": "xxh128:82d3604e64f289bb66ec46a5643da169",
+    }
+    registry = {**encoder_registry, **decoder_registry}
+
+    encoder_urls = {
+        # the default segment anything models
+        "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
+        "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
+        "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
+        # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
+        "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
+        # the current version of our models on zenodo
+        "vit_t_lm": "https://sandbox.zenodo.org/records/45542/files/vit_t.pt?download=1",
+        # TODO more to come
+        # "vit_b_em_organelles": "https://zenodo.org/records/10524828/files/vit_b_em_organelles.pth?download=1",
+        # "vit_b_em_boundaries": "https://zenodo.org/records/10524894/files/vit_b_em_boundaries.pth?download=1",
+    }
+    decoder_urls = {
+        "vit_t_lm_decoder": "https://sandbox.zenodo.org/records/45542/files/vit_t_decoder.pt?download=1"
+    }
+    urls = {**encoder_urls, **decoder_urls}
 
     models = pooch.create(
         path=os.path.join(microsam_cachedir(), "models"),
         base_url="",
         registry=registry,
-        # Now specify custom URLs for some of the files in the registry.
-        urls={
-            # the default segment anything models
-            "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
-            "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
-            "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
-            # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
-            "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
-            # first version of finetuned models on zenodo
-            "vit_b_lm": "https://zenodo.org/records/10524791/files/vit_b_lm.pth?download=1",
-            "vit_b_em_organelles": "https://zenodo.org/records/10524828/files/vit_b_em_organelles.pth?download=1",
-            "vit_b_em_boundaries": "https://zenodo.org/records/10524894/files/vit_b_em_boundaries.pth?download=1",
-        },
+        urls=urls,
     )
     return models
 
@@ -213,6 +224,29 @@ def _compute_hash(path, chunk_size=8192):
     return f"xxh128:{hash_val}"
 
 
+# Load the state from a checkpoint.
+# The checkpoint can either contain a sam encoder state
+# or it can be a checkpoint for model finetuning.
+def _load_checkpoint(checkpoint_path):
+    # Over-ride the unpickler with our custom one.
+    # This enables imports from torch_em checkpoints even if it cannot be fully unpickled.
+    custom_pickle = pickle
+    custom_pickle.Unpickler = _CustomUnpickler
+
+    state = torch.load(checkpoint_path, map_location="cpu", pickle_module=custom_pickle)
+    if "model_state" in state:
+        # Copy the model weights from torch_em's training format.
+        model_state = state["model_state"]
+        sam_prefix = "sam."
+        model_state = OrderedDict(
+            [(k[len(sam_prefix):] if k.startswith(sam_prefix) else k, v) for k, v in model_state.items()]
+        )
+    else:
+        model_state = state
+
+    return state, model_state
+
+
 def get_sam_model(
     model_type: str = _DEFAULT_MODEL,
     device: Optional[Union[str, torch.device]] = None,
@@ -267,6 +301,12 @@ def get_sam_model(
         model_registry = models()
         checkpoint_path = model_registry.fetch(model_type)
         model_hash = model_registry.registry[model_type]
+
+        # If we have a custom model then we may also have a decoder checkpoint.
+        # Download it here, so that we can add it to the state.
+        decoder_name = f"{model_type}_decoder"
+        decoder_path = model_registry.fetch(decoder_name) if decoder_name in model_registry.registry else None
+
     # checkpoint_path has been passed, we use it instead of downloading a model.
     else:
         # Check if the file exists and raise an error otherwise.
@@ -275,6 +315,7 @@ def get_sam_model(
         if not os.path.exists(checkpoint_path):
             raise ValueError(f"Checkpoint at {checkpoint_path} could not be found.")
         model_hash = _compute_hash(checkpoint_path)
+        decoder_path = None
 
     # Our fine-tuned model types have a suffix "_...". This suffix needs to be stripped
     # before calling sam_model_registry.
@@ -287,29 +328,18 @@ def get_sam_model(
             "You can install it via 'pip install git+https://github.com/ChaoningZhang/MobileSAM.git'"
         )
 
-    # Over-ride the unpickler with our custom one.
-    # This enables imports from torch_em checkpoints even if it cannot be fully unpickled.
-    custom_pickle = pickle
-    custom_pickle.Unpickler = _CustomUnpickler
-
-    state = torch.load(checkpoint_path, map_location="cpu", pickle_module=custom_pickle)
-    if "model_state" in state:
-        # Copy the model weights from torch_em's training format.
-        model_state = state["model_state"]
-        sam_prefix = "sam."
-        model_state = OrderedDict(
-            [(k[len(sam_prefix):] if k.startswith(sam_prefix) else k, v) for k, v in model_state.items()]
-        )
-    else:
-        model_state = state
-
+    state, model_state = _load_checkpoint(checkpoint_path)
     sam = sam_model_registry[abbreviated_model_type]()
     sam.load_state_dict(model_state)
-
     sam.to(device=device)
+
     predictor = SamPredictor(sam)
     predictor.model_type = abbreviated_model_type
     predictor._hash = model_hash
+
+    # Add the decoder to the state if we have one and if the state is returned.
+    if decoder_path is not None and return_state:
+        state["decoder_state"] = torch.load(decoder_path, map_location=device)
 
     if return_sam and return_state:
         return predictor, sam, state
