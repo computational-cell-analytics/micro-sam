@@ -22,7 +22,7 @@
   <path fill-rule="evenodd" d="M4.146 8.354a.5.5 0 0 1 0-.708l3-3a.5.5 0 1 1 .708.708L5.707 7.5H14.5a.5.5 0 0 1 0 1H5.707l2.147 2.146a.5.5 0 0 1-.708.708l-3-3z"/>
 </svg>                &nbsp;micro_sam</a>
 
-            <img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/micro-sam-logo.png" class="logo" alt="project logo"/>
+            <img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/logo/logo_and_text.jpg" class="logo" alt="project logo"/>
 
             <input type="search" placeholder="Search..." role="searchbox" aria-label="search"
                    pattern=".+" required>
@@ -910,7 +910,7 @@
 </span><span id="L-812"><a href="#L-812"><span class="linenos">812</span></a>        <span class="n">n_ids</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">segmentation</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>
 </span><span id="L-813"><a href="#L-813"><span class="linenos">813</span></a>
 </span><span id="L-814"><a href="#L-814"><span class="linenos">814</span></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="L-815"><a href="#L-815"><span class="linenos">815</span></a>        <span class="k">assert</span> <span class="n">segmentation_ids</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">0</span>
+</span><span id="L-815"><a href="#L-815"><span class="linenos">815</span></a>        <span class="k">assert</span> <span class="n">segmentation_ids</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;No objects were found.&quot;</span>
 </span><span id="L-816"><a href="#L-816"><span class="linenos">816</span></a>
 </span><span id="L-817"><a href="#L-817"><span class="linenos">817</span></a>        <span class="c1"># the segmentation ids have to be sorted</span>
 </span><span id="L-818"><a href="#L-818"><span class="linenos">818</span></a>        <span class="n">segmentation_ids</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">segmentation_ids</span><span class="p">)</span>
@@ -1814,7 +1814,7 @@ or a time dimension and two spatial dimensions.</li>
 </span><span id="segmentation_to_one_hot-813"><a href="#segmentation_to_one_hot-813"><span class="linenos">813</span></a>        <span class="n">n_ids</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">segmentation</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>
 </span><span id="segmentation_to_one_hot-814"><a href="#segmentation_to_one_hot-814"><span class="linenos">814</span></a>
 </span><span id="segmentation_to_one_hot-815"><a href="#segmentation_to_one_hot-815"><span class="linenos">815</span></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="segmentation_to_one_hot-816"><a href="#segmentation_to_one_hot-816"><span class="linenos">816</span></a>        <span class="k">assert</span> <span class="n">segmentation_ids</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">0</span>
+</span><span id="segmentation_to_one_hot-816"><a href="#segmentation_to_one_hot-816"><span class="linenos">816</span></a>        <span class="k">assert</span> <span class="n">segmentation_ids</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;No objects were found.&quot;</span>
 </span><span id="segmentation_to_one_hot-817"><a href="#segmentation_to_one_hot-817"><span class="linenos">817</span></a>
 </span><span id="segmentation_to_one_hot-818"><a href="#segmentation_to_one_hot-818"><span class="linenos">818</span></a>        <span class="c1"># the segmentation ids have to be sorted</span>
 </span><span id="segmentation_to_one_hot-819"><a href="#segmentation_to_one_hot-819"><span class="linenos">819</span></a>        <span class="n">segmentation_ids</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">segmentation_ids</span><span class="p">)</span>

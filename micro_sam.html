@@ -17,7 +17,7 @@
         <label id="navtoggle" for="togglestate" class="pdoc-button"><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'><path stroke-linecap='round' stroke="currentColor" stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/></svg></label>
         <input id="togglestate" type="checkbox" aria-hidden="true" tabindex="-1">
         <div>
-            <img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/micro-sam-logo.png" class="logo" alt="project logo"/>
+            <img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/logo/logo_and_text.jpg" class="logo" alt="project logo"/>
 
             <input type="search" placeholder="Search..." role="searchbox" aria-label="search"
                    pattern=".+" required>
@@ -171,36 +171,28 @@ For now, check out <a href="https://github.com/computational-cell-analytics/micr
 
 <h1 id="installation">Installation</h1>
 
-<p>We provide three different ways of installing <code><a href="">micro_sam</a></code>:</p>
+<p>There are three ways to install <code><a href="">micro_sam</a></code>:</p>
 
 <ul>
 <li><a href="#from-mamba">From mamba</a> is the recommended way if you want to use all functionality.</li>
 <li><a href="#from-source">From source</a> for setting up a development environment to use the latest version and be able to change and contribute to our software.</li>
-<li><a href="#from-installer">From installer</a> to install without having to use conda. This mode of installation is still experimental! It only provides the annotation tools and does not enable model finetuning.</li>
-</ul>
-
-<p>Our software requires the following dependencies:</p>
-
-<ul>
-<li><a href="https://pytorch.org/get-started/locally/">PyTorch</a></li>
-<li><a href="https://github.com/facebookresearch/segment-anything#installation">SegmentAnything</a></li>
-<li><a href="https://github.com/constantinpape/elf">elf</a></li>
-<li><a href="https://github.com/constantinpape/torch-em">torch_em</a></li>
-<li><a href="https://napari.org/stable/">napari</a> (for the interactive annotation tools)</li>
+<li><a href="#from-installer">From installer</a> to install without having to use conda (supported platforms: Windows and Linux, only for CPU users). </li>
 </ul>
 
 <h2 id="from-mamba">From mamba</h2>
 
-<p><a href="https://mamba.readthedocs.io/en/latest/">mamba</a> is a drop-in replacement for conda, but is much faster than it.
+<p><a href="https://mamba.readthedocs.io/en/latest/">mamba</a> is a drop-in replacement for conda, but much faster.
 While the steps below may also work with <code>conda</code>, we highly recommend using <code>mamba</code>.
-You can follow the instrutions <a href="https://mamba.readthedocs.io/en/latest/installation/mamba-installation.html">here</a> to install <code>mamba</code>.</p>
+You can follow the instructions <a href="https://mamba.readthedocs.io/en/latest/installation/mamba-installation.html">here</a> to install <code>mamba</code>.</p>
 
-<p><code><a href="">micro_sam</a></code> can then be installed in an existing environment via</p>
+<p><strong>IMPORTANT</strong>: Make sure to avoid installing anything in the base environment.</p>
+
+<p><code><a href="">micro_sam</a></code> can be installed in an existing environment via:</p>
 
 <pre><code>$ mamba install -c conda-forge micro_sam
 </code></pre>
 
-<p>or you can create a new environment (here called <code>micro-sam</code>) via</p>
+<p>or you should create a new environment (here called <code>micro-sam</code>) via:</p>
 
 <pre><code>$ mamba create -c conda-forge -n micro-sam micro_sam
 </code></pre>
@@ -296,7 +288,7 @@ You can follow the instrutions <a href="https://mamba.readthedocs.io/en/latest/i
 --></li>
 </ul>
 
-<p><strong>The installers are stil experimental and not fully tested.</strong> Mac is not supported yet, but we are working on also providing an installer for it.</p>
+<p><strong>The installers are still experimental and not fully tested.</strong> Mac is not supported yet, but we are working on also providing an installer for it.</p>
 
 <p>If you encounter problems with them then please consider installing <code><a href="">micro_sam</a></code> via <a href="#from-mamba">mamba</a> instead.</p>
 
@@ -753,7 +745,7 @@ git checkout -b my-new-feature
 </ul></li>
 <li>By adding or editing markdown files in the micro-sam <code>doc</code> directory.
 <ul>
-<li>If you add a new narkdown file to the documentation, you must tell <a href="https://pdoc.dev/docs/pdoc.html">pdoc</a> that it exists by adding a line to the <code>micro_sam/__init__.py</code> module docstring (eg: <code>.. include:: ../doc/my_amazing_new_docs_page.md</code>). Otherwise it will not be included in the final documenation build!</li>
+<li>If you add a new markdown file to the documentation, you must tell <a href="https://pdoc.dev/docs/pdoc.html">pdoc</a> that it exists by adding a line to the <code>micro_sam/__init__.py</code> module docstring (eg: <code>.. include:: ../doc/my_amazing_new_docs_page.md</code>). Otherwise it will not be included in the final documentation build!</li>
 </ul></li>
 </ol>
 
