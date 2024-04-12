@@ -769,7 +769,11 @@ class EmbeddingWidget(_WidgetBase):
 
     def _create_model_section(self):
         self.model_type = util._DEFAULT_MODEL
+
         self.model_options = list(util.models().urls.keys())
+        # Filter out the decoders from the model list.
+        self.model_options = [model for model in self.model_options if not model.endswith("decoder")]
+
         layout = QtWidgets.QVBoxLayout()
         self.model_dropdown, layout = self._add_choice_param(
             "model_type", self.model_type, self.model_options, title="Model:",
@@ -789,14 +793,14 @@ class EmbeddingWidget(_WidgetBase):
 
         # Create UI for the save path.
         self.embeddings_save_path = None
-        _, layout = self._add_path_param(
+        self.embeddings_save_path_param, layout = self._add_path_param(
             "embeddings_save_path", self.embeddings_save_path, "directory", title="embeddings save path:"
         )
         setting_values.layout().addLayout(layout)
 
         # Create UI for the custom weights.
-        self.custom_weights = None  # select_file
-        _, layout = self._add_path_param(
+        self.custom_weights = None
+        self.custom_weights_param, layout = self._add_path_param(
             "custom_weights", self.custom_weights, "file", title="custom weights path:"
         )
         setting_values.layout().addLayout(layout)
@@ -1238,7 +1242,7 @@ class AutoSegmentWidget(_WidgetBase):
     def _add_common_settings(self, settings):
         # Create the UI element for min object size.
         self.min_object_size = 100
-        self.min_obbject_size_param, layout = self._add_int_param(
+        self.min_object_size_param, layout = self._add_int_param(
             "min_object_size", self.min_object_size, min_val=0, max_val=int(1e4)
         )
         settings.layout().addLayout(layout)
