@@ -213,6 +213,29 @@ def _compute_hash(path, chunk_size=8192):
     return f"xxh128:{hash_val}"
 
 
+# Load the state from a checkpoint.
+# The checkpoint can either contain a sam encoder state
+# or it can be a checkpoint for model finetuning.
+def _load_checkpoint(checkpoint_path):
+    # Over-ride the unpickler with our custom one.
+    # This enables imports from torch_em checkpoints even if it cannot be fully unpickled.
+    custom_pickle = pickle
+    custom_pickle.Unpickler = _CustomUnpickler
+
+    state = torch.load(checkpoint_path, map_location="cpu", pickle_module=custom_pickle)
+    if "model_state" in state:
+        # Copy the model weights from torch_em's training format.
+        model_state = state["model_state"]
+        sam_prefix = "sam."
+        model_state = OrderedDict(
+            [(k[len(sam_prefix):] if k.startswith(sam_prefix) else k, v) for k, v in model_state.items()]
+        )
+    else:
+        model_state = state
+
+    return state, model_state
+
+
 def get_sam_model(
     model_type: str = _DEFAULT_MODEL,
     device: Optional[Union[str, torch.device]] = None,
@@ -287,22 +310,7 @@ def get_sam_model(
             "You can install it via 'pip install git+https://github.com/ChaoningZhang/MobileSAM.git'"
         )
 
-    # Over-ride the unpickler with our custom one.
-    # This enables imports from torch_em checkpoints even if it cannot be fully unpickled.
-    custom_pickle = pickle
-    custom_pickle.Unpickler = _CustomUnpickler
-
-    state = torch.load(checkpoint_path, map_location="cpu", pickle_module=custom_pickle)
-    if "model_state" in state:
-        # Copy the model weights from torch_em's training format.
-        model_state = state["model_state"]
-        sam_prefix = "sam."
-        model_state = OrderedDict(
-            [(k[len(sam_prefix):] if k.startswith(sam_prefix) else k, v) for k, v in model_state.items()]
-        )
-    else:
-        model_state = state
-
+    state, model_state = _load_checkpoint(checkpoint_path)
     sam = sam_model_registry[abbreviated_model_type]()
     sam.load_state_dict(model_state)
 

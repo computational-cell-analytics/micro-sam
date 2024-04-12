@@ -128,11 +128,34 @@ def _write_documentation(doc_path, doc):
     return doc_path
 
 
-def _get_checkpoint(model_type, checkpoint_path):
+def _get_checkpoint(model_type, checkpoint_path, tmp_dir):
+    # If we don't have a checkpoint we get the corresponding model from the registry.
     if checkpoint_path is None:
         model_registry = util.models()
         checkpoint_path = model_registry.fetch(model_type)
-    return checkpoint_path
+        return checkpoint_path, None
+
+    # Otherwise we have to load the checkpoint to see if it is the state dict of an encoder,
+    # or the checkpoint for a custom SAM model.
+    state, model_state = util._load_checkpoint(checkpoint_path)
+
+    if "model_state" in state:  # This is a finetuning checkpoint -> we have to resave the state.
+        new_checkpoint_path = os.path.join(tmp_dir, f"{model_type}.pt")
+        torch.save(model_state, new_checkpoint_path)
+
+        # We may also have an instance segmentation decoder in that case.
+        # If we have it we also resave this one and return it.
+        if "decoder_state" in state:
+            decoder_path = os.path.join(tmp_dir, f"{model_type}_decoder.pt")
+            decoder_state = state["decoder_state"]
+            torch.save(decoder_state, decoder_path)
+        else:
+            decoder_path = None
+
+        return new_checkpoint_path, decoder_path
+
+    else:  # This is a SAM encoder state -> we don't have to resave.
+        return checkpoint_path, None
 
 
 def _write_dependencies(dependency_file, require_mobile_sam):
@@ -265,7 +288,7 @@ def export_sam_model(
         checkpoint_path: Optional checkpoint for loading the SAM model.
     """
     with tempfile.TemporaryDirectory() as tmp_dir:
-        checkpoint_path = _get_checkpoint(model_type, checkpoint_path=checkpoint_path)
+        checkpoint_path, decoder_path = _get_checkpoint(model_type, checkpoint_path, tmp_dir)
         input_paths, result_paths = _create_test_inputs_and_outputs(
             image, label_image, model_type, checkpoint_path, tmp_dir,
         )
@@ -460,6 +483,11 @@ def export_sam_model(
 
         covers = _generate_covers(input_paths, result_paths, tmp_dir)
 
+        if decoder_path is None:
+            attachments = None
+        else:
+            attachments = [spec.FileDescr(source=decoder_path)]
+
         model_description = spec.ModelDescr(
             name=name,
             inputs=input_descriptions,
@@ -476,9 +504,7 @@ def export_sam_model(
             uploader=kwargs.get("uploader", DEFAULTS["uploader"]),
             id=kwargs.get("id", DEFAULTS["id"]),
             id_emoji=kwargs.get("id_emoji", DEFAULTS["id_emoji"]),
-            # TODO attach the decoder weights if given
-            # Can be list of files???
-            # attachments=[spec.FileDescr(source=file_path) for file_path in attachment_files]
+            attachments=attachments,
             # TODO write the config
             # dict with yaml values, key must be a str
             # micro_sam: ...
