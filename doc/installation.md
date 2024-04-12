@@ -1,29 +1,23 @@
 # Installation
 
-We provide three different ways of installing `micro_sam`:
+There are three ways to install `micro_sam`:
 - [From mamba](#from-mamba) is the recommended way if you want to use all functionality.
 - [From source](#from-source) for setting up a development environment to use the latest version and be able to change and contribute to our software.
-- [From installer](#from-installer) to install without having to use conda. This mode of installation is still experimental! It only provides the annotation tools and does not enable model finetuning.
-
-Our software requires the following dependencies:
-- [PyTorch](https://pytorch.org/get-started/locally/)
-- [SegmentAnything](https://github.com/facebookresearch/segment-anything#installation)
-- [elf](https://github.com/constantinpape/elf)
-- [torch_em](https://github.com/constantinpape/torch-em)
-- [napari](https://napari.org/stable/) (for the interactive annotation tools)
-
+- [From installer](#from-installer) to install without having to use conda (supported platforms: Windows and Linux, only for CPU users). 
 
 ## From mamba
 
-[mamba](https://mamba.readthedocs.io/en/latest/) is a drop-in replacement for conda, but is much faster than it.
+[mamba](https://mamba.readthedocs.io/en/latest/) is a drop-in replacement for conda, but much faster.
 While the steps below may also work with `conda`, we highly recommend using `mamba`.
-You can follow the instrutions [here](https://mamba.readthedocs.io/en/latest/installation/mamba-installation.html) to install `mamba`.
+You can follow the instructions [here](https://mamba.readthedocs.io/en/latest/installation/mamba-installation.html) to install `mamba`.
 
-`micro_sam` can then be installed in an existing environment via
+**IMPORTANT**: Make sure to avoid installing anything in the base environment.
+
+`micro_sam` can be installed in an existing environment via:
 ```
 $ mamba install -c conda-forge micro_sam
 ```
-or you can create a new environment (here called `micro-sam`) via
+or you should create a new environment (here called `micro-sam`) via:
 ```
 $ mamba create -c conda-forge -n micro-sam micro_sam
 ```
