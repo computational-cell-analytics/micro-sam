@@ -136,7 +136,7 @@ def generate_data_for_model_comparison(
 
 
 #
-# Visual evaluation accroding to metrics
+# Visual evaluation according to metrics
 #
 
 
@@ -312,7 +312,7 @@ def _compare_eval(
             fig, axis = plt.subplots(1, 2)
             plot_ax(axis, None, row)
             plt.subplots_adjust(wspace=0.05, hspace=0)
-            plt.savefig(os.path.join(plot_folder, f"{sample_name}_{i}.png"), bbox_inches="tight")
+            plt.savefig(os.path.join(plot_folder, f"{sample_name}_{i}.svg"), bbox_inches="tight")
             plt.close()
 
 

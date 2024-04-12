@@ -1,4 +1,3 @@
-import os
 import unittest
 
 import micro_sam.util as util
@@ -8,9 +7,6 @@ from micro_sam.instance_segmentation import get_predictor_and_decoder
 from elf.evaluation.matching import matching
 from skimage.draw import disk
 from skimage.measure import label
-
-# TODO get rid of this once the LM model is published.
-CHECKPOINT_LM = "./vit_t_lm.pt"
 
 
 class TestInstanceSegmentation(unittest.TestCase):
@@ -125,13 +121,12 @@ class TestInstanceSegmentation(unittest.TestCase):
         predicted3 = mask_data_to_segmentation(predicted3, with_background=True)
         self.assertTrue(np.array_equal(predicted, predicted3))
 
-    @unittest.skipUnless(os.path.exists(CHECKPOINT_LM), "Require finetuned model")
     def test_instance_segmentation_with_decoder(self):
         from micro_sam.instance_segmentation import InstanceSegmentationWithDecoder, mask_data_to_segmentation
 
         mask, image = self.mask, self.image
         predictor, decoder, image_embeddings = self._get_model(
-            image, self.model_type_ais, with_decoder=True, checkpoint=CHECKPOINT_LM
+            image, self.model_type_ais, with_decoder=True
         )
 
         amg = InstanceSegmentationWithDecoder(predictor, decoder)
@@ -157,13 +152,12 @@ class TestInstanceSegmentation(unittest.TestCase):
         predicted3 = mask_data_to_segmentation(predicted3, with_background=True)
         self.assertTrue(np.array_equal(predicted, predicted3))
 
-    @unittest.skipUnless(os.path.exists(CHECKPOINT_LM), "Require finetuned model")
     def test_tiled_instance_segmentation_with_decoder(self):
         from micro_sam.instance_segmentation import TiledInstanceSegmentationWithDecoder, mask_data_to_segmentation
 
         mask, image = self.large_mask, self.large_image
         predictor, decoder, image_embeddings = self._get_model(
-            image, self.model_type_ais, with_decoder=True, with_tiling=True, checkpoint=CHECKPOINT_LM
+            image, self.model_type_ais, with_decoder=True, with_tiling=True
         )
 
         amg = TiledInstanceSegmentationWithDecoder(predictor, decoder)
