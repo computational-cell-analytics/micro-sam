@@ -2,6 +2,20 @@ name: build_installers
 
 on:
   workflow_dispatch:
+    inputs:
+      resource_id:
+        description: "Bioimage.io resource identifier"
+        required: true
+        type: string
+      package_url:
+        description: "Download URL of the resource package zip-file"
+        required: true
+        type: string
+      sandbox:
+        description: Flag to stage to sandbox instead
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   build_intaller:
