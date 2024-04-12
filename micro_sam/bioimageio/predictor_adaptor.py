@@ -73,8 +73,8 @@ class PredictorAdaptor(nn.Module):
 
         # We don't have image embeddings set and they were not passed.
         elif not self.sam.is_image_set:
-            image = self.sam.transform.apply_image_torch(image)
-            self.sam.set_torch_image(image, original_image_size=image.numpy().shape[2:])
+            input_ = self.sam.transform.apply_image_torch(image)
+            self.sam.set_torch_image(input_, original_image_size=image.shape[2:])
             self.sam.orig_h, self.sam.orig_w = self.sam.original_size
             self.sam.input_h, self.sam.input_w = self.sam.input_size
 

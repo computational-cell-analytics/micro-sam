@@ -94,36 +94,47 @@ def models():
     # (It is now a dependency, so we don't provide the sha256 fallback anymore.)
     # To generate the xxh128 hash:
     #     xxh128sum filename
-    registry = {
+    encoder_registry = {
         # the default segment anything models
         "vit_h": "xxh128:97698fac30bd929c2e6d8d8cc15933c2",
         "vit_l": "xxh128:a82beb3c660661e3dd38d999cc860e9a",
         "vit_b": "xxh128:6923c33df3637b6a922d7682bfc9a86b",
         # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
         "vit_t": "xxh128:8eadbc88aeb9d8c7e0b4b60c3db48bd0",
-        # first version of finetuned models on zenodo
-        "vit_b_lm": "xxh128:6b061eb8684d9d5f55545330d6dce50d",
-        "vit_b_em_organelles": "xxh128:3919c2b761beba7d3f4ece342c9f5369",
-        "vit_b_em_boundaries": "xxh128:3099fe6339f5be91ca84db889db1909f",
+        # the current version of our models on zenodo
+        "vit_t_lm": "TODO",
+        # TODO more to come
+        # "vit_b_em_organelles": "xxh128:3919c2b761beba7d3f4ece342c9f5369",
+        # "vit_b_em_boundaries": "xxh128:3099fe6339f5be91ca84db889db1909f",
     }
+    decoder_registry = {
+        "vit_t_lm": "TODO",
+    }
+    registry = {**encoder_registry, **decoder_registry}
+
+    encoder_urls = {
+        # the default segment anything models
+        "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
+        "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
+        "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
+        # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
+        "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
+        # the current version of our models on zenodo
+        "vit_t_lm": "TODO",
+        # TODO more to come
+        # "vit_b_em_organelles": "https://zenodo.org/records/10524828/files/vit_b_em_organelles.pth?download=1",
+        # "vit_b_em_boundaries": "https://zenodo.org/records/10524894/files/vit_b_em_boundaries.pth?download=1",
+    }
+    decoder_urls = {
+        "vit_t_lm": "TODO"
+    }
+    urls = {**encoder_urls, **decoder_urls}
 
     models = pooch.create(
         path=os.path.join(microsam_cachedir(), "models"),
         base_url="",
         registry=registry,
-        # Now specify custom URLs for some of the files in the registry.
-        urls={
-            # the default segment anything models
-            "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
-            "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
-            "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
-            # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
-            "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
-            # first version of finetuned models on zenodo
-            "vit_b_lm": "https://zenodo.org/records/10524791/files/vit_b_lm.pth?download=1",
-            "vit_b_em_organelles": "https://zenodo.org/records/10524828/files/vit_b_em_organelles.pth?download=1",
-            "vit_b_em_boundaries": "https://zenodo.org/records/10524894/files/vit_b_em_boundaries.pth?download=1",
-        },
+        urls=urls,
     )
     return models
 

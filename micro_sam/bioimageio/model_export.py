@@ -31,10 +31,6 @@ DEFAULTS = {
         spec.CiteEntry(text="Archit et al. Segment Anything for Microscopy", doi=spec.Doi("10.1101/2023.08.21.554208")),
     ],
     "tags": ["segment-anything", "instance-segmentation"],
-    # FIXME these are details for the uploader we should remove here
-    "uploader": spec.Uploader(email="constantin.pape@informatik.uni-goettinge.de"),
-    "id": "acclaimed-angelfish",
-    "id_emoji": "🐠",
 }
 
 
@@ -116,16 +112,23 @@ def _create_test_inputs_and_outputs(
     return inputs, outputs
 
 
-# TODO url with documentation for the modelzoo interface, and just add it to defaults
-def _write_documentation(doc_path, doc):
-    with open(doc_path, "w") as f:
-        if doc is None:
+def _write_documentation(doc, model_type, tmp_dir):
+    tmp_doc_path = os.path.join(tmp_dir, "documentation.md")
+
+    if doc is None:
+        with open(tmp_doc_path, "w") as f:
             f.write("# Segment Anything for Microscopy\n")
             f.write("We extend Segment Anything, a vision foundation model for image segmentation ")
             f.write("by training specialized models for microscopy data.\n")
-        else:
+        return tmp_doc_path
+
+    elif os.path.exists(doc):
+        return doc
+
+    else:
+        with open(tmp_doc_path, "w") as f:
             f.write(doc)
-    return doc_path
+        return tmp_doc_path
 
 
 def _get_checkpoint(model_type, checkpoint_path, tmp_dir):
@@ -478,15 +481,27 @@ def export_sam_model(
             )
         )
 
-        doc_path = os.path.join(tmp_dir, "documentation.md")
-        _write_documentation(doc_path, kwargs.get("documentation", None))
+        doc_path = _write_documentation(kwargs.get("documentation", None), model_type, tmp_dir)
 
-        covers = _generate_covers(input_paths, result_paths, tmp_dir)
+        covers = kwargs.get("covers", None)
+        if covers is None:
+            covers = _generate_covers(input_paths, result_paths, tmp_dir)
+        else:
+            assert all(os.path.exists(cov) for cov in covers)
 
         if decoder_path is None:
             attachments = None
         else:
             attachments = [spec.FileDescr(source=decoder_path)]
+
+        # the uploader information is only added if explicitly passed
+        extra_kwargs = {}
+        if "id" in kwargs:
+            extra_kwargs["id"] = kwargs["id"]
+        if "id_emoji" in kwargs:
+            extra_kwargs["id_emoji"] = kwargs["id_emoji"]
+        if "uploader" in kwargs:
+            extra_kwargs["uploader"] = kwargs["uploader"]
 
         model_description = spec.ModelDescr(
             name=name,
@@ -501,16 +516,15 @@ def export_sam_model(
             git_repo=spec.HttpUrl("https://github.com/computational-cell-analytics/micro-sam"),
             tags=kwargs.get("tags", DEFAULTS["tags"]),
             covers=covers,
-            uploader=kwargs.get("uploader", DEFAULTS["uploader"]),
-            id=kwargs.get("id", DEFAULTS["id"]),
-            id_emoji=kwargs.get("id_emoji", DEFAULTS["id_emoji"]),
             attachments=attachments,
-            # TODO write the config
+            **extra_kwargs,
+            # TODO write specific settings in the config
             # dict with yaml values, key must be a str
             # micro_sam: ...
             # config=
         )
 
+        # TODO this requires the new bioimageio.core release
         # _check_model(model_description, input_paths, result_paths)
 
         save_bioimageio_package(model_description, output_path=output_path)
