@@ -108,7 +108,7 @@ def models():
         # "vit_b_em_boundaries": "xxh128:3099fe6339f5be91ca84db889db1909f",
     }
     decoder_registry = {
-        "vit_t_lm": "xxh128:82d3604e64f289bb66ec46a5643da169",
+        "vit_t_lm_decoder": "xxh128:82d3604e64f289bb66ec46a5643da169",
     }
     registry = {**encoder_registry, **decoder_registry}
 
@@ -126,7 +126,7 @@ def models():
         # "vit_b_em_boundaries": "https://zenodo.org/records/10524894/files/vit_b_em_boundaries.pth?download=1",
     }
     decoder_urls = {
-        "vit_t_lm": "https://sandbox.zenodo.org/records/45542/files/vit_t_decoder.pt?download=1"
+        "vit_t_lm_decoder": "https://sandbox.zenodo.org/records/45542/files/vit_t_decoder.pt?download=1"
     }
     urls = {**encoder_urls, **decoder_urls}
 
@@ -301,6 +301,12 @@ def get_sam_model(
         model_registry = models()
         checkpoint_path = model_registry.fetch(model_type)
         model_hash = model_registry.registry[model_type]
+
+        # If we have a custom model then we may also have a decoder checkpoint.
+        # Download it here, so that we can add it to the state.
+        decoder_name = f"{model_type}_decoder"
+        decoder_path = model_registry.fetch(decoder_name) if decoder_name in model_registry.registry else None
+
     # checkpoint_path has been passed, we use it instead of downloading a model.
     else:
         # Check if the file exists and raise an error otherwise.
@@ -309,6 +315,7 @@ def get_sam_model(
         if not os.path.exists(checkpoint_path):
             raise ValueError(f"Checkpoint at {checkpoint_path} could not be found.")
         model_hash = _compute_hash(checkpoint_path)
+        decoder_path = None
 
     # Our fine-tuned model types have a suffix "_...". This suffix needs to be stripped
     # before calling sam_model_registry.
@@ -324,11 +331,15 @@ def get_sam_model(
     state, model_state = _load_checkpoint(checkpoint_path)
     sam = sam_model_registry[abbreviated_model_type]()
     sam.load_state_dict(model_state)
-
     sam.to(device=device)
+
     predictor = SamPredictor(sam)
     predictor.model_type = abbreviated_model_type
     predictor._hash = model_hash
+
+    # Add the decoder to the state if we have one and if the state is returned.
+    if decoder_path is not None and return_state:
+        state["decoder_state"] = torch.load(decoder_path, map_location=device)
 
     if return_sam and return_state:
         return predictor, sam, state
