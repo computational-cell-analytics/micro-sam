@@ -31,8 +31,20 @@ def get_limited_data_livecell(res_root, model):
 
         ais = pd.read_csv(os.path.join(experiment_dir, "results_ais", "instance_segmentation_with_decoder.csv"))
         amg = pd.read_csv(os.path.join(experiment_dir, "results_amg", "amg.csv"))
-        ip = pd.read_csv(os.path.join(experiment_dir, "results_ip", "iterative_prompts_start_point.csv"))
-        ib = pd.read_csv(os.path.join(experiment_dir, "results_ipb", "iterative_prompts_start_box.csv"))
+
+        ip = pd.read_csv(
+            os.path.join(
+                experiment_dir,
+                "results_ip_out" if model == "vit_t" else "results_ip",
+                "iterative_prompts_start_point.csv"
+            )
+        )
+        ib = pd.read_csv(
+            os.path.join(
+                experiment_dir,
+                "results_ipb_out" if model == "vit_t" else "results_ipb",
+                "iterative_prompts_start_box.csv")
+        )
 
         res = {
             "experiment": int(experiment_name.split("_")[0]),
@@ -109,6 +121,7 @@ def main():
     get_plots(ROOT, "vit_l")
 
     # for supplementary figure 1
+    get_plots(ROOT, "vit_t", "ViT Tiny")
     get_plots(ROOT, "vit_b", "ViT Base")
     get_plots(ROOT, "vit_l", "ViT Large")
     get_plots(ROOT, "vit_h", "ViT Huge")

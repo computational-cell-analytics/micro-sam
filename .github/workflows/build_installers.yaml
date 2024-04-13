@@ -1,9 +1,7 @@
 name: build_installers
 
 on:
-  push:
-    tags:
-      - '**'
+  workflow_dispatch:
 
 jobs:
   build_intaller:
@@ -13,15 +11,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest, macos-14]
+        os: [windows-latest, ubuntu-latest]  # macos-latest
 
     env:
       PREPARE_SCRIPT: |
         cd deployment
-        conda install -y -c conda-forge constructor
-        conda install -y -c conda-forge ruamel.yaml
-        conda install -y -c conda-forge mamba
-        mamba env create --file=env.yaml
+        mamba install -y -c conda-forge constructor
+        mamba install -y -c conda-forge ruamel.yaml
+
+        mamba env create --file=../environment_cpu.yaml -n __MICROSAM_BUILD_ENV__
+        mamba activate __MICROSAM_BUILD_ENV__
+        # TODO get the current version here and use it for pinning or enable passing this from dispatch
+        mamba install -c conda-forge micro_sam
+        mamba activate base
+
       RUN_SCRIPT: |
         python version_getter.py
         mkdir ./${{ matrix.os }}_x86_64
@@ -30,44 +33,47 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
       - name: setup conda
-        if: matrix.os == 'windows-latest' || matrix.os == 'ubuntu-latest'
+        if: matrix.os == "windows-latest" || matrix.os == "ubuntu-latest"
         uses: conda-incubator/setup-miniconda@v2
         with:
           miniconda-version: "latest"
           auto-activate-base: true
           activate-environment: ""
+          mamba-version: "*"
         env:
           ACTIONS_ALLOW_UNSECURE_COMMANDS: true
 
       - name: build ${{ matrix.os }}_x86_64
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == "windows-latest"
         shell: pwsh
         run: |
           ${{ env.PREPARE_SCRIPT }}
-          conda activate __MICROSAM_BUILD_ENV__
-          conda install -c anaconda menuinst
+          mamba activate sam
+          mamba install -c anaconda menuinst
           python windows_menu_setup.py
           conda activate base
           ${{ env.RUN_SCRIPT }}
 
       - name: build ${{ matrix.os }}_x86_64
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == "ubuntu-latest"
         shell: bash -el {0}
         run: |
           ${{ env.PREPARE_SCRIPT }}
           ${{ env.RUN_SCRIPT }}
 
       - name: build ${{ matrix.os }}_x86_64_step1
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == "macos-latest"
         shell: bash -el {0}
         run: |
           brew install micromamba
           /usr/local/opt/micromamba/bin/micromamba shell init -s bash -p ~/micromamba
 
       - name: build ${{ matrix.os }}_x86_64_step2
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == "macos-latest"
         shell: bash -el {0}
         run: |
           cd deployment

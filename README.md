@@ -3,9 +3,11 @@
 [![codecov](https://codecov.io/gh/computational-cell-analytics/micro-sam/graph/badge.svg?token=7ETPP5CABP)](https://codecov.io/gh/computational-cell-analytics/micro-sam)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7919746.svg)](https://doi.org/10.5281/zenodo.7919746)
 
-# SegmentAnything for Microscopy
+# Segment Anything for Microscopy
 
-Tools for segmentation and tracking in microscopy build on top of [SegmentAnything](https://segment-anything.com/).
+**Attention: We are currently updating our software to a new release that will improve it and introduce new features. The documentation is not up-to-date with these changes yet, we will update it as soon as possible!**
+
+Tools for segmentation and tracking in microscopy build on top of [Segment Anything](https://segment-anything.com/).
 Segment and track objects in microscopy images interactively with a few clicks!
 
 We implement napari applications for:
@@ -22,20 +24,15 @@ If you run into any problems or have questions regarding our tool please open an
 
 ## Installation and Usage
 
-You can install `micro_sam` via conda:
-```
-conda install -c conda-forge micro_sam napari pyqt
-```
-You can then start the `micro_sam` tools by running `$ micro_sam.annotator` in the command line.
+Please check [the documentation](https://computational-cell-analytics.github.io/micro-sam/) for details on how to install and use `micro_sam`. You can also find a quickstart guide in [this video](TODO) and find all video tutorials [here](https://www.youtube.com/watch?v=ket7bDUP9tI&list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO&pp=gAQBiAQB). 
 
-For an introduction in how to use the napari based annotation tools check out [the video tutorials](https://www.youtube.com/watch?v=ket7bDUP9tI&list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO&pp=gAQBiAQB).
-Please check out [the documentation](https://computational-cell-analytics.github.io/micro-sam/) for more details on the installation and usage of `micro_sam`.
 
 ## Contributing
 
 We welcome new contributions!
 
 If you are interested in contributing to micro-sam, please see the [contributing guide](doc/contributing.md) and [developer documentation](doc/development.md). The first step is to [discuss your idea in a new issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) with the current developers.
+
 
 ## Citation
 

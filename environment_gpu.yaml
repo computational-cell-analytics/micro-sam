@@ -5,16 +5,18 @@ channels:
     - conda-forge
 dependencies:
     - imagecodecs
+    - magicgui
     - napari
     - pip
     - pooch
+    - pyqt
     - python-xxhash
     - python-elf >=0.4.8
     - pytorch
     - pytorch-cuda>=11.7  # you may need to update the cuda version to match your system
     - segment-anything
     - torchvision
-    - torch_em >=0.6.0
+    - torch_em >=0.7.0
     - tqdm
     - timm
     - pip:
