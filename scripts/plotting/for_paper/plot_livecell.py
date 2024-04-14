@@ -23,7 +23,6 @@ MODEL_NAME_MAP = {
 }
 FIG_ASPECT = (30, 15)
 
-# increase the font size globally
 plt.rcParams.update({'font.size': 24})
 
 
@@ -99,7 +98,7 @@ def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
         ax.errorbar(
             x=ip_data['iteration'], y=ip_data['result'], yerr=ip_data['error'], fmt='none', c='black', capsize=10
         )
-    ax.set(xlabel=None, ylabel=None)
+    ax.set(xlabel="Iterations", ylabel="Segmentation Quality")
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
     ax.set_title(name, fontweight="bold")
 
@@ -113,7 +112,7 @@ def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
 def plot_for_livecell(benchmark_choice, results_with_logits, model_choice=MODEL_CHOICE):
     result_type = "with_logits" if results_with_logits else "default"
 
-    fig, ax = plt.subplots(1, 2, figsize=FIG_ASPECT, sharex="col", sharey="row")
+    fig, ax = plt.subplots(1, 2, figsize=FIG_ASPECT, sharex=True, sharey=True)
     amg_vanilla, _, ib_vanilla, ip_vanilla, cellpose_res = gather_livecell_results(
         model_choice, "vanilla", benchmark_choice, result_type
     )
@@ -134,22 +133,16 @@ def plot_for_livecell(benchmark_choice, results_with_logits, model_choice=MODEL_
                 all_labels.append(label)
         ax.get_legend().remove()
 
-    fig.legend(all_lines, all_labels, loc="upper left")
+    fig.legend(all_lines, all_labels, loc="upper left", bbox_to_anchor=(0.05, 0.95))
 
     ax.set_yticks(np.linspace(0.1, 0.8, 8))
     for ax in fig.axes:
-        ax.set_xticks(np.linspace(1, 7, 7))
-
-    plt.text(
-        x=0.8, y=1.12, s=" X-Axis: Iterative Prompting \n Y-Axis: Segmentation Accuracy ", ha='center', va='center',
-        transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#D6D6D6", "boxstyle": "round"}
-    )
+        ax.set_xticks(np.linspace(0, 7, 8))
 
     plt.show()
     plt.tight_layout()
-    fig.suptitle(MODEL_NAME_MAP[model_choice], fontsize=36, x=0.54, y=0.9)
-    if results_with_logits:
-        plt.subplots_adjust(top=0.78, right=0.95, left=0.13, bottom=0.05)
+    # fig.suptitle(MODEL_NAME_MAP[model_choice], fontsize=36, x=0.54, y=0.9)
+    # plt.subplots_adjust(right=0.95, left=0.13, bottom=0.05)
     _path = f"livecell_{model_choice}_with_logits.svg" if results_with_logits else f"livecell_{model_choice}.svg"
     plt.savefig(_path)
     plt.savefig(Path(_path).with_suffix(".pdf"))
@@ -223,7 +216,7 @@ def plot_all_livecell(benchmark_choice, model_type):
     plt.show()
     plt.tight_layout()
     plt.subplots_adjust(top=0.865, right=0.95, left=0.075, bottom=0.05)
-    fig.suptitle(MODEL_NAME_MAP[model_type], fontsize=26, x=0.515, y=0.97)
+    fig.suptitle(MODEL_NAME_MAP[model_type], fontsize=36, x=0.515, y=0.97)
     _path = f"livecell_supplementary_{model_type}.svg"
     plt.savefig(_path)
     plt.savefig(Path(_path).with_suffix(".pdf"))
@@ -231,7 +224,9 @@ def plot_all_livecell(benchmark_choice, model_type):
 
 
 def main():
-    # plot_for_livecell(benchmark_choice="livecell", results_with_logits=False)
+    plot_for_livecell(benchmark_choice="livecell", results_with_logits=False)
+
+    return
 
     for model in ALL_MODELS:
         plot_for_livecell(benchmark_choice="livecell", results_with_logits=True, model_choice=model)

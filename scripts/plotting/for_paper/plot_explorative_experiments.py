@@ -20,7 +20,7 @@ PALETTE = {
     r"i$_{b}$": "#90477F"
 }
 
-plt.rcParams.update({'font.size': 18})
+plt.rcParams.update({'font.size': 24})
 
 
 def _open_csv_file(csv_path):
@@ -98,10 +98,10 @@ def get_partial_finetuning_plots():
 
     res_df = pd.concat(res_list)
 
-    plt.figure(figsize=(20, 10))
+    plt.figure(figsize=(30, 15))
 
     ax = sns.barplot(x="name", y="results", hue="type", data=res_df, palette=PALETTE, hue_order=PALETTE.keys())
-
+    ax.set_yticks(np.linspace(0.1, 1, 10))
     lines, labels = ax.get_legend_handles_labels()
     for line, label in zip(lines, labels):
         if label == "ais":
@@ -109,11 +109,12 @@ def get_partial_finetuning_plots():
                 line.patches[k].set_hatch('///')
                 line.patches[k].set_edgecolor('white')
 
-    plt.xlabel("Finetuned Parts", labelpad=15)
-    plt.ylabel("Segmentation Accuracy", labelpad=15)
-    plt.legend(bbox_to_anchor=(-0.07, 1.02))
+    plt.xlabel("Finetuned Parts")
+    plt.ylabel("Segmentation Accuracy")
+    plt.legend(loc="upper center", ncol=6)
+    plt.tight_layout()
 
-    plt.subplots_adjust(top=0.9, right=0.95, left=0.15, bottom=0.1)
+    # plt.subplots_adjust(top=0.9, right=0.95, left=0.15, bottom=0.1)
 
     save_path = "livecell_vit_l_partial_finetuning.svg"
     plt.savefig(save_path)
