@@ -136,8 +136,6 @@ def plot_for_livecell(benchmark_choice, results_with_logits, model_choice=MODEL_
     fig.legend(all_lines, all_labels, loc="upper left", bbox_to_anchor=(0.05, 0.95))
 
     ax.set_yticks(np.linspace(0.1, 0.8, 8))
-    for ax in fig.axes:
-        ax.set_xticks(np.linspace(0, 7, 8))
 
     plt.show()
     plt.tight_layout()
@@ -224,9 +222,7 @@ def plot_all_livecell(benchmark_choice, model_type):
 
 
 def main():
-    plot_for_livecell(benchmark_choice="livecell", results_with_logits=False)
-
-    return
+    # plot_for_livecell(benchmark_choice="livecell", results_with_logits=False)
 
     for model in ALL_MODELS:
         plot_for_livecell(benchmark_choice="livecell", results_with_logits=True, model_choice=model)

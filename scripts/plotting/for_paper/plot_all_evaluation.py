@@ -168,7 +168,9 @@ def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice=None):
             ax.axhline(y=benchmark_res, label=benchmark_name, color="#DC3977")
 
 
-def _get_plot_postprocessing(fig, experiment_title, save_path, ignore_legends=False, title_loc=0.93):
+def _get_plot_postprocessing(
+    fig, experiment_title, save_path, ignore_legends=False, title_loc=0.93, ylabel_choice=None
+):
     # here, we remove the legends for each subplot, and get one common legend for all
     all_lines, all_labels = [], []
     for ax in fig.axes:
@@ -179,13 +181,32 @@ def _get_plot_postprocessing(fig, experiment_title, save_path, ignore_legends=Fa
                 all_labels.append(label)
         ax.get_legend().remove()
 
-    if not ignore_legends:
-        fig.legend(all_lines, all_labels, loc="lower center", ncols=7, bbox_to_anchor=(0.5, 0.04))
-    else:
+    if ignore_legends:
+        hspace = 0.4
+        bbox_to_anchor = (0.5, 0.06)
         plt.suptitle(experiment_title, fontsize=36, y=title_loc)
+        if ylabel_choice == "em":
+            if experiment_title == "ViT Tiny":
+                y = 1.7
+            else:
+                y = 1.55
+            x = -5.9
+        else:
+            if experiment_title == "ViT Tiny":
+                y = 1.85
+            else:
+                y = 2.75
+            x = -3.5
+    else:
+        bbox_to_anchor = (0.5, 0.04)
+        hspace = 0.25
+        x, y = -5.8, 1
 
-    plt.subplots_adjust(hspace=0.25)
-    plt.text(x=-5.8, y=1, s="Segmentation Accuracy", rotation=90, fontsize=30)
+    plt.text(x=x, y=y, s="Segmentation Accuracy", rotation=90, fontsize=30)
+
+    fig.legend(all_lines, all_labels, loc="lower center", ncols=7, bbox_to_anchor=bbox_to_anchor)
+
+    plt.subplots_adjust(hspace=hspace)
     plt.show()
     plt.savefig(Path(save_path).with_suffix(".pdf"))
     plt.savefig(save_path)
@@ -244,6 +265,7 @@ def plot_evaluation_for_all_lm_datasets(model_type):
         experiment_title=MODELS[model_type],
         save_path=f"lm_all_{model_type}_evaluation.svg",
         ignore_legends=True,
+        ylabel_choice="lm",
     )
 
 
@@ -307,6 +329,7 @@ def plot_evaluation_for_all_em_datasets(model_type):
         experiment_title=MODELS[model_type],
         save_path=f"em_all_{model_type}_evaluation.svg",
         ignore_legends=True,
+        ylabel_choice="em",
     )
 
 
@@ -327,16 +350,14 @@ def plot_em_specialists(model_type):
 
 
 def main():
-    plot_evaluation_for_lm_datasets("vit_l")
-    plot_evaluation_for_em_datasets("vit_l")
-
-    return
+    # plot_evaluation_for_lm_datasets("vit_l")
+    # plot_evaluation_for_em_datasets("vit_l")
 
     all_models = ["vit_t", "vit_b", "vit_l", "vit_h"]
     for model in all_models:
-        # plot_evaluation_for_all_em_datasets(model)
-        # plot_evaluation_for_all_lm_datasets(model)
-        plot_em_specialists(model)
+        plot_evaluation_for_all_em_datasets(model)
+        plot_evaluation_for_all_lm_datasets(model)
+        # plot_em_specialists(model)
 
 
 if __name__ == "__main__":
