@@ -42,11 +42,11 @@ except ImportError:
 
 # this is the default model used in micro_sam
 # currently set to the default vit_h
-_DEFAULT_MODEL = "vit_h"
+_DEFAULT_MODEL = "vit_l"
 
 # The valid model types. Each type corresponds to the architecture of the
 # vision transformer used within SAM.
-_MODEL_TYPES = ("vit_h", "vit_b", "vit_l", "vit_t")
+_MODEL_TYPES = ("vit_l", "vit_b", "vit_h", "vit_t")
 
 
 # TODO define the proper type for image embeddings
