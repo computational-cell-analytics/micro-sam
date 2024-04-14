@@ -98,15 +98,15 @@ def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
         ax.errorbar(
             x=ip_data['iteration'], y=ip_data['result'], yerr=ip_data['error'], fmt='none', c='black', capsize=10
         )
-    ax.set(xlabel="Iterations", ylabel="Segmentation Quality")
+    ax.set(xlabel="Iterations", ylabel="Segmentation Accuracy")
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
     ax.set_title(name, fontweight="bold")
 
     if amg is not None:
-        ax.axhline(y=amg, label="amg", color="#DC3977")
+        ax.axhline(y=amg, label="amg", color="#DC3977", lw=5)
     if ais is not None:
-        ax.axhline(y=ais, label="ais", color="#E19951")
-    ax.axhline(y=cellpose, label="cellpose", color="#5454DA")
+        ax.axhline(y=ais, label="ais", color="#E19951", lw=5)
+    ax.axhline(y=cellpose, label="cellpose", color="#5454DA", lw=5)
 
 
 def plot_for_livecell(benchmark_choice, results_with_logits, model_choice=MODEL_CHOICE):

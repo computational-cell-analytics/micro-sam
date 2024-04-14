@@ -75,6 +75,9 @@ def gather_all_results(dataset, modality, model_type):
         if experiment_name == "vanilla":  # easy fix to alter the name
             experiment_name = "default"
 
+        if modality == "em" and experiment_name == "generalist":
+            experiment_name = "finetuned"
+
         res_list_per_experiment = []
         for i, result_path in enumerate(sorted(glob(os.path.join(experiment_dir, model_type, "results", "*")))):
             # avoid using the grid-search parameters' files
@@ -176,18 +179,13 @@ def _get_plot_postprocessing(fig, experiment_title, save_path, ignore_legends=Fa
                 all_labels.append(label)
         ax.get_legend().remove()
 
-    adjust_params = {}
     if not ignore_legends:
-        fig.legend(all_lines, all_labels, loc="upper left")
-        plt.text(
-            x=0.25, y=4.1, s=" X-Axis: Models \n Y-Axis: Segmentation Accuracy ", ha='left',
-            transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#D6D6D6", "boxstyle": "round"}
-        )
-        adjust_params = {"top": 0.8, "right": 0.95, "left": 0.11, "bottom": 0.05}
+        fig.legend(all_lines, all_labels, loc="lower center", ncols=7, bbox_to_anchor=(0.5, 0.04))
     else:
         plt.suptitle(experiment_title, fontsize=36, y=title_loc)
 
-    plt.subplots_adjust(hspace=0.4, **adjust_params)
+    plt.subplots_adjust(hspace=0.25)
+    plt.text(x=-5.8, y=1, s="Segmentation Accuracy", rotation=90, fontsize=30)
     plt.show()
     plt.savefig(Path(save_path).with_suffix(".pdf"))
     plt.savefig(save_path)
@@ -212,7 +210,7 @@ def plot_evaluation_for_lm_datasets(model_type):
     get_barplots(ax[1, 2], "covid_if", modality, model_type, benchmark_choice="cyto2")
     get_barplots(ax[2, 0], "plantseg/ovules", modality, model_type, benchmark_choice="cyto2")
     get_barplots(ax[2, 1], "lizard", modality, model_type, benchmark_choice="cyto2")
-    get_barplots(ax[2, 2], "hpa", modality, model_type, benchmark_choice="cyto2")
+    get_barplots(ax[2, 2], "mouse-embryo", modality, model_type, benchmark_choice="cyto2")
 
     _get_plot_postprocessing(
         fig=fig, experiment_title="Light Microscopy", save_path=f"lm_{model_type}_evaluation.svg"
@@ -267,10 +265,10 @@ def plot_evaluation_for_em_datasets(model_type):
     get_barplots(ax[0, 2], "platynereis/nuclei", modality, model_type)
     get_barplots(ax[1, 0], "lucchi", modality, model_type)
     get_barplots(ax[1, 1], "mitolab/fly_brain", modality, model_type)
-    get_barplots(ax[1, 2], "mitolab/c_elegans", modality, model_type)
+    get_barplots(ax[1, 2], "mitolab/tem", modality, model_type)
     get_barplots(ax[2, 0], "uro_cell", modality, model_type)
     get_barplots(ax[2, 1], "nuc_mm/mouse", modality, model_type)
-    get_barplots(ax[2, 2], "sponge_em", modality, model_type)
+    get_barplots(ax[2, 2], "vnc", modality, model_type)
 
     _get_plot_postprocessing(
         fig=fig, experiment_title="Electron Microscopy", save_path=f"em_{model_type}_evaluation.svg"
@@ -329,8 +327,10 @@ def plot_em_specialists(model_type):
 
 
 def main():
-    # plot_evaluation_for_lm_datasets("vit_l")
-    # plot_evaluation_for_em_datasets("vit_l")
+    plot_evaluation_for_lm_datasets("vit_l")
+    plot_evaluation_for_em_datasets("vit_l")
+
+    return
 
     all_models = ["vit_t", "vit_b", "vit_l", "vit_h"]
     for model in all_models:
