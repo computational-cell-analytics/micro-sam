@@ -759,11 +759,14 @@ class EmbeddingWidget(_WidgetBase):
 
         return image_section
 
-    def _update_model(self, index):
-        self.model_type = self.model_options[index]
+    def _update_model(self):
+        print("Computed embeddings for", self.model_type)
         state = AnnotatorState()
         if "autosegment" in state.widgets:
-            vutil._sync_autosegment_widget(state.widgets["autosegment"], self.model_type, self.custom_weights)
+            with_decoder = state.decoder is not None
+            vutil._sync_autosegment_widget(
+                state.widgets["autosegment"], self.model_type, self.custom_weights, update_decoder=with_decoder
+            )
         if "segment_nd" in state.widgets:
             vutil._sync_ndsegment_widget(state.widgets["segment_nd"], self.model_type, self.custom_weights)
 
@@ -776,8 +779,7 @@ class EmbeddingWidget(_WidgetBase):
 
         layout = QtWidgets.QVBoxLayout()
         self.model_dropdown, layout = self._add_choice_param(
-            "model_type", self.model_type, self.model_options, title="Model:",
-            layout=layout, update=self._update_model
+            "model_type", self.model_type, self.model_options, title="Model:", layout=layout,
         )
         return layout
 
@@ -818,6 +820,11 @@ class EmbeddingWidget(_WidgetBase):
             ("halo_x", "halo_y"), (self.halo_x, self.halo_y), min_val=0, max_val=512
         )
         setting_values.layout().addLayout(layout)
+
+        # Create UI for prefering the decoder.
+        self.prefer_decoder = True
+        widget = self._add_boolean_param("prefer_decoder", self.prefer_decoder, title="Prefer Segmentation Decoder")
+        setting_values.layout().addWidget(widget)
 
         settings = _make_collapsible(setting_values, title="Settings")
         return settings
@@ -954,15 +961,13 @@ class EmbeddingWidget(_WidgetBase):
             state.initialize_predictor(
                 image_data, model_type=self.model_type, save_path=save_path, ndim=ndim,
                 device=self.device, checkpoint_path=self.custom_weights, tile_shape=tile_shape, halo=halo,
-                pbar_init=pbar_init,
+                prefer_decoder=self.prefer_decoder, pbar_init=pbar_init,
                 pbar_update=lambda update: pbar_signals.pbar_update.emit(update),
             )
             pbar_signals.pbar_stop.emit()
 
         worker = compute_image_embedding()
-        # Note: this is how we can handle the worker when it's done.
-        # We can use this e.g. to add an indicator that the embeddings are computed or not.
-        worker.returned.connect(lambda _: print("Embeddings for", self.model_type, "have been computed."))
+        worker.returned.connect(self._update_model)
         worker.start()
         return worker
 
@@ -1221,7 +1226,9 @@ class AutoSegmentWidget(_WidgetBase):
         self._viewer = viewer
         self.with_decoder = with_decoder
         self.volumetric = volumetric
+        self._create_widget()
 
+    def _create_widget(self):
         # Add the switch for segmenting the slice vs. the volume if we have a volume.
         if self.volumetric:
             self.layout().addWidget(self._create_volumetric_switch())
@@ -1234,6 +1241,24 @@ class AutoSegmentWidget(_WidgetBase):
         self.run_button = QtWidgets.QPushButton("Automatic Segmentation")
         self.run_button.clicked.connect(self.__call__)
         self.layout().addWidget(self.run_button)
+
+    def _reset_segmentation_mode(self, with_decoder):
+        # If we already have the same segmentation mode we don't need to do anything.
+        if with_decoder == self.with_decoder:
+            return
+
+        # Otherwise we change the value of with_decoder.
+        self.with_decoder = with_decoder
+
+        # Then we clear the whole widget.
+        layout = self.layout()
+        while layout.count():
+            child = layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        # And then we reset it.
+        self._create_widget()
 
     def _create_volumetric_switch(self):
         self.apply_to_volume = False

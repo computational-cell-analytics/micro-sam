@@ -696,7 +696,10 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
 
 
 # Read parameters from checkpoint path if it is given instead.
-def _sync_autosegment_widget(widget, model_type, checkpoint_path):
+def _sync_autosegment_widget(widget, model_type, checkpoint_path, update_decoder=None):
+    if update_decoder is not None:
+        widget._reset_segmentation_mode(update_decoder)
+
     if widget.with_decoder:
         settings = model_settings.AIS_SETTINGS.get(model_type, {})
         params = ("center_distance_thresh", "boundary_distance_thresh")
