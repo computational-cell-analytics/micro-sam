@@ -9,6 +9,7 @@ from scipy.ndimage import shift
 from skimage import draw
 
 from .. import prompt_based_segmentation, util
+from .. import _model_settings as model_settings
 from ..multi_dimensional_segmentation import _validate_projection
 
 # Green and Red
@@ -674,7 +675,11 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
     if index > 0:
         widget.model_dropdown.setCurrentIndex(index)
 
-    # TODO update save path and checkpoint path
+    if save_path is not None:
+        widget.embeddings_save_path_param.setText(save_path)
+
+    if checkpoint_path is not None:
+        widget.custom_weights_param.setText(checkpoint_path)
 
     if device is not None:
         widget.device = device
@@ -690,30 +695,37 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
         widget.halo_y_param.setValue(halo[1])
 
 
-# TODO
-def _sync_autosegment_widget(widget, model_type, checkpoint_path):
+# Read parameters from checkpoint path if it is given instead.
+def _sync_autosegment_widget(widget, model_type, checkpoint_path, update_decoder=None):
+    if update_decoder is not None:
+        widget._reset_segmentation_mode(update_decoder)
+
     if widget.with_decoder:
-        # Here's how to set the relevant params:
-        # widget.center_distance_thresh_param.setValue(0.5)
-        # widget.boundary_distance_thresh_param.setValue(0.5)
-        pass
+        settings = model_settings.AIS_SETTINGS.get(model_type, {})
+        params = ("center_distance_thresh", "boundary_distance_thresh")
+        for param in params:
+            if param in settings:
+                getattr(widget, f"{param}_param").setValue(settings[param])
     else:
-        # Here's how to set the relevant values:
-        # widget.pred_iou_thresh_param.setValue(0.88)
-        # widget.stability_score_thresh_param.setValue(0.95)
-        # widget.min_object_size_param.setValue(100)
-        pass
+        settings = model_settings.AMG_SETTINGS.get(model_type, {})
+        params = ("pred_iou_thresh", "stability_score_thresh", "min_object_size")
+        for param in params:
+            if param in settings:
+                getattr(widget, f"{param}_param").setValue(settings[param])
 
 
-# TODO
+# Read parameters from checkpoint path if it is given instead.
 def _sync_ndsegment_widget(widget, model_type, checkpoint_path):
-    # Here's how to set the relevant parameters:
+    settings = model_settings.ND_SEGMENT_SETTINGS.get(model_type, {})
 
-    # widget.projection = projection_mode
-    # index = widget.projection_dropdown.findText(projection_mode)
-    # if index > 0:
-    #   widget.projection_dropdown.setCurrentIndex(index)
+    if "projection_mode" in settings:
+        projection_mode = settings["projection_mode"]
+        widget.projection = projection_mode
+        index = widget.projection_dropdown.findText(projection_mode)
+        if index > 0:
+            widget.projection_dropdown.setCurrentIndex(index)
 
-    # widget.iou_threshold_param.setValue(0.5)
-    # widget.box_extension_param.setValue(0.05)
-    pass
+    params = ("iou_threshold", "box_extension")
+    for param in params:
+        if param in settings:
+            getattr(widget, f"{param}_param").setValue(settings[param])
