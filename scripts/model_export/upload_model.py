@@ -73,6 +73,9 @@ def upload_model_manual(model_zip_path):
     trigger_workflow(model_name, url)
 
 
+# TODO auto-generate the links
+# https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/acclaimed-angelfish/staged/1/files/bioimageio.yaml
+# https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/staged/1/files/bioimageio.yaml
 def main():
     # upload_model_via_oc("./exported_models/lm/vit_t_lm")
     upload_model_manual("./exported_models/lm/vit_t_lm")
