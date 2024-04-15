@@ -188,27 +188,6 @@ def export_vit_t_lm(email):
     export_model(model_path, model_type, "lm", version=2, email=email)
 
 
-# Snippets from Fynn to automate the workflow execution.
-
-# def workflow_dispatch(workflow_name: str, inputs: Dict[str, Any]):
-#     g = github.Github(login_or_token=os.environ["GITHUB_PAT"])
-#
-#     repo = g.get_repo("bioimage-io/collection")
-#
-#     workflow = repo.get_workflow(workflow_name)
-#
-#     ref = repo.get_branch("main")
-#     ok = workflow.create_dispatch(ref=ref, inputs=inputs)
-#     assert ok
-
-# workflow_dispatch(
-#   "stage.yaml",
-#   {"resource_id": rd.id,
-#    "package_url": f"https://{client.host}/{client.bucket}/{client.root_folder}/{fname}",
-#   },
-# )
-
-
 # Update this to automate model exports more.
 def main():
     parser = argparse.ArgumentParser()
