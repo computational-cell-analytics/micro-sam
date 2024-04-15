@@ -21,8 +21,10 @@ def compare_experiments_for_dataset(
     experiment_folder,
     standard_model,
     finetuned_model,
+    intermediate_model=None,
     checkpoint1=None,
     checkpoint2=None,
+    checkpoint3=None,
     view_napari=False,
     n_samples=20,
 ):
@@ -37,9 +39,11 @@ def compare_experiments_for_dataset(
             output_folder=output_folder,
             model_type1=standard_model,
             model_type2=finetuned_model[:5],
+            model_type3=intermediate_model[:5],
             n_samples=n_samples,
             checkpoint1=checkpoint1,
-            checkpoint2=checkpoint2
+            checkpoint2=checkpoint2,
+            checkpoint3=checkpoint3,
         )
 
     model_comparison(
@@ -48,7 +52,8 @@ def compare_experiments_for_dataset(
         min_size=100,
         plot_folder=plot_folder,
         point_radius=3,
-        outline_dilation=0
+        outline_dilation=0,
+        have_model3=intermediate_model is not None
     )
     if view_napari:
         from micro_sam.evaluation.model_comparison import model_comparison_with_napari
@@ -252,6 +257,18 @@ def fetch_data_loaders(dataset_name):
         loader = datasets.get_vnc_mito_loader(
             path=os.path.join(ROOT, "vnc"), patch_shape=(1, 512, 512),
             ndim=2, sampler=sampler, batch_size=1,
+        )
+
+    elif dataset_name == "asem_er":
+        loader = datasets.get_asem_loader(
+            path=os.path.join(ROOT, "asem"), patch_shape=(1, 512, 512), batch_size=1,
+            ndim=2, organelles="er", sampler=sampler, shuffle=True, label_transform=connected_components
+        )
+
+    elif dataset_name == "cremi":
+        loader = datasets.get_cremi_loader(
+            path=os.path.join(ROOT, "cremi"), patch_shape=(1, 512, 512), ndim=2, batch_size=1,
+            defect_augmentation_kwargs=None, sampler=sampler, shuffle=True, label_transform=connected_components
         )
 
     else:
