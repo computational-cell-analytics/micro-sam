@@ -112,9 +112,11 @@ def get_data(modality):
     return image, label_image
 
 
-# TODO
 def get_covers(modality):
-    return None
+    if modality == "lm":
+        return ["./covers/cover_lm.png"]
+    else:
+        return ["./covers/cover_em.png"]
 
 
 def compute_checksum(path):
