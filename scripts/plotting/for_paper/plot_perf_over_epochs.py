@@ -4,6 +4,7 @@ import pandas as pd
 import seaborn as sns
 from glob import glob
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FormatStrFormatter
 
 
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/from_carolin/perf_over_epochs/"
@@ -81,32 +82,33 @@ def get_plots(ax, data, experiment_name):
     plt.rcParams["hatch.linewidth"] = 1.5
 
     sns.lineplot(
-        data=data, x='epoch', y='result', ax=ax, hue='model', palette=PALETTE, errorbar='pi', err_style='band',
-        alpha=0.75,
+        data=data, x='epoch', y='result', ax=ax, hue='model', palette=PALETTE,
+        errorbar='pi', err_style='band', alpha=0.75, linewidth=4
     )
 
     ax.set(xlabel=None, ylabel=None)
     ax.legend(title="Models", bbox_to_anchor=(1, 1))
     ax.set_title(experiment_name)
+    ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
 
 
 def plot_perf_over_epochs():
     all_data = gather_all_results()
-    fig, ax = plt.subplots(2, 2, figsize=(25, 15))
+    fig, ax = plt.subplots(3, 2, figsize=(25, 30))
 
     amg = all_data[all_data["name"] == "amg"]
     ais = all_data[all_data["name"] == "instance_segmentation_with_decoder"]
     point = all_data[all_data["type"] == "point"]
     box = all_data[all_data["type"] == "box"]
-    # i_point = all_data[all_data["type"] == "i_p"]
-    # i_box = all_data[all_data["type"] == "i_b"]
+    i_point = all_data[all_data["type"] == "i_p"]
+    i_box = all_data[all_data["type"] == "i_b"]
 
     get_plots(ax[0, 0], point, "Point")
     get_plots(ax[0, 1], box, "Box")
     get_plots(ax[1, 0], ais, "AIS")
     get_plots(ax[1, 1], amg, "AMG")
-    # get_plots(ax[2, 0], i_point, "Iterative Prompting (Start with Point)")
-    # get_plots(ax[2, 1], i_box, "Iterative Prompting (Start with Box)")
+    get_plots(ax[2, 0], i_point, "Iterative Prompting (Start with Point)")
+    get_plots(ax[2, 1], i_box, "Iterative Prompting (Start with Box)")
 
     # here, we remove the legends for each subplot, and get one common legend for all
     all_lines, all_labels = [], []
@@ -119,18 +121,16 @@ def plot_perf_over_epochs():
         ax.get_legend().remove()
 
     labels = [MODELS[_l] for _l in labels]
-    fig.legend(all_lines, labels, loc="upper left")
+    fig.legend(all_lines, labels, loc="lower center", ncols=4, bbox_to_anchor=(0.5, 0.02))
     plt.tight_layout()
 
-    fig.text(
-        0.78, 0.97, 'X-Axis: Epoch \nY-Axis: Segmentation Accuracy', verticalalignment='top',
-        horizontalalignment='left', bbox=dict(boxstyle='round', edgecolor='lightgrey', facecolor='None')
-    )
-
     plt.show()
-    plt.subplots_adjust(top=0.9, right=0.9, left=0.15, bottom=0.05, hspace=0.3, wspace=0.2)
+    plt.subplots_adjust(top=0.9, bottom=0.1, right=0.9, left=0.1, wspace=0.2, hspace=0.2)
 
-    # fig.suptitle("Performance over Epochs", y=0.97, fontsize=26)
+    plt.text(x=-100, y=1, s="Segmentation Accuracy", fontsize=30, rotation=90)
+    plt.text(x=-15, y=0.24, s="Epochs", fontsize=30)
+
+    fig.suptitle("Performance over Epochs", y=0.95, fontsize=40)
     save_path = "plot_perf_over_epochs.svg"
     plt.savefig(save_path)
     plt.savefig(Path(save_path).with_suffix(".pdf"))
