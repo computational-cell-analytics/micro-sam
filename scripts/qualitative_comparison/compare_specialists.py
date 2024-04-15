@@ -17,25 +17,25 @@ SPECIALISTS = {
 
 
 # HACK: the import issues don't matter, as long as the object satisfies the namespaces' requirement.
-class FilterObjectsLabelTrafo:
-    def __init__(self, min_size=0, gap_closing=0):
-        self.min_size = min_size
-        self.gap_closing = gap_closing
+# class FilterObjectsLabelTrafo:
+#     def __init__(self, min_size=0, gap_closing=0):
+#         self.min_size = min_size
+#         self.gap_closing = gap_closing
 
-    def __call__(self, labels):
-        if self.gap_closing > 0:
-            labels = binary_closing(labels, iterations=self.gap_closing)
+#     def __call__(self, labels):
+#         if self.gap_closing > 0:
+#             labels = binary_closing(labels, iterations=self.gap_closing)
 
-        distance_transform = PerObjectDistanceTransform(
-            distances=True,
-            boundary_distances=True,
-            directed_distances=False,
-            foreground=True,
-            instances=True,
-            min_size=self.min_size
-        )
-        labels = distance_transform(labels)
-        return labels
+#         distance_transform = PerObjectDistanceTransform(
+#             distances=True,
+#             boundary_distances=True,
+#             directed_distances=False,
+#             foreground=True,
+#             instances=True,
+#             min_size=self.min_size
+#         )
+#         labels = distance_transform(labels)
+#         return labels
 
 
 def compare_em_specialists():
