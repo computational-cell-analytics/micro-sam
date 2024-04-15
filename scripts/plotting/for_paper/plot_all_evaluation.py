@@ -145,7 +145,7 @@ def get_benchmark_results(dataset_name, benchmark_name, benchmark_choice):
         return None
 
 
-def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice=None):
+def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice=None, title_as_model_name=False):
     plt.rcParams["hatch.linewidth"] = 1.5
     res_df = gather_all_results(dataset_name, modality, model_type)
     sns.barplot(x="name", y="results", hue="type", data=res_df, ax=ax, palette=PALETTE, hue_order=PALETTE.keys())
@@ -159,7 +159,9 @@ def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice=None):
     ax.set(xlabel=None, ylabel=None)
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
     ax.title.set_color("#212427")
-    ax.set_title(TITLE[dataset_name], fontweight="bold")
+    ax.set_title(
+        TITLE[dataset_name] if not title_as_model_name else MODELS[model_type], fontweight="bold"
+    )
 
     if dataset_name != "ctc":
         benchmark_name = "cellpose" if modality == "lm" else "mitonet"
@@ -169,7 +171,8 @@ def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice=None):
 
 
 def _get_plot_postprocessing(
-    fig, experiment_title, save_path, ignore_legends=False, title_loc=0.93, ylabel_choice=None
+    fig, experiment_title, save_path, ignore_legends=False, title_loc=0.93,
+    ylabel_choice=None, bba=None, adj_params={}, y_loc=None, x_loc=None
 ):
     # here, we remove the legends for each subplot, and get one common legend for all
     all_lines, all_labels = [], []
@@ -202,11 +205,20 @@ def _get_plot_postprocessing(
         hspace = 0.25
         x, y = -5.8, 1
 
+    if y_loc is not None:
+        y = y_loc
+
+    if x_loc is not None:
+        x = x_loc
+
     plt.text(x=x, y=y, s="Segmentation Accuracy", rotation=90, fontsize=30)
+
+    if bbox_to_anchor is not None:
+        bbox_to_anchor = bba
 
     fig.legend(all_lines, all_labels, loc="lower center", ncols=7, bbox_to_anchor=bbox_to_anchor)
 
-    plt.subplots_adjust(hspace=hspace)
+    plt.subplots_adjust(hspace=hspace, **adj_params)
     plt.show()
     plt.savefig(Path(save_path).with_suffix(".pdf"))
     plt.savefig(save_path)
@@ -333,23 +345,38 @@ def plot_evaluation_for_all_em_datasets(model_type):
     )
 
 
-def plot_em_specialists(model_type):
+def plot_em_specialists(dataset_name):
     modality = "em"
-    fig, ax = plt.subplots(1, 2, figsize=(20, 10))
+    fig, ax = plt.subplots(1, 4, figsize=(35, 10), sharey=True)
 
-    get_barplots(ax[0], "cremi", modality, model_type)
-    get_barplots(ax[1], "asem/er", modality, model_type)
+    get_barplots(ax[0], dataset_name, modality, "vit_t", title_as_model_name=True)
+    get_barplots(ax[1], dataset_name, modality, "vit_b", title_as_model_name=True)
+    get_barplots(ax[2], dataset_name, modality, "vit_l", title_as_model_name=True)
+    get_barplots(ax[3], dataset_name, modality, "vit_h", title_as_model_name=True)
+
+    if dataset_name != "cremi":
+        dsplit =  dataset_name.split("/")
+        dataset_name = dsplit[0].upper() + f" ({dsplit[1].upper()})"
 
     _get_plot_postprocessing(
         fig=fig,
-        experiment_title=MODELS[model_type],
-        save_path=f"em_specialist_{model_type}_evaluation.svg",
+        experiment_title=dataset_name.upper(),
+        save_path=f"em_{dataset_name}_specialist_evaluation.svg",
         ignore_legends=True,
-        title_loc=0.97
+        title_loc=0.98,
+        ylabel_choice="em",
+        bba=(0.5, -0.01),
+        adj_params={"wspace": 0.05, "top": 0.85, "bottom": 0.15},
+        y_loc=0.16, x_loc=-10.7,
     )
 
 
 def main():
+    plot_em_specialists("cremi")
+    plot_em_specialists("asem/er")
+
+    return
+
     # plot_evaluation_for_lm_datasets("vit_l")
     # plot_evaluation_for_em_datasets("vit_l")
 
@@ -357,7 +384,6 @@ def main():
     for model in all_models:
         plot_evaluation_for_all_em_datasets(model)
         plot_evaluation_for_all_lm_datasets(model)
-        # plot_em_specialists(model)
 
 
 if __name__ == "__main__":
