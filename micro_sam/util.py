@@ -42,11 +42,11 @@ except ImportError:
 
 # this is the default model used in micro_sam
 # currently set to the default vit_h
-_DEFAULT_MODEL = "vit_h"
+_DEFAULT_MODEL = "vit_l"
 
 # The valid model types. Each type corresponds to the architecture of the
 # vision transformer used within SAM.
-_MODEL_TYPES = ("vit_h", "vit_b", "vit_l", "vit_t")
+_MODEL_TYPES = ("vit_l", "vit_b", "vit_h", "vit_t")
 
 
 # TODO define the proper type for image embeddings
@@ -112,6 +112,7 @@ def models():
     }
     registry = {**encoder_registry, **decoder_registry}
 
+    # Note: the modelzoo urls should be updated at some point to not point at 'staged' but 'published'.
     encoder_urls = {
         # the default segment anything models
         "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
@@ -120,13 +121,13 @@ def models():
         # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
         "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
         # the current version of our models on zenodo
-        "vit_t_lm": "https://sandbox.zenodo.org/records/45542/files/vit_t.pt?download=1",
+        "vit_t_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/staged/1/files/vit_t.pt",
         # TODO more to come
         # "vit_b_em_organelles": "https://zenodo.org/records/10524828/files/vit_b_em_organelles.pth?download=1",
         # "vit_b_em_boundaries": "https://zenodo.org/records/10524894/files/vit_b_em_boundaries.pth?download=1",
     }
     decoder_urls = {
-        "vit_t_lm_decoder": "https://sandbox.zenodo.org/records/45542/files/vit_t_decoder.pt?download=1"
+        "vit_t_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/staged/1/files/vit_t_decoder.pt"
     }
     urls = {**encoder_urls, **decoder_urls}
 
