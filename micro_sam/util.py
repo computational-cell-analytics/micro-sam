@@ -95,39 +95,56 @@ def models():
     # To generate the xxh128 hash:
     #     xxh128sum filename
     encoder_registry = {
-        # the default segment anything models
+        # The default segment anything models:
         "vit_h": "xxh128:97698fac30bd929c2e6d8d8cc15933c2",
         "vit_l": "xxh128:a82beb3c660661e3dd38d999cc860e9a",
         "vit_b": "xxh128:6923c33df3637b6a922d7682bfc9a86b",
-        # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
+        # The model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM.
         "vit_t": "xxh128:8eadbc88aeb9d8c7e0b4b60c3db48bd0",
-        # the current version of our models on zenodo
+        # The current version of our models in the modelzoo.
+        # LM generalist models:
+        "vit_l_lm": "xxh128:ad3afe783b0d05a788eaf3cc24b308d2",
+        "vit_b_lm": "xxh128:61ce01ea731d89ae41a252480368f886",
         "vit_t_lm": "xxh128:f90e2ba3dd3d5b935aa870cf2e48f689",
-        # TODO more to come
-        # "vit_b_em_organelles": "xxh128:3919c2b761beba7d3f4ece342c9f5369",
-        # "vit_b_em_boundaries": "xxh128:3099fe6339f5be91ca84db889db1909f",
+        # EM models:
+        "vit_l_em_organelles": "xxh128:096c9695966803ca6fde24f4c1e3c3fb",
+        "vit_b_em_organelles": "xxh128:f6f6593aeecd0e15a07bdac86360b6cc",
+        "vit_t_em_organelles": "xxh128:253474720c497cce605e57c9b1d18fd9",
     }
+    # Additional decoders for instance segmentation.
     decoder_registry = {
+        # LM generalist models:
+        "vit_l_lm_decoder": "xxh128:40c1ae378cfdce24008b9be24889a5b1",
+        "vit_b_lm_decoder": "xxh128:1bac305195777ba7375634ca15a3c370",
         "vit_t_lm_decoder": "xxh128:82d3604e64f289bb66ec46a5643da169",
+        # EM models:
+        "vit_l_em_organelles_decoder": "xxh128:d60fd96bd6060856f6430f29e42568fb",
+        "vit_b_em_organelles_decoder": "xxh128:b2d4dcffb99f76d83497d39ee500088f",
+        "vit_t_em_organelles_decoder": "xxh128:8f897c7bb93174a4d1638827c4dd6f44",
     }
     registry = {**encoder_registry, **decoder_registry}
 
     # Note: the modelzoo urls should be updated at some point to not point at 'staged' but 'published'.
     encoder_urls = {
-        # the default segment anything models
         "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
         "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
         "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
-        # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
         "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
-        # the current version of our models on zenodo
+        "vit_l_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/staged/1/files/vit_l.pt",
+        "vit_b_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/staged/1/files/vit_b.pt",
         "vit_t_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/staged/1/files/vit_t.pt",
-        # TODO more to come
-        # "vit_b_em_organelles": "https://zenodo.org/records/10524828/files/vit_b_em_organelles.pth?download=1",
-        # "vit_b_em_boundaries": "https://zenodo.org/records/10524894/files/vit_b_em_boundaries.pth?download=1",
+        "vit_l_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/staged/1/files/vit_l.pt",
+        "vit_b_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/staged/1/files/vit_b.pt",
+        "vit_t_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/staged/1/files/vit_t.pt",
     }
+
     decoder_urls = {
-        "vit_t_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/staged/1/files/vit_t_decoder.pt"
+        "vit_l_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/staged/1/files/vit_l_decoder.pt",
+        "vit_b_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/staged/1/files/vit_b_decoder.pt",
+        "vit_t_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/staged/1/files/vit_t_decoder.pt",
+        "vit_l_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/staged/1/files/vit_l_decoder.pt",
+        "vit_b_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/staged/1/files/vit_b_decoder.pt",
+        "vit_t_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/staged/1/files/vit_t_decoder.pt",
     }
     urls = {**encoder_urls, **decoder_urls}
 

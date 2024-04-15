@@ -1,8 +1,11 @@
 import os
+import time
 
 import github
 import owncloud
 import yaml
+
+URL_BASE = "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/%s/staged/1/files/%s"
 
 
 def trigger_workflow(model_name, url):
@@ -61,24 +64,50 @@ def upload_model_via_oc(model_zip_path):
 
 
 OC_MODELS = {
-    "vit_t_lm": "https://owncloud.gwdg.de/index.php/s/d21I2lnOjsnjLpz/download"
+    "vit_t_lm": "https://owncloud.gwdg.de/index.php/s/d21I2lnOjsnjLpz/download",
+    "vit_b_lm": "https://owncloud.gwdg.de/index.php/s/PIYSswEX6WfP9Tj/download",
+    "vit_l_lm": "https://owncloud.gwdg.de/index.php/s/APvKGYB91UMISV5/download",
+    "vit_t_em_organelles": "https://owncloud.gwdg.de/index.php/s/2hxRZ7JePPpLRQN/download",
+    "vit_b_em_organelles": "https://owncloud.gwdg.de/index.php/s/1yT6w2dpI3bdzrR/download",
+    "vit_l_em_organelles": "https://owncloud.gwdg.de/index.php/s/21Q8YaDj7Z8HMNN/download",
 }
 
+UPLOADED_MODELS = (
+    "vit_t_lm",
+)
 
-# TODO check which models have been uploaded and skip them
-# So theat we can just do this in a loop
+
 def upload_model_manual(model_zip_path):
     url = OC_MODELS[os.path.basename(model_zip_path)]
-    model_name = get_model_name(model_zip_path)
-    trigger_workflow(model_name, url)
+    model_id = get_model_name(model_zip_path)
+    trigger_workflow(model_id, url)
 
 
-# TODO auto-generate the links
-# https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/acclaimed-angelfish/staged/1/files/bioimageio.yaml
-# https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/staged/1/files/bioimageio.yaml
+def upload_all_models():
+    for model_name, url in OC_MODELS.items():
+        if model_name in UPLOADED_MODELS:
+            print("Model", model_name, "is already uploaded")
+            continue
+        modality = "lm" if model_name.endswith("lm") else "em_organelles"
+        model_zip_path = os.path.join(f"./exported_models/{modality}/{model_name}")
+        assert os.path.exists(model_zip_path), model_zip_path
+
+        upload_model_manual(model_zip_path)
+
+        model_type = model_name[:5]
+        model_id = get_model_name(model_zip_path)
+        print("Model", model_name, "uploaded")
+        print(model_name, URL_BASE % (model_id, f"{model_type}.pt"))
+        print(f"{model_name}_decoder", URL_BASE % (model_id, f"{model_type}_decoder.pt"))
+        print()
+        time.sleep(1)
+
+
 def main():
     # upload_model_via_oc("./exported_models/lm/vit_t_lm")
-    upload_model_manual("./exported_models/lm/vit_t_lm")
+    # upload_model_manual("./exported_models/lm/vit_t_lm")
+
+    upload_all_models()
 
 
 if __name__ == "__main__":

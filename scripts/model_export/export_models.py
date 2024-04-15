@@ -8,6 +8,7 @@ import warnings
 from glob import glob
 
 import bioimageio.spec.model.v0_5 as spec
+import h5py
 import imageio.v3 as imageio
 import numpy as np
 import requests
@@ -15,6 +16,7 @@ import xxhash
 import yaml
 
 from micro_sam.bioimageio import export_sam_model
+from skimage.measure import label
 
 BUF_SIZE = 65536  # lets read stuff in 64kb chunks!
 
@@ -23,7 +25,7 @@ OUTPUT_FOLDER = "./exported_models"
 
 
 def create_doc(model_type, modality, version):
-    if modality not in ("lm", "em_mito"):
+    if modality not in ("lm", "em_organelles"):
         raise ValueError(f"Invalid modality template {modality}")
 
     template_file = os.path.join(
@@ -105,10 +107,20 @@ def get_data(modality):
         )
         image = imageio.imread(image_path)
         label_image = imageio.imread(label_path)
-        assert image.shape == label_image.shape
     else:
-        raise RuntimeError(modality)
+        path = "/home/pape/Work/data/kasthuri/kasthuri_train.h5"
+        with h5py.File(path, "r") as f:
+            image = f["raw"][0]
+            label_image = f["labels"][0]
+            label_image = label(label_image == 1)
 
+    # import napari
+    # v = napari.Viewer()
+    # v.add_image(image)
+    # v.add_labels(label_image)
+    # napari.run()
+
+    assert image.shape == label_image.shape
     return image, label_image
 
 
@@ -174,28 +186,30 @@ def export_model(model_path, model_type, modality, version, email):
     print(f"{export_name}_decoder", f"xxh128:{decoder_checksum}")
 
 
-def export_all_models():
-    models = glob(os.path.join("./new_models/*.pt"))
-    model_type = "vit_b"
-    for model_path in models:
-        export_name = os.path.basename(model_path).replace(".pt", ".pth")
-        export_model(model_path, model_type, export_name)
+def export_all_models(email):
+    models = glob(os.path.join("./v2/**/vit*"))
+    for path in models:
+        modality, model_type = path.split("/")[-2:]
+        # print(model_path, modality, model_type)
+        model_path = os.path.join(path, "best.pt")
+        assert os.path.exists(model_path), model_path
+        export_model(model_path, model_type, modality, version=2, email=email)
 
 
+# For testing.
 def export_vit_t_lm(email):
     model_type = "vit_t"
     model_path = os.path.join(INPUT_FOLDER, "lm", "generalist", model_type, "best.pt")
     export_model(model_path, model_type, "lm", version=2, email=email)
 
 
-# Update this to automate model exports more.
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--email", required=True)
     args = parser.parse_args()
 
-    export_vit_t_lm(args.email)
-    # export_all_models()
+    # export_vit_t_lm(args.email)
+    export_all_models(args.email)
 
 
 if __name__ == "__main__":
