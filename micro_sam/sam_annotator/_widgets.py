@@ -699,7 +699,7 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
     tile_shape = (tile_shape_x, tile_shape_y)
     halo = (halo_x, halo_y)
     # check if tile_shape/halo are not set: (0, 0)
-    if all(item == 0 for item in tile_shape):
+    if all(item in (0, None) for item in tile_shape):
         tile_shape = None
     # check if at least 1 param is given
     elif tile_shape[0] == 0 or tile_shape[1] == 0:
@@ -713,7 +713,7 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
             tile_shape = (256, tile_shape[1])  # Create a new tuple
         if tile_shape[1] < 256:
             tile_shape = (tile_shape[0], 256)  # Create a new tuple with modified value
-    if all(item == 0 for item in halo):
+    if all(item in (0, None) for item in halo):
         if tile_shape is not None:
             halo = (0, 0)
         else:
@@ -745,8 +745,14 @@ class EmbeddingWidget(_WidgetBase):
 
         # Section 3: The button to trigger the embedding computation.
         self.run_button = QtWidgets.QPushButton("Compute Embeddings")
+        self.run_button.clicked.connect(self._initialize_image)
         self.run_button.clicked.connect(self.__call__)
         self.layout().addWidget(self.run_button)
+
+    def _initialize_image(self):
+        state = AnnotatorState()
+        image_shape = self.image_selection.get_value().data.shape
+        state.image_shape = image_shape
 
     def _create_image_section(self):
         image_section = QtWidgets.QVBoxLayout()
@@ -876,7 +882,7 @@ class EmbeddingWidget(_WidgetBase):
 
                 # Load existing parameters.
                 self.model_type = f.attrs["model_type"]
-                if "tile_shape" in f.attrs:
+                if "tile_shape" in f.attrs and f.attrs["tile_shape"] is not None:
                     self.tile_x, self.tile_y = f.attrs["tile_shape"]
                     self.halo_x, self.halo_y = f.attrs["halo"]
                     val_results = {

@@ -54,7 +54,7 @@ class _AnnotatorBase(QtWidgets.QWidget):
         # Connect events for the image selection box.
         self._viewer.layers.events.inserted.connect(self._embedding_widget.image_selection.reset_choices)
         self._viewer.layers.events.removed.connect(self._embedding_widget.image_selection.reset_choices)
-        # Connect the run button with the fundtion to update the image.
+        # Connect the run button with the function to update the image.
         self._embedding_widget.run_button.clicked.connect(self._update_image)
 
         # Create the prompt widget. (The same for all plugins.)
