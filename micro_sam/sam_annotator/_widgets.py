@@ -881,7 +881,7 @@ class EmbeddingWidget(_WidgetBase):
                         return _generate_message("error", msg)
 
                 # Load existing parameters.
-                self.model_type = f.attrs["model_name"]
+                self.model_type = f.attrs.get("model_name", f.attrs["model_type"])
                 if "tile_shape" in f.attrs and f.attrs["tile_shape"] is not None:
                     self.tile_x, self.tile_y = f.attrs["tile_shape"]
                     self.halo_x, self.halo_y = f.attrs["halo"]

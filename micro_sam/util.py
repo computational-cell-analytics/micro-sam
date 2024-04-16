@@ -684,7 +684,7 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
             # match in order to not invalidate previous embedding files.
             # Instead we just raise a warning. (For the version we probably also don't want to fail
             # i the future since it should not invalidate the embeddings).
-            if key in ("micro_sam_version", "model_hash"):
+            if key in ("micro_sam_version", "model_hash", "model_name"):
                 warnings.warn(
                     f"The signature for {key} in embeddings file {save_path} has a mismatch: "
                     f"{f.attrs.get(key)} != {val}. This key was recently added, so your embeddings are likely correct. "
