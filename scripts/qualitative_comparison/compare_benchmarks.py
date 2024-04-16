@@ -38,6 +38,10 @@ def compare_cellpose_vs_ais():
     # once this is done, we check the n best cases and compare them with amg and ais
 
 
+def compare_covid_if_cellpose_vs_ais():
+    
+
+
 def main():
     compare_cellpose_vs_ais()
 

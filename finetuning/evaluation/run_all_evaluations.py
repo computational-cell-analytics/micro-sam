@@ -92,10 +92,27 @@ def for_livecell(specific_script):
     )
 
 
+def for_em_benchmarking(specific_script):
+    # let's run for em
+    run_one_setup(
+        all_dataset_list=[
+            "mitolab/c_elegans", "mitolab/fly_brain", "mitolab/glycolytic_muscle",
+            "mitolab/hela_cell", "mitolab/tem", "lucchi",
+        ],
+        all_model_list=ALl_MODELS,
+        all_experiment_set_list=["vanilla", "generalist"],
+        roi="organelles",
+        specific_script=specific_script
+    )
+
+
 def main(args):
-    for_all_lm(specific_script=args.specific_script)
-    for_all_em(specific_script=args.specific_script)
-    for_livecell(specific_script=args.specific_script)
+    # for_all_lm(specific_script=args.specific_script)
+    # for_all_em(specific_script=args.specific_script)
+
+    # for_livecell(specific_script=args.specific_script)
+
+    for_em_benchmarking(specific_script=args.specific_script)
 
 
 if __name__ == "__main__":
