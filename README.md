@@ -55,6 +55,10 @@ Compared to these we support more applications (2d, 3d and tracking), and provid
 
 ## Release Overview
 
+**New in version 0.4.1**
+
+- Bugfix for the image series annotator. Before the automatic segmentation did not work correctly.
+
 **New in version 0.4.0**
 
 - Significantly improved model finetuning

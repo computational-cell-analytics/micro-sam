@@ -11,6 +11,13 @@ The library
 - implements training functionality that can be used for finetuning on your own data in `micro_sam.training`.
 - provides functionality for quantitative and qualitative evaluation of Segment Anything models in `micro_sam.evaluation`.
 
+You can import these sub-modules via
+```python
+import micro_sam.prompt_based_segmentation
+import micro_sam.instance_segmentation
+# etc.
+```
+
 This functionality is used to implement the interactive annotation tools and can also be used as a standalone python library.
 Some preliminary examples for how to use the python library can be found [here](https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/use_as_library). Check out the `Submodules` documentation for more details.
 
