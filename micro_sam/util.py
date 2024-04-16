@@ -354,6 +354,7 @@ def get_sam_model(
     predictor = SamPredictor(sam)
     predictor.model_type = abbreviated_model_type
     predictor._hash = model_hash
+    predictor.model_name = model_type
 
     # Add the decoder to the state if we have one and if the state is returned.
     if decoder_path is not None and return_state:
@@ -653,6 +654,7 @@ def _get_embedding_signature(input_, predictor, tile_shape, halo, data_signature
         "tile_shape": tile_shape if tile_shape is None else list(tile_shape),
         "halo": halo if halo is None else list(halo),
         "model_type": predictor.model_type,
+        "model_name": predictor.model_name,
         "micro_sam_version": __version__,
         "model_hash": getattr(predictor, "_hash", None),
     }
