@@ -860,7 +860,7 @@ class EmbeddingWidget(_WidgetBase):
         # Check if we have an existing embedding path.
         # If yes we check the data signature of these embeddings against the selected image
         # and we ask the user if they want to load these embeddings.
-        if (self.embeddings_save_path is not None) and os.listdir(self.embeddings_save_path):
+        if self.embeddings_save_path and os.listdir(self.embeddings_save_path):
             try:
                 f = zarr.open(self.embeddings_save_path, "a")
 
@@ -888,11 +888,11 @@ class EmbeddingWidget(_WidgetBase):
                     val_results = {
                         "message_type": "info",
                         "message": (f"Load embeddings for model: {self.model_type} with tile shape: "
-                                    "{self.tile_x}, {self.tile_y} and halo: {self.halo_x}, {self.halo_y}.")
+                                    f"{self.tile_x}, {self.tile_y} and halo: {self.halo_x}, {self.halo_y}.")
                     }
                 else:
-                    self.tile_x, self.tile_y = None, None
-                    self.halo_x, self.halo_y = None, None
+                    self.tile_x, self.tile_y = 0, 0
+                    self.halo_x, self.halo_y = 0, 0
                     val_results = {
                         "message_type": "info",
                         "message": f"Load embeddings for model: {self.model_type}."
