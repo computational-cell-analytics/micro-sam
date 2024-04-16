@@ -110,7 +110,7 @@ def main(args):
     # for_all_lm(specific_script=args.specific_script)
     # for_all_em(specific_script=args.specific_script)
 
-    # for_livecell(specific_script=args.specific_script)
+    for_livecell(specific_script=args.specific_script)
 
     for_em_benchmarking(specific_script=args.specific_script)
 

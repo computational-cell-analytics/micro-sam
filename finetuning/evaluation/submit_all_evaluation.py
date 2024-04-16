@@ -18,7 +18,7 @@ def write_batch_script(
 ):
     "Writing scripts with different fold-trainings for micro-sam evaluation"
     batch_script = f"""#!/bin/bash
-#SBATCH -c 8
+#SBATCH -c 16
 #SBATCH --mem 64G
 #SBATCH -t 4-00:00:00
 #SBATCH -p grete:shared
