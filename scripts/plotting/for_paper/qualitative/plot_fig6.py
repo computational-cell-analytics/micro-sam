@@ -5,7 +5,8 @@ import imageio.v3 as imageio
 import h5py
 import napari
 
-DATA_ROOT = "./figure_data"
+# DATA_ROOT = "./figure_data"
+DATA_ROOT = "/media/anwai/ANWAI/figure_data"
 
 
 def plot_3d():
@@ -17,13 +18,22 @@ def plot_3d():
         seg_default = f["segmentation/sam_default"][:]
         seg_finetuned = f["segmentation/sam_finetuned"][:]
 
+    raw_slice = raw.copy()
+    z = len(raw_slice) // 2
+    raw_slice[:z] = 0
+    raw_slice[(z+2):] = 0
+
     v = napari.Viewer()
     v.add_image(raw)
+    v.add_image(raw_slice)
     v.add_labels(seg_ilastik)
     v.add_labels(seg_default)
     v.add_labels(seg_finetuned)
     v.add_labels(labels)
     napari.run()
+
+    # Exporting the label stack to try out stuff
+    # imageio.imwrite(os.path.join(DATA_ROOT, "3d_user_study_seg_finetuned.tif"), seg_finetuned)
 
 
 def create_data_2d_default():
