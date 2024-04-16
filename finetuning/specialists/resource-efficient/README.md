@@ -3,7 +3,6 @@
 All the fullscale experiment in `micro-sam` have been performed on A100s. Can we finetune Segment Anything on limited resources?
 
 ## Available Resource Combinations:
-- `xps13` (CPU - local)
 - `medium` (CPU - SCC)
 - `gtx1080`: (GPU - SCC) 8GB
 - `rtx5000`: (GPU - SCC) 16GB
@@ -79,8 +78,6 @@ All jobs are tested on `medium` partition.
     - `vit_t`: freeze `image_encoder`
     - `n_objects`: 1
 
-5. `XPS13`:
-    - TODO
 
 ## Scripts:
 
