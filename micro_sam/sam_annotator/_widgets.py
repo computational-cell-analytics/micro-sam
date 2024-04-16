@@ -768,6 +768,17 @@ class EmbeddingWidget(_WidgetBase):
     def _update_model(self):
         print("Computed embeddings for", self.model_type)
         state = AnnotatorState()
+        # Update the widget itself. This is necessary because we may have loaded
+        # some settings from the embedding file and have to reflect them in the widget.
+        vutil._sync_embedding_widget(
+            self,
+            model_type=self.model_type,
+            save_path=self.embeddings_save_path,
+            checkpoint_path=self.custom_weights,
+            device=self.device,
+            tile_shape=[self.tile_x, self.tile_y],
+            halo=[self.halo_x, self.halo_y]
+        )
         if "autosegment" in state.widgets:
             with_decoder = state.decoder is not None
             vutil._sync_autosegment_widget(
@@ -912,26 +923,8 @@ class EmbeddingWidget(_WidgetBase):
 
     def __call__(self, skip_validate=False):
         # Validate user inputs.
-        abort = False  # Flag to track cancellation
-        if not skip_validate:
-            abort = self._validate_inputs()
-
-            if abort:
-                return
-
-            else:
-                # Update the GUI. This is necessary because we may have
-                # loaded some settings from the embedding file and want to
-                # reflect those settings in the values shown in the GUI.
-                vutil._sync_embedding_widget(
-                    self,
-                    model_type=self.model_type,
-                    save_path=self.embeddings_save_path,
-                    checkpoint_path=self.custom_weights,
-                    device=self.device,
-                    tile_shape=[self.tile_x, self.tile_y],
-                    halo=[self.halo_x, self.halo_y]
-                )
+        if not skip_validate and self._validate_inputs():
+            return
 
         # Get the image.
         image = self.image_selection.get_value()
