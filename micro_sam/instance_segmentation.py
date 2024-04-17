@@ -1070,7 +1070,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         )
         tiling = blocking([0, 0], original_size, tile_shape)
 
-        _, pbar_init, pbar_update = util.handle_pbar(verbose, pbar_init, pbar_update)
+        _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
         pbar_init(tiling.numberOfBlocks, "Initialize tiled instannce segmentation with decoder")
 
         foreground = np.zeros(original_size, dtype="float32")
@@ -1099,6 +1099,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
             foreground[inner_bb] = output[0][local_bb]
             center_distances[inner_bb] = output[1][local_bb]
             boundary_distances[inner_bb] = output[2][local_bb]
+        pbar_close()
 
         # Set the state.
         self._foreground = foreground
