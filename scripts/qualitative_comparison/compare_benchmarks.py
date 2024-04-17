@@ -29,14 +29,14 @@ def get_random_colors(labels):
 
 def compare_livecell_cellpose_vs_ais(all_images, all_gt):
     amg_vanilla_root = os.path.join(ROOT, "experiments/new_models/v3/vanilla/lm/livecell/vit_l/amg/inference/")
-    amg_gen_root = os.path.join(ROOT, "experiments/new_models/v3/specialist/lm/livecell/vit_l/amg/inference/")
-    ais_gen_root = os.path.join(
+    amg_spec_root = os.path.join(ROOT, "experiments/new_models/v3/specialist/lm/livecell/vit_l/amg/inference/")
+    ais_spec_root = os.path.join(
         ROOT,
         "experiments/new_models/v3/specialist/lm/livecell/vit_l/instance_segmentation_with_decoder/inference/"
     )
     assert os.path.exists(amg_vanilla_root), amg_vanilla_root
-    assert os.path.exists(amg_gen_root), amg_gen_root
-    assert os.path.exists(ais_gen_root), ais_gen_root
+    assert os.path.exists(amg_spec_root), amg_spec_root
+    assert os.path.exists(ais_spec_root), ais_spec_root
 
     cellpose_root = os.path.join(ROOT, "experiments/benchmarking/cellpose/livecell/livecell/predictions/")
 
@@ -45,7 +45,7 @@ def compare_livecell_cellpose_vs_ais(all_images, all_gt):
         image_id = os.path.split(gt_path)[-1]
 
         gt = imageio.imread(gt_path)
-        ais_seg = imageio.imread(os.path.join(ais_gen_root, image_id))
+        ais_seg = imageio.imread(os.path.join(ais_spec_root, image_id))
 
         score = {
             "name": image_id.split(".")[0],
@@ -55,7 +55,7 @@ def compare_livecell_cellpose_vs_ais(all_images, all_gt):
 
     all_res = pd.concat(all_res, ignore_index=True)
 
-    sscores = np.array(all_res["score"]).argsort()[::-1][250:]
+    sscores = np.array(all_res["score"]).argsort()[::-1][1000:]
     best_image_ids = [all_res.iloc[sscore]["name"] for sscore in sscores]
 
     for image_path, gt_path in zip(all_images, all_gt):
@@ -71,8 +71,8 @@ def compare_livecell_cellpose_vs_ais(all_images, all_gt):
         image = _overlay_outline(image, gt, 0)
 
         # amg_vanilla = imageio.imread(os.path.join(amg_vanilla_root, image_id))
-        amg_gen = imageio.imread(os.path.join(amg_gen_root, image_id))
-        ais_gen = imageio.imread(os.path.join(ais_gen_root, image_id))
+        amg_spec = imageio.imread(os.path.join(amg_spec_root, image_id))
+        ais_spec = imageio.imread(os.path.join(ais_spec_root, image_id))
 
         cellpose_seg = imageio.imread(os.path.join(cellpose_root, image_id))
 
@@ -87,10 +87,10 @@ def compare_livecell_cellpose_vs_ais(all_images, all_gt):
         # ax[2].imshow(amg_vanilla, cmap=get_random_colors(amg_vanilla), interpolation="nearest")
         # ax[2].axis("off")
 
-        ax[3].imshow(amg_gen, cmap=get_random_colors(amg_gen), interpolation="nearest")
+        ax[3].imshow(amg_spec, cmap=get_random_colors(amg_spec), interpolation="nearest")
         ax[3].axis("off")
 
-        ax[4].imshow(ais_gen, cmap=get_random_colors(ais_gen), interpolation="nearest")
+        ax[4].imshow(ais_spec, cmap=get_random_colors(ais_spec), interpolation="nearest")
         ax[4].axis("off")
 
         plt.subplots_adjust(wspace=0.05)
