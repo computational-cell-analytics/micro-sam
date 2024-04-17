@@ -1180,7 +1180,7 @@ def _handle_amg_state(state, i, pbar_init, pbar_update):
                 with open(cache_path, "wb") as f:
                     pickle.dump(amg_state_i, f)
 
-            cache_path = state.amge_state.get("cache_path", None)
+            cache_path = state.amg_state.get("cache_path", None)
             if cache_path is not None:
                 save_key = f"state-{i}"
                 with h5py.File(cache_path, "a") as f:
