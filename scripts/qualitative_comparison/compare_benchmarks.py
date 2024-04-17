@@ -29,10 +29,10 @@ def get_random_colors(labels):
 
 def compare_livecell_cellpose_vs_ais(all_images, all_gt):
     amg_vanilla_root = os.path.join(ROOT, "experiments/new_models/v3/vanilla/lm/livecell/vit_l/amg/inference/")
-    amg_gen_root = os.path.join(ROOT, "experiments/new_models/v3/generalist/lm/livecell/vit_l/amg/inference/")
+    amg_gen_root = os.path.join(ROOT, "experiments/new_models/v3/specialist/lm/livecell/vit_l/amg/inference/")
     ais_gen_root = os.path.join(
         ROOT,
-        "experiments/new_models/v3/generalist/lm/livecell/vit_l/instance_segmentation_with_decoder/inference/"
+        "experiments/new_models/v3/specialist/lm/livecell/vit_l/instance_segmentation_with_decoder/inference/"
     )
     assert os.path.exists(amg_vanilla_root), amg_vanilla_root
     assert os.path.exists(amg_gen_root), amg_gen_root
@@ -55,7 +55,7 @@ def compare_livecell_cellpose_vs_ais(all_images, all_gt):
 
     all_res = pd.concat(all_res, ignore_index=True)
 
-    sscores = np.array(all_res["score"]).argsort()[::-1][:10]
+    sscores = np.array(all_res["score"]).argsort()[::-1][250:]
     best_image_ids = [all_res.iloc[sscore]["name"] for sscore in sscores]
 
     for image_path, gt_path in zip(all_images, all_gt):
