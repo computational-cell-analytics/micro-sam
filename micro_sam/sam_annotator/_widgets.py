@@ -596,7 +596,7 @@ def _validate_embeddings(viewer: "napari.viewer.Viewer"):
 
 def _validate_prompts(viewer: "napari.viewer.Viewer") -> bool:
     if len(viewer.layers["prompts"].data) == 0 and len(viewer.layers["point_prompts"].data) == 0:
-        msg = "No prompts given. Create prompts first to segment objects."
+        msg = "No prompts were given. Please provide prompts to run interactive segmentation."
         return _generate_message("error", msg)
     else:
         return False
@@ -958,7 +958,6 @@ class EmbeddingWidget(_WidgetBase):
         # Process tile_shape and halo, set other data.
         tile_shape, halo = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
         save_path = None if self.embeddings_save_path == "" else self.embeddings_save_path
-        print(save_path)
         image_data = image.data
 
         # Set up progress bar and signals for using it within a threadworker.
