@@ -305,7 +305,7 @@ def merge_instance_segmentation_3d(
     Returns:
         The merged segmentation.
     """
-    _, pbar_init, pbar_update = util.handle_pbar(verbose, pbar_init, pbar_update)
+    _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
 
     if gap_closing is not None and gap_closing > 0:
         pbar_init(slice_segmentation.shape[0] + 1, "Merge segmentation")
@@ -343,7 +343,9 @@ def merge_instance_segmentation_3d(
                 filter_ids.append(prop.label)
         if filter_ids:
             segmentation[np.isin(segmentation, filter_ids)] = 0
+
     pbar_update(1)
+    pbar_close()
 
     return segmentation
 

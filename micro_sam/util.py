@@ -700,6 +700,11 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
 # Helper function for optional external progress bars.
 def handle_pbar(verbose, pbar_init, pbar_update):
     """@private"""
+
+    # Noop to provide dummy functions.
+    def noop(*args):
+        pass
+
     if verbose and pbar_init is None:  # we are verbose and don't have an external progress bar.
         assert pbar_update is None  # avoid inconsistent state of callbacks
 
@@ -719,13 +724,11 @@ def handle_pbar(verbose, pbar_init, pbar_update):
     elif verbose and pbar_init is not None:  # external pbar -> we don't have to do anything
         assert pbar_update is not None
         pbar = None
+        pbar_close = noop
 
     else:  # we are not verbose, do nothing
-        def noop(*args):
-            pass
-
         pbar = None
-        pbar_init, pbar_update = noop, noop
+        pbar_init, pbar_update, pbar_close = noop, noop, noop
 
     return pbar, pbar_init, pbar_update, pbar_close
 
@@ -795,6 +798,7 @@ def precompute_image_embeddings(
         embeddings = _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update)
     else:
         raise ValueError(f"Invalid dimesionality {input_.ndim}, expect 2 or 3 dim data.")
+
     pbar_close()
     return embeddings
 
