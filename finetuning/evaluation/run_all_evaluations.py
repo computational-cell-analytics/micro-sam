@@ -106,13 +106,25 @@ def for_em_benchmarking(specific_script):
     )
 
 
+def for_covid_if(specific_script):
+    # let's run for covid if
+    run_one_setup(
+        all_dataset_list=["covid_if"],
+        all_model_list=ALl_MODELS,
+        all_experiment_set_list=["vanilla", "generalist"],
+        roi="lm",
+        specific_script=specific_script
+    )
+
+
 def main(args):
     # for_all_lm(specific_script=args.specific_script)
     # for_all_em(specific_script=args.specific_script)
 
-    for_livecell(specific_script=args.specific_script)
+    # for_livecell(specific_script=args.specific_script)
+    # for_em_benchmarking(specific_script=args.specific_script)
 
-    for_em_benchmarking(specific_script=args.specific_script)
+    for_covid_if(specific_script=args.specific_script)
 
 
 if __name__ == "__main__":

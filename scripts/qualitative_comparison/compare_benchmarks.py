@@ -27,18 +27,28 @@ def get_random_colors(labels):
     return cmap
 
 
-def compare_livecell_cellpose_vs_ais(all_images, all_gt):
-    amg_vanilla_root = os.path.join(ROOT, "experiments/new_models/v3/vanilla/lm/livecell/vit_l/amg/inference/")
-    amg_spec_root = os.path.join(ROOT, "experiments/new_models/v3/specialist/lm/livecell/vit_l/amg/inference/")
+def compare_cellpose_vs_ais(all_images, all_gt, dataset_name):
+    amg_vanilla_root = os.path.join(ROOT, f"experiments/new_models/v3/vanilla/lm/{dataset_name}/vit_l/amg/inference/")
+
+    if dataset_name == "livecell":
+        usam_method = "specialist"
+        cp_method = "livecell"
+    else:
+        usam_method = "generalist"
+        cp_method = "cyto2"
+
+    amg_spec_root = os.path.join(
+        ROOT, f"experiments/new_models/v3/{usam_method}/lm/{dataset_name}/vit_l/amg/inference/"
+    )
     ais_spec_root = os.path.join(
         ROOT,
-        "experiments/new_models/v3/specialist/lm/livecell/vit_l/instance_segmentation_with_decoder/inference/"
+        f"experiments/new_models/v3/{usam_method}/lm/{dataset_name}/vit_l/instance_segmentation_with_decoder/inference/"
     )
     assert os.path.exists(amg_vanilla_root), amg_vanilla_root
     assert os.path.exists(amg_spec_root), amg_spec_root
     assert os.path.exists(ais_spec_root), ais_spec_root
 
-    cellpose_root = os.path.join(ROOT, "experiments/benchmarking/cellpose/livecell/livecell/predictions/")
+    cellpose_root = os.path.join(ROOT, f"experiments/benchmarking/cellpose/{dataset_name}/{cp_method}/predictions/")
 
     all_res = []
     for gt_path in tqdm(all_gt):
@@ -55,7 +65,7 @@ def compare_livecell_cellpose_vs_ais(all_images, all_gt):
 
     all_res = pd.concat(all_res, ignore_index=True)
 
-    sscores = np.array(all_res["score"]).argsort()[::-1][1000:]
+    sscores = np.array(all_res["score"]).argsort()[::-1]
     best_image_ids = [all_res.iloc[sscore]["name"] for sscore in sscores]
 
     for image_path, gt_path in zip(all_images, all_gt):
@@ -66,15 +76,19 @@ def compare_livecell_cellpose_vs_ais(all_images, all_gt):
         gt = imageio.imread(gt_path)
 
         image = imageio.imread(image_path)
-        image = _enhance_image(image, do_norm=False)
+        image = _enhance_image(image, do_norm=True if dataset_name == "covid_if" else False)
         image = _overlay_mask(image, gt, alpha=0.95)
         image = _overlay_outline(image, gt, 0)
 
-        # amg_vanilla = imageio.imread(os.path.join(amg_vanilla_root, image_id))
+        amg_vanilla = imageio.imread(os.path.join(amg_vanilla_root, image_id))
         amg_spec = imageio.imread(os.path.join(amg_spec_root, image_id))
         ais_spec = imageio.imread(os.path.join(ais_spec_root, image_id))
 
-        cellpose_seg = imageio.imread(os.path.join(cellpose_root, image_id))
+        cellpose_seg = imageio.imread(
+            os.path.join(
+                cellpose_root, image_id if dataset_name == "livecell" else f"covid_if_{Path(image_id).stem}_00001.tif"
+            )
+        )
 
         fig, ax = plt.subplots(1, 5, figsize=(30, 20), sharex=True, sharey=True)
 
@@ -84,8 +98,8 @@ def compare_livecell_cellpose_vs_ais(all_images, all_gt):
         ax[1].imshow(cellpose_seg, cmap=get_random_colors(cellpose_seg), interpolation="nearest")
         ax[1].axis("off")
 
-        # ax[2].imshow(amg_vanilla, cmap=get_random_colors(amg_vanilla), interpolation="nearest")
-        # ax[2].axis("off")
+        ax[2].imshow(amg_vanilla, cmap=get_random_colors(amg_vanilla), interpolation="nearest")
+        ax[2].axis("off")
 
         ax[3].imshow(amg_spec, cmap=get_random_colors(amg_spec), interpolation="nearest")
         ax[3].axis("off")
@@ -94,14 +108,11 @@ def compare_livecell_cellpose_vs_ais(all_images, all_gt):
         ax[4].axis("off")
 
         plt.subplots_adjust(wspace=0.05)
-        # plt.savefig(f"./{Path(image_id).stem}.png", bbox_inches="tight")
-        plt.savefig("./test.png", bbox_inches="tight")
+        plt.savefig(f"./figs/{dataset_name}-cellpose/{Path(image_id).stem}.svg", bbox_inches="tight")
         plt.close()
 
-        breakpoint()
 
-
-def compare_covid_if_cellpose_vs_ais(
+def compare_covid_if_rf(
     all_images, all_gt, resource_choice="cpu_32G-mem_16-cores"
 ):
     base_dir = "/scratch/usr/nimanwai/experiments/resource-efficient-finetuning/"
@@ -279,11 +290,8 @@ def compare_mitolab_mitonet_vs_ais(all_images, all_gt, dataset_name):
         ax[4].axis("off")
 
         plt.subplots_adjust(wspace=0.05)
-        # plt.savefig(f"./{Path(image_id).stem}.png", bbox_inches="tight")
-        plt.savefig("./test.png", bbox_inches="tight")
+        plt.savefig(f"./{Path(image_id).stem}.svg", bbox_inches="tight")
         plt.close()
-
-        breakpoint()
 
 
 def get_paths(dataset_name):
@@ -315,17 +323,20 @@ def get_paths(dataset_name):
     return sorted(image_paths), sorted(gt_paths)
 
 
-def compare_experiments(dataset_name):
+def compare_experiments(dataset_name, for_cellpose=True):
     all_images, all_gt = get_paths(dataset_name=dataset_name)
 
     if dataset_name == "livecell":
-        compare_livecell_cellpose_vs_ais(all_images, all_gt)
+        compare_cellpose_vs_ais(all_images, all_gt, dataset_name="livecell")
 
     elif dataset_name.startswith("mitolab") or dataset_name == "lucchi":
         compare_mitolab_mitonet_vs_ais(all_images, all_gt, dataset_name)
 
     elif dataset_name == "covid_if":
-        compare_covid_if_cellpose_vs_ais(all_images, all_gt)
+        if for_cellpose:
+            compare_cellpose_vs_ais(all_images, all_gt, dataset_name="covid_if")
+        else:
+            compare_covid_if_rf(all_images, all_gt)
 
 
 def main():
@@ -339,6 +350,8 @@ def main():
     # compare_experiments("lucchi")
 
     compare_experiments("livecell")
+
+    # compare_experiments("covid_if", for_cellpose=True)
 
 
 if __name__ == "__main__":
