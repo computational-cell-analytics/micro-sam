@@ -594,9 +594,19 @@ def _validate_embeddings(viewer: "napari.viewer.Viewer"):
     #     return False
 
 
+def _validate_prompts(viewer: "napari.viewer.Viewer") -> bool:
+    if len(viewer.layers["prompts"].data) == 0 and len(viewer.layers["point_prompts"].data) == 0:
+        msg = "No prompts were given. Please provide prompts to run interactive segmentation."
+        return _generate_message("error", msg)
+    else:
+        return False
+
+
 @magic_factory(call_button="Segment Object [S]")
 def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
     if _validate_embeddings(viewer):
+        return None
+    if _validate_prompts(viewer):
         return None
 
     shape = viewer.layers["current_object"].data.shape
@@ -624,6 +634,8 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
 @magic_factory(call_button="Segment Slice [S]")
 def segment_slice(viewer: "napari.viewer.Viewer") -> None:
     if _validate_embeddings(viewer):
+        return None
+    if _validate_prompts(viewer):
         return None
 
     shape = viewer.layers["current_object"].data.shape[1:]
@@ -657,7 +669,8 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
 def segment_frame(viewer: "napari.viewer.Viewer") -> None:
     if _validate_embeddings(viewer):
         return None
-
+    if _validate_prompts(viewer):
+        return None
     state = AnnotatorState()
     shape = state.image_shape[1:]
     position = viewer.cursor.position
@@ -768,6 +781,17 @@ class EmbeddingWidget(_WidgetBase):
     def _update_model(self):
         print("Computed embeddings for", self.model_type)
         state = AnnotatorState()
+        # Update the widget itself. This is necessary because we may have loaded
+        # some settings from the embedding file and have to reflect them in the widget.
+        vutil._sync_embedding_widget(
+            self,
+            model_type=self.model_type,
+            save_path=self.embeddings_save_path,
+            checkpoint_path=self.custom_weights,
+            device=self.device,
+            tile_shape=[self.tile_x, self.tile_y],
+            halo=[self.halo_x, self.halo_y]
+        )
         if "autosegment" in state.widgets:
             with_decoder = state.decoder is not None
             vutil._sync_autosegment_widget(
@@ -860,7 +884,7 @@ class EmbeddingWidget(_WidgetBase):
         # Check if we have an existing embedding path.
         # If yes we check the data signature of these embeddings against the selected image
         # and we ask the user if they want to load these embeddings.
-        if (self.embeddings_save_path is not None) and os.listdir(self.embeddings_save_path):
+        if self.embeddings_save_path and os.listdir(self.embeddings_save_path):
             try:
                 f = zarr.open(self.embeddings_save_path, "a")
 
@@ -881,18 +905,18 @@ class EmbeddingWidget(_WidgetBase):
                         return _generate_message("error", msg)
 
                 # Load existing parameters.
-                self.model_type = f.attrs["model_type"]
+                self.model_type = f.attrs.get("model_name", f.attrs["model_type"])
                 if "tile_shape" in f.attrs and f.attrs["tile_shape"] is not None:
                     self.tile_x, self.tile_y = f.attrs["tile_shape"]
                     self.halo_x, self.halo_y = f.attrs["halo"]
                     val_results = {
                         "message_type": "info",
                         "message": (f"Load embeddings for model: {self.model_type} with tile shape: "
-                                    "{self.tile_x}, {self.tile_y} and halo: {self.halo_x}, {self.halo_y}.")
+                                    f"{self.tile_x}, {self.tile_y} and halo: {self.halo_x}, {self.halo_y}.")
                     }
                 else:
-                    self.tile_x, self.tile_y = None, None
-                    self.halo_x, self.halo_y = None, None
+                    self.tile_x, self.tile_y = 0, 0
+                    self.halo_x, self.halo_y = 0, 0
                     val_results = {
                         "message_type": "info",
                         "message": f"Load embeddings for model: {self.model_type}."
@@ -912,26 +936,8 @@ class EmbeddingWidget(_WidgetBase):
 
     def __call__(self, skip_validate=False):
         # Validate user inputs.
-        abort = False  # Flag to track cancellation
-        if not skip_validate:
-            abort = self._validate_inputs()
-
-            if abort:
-                return
-
-            else:
-                # Update the GUI. This is necessary because we may have
-                # loaded some settings from the embedding file and want to
-                # reflect those settings in the values shown in the GUI.
-                vutil._sync_embedding_widget(
-                    self,
-                    model_type=self.model_type,
-                    save_path=self.embeddings_save_path,
-                    checkpoint_path=self.custom_weights,
-                    device=self.device,
-                    tile_shape=[self.tile_x, self.tile_y],
-                    halo=[self.halo_x, self.halo_y]
-                )
+        if not skip_validate and self._validate_inputs():
+            return
 
         # Get the image.
         image = self.image_selection.get_value()
@@ -951,7 +957,7 @@ class EmbeddingWidget(_WidgetBase):
 
         # Process tile_shape and halo, set other data.
         tile_shape, halo = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
-        save_path = self.embeddings_save_path
+        save_path = None if self.embeddings_save_path == "" else self.embeddings_save_path
         image_data = image.data
 
         # Set up progress bar and signals for using it within a threadworker.
@@ -1145,6 +1151,8 @@ class SegmentNDWidget(_WidgetBase):
     def __call__(self):
         if _validate_embeddings(self._viewer):
             return None
+        if _validate_prompts(self._viewer):
+            return None
         if self.tracking:
             return self._run_tracking()
         else:
@@ -1187,7 +1195,7 @@ def _handle_amg_state(state, i, pbar_init, pbar_update):
                 with open(cache_path, "wb") as f:
                     pickle.dump(amg_state_i, f)
 
-            cache_path = state.amge_state.get("cache_path", None)
+            cache_path = state.amg_state.get("cache_path", None)
             if cache_path is not None:
                 save_key = f"state-{i}"
                 with h5py.File(cache_path, "a") as f:
