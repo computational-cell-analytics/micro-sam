@@ -180,9 +180,12 @@ def image_series_annotator(
         nonlocal next_image_id
 
         segmentation = viewer.layers["committed_objects"].data
+        abort = False
         if segmentation.sum() == 0:
-            print("Nothing is segmented yet. Not advancing to next image.")
-            return
+            msg = "Nothing is segmented yet. Do you wish to continue to the next image?"
+            abort = widgets._generate_message("info", msg)
+            if abort:
+                return
 
         # Save the current segmentation.
         _save_segmentation(images[next_image_id], next_image_id, segmentation)
@@ -190,7 +193,10 @@ def image_series_annotator(
         # Load the next image.
         next_image_id += 1
         if next_image_id == len(images):
-            print("You have annotated the last image.")
+            msg = "You have annotated the last image."
+            print(msg)
+            # inform the user via dialog
+            # abort = widgets._generate_message("error", msg)
             viewer.close()
             return
 
