@@ -96,8 +96,8 @@ def models():
     #     xxh128sum filename
     encoder_registry = {
         # The default segment anything models:
-        "vit_h": "xxh128:97698fac30bd929c2e6d8d8cc15933c2",
         "vit_l": "xxh128:a82beb3c660661e3dd38d999cc860e9a",
+        "vit_h": "xxh128:97698fac30bd929c2e6d8d8cc15933c2",
         "vit_b": "xxh128:6923c33df3637b6a922d7682bfc9a86b",
         # The model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM.
         "vit_t": "xxh128:8eadbc88aeb9d8c7e0b4b60c3db48bd0",
@@ -126,8 +126,8 @@ def models():
 
     # Note: the modelzoo urls should be updated at some point to not point at 'staged' but 'published'.
     encoder_urls = {
-        "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
         "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
+        "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
         "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
         "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
         "vit_l_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/staged/1/files/vit_l.pt",
@@ -354,6 +354,7 @@ def get_sam_model(
     predictor = SamPredictor(sam)
     predictor.model_type = abbreviated_model_type
     predictor._hash = model_hash
+    predictor.model_name = model_type
 
     # Add the decoder to the state if we have one and if the state is returned.
     if decoder_path is not None and return_state:
@@ -653,6 +654,7 @@ def _get_embedding_signature(input_, predictor, tile_shape, halo, data_signature
         "tile_shape": tile_shape if tile_shape is None else list(tile_shape),
         "halo": halo if halo is None else list(halo),
         "model_type": predictor.model_type,
+        "model_name": predictor.model_name,
         "micro_sam_version": __version__,
         "model_hash": getattr(predictor, "_hash", None),
     }
@@ -682,7 +684,7 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
             # match in order to not invalidate previous embedding files.
             # Instead we just raise a warning. (For the version we probably also don't want to fail
             # i the future since it should not invalidate the embeddings).
-            if key in ("micro_sam_version", "model_hash"):
+            if key in ("micro_sam_version", "model_hash", "model_name"):
                 warnings.warn(
                     f"The signature for {key} in embeddings file {save_path} has a mismatch: "
                     f"{f.attrs.get(key)} != {val}. This key was recently added, so your embeddings are likely correct. "
