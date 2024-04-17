@@ -138,7 +138,7 @@ def get_n_objects_plots(max_objects=45):
         _itp_p_last_list.append(_itp_p)
         _itp_b_last_list.append(_itp_b)
 
-    plt.figure(figsize=(10, 10))
+    plt.figure(figsize=(25, 20))
 
     res = {
         "name": list(range(1, len(amg_list) + 1)),
@@ -194,9 +194,9 @@ def get_n_objects_plots(max_objects=45):
 
     ax.set_xlim(-0.5, len(res_df.columns[1:]) - 0.5)
 
-    plt.suptitle("Number of Objects per Batch", fontsize=26, x=0.45, y=0.945)
-    plt.xlabel("Inference Settings", fontdict={"fontsize": 13}, labelpad=15)
-    plt.ylabel("Segmentation Accuracy", fontdict={"fontsize": 13}, labelpad=15)
+    plt.suptitle("Number of Objects per Batch", x=0.45, y=0.945)
+    plt.xlabel("Inference Settings", labelpad=15)
+    plt.ylabel("Segmentation Accuracy", labelpad=30)
 
     save_path = "livecell_vit_b_n_objects.svg"
     plt.savefig(save_path)
@@ -206,8 +206,8 @@ def get_n_objects_plots(max_objects=45):
 
 
 def main():
-    get_partial_finetuning_plots()
-    # get_n_objects_plots()
+    # get_partial_finetuning_plots()
+    get_n_objects_plots()
 
 
 if __name__ == "__main__":

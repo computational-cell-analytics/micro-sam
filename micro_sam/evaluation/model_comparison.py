@@ -196,7 +196,7 @@ def _evaluate_samples(f, prefix, min_size):
     return eval_result
 
 
-def _overlay_mask(image, mask):
+def _overlay_mask(image, mask, alpha=0.6):
     assert image.ndim in (2, 3)
     # overlay the mask
     if image.ndim == 2:
@@ -206,15 +206,16 @@ def _overlay_mask(image, mask):
     assert overlay.shape[-1] == 3
     mask_overlay = np.zeros_like(overlay)
     mask_overlay[mask == 1] = [255, 0, 0]
-    alpha = 0.6
+    alpha = alpha
     overlay = alpha * overlay + (1.0 - alpha) * mask_overlay
     return overlay.astype("uint8")
 
 
-def _enhance_image(im):
+def _enhance_image(im, do_norm=True):
     # apply CLAHE to improve the image quality
-    im -= im.min(axis=(0, 1), keepdims=True)
-    im /= (im.max(axis=(0, 1), keepdims=True) + 1e-6)
+    if do_norm:
+        im -= im.min(axis=(0, 1), keepdims=True)
+        im /= (im.max(axis=(0, 1), keepdims=True) + 1e-6)
     im = exposure.equalize_adapthist(im)
     im *= 255
     return im

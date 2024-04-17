@@ -8,6 +8,7 @@ import pandas as pd
 import imageio.v3 as imageio
 from matplotlib import colors
 import matplotlib.pyplot as plt
+from skimage.measure import label as connected_components
 
 from elf.evaluation import mean_segmentation_accuracy
 
@@ -27,45 +28,93 @@ def get_random_colors(labels):
 
 
 def compare_livecell_cellpose_vs_ais(all_images, all_gt):
-    cellpose_root = os.path.join(ROOT, "experiments/benchmarking/cellpose/livecell/livecell/predictions/")
-    amg_root = os.path.join(ROOT, "experiments/new_models/v3/specialist/lm/livecell/vit_l/amg/inference/")
-    ais_root = os.path.join(
-        ROOT, "experiments/new_models/v3/specialist/lm/livecell/vit_l/instance_segmentation_with_decoder/inference/"
+    amg_vanilla_root = os.path.join(ROOT, "experiments/new_models/v3/vanilla/lm/livecell/vit_l/amg/inference/")
+    amg_gen_root = os.path.join(ROOT, "experiments/new_models/v3/generalist/lm/livecell/vit_l/amg/inference/")
+    ais_gen_root = os.path.join(
+        ROOT,
+        "experiments/new_models/v3/generalist/lm/livecell/vit_l/instance_segmentation_with_decoder/inference/"
     )
+    assert os.path.exists(amg_vanilla_root), amg_vanilla_root
+    assert os.path.exists(amg_gen_root), amg_gen_root
+    assert os.path.exists(ais_gen_root), ais_gen_root
 
-    # let's identify the best performing cases first
-    all_scores = []
-    for image_path, gt_path in zip(all_images, all_gt):
-        image_id = Path(image_path).stem
+    cellpose_root = os.path.join(ROOT, "experiments/benchmarking/cellpose/livecell/livecell/predictions/")
 
-        # cellpose_seg = imageio.imread(os.path.join(cellpose_root, f"{image_id}.tif"))
-        ais_seg = imageio.imread(os.path.join(ais_root, f"{image_id}.tif"))
-        # amg_seg = imageio.imread(os.path.join(amg_root, f"{image_id}.tif"))
+    all_res = []
+    for gt_path in tqdm(all_gt):
+        image_id = os.path.split(gt_path)[-1]
+
         gt = imageio.imread(gt_path)
+        ais_seg = imageio.imread(os.path.join(ais_gen_root, image_id))
 
         score = {
-            "name": image_id,
+            "name": image_id.split(".")[0],
             "score": mean_segmentation_accuracy(ais_seg, gt)
         }
-        all_scores.append(pd.DataFrame.from_dict([score]))
+        all_res.append(pd.DataFrame.from_dict([score]))
 
-    results = pd.concat(all_scores, ignore_index=True)
+    all_res = pd.concat(all_res, ignore_index=True)
 
-    # once we have identified the best performing cases, we get the comparison plots next
+    sscores = np.array(all_res["score"]).argsort()[::-1][:10]
+    best_image_ids = [all_res.iloc[sscore]["name"] for sscore in sscores]
+
+    for image_path, gt_path in zip(all_images, all_gt):
+        image_id = os.path.split(image_path)[-1]
+        if Path(image_id).stem not in best_image_ids:
+            continue
+
+        gt = imageio.imread(gt_path)
+
+        image = imageio.imread(image_path)
+        image = _enhance_image(image, do_norm=False)
+        image = _overlay_mask(image, gt, alpha=0.95)
+        image = _overlay_outline(image, gt, 0)
+
+        # amg_vanilla = imageio.imread(os.path.join(amg_vanilla_root, image_id))
+        amg_gen = imageio.imread(os.path.join(amg_gen_root, image_id))
+        ais_gen = imageio.imread(os.path.join(ais_gen_root, image_id))
+
+        cellpose_seg = imageio.imread(os.path.join(cellpose_root, image_id))
+
+        fig, ax = plt.subplots(1, 5, figsize=(30, 20), sharex=True, sharey=True)
+
+        ax[0].imshow(image, cmap="gray")
+        ax[0].axis("off")
+
+        ax[1].imshow(cellpose_seg, cmap=get_random_colors(cellpose_seg), interpolation="nearest")
+        ax[1].axis("off")
+
+        # ax[2].imshow(amg_vanilla, cmap=get_random_colors(amg_vanilla), interpolation="nearest")
+        # ax[2].axis("off")
+
+        ax[3].imshow(amg_gen, cmap=get_random_colors(amg_gen), interpolation="nearest")
+        ax[3].axis("off")
+
+        ax[4].imshow(ais_gen, cmap=get_random_colors(ais_gen), interpolation="nearest")
+        ax[4].axis("off")
+
+        plt.subplots_adjust(wspace=0.05)
+        # plt.savefig(f"./{Path(image_id).stem}.png", bbox_inches="tight")
+        plt.savefig("./test.png", bbox_inches="tight")
+        plt.close()
+
+        breakpoint()
 
 
 def compare_covid_if_cellpose_vs_ais(
-    all_images, all_gt, resource_choice="cpu_32G-mem_16-cores", model_choice="vit_b"
+    all_images, all_gt, resource_choice="cpu_32G-mem_16-cores"
 ):
     base_dir = "/scratch/usr/nimanwai/experiments/resource-efficient-finetuning/"
+
     def_amg_dir = f"{base_dir}/vanilla/vit_b/amg/inference"
-    gen_amg_dir = f"{base_dir}/generalist/vit_b/amg/inference"
     gen_ais_dir = f"{base_dir}/generalist/vit_b/instance_segmentation_with_decoder/inference"
 
-    root_dir = f"/scratch/usr/nimanwai/experiments/resource-efficient-finetuning/{resource_choice}/{model_choice}/"
+    root_dir = f"/scratch/usr/nimanwai/experiments/resource-efficient-finetuning/{resource_choice}"
     assert os.path.exists(root_dir)
 
-    ais_dir = os.path.join(root_dir, "freeze-None", "10-images", "instance_segmentation_with_decoder", "inference")
+    ais_dir = os.path.join(
+        root_dir, "vit_b_lm", "freeze-None", "10-images", "instance_segmentation_with_decoder", "inference"
+    )
     all_res = []
     for gt_path in tqdm(all_gt):
         image_id = os.path.split(gt_path)[-1]
@@ -87,18 +136,9 @@ def compare_covid_if_cellpose_vs_ais(
     sscores = np.array(all_res["score"]).argsort()[::-1][:5]
     best_image_ids = [all_res.iloc[sscore]["name"] for sscore in sscores]
 
-    def _get_image(experiment, n_images, image_id):
-        _path = os.path.join(
-            root_dir, "freeze-None", n_images,
-            "instance_segmentation_with_decoder" if experiment == "ais" else experiment,
-            "inference", f"{image_id}.tif"
-        )
-        image = imageio.imread(_path)
-        return image
-
     for image_path, gt_path in zip(all_images, all_gt):
-        image_id = Path(image_path).stem
-        if image_id not in best_image_ids:
+        image_id = os.path.split(image_path)[-1]
+        if Path(image_id).stem not in best_image_ids:
             continue
 
         gt = imageio.imread(gt_path)
@@ -108,72 +148,142 @@ def compare_covid_if_cellpose_vs_ais(
         image = _overlay_mask(image, gt)
         image = _overlay_outline(image, gt, 0)
 
-        # now, we (ideally) would like to see the plots from all the models
-        amg_vanilla = imageio.imread(os.path.join(def_amg_dir, f"{image_id}.tif"))
-        amg_gen = imageio.imread(os.path.join(gen_amg_dir, f"{image_id}.tif"))
-        ais_gen = imageio.imread(os.path.join(gen_ais_dir, f"{image_id}.tif"))
+        amg_vanilla = imageio.imread(os.path.join(def_amg_dir, image_id))
+        ais_default_ft = imageio.imread(
+            os.path.join(
+                root_dir, "vit_b", "freeze-None", "10-images",
+                "instance_segmentation_with_decoder", "inference", image_id
+            )
+        )
 
-        amg_10 = _get_image("amg", "10-images", image_id)
-        ais_10 = _get_image("ais", "10-images", image_id)
+        ais_gen = imageio.imread(os.path.join(gen_ais_dir, image_id))
+        ais_gen_ft = imageio.imread(
+            os.path.join(
+                root_dir, "vit_b_lm", "freeze-None", "10-images",
+                "instance_segmentation_with_decoder", "inference", image_id
+            )
+        )
 
-        fig, ax = plt.subplots(1, 6, figsize=(30, 20), sharex=True, sharey=True)
+        fig, ax = plt.subplots(1, 5, figsize=(30, 20), sharex=True, sharey=True)
 
         ax[0].imshow(image, cmap="gray")
-        # ax[0].imshow(boundaries, cmap="magma", interpolation="none", alpha=0.9 * (boundaries > 0))
-        # ax[0].set_title("Image")
         ax[0].axis("off")
 
         ax[1].imshow(amg_vanilla, cmap=get_random_colors(amg_vanilla), interpolation="nearest")
-        # ax[1].set_title("AMG (Default)")
         ax[1].axis("off")
 
-        ax[2].imshow(amg_gen, cmap=get_random_colors(amg_gen), interpolation="nearest")
-        # ax[2].set_title("AMG (LM)")
+        ax[2].imshow(ais_default_ft, cmap=get_random_colors(ais_default_ft), interpolation="nearest")
         ax[2].axis("off")
 
         ax[3].imshow(ais_gen, cmap=get_random_colors(ais_gen), interpolation="nearest")
-        # ax[3].set_title("AIS (LM)")
         ax[3].axis("off")
 
-        ax[4].imshow(amg_10, cmap=get_random_colors(amg_10), interpolation="nearest")
-        # ax[4].set_title("AMG (Finetuned)")
+        ax[4].imshow(ais_gen_ft, cmap=get_random_colors(ais_gen_ft), interpolation="nearest")
         ax[4].axis("off")
 
-        ax[5].imshow(ais_10, cmap=get_random_colors(ais_10), interpolation="nearest")
-        # ax[5].set_title("AIS (Finetuned)")
-        ax[5].axis("off")
-
         plt.subplots_adjust(wspace=0.05)
-        plt.savefig(f"./{image_id}_{model_choice}.svg", bbox_inches="tight")
+        plt.savefig(f"./{Path(image_id).stem}.svg", bbox_inches="tight")
         plt.close()
 
 
 def compare_mitolab_mitonet_vs_ais(all_images, all_gt, dataset_name):
-    mitonet_root = os.path.join(ROOT, "experiments/benchmarking/mitonet/")
-    amg_root = os.path.join(ROOT, f"experiments/new_models/v3/generalist/em/{dataset_name}/vit_l/amg/inference/")
-    ais_root = os.path.join(
+    amg_vanilla_root = os.path.join(ROOT, f"experiments/new_models/v3/vanilla/em/{dataset_name}/vit_l/amg/inference/")
+    amg_gen_root = os.path.join(ROOT, f"experiments/new_models/v3/generalist/em/{dataset_name}/vit_l/amg/inference/")
+    ais_gen_root = os.path.join(
         ROOT,
-        f"experiments/new_models/v3/specialist/em/{dataset_name}/vit_l/instance_segmentation_with_decoder/inference/"
+        f"experiments/new_models/v3/generalist/em/{dataset_name}/vit_l/instance_segmentation_with_decoder/inference/"
     )
+    assert os.path.exists(amg_vanilla_root), amg_vanilla_root
+    assert os.path.exists(amg_gen_root), amg_gen_root
+    assert os.path.exists(ais_gen_root), ais_gen_root
 
-    all_scores = []
-    for image_path, gt_path in zip(all_images, all_gt):
-        image_id = Path(image_path).stem
+    if dataset_name.endswith("tem"):
+        dname = "tem"
+        seg_dir = os.path.join(ROOT, "experiments", "benchmarking", "mitonet", "segmentations", "tem", "segmentations")
+        all_segs = sorted(glob(os.path.join(seg_dir, "*")))
+        mitonet_seg_vol = [imageio.imread(_path) for _path in all_segs]
+        offset = 0
+    else:
+        dsplit = dataset_name.split("/")
+        if len(dsplit) > 1:
+            dname = f"{dsplit[0]}_{dsplit[1]}"
+        else:
+            dname = dataset_name
 
-        # cellpose_seg = imageio.imread(os.path.join(cellpose_root, f"{image_id}.tif"))
-        ais_seg = imageio.imread(os.path.join(ais_root, f"{image_id}.tif"))
-        # amg_seg = imageio.imread(os.path.join(amg_root, f"{image_id}.tif"))
+        mitonet_seg_path = glob(
+            os.path.join(
+                ROOT, "experiments", "benchmarking", "mitonet", "segmentations", dname, "*mitonet_seg.tif"
+            )
+        )
+        mitonet_seg_vol = imageio.imread(mitonet_seg_path[0])
+        offset = int(Path(all_gt[0]).stem.split("_")[-1])
+
+    assert len(mitonet_seg_vol) == len(all_gt)
+
+    all_res = []
+    for gt_path in all_gt:
+        image_id = os.path.split(gt_path)[-1]
+
         gt = imageio.imread(gt_path)
+        ais_seg = imageio.imread(os.path.join(ais_gen_root, image_id))
 
         score = {
-            "image": image_id,
-            "msa": mean_segmentation_accuracy(ais_seg, gt)
+            "name": image_id.split(".")[0],
+            "score": mean_segmentation_accuracy(ais_seg, gt)
         }
-        all_scores.append(pd.DataFrame.from_dict([score]))
+        all_res.append(pd.DataFrame.from_dict([score]))
 
-    results = pd.concat(all_scores, ignore_index=True)
+    all_res = pd.concat(all_res, ignore_index=True)
 
-    # once this is done, we check the n best cases and compare them with amg and ais
+    sscores = np.array(all_res["score"]).argsort()[::-1][:10]
+    best_image_ids = [all_res.iloc[sscore]["name"] for sscore in sscores]
+
+    for image_path, gt_path in zip(all_images, all_gt):
+        image_id = os.path.split(image_path)[-1]
+        if Path(image_id).stem not in best_image_ids:
+            continue
+
+        gt = imageio.imread(gt_path).astype("int")
+
+        image = imageio.imread(image_path).astype("int")
+
+        # image = _enhance_image(image, do_norm=False)
+        image = _overlay_mask(image, gt, alpha=0.95)
+        image = _overlay_outline(image, gt, 0)
+
+        amg_vanilla = imageio.imread(os.path.join(amg_vanilla_root, image_id))
+        amg_gen = imageio.imread(os.path.join(amg_gen_root, image_id))
+        ais_gen = imageio.imread(os.path.join(ais_gen_root, image_id))
+
+        if dname == "tem":
+            mitonet_seg = connected_components(imageio.imread(os.path.join(seg_dir, image_id)))
+        else:
+            id_val = int(Path(image_id).stem.split("_")[-1]) - offset
+            mitonet_seg = connected_components(mitonet_seg_vol[id_val])
+
+        fig, ax = plt.subplots(1, 5, figsize=(30, 20), sharex=True, sharey=True)
+
+        ax[0].imshow(image, cmap="gray")
+        ax[0].axis("off")
+
+        ax[1].imshow(mitonet_seg, cmap=get_random_colors(mitonet_seg), interpolation="nearest")
+        ax[1].axis("off")
+
+        ax[2].imshow(amg_vanilla, cmap=get_random_colors(amg_vanilla), interpolation="nearest")
+        ax[2].axis("off")
+
+        ax[3].imshow(amg_gen, cmap=get_random_colors(amg_gen), interpolation="nearest")
+        ax[3].axis("off")
+
+        ax[4].imshow(ais_gen, cmap=get_random_colors(ais_gen), interpolation="nearest")
+        ax[4].axis("off")
+
+        plt.subplots_adjust(wspace=0.05)
+        # plt.savefig(f"./{Path(image_id).stem}.png", bbox_inches="tight")
+        plt.savefig("./test.png", bbox_inches="tight")
+        plt.close()
+
+        breakpoint()
 
 
 def get_paths(dataset_name):
@@ -189,16 +299,18 @@ def get_paths(dataset_name):
 
     elif dataset_name == "lucchi":
         root_dir = os.path.join(ROOT, "data", dataset_name, "slices")
-        image_paths = [_path for _path in glob(os.path.join(root_dir, "raw", "*.tif"))]
-        gt_paths = [_path for _path in glob(os.path.join(root_dir, "labels", "*.tif"))]
+        image_paths = [_path for _path in glob(os.path.join(root_dir, "raw", "lucchi_test*.tif"))]
+        gt_paths = [_path for _path in glob(os.path.join(root_dir, "labels", "lucchi_test*.tif"))]
 
     elif dataset_name.startswith("mitolab"):
-        root_dir = os.path.join(ROOT, "data", "mitolab", "slices", dataset_name, "test")
-        image_paths = [_path for _path in glob(os.path.join(root_dir, "raw", "*.tif"))]
-        gt_paths = [_path for _path in glob(os.path.join(root_dir, "labels", "*.tif"))]
+        root_dir = os.path.join(ROOT, "data", "mitolab", "slices", dataset_name.split("/")[-1], "test")
+        image_paths = [_path for _path in glob(os.path.join(root_dir, "raw", "*"))]
+        gt_paths = [_path for _path in glob(os.path.join(root_dir, "labels", "*"))]
 
     else:
         raise ValueError
+
+    assert len(image_paths) == len(gt_paths)
 
     return sorted(image_paths), sorted(gt_paths)
 
@@ -217,7 +329,16 @@ def compare_experiments(dataset_name):
 
 
 def main():
-    compare_experiments("covid_if")
+    # compare_experiments("covid_if")
+
+    # compare_experiments("mitolab/c_elegans")
+    # compare_experiments("mitolab/fly_brain")
+    # compare_experiments("mitolab/glycolytic_muscle")
+    # compare_experiments("mitolab/hela_cell")
+    # compare_experiments("mitolab/tem")
+    # compare_experiments("lucchi")
+
+    compare_experiments("livecell")
 
 
 if __name__ == "__main__":
