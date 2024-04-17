@@ -711,6 +711,9 @@ def handle_pbar(verbose, pbar_init, pbar_update):
         def pbar_update(update):
             pbar.update(update)
 
+        def pbar_close():
+            pbar.close()
+
     elif verbose and pbar_init is not None:  # external pbar -> we don't have to do anything
         assert pbar_update is not None
         pbar = None
@@ -722,7 +725,7 @@ def handle_pbar(verbose, pbar_init, pbar_update):
         pbar = None
         pbar_init, pbar_update = noop, noop
 
-    return pbar, pbar_init, pbar_update
+    return pbar, pbar_init, pbar_update, pbar_close
 
 
 def precompute_image_embeddings(
@@ -778,7 +781,7 @@ def precompute_image_embeddings(
     else:
         f = zarr.open(save_path, "a")
 
-    _, pbar_init, pbar_update = handle_pbar(verbose, pbar_init, pbar_update)
+    _, pbar_init, pbar_update, pbar_close = handle_pbar(verbose, pbar_init, pbar_update)
 
     if ndim == 2 and tile_shape is None:
         embeddings = _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update)
@@ -790,7 +793,7 @@ def precompute_image_embeddings(
         embeddings = _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update)
     else:
         raise ValueError(f"Invalid dimesionality {input_.ndim}, expect 2 or 3 dim data.")
-
+    pbar_close()
     return embeddings
 
 
