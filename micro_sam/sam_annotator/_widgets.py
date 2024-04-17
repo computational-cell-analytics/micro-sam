@@ -594,9 +594,19 @@ def _validate_embeddings(viewer: "napari.viewer.Viewer"):
     #     return False
 
 
+def _validate_prompts(viewer: "napari.viewer.Viewer") -> bool:
+    if len(viewer.layers["prompts"].data) == 0 and len(viewer.layers["point_prompts"].data) == 0:
+        msg = "No prompts given. Create prompts first to segment objects."
+        return _generate_message("error", msg)
+    else:
+        return False
+
+
 @magic_factory(call_button="Segment Object [S]")
 def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
     if _validate_embeddings(viewer):
+        return None
+    if _validate_prompts(viewer):
         return None
 
     shape = viewer.layers["current_object"].data.shape
@@ -624,6 +634,8 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
 @magic_factory(call_button="Segment Slice [S]")
 def segment_slice(viewer: "napari.viewer.Viewer") -> None:
     if _validate_embeddings(viewer):
+        return None
+    if _validate_prompts(viewer):
         return None
 
     shape = viewer.layers["current_object"].data.shape[1:]
@@ -657,7 +669,8 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
 def segment_frame(viewer: "napari.viewer.Viewer") -> None:
     if _validate_embeddings(viewer):
         return None
-
+    if _validate_prompts(viewer):
+        return None
     state = AnnotatorState()
     shape = state.image_shape[1:]
     position = viewer.cursor.position
@@ -944,7 +957,8 @@ class EmbeddingWidget(_WidgetBase):
 
         # Process tile_shape and halo, set other data.
         tile_shape, halo = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
-        save_path = self.embeddings_save_path
+        save_path = None if self.embeddings_save_path == "" else self.embeddings_save_path
+        print(save_path)
         image_data = image.data
 
         # Set up progress bar and signals for using it within a threadworker.
@@ -1137,6 +1151,8 @@ class SegmentNDWidget(_WidgetBase):
 
     def __call__(self):
         if _validate_embeddings(self._viewer):
+            return None
+        if _validate_prompts(self._viewer):
             return None
         if self.tracking:
             return self._run_tracking()
