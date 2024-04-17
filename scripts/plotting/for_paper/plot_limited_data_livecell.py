@@ -97,21 +97,21 @@ def get_vanilla_and_finetuned_results(res_root, model):
 
 
 def get_plots(res_root, model, for_supp=None):
-    plt.figure(figsize=(20, 10))
+    plt.figure(figsize=(30, 15))
     res = get_vanilla_and_finetuned_results(res_root, model)
     sns.lineplot(
-        data=pd.melt(res, "experiment"), x="experiment", y="value", hue="variable", marker="d", palette=PALETTE
+        data=pd.melt(res, "experiment"), x="experiment", y="value", hue="variable", marker="d", palette=PALETTE, markersize=20
     )
-    plt.ylabel("Segmentation Accuracy", labelpad=15)
-    plt.xlabel("Percent of Data", labelpad=15)
+    plt.ylabel("Segmentation Accuracy")
+    plt.xlabel("Percent of Data")
     plt.legend(loc="lower center", ncol=6)
     if for_supp is None:
-        plt.title("Finetuning with Reduced Data")
         save_path = f"livecell_{model}_reduce_data.svg"
     else:
         plt.title(for_supp)
         save_path = f"livecell_supplementary_{model}_reduce_data.svg"
 
+    plt.tight_layout()
     plt.savefig(save_path)
     plt.savefig(Path(save_path).with_suffix(".pdf"))
 
@@ -119,6 +119,8 @@ def get_plots(res_root, model, for_supp=None):
 def main():
     # for figure 2
     get_plots(ROOT, "vit_l")
+
+    return
 
     # for supplementary figure 1
     get_plots(ROOT, "vit_t", "ViT Tiny")
