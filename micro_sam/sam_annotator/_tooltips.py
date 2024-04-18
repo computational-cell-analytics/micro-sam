@@ -39,6 +39,12 @@ tooltips = {
     "with_background": "with_background",
     # ... tooltips for autosegment widgets ...
   },
+  "segment": {
+    "run_button": "run_button",
+  },
+  "prompt_menu": {
+    "labels": "these are labels",
+  }
 }
 
 

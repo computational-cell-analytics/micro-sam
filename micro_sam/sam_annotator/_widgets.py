@@ -287,7 +287,11 @@ def _reset_tracking_state(viewer):
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
 def clear(viewer: "napari.viewer.Viewer") -> None:
-    """Widget for clearing the current annotations."""
+    """Widget for clearing the current annotations.
+
+    Args:
+        viewer (napari.viewer.Viewer): _description_
+    """
     vutil.clear_annotations(viewer)
 
 
@@ -446,7 +450,13 @@ def commit(
     layer: str = "current_object",
     commit_path: Optional[Path] = None,
 ) -> None:
-    """Widget for committing the segmented objects from automatic or interactive segmentation."""
+    """Widget for committing the segmented objects from automatic or interactive segmentation.
+
+    Args:
+        viewer (napari.viewer.Viewer): _description_
+        layer (str, optional): _description_. Defaults to "current_object".
+        commit_path (Optional[Path], optional): _description_. Defaults to None.
+    """
     _, seg, mask, bb = _commit_impl(viewer, layer)
 
     if commit_path is not None:
@@ -472,7 +482,13 @@ def commit_track(
     layer: str = "current_object",
     commit_path: Optional[Path] = None,
 ) -> None:
-    """Widget for committing the segmented objects from interactive tracking."""
+    """Widget for committing the segmented objects from interactive tracking.
+
+    Args:
+        viewer (napari.viewer.Viewer): _description_
+        layer (str, optional): _description_. Defaults to "current_object".
+        commit_path (Optional[Path], optional): _description_. Defaults to None.
+    """
     # Commit the segmentation layer.
     id_offset, seg, mask, bb = _commit_impl(viewer, layer)
 
@@ -498,7 +514,7 @@ def commit_track(
 
 def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="label"):
     """Create the menu for toggling point prompt labels."""
-    label_menu = ComboBox(label=menu_name, choices=labels)
+    label_menu = ComboBox(label=menu_name, choices=labels, tooltip=get_tooltip("prompt_menu", "labels"))
     label_widget = Container(widgets=[label_menu])
 
     def update_label_menu(event):
@@ -526,7 +542,11 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
 def settings_widget(
     cache_directory: Optional[Path] = util.get_cache_directory(),
 ) -> None:
-    """Widget to update global micro_sam settings."""
+    """Widget to update global micro_sam settings.
+
+    Args:
+        cache_directory (Optional[Path], optional): _description_. Defaults to util.get_cache_directory().
+    """
     os.environ["MICROSAM_CACHEDIR"] = str(cache_directory)
     print(f"micro-sam cache directory set to: {cache_directory}")
 
@@ -627,6 +647,16 @@ def _validate_prompts(viewer: "napari.viewer.Viewer") -> bool:
 
 @magic_factory(call_button="Segment Object [S]")
 def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
+    """_summary_
+
+    Args:
+        viewer (napari.viewer.Viewer): _description_
+        batched (bool, optional): _description_. Defaults to False.
+        call_button: run code
+
+    Returns:
+        _type_: _description_
+    """
     if _validate_embeddings(viewer):
         return None
     if _validate_prompts(viewer):
@@ -690,6 +720,14 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
 
 @magic_factory(call_button="Segment Frame [S]")
 def segment_frame(viewer: "napari.viewer.Viewer") -> None:
+    """_summary_
+
+    Args:
+        viewer (napari.viewer.Viewer): _description_
+
+    Returns:
+        _type_: _description_
+    """
     if _validate_embeddings(viewer):
         return None
     if _validate_prompts(viewer):
