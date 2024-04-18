@@ -144,7 +144,7 @@ def rpros_over_time(labels):
 
 def check_tracking_results(raw, labels, curr_lineages, chosen_frames, save=False):
     """
-    Total number of objects for tracking:
+    Total number of objects (times reported per track):
         - true number of objects: 107
         - default vit_l: 102 (0.637 min per object)
         - generalist vit_l: 105 (0.4 min per object)
