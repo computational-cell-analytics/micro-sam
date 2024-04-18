@@ -34,6 +34,8 @@ def run_one_setup(all_dataset_list, all_model_list, all_experiment_set_list, roi
 
                 run_specific_experiment(dataset_name, model_type, experiment_set, roi, specific_script)
 
+        breakpoint()  # check per dataset briefly
+
 
 def for_all_lm(specific_script):
     # let's run for in-domain
@@ -90,62 +92,39 @@ def for_livecell(specific_script):
     )
 
 
-def for_custom_livecell(specific_script):
-    EXP_ROOT = "/scratch/projects/nim00007/sam/experiments/new_models"
-
-    def _run_custom_livecell(model_type, experiment_set):
-        cmd = CMD
-        cmd += "-d livecell "
-        cmd += f"-m {model_type} "
-        cmd += f"-e {experiment_set} "
-        cmd += "-r lm "
-        cmd += f"--experiment_path {EXP_ROOT}/test/input_logits/{experiment_set}/lm/livecell/{model_type} "
-        cmd += f"-s {specific_script} "
-        cmd += "--use_masks"
-
-        print(f"Running the command: {cmd} \n")
-        _cmd = re.split(r"\s", cmd)
-        run_eval_process(_cmd)
-
-    all_experiments = ["vanilla", "generalist", "specialist"]
-    for model_type in ALl_MODELS:
-        for experiment_set in all_experiments:
-            _run_custom_livecell(model_type, experiment_set)
+def for_em_benchmarking(specific_script):
+    # let's run for em
+    run_one_setup(
+        all_dataset_list=[
+            "mitolab/c_elegans", "mitolab/fly_brain", "mitolab/glycolytic_muscle",
+            "mitolab/hela_cell", "mitolab/tem", "lucchi",
+        ],
+        all_model_list=ALl_MODELS,
+        all_experiment_set_list=["vanilla", "generalist"],
+        roi="organelles",
+        specific_script=specific_script
+    )
 
 
-def for_variance_in_livecell(run_set):
-    EXP_ROOT = "/scratch/projects/nim00007/sam/experiments/new_models/test"
-
-    def _run_custom_livecell(model_type, experiment_set):
-        cmd = CMD
-        cmd += "-d livecell "
-        cmd += f"-m {model_type} "
-        cmd += f"-e {experiment_set} "
-        cmd += "-r lm "
-        cmd += f"--experiment_path {EXP_ROOT}/{run_set}/{experiment_set}/lm/livecell/{model_type}"
-
-        print(f"Running the command: {cmd} \n")
-        _cmd = re.split(r"\s", cmd)
-        run_eval_process(_cmd)
-
-    all_experiments = ["vanilla", "generalist", "specialist"]
-    for model_type in ALl_MODELS:
-        for experiment_set in all_experiments:
-            _run_custom_livecell(model_type, experiment_set)
+def for_covid_if(specific_script):
+    # let's run for covid if
+    run_one_setup(
+        all_dataset_list=["covid_if"],
+        all_model_list=ALl_MODELS,
+        all_experiment_set_list=["vanilla", "generalist"],
+        roi="lm",
+        specific_script=specific_script
+    )
 
 
 def main(args):
     # for_all_lm(specific_script=args.specific_script)
     # for_all_em(specific_script=args.specific_script)
+
     # for_livecell(specific_script=args.specific_script)
+    # for_em_benchmarking(specific_script=args.specific_script)
 
-    # for_custom_livecell(specific_script="iterative_prompting")
-
-    for_variance_in_livecell("run_1")
-    for_variance_in_livecell("run_2")
-    for_variance_in_livecell("run_3")
-    for_variance_in_livecell("run_4")
-    for_variance_in_livecell("run_5")
+    for_covid_if(specific_script=args.specific_script)
 
 
 if __name__ == "__main__":

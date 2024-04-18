@@ -120,7 +120,7 @@ ND_SEGMENT_SETTINGS = {
     },
 
     "vit_t_em_organelles": {
-        "projection_mode": "signle_point",
+        "projection_mode": "single_point",
         "iou_threshold": 0.6,
         "box_extension": 0.025,
     },

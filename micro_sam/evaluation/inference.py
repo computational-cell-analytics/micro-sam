@@ -360,6 +360,26 @@ def _save_segmentation(masks, prediction_path):
     imageio.imwrite(prediction_path, segmentation, compression=5)
 
 
+def _get_batched_iterative_prompts(sampled_binary_gt, masks, batch_size, prompt_generator):
+    n_samples = sampled_binary_gt.shape[0]
+    n_batches = int(np.ceil(float(n_samples) / batch_size))
+    next_coords, next_labels = [], []
+    for batch_idx in range(n_batches):
+        batch_start = batch_idx * batch_size
+        batch_stop = min((batch_idx + 1) * batch_size, n_samples)
+
+        batch_coords, batch_labels, _, _ = prompt_generator(
+            sampled_binary_gt[batch_start: batch_stop], masks[batch_start: batch_stop]
+        )
+        next_coords.append(batch_coords)
+        next_labels.append(batch_labels)
+
+    next_coords = torch.concatenate(next_coords)
+    next_labels = torch.concatenate(next_labels)
+
+    return next_coords, next_labels
+
+
 @torch.no_grad()
 def _run_inference_with_iterative_prompting_for_image(
     predictor,
@@ -417,7 +437,9 @@ def _run_inference_with_iterative_prompting_for_image(
 
         masks = torch.stack([m["segmentation"][None] for m in batched_outputs]).to(torch.float32)
 
-        next_coords, next_labels, _, _ = prompt_generator(sampled_binary_gt, masks)
+        next_coords, next_labels = _get_batched_iterative_prompts(
+            sampled_binary_gt, masks, batch_size, prompt_generator
+        )
         next_coords, next_labels = next_coords.detach().cpu().numpy(), next_labels.detach().cpu().numpy()
 
         if points is not None:

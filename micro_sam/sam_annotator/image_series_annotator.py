@@ -296,6 +296,7 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
 
         self.model_type = util._DEFAULT_MODEL
         model_options = list(util.models().urls.keys())
+        model_options = [model for model in model_options if not model.endswith("decoder")]
         _, layout = self._add_choice_param(
             "model_type", self.model_type, model_options, title="Model:",
         )
@@ -369,7 +370,7 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
             embedding_path=self.embeddings_save_path,
             tile_shape=tile_shape, halo=halo, checkpoint_path=self.custom_weights,
             device=self.device, is_volumetric=self.is_volumetric,
-            viewer=self._viewer,
+            viewer=self._viewer, return_viewer=True,
         )
 
 
