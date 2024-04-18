@@ -167,8 +167,15 @@ def check_tracking_results(raw, labels, curr_lineages, chosen_frames, save=False
         lineage = curr_lineages[idx]
         lineage["frames"] = [frame for frame in lineage["frames"] if frame in chosen_frames]
 
+    # get middle slice
+    raw_slice = raw.copy()
+    z = len(raw_slice) // 2
+    raw_slice[:z] = 0
+    raw_slice[(z+2):] = 0
+
     v = napari.Viewer()
     v.add_image(raw)
+    v.add_image(raw_slice)
     # v.add_labels(labels)
 
     v.axes.visible = True
