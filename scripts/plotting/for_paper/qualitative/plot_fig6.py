@@ -146,10 +146,10 @@ def check_tracking_results(raw, labels, curr_lineages, chosen_frames, save=False
     """
     Total number of objects (times reported per track):
         - true number of objects: 107
-        - default vit_l: 102 (0.637 min per object)
-        - generalist vit_l: 105 (0.4 min per object)
-        - finetuned vit_l: 104 (0.384 min per object)
-        - trackmate (stardist): 0.318 min per object
+        - default vit_l: 102 (0.637 min per track) (38 sec per track)
+        - generalist vit_l: 105 (0.4 min per track) (24 sec per track)
+        - finetuned vit_l: 104 (0.384 min per track) (23 sec per track)
+        - trackmate (stardist): 0.318 min per track; (19 sec per track)
     """
     # path = "/media/anwai/ANWAI/data/for_tracking/DynamicNuclearNet_test_b007.h5"
     # with h5py.File(path, "r") as f:
