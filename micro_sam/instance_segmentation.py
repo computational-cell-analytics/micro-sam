@@ -481,7 +481,7 @@ class AutomaticMaskGenerator(AMGBase):
         # we need to cast to the image representation that is compatible with SAM
         image = util._to_image(image)
 
-        _, pbar_init, pbar_update = util.handle_pbar(verbose, pbar_init, pbar_update)
+        _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
 
         crop_list = []
         for crop_box, layer_idx in zip(crop_boxes, layer_idxs):
@@ -491,6 +491,7 @@ class AutomaticMaskGenerator(AMGBase):
                 pbar_init=pbar_init, pbar_update=pbar_update,
             )
             crop_list.append(crop_data)
+        pbar_close()
 
         self._is_initialized = True
         self._crop_list = crop_list
@@ -653,7 +654,7 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         tiles = [tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock for tile_id in range(n_tiles)]
         crop_boxes = [[tile.begin[1], tile.begin[0], tile.end[1], tile.end[0]] for tile in tiles]
 
-        _, pbar_init, pbar_update = util.handle_pbar(verbose, pbar_init, pbar_update)
+        _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
         pbar_init(n_tiles, "Compute masks for tile")
 
         # We need to cast to the image representation that is compatible with SAM.
@@ -676,6 +677,7 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
             )
             mask_data.append(this_mask_data)
             pbar_update(1)
+        pbar_close()
 
         # set the initialized data
         self._is_initialized = True
@@ -884,7 +886,7 @@ class InstanceSegmentationWithDecoder:
                 To enables using this function within a threadworker.
             pbar_update: Callback to update an external progress bar.
         """
-        _, pbar_init, pbar_update = util.handle_pbar(verbose, pbar_init, pbar_update)
+        _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
         pbar_init(1, "Initialize instannce segmentation with decoder")
 
         if image_embeddings is None:
@@ -900,6 +902,7 @@ class InstanceSegmentationWithDecoder:
         output = self._decoder(embeddings, input_shape, original_shape).cpu().numpy().squeeze(0)
         assert output.shape[0] == 3, f"{output.shape}"
         pbar_update(1)
+        pbar_close()
 
         # Set the state.
         self._foreground = output[0]
@@ -1067,7 +1070,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         )
         tiling = blocking([0, 0], original_size, tile_shape)
 
-        _, pbar_init, pbar_update = util.handle_pbar(verbose, pbar_init, pbar_update)
+        _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
         pbar_init(tiling.numberOfBlocks, "Initialize tiled instannce segmentation with decoder")
 
         foreground = np.zeros(original_size, dtype="float32")
@@ -1096,6 +1099,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
             foreground[inner_bb] = output[0][local_bb]
             center_distances[inner_bb] = output[1][local_bb]
             boundary_distances[inner_bb] = output[2][local_bb]
+        pbar_close()
 
         # Set the state.
         self._foreground = foreground
