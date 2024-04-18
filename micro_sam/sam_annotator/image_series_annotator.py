@@ -193,11 +193,13 @@ def image_series_annotator(
         # Load the next image.
         next_image_id += 1
         if next_image_id == len(images):
-            msg = "You have annotated the last image."
+            msg = "You have annotated the last image. Do you wish to close napari?"
             print(msg)
+            abort = False
             # inform the user via dialog
-            # abort = widgets._generate_message("error", msg)
-            viewer.close()
+            abort = widgets._generate_message("info", msg)
+            if not abort:
+                viewer.close()
             return
 
         print(
