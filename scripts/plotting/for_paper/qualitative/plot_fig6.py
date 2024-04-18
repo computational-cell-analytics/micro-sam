@@ -1,9 +1,16 @@
 import os
 from glob import glob
+from pathlib import Path
 
-import imageio.v3 as imageio
 import h5py
 import napari
+import numpy as np
+import pandas as pd
+import imageio.v3 as imageio
+from skimage.measure import regionprops_table
+
+from deepcell_tracking.utils import load_trks
+
 
 # DATA_ROOT = "./figure_data"
 DATA_ROOT = "/media/anwai/ANWAI/figure_data"
@@ -99,10 +106,133 @@ def plot_2d():
         v.add_labels(seg_default)
         napari.run()
 
+#
+# FOR TRACKING
+#
+
+
+def load_tracking_segmentation(experiment):
+    ROOT = r"/home/anwai/results/tracking/MicroSAM testing/"
+    if experiment == "vit_l":
+        seg_path = glob(os.path.join(ROOT, r"round 2 vit_l", "*.tif"))[0]
+    elif experiment == "vit_l_lm":
+        seg_path = glob(os.path.join(ROOT, "vit_l_finetuned", "*.tif"))[0]
+    elif experiment == "vit_l_specialist":
+        seg_path = glob(os.path.join(ROOT, "vit_l_specialist", "*.tif"))[0]
+    else:
+        print(experiment)
+        raise ValueError
+
+    return imageio.imread(seg_path)
+
+
+def rpros_over_time(labels):
+    data_df = []
+    for idx in range(labels.shape[0]):
+        props = regionprops_table(labels[idx], properties=('label', 'centroid'))
+        props['frame'] = np.full(props['label'].shape, idx)
+        data_df.append(pd.DataFrame(props))
+
+    data_df = pd.concat(data_df).reset_index(drop=True)
+    data_df = data_df.sort_values(['label', 'frame'], ignore_index=True)
+    data = data_df.loc[
+        :, ['label', 'frame', 'centroid-0', 'centroid-1']
+    ].to_numpy()
+
+    return data
+
+
+def check_tracking_results(raw, labels, curr_lineages, chosen_frames, save=False):
+    """
+    Total number of objects for tracking:
+        - true number of objects: 107
+        - default vit_l: 102
+        - generalist vit_l: 105
+        - finetuned vit_l: 104
+    """
+    # path = "/media/anwai/ANWAI/data/for_tracking/DynamicNuclearNet_test_b007.h5"
+    # with h5py.File(path, "r") as f:
+    #     raw = f["raw"][:]
+
+    # # take every 3rd frame
+    # frames = list(range(0, 71, 3))
+    # raw = np.stack([raw[frame] for frame in frames])
+
+    seg_default = load_tracking_segmentation("vit_l")
+    seg_generalist = load_tracking_segmentation("vit_l_lm")
+    seg_specialist = load_tracking_segmentation("vit_l_specialist")
+    
+    # let's get the tracks only for the objects present per frame
+    for idx in np.unique(labels)[1:]:
+        lineage = curr_lineages[idx]
+        lineage["frames"] = [frame for frame in lineage["frames"] if frame in chosen_frames]
+
+    v = napari.Viewer()
+    v.add_image(raw)
+    # v.add_labels(labels)
+
+    v.axes.visible = True
+    v.add_tracks(rpros_over_time(seg_specialist), name="tracklets")
+
+    # v.add_labels(seg_default, visible=False)
+    # v.add_labels(seg_generalist, visible=False)
+    v.add_labels(seg_specialist, visible=False)
+
+    napari.run()
+
+    if save:
+        # let's save the volume
+        with h5py.File(
+            "/media/anwai/ANWAI/results/micro-sam/tracking/DynamicNuclearNet_results_b007.h5", "a"
+        ) as f:
+            f.create_dataset("raw", data=volume)
+            f.create_dataset("segmentation/default", data=seg_default)
+            f.create_dataset("segmentation/generalist", data=seg_generalist)
+            f.create_dataset("segmentation/specialist", data=seg_specialist)
+
+
+def get_tracking_data(view=False, save=False):
+    data_dir = "/home/anwai/data/dynamicnuclearnet/DynamicNuclearNet-tracking-v1_0/"
+    data_source = np.load(os.path.join(data_dir, "data-source.npz"), allow_pickle=True)
+
+    fname = "test.trks"
+    track_file = os.path.join(data_dir, fname)
+    split_name = Path(track_file).stem
+
+    data = load_trks(track_file)
+
+    X = data["X"]
+    y = data["y"]
+    lineages = data["lineages"]
+
+    meta = pd.DataFrame(
+        data_source[split_name],
+        columns=["filename", "experiment", "pixel_size", "screening_passed", "time_step", "specimen"]
+    )
+
+    # let's convert the data to expected shape
+    X = X.squeeze(-1)
+    y = y.squeeze(-1)
+
+    # NOTE: chosen slice for the tracking user study.
+    _slice = 7
+    raw, labels = X[_slice, ...], y[_slice, ...]
+    curr_lineages = lineages[_slice]
+
+    # NOTE:
+    # let's get every third frame of data and see how it looks
+    chosen_frames = list(range(0, raw.shape[0], 3))
+    raw = np.stack([raw[frame] for frame in chosen_frames])
+    labels = np.stack([labels[frame] for frame in chosen_frames])
+
+    return raw, labels, curr_lineages, chosen_frames
+
+
 
 # TODO
 def plot_tracking():
-    pass
+    raw, labels, curr_lineages, chosen_frames = get_tracking_data()
+    check_tracking_results(raw, labels, curr_lineages, chosen_frames)
 
 
 def main():
@@ -110,7 +240,8 @@ def main():
     # create_data_2d_finetuned()
 
     # plot_3d()
-    plot_2d()
+    # plot_2d()
+    plot_tracking()
 
 
 main()
