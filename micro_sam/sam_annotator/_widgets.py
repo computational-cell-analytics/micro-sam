@@ -25,6 +25,7 @@ from napari.utils import progress
 
 from ._state import AnnotatorState
 from . import util as vutil
+from ._tooltips import get_tooltip
 from .. import instance_segmentation, util
 from ..multi_dimensional_segmentation import segment_mask_in_volume, merge_instance_segmentation_3d, PROJECTION_MODES
 
@@ -54,53 +55,74 @@ class _WidgetBase(QtWidgets.QWidget):
         super().__init__(parent)
         self.setLayout(QtWidgets.QVBoxLayout())
 
-    def _add_boolean_param(self, name, value, title=None):
+    def _add_boolean_param(self, name, value, title=None, tooltip=None):
         checkbox = QtWidgets.QCheckBox(name if title is None else title)
         checkbox.setChecked(value)
         checkbox.stateChanged.connect(lambda val: setattr(self, name, val))
+        if tooltip:
+            checkbox.setToolTip(tooltip)
         return checkbox
 
-    def _add_string_param(self, name, value, title=None, placeholder=None, layout=None):
+    def _add_string_param(self, name, value, title=None, placeholder=None, layout=None, tooltip=None):
         if layout is None:
             layout = QtWidgets.QHBoxLayout()
-        layout.addWidget(QtWidgets.QLabel(name if title is None else title))
+        label = QtWidgets.QLabel(title or name)
+        if tooltip:
+            label.setToolTip(tooltip)
+        layout.addWidget(label)
         param = QtWidgets.QLineEdit()
         param.setText(value)
         if placeholder is not None:
             param.setPlaceholderText(placeholder)
         param.textChanged.connect(lambda val: setattr(self, name, val))
+        if tooltip:
+            param.setToolTip(tooltip)
         layout.addWidget(param)
         return param, layout
 
-    def _add_float_param(self, name, value, title=None, min_val=0.0, max_val=1.0, decimals=2, step=0.01, layout=None):
+    def _add_float_param(self, name, value, title=None, min_val=0.0, max_val=1.0, decimals=2,
+                         step=0.01, layout=None, tooltip=None):
         if layout is None:
             layout = QtWidgets.QHBoxLayout()
-        layout.addWidget(QtWidgets.QLabel(name if title is None else title))
+        label = QtWidgets.QLabel(title or name)
+        if tooltip:
+            label.setToolTip(tooltip)
+        layout.addWidget(label)
         param = QtWidgets.QDoubleSpinBox()
         param.setRange(min_val, max_val)
         param.setDecimals(decimals)
         param.setValue(value)
         param.setSingleStep(step)
         param.valueChanged.connect(lambda val: setattr(self, name, val))
+        if tooltip:
+            param.setToolTip(tooltip)
         layout.addWidget(param)
         return param, layout
 
-    def _add_int_param(self, name, value, min_val, max_val, title=None, step=1, layout=None):
+    def _add_int_param(self, name, value, min_val, max_val, title=None, step=1, layout=None, tooltip=None):
         if layout is None:
             layout = QtWidgets.QHBoxLayout()
-        layout.addWidget(QtWidgets.QLabel(name if title is None else title))
+        label = QtWidgets.QLabel(title or name)
+        if tooltip:
+            label.setToolTip(tooltip)
+        layout.addWidget(label)
         param = QtWidgets.QSpinBox()
         param.setRange(min_val, max_val)
         param.setValue(value)
         param.setSingleStep(step)
         param.valueChanged.connect(lambda val: setattr(self, name, val))
+        if tooltip:
+            param.setToolTip(tooltip)
         layout.addWidget(param)
         return param, layout
 
-    def _add_choice_param(self, name, value, options, title=None, layout=None, update=None):
+    def _add_choice_param(self, name, value, options, title=None, layout=None, update=None, tooltip=None):
         if layout is None:
             layout = QtWidgets.QHBoxLayout()
-        layout.addWidget(QtWidgets.QLabel(name if title is None else title))
+        label = QtWidgets.QLabel(title or name)
+        if tooltip:
+            label.setToolTip(tooltip)
+        layout.addWidget(label)
 
         # Create the dropdown menu via QComboBox, set the available values.
         dropdown = QtWidgets.QComboBox()
@@ -113,47 +135,59 @@ class _WidgetBase(QtWidgets.QWidget):
         # Set the correct value for the value.
         dropdown.setCurrentIndex(dropdown.findText(value))
 
+        if tooltip:
+            dropdown.setToolTip(tooltip)
+
         layout.addWidget(dropdown)
         return dropdown, layout
 
-    def _add_shape_param(self, names, values, min_val, max_val, step=1):
+    def _add_shape_param(self, names, values, min_val, max_val, step=1, tooltip=None):
         layout = QtWidgets.QHBoxLayout()
 
         x_layout = QtWidgets.QVBoxLayout()
         x_param, _ = self._add_int_param(
-            names[0], values[0], min_val=min_val, max_val=max_val, layout=x_layout, step=step
+            names[0], values[0], min_val=min_val, max_val=max_val, layout=x_layout, step=step,
+            tooltip=tooltip
         )
         layout.addLayout(x_layout)
 
         y_layout = QtWidgets.QVBoxLayout()
         y_param, _ = self._add_int_param(
-            names[1], values[1], min_val=min_val, max_val=max_val, layout=y_layout, step=step
+            names[1], values[1], min_val=min_val, max_val=max_val, layout=y_layout, step=step,
+            tooltip=tooltip
         )
         layout.addLayout(y_layout)
 
         return x_param, y_param, layout
 
-    def _add_path_param(self, name, value, select_type, title=None, placeholder=None):
+    def _add_path_param(self, name, value, select_type, title=None, placeholder=None, tooltip=None):
         assert select_type in ("directory", "file", "both")
 
         layout = QtWidgets.QHBoxLayout()
-        layout.addWidget(QtWidgets.QLabel(name if title is None else title))
+        label = QtWidgets.QLabel(title or name)
+        if tooltip:
+            label.setToolTip(tooltip)
+        layout.addWidget(label)
 
         path_textbox = QtWidgets.QLineEdit()
         path_textbox.setText(value)
         if placeholder is not None:
             path_textbox.setPlaceholderText(placeholder)
         path_textbox.textChanged.connect(lambda val: setattr(self, name, val))
+        if tooltip:
+            path_textbox.setToolTip(tooltip)
 
         layout.addWidget(path_textbox)
 
-        def add_path_button(select_type):
+        def add_path_button(select_type, tooltip=None):
             # Adjust button text.
             button_text = f"Select {select_type.capitalize()}"
             path_button = QtWidgets.QPushButton(button_text)
 
             # Call appropriate function based on select_type.
             path_button.clicked.connect(lambda: getattr(self, f"_get_{select_type}_path")(name, path_textbox))
+            if tooltip:
+                path_button.setToolTip(tooltip)
             layout.addWidget(path_button)
 
         if select_type == "both":
@@ -165,20 +199,24 @@ class _WidgetBase(QtWidgets.QWidget):
 
         return path_textbox, layout
 
-    def _get_directory_path(self, name, textbox):
+    def _get_directory_path(self, name, textbox, tooltip=None):
         directory = QtWidgets.QFileDialog.getExistingDirectory(
             self, "Select Directory", "", QtWidgets.QFileDialog.ShowDirsOnly
         )
+        if tooltip:
+            directory.setToolTip(tooltip)
         if directory and Path(directory).is_dir():
             textbox.setText(directory)
         else:
             # Handle the case where the selected path is not a directory
             print("Invalid directory selected. Please try again.")
 
-    def _get_file_path(self, name, textbox):
+    def _get_file_path(self, name, textbox, tooltip=None):
         file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self, "Select File", "", "All Files (*)"
         )
+        if tooltip:
+            file_path.setToolTip(tooltip)
         if file_path and Path(file_path).is_file():
             textbox.setText(file_path)
         else:
@@ -264,7 +302,11 @@ def _reset_tracking_state(viewer):
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
 def clear(viewer: "napari.viewer.Viewer") -> None:
-    """Widget for clearing the current annotations."""
+    """Widget for clearing the current annotations.
+
+    Args:
+        viewer (napari.viewer.Viewer): _description_
+    """
     vutil.clear_annotations(viewer)
 
 
@@ -423,7 +465,13 @@ def commit(
     layer: str = "current_object",
     commit_path: Optional[Path] = None,
 ) -> None:
-    """Widget for committing the segmented objects from automatic or interactive segmentation."""
+    """Widget for committing the segmented objects from automatic or interactive segmentation.
+
+    Args:
+        viewer (napari.viewer.Viewer): _description_
+        layer (str, optional): _description_. Defaults to "current_object".
+        commit_path (Optional[Path], optional): _description_. Defaults to None.
+    """
     _, seg, mask, bb = _commit_impl(viewer, layer)
 
     if commit_path is not None:
@@ -449,7 +497,13 @@ def commit_track(
     layer: str = "current_object",
     commit_path: Optional[Path] = None,
 ) -> None:
-    """Widget for committing the segmented objects from interactive tracking."""
+    """Widget for committing the segmented objects from interactive tracking.
+
+    Args:
+        viewer (napari.viewer.Viewer): _description_
+        layer (str, optional): _description_. Defaults to "current_object".
+        commit_path (Optional[Path], optional): _description_. Defaults to None.
+    """
     # Commit the segmentation layer.
     id_offset, seg, mask, bb = _commit_impl(viewer, layer)
 
@@ -475,7 +529,7 @@ def commit_track(
 
 def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="label"):
     """Create the menu for toggling point prompt labels."""
-    label_menu = ComboBox(label=menu_name, choices=labels)
+    label_menu = ComboBox(label=menu_name, choices=labels, tooltip=get_tooltip("prompt_menu", "labels"))
     label_widget = Container(widgets=[label_menu])
 
     def update_label_menu(event):
@@ -503,7 +557,11 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
 def settings_widget(
     cache_directory: Optional[Path] = util.get_cache_directory(),
 ) -> None:
-    """Widget to update global micro_sam settings."""
+    """Widget to update global micro_sam settings.
+
+    Args:
+        cache_directory (Optional[Path], optional): _description_. Defaults to util.get_cache_directory().
+    """
     os.environ["MICROSAM_CACHEDIR"] = str(cache_directory)
     print(f"micro-sam cache directory set to: {cache_directory}")
 
@@ -604,6 +662,16 @@ def _validate_prompts(viewer: "napari.viewer.Viewer") -> bool:
 
 @magic_factory(call_button="Segment Object [S]")
 def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
+    """_summary_
+
+    Args:
+        viewer (napari.viewer.Viewer): _description_
+        batched (bool, optional): _description_. Defaults to False.
+        call_button: run code
+
+    Returns:
+        _type_: _description_
+    """
     if _validate_embeddings(viewer):
         return None
     if _validate_prompts(viewer):
@@ -667,6 +735,14 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
 
 @magic_factory(call_button="Segment Frame [S]")
 def segment_frame(viewer: "napari.viewer.Viewer") -> None:
+    """_summary_
+
+    Args:
+        viewer (napari.viewer.Viewer): _description_
+
+    Returns:
+        _type_: _description_
+    """
     if _validate_embeddings(viewer):
         return None
     if _validate_prompts(viewer):
@@ -760,6 +836,7 @@ class EmbeddingWidget(_WidgetBase):
         self.run_button = QtWidgets.QPushButton("Compute Embeddings")
         self.run_button.clicked.connect(self._initialize_image)
         self.run_button.clicked.connect(self.__call__)
+        self.run_button.setToolTip(get_tooltip("embedding", "run_button"))
         self.layout().addWidget(self.run_button)
 
     def _initialize_image(self):
@@ -769,11 +846,14 @@ class EmbeddingWidget(_WidgetBase):
 
     def _create_image_section(self):
         image_section = QtWidgets.QVBoxLayout()
-        image_section.addWidget(QtWidgets.QLabel("Image Layer:"))
+        image_layer_widget = QtWidgets.QLabel("Image Layer:")
+        # image_layer_widget.setToolTip(get_tooltip("embedding", "image")) #  this adds tooltip to label
+        image_section.addWidget(image_layer_widget)
 
         # Setting a napari layer in QT, see:
         # https://github.com/pyapp-kit/magicgui/blob/main/docs/examples/napari/napari_combine_qt.py
         self.image_selection = create_widget(annotation=napari.layers.Image)
+        self.image_selection.native.setToolTip(get_tooltip("embedding", "image"))
         image_section.addWidget(self.image_selection.native)
 
         return image_section
@@ -810,50 +890,61 @@ class EmbeddingWidget(_WidgetBase):
         layout = QtWidgets.QVBoxLayout()
         self.model_dropdown, layout = self._add_choice_param(
             "model_type", self.model_type, self.model_options, title="Model:", layout=layout,
+            tooltip=get_tooltip("embedding", "model")
         )
         return layout
 
     def _create_settings_widget(self):
         setting_values = QtWidgets.QWidget()
+        setting_values.setToolTip(get_tooltip("embedding", "settings"))
         setting_values.setLayout(QtWidgets.QVBoxLayout())
 
         # Create UI for the device.
         self.device = "auto"
         device_options = ["auto"] + util._available_devices()
-        self.device_dropdown, layout = self._add_choice_param("device", self.device, device_options)
+
+        self.device_dropdown, layout = self._add_choice_param("device", self.device, device_options,
+                                                              tooltip=get_tooltip("embedding", "device"))
         setting_values.layout().addLayout(layout)
 
         # Create UI for the save path.
         self.embeddings_save_path = None
         self.embeddings_save_path_param, layout = self._add_path_param(
-            "embeddings_save_path", self.embeddings_save_path, "directory", title="embeddings save path:"
+            "embeddings_save_path", self.embeddings_save_path, "directory", title="embeddings save path:",
+            tooltip=get_tooltip("embedding", "embeddings_save_path")
         )
         setting_values.layout().addLayout(layout)
 
         # Create UI for the custom weights.
         self.custom_weights = None
         self.custom_weights_param, layout = self._add_path_param(
-            "custom_weights", self.custom_weights, "file", title="custom weights path:"
+            "custom_weights", self.custom_weights, "file", title="custom weights path:",
+            tooltip=get_tooltip("embedding", "custom_weights")
         )
         setting_values.layout().addLayout(layout)
 
         # Create UI for the tile shape.
         self.tile_x, self.tile_y = 0, 0
         self.tile_x_param, self.tile_y_param, layout = self._add_shape_param(
-            ("tile_x", "tile_y"), (self.tile_x, self.tile_y), min_val=0, max_val=2048, step=16
+            ("tile_x", "tile_y"), (self.tile_x, self.tile_y), min_val=0, max_val=2048, step=16,
+            tooltip=get_tooltip("embedding", "tiling")
         )
         setting_values.layout().addLayout(layout)
 
         # Create UI for the halo.
         self.halo_x, self.halo_y = 0, 0
         self.halo_x_param, self.halo_y_param, layout = self._add_shape_param(
-            ("halo_x", "halo_y"), (self.halo_x, self.halo_y), min_val=0, max_val=512
+            ("halo_x", "halo_y"), (self.halo_x, self.halo_y), min_val=0, max_val=512,
+            tooltip=get_tooltip("embedding", "halo")
         )
         setting_values.layout().addLayout(layout)
 
         # Create UI for prefering the decoder.
         self.prefer_decoder = True
-        widget = self._add_boolean_param("prefer_decoder", self.prefer_decoder, title="Prefer Segmentation Decoder")
+        widget = self._add_boolean_param(
+            "prefer_decoder", self.prefer_decoder, title="Prefer Segmentation Decoder",
+            tooltip=get_tooltip("embedding", "prefer_decoder")
+        )
         setting_values.layout().addWidget(widget)
 
         settings = _make_collapsible(setting_values, title="Settings")
@@ -1031,27 +1122,36 @@ class SegmentNDWidget(_WidgetBase):
 
     def _create_settings(self):
         setting_values = QtWidgets.QWidget()
+        setting_values.setToolTip(get_tooltip("segmentnd", "settings"))
         setting_values.setLayout(QtWidgets.QVBoxLayout())
 
         # Create the UI for the projection modes.
         self.projection = "points"
-        self.projection_dropdown, layout = self._add_choice_param("projection", self.projection, PROJECTION_MODES)
+        self.projection_dropdown, layout = self._add_choice_param(
+            "projection", self.projection, PROJECTION_MODES, tooltip=get_tooltip("segmentnd", "projection_dropdown")
+            )
         setting_values.layout().addLayout(layout)
 
         # Create the UI element for the IOU threshold.
         self.iou_threshold = 0.5
-        self.iou_threshold_param, layout = self._add_float_param("iou_threshold", self.iou_threshold)
+        self.iou_threshold_param, layout = self._add_float_param(
+            "iou_threshold", self.iou_threshold, tooltip=get_tooltip("segmentnd", "iou_threshold")
+            )
         setting_values.layout().addLayout(layout)
 
         # Create the UI element for the box extension.
         self.box_extension = 0.05
-        self.box_extension_param, layout = self._add_float_param("box_extension", self.box_extension)
+        self.box_extension_param, layout = self._add_float_param(
+            "box_extension", self.box_extension, tooltip=get_tooltip("segmentnd", "box_extension")
+            )
         setting_values.layout().addLayout(layout)
 
         # Create the UI element for the motion smoothing (if we have the tracking widget).
         if self.tracking:
             self.motion_smoothing = 0.5
-            self.motion_smoothing_param, layout = self._add_float_param("motion_smoothing", self.motion_smoothing)
+            self.motion_smoothing_param, layout = self._add_float_param(
+                "motion_smoothing", self.motion_smoothing, tooltip=get_tooltip("segmentnd", "motion_smoothing")
+                )
             setting_values.layout().addLayout(layout)
 
         settings = _make_collapsible(setting_values, title="Settings")
@@ -1254,6 +1354,7 @@ class AutoSegmentWidget(_WidgetBase):
         # Add the run button.
         self.run_button = QtWidgets.QPushButton("Automatic Segmentation")
         self.run_button.clicked.connect(self.__call__)
+        self.run_button.setToolTip(get_tooltip("autosegment", "run_button"))
         self.layout().addWidget(self.run_button)
 
     def _reset_segmentation_mode(self, with_decoder):
@@ -1276,28 +1377,41 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _create_volumetric_switch(self):
         self.apply_to_volume = False
-        return self._add_boolean_param("apply_to_volume", self.apply_to_volume, title="Apply to Volume")
+        return self._add_boolean_param(
+            "apply_to_volume", self.apply_to_volume, title="Apply to Volume",
+            tooltip=get_tooltip("autosegment", "apply_to_volume")
+            )
 
     def _add_common_settings(self, settings):
         # Create the UI element for min object size.
         self.min_object_size = 100
         self.min_object_size_param, layout = self._add_int_param(
-            "min_object_size", self.min_object_size, min_val=0, max_val=int(1e4)
+            "min_object_size", self.min_object_size, min_val=0, max_val=int(1e4),
+            tooltip=get_tooltip("autosegment", "min_object_size")
         )
         settings.layout().addLayout(layout)
 
         # Create the UI element for with background.
         self.with_background = True
-        settings.layout().addWidget(self._add_boolean_param("with_background", self.with_background))
+        settings.layout().addWidget(self._add_boolean_param(
+            "with_background", self.with_background,
+            tooltip=get_tooltip("autosegment", "with_background")
+            ))
 
         # Add extra settings for volumetric segmentation: gap_closing and min_extent.
         if self.volumetric:
             self.gap_closing = 2
-            self.gap_closing_param, layout = self._add_int_param("gap_closing", self.gap_closing, min_val=0, max_val=10)
+            self.gap_closing_param, layout = self._add_int_param(
+                "gap_closing", self.gap_closing, min_val=0, max_val=10,
+                tooltip=get_tooltip("autosegment", "gap_closing")
+                )
             settings.layout().addLayout(layout)
 
             self.min_extent = 2
-            self.min_extent_param, layout = self._add_int_param("min_extent", self.min_extent, min_val=0, max_val=10)
+            self.min_extent_param, layout = self._add_int_param(
+                "min_extent", self.min_extent, min_val=0, max_val=10,
+                tooltip=get_tooltip("autosegment", "min_extent")
+                )
             settings.layout().addLayout(layout)
 
     def _ais_settings(self):
@@ -1307,14 +1421,16 @@ class AutoSegmentWidget(_WidgetBase):
         # Create the UI element for center_distance_threshold.
         self.center_distance_thresh = 0.5
         self.center_distance_thresh_param, layout = self._add_float_param(
-            "center_distance_thresh", self.center_distance_thresh
+            "center_distance_thresh", self.center_distance_thresh,
+            tooltip=get_tooltip("autosegment", "center_distance_thresh")
         )
         settings.layout().addLayout(layout)
 
         # Create the UI element for boundary_distance_threshold.
         self.boundary_distance_thresh = 0.5
         self.boundary_distance_thresh_param, layout = self._add_float_param(
-            "boundary_distance_thresh", self.boundary_distance_thresh
+            "boundary_distance_thresh", self.boundary_distance_thresh,
+            tooltip=get_tooltip("autosegment", "boundary_distance_thresh")
         )
         settings.layout().addLayout(layout)
 
@@ -1329,19 +1445,26 @@ class AutoSegmentWidget(_WidgetBase):
 
         # Create the UI element for pred_iou_thresh.
         self.pred_iou_thresh = 0.88
-        self.pred_iou_thresh_param, layout = self._add_float_param("pred_iou_thresh", self.pred_iou_thresh)
+        self.pred_iou_thresh_param, layout = self._add_float_param(
+            "pred_iou_thresh", self.pred_iou_thresh,
+            tooltip=get_tooltip("autosegment", "pred_iou_thresh")
+            )
         settings.layout().addLayout(layout)
 
         # Create the UI element for stability score thresh.
         self.stability_score_thresh = 0.95
         self.stability_score_thresh_param, layout = self._add_float_param(
-            "stability_score_thresh", self.stability_score_thresh
+            "stability_score_thresh", self.stability_score_thresh,
+            tooltip=get_tooltip("autosegment", "stability_score_thresh")
         )
         settings.layout().addLayout(layout)
 
         # Create the UI element for box nms thresh.
         self.box_nms_thresh = 0.7
-        self.box_nms_thresh_param, layout = self._add_float_param("box_nms_thresh", self.box_nms_thresh)
+        self.box_nms_thresh_param, layout = self._add_float_param(
+            "box_nms_thresh", self.box_nms_thresh,
+            tooltip=get_tooltip("autosegment", "box_nms_thresh")
+            )
         settings.layout().addLayout(layout)
 
         # Add min_object_size and with_background
@@ -1352,6 +1475,7 @@ class AutoSegmentWidget(_WidgetBase):
     def _create_settings(self):
         setting_values = self._ais_settings() if self.with_decoder else self._amg_settings()
         settings = _make_collapsible(setting_values, title="Settings")
+        settings.setToolTip(get_tooltip("segmentnd", "projection_dropdown"))
         return settings
 
     def _run_segmentation_2d(self, kwargs, i=None):
