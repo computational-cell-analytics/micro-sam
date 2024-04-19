@@ -12,7 +12,7 @@ tooltips = {
     "model": "Select a model to use for segmentation tasks.",
     "prefer_decoder": "Choose if to use segmentation decoder.",
     "run_button": "Compute embeddings or load embeddings if embeddings file path is specified.",
-    "settings": "Click to expand/collapse advanced settings.",
+    "settings": "",
     "tiling": "Enter values to activate tiling. Only x-value for quadratic tiling or both values for custom tiling.",
     # ... other tooltips for embedding widgets ...
   },
@@ -22,7 +22,7 @@ tooltips = {
     "iou_threshold": "iou_threshold",
     "motion_smoothing": "motion_smoothing",
     "projection_dropwdown": "projection dropdown",
-    "settings": "settings",
+    "settings": "",
     # ... other tooltips for segmentation widgets ...
   },
   "autosegment": {

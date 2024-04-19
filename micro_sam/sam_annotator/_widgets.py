@@ -66,7 +66,10 @@ class _WidgetBase(QtWidgets.QWidget):
     def _add_string_param(self, name, value, title=None, placeholder=None, layout=None, tooltip=None):
         if layout is None:
             layout = QtWidgets.QHBoxLayout()
-        layout.addWidget(QtWidgets.QLabel(name if title is None else title))
+        label = QtWidgets.QLabel(title or name)
+        if tooltip:
+            label.setToolTip(tooltip)
+        layout.addWidget(label)
         param = QtWidgets.QLineEdit()
         param.setText(value)
         if placeholder is not None:
@@ -81,7 +84,10 @@ class _WidgetBase(QtWidgets.QWidget):
                          step=0.01, layout=None, tooltip=None):
         if layout is None:
             layout = QtWidgets.QHBoxLayout()
-        layout.addWidget(QtWidgets.QLabel(name if title is None else title))
+        label = QtWidgets.QLabel(title or name)
+        if tooltip:
+            label.setToolTip(tooltip)
+        layout.addWidget(label)
         param = QtWidgets.QDoubleSpinBox()
         param.setRange(min_val, max_val)
         param.setDecimals(decimals)
@@ -96,7 +102,10 @@ class _WidgetBase(QtWidgets.QWidget):
     def _add_int_param(self, name, value, min_val, max_val, title=None, step=1, layout=None, tooltip=None):
         if layout is None:
             layout = QtWidgets.QHBoxLayout()
-        layout.addWidget(QtWidgets.QLabel(name if title is None else title))
+        label = QtWidgets.QLabel(title or name)
+        if tooltip:
+            label.setToolTip(tooltip)
+        layout.addWidget(label)
         param = QtWidgets.QSpinBox()
         param.setRange(min_val, max_val)
         param.setValue(value)
@@ -110,7 +119,10 @@ class _WidgetBase(QtWidgets.QWidget):
     def _add_choice_param(self, name, value, options, title=None, layout=None, update=None, tooltip=None):
         if layout is None:
             layout = QtWidgets.QHBoxLayout()
-        layout.addWidget(QtWidgets.QLabel(name if title is None else title))
+        label = QtWidgets.QLabel(title or name)
+        if tooltip:
+            label.setToolTip(tooltip)
+        layout.addWidget(label)
 
         # Create the dropdown menu via QComboBox, set the available values.
         dropdown = QtWidgets.QComboBox()
@@ -152,7 +164,10 @@ class _WidgetBase(QtWidgets.QWidget):
         assert select_type in ("directory", "file", "both")
 
         layout = QtWidgets.QHBoxLayout()
-        layout.addWidget(QtWidgets.QLabel(name if title is None else title))
+        label = QtWidgets.QLabel(title or name)
+        if tooltip:
+            label.setToolTip(tooltip)
+        layout.addWidget(label)
 
         path_textbox = QtWidgets.QLineEdit()
         path_textbox.setText(value)
