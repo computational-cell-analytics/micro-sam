@@ -4,7 +4,7 @@
 #   - (vit_b_lm) 1-image: 2089.22, 2-image: 1622.69, 5-image: 3477.83, 10-image: 1869.33
 
 # b: v100
-#   - (vit_b) 1-image: 752.39, 2-image: 2051.77 , 5-image: 1653.99, 10-image: 2998.08
+#   - (vit_b) 1-image: 752.39 (9/100), 2-image: 2051.77 , 5-image: 1653.99, 10-image: 2998.08
 #   - (vit_b_lm) 1-image: 1874.83, 2-image: 3205.59 , 5-image: 3196.15, 10-image: 2612.99
 
 # c: cpu32gb
@@ -19,24 +19,22 @@
 import os
 from glob import glob
 
-import torch
-
 from micro_sam.util import _load_checkpoint
 
 
-ROOT = "/scratch/users/archit/experiments/"
+ROOT = "/scratch/usr/nimanwai/experiments/resource-efficient-finetuning/"
 
 
 def _load_per_model(checkpoint):
     state, model_state = _load_checkpoint(checkpoint)
-    print(state["train_time"])
+    print("Time taken to train for the best epoch:", state["train_time"])
+    print("The best epoch attained at:", state["epoch"])
     print()
-
 
 
 def check_models(setting, model):
     all_ckpt_paths = sorted(
-        glob(os.path.join(ROOT, setting, model, "freeze-None", "*", "checkpoints", "*", "*", "best.pt"))
+        glob(os.path.join(ROOT, setting, model, "freeze-*", "*", "checkpoints", "*", "*", "best.pt"))
     )
     for ckpt in all_ckpt_paths:
         print(ckpt)
@@ -44,7 +42,7 @@ def check_models(setting, model):
 
 
 def main():
-    settings = ["v100", "rtx5000", "cpu_32G-mem_16-cores", "cpu_64G-mem_16-cores"]
+    settings = ["v100", "rtx5000", "gtx1080", "cpu_32G-mem_16-cores", "cpu_64G-mem_16-cores"]
     models = ["vit_b", "vit_b_lm"]
     for setting in settings:
         for model in models:
@@ -54,4 +52,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import warnings
+    warnings.simplefilter(action="ignore")
     main()

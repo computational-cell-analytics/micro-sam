@@ -138,7 +138,7 @@ def get_n_objects_plots(max_objects=45):
         _itp_p_last_list.append(_itp_p)
         _itp_b_last_list.append(_itp_b)
 
-    plt.figure(figsize=(25, 20))
+    plt.figure(figsize=(25, 30))
 
     res = {
         "name": list(range(1, len(amg_list) + 1)),
@@ -158,7 +158,7 @@ def get_n_objects_plots(max_objects=45):
     ax = sns.stripplot(
         x="variable", y="value", hue="name", data=pd.melt(res_df, ["name"]),
         dodge=True, alpha=.5, palette='viridis', legend=None,
-        edgecolor=dark_palette, linewidth=0.5
+        edgecolor=dark_palette, linewidth=0.75, s=10
     )
     ax.set(xlabel=None, ylabel=None)
 
@@ -179,7 +179,7 @@ def get_n_objects_plots(max_objects=45):
             y1=interval_data["lower"].iloc[0] - 0.005,
             y2=interval_data["upper"].iloc[0] + 0.005,
             color=color,
-            alpha=0.075,
+            alpha=0.1,
         )
 
     _get_all_interval_fills("amg", color="#440154")
@@ -194,7 +194,7 @@ def get_n_objects_plots(max_objects=45):
 
     ax.set_xlim(-0.5, len(res_df.columns[1:]) - 0.5)
 
-    plt.suptitle("Number of Objects per Batch", x=0.45, y=0.945)
+    plt.suptitle("Number of Objects per Batch", x=0.45, y=0.9)
     plt.xlabel("Inference Settings", labelpad=15)
     plt.ylabel("Segmentation Accuracy", labelpad=30)
 
