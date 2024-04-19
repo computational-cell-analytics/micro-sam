@@ -126,3 +126,90 @@ class TrainableSAM(nn.Module):
             )
 
         return outputs
+
+
+# simple wrapper around SAM to make it trainable and incorporate lora-based methods
+class TrainableLoRASAM(TrainableSAM):
+    """
+    https://github.com/JamesQFreeman/Sam_LoRA
+    """
+    def __init__(
+        self,
+        sam: Sam,
+        rank: int,
+        device: Union[str, torch.device],
+    ) -> None:
+        super().__init__(sam=sam, device=device)
+
+        assert rank > 0
+        self.rank = rank
+
+        self.device = device
+        self.transform = ResizeLongestSide(sam.image_encoder.img_size)
+
+        # first, freeze all the layers in the image encoder
+        for param in sam.image_encoder.parameters():
+            param.requires_grad = False
+
+        # dry spot for storing linear layers
+        self.layers_a, self.layers_b = [], []
+
+        # let's move around the layers to adapt with the lora layers
+        for block in sam.image_encoder.blocks:
+            qkv_layer = block.attn.qkv
+            self.dim = qkv_layer.in_features
+
+            linear_a_q = nn.Linear(self.dim, self.rank, bias=False)
+            linear_a_v = nn.Linear(self.dim, self.rank, bias=False)
+            self.layers_a.append(linear_a_q)
+            self.layers_a.append(linear_a_v)
+
+            linear_b_q = nn.Linear(self.rank, self.dim, bias=False)
+            linear_b_v = nn.Linear(self.rank, self.dim, bias=False)
+            self.layers_b.append(linear_b_q)
+            self.layers_b.append(linear_b_v)
+
+            block.attn.qkv = LoRAMapper(
+                qkv=qkv_layer,
+                linear_a_q=linear_a_q,
+                linear_b_q=linear_b_q,
+                linear_a_v=linear_a_v,
+                linear_b_v=linear_b_v,
+            )
+
+        # self.reset_parameters()
+        self.sam = sam
+
+
+class LoRAMapper(nn.Module):
+    """In Sam it is implemented as
+    self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+    B, N, C = x.shape
+    qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+    q, k, v = qkv.unbind(0)
+    """
+
+    def __init__(
+        self,
+        qkv: nn.Module,
+        linear_a_q: nn.Module,
+        linear_b_q: nn.Module,
+        linear_a_v: nn.Module,
+        linear_b_v: nn.Module,
+    ):
+        super().__init__()
+        self.qkv = qkv
+        self.linear_a_q = linear_a_q
+        self.linear_b_q = linear_b_q
+        self.linear_a_v = linear_a_v
+        self.linear_b_v = linear_b_v
+        self.dim = qkv.in_features
+        self.w_identity = torch.eye(qkv.in_features)
+
+    def forward(self, x):
+        qkv = self.qkv(x)  # B, N, N, 3 * org_C
+        new_q = self.linear_b_q(self.linear_a_q(x))
+        new_v = self.linear_b_v(self.linear_a_v(x))
+        qkv[:, :, :, : self.dim] += new_q
+        qkv[:, :, :, -self.dim:] += new_v
+        return qkv

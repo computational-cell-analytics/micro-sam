@@ -12,7 +12,7 @@ from ..util import (
     get_centers_and_bounding_boxes, get_sam_model, get_device,
     segmentation_to_one_hot, _DEFAULT_MODEL,
 )
-from .trainable_sam import TrainableSAM
+from .trainable_sam import TrainableSAM, TrainableLoRASAM
 
 from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.transform.raw import normalize_percentile, normalize
@@ -42,6 +42,7 @@ def get_trainable_sam_model(
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     freeze: Optional[List[str]] = None,
     return_state: bool = False,
+    get_lora: bool = False,
 ) -> TrainableSAM:
     """Get the trainable sam model.
 
@@ -81,7 +82,11 @@ def get_trainable_sam_model(
                     param.requires_grad = False
 
     # convert to trainable sam
-    trainable_sam = TrainableSAM(sam, device)
+    if get_lora:
+        trainable_sam = TrainableLoRASAM(sam=sam, rank=4, device=device)
+    else:
+        trainable_sam = TrainableSAM(sam, device)
+
     if return_state:
         return trainable_sam, state
     return trainable_sam
