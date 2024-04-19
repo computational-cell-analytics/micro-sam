@@ -12,7 +12,7 @@ from ..util import (
     get_centers_and_bounding_boxes, get_sam_model, get_device,
     segmentation_to_one_hot, _DEFAULT_MODEL,
 )
-from .trainable_sam import TrainableSAM, TrainableLoRASAM
+from .trainable_sam import TrainableSAM, LoRA_Sam
 
 from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.transform.raw import normalize_percentile, normalize
@@ -81,11 +81,11 @@ def get_trainable_sam_model(
                 if name.startswith(f"{freeze}"):
                     param.requires_grad = False
 
-    # convert to trainable sam
     if get_lora:
-        trainable_sam = TrainableLoRASAM(sam=sam, rank=4, device=device)
-    else:
-        trainable_sam = TrainableSAM(sam, device)
+        sam = LoRA_Sam(sam, 4).sam
+
+    # convert to trainable sam
+    trainable_sam = TrainableSAM(sam, device)
 
     if return_state:
         return trainable_sam, state

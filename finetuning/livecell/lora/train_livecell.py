@@ -75,8 +75,31 @@ def finetune_livecell(args):
     )
     unetr.to(device)
 
+    def count_parameters(model):
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    # vit_b
+    # SAM: 93M (takes ~50GB)
+    # SAM-LoRA: 4.2M (takes ~49GB)
+
+    # vit_l
+    # SAM: 312M (takes ~63GB)
+    # SAM-LoRA: 4.4M (takes ~61GB)
+
+    # vit_h
+    # SAM: 641M (takes ~73GB)
+    # SAM-LoRA: 4.7M (takes ~67GB)
+
+    # There's no real memory advantage actually unless it's "truly" scaled up
+    # Need to investigate QLoRA
+
+    print(count_parameters(model))
+
     # let's get the parameters for SAM and the decoder from UNETR
-    joint_model_params = [params for params in model.parameters()]  # sam parameters
+    joint_model_params = filter(lambda p: p.requires_grad, model.parameters())
+    # joint_model_params = model.parameters()
+
+    joint_model_params = [params for params in joint_model_params]  # sam parameters
     for name, params in unetr.named_parameters():  # unetr's decoder parameters
         if not name.startswith("encoder"):
             joint_model_params.append(params)
