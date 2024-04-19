@@ -9,6 +9,7 @@ from torch.utils.data import random_split
 
 import micro_sam.util as util
 import micro_sam.sam_annotator._widgets as widgets
+from ._tooltips import get_tooltip
 from micro_sam.training import default_sam_dataset, train_sam_for_setting, SETTINGS
 
 
@@ -39,35 +40,43 @@ class TrainingWidget(widgets._WidgetBase):
     def _create_options(self):
         self.raw_path = None
         _, layout = self._add_path_param(
-            "raw_path", self.raw_path, "both", placeholder="Image data ..."
+            "raw_path", self.raw_path, "both", placeholder="Image data ...",
+            tooltip=get_tooltip("training", "raw_path")
         )
         self.layout().addLayout(layout)
 
         self.raw_key = None
         _, layout = self._add_string_param(
             "raw_key", self.raw_key, placeholder="Image data key ...",
+            tooltip=get_tooltip("training", "raw_key")
         )
         self.layout().addLayout(layout)
 
         self.label_path = None
         _, layout = self._add_path_param(
-            "label_path", self.label_path, "both", placeholder="Label data ..."
+            "label_path", self.label_path, "both", placeholder="Label data ...",
+            tooltip=get_tooltip("training", "label_path")
         )
         self.layout().addLayout(layout)
 
         self.label_key = None
         _, layout = self._add_string_param(
             "label_key", self.label_key, placeholder="Label data key ...",
+            tooltip=get_tooltip("training", "label_key")
         )
         self.layout().addLayout(layout)
 
         self.setting = _find_best_setting()
-        self.setting_dropdown, layout = self._add_choice_param("setting", self.setting, list(SETTINGS.keys()))
+        self.setting_dropdown, layout = self._add_choice_param(
+            "setting", self.setting, list(SETTINGS.keys()),
+            tooltip=get_tooltip("training", "setting")
+        )
         self.layout().addLayout(layout)
 
         self.with_segmentation_decoder = True
         self.layout().addWidget(self._add_boolean_param(
-            "with_segmentation_decoder", self.with_segmentation_decoder
+            "with_segmentation_decoder", self.with_segmentation_decoder,
+            tooltip=get_tooltip("training", "segmentation_decoder")
         ))
 
     def _create_settings(self):
@@ -78,40 +87,52 @@ class TrainingWidget(widgets._WidgetBase):
         # Device and patch shape settings.
         self.device = "auto"
         device_options = ["auto"] + util._available_devices()
-        self.device_dropdown, layout = self._add_choice_param("device", self.device, device_options)
+        self.device_dropdown, layout = self._add_choice_param(
+            "device", self.device, device_options,
+            tooltip=get_tooltip("training", "device")
+        )
         setting_values.layout().addLayout(layout)
 
         self.patch_x, self.patch_y = 512, 512
         self.patch_x_param, self.patch_y_param, layout = self._add_shape_param(
-            ("patch_x", "patch_y"), (self.patch_x, self.patch_y), min_val=0, max_val=2048
+            ("patch_x", "patch_y"), (self.patch_x, self.patch_y), min_val=0, max_val=2048,
+            tooltip=get_tooltip("training", "patch")
         )
         setting_values.layout().addLayout(layout)
 
         # Paths for validation data.
         self.raw_path_val = None
         _, layout = self._add_path_param(
-            "raw_path_val", self.raw_path_val, "both", placeholder="Image data for validation ..."
+            "raw_path_val", self.raw_path_val, "both", placeholder="Image data for validation ...",
+            tooltip=get_tooltip("training", "raw_path_val")
         )
         setting_values.layout().addLayout(layout)
 
         self.label_path_val = None
         _, layout = self._add_path_param(
-            "label_path_val", self.label_path_val, "both", placeholder="Label data for validation ..."
+            "label_path_val", self.label_path_val, "both", placeholder="Label data for validation ...",
+            tooltip=get_tooltip("training", "label_path_val")
         )
         setting_values.layout().addLayout(layout)
 
         # Name of the model to be trained and options to over-ride the initial model
         # on top of which the finetuning is run.
         self.name = "sam_model"
-        self.name_param, layout = self._add_string_param("name", self.name)
+        self.name_param, layout = self._add_string_param(
+            "name", self.name, tooltip=get_tooltip("training", "name")
+        )
         setting_values.layout().addLayout(layout)
 
         self.initial_model = None
-        self.initial_model_param, layout = self._add_string_param("initial_model", self.initial_model)
+        self.initial_model_param, layout = self._add_string_param(
+            "initial_model", self.initial_model, tooltip=get_tooltip("training", "initial_model")
+            )
         setting_values.layout().addLayout(layout)
 
         self.checkpoint = None
-        self.checkpoint_param, layout = self._add_string_param("checkpoint", self.name)
+        self.checkpoint_param, layout = self._add_string_param(
+            "checkpoint", self.name, tooltip=get_tooltip("training", "checkpoint")
+        )
         setting_values.layout().addLayout(layout)
 
         settings = widgets._make_collapsible(setting_values, title="Advanced")
