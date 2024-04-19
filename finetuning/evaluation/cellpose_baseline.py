@@ -1,6 +1,8 @@
 import os
+import time
 from tqdm import tqdm
 
+import numpy as np
 import pandas as pd
 import imageio.v3 as imageio
 
@@ -21,10 +23,22 @@ LM_DATASETS = [
 
 FOR_MULTICHAN = ["tissuenet/multi_chan"]
 
-# For TissueNet:
-# RESULTS:
-# mSA score for inference at channel [1, 3]: 0.28846337471846234
-# mSA score for inference at channel [2, 3]: 0.4309667789626076
+# Time benchmarks for:
+#   - LIVECell dataset with "livecell" speclalist model (to stay consistent with our time benchmarking setup)
+
+# GPU (A100)
+#       - Run 1: 0.234 s (0.078)
+#       - Run 2: 0.234 s (0.062)
+#       - Run 3: 0.233 s (0.059)
+#       - Run 4: 0.233 s (0.058)
+#       - Run 5: 0.231 s (0.062)
+
+# CPU (64GB CPU mem)
+#       - Run 1: 6.987 s (0.361)
+#       - Run 2: 7.019 s (0.362)
+#       - Run 3: 7.016 s (0.359)
+#       - Run 4: 6.944 s (0.364)
+#       - Run 5: 7.007 s (0.357)
 
 
 def load_cellpose_model(model_type):
@@ -48,6 +62,7 @@ def run_cellpose_segmentation(dataset, model_type):
     image_paths, _ = get_paths(dataset, split="test")
     model = load_cellpose_model(model_type)
 
+    time_per_image = []
     for path in tqdm(image_paths, desc=f"Segmenting {dataset} with cellpose ({model_type})"):
         fname = os.path.basename(path)
         out_path = os.path.join(prediction_folder, fname)
@@ -63,10 +78,18 @@ def run_cellpose_segmentation(dataset, model_type):
             else:
                 image = image.mean(axis=-1)
 
+        start_time = time.time()
+
         seg = model.eval(image, diameter=None, flow_threshold=None, channels=channels)[0]
+
+        end_time = time.time()
+        time_per_image.append(end_time - start_time)
 
         assert seg.shape == image.shape[:2]
         imageio.imwrite(out_path, seg, compression=5)
+
+    n_images = len(image_paths)
+    print(f"The mean time over {n_images} images is:", np.mean(time_per_image), f"({np.std(time_per_image)})")
 
     return prediction_folder
 
