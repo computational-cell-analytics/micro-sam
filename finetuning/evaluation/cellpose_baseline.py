@@ -8,10 +8,12 @@ import imageio.v3 as imageio
 
 from micro_sam.evaluation.evaluation import run_evaluation
 
-from util import get_paths, get_pred_paths
+# from util import get_paths   # for hlrn
+from util import get_pred_paths 
 
 
-EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/benchmarking/cellpose"
+# EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/benchmarking/cellpose"  # for hlrn
+EXPERIMENT_ROOT = "/scratch/users/archit/experiments/cellpose/"  # for scc
 
 LM_DATASETS = [
     # in-domain (LM)
@@ -26,19 +28,28 @@ FOR_MULTICHAN = ["tissuenet/multi_chan"]
 # Time benchmarks for:
 #   - LIVECell dataset with "livecell" speclalist model (to stay consistent with our time benchmarking setup)
 
-# GPU (A100)
-#       - Run 1: 0.234 s (0.078)
-#       - Run 2: 0.234 s (0.062)
-#       - Run 3: 0.233 s (0.059)
-#       - Run 4: 0.233 s (0.058)
-#       - Run 5: 0.231 s (0.062)
+# GPU (RTX5000)
+#       - Run 1: 0.286 s (0.102)
+#       - Run 2: 0.267 s (0.053)
+#       - Run 3: 0.271 s (0.054)
+#       - Run 4: 0.266 s (0.053)
+#       - Run 5: 0.267 s (0.052)
 
-# CPU (64GB CPU mem)
-#       - Run 1: 6.987 s (0.361)
-#       - Run 2: 7.019 s (0.362)
-#       - Run 3: 7.016 s (0.359)
-#       - Run 4: 6.944 s (0.364)
-#       - Run 5: 7.007 s (0.357)
+# medium partition (64GB CPU mem)
+#       - Run 1: 1.387 s (0.391)
+#       - Run 2: 1.361 s (0.389)
+#       - Run 3: 1.771 s (0.502)
+#       - Run 4: 1.371 s (0.387)
+#       - Run 5: 1.616 s (0.394)
+
+
+# override for SCC
+def get_paths(dataset_name, split):
+    from micro_sam.evaluation.livecell import _get_livecell_paths
+    image_paths, gt_paths = _get_livecell_paths(
+        input_folder="/scratch/users/archit/data/livecell", split=split
+    )
+    return sorted(image_paths), sorted(gt_paths)
 
 
 def load_cellpose_model(model_type):
