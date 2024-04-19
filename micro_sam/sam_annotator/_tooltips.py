@@ -46,8 +46,23 @@ tooltips = {
     "labels": "Choose positive prompts to inlcude regions or negative ones to exclude regions.",
   },
   "annotator_tracking": {
-    "track_state": "track_state",
     "track_id": "track_id",
+    "track_state": "track_state",
+  },
+  "training": {
+    "checkpoint": "checkpoint",
+    "device": "device",
+    "initial_model": "initial_model",
+    "label_key": "label_key",
+    "label_path": "label_path",
+    "label_path_val": "label_path_val",
+    "name": "Name of the new model.",
+    "patch": "patch",
+    "raw_key": "raw_key",
+    "raw_path": "raw_path",
+    "raw_path_val": "raw_path_val",
+    "segmentation_decoder": "segmentation_decoder",
+    "setting": "setting"
   }
 }
 
