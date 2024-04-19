@@ -66,8 +66,8 @@ def run_cellpose_segmentation(dataset, model_type):
     for path in tqdm(image_paths, desc=f"Segmenting {dataset} with cellpose ({model_type})"):
         fname = os.path.basename(path)
         out_path = os.path.join(prediction_folder, fname)
-        # if os.path.exists(out_path):
-        #     continue
+        if os.path.exists(out_path):
+            continue
         image = imageio.imread(path)
         channels = [0, 0]  # it's assumed to use one-channel, unless overwritten by logic below
 
