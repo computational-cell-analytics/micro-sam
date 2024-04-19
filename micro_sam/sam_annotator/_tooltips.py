@@ -43,7 +43,7 @@ tooltips = {
     "run_button": "run_button",
   },
   "prompt_menu": {
-    "labels": "these are labels",
+    "labels": "Choose positive prompts to inlcude regions or negative ones to exclude regions.",
   }
 }
 
