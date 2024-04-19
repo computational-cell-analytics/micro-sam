@@ -43,7 +43,7 @@ FOR_MULTICHAN = ["tissuenet/multi_chan"]
 
 def load_cellpose_model(model_type):
     from cellpose import models
-    device, gpu = models.assign_device(False, False)
+    device, gpu = models.assign_device(True, True)
 
     if model_type in ["cyto", "cyto2", "cyto3", "nuclei"]:
         model = models.Cellpose(gpu=gpu, model_type=model_type, device=device)
@@ -142,6 +142,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--dataset", type=str, default=None)
     parser.add_argument("-m", "--model_type", type=str, default=None)
-    parser.add_argument("--store_times", action="store_true")
     args = parser.parse_args()
     main(args)
