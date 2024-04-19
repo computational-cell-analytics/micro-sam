@@ -21,7 +21,7 @@ tooltips = {
     "custom_weights": "Path to the file containing pre-trained weights for the segmentation model.",
     "iou_threshold": "iou_threshold",
     "motion_smoothing": "motion_smoothing",
-    "projection_dropwdown": "projection dropdown",
+    "projection_dropdown": "projection dropdown",
     "settings": "",
     # ... other tooltips for segmentation widgets ...
   },
@@ -44,6 +44,10 @@ tooltips = {
   },
   "prompt_menu": {
     "labels": "Choose positive prompts to inlcude regions or negative ones to exclude regions.",
+  },
+  "annotator_tracking": {
+    "track_state": "track_state",
+    "track_id": "track_id",
   }
 }
 
