@@ -1,6 +1,5 @@
 from subprocess import run
 
-# TODO we need to make sure that this has the corrected training data for the proper training
 DATA_ROOT = "/scratch/usr/nimanwai/data/livecell"
 SAVE_ROOT = "/scratch/usr/nimanwai/experiments/micro-sam/parameters_ablation/"
 
