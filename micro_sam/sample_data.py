@@ -68,7 +68,7 @@ def sample_data_image_series():
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    base_data_directory = os.path.join(get_cache_directory(), 'sample_data')
+    base_data_directory = os.path.join(get_cache_directory(), "sample_data")
     data_directory = fetch_image_series_example_data(base_data_directory)
     fnames = os.listdir(data_directory)
     full_filenames = [os.path.join(data_directory, f) for f in fnames]
@@ -109,7 +109,7 @@ def sample_data_wholeslide():
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    base_data_directory = os.path.join(get_cache_directory(), 'sample_data')
+    base_data_directory = os.path.join(get_cache_directory(), "sample_data")
     filename = fetch_wholeslide_example_data(base_data_directory)
     data = imageio.imread(filename)
     add_image_kwargs = {"name": "wholeslide"}
@@ -185,7 +185,7 @@ def sample_data_hela_2d():
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    base_data_directory = os.path.join(get_cache_directory(), 'sample_data')
+    base_data_directory = os.path.join(get_cache_directory(), "sample_data")
     filename = fetch_hela_2d_example_data(base_data_directory)
     data = imageio.imread(filename)
     add_image_kwargs = {"name": "hela_2d"}
@@ -228,7 +228,7 @@ def sample_data_3d():
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    base_data_directory = os.path.join(get_cache_directory(), 'sample_data')
+    base_data_directory = os.path.join(get_cache_directory(), "sample_data")
     data_directory = fetch_3d_example_data(base_data_directory)
     fnames = os.listdir(data_directory)
     full_filenames = [os.path.join(data_directory, f) for f in fnames]

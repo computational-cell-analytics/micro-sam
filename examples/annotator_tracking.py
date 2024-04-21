@@ -32,9 +32,12 @@ def track_ctc_data(use_finetuned_model):
 
 def main():
     # Whether to use the fine-tuned SAM model.
-    use_finetuned_model = True
+    use_finetuned_model = False
     track_ctc_data(use_finetuned_model)
 
 
+# The corresponding CLI call for track_ctc_data:
+# (replace with cache directory on your machine)
+# $ micro_sam.annotator_tracking -i /home/pape/.cache/micro_sam/sample_data/DIC-C2DH-HeLa.zip.unzip/DIC-C2DH-HeLa/01 -k *.tif -e /home/pape/.cache/micro_sam/embeddings/embeddings-ctc.zarr
 if __name__ == "__main__":
     main()

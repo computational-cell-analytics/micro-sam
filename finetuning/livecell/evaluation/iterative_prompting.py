@@ -1,4 +1,3 @@
-import argparse
 import os
 from glob import glob
 
@@ -6,7 +5,7 @@ import pandas as pd
 
 from micro_sam.evaluation import inference
 from micro_sam.evaluation.evaluation import run_evaluation
-from util import get_paths, get_model, get_pred_and_gt_paths
+from util import get_paths, get_model, get_pred_and_gt_paths, get_default_arguments
 
 
 def run_interactive_prompting(exp_folder, predictor, start_with_box_prompt):
@@ -51,14 +50,7 @@ def evaluate_interactive_prompting(prediction_root, start_with_box_prompt, exp_f
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "-m", "--model", type=str, required=True, help="Provide the model type to initialize the predictor"
-    )
-    parser.add_argument("-c", "--checkpoint", type=str, required=True)
-    parser.add_argument("-e", "--experiment_folder", type=str, required=True)
-    parser.add_argument("--box", action="store_true", help="If passed, starts with first prompt as box")
-    args = parser.parse_args()
+    args = get_default_arguments()
 
     start_with_box_prompt = args.box  # overwrite to start first iters' prompt with box instead of single point
 

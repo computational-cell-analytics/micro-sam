@@ -21,7 +21,7 @@ def finetune_mito_nuc_em_generalist(args):
     model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
     patch_shape = (1, 512, 512)  # the patch shape for training
-    n_objects_per_batch = 25  # this is the number of objects per batch that will be sampled
+    n_objects_per_batch = args.n_objects  # this is the number of objects per batch that will be sampled (default: 25)
     freeze_parts = None  # override this to freeze one or more of these backbones
 
     # get the trainable segment anything model
@@ -41,7 +41,8 @@ def finetune_mito_nuc_em_generalist(args):
         use_sam_stats=True,
         final_activation="Sigmoid",
         use_skip_connection=False,
-        resize_input=True
+        resize_input=True,
+        use_conv_transpose=True,
     )
     unetr.to(device)
 
@@ -54,16 +55,12 @@ def finetune_mito_nuc_em_generalist(args):
     # all the stuff we need for training
     optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=15, verbose=True)
-    train_loader, val_loader = get_generalist_mito_nuc_loaders(
-        input_path=args.input_path, patch_shape=patch_shape, with_cem=args.with_cem
-    )
+    train_loader, val_loader = get_generalist_mito_nuc_loaders(input_path=args.input_path, patch_shape=patch_shape)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
     convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
 
-    checkpoint_name = f"{args.model_type}/"
-    checkpoint_name += "with_cem/" if args.with_cem else "without_cem/"
-    checkpoint_name += "mito_nuc_em_generalist_sam"
+    checkpoint_name = f"{args.model_type}/mito_nuc_em_generalist_sam"
 
     # the trainer which performs the joint training and validation (implemented using "torch_em")
     trainer = sam_training.JointSamTrainer(
@@ -82,7 +79,7 @@ def finetune_mito_nuc_em_generalist(args):
         n_objects_per_batch=n_objects_per_batch,
         n_sub_iteration=8,
         compile_model=False,
-        mask_prob=0.5,  # (optional) overwrite to provide the probability of using mask inputs while training
+        mask_prob=args.mask_prob,  # (default: 0.5) provides the probability of using mask inputs while training
         unetr=unetr,
         instance_loss=DiceBasedDistanceLoss(mask_distances_in_bg=True),
         instance_metric=DiceBasedDistanceLoss(mask_distances_in_bg=True)
@@ -107,7 +104,7 @@ def main():
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
-        help="The model type to use for fine-tuning. Either vit_b, vit_l or vit_h."
+        help="The model type to use for fine-tuning. Either vit_t, vit_b, vit_l or vit_h."
     )
     parser.add_argument(
         "--save_root", "-s",
@@ -122,12 +119,18 @@ def main():
         help="Where to export the finetuned model to. The exported model can be used in the annotation tools."
     )
     parser.add_argument(
+        "--freeze", type=str, nargs="+", default=None,
+        help="Which parts of the model to freeze for finetuning."
+    )
+    parser.add_argument(
         "--save_every_kth_epoch", type=int, default=None,
         help="To save every kth epoch while fine-tuning. Expects an integer value."
     )
     parser.add_argument(
-        "--with_cem", action="store_true",
-        help="To train the Mito-Nuc EM generalist using the MitoLab CEM dataset."
+        "--mask_prob", type=float, default=0.5, help="The probability of using mask inputs for iterative training."
+    )
+    parser.add_argument(
+        "--n_objects", type=int, default=25, help="The number of instances (objects) per batch used for finetuning."
     )
     args = parser.parse_args()
     finetune_mito_nuc_em_generalist(args)

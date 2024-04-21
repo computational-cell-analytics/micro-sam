@@ -30,7 +30,7 @@ from ..prompt_based_segmentation import segment_from_box, segment_from_points
 #
 
 
-def _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1, predictor2, output_folder):
+def _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1, predictor2, predictor3, output_folder):
     i = 0
     os.makedirs(output_folder, exist_ok=True)
 
@@ -50,6 +50,10 @@ def _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1,
         emb2 = util.precompute_image_embeddings(predictor2, im, ndim=2)
         util.set_precomputed(predictor2, emb2)
 
+        if predictor3 is not None:
+            emb3 = util.precompute_image_embeddings(predictor3, im, ndim=2)
+            util.set_precomputed(predictor3, emb3)
+
         with h5py.File(out_path, "a") as f:
             f.create_dataset("image", data=im, compression="gzip")
 
@@ -58,22 +62,36 @@ def _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1,
         centers = [centers[gt_id] for gt_id in gt_ids]
         boxes = [boxes[gt_id] for gt_id in gt_ids]
 
-        object_masks = util.segmentation_to_one_hot(gt, gt_ids)
-        coords, labels, boxes, _ = prompt_generator(object_masks, boxes, centers)
+        object_masks = util.segmentation_to_one_hot(gt.astype("int64"), gt_ids)
+        coords, labels, boxes, _ = prompt_generator(
+            segmentation=object_masks,
+            bbox_coordinates=boxes,
+            center_coordinates=centers,
+        )
 
         for idx, gt_id in tqdm(enumerate(gt_ids), total=len(gt_ids)):
 
-            # TODO bring the outputs to the correct format
-            box = boxes[idx]
+            # Box prompts:
+            # Reorder the coordinates so that they match the normal python convention.
+            box = boxes[idx][[1, 0, 3, 2]]
             mask1_box = segment_from_box(predictor1, box)
             mask2_box = segment_from_box(predictor2, box)
             mask1_box, mask2_box = mask1_box.squeeze(), mask2_box.squeeze()
 
-            # TODO bring the outputs to the correct format
-            point_coords, point_labels = np.array(coords[idx]), np.array(labels[idx])
+            if predictor3 is not None:
+                mask3_box = segment_from_box(predictor3, box)
+                mask3_box = mask3_box.squeeze()
+
+            # Point prompts:
+            # Reorder the coordinates so that they match the normal python convention.
+            point_coords, point_labels = np.array(coords[idx])[:, ::-1], np.array(labels[idx])
             mask1_points = segment_from_points(predictor1, point_coords, point_labels)
             mask2_points = segment_from_points(predictor2, point_coords, point_labels)
             mask1_points, mask2_points = mask1_points.squeeze(), mask2_points.squeeze()
+
+            if predictor3 is not None:
+                mask3_points = segment_from_points(predictor3, point_coords, point_labels)
+                mask3_points = mask3_points.squeeze()
 
             gt_mask = gt == gt_id
             with h5py.File(out_path, "a") as f:
@@ -88,6 +106,10 @@ def _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1,
                 g.create_dataset("points/mask1", data=mask1_points.astype("uint8"), compression="gzip")
                 g.create_dataset("points/mask2", data=mask2_points.astype("uint8"), compression="gzip")
 
+                if predictor3 is not None:
+                    g.create_dataset("box/mask3", data=mask3_box.astype("uint8"), compression="gzip")
+                    g.create_dataset("points/mask3", data=mask3_points.astype("uint8"), compression="gzip")
+
         i += 1
         if i >= n_samples:
             return
@@ -99,6 +121,10 @@ def generate_data_for_model_comparison(
     model_type1: str,
     model_type2: str,
     n_samples: int,
+    model_type3: Optional[str] = None,
+    checkpoint1: Optional[Union[str, os.PathLike]] = None,
+    checkpoint2: Optional[Union[str, os.PathLike]] = None,
+    checkpoint3: Optional[Union[str, os.PathLike]] = None,
 ) -> None:
     """Generate samples for qualitative model comparison.
 
@@ -112,6 +138,8 @@ def generate_data_for_model_comparison(
         model_type2: The second model to use for comparison.
             The value needs to be a valid model_type for `micro_sam.util.get_sam_model`.
         n_samples: The number of samples to draw from the dataloader.
+        checkpoint1: Optional checkpoint for the first model.
+        checkpoint2: Optional checkpoint for the second model.
     """
     prompt_generator = PointAndBoxPromptGenerator(
         n_positive_points=1,
@@ -120,13 +148,19 @@ def generate_data_for_model_comparison(
         get_point_prompts=True,
         get_box_prompts=True,
     )
-    predictor1 = util.get_sam_model(model_type=model_type1)
-    predictor2 = util.get_sam_model(model_type=model_type2)
-    _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1, predictor2, output_folder)
+    predictor1 = util.get_sam_model(model_type=model_type1, checkpoint_path=checkpoint1)
+    predictor2 = util.get_sam_model(model_type=model_type2, checkpoint_path=checkpoint2)
+
+    if model_type3 is not None:
+        predictor3 = util.get_sam_model(model_type=model_type3, checkpoint_path=checkpoint3)
+    else:
+        predictor3 = None
+
+    _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1, predictor2, predictor3, output_folder)
 
 
 #
-# Visual evaluation accroding to metrics
+# Visual evaluation according to metrics
 #
 
 
@@ -162,7 +196,7 @@ def _evaluate_samples(f, prefix, min_size):
     return eval_result
 
 
-def _overlay_mask(image, mask):
+def _overlay_mask(image, mask, alpha=0.6):
     assert image.ndim in (2, 3)
     # overlay the mask
     if image.ndim == 2:
@@ -172,15 +206,16 @@ def _overlay_mask(image, mask):
     assert overlay.shape[-1] == 3
     mask_overlay = np.zeros_like(overlay)
     mask_overlay[mask == 1] = [255, 0, 0]
-    alpha = 0.6
+    alpha = alpha
     overlay = alpha * overlay + (1.0 - alpha) * mask_overlay
     return overlay.astype("uint8")
 
 
-def _enhance_image(im):
+def _enhance_image(im, do_norm=True):
     # apply CLAHE to improve the image quality
-    im -= im.min(axis=(0, 1), keepdims=True)
-    im /= (im.max(axis=(0, 1), keepdims=True) + 1e-6)
+    if do_norm:
+        im -= im.min(axis=(0, 1), keepdims=True)
+        im /= (im.max(axis=(0, 1), keepdims=True) + 1e-6)
     im = exposure.equalize_adapthist(im)
     im *= 255
     return im
@@ -226,10 +261,8 @@ def _overlay_points(im, prompt, radius):
 
 
 def _compare_eval(
-    f, eval_result, advantage_column,
-    n_images_per_sample, prefix,
-    sample_name, plot_folder,
-    point_radius, outline_dilation,
+    f, eval_result, advantage_column, n_images_per_sample, prefix,
+    sample_name, plot_folder, point_radius, outline_dilation, have_model3,
 ):
     result = eval_result.sort_values(advantage_column, ascending=False).iloc[:n_images_per_sample]
     n_rows = result.shape[0]
@@ -255,6 +288,10 @@ def _compare_eval(
         mask1 = g[f"{prefix}/mask1"][:]
         mask2 = g[f"{prefix}/mask2"][:]
 
+        # The mask3 is just for comparison purpose, we just plot the crops as it is.
+        if have_model3:
+            mask3 = g[f"{prefix}/mask3"][:]
+
         fg_mask = (gt + mask1 + mask2) > 0
         # if this is a box prompt we dilate the mask so that the bounding box
         # can be seen
@@ -278,6 +315,9 @@ def _compare_eval(
         im = _enhance_image(image[bb])
         gt, mask1, mask2 = gt[bb], mask1[bb], mask2[bb]
 
+        if have_model3:
+            mask3 = mask3[bb]
+
         im1 = _overlay_mask(im, mask1)
         im1 = _overlay_outline(im1, gt, outline_dilation)
         im1 = overlay_prompts(im1, prompt)
@@ -285,30 +325,45 @@ def _compare_eval(
         ax.axis("off")
         ax.imshow(im1)
 
+        # We put the third set of comparsion point in between
+        # so that the comparison looks -> default, generalist, specialist
+        if have_model3:
+            im3 = _overlay_mask(im, mask3)
+            im3 = _overlay_outline(im3, gt, outline_dilation)
+            im3 = overlay_prompts(im3, prompt)
+            ax = axis[1] if i is None else axis[i, 1]
+            ax.axis("off")
+            ax.imshow(im3)
+
+            nexax = 2
+        else:
+            nexax = 1
+
         im2 = _overlay_mask(im, mask2)
         im2 = _overlay_outline(im2, gt, outline_dilation)
         im2 = overlay_prompts(im2, prompt)
-        ax = axis[1] if i is None else axis[i, 1]
+        ax = axis[nexax] if i is None else axis[i, nexax]
         ax.axis("off")
         ax.imshow(im2)
 
+    cols = 3 if have_model3 else 2
     if plot_folder is None:
-        fig, axis = plt.subplots(n_rows, 2)
+        fig, axis = plt.subplots(n_rows, cols)
         for i, (_, row) in enumerate(result.iterrows()):
             plot_ax(axis, i, row)
         plt.show()
     else:
         for i, (_, row) in enumerate(result.iterrows()):
-            fig, axis = plt.subplots(1, 2)
+            fig, axis = plt.subplots(1, cols)
             plot_ax(axis, None, row)
             plt.subplots_adjust(wspace=0.05, hspace=0)
-            plt.savefig(os.path.join(plot_folder, f"{sample_name}_{i}.png"), bbox_inches="tight")
+            plt.savefig(os.path.join(plot_folder, f"{sample_name}_{i}.svg"), bbox_inches="tight")
             plt.close()
 
 
 def _compare_prompts(
     f, prefix, n_images_per_sample, min_size, sample_name, plot_folder,
-    point_radius, outline_dilation
+    point_radius, outline_dilation, have_model3,
 ):
     box_eval = _evaluate_samples(f, prefix, min_size)
     if plot_folder is None:
@@ -320,16 +375,16 @@ def _compare_prompts(
         os.makedirs(plot_folder2, exist_ok=True)
     _compare_eval(
         f, box_eval, "advantage1", n_images_per_sample, prefix, sample_name, plot_folder1,
-        point_radius, outline_dilation
+        point_radius, outline_dilation, have_model3,
     )
     _compare_eval(
         f, box_eval, "advantage2", n_images_per_sample, prefix, sample_name, plot_folder2,
-        point_radius, outline_dilation
+        point_radius, outline_dilation, have_model3,
     )
 
 
 def _compare_models(
-    path,  n_images_per_sample, min_size, plot_folder, point_radius, outline_dilation
+    path, n_images_per_sample, min_size, plot_folder, point_radius, outline_dilation, have_model3,
 ):
     sample_name = Path(path).stem
     with h5py.File(path, "r") as f:
@@ -340,15 +395,14 @@ def _compare_models(
             plot_folder_box = os.path.join(plot_folder, "box")
         _compare_prompts(
             f, "points", n_images_per_sample, min_size, sample_name, plot_folder_points,
-            point_radius, outline_dilation
+            point_radius, outline_dilation, have_model3,
         )
         _compare_prompts(
             f, "box", n_images_per_sample, min_size, sample_name, plot_folder_box,
-            point_radius, outline_dilation
+            point_radius, outline_dilation, have_model3,
         )
 
 
-# TODO adapt to new prompt generator
 def model_comparison(
     output_folder: Union[str, os.PathLike],
     n_images_per_sample: int,
@@ -356,6 +410,7 @@ def model_comparison(
     plot_folder: Optional[Union[str, os.PathLike]] = None,
     point_radius: int = 4,
     outline_dilation: int = 0,
+    have_model3=False,
 ) -> None:
     """Create images for a qualitative model comparision.
 
@@ -370,7 +425,7 @@ def model_comparison(
     files = glob(os.path.join(output_folder, "*.h5"))
     for path in tqdm(files):
         _compare_models(
-            path, n_images_per_sample, min_size, plot_folder, point_radius, outline_dilation
+            path, n_images_per_sample, min_size, plot_folder, point_radius, outline_dilation, have_model3,
         )
 
 

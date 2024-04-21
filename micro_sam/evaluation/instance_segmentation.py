@@ -22,7 +22,7 @@ from .. import util
 def _get_range_of_search_values(input_vals, step):
     if isinstance(input_vals, list):
         search_range = np.arange(input_vals[0], input_vals[1] + step, step)
-        search_range = [round(e, 2) for e in search_range]
+        search_range = [round(e, 3) for e in search_range]
     else:
         search_range = [input_vals]
     return search_range
@@ -67,13 +67,13 @@ def default_grid_search_values_instance_segmentation_with_decoder(
 
     Args:
         center_distance_threshold_values: The values for `center_distance_threshold` used in the gridsearch.
-            By default values in the range from 0.5 to 0.9 with a stepsize of 0.1 will be used.
+            By default values in the range from 0.3 to 0.7 with a stepsize of 0.1 will be used.
         boundary_distance_threshold_values: The values for `boundary_distance_threshold` used in the gridsearch.
-            By default values in the range from 0.5 to 0.9 with a stepsize of 0.1 will be used.
+            By default values in the range from 0.3 to 0.7 with a stepsize of 0.1 will be used.
         distance_smoothing_values: The values for `distance_smoothing` used in the gridsearch.
             By default values in the range from 1.0 to 2.0 with a stepsize of 0.1 will be used.
         min_size_values: The values for `min_size` used in the gridsearch.
-            By default the values 25, 50, 75, 100 and 200  are used.
+            By default the values 50, 100 and 200  are used.
 
     Returns:
         The values for grid search.
@@ -275,7 +275,18 @@ def run_instance_segmentation_inference(
 
         segmenter.initialize(image, image_embeddings)
         masks = segmenter.generate(**generate_kwargs)
-        instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=min_object_size)
+
+        if len(masks) == 0:  # the instance segmentation can have no masks, hence we just save empty labels
+            if isinstance(segmenter, InstanceSegmentationWithDecoder):
+                this_shape = segmenter._foreground.shape
+            elif isinstance(segmenter, AMGBase):
+                this_shape = segmenter._original_size
+            else:
+                this_shape = image.shape[-2:]
+
+            instances = np.zeros(this_shape, dtype="uint32")
+        else:
+            instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=min_object_size)
 
         # It's important to compress here, otherwise the predictions would take up a lot of space.
         imageio.imwrite(prediction_path, instances, compression=5)
@@ -317,6 +328,24 @@ def evaluate_instance_segmentation_grid_search(
     return best_kwargs, best_score
 
 
+def save_grid_search_best_params(best_kwargs, best_msa, grid_search_result_dir=None):
+    # saving the best parameters estimated from grid-search in the `results` folder
+    param_df = pd.DataFrame.from_dict([best_kwargs])
+    res_df = pd.DataFrame.from_dict([{"best_msa": best_msa}])
+    best_param_df = pd.merge(res_df, param_df, left_index=True, right_index=True)
+
+    path_name = "grid_search_params_amg.csv" if "pred_iou_thresh" and "stability_score_thresh" in best_kwargs \
+        else "grid_search_params_instance_segmentation_with_decoder.csv"
+
+    if grid_search_result_dir is not None:
+        os.makedirs(os.path.join(grid_search_result_dir, "results"), exist_ok=True)
+        res_path = os.path.join(grid_search_result_dir, "results", path_name)
+    else:
+        res_path = path_name
+
+    best_param_df.to_csv(res_path)
+
+
 def run_instance_segmentation_grid_search_and_inference(
     segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
     grid_search_values: Dict[str, List],
@@ -355,6 +384,8 @@ def run_instance_segmentation_grid_search_and_inference(
     best_kwargs, best_msa = evaluate_instance_segmentation_grid_search(result_dir, list(grid_search_values.keys()))
     best_param_str = ", ".join(f"{k} = {v}" for k, v in best_kwargs.items())
     print("Best grid-search result:", best_msa, "with parmeters:\n", best_param_str)
+
+    save_grid_search_best_params(best_kwargs, best_msa, Path(embedding_dir).parent)
 
     generate_kwargs = {} if fixed_generate_kwargs is None else fixed_generate_kwargs
     generate_kwargs.update(best_kwargs)

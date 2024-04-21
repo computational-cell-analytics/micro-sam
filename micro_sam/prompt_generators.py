@@ -240,7 +240,7 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
             coord_list, label_list = None, None
 
         if self.get_box_prompts:
-            # change the axis convention of the point coordinates to match the expected coordinate order of SAM
+            # change the axis convention of the box coordinates to match the expected coordinate order of SAM
             bbox_list = np.array(bbox_coordinates)[:, [1, 0, 3, 2]]
             bbox_list = torch.from_numpy(bbox_list)
         else:
