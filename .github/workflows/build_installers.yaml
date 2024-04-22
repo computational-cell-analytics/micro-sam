@@ -37,7 +37,7 @@ jobs:
           ref: ${{ github.ref }}
 
       - name: setup conda
-        if: matrix.os == "windows-latest" || matrix.os == "ubuntu-latest"
+        if: matrix.os == 'windows-latest' || matrix.os == 'ubuntu-latest'
         uses: conda-incubator/setup-miniconda@v2
         with:
           miniconda-version: "latest"
@@ -48,7 +48,7 @@ jobs:
           ACTIONS_ALLOW_UNSECURE_COMMANDS: true
 
       - name: build ${{ matrix.os }}_x86_64
-        if: matrix.os == "windows-latest"
+        if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           ${{ env.PREPARE_SCRIPT }}
@@ -59,21 +59,21 @@ jobs:
           ${{ env.RUN_SCRIPT }}
 
       - name: build ${{ matrix.os }}_x86_64
-        if: matrix.os == "ubuntu-latest"
+        if: matrix.os == 'ubuntu-latest'
         shell: bash -el {0}
         run: |
           ${{ env.PREPARE_SCRIPT }}
           ${{ env.RUN_SCRIPT }}
 
       - name: build ${{ matrix.os }}_x86_64_step1
-        if: matrix.os == "macos-latest"
+        if: matrix.os == 'macos-latest'
         shell: bash -el {0}
         run: |
           brew install micromamba
           /usr/local/opt/micromamba/bin/micromamba shell init -s bash -p ~/micromamba
 
       - name: build ${{ matrix.os }}_x86_64_step2
-        if: matrix.os == "macos-latest"
+        if: matrix.os == 'macos-latest'
         shell: bash -el {0}
         run: |
           cd deployment
