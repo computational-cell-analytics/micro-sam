@@ -94,6 +94,8 @@ def main():
     checkpoint_paths = glob(os.path.join(ROOT, "checkpoints", "**", "best.pt"), recursive=True)
     # everything betweek checkpoints and best.pt is to be stored
     for checkpoint_path in checkpoint_paths:
+        print(checkpoint_path)
+        name = checkpoint_path[76:-8]
         run_slurm_scripts(
             model_type="vit_b",
             checkpoint=checkpoint_path,
