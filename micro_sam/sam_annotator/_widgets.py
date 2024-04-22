@@ -305,14 +305,19 @@ def clear(viewer: "napari.viewer.Viewer") -> None:
     """Widget for clearing the current annotations.
 
     Args:
-        viewer (napari.viewer.Viewer): _description_
+        viewer: The napari viewer.
     """
     vutil.clear_annotations(viewer)
 
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
 def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> None:
-    """Widget for clearing the current annotations in 3D."""
+    """Widget for clearing the current annotations in 3D.
+
+    Args:
+        viewer: The napari viewer.
+        all_slices: Choose whether to clear the annotations for all or only the current slice.
+    """
     if all_slices:
         vutil.clear_annotations(viewer)
     else:
@@ -322,7 +327,12 @@ def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> Non
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
 def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None:
-    """Widget for clearing all tracking annotations and state."""
+    """Widget for clearing all tracking annotations and state.
+
+    Args:
+        viewer: The napari viewer.
+        all_frames: Choose whether to clear the annotations for all or only the current frame.
+    """
     if all_frames:
         _reset_tracking_state(viewer)
         vutil.clear_annotations(viewer)
@@ -468,9 +478,11 @@ def commit(
     """Widget for committing the segmented objects from automatic or interactive segmentation.
 
     Args:
-        viewer (napari.viewer.Viewer): _description_
-        layer (str, optional): _description_. Defaults to "current_object".
-        commit_path (Optional[Path], optional): _description_. Defaults to None.
+        viewer: The napari viewer.
+        layer: Select the layer to commit. Can be either 'current_object' to commit interacitve segmentation results.
+            Or 'auto_segmentation' to commit automatic segmentation results.
+        commit_path: Select a file path where the committed results and prompts will be saved.
+            This feature is still experimental.
     """
     _, seg, mask, bb = _commit_impl(viewer, layer)
 
@@ -497,12 +509,14 @@ def commit_track(
     layer: str = "current_object",
     commit_path: Optional[Path] = None,
 ) -> None:
-    """Widget for committing the segmented objects from interactive tracking.
+    """Widget for committing the objects from interactive tracking.
 
     Args:
-        viewer (napari.viewer.Viewer): _description_
-        layer (str, optional): _description_. Defaults to "current_object".
-        commit_path (Optional[Path], optional): _description_. Defaults to None.
+        viewer: The napari viewer.
+        layer: Select the layer to commit. Can be either 'current_object' to commit interacitve segmentation results.
+            Or 'auto_segmentation' to commit automatic segmentation results.
+        commit_path: Select a file path where the committed results and prompts will be saved.
+            This feature is still experimental.
     """
     # Commit the segmentation layer.
     id_offset, seg, mask, bb = _commit_impl(viewer, layer)
@@ -560,7 +574,7 @@ def settings_widget(
     """Widget to update global micro_sam settings.
 
     Args:
-        cache_directory (Optional[Path], optional): _description_. Defaults to util.get_cache_directory().
+        cache_directory: Select the path for the micro_sam cache directory. `$HOME/.cache/micro_sam`.
     """
     os.environ["MICROSAM_CACHEDIR"] = str(cache_directory)
     print(f"micro-sam cache directory set to: {cache_directory}")
@@ -662,15 +676,11 @@ def _validate_prompts(viewer: "napari.viewer.Viewer") -> bool:
 
 @magic_factory(call_button="Segment Object [S]")
 def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
-    """_summary_
+    """Segment object(s) for the current prompts.
 
     Args:
-        viewer (napari.viewer.Viewer): _description_
-        batched (bool, optional): _description_. Defaults to False.
-        call_button: run code
-
-    Returns:
-        _type_: _description_
+        viewer: The napari viewer.
+        batched: Choose if you want to segment multiple objects with point prompts.
     """
     if _validate_embeddings(viewer):
         return None
@@ -701,6 +711,11 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
 
 @magic_factory(call_button="Segment Slice [S]")
 def segment_slice(viewer: "napari.viewer.Viewer") -> None:
+    """Segment object for to the current prompts.
+
+    Args:
+        viewer: The napari viewer.
+    """
     if _validate_embeddings(viewer):
         return None
     if _validate_prompts(viewer):
@@ -735,13 +750,10 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
 
 @magic_factory(call_button="Segment Frame [S]")
 def segment_frame(viewer: "napari.viewer.Viewer") -> None:
-    """_summary_
+    """Segment object for the current prompts.
 
     Args:
-        viewer (napari.viewer.Viewer): _description_
-
-    Returns:
-        _type_: _description_
+        viewer: The napari viewer.
     """
     if _validate_embeddings(viewer):
         return None
