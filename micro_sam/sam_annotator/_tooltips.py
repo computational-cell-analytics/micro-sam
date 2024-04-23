@@ -63,6 +63,8 @@ tooltips = {
     "raw_path_val": "raw_path_val",
     "segmentation_decoder": "segmentation_decoder",
     "output_path": "output_path",
+    "n_epochs": "n_epochs",
+    "configuration": "configuration",
   },
 }
 

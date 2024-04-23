@@ -10,14 +10,26 @@ from torch.utils.data import random_split
 import micro_sam.util as util
 import micro_sam.sam_annotator._widgets as widgets
 from ._tooltips import get_tooltip
-from micro_sam.training import default_sam_dataset, train_sam_for_setting, SETTINGS
+from micro_sam.training import default_sam_dataset, train_sam_for_configuration, CONFIGURATIONS
 
 
-def _find_best_setting():
+def _find_best_configuration():
     if torch.cuda.is_available():
-        # TODO
-        # can we check the GPU type and use it to match the setting?
-        return "rtx5000"
+
+        # Check how much memory we have and select the best matching GPU
+        # for the available VRAM size.
+        _, vram = torch.cuda.mem_get_info()
+        vram = vram / 1e9  # in GB
+
+        # Maybe we can get more configurations in the future.
+        if vram > 80:  # More than 80 GB: use the A100 configurations.
+            return "A100"
+        elif vram > 30:  # More than 30 GB: use the V100 configurations.
+            return "V100"
+        elif vram > 14:  # More than 14 GB: use the RTX5000 configurations.
+            return "rtx5000"
+        else:  # Otherwise: not enough memory to train on the GPU, use CPU instead.
+            return "CPU"
     else:
         return "CPU"
 
@@ -66,11 +78,10 @@ class TrainingWidget(widgets._WidgetBase):
         )
         self.layout().addLayout(layout)
 
-        # TODO rename to configuration
-        # TODO update the options according to this
-        self.setting = _find_best_setting()
+        self.configuration = _find_best_configuration()
         self.setting_dropdown, layout = self._add_choice_param(
-            "setting", self.setting, list(SETTINGS.keys()), tooltip=get_tooltip("training", "setting")
+            "configuration", self.configuration, list(CONFIGURATIONS.keys()),
+            tooltip=get_tooltip("training", "configuration")
         )
         self.layout().addLayout(layout)
 
@@ -139,6 +150,14 @@ class TrainingWidget(widgets._WidgetBase):
         self.output_path_param, layout = self._add_string_param(
             "output_path", self.output_path, tooltip=get_tooltip("training", "output_path")
         )
+        setting_values.layout().addLayout(layout)
+
+        self.n_epochs = 100
+        self.n_epochs_param, layout = self._add_int_param(
+            "n_epochs", self.n_epochs, tooltip=get_tooltip("training", "n_epochs"),
+            min_val=1, max_val=1000,
+        )
+        setting_values.layout().addLayout(layout)
 
         settings = widgets._make_collapsible(setting_values, title="Advanced")
         return settings
@@ -155,8 +174,9 @@ class TrainingWidget(widgets._WidgetBase):
 
         raw_path_val, label_path_val = self.raw_path_val, self.label_path_val
         if raw_path_val is None:
-            # TODO better heuristic for the split?
-            train_dataset, val_dataset = random_split(dataset, lengths=[len(dataset) - 1, 1])
+            # Use 10% of the dataset - at least one image - for validation.
+            n_val = min(1, int(0.1 * len(dataset)))
+            train_dataset, val_dataset = random_split(dataset, lengths=[len(dataset) - n_val, n_val])
         else:
             train_dataset = dataset
             val_dataset = default_sam_dataset(
@@ -173,15 +193,15 @@ class TrainingWidget(widgets._WidgetBase):
         return train_loader, val_loader
 
     def _get_model_type(self):
-        # Consolidate initial model name, the checkpoint path and the model type according to the settings.
+        # Consolidate initial model name, the checkpoint path and the model type according to the configuration.
         if self.initial_model is None or self.initial_model in ("None", ""):
-            model_type = SETTINGS[self.setting]["model_type"]
+            model_type = CONFIGURATIONS[self.configuration]["model_type"]
         else:
             model_type = self.initial_model[:5]
-            if model_type != SETTINGS[self.setting]["model_type"]:
+            if model_type != CONFIGURATIONS[self.configuration]["model_type"]:
                 warnings.warn(
-                    f"You have changed the model type for your chosen setting {self.setting} "
-                    f"from {SETTINGS[self.setting]['model_type']} to {model_type}. "
+                    f"You have changed the model type for your chosen configuration {self.configuration} "
+                    f"from {CONFIGURATIONS[self.configuration]['model_type']} to {model_type}. "
                     "The training may be very slow or not work at all."
                 )
         assert model_type is not None
@@ -219,13 +239,13 @@ class TrainingWidget(widgets._WidgetBase):
         @thread_worker()
         def run_training():
             train_loader, val_loader = self._get_loaders()
-            train_sam_for_setting(
-                name=self.name, setting=self.setting,
+            train_sam_for_configuration(
+                name=self.name, configuration=self.configuration,
                 train_loader=train_loader, val_loader=val_loader,
                 checkpoint_path=checkpoint_path,
                 with_segmentation_decoder=self.with_segmentation_decoder,
                 model_type=model_type, device=self.device,
-                pbar_signals=pbar_signals,
+                n_epochs=self.n_epochs, pbar_signals=pbar_signals,
             )
 
             # The best checkpoint after training.
@@ -237,7 +257,7 @@ class TrainingWidget(widgets._WidgetBase):
 
                 # If the output path has a pytorch specific ending then
                 # we just export the checkpoint.
-                if os.path.splitext(self.output_path) in (".pt", ".pth"):
+                if os.path.splitext(self.output_path)[1] in (".pt", ".pth"):
                     util.export_custom_sam_model(
                         checkpoint_path=export_checkpoint, model_type=model_type, save_path=self.output_path,
                     )
@@ -246,25 +266,33 @@ class TrainingWidget(widgets._WidgetBase):
                 else:
                     from micro_sam.bioimageio import export_sam_model
 
-                    # TODO: this needs to be tested!
-                    # Get image and label image from the val loader.
+                    # Load image and label image from the val loader.
                     with torch.no_grad():
                         image, label_image = next(iter(val_loader))
                         image, label_image = image.cpu().numpy().squeeze(), label_image.cpu().numpy().squeeze()
+
+                    # Select the last channel of the label image if we have a channel axis.
+                    # (This contains the labels.)
+                    if label_image.ndim == 3:
+                        label_image = label_image[0]
+                    assert image.shape == label_image.shape
+                    label_image = label_image.astype("uint32")
 
                     export_sam_model(
                         image=image,
                         label_image=label_image,
                         model_type=model_type,
+                        name=self.name,
                         output_path=self.output_path,
                         checkpoint_path=export_checkpoint,
                     )
+
+                pbar_signals.pbar_stop.emit()
                 return self.output_path
 
             else:
+                pbar_signals.pbar_stop.emit()
                 return export_checkpoint
-
-            pbar_signals.pbar_stop.emit()
 
         worker = run_training()
         worker.returned.connect(lambda path: print(f"Training has finished. The trained model is saved at {path}."))

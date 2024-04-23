@@ -325,12 +325,26 @@ def default_sam_dataset(
     is_train: bool = True,
     **kwargs,
 ) -> Dataset:
-    """TODO
+    """Create a PyTorch Dataset for training a SAM model.
 
     Args:
+        raw_paths: The path(s) to the image data used for training.
+            Can either be multiple 2D images or volumetric data.
+        raw_key: The key for accessing the image data. Internal filepath for hdf5-like input
+            or a glob pattern for selecting multiple files.
+        label_paths: The path(s) to the label data used for training.
+            Can either be multiple 2D images or volumetric data.
+        label_key: The key for accessing the label data. Internal filepath for hdf5-like input
+            or a glob pattern for selecting multiple files.
+        patch_shape: The shape for training patches.
+        with_segmentation_decoder: Whether to train with additional segmentation decoder.
+        with_channels: Whether the image data has RGB channels.
+        sampler: A sampler to reject batches according to a given criterion.
+        n_samples: The number of samples for this dataset.
+        is_train: Whether this dataset is used for training or validation.
 
     Returns:
-        The dataloader.
+        The dataset.
     """
 
     # Set the data transformations.
@@ -378,7 +392,7 @@ def default_sam_loader(**kwargs) -> DataLoader:
     return loader
 
 
-SETTINGS = {
+CONFIGURATIONS = {
     "Minimal": {"model_type": "vit_t", "n_objects_per_batch": 4, "n_sub_iteration": 4},
     "CPU": {"model_type": "vit_b", "n_objects_per_batch": 10},
     "gtx1080": {"model_type": "vit_t", "n_objects_per_batch": 5},
@@ -386,36 +400,39 @@ SETTINGS = {
     "V100": {"model_type": "vit_b"},
     "A100": {"model_type": "vit_h"},
 }
+"""Best training configurations for given hardware resources.
+"""
 
 
-def train_sam_for_setting(
+def train_sam_for_configuration(
     name: str,
-    setting: str,
+    configuration: str,
     train_loader: DataLoader,
     val_loader: DataLoader,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     with_segmentation_decoder: bool = True,
-    **kwargs,  # enable passing kwargs to train_sam
+    **kwargs,
 ) -> None:
-    """Run training for a SAM model with settings for a given ressource.
+    """Run training for a SAM model with the configuration for a given hardware resource.
 
-    TODO explain more
+    Selects the best training settings for the given configuration.
+    The available configurations are listed in `CONFIGURATIONS`.
 
     Args:
         name: The name of the model to be trained.
             The checkpoint and logs wil have this name.
-        setting: TODO
+        configuration: The configuration (= name of hardware resource).
         train_loader: The dataloader for training.
         val_loader: The dataloader for validation.
         checkpoint_path: Path to checkpoint for initializing the SAM model.
         with_segmentation_decoder: Whether to train additional UNETR decoder
             for automatic instance segmentation.
-        kwargs: TODO
+        kwargs: Additional keyword parameterts that will be passed to `train_sam`.
     """
-    if setting in SETTINGS:
-        train_kwargs = SETTINGS[setting]
+    if configuration in CONFIGURATIONS:
+        train_kwargs = CONFIGURATIONS[configuration]
     else:
-        raise ValueError(f"Invalid setting {setting} expect one of {list(SETTINGS.keys())}")
+        raise ValueError(f"Invalid configuration {configuration} expect one of {list(CONFIGURATIONS.keys())}")
 
     train_kwargs.update(**kwargs)
     train_sam(
