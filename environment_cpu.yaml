@@ -18,6 +18,5 @@ dependencies:
     - torch_em >=0.7.0
     - tqdm
     - timm
-    - mobile_sam
-    # - pip:
-    #     - git+https://github.com/ChaoningZhang/MobileSAM.git
+    - pip:
+        - git+https://github.com/ChaoningZhang/MobileSAM.git
