@@ -27,6 +27,7 @@ def write_slurm_scripts(
 #SBATCH -t 2-00:00:00
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
+#SBATCH -A gzz0001
 #SBATCH --job-name={Path(inference_setup).stem}
 
 source activate {env_name} \n"""
