@@ -489,11 +489,6 @@ def export_sam_model(
         else:
             assert all(os.path.exists(cov) for cov in covers)
 
-        if decoder_path is None:
-            attachments = None
-        else:
-            attachments = [spec.FileDescr(source=decoder_path)]
-
         # the uploader information is only added if explicitly passed
         extra_kwargs = {}
         if "id" in kwargs:
@@ -502,6 +497,9 @@ def export_sam_model(
             extra_kwargs["id_emoji"] = kwargs["id_emoji"]
         if "uploader" in kwargs:
             extra_kwargs["uploader"] = kwargs["uploader"]
+
+        if decoder_path is not None:
+            extra_kwargs["attachments"] = [spec.FileDescr(source=decoder_path)]
 
         model_description = spec.ModelDescr(
             name=name,
@@ -516,7 +514,6 @@ def export_sam_model(
             git_repo=spec.HttpUrl("https://github.com/computational-cell-analytics/micro-sam"),
             tags=kwargs.get("tags", DEFAULTS["tags"]),
             covers=covers,
-            attachments=attachments,
             **extra_kwargs,
             # TODO write specific settings in the config
             # dict with yaml values, key must be a str
