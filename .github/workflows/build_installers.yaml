@@ -20,6 +20,7 @@ jobs:
         mamba install -y -c conda-forge ruamel.yaml
 
         mamba env create --file=../environment_cpu.yaml -n __MICROSAM_BUILD_ENV__
+        mamba init
         mamba activate __MICROSAM_BUILD_ENV__
         # TODO get the current version here and use it for pinning or enable passing this from dispatch
         mamba install -c conda-forge micro_sam
