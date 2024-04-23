@@ -66,10 +66,11 @@ class TrainingWidget(widgets._WidgetBase):
         )
         self.layout().addLayout(layout)
 
+        # TODO rename to configuration
+        # TODO update the options according to this
         self.setting = _find_best_setting()
         self.setting_dropdown, layout = self._add_choice_param(
-            "setting", self.setting, list(SETTINGS.keys()),
-            tooltip=get_tooltip("training", "setting")
+            "setting", self.setting, list(SETTINGS.keys()), tooltip=get_tooltip("training", "setting")
         )
         self.layout().addLayout(layout)
 
@@ -88,8 +89,7 @@ class TrainingWidget(widgets._WidgetBase):
         self.device = "auto"
         device_options = ["auto"] + util._available_devices()
         self.device_dropdown, layout = self._add_choice_param(
-            "device", self.device, device_options,
-            tooltip=get_tooltip("training", "device")
+            "device", self.device, device_options, tooltip=get_tooltip("training", "device")
         )
         setting_values.layout().addLayout(layout)
 
@@ -126,7 +126,7 @@ class TrainingWidget(widgets._WidgetBase):
         self.initial_model = None
         self.initial_model_param, layout = self._add_string_param(
             "initial_model", self.initial_model, tooltip=get_tooltip("training", "initial_model")
-            )
+        )
         setting_values.layout().addLayout(layout)
 
         self.checkpoint = None
@@ -134,6 +134,11 @@ class TrainingWidget(widgets._WidgetBase):
             "checkpoint", self.name, tooltip=get_tooltip("training", "checkpoint")
         )
         setting_values.layout().addLayout(layout)
+
+        self.output_path = None
+        self.output_path_param, layout = self._add_string_param(
+            "output_path", self.output_path, tooltip=get_tooltip("training", "output_path")
+        )
 
         settings = widgets._make_collapsible(setting_values, title="Advanced")
         return settings
@@ -223,10 +228,45 @@ class TrainingWidget(widgets._WidgetBase):
                 pbar_signals=pbar_signals,
             )
 
-            # TODO implement exporting the model to SAM (state dict) or bioimage.io format.
+            # The best checkpoint after training.
+            export_checkpoint = os.path.join("checkpoints", self.name, "best.pt")
+            assert os.path.exists(export_checkpoint), export_checkpoint
+
+            # Export the model if an output path was given.
+            if self.output_path:
+
+                # If the output path has a pytorch specific ending then
+                # we just export the checkpoint.
+                if os.path.splitext(self.output_path) in (".pt", ".pth"):
+                    util.export_custom_sam_model(
+                        checkpoint_path=export_checkpoint, model_type=model_type, save_path=self.output_path,
+                    )
+
+                # Otherwise we export it as bioimage.io model.
+                else:
+                    from micro_sam.bioimageio import export_sam_model
+
+                    # TODO: this needs to be tested!
+                    # Get image and label image from the val loader.
+                    with torch.no_grad():
+                        image, label_image = next(iter(val_loader))
+                        image, label_image = image.cpu().numpy().squeeze(), label_image.cpu().numpy().squeeze()
+
+                    export_sam_model(
+                        image=image,
+                        label_image=label_image,
+                        model_type=model_type,
+                        output_path=self.output_path,
+                        checkpoint_path=export_checkpoint,
+                    )
+                return self.output_path
+
+            else:
+                return export_checkpoint
 
             pbar_signals.pbar_stop.emit()
 
         worker = run_training()
+        worker.returned.connect(lambda path: print(f"Training has finished. The trained model is saved at {path}."))
         worker.start()
         return worker
