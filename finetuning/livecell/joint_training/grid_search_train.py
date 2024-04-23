@@ -1,12 +1,11 @@
 from subprocess import run
 
-# TODO we need to make sure that this has the corrected training data for the proper training
-DATA_ROOT = "/scratch/projects/nim00007/data/LiveCELL"
-SAVE_ROOT = "/scratch-grete/projects/nim00007/sam/livecell_grid_search"
+DATA_ROOT = "/scratch/usr/nimanwai/data/livecell"
+SAVE_ROOT = "/scratch/usr/nimanwai/experiments/micro-sam/parameters_ablation/"
 
 
 def run_grid_search(dry_run):
-    lrs = [1e-4, 5e-5, 1e-5, 5e-6]
+    lrs = [5e-4, 1e-4, 5e-5, 1e-5, 5e-6]
     for lr in lrs:
         for use_adamw in [True, False]:
             name = f"vit_b-lr{lr}"
@@ -22,4 +21,4 @@ def run_grid_search(dry_run):
                 run(cmd)
 
 
-run_grid_search(False)
+run_grid_search(dry_run=False)
