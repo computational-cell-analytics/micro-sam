@@ -43,9 +43,9 @@ jobs:
 
       - name: setup conda
         if: matrix.os == 'windows-latest' || matrix.os == 'ubuntu-latest'
-        uses: conda-incubator/setup-miniconda@v2 # mamba-org/setup-micromamba@v1 
+        uses: conda-incubator/setup-miniconda@v2
         with:
-          miniconda-version: "latest" #micromamba-version: 'latest'
+          miniconda-version: "latest"
           auto-activate-base: true
           activate-environment: ""
           channels: conda-forge
