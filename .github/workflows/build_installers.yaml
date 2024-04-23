@@ -15,8 +15,6 @@ jobs:
 
     env:
       PREPARE_SCRIPT: |
-        conda config --add channels conda-forge  # Replace with the desired channel
-        conda install --name base -c conda-forge mamba=*  # Update mamba
         cd deployment
         mamba install -y -c conda-forge constructor
         mamba install -y -c conda-forge ruamel.yaml
