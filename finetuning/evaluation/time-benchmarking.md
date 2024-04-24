@@ -5,10 +5,10 @@
 
 | Model | Experiment           | Inference Time (for 5 runs)       | Chosen |
 |-------|----------------------|-----------------------------------|--------|
-| vit_t | Precompute embeddings | | |
-| vit_b | Precompute embeddings | | |
-| vit_l | Precompute embeddings | | |
-| vit_h | Precompute embeddings | | |
+| vit_t | Precompute embeddings | 0.039, 0.039, 0.039, 0.040, 0.041 | 0.039s |
+| vit_b | Precompute embeddings | 0.202, 0.203, 0.205, 0.204, 0.205 | 0.202s |
+| vit_l | Precompute embeddings | 0.482, 0.486, 0.479, 0.488, 0.483 | 0.479s |
+| vit_h | Precompute embeddings | 0.876, 0.874, 0.895, 0.884, 0.885 | 0.874s |
 | vit_t | AMG (w/o embeddings) | 3.392, 3.377, 3.375, 3.376, 3.376 | 3.375s  |
 | vit_b | AMG (w/o embeddings) | 3.378, 3.380, 3.381, 3.391, 3.392 | 3.378s  |
 | vit_l | AMG (w/o embeddings) | 3.374, 3.379, 3.376, 3.376, 3.384 | 3.374s  |
