@@ -341,7 +341,6 @@ def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None
         vutil.clear_annotations_slice(viewer, i=i)
 
 
-# TODO implement preserve committed
 def _commit_impl(viewer, layer, preserve_committed):
     # Check if we have a z_range. If yes, use it to set a bounding box.
     state = AnnotatorState()
@@ -369,6 +368,9 @@ def _commit_impl(viewer, layer, preserve_committed):
     mask = elf.parallel.apply_operation(
         seg, 0, np.not_equal, out=mask, block_shape=util.get_block_shape(shape)
     )
+    if preserve_committed:
+        prev_seg = viewer.layers["committed_objects"].data[bb]
+        mask[prev_seg != 0] = 0
 
     # Write the current object to committed objects.
     seg[mask] += id_offset
