@@ -12,15 +12,15 @@ import matplotlib.pyplot as plt
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/new_models/test/"
 
 PALETTE = {
-    "ais": "#045275",
-    "amg": "#089099",
-    "point": "#7CCBA2",
-    r"i$_{p}$": "#FCDE9C",
-    "box": "#F0746E",
-    r"i$_{b}$": "#90477F"
+    "AIS": "#045275",
+    "AMG": "#089099",
+    "Point": "#7CCBA2",
+    r"I$_{P}$": "#FCDE9C",
+    "Box": "#F0746E",
+    r"I$_{B}$": "#90477F"
 }
 
-plt.rcParams.update({'font.size': 24})
+plt.rcParams.update({'font.size': 30})
 
 
 def _open_csv_file(csv_path):
@@ -68,7 +68,7 @@ def get_partial_finetuning_plots():
     all_combinations = get_partial_finetuning_combinations()
 
     # custom naming for plotting purpose
-    partial_finetuning_combinations = ["all", "PE, MD", "IE, MD", "IE, PE", "MD", "PE", "IE"]
+    partial_finetuning_combinations = [r"${all}$", "PE, MD", "IE, MD", "IE, PE", "MD", "PE", "IE"]
 
     res_list = []
 
@@ -85,12 +85,12 @@ def get_partial_finetuning_plots():
         amg, ais, _1p, _box, _itp_p, _itp_b = _get_results(experiment_folder)
 
         res = [
-            {"name": _plot_object, "type": "amg", "results": amg},
-            {"name": _plot_object, "type": "ais", "results": ais},
-            {"name": _plot_object, "type": "point", "results": _1p},
-            {"name": _plot_object, "type": "box", "results": _box},
-            {"name": _plot_object, "type": r"i$_{p}$", "results": _itp_p},
-            {"name": _plot_object, "type": r"i$_{b}$", "results": _itp_b}
+            {"name": _plot_object, "type": "AMG", "results": amg},
+            {"name": _plot_object, "type": "AIS", "results": ais},
+            {"name": _plot_object, "type": "Point", "results": _1p},
+            {"name": _plot_object, "type": "Box", "results": _box},
+            {"name": _plot_object, "type": r"I$_{P}$", "results": _itp_p},
+            {"name": _plot_object, "type": r"I$_{B}$", "results": _itp_b}
         ]
         res = [pd.DataFrame(_res, index=[i]) for i, _res in enumerate(res)]
         res = pd.concat(res, ignore_index=True)
@@ -104,13 +104,13 @@ def get_partial_finetuning_plots():
     ax.set_yticks(np.linspace(0.1, 1, 10))
     lines, labels = ax.get_legend_handles_labels()
     for line, label in zip(lines, labels):
-        if label == "ais":
+        if label == "AIS":
             for k in range(len(line)):
                 line.patches[k].set_hatch('///')
                 line.patches[k].set_edgecolor('white')
 
-    plt.xlabel("Finetuned Parts")
-    plt.ylabel("Segmentation Accuracy")
+    plt.xlabel("Finetuned Parts", labelpad=10)
+    plt.ylabel("Segmentation Accuracy", labelpad=10)
     plt.legend(loc="upper center", ncol=6)
     plt.tight_layout()
 
@@ -206,8 +206,8 @@ def get_n_objects_plots(max_objects=45):
 
 
 def main():
-    # get_partial_finetuning_plots()
-    get_n_objects_plots()
+    get_partial_finetuning_plots()
+    # get_n_objects_plots()
 
 
 if __name__ == "__main__":

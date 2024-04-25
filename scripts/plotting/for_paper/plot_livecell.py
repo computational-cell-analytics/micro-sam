@@ -23,7 +23,7 @@ MODEL_NAME_MAP = {
 }
 FIG_ASPECT = (30, 15)
 
-plt.rcParams.update({'font.size': 24})
+plt.rcParams.update({'font.size': 30})
 
 
 def gather_livecell_results(model_type, experiment_name, benchmark_choice, result_type="default"):
@@ -60,13 +60,13 @@ def gather_livecell_results(model_type, experiment_name, benchmark_choice, resul
 
     ip_score = pd.concat([
         pd.DataFrame(
-            [{"iteration": idx, "name": "point", "result": ip}]
+            [{"iteration": idx, "name": "Point", "result": ip}]
         ) for idx, ip in enumerate(ip_score)
     ], ignore_index=True)
 
     ib_score = pd.concat([
         pd.DataFrame(
-            [{"iteration": idx, "name": "box", "result": ib}]
+            [{"iteration": idx, "name": "Box", "result": ib}]
         ) for idx, ib in enumerate(ib_score)
     ], ignore_index=True)
 
@@ -87,26 +87,21 @@ def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
             x=ib_data['iteration'], y=ib_data['result'], yerr=ib_data['error'], fmt='none', c='black', capsize=10
         )
 
-    # NOTE: this is the snippet which creates hatches on the iterative prompting starting with box.
-    # all_containers = ax.containers[-1]
-    # for k in range(len(all_containers)):
-    #     ax.patches[k].set_hatch('//')
-    #     ax.patches[k].set_edgecolor('k')
-
     sns.barplot(x="iteration", y="result", hue="name", data=ip_data, ax=ax, palette=[BOTTOM_BAR_COLOR])
     if "error" in ip_data:
         ax.errorbar(
             x=ip_data['iteration'], y=ip_data['result'], yerr=ip_data['error'], fmt='none', c='black', capsize=10
         )
-    ax.set(xlabel="Iterations", ylabel="Segmentation Accuracy")
+    ax.set_xlabel("Iterations", labelpad=10)
+    ax.set_ylabel("Segmentation Accuracy", labelpad=10)
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
     ax.set_title(name, fontweight="bold")
 
     if amg is not None:
-        ax.axhline(y=amg, label="amg", color="#DC3977", lw=5)
+        ax.axhline(y=amg, label="AMG", color="#DC3977", lw=5)
     if ais is not None:
-        ax.axhline(y=ais, label="ais", color="#E19951", lw=5)
-    ax.axhline(y=cellpose, label="cellpose", color="#5454DA", lw=5)
+        ax.axhline(y=ais, label="AIS", color="#E19951", lw=5)
+    ax.axhline(y=cellpose, label="CellPose", color="#5454DA", lw=5)
 
 
 def plot_for_livecell(benchmark_choice, results_with_logits, model_choice=MODEL_CHOICE):
@@ -133,7 +128,7 @@ def plot_for_livecell(benchmark_choice, results_with_logits, model_choice=MODEL_
                 all_labels.append(label)
         ax.get_legend().remove()
 
-    fig.legend(all_lines, all_labels, loc="upper left", bbox_to_anchor=(0.05, 0.95))
+    fig.legend(all_lines, all_labels, loc="upper left", bbox_to_anchor=(0.06, 0.94))
 
     ax.set_yticks(np.linspace(0.1, 0.8, 8))
 
@@ -222,11 +217,11 @@ def plot_all_livecell(benchmark_choice, model_type):
 
 
 def main():
-    # plot_for_livecell(benchmark_choice="livecell", results_with_logits=False)
+    plot_for_livecell(benchmark_choice="livecell", results_with_logits=False)
 
-    for model in ALL_MODELS:
-        plot_for_livecell(benchmark_choice="livecell", results_with_logits=True, model_choice=model)
-        plot_all_livecell(benchmark_choice="livecell", model_type=model)
+    # for model in ALL_MODELS:
+    #     plot_for_livecell(benchmark_choice="livecell", results_with_logits=True, model_choice=model)
+    #     plot_all_livecell(benchmark_choice="livecell", model_type=model)
 
 
 if __name__ == "__main__":
