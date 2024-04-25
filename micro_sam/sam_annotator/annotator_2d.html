@@ -32,6 +32,15 @@
             <h2>API Documentation</h2>
                 <ul class="memberlist">
             <li>
+                    <a class="class" href="#Annotator2d">Annotator2d</a>
+                            <ul class="memberlist">
+                        <li>
+                                <a class="function" href="#Annotator2d.__init__">Annotator2d</a>
+                        </li>
+                </ul>
+
+            </li>
+            <li>
                     <a class="function" href="#annotator_2d">annotator_2d</a>
             </li>
     </ul>
@@ -55,403 +64,632 @@
 
                         <label class="view-source-button" for="mod-annotator_2d-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">  1</span></a><span class="kn">import</span> <span class="nn">warnings</span>
-</span><span id="L-2"><a href="#L-2"><span class="linenos">  2</span></a><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span>
-</span><span id="L-3"><a href="#L-3"><span class="linenos">  3</span></a>
-</span><span id="L-4"><a href="#L-4"><span class="linenos">  4</span></a><span class="kn">import</span> <span class="nn">napari</span>
-</span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">  1</span></a><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">Union</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">  2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">  3</span></a><span class="kn">import</span> <span class="nn">napari</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">  4</span></a><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a><span class="kn">import</span> <span class="nn">torch</span>
 </span><span id="L-6"><a href="#L-6"><span class="linenos">  6</span></a>
-</span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a><span class="kn">from</span> <span class="nn">magicgui</span> <span class="kn">import</span> <span class="n">magicgui</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="kn">from</span> <span class="nn">napari</span> <span class="kn">import</span> <span class="n">Viewer</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a><span class="kn">from</span> <span class="nn">segment_anything</span> <span class="kn">import</span> <span class="n">SamPredictor</span>
-</span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a>
-</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a><span class="kn">from</span> <span class="nn">..</span> <span class="kn">import</span> <span class="n">instance_segmentation</span><span class="p">,</span> <span class="n">util</span>
-</span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a><span class="kn">from</span> <span class="nn">..precompute_state</span> <span class="kn">import</span> <span class="n">cache_amg_state</span>
-</span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a><span class="kn">from</span> <span class="nn">..visualization</span> <span class="kn">import</span> <span class="n">project_embeddings_for_visualization</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="kn">from</span> <span class="nn">.</span> <span class="kn">import</span> <span class="n">util</span> <span class="k">as</span> <span class="n">vutil</span>
-</span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a><span class="kn">from</span> <span class="nn">.gui_utils</span> <span class="kn">import</span> <span class="n">show_wrong_file_warning</span>
-</span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a><span class="kn">from</span> <span class="nn">._state</span> <span class="kn">import</span> <span class="n">AnnotatorState</span>
-</span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a>
-</span><span id="L-18"><a href="#L-18"><span class="linenos"> 18</span></a>
-</span><span id="L-19"><a href="#L-19"><span class="linenos"> 19</span></a><span class="nd">@magicgui</span><span class="p">(</span><span class="n">call_button</span><span class="o">=</span><span class="s2">&quot;Segment Object [S]&quot;</span><span class="p">)</span>
-</span><span id="L-20"><a href="#L-20"><span class="linenos"> 20</span></a><span class="k">def</span> <span class="nf">_segment_widget</span><span class="p">(</span><span class="n">v</span><span class="p">:</span> <span class="n">Viewer</span><span class="p">,</span> <span class="n">box_extension</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.1</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-21"><a href="#L-21"><span class="linenos"> 21</span></a>    <span class="n">shape</span> <span class="o">=</span> <span class="n">v</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="s2">&quot;current_object&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">shape</span>
-</span><span id="L-22"><a href="#L-22"><span class="linenos"> 22</span></a>
-</span><span id="L-23"><a href="#L-23"><span class="linenos"> 23</span></a>    <span class="c1"># get the current box and point prompts</span>
-</span><span id="L-24"><a href="#L-24"><span class="linenos"> 24</span></a>    <span class="n">boxes</span><span class="p">,</span> <span class="n">masks</span> <span class="o">=</span> <span class="n">vutil</span><span class="o">.</span><span class="n">shape_layer_to_prompts</span><span class="p">(</span><span class="n">v</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="s2">&quot;prompts&quot;</span><span class="p">],</span> <span class="n">shape</span><span class="p">)</span>
-</span><span id="L-25"><a href="#L-25"><span class="linenos"> 25</span></a>    <span class="n">points</span><span class="p">,</span> <span class="n">labels</span> <span class="o">=</span> <span class="n">vutil</span><span class="o">.</span><span class="n">point_layer_to_prompts</span><span class="p">(</span><span class="n">v</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="s2">&quot;point_prompts&quot;</span><span class="p">],</span> <span class="n">with_stop_annotation</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-</span><span id="L-26"><a href="#L-26"><span class="linenos"> 26</span></a>
-</span><span id="L-27"><a href="#L-27"><span class="linenos"> 27</span></a>    <span class="n">predictor</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span><span class="o">.</span><span class="n">predictor</span>
-</span><span id="L-28"><a href="#L-28"><span class="linenos"> 28</span></a>    <span class="n">image_embeddings</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span><span class="o">.</span><span class="n">image_embeddings</span>
-</span><span id="L-29"><a href="#L-29"><span class="linenos"> 29</span></a>    <span class="k">if</span> <span class="n">image_embeddings</span><span class="p">[</span><span class="s2">&quot;original_size&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>  <span class="c1"># tiled prediction</span>
-</span><span id="L-30"><a href="#L-30"><span class="linenos"> 30</span></a>        <span class="n">seg</span> <span class="o">=</span> <span class="n">vutil</span><span class="o">.</span><span class="n">prompt_segmentation</span><span class="p">(</span>
-</span><span id="L-31"><a href="#L-31"><span class="linenos"> 31</span></a>            <span class="n">predictor</span><span class="p">,</span> <span class="n">points</span><span class="p">,</span> <span class="n">labels</span><span class="p">,</span> <span class="n">boxes</span><span class="p">,</span> <span class="n">masks</span><span class="p">,</span> <span class="n">shape</span><span class="p">,</span> <span class="n">image_embeddings</span><span class="o">=</span><span class="n">image_embeddings</span><span class="p">,</span>
-</span><span id="L-32"><a href="#L-32"><span class="linenos"> 32</span></a>            <span class="n">multiple_box_prompts</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">box_extension</span><span class="o">=</span><span class="n">box_extension</span><span class="p">,</span>
-</span><span id="L-33"><a href="#L-33"><span class="linenos"> 33</span></a>        <span class="p">)</span>
-</span><span id="L-34"><a href="#L-34"><span class="linenos"> 34</span></a>    <span class="k">else</span><span class="p">:</span>  <span class="c1"># normal prediction and we have set the precomputed embeddings already</span>
-</span><span id="L-35"><a href="#L-35"><span class="linenos"> 35</span></a>        <span class="n">seg</span> <span class="o">=</span> <span class="n">vutil</span><span class="o">.</span><span class="n">prompt_segmentation</span><span class="p">(</span>
-</span><span id="L-36"><a href="#L-36"><span class="linenos"> 36</span></a>            <span class="n">predictor</span><span class="p">,</span> <span class="n">points</span><span class="p">,</span> <span class="n">labels</span><span class="p">,</span> <span class="n">boxes</span><span class="p">,</span> <span class="n">masks</span><span class="p">,</span> <span class="n">shape</span><span class="p">,</span> <span class="n">multiple_box_prompts</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">box_extension</span><span class="o">=</span><span class="n">box_extension</span><span class="p">,</span>
-</span><span id="L-37"><a href="#L-37"><span class="linenos"> 37</span></a>        <span class="p">)</span>
-</span><span id="L-38"><a href="#L-38"><span class="linenos"> 38</span></a>
-</span><span id="L-39"><a href="#L-39"><span class="linenos"> 39</span></a>    <span class="c1"># no prompts were given or prompts were invalid, skip segmentation</span>
-</span><span id="L-40"><a href="#L-40"><span class="linenos"> 40</span></a>    <span class="k">if</span> <span class="n">seg</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-41"><a href="#L-41"><span class="linenos"> 41</span></a>        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;You either haven&#39;t provided any prompts or invalid prompts. The segmentation will be skipped.&quot;</span><span class="p">)</span>
-</span><span id="L-42"><a href="#L-42"><span class="linenos"> 42</span></a>        <span class="k">return</span>
-</span><span id="L-43"><a href="#L-43"><span class="linenos"> 43</span></a>
-</span><span id="L-44"><a href="#L-44"><span class="linenos"> 44</span></a>    <span class="n">v</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="s2">&quot;current_object&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">data</span> <span class="o">=</span> <span class="n">seg</span>
-</span><span id="L-45"><a href="#L-45"><span class="linenos"> 45</span></a>    <span class="n">v</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="s2">&quot;current_object&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">refresh</span><span class="p">()</span>
-</span><span id="L-46"><a href="#L-46"><span class="linenos"> 46</span></a>
-</span><span id="L-47"><a href="#L-47"><span class="linenos"> 47</span></a>
-</span><span id="L-48"><a href="#L-48"><span class="linenos"> 48</span></a><span class="k">def</span> <span class="nf">_changed_param</span><span class="p">(</span><span class="n">amg</span><span class="p">,</span> <span class="o">**</span><span class="n">params</span><span class="p">):</span>
-</span><span id="L-49"><a href="#L-49"><span class="linenos"> 49</span></a>    <span class="k">if</span> <span class="n">amg</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-50"><a href="#L-50"><span class="linenos"> 50</span></a>        <span class="k">return</span> <span class="kc">None</span>
-</span><span id="L-51"><a href="#L-51"><span class="linenos"> 51</span></a>    <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">val</span> <span class="ow">in</span> <span class="n">params</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-</span><span id="L-52"><a href="#L-52"><span class="linenos"> 52</span></a>        <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">amg</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">amg</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span> <span class="o">!=</span> <span class="n">val</span><span class="p">:</span>
-</span><span id="L-53"><a href="#L-53"><span class="linenos"> 53</span></a>            <span class="k">return</span> <span class="n">name</span>
-</span><span id="L-54"><a href="#L-54"><span class="linenos"> 54</span></a>    <span class="k">return</span> <span class="kc">None</span>
-</span><span id="L-55"><a href="#L-55"><span class="linenos"> 55</span></a>
-</span><span id="L-56"><a href="#L-56"><span class="linenos"> 56</span></a>
-</span><span id="L-57"><a href="#L-57"><span class="linenos"> 57</span></a><span class="nd">@magicgui</span><span class="p">(</span>
-</span><span id="L-58"><a href="#L-58"><span class="linenos"> 58</span></a>    <span class="n">call_button</span><span class="o">=</span><span class="s2">&quot;Automatic Segmentation&quot;</span><span class="p">,</span>
-</span><span id="L-59"><a href="#L-59"><span class="linenos"> 59</span></a>    <span class="n">min_object_size</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;min&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;max&quot;</span><span class="p">:</span> <span class="mi">10000</span><span class="p">},</span>
-</span><span id="L-60"><a href="#L-60"><span class="linenos"> 60</span></a><span class="p">)</span>
-</span><span id="L-61"><a href="#L-61"><span class="linenos"> 61</span></a><span class="k">def</span> <span class="nf">_autosegment_widget</span><span class="p">(</span>
-</span><span id="L-62"><a href="#L-62"><span class="linenos"> 62</span></a>    <span class="n">v</span><span class="p">:</span> <span class="n">Viewer</span><span class="p">,</span>
-</span><span id="L-63"><a href="#L-63"><span class="linenos"> 63</span></a>    <span class="n">pred_iou_thresh</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.88</span><span class="p">,</span>
-</span><span id="L-64"><a href="#L-64"><span class="linenos"> 64</span></a>    <span class="n">stability_score_thresh</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.95</span><span class="p">,</span>
-</span><span id="L-65"><a href="#L-65"><span class="linenos"> 65</span></a>    <span class="n">min_object_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">100</span><span class="p">,</span>
-</span><span id="L-66"><a href="#L-66"><span class="linenos"> 66</span></a>    <span class="n">with_background</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-</span><span id="L-67"><a href="#L-67"><span class="linenos"> 67</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-68"><a href="#L-68"><span class="linenos"> 68</span></a>    <span class="n">state</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span>
-</span><span id="L-69"><a href="#L-69"><span class="linenos"> 69</span></a>
-</span><span id="L-70"><a href="#L-70"><span class="linenos"> 70</span></a>    <span class="n">is_tiled</span> <span class="o">=</span> <span class="n">state</span><span class="o">.</span><span class="n">image_embeddings</span><span class="p">[</span><span class="s2">&quot;input_size&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">None</span>
-</span><span id="L-71"><a href="#L-71"><span class="linenos"> 71</span></a>    <span class="k">if</span> <span class="n">state</span><span class="o">.</span><span class="n">amg</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-72"><a href="#L-72"><span class="linenos"> 72</span></a>        <span class="n">state</span><span class="o">.</span><span class="n">amg</span> <span class="o">=</span> <span class="n">instance_segmentation</span><span class="o">.</span><span class="n">get_amg</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">predictor</span><span class="p">,</span> <span class="n">is_tiled</span><span class="p">)</span>
-</span><span id="L-73"><a href="#L-73"><span class="linenos"> 73</span></a>
-</span><span id="L-74"><a href="#L-74"><span class="linenos"> 74</span></a>    <span class="n">shape</span> <span class="o">=</span> <span class="n">state</span><span class="o">.</span><span class="n">image_shape</span>
-</span><span id="L-75"><a href="#L-75"><span class="linenos"> 75</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">state</span><span class="o">.</span><span class="n">amg</span><span class="o">.</span><span class="n">is_initialized</span><span class="p">:</span>
-</span><span id="L-76"><a href="#L-76"><span class="linenos"> 76</span></a>        <span class="c1"># we don&#39;t need to pass the actual image data here, since the embeddings are passed</span>
-</span><span id="L-77"><a href="#L-77"><span class="linenos"> 77</span></a>        <span class="c1"># (the image data is only used by the amg to compute image embeddings, so not needed here)</span>
-</span><span id="L-78"><a href="#L-78"><span class="linenos"> 78</span></a>        <span class="n">dummy_image</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;uint8&quot;</span><span class="p">)</span>
-</span><span id="L-79"><a href="#L-79"><span class="linenos"> 79</span></a>        <span class="n">state</span><span class="o">.</span><span class="n">amg</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">dummy_image</span><span class="p">,</span> <span class="n">image_embeddings</span><span class="o">=</span><span class="n">state</span><span class="o">.</span><span class="n">image_embeddings</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a><span class="kn">from</span> <span class="nn">.</span> <span class="kn">import</span> <span class="n">_widgets</span> <span class="k">as</span> <span class="n">widgets</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="kn">from</span> <span class="nn">._annotator</span> <span class="kn">import</span> <span class="n">_AnnotatorBase</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a><span class="kn">from</span> <span class="nn">._state</span> <span class="kn">import</span> <span class="n">AnnotatorState</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a><span class="kn">from</span> <span class="nn">.util</span> <span class="kn">import</span> <span class="n">_initialize_parser</span><span class="p">,</span> <span class="n">_sync_embedding_widget</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a><span class="kn">from</span> <span class="nn">..</span> <span class="kn">import</span> <span class="n">util</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a>
+</span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a>
+</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="k">class</span> <span class="nc">Annotator2d</span><span class="p">(</span><span class="n">_AnnotatorBase</span><span class="p">):</span>
+</span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a>    <span class="k">def</span> <span class="nf">_get_widgets</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a>        <span class="n">autosegment</span> <span class="o">=</span> <span class="n">widgets</span><span class="o">.</span><span class="n">AutoSegmentWidget</span><span class="p">(</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a>            <span class="bp">self</span><span class="o">.</span><span class="n">_viewer</span><span class="p">,</span> <span class="n">with_decoder</span><span class="o">=</span><span class="n">AnnotatorState</span><span class="p">()</span><span class="o">.</span><span class="n">decoder</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span> <span class="n">volumetric</span><span class="o">=</span><span class="kc">False</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos"> 18</span></a>        <span class="p">)</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos"> 19</span></a>        <span class="k">return</span> <span class="p">{</span>
+</span><span id="L-20"><a href="#L-20"><span class="linenos"> 20</span></a>            <span class="s2">&quot;segment&quot;</span><span class="p">:</span> <span class="n">widgets</span><span class="o">.</span><span class="n">segment</span><span class="p">(),</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos"> 21</span></a>            <span class="s2">&quot;autosegment&quot;</span><span class="p">:</span> <span class="n">autosegment</span><span class="p">,</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos"> 22</span></a>            <span class="s2">&quot;commit&quot;</span><span class="p">:</span> <span class="n">widgets</span><span class="o">.</span><span class="n">commit</span><span class="p">(),</span>
+</span><span id="L-23"><a href="#L-23"><span class="linenos"> 23</span></a>            <span class="s2">&quot;clear&quot;</span><span class="p">:</span> <span class="n">widgets</span><span class="o">.</span><span class="n">clear</span><span class="p">(),</span>
+</span><span id="L-24"><a href="#L-24"><span class="linenos"> 24</span></a>        <span class="p">}</span>
+</span><span id="L-25"><a href="#L-25"><span class="linenos"> 25</span></a>
+</span><span id="L-26"><a href="#L-26"><span class="linenos"> 26</span></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">viewer</span><span class="p">:</span> <span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-27"><a href="#L-27"><span class="linenos"> 27</span></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">viewer</span><span class="o">=</span><span class="n">viewer</span><span class="p">,</span> <span class="n">ndim</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+</span><span id="L-28"><a href="#L-28"><span class="linenos"> 28</span></a>
+</span><span id="L-29"><a href="#L-29"><span class="linenos"> 29</span></a>
+</span><span id="L-30"><a href="#L-30"><span class="linenos"> 30</span></a><span class="k">def</span> <span class="nf">annotator_2d</span><span class="p">(</span>
+</span><span id="L-31"><a href="#L-31"><span class="linenos"> 31</span></a>    <span class="n">image</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+</span><span id="L-32"><a href="#L-32"><span class="linenos"> 32</span></a>    <span class="n">embedding_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-33"><a href="#L-33"><span class="linenos"> 33</span></a>    <span class="n">segmentation_result</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-34"><a href="#L-34"><span class="linenos"> 34</span></a>    <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">_DEFAULT_MODEL</span><span class="p">,</span>
+</span><span id="L-35"><a href="#L-35"><span class="linenos"> 35</span></a>    <span class="n">tile_shape</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-36"><a href="#L-36"><span class="linenos"> 36</span></a>    <span class="n">halo</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-37"><a href="#L-37"><span class="linenos"> 37</span></a>    <span class="n">return_viewer</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="L-38"><a href="#L-38"><span class="linenos"> 38</span></a>    <span class="n">viewer</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-39"><a href="#L-39"><span class="linenos"> 39</span></a>    <span class="n">precompute_amg_state</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="L-40"><a href="#L-40"><span class="linenos"> 40</span></a>    <span class="n">checkpoint_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-41"><a href="#L-41"><span class="linenos"> 41</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-42"><a href="#L-42"><span class="linenos"> 42</span></a>    <span class="n">prefer_decoder</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos"> 43</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">]:</span>
+</span><span id="L-44"><a href="#L-44"><span class="linenos"> 44</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Start the 2d annotation tool for a given image.</span>
+</span><span id="L-45"><a href="#L-45"><span class="linenos"> 45</span></a>
+</span><span id="L-46"><a href="#L-46"><span class="linenos"> 46</span></a><span class="sd">    Args:</span>
+</span><span id="L-47"><a href="#L-47"><span class="linenos"> 47</span></a><span class="sd">        image: The image data.</span>
+</span><span id="L-48"><a href="#L-48"><span class="linenos"> 48</span></a><span class="sd">        embedding_path: Filepath where to save the embeddings.</span>
+</span><span id="L-49"><a href="#L-49"><span class="linenos"> 49</span></a><span class="sd">        segmentation_result: An initial segmentation to load.</span>
+</span><span id="L-50"><a href="#L-50"><span class="linenos"> 50</span></a><span class="sd">            This can be used to correct segmentations with Segment Anything or to save and load progress.</span>
+</span><span id="L-51"><a href="#L-51"><span class="linenos"> 51</span></a><span class="sd">            The segmentation will be loaded as the &#39;committed_objects&#39; layer.</span>
+</span><span id="L-52"><a href="#L-52"><span class="linenos"> 52</span></a><span class="sd">        model_type: The Segment Anything model to use. For details on the available models check out</span>
+</span><span id="L-53"><a href="#L-53"><span class="linenos"> 53</span></a><span class="sd">            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.</span>
+</span><span id="L-54"><a href="#L-54"><span class="linenos"> 54</span></a><span class="sd">        tile_shape: Shape of tiles for tiled embedding prediction.</span>
+</span><span id="L-55"><a href="#L-55"><span class="linenos"> 55</span></a><span class="sd">            If `None` then the whole image is passed to Segment Anything.</span>
+</span><span id="L-56"><a href="#L-56"><span class="linenos"> 56</span></a><span class="sd">        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.</span>
+</span><span id="L-57"><a href="#L-57"><span class="linenos"> 57</span></a><span class="sd">        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.</span>
+</span><span id="L-58"><a href="#L-58"><span class="linenos"> 58</span></a><span class="sd">        viewer: The viewer to which the SegmentAnything functionality should be added.</span>
+</span><span id="L-59"><a href="#L-59"><span class="linenos"> 59</span></a><span class="sd">            This enables using a pre-initialized viewer.</span>
+</span><span id="L-60"><a href="#L-60"><span class="linenos"> 60</span></a><span class="sd">        precompute_amg_state: Whether to precompute the state for automatic mask generation.</span>
+</span><span id="L-61"><a href="#L-61"><span class="linenos"> 61</span></a><span class="sd">            This will take more time when precomputing embeddings, but will then make</span>
+</span><span id="L-62"><a href="#L-62"><span class="linenos"> 62</span></a><span class="sd">            automatic mask generation much faster.</span>
+</span><span id="L-63"><a href="#L-63"><span class="linenos"> 63</span></a><span class="sd">        checkpoint_path: Path to a custom checkpoint from which to load the SAM model.</span>
+</span><span id="L-64"><a href="#L-64"><span class="linenos"> 64</span></a><span class="sd">        device: The computational device to use for the SAM model.</span>
+</span><span id="L-65"><a href="#L-65"><span class="linenos"> 65</span></a><span class="sd">        prefer_decoder: Whether to use decoder based instance segmentation if</span>
+</span><span id="L-66"><a href="#L-66"><span class="linenos"> 66</span></a><span class="sd">            the model used has an additional decoder for instance segmentation.</span>
+</span><span id="L-67"><a href="#L-67"><span class="linenos"> 67</span></a>
+</span><span id="L-68"><a href="#L-68"><span class="linenos"> 68</span></a><span class="sd">    Returns:</span>
+</span><span id="L-69"><a href="#L-69"><span class="linenos"> 69</span></a><span class="sd">        The napari viewer, only returned if `return_viewer=True`.</span>
+</span><span id="L-70"><a href="#L-70"><span class="linenos"> 70</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-71"><a href="#L-71"><span class="linenos"> 71</span></a>
+</span><span id="L-72"><a href="#L-72"><span class="linenos"> 72</span></a>    <span class="n">state</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span>
+</span><span id="L-73"><a href="#L-73"><span class="linenos"> 73</span></a>    <span class="n">state</span><span class="o">.</span><span class="n">image_shape</span> <span class="o">=</span> <span class="n">image</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="k">if</span> <span class="n">image</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">3</span> <span class="k">else</span> <span class="n">image</span><span class="o">.</span><span class="n">shape</span>
+</span><span id="L-74"><a href="#L-74"><span class="linenos"> 74</span></a>
+</span><span id="L-75"><a href="#L-75"><span class="linenos"> 75</span></a>    <span class="n">state</span><span class="o">.</span><span class="n">initialize_predictor</span><span class="p">(</span>
+</span><span id="L-76"><a href="#L-76"><span class="linenos"> 76</span></a>        <span class="n">image</span><span class="p">,</span> <span class="n">model_type</span><span class="o">=</span><span class="n">model_type</span><span class="p">,</span> <span class="n">save_path</span><span class="o">=</span><span class="n">embedding_path</span><span class="p">,</span>
+</span><span id="L-77"><a href="#L-77"><span class="linenos"> 77</span></a>        <span class="n">halo</span><span class="o">=</span><span class="n">halo</span><span class="p">,</span> <span class="n">tile_shape</span><span class="o">=</span><span class="n">tile_shape</span><span class="p">,</span> <span class="n">precompute_amg_state</span><span class="o">=</span><span class="n">precompute_amg_state</span><span class="p">,</span>
+</span><span id="L-78"><a href="#L-78"><span class="linenos"> 78</span></a>        <span class="n">ndim</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">checkpoint_path</span><span class="o">=</span><span class="n">checkpoint_path</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">prefer_decoder</span><span class="o">=</span><span class="n">prefer_decoder</span><span class="p">,</span>
+</span><span id="L-79"><a href="#L-79"><span class="linenos"> 79</span></a>    <span class="p">)</span>
 </span><span id="L-80"><a href="#L-80"><span class="linenos"> 80</span></a>
-</span><span id="L-81"><a href="#L-81"><span class="linenos"> 81</span></a>    <span class="n">seg</span> <span class="o">=</span> <span class="n">state</span><span class="o">.</span><span class="n">amg</span><span class="o">.</span><span class="n">generate</span><span class="p">(</span><span class="n">pred_iou_thresh</span><span class="o">=</span><span class="n">pred_iou_thresh</span><span class="p">,</span> <span class="n">stability_score_thresh</span><span class="o">=</span><span class="n">stability_score_thresh</span><span class="p">)</span>
-</span><span id="L-82"><a href="#L-82"><span class="linenos"> 82</span></a>
-</span><span id="L-83"><a href="#L-83"><span class="linenos"> 83</span></a>    <span class="n">seg</span> <span class="o">=</span> <span class="n">instance_segmentation</span><span class="o">.</span><span class="n">mask_data_to_segmentation</span><span class="p">(</span>
-</span><span id="L-84"><a href="#L-84"><span class="linenos"> 84</span></a>        <span class="n">seg</span><span class="p">,</span> <span class="n">with_background</span><span class="o">=</span><span class="n">with_background</span><span class="p">,</span> <span class="n">min_object_size</span><span class="o">=</span><span class="n">min_object_size</span>
-</span><span id="L-85"><a href="#L-85"><span class="linenos"> 85</span></a>    <span class="p">)</span>
-</span><span id="L-86"><a href="#L-86"><span class="linenos"> 86</span></a>    <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">seg</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span>
-</span><span id="L-87"><a href="#L-87"><span class="linenos"> 87</span></a>
-</span><span id="L-88"><a href="#L-88"><span class="linenos"> 88</span></a>    <span class="n">v</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="s2">&quot;auto_segmentation&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">data</span> <span class="o">=</span> <span class="n">seg</span>
-</span><span id="L-89"><a href="#L-89"><span class="linenos"> 89</span></a>    <span class="n">v</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="s2">&quot;auto_segmentation&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">refresh</span><span class="p">()</span>
+</span><span id="L-81"><a href="#L-81"><span class="linenos"> 81</span></a>    <span class="k">if</span> <span class="n">viewer</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-82"><a href="#L-82"><span class="linenos"> 82</span></a>        <span class="n">viewer</span> <span class="o">=</span> <span class="n">napari</span><span class="o">.</span><span class="n">Viewer</span><span class="p">()</span>
+</span><span id="L-83"><a href="#L-83"><span class="linenos"> 83</span></a>
+</span><span id="L-84"><a href="#L-84"><span class="linenos"> 84</span></a>    <span class="n">viewer</span><span class="o">.</span><span class="n">add_image</span><span class="p">(</span><span class="n">image</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">&quot;image&quot;</span><span class="p">)</span>
+</span><span id="L-85"><a href="#L-85"><span class="linenos"> 85</span></a>    <span class="n">annotator</span> <span class="o">=</span> <span class="n">Annotator2d</span><span class="p">(</span><span class="n">viewer</span><span class="p">)</span>
+</span><span id="L-86"><a href="#L-86"><span class="linenos"> 86</span></a>
+</span><span id="L-87"><a href="#L-87"><span class="linenos"> 87</span></a>    <span class="c1"># Trigger layer update of the annotator so that layers have the correct shape.</span>
+</span><span id="L-88"><a href="#L-88"><span class="linenos"> 88</span></a>    <span class="c1"># And initialize the &#39;committed_objects&#39; with the segmentation result if it was given.</span>
+</span><span id="L-89"><a href="#L-89"><span class="linenos"> 89</span></a>    <span class="n">annotator</span><span class="o">.</span><span class="n">_update_image</span><span class="p">(</span><span class="n">segmentation_result</span><span class="o">=</span><span class="n">segmentation_result</span><span class="p">)</span>
 </span><span id="L-90"><a href="#L-90"><span class="linenos"> 90</span></a>
-</span><span id="L-91"><a href="#L-91"><span class="linenos"> 91</span></a>
-</span><span id="L-92"><a href="#L-92"><span class="linenos"> 92</span></a><span class="k">def</span> <span class="nf">_get_shape</span><span class="p">(</span><span class="n">raw</span><span class="p">):</span>
-</span><span id="L-93"><a href="#L-93"><span class="linenos"> 93</span></a>    <span class="k">if</span> <span class="n">raw</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
-</span><span id="L-94"><a href="#L-94"><span class="linenos"> 94</span></a>        <span class="n">shape</span> <span class="o">=</span> <span class="n">raw</span><span class="o">.</span><span class="n">shape</span>
-</span><span id="L-95"><a href="#L-95"><span class="linenos"> 95</span></a>    <span class="k">elif</span> <span class="n">raw</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">3</span> <span class="ow">and</span> <span class="n">raw</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
-</span><span id="L-96"><a href="#L-96"><span class="linenos"> 96</span></a>        <span class="n">shape</span> <span class="o">=</span> <span class="n">raw</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span>
-</span><span id="L-97"><a href="#L-97"><span class="linenos"> 97</span></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="L-98"><a href="#L-98"><span class="linenos"> 98</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Invalid input image of shape </span><span class="si">{</span><span class="n">raw</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">. Expect either 2D grayscale or 3D RGB image.&quot;</span><span class="p">)</span>
-</span><span id="L-99"><a href="#L-99"><span class="linenos"> 99</span></a>    <span class="k">return</span> <span class="n">shape</span>
-</span><span id="L-100"><a href="#L-100"><span class="linenos">100</span></a>
+</span><span id="L-91"><a href="#L-91"><span class="linenos"> 91</span></a>    <span class="c1"># Add the annotator widget to the viewer and sync widgets.</span>
+</span><span id="L-92"><a href="#L-92"><span class="linenos"> 92</span></a>    <span class="n">viewer</span><span class="o">.</span><span class="n">window</span><span class="o">.</span><span class="n">add_dock_widget</span><span class="p">(</span><span class="n">annotator</span><span class="p">)</span>
+</span><span id="L-93"><a href="#L-93"><span class="linenos"> 93</span></a>    <span class="n">_sync_embedding_widget</span><span class="p">(</span>
+</span><span id="L-94"><a href="#L-94"><span class="linenos"> 94</span></a>        <span class="n">state</span><span class="o">.</span><span class="n">widgets</span><span class="p">[</span><span class="s2">&quot;embeddings&quot;</span><span class="p">],</span> <span class="n">model_type</span><span class="p">,</span>
+</span><span id="L-95"><a href="#L-95"><span class="linenos"> 95</span></a>        <span class="n">save_path</span><span class="o">=</span><span class="n">embedding_path</span><span class="p">,</span> <span class="n">checkpoint_path</span><span class="o">=</span><span class="n">checkpoint_path</span><span class="p">,</span>
+</span><span id="L-96"><a href="#L-96"><span class="linenos"> 96</span></a>        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">tile_shape</span><span class="o">=</span><span class="n">tile_shape</span><span class="p">,</span> <span class="n">halo</span><span class="o">=</span><span class="n">halo</span>
+</span><span id="L-97"><a href="#L-97"><span class="linenos"> 97</span></a>    <span class="p">)</span>
+</span><span id="L-98"><a href="#L-98"><span class="linenos"> 98</span></a>
+</span><span id="L-99"><a href="#L-99"><span class="linenos"> 99</span></a>    <span class="k">if</span> <span class="n">return_viewer</span><span class="p">:</span>
+</span><span id="L-100"><a href="#L-100"><span class="linenos">100</span></a>        <span class="k">return</span> <span class="n">viewer</span>
 </span><span id="L-101"><a href="#L-101"><span class="linenos">101</span></a>
-</span><span id="L-102"><a href="#L-102"><span class="linenos">102</span></a><span class="k">def</span> <span class="nf">_initialize_viewer</span><span class="p">(</span><span class="n">raw</span><span class="p">,</span> <span class="n">segmentation_result</span><span class="p">,</span> <span class="n">tile_shape</span><span class="p">,</span> <span class="n">show_embeddings</span><span class="p">):</span>
-</span><span id="L-103"><a href="#L-103"><span class="linenos">103</span></a>    <span class="n">v</span> <span class="o">=</span> <span class="n">Viewer</span><span class="p">()</span>
+</span><span id="L-102"><a href="#L-102"><span class="linenos">102</span></a>    <span class="n">napari</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
+</span><span id="L-103"><a href="#L-103"><span class="linenos">103</span></a>
 </span><span id="L-104"><a href="#L-104"><span class="linenos">104</span></a>
-</span><span id="L-105"><a href="#L-105"><span class="linenos">105</span></a>    <span class="c1">#</span>
-</span><span id="L-106"><a href="#L-106"><span class="linenos">106</span></a>    <span class="c1"># initialize the viewer and add layers</span>
-</span><span id="L-107"><a href="#L-107"><span class="linenos">107</span></a>    <span class="c1">#</span>
-</span><span id="L-108"><a href="#L-108"><span class="linenos">108</span></a>
-</span><span id="L-109"><a href="#L-109"><span class="linenos">109</span></a>    <span class="n">v</span><span class="o">.</span><span class="n">add_image</span><span class="p">(</span><span class="n">raw</span><span class="p">)</span>
-</span><span id="L-110"><a href="#L-110"><span class="linenos">110</span></a>    <span class="n">shape</span> <span class="o">=</span> <span class="n">_get_shape</span><span class="p">(</span><span class="n">raw</span><span class="p">)</span>
-</span><span id="L-111"><a href="#L-111"><span class="linenos">111</span></a>
-</span><span id="L-112"><a href="#L-112"><span class="linenos">112</span></a>    <span class="n">v</span><span class="o">.</span><span class="n">add_labels</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;uint32&quot;</span><span class="p">),</span> <span class="n">name</span><span class="o">=</span><span class="s2">&quot;auto_segmentation&quot;</span><span class="p">)</span>
-</span><span id="L-113"><a href="#L-113"><span class="linenos">113</span></a>    <span class="k">if</span> <span class="n">segmentation_result</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-114"><a href="#L-114"><span class="linenos">114</span></a>        <span class="n">v</span><span class="o">.</span><span class="n">add_labels</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;uint32&quot;</span><span class="p">),</span> <span class="n">name</span><span class="o">=</span><span class="s2">&quot;committed_objects&quot;</span><span class="p">)</span>
-</span><span id="L-115"><a href="#L-115"><span class="linenos">115</span></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="L-116"><a href="#L-116"><span class="linenos">116</span></a>        <span class="n">v</span><span class="o">.</span><span class="n">add_labels</span><span class="p">(</span><span class="n">segmentation_result</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">&quot;committed_objects&quot;</span><span class="p">)</span>
-</span><span id="L-117"><a href="#L-117"><span class="linenos">117</span></a>    <span class="n">v</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="s2">&quot;committed_objects&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">new_colormap</span><span class="p">()</span>  <span class="c1"># randomize colors so it is easy to see when object committed</span>
-</span><span id="L-118"><a href="#L-118"><span class="linenos">118</span></a>    <span class="n">v</span><span class="o">.</span><span class="n">add_labels</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;uint32&quot;</span><span class="p">),</span> <span class="n">name</span><span class="o">=</span><span class="s2">&quot;current_object&quot;</span><span class="p">)</span>
-</span><span id="L-119"><a href="#L-119"><span class="linenos">119</span></a>
-</span><span id="L-120"><a href="#L-120"><span class="linenos">120</span></a>    <span class="c1"># show the PCA of the image embeddings</span>
-</span><span id="L-121"><a href="#L-121"><span class="linenos">121</span></a>    <span class="k">if</span> <span class="n">show_embeddings</span><span class="p">:</span>
-</span><span id="L-122"><a href="#L-122"><span class="linenos">122</span></a>        <span class="n">embedding_vis</span><span class="p">,</span> <span class="n">scale</span> <span class="o">=</span> <span class="n">project_embeddings_for_visualization</span><span class="p">(</span><span class="n">AnnotatorState</span><span class="p">()</span><span class="o">.</span><span class="n">image_embeddings</span><span class="p">)</span>
-</span><span id="L-123"><a href="#L-123"><span class="linenos">123</span></a>        <span class="n">v</span><span class="o">.</span><span class="n">add_image</span><span class="p">(</span><span class="n">embedding_vis</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">&quot;embeddings&quot;</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="n">scale</span><span class="p">)</span>
-</span><span id="L-124"><a href="#L-124"><span class="linenos">124</span></a>
-</span><span id="L-125"><a href="#L-125"><span class="linenos">125</span></a>    <span class="n">labels</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;positive&quot;</span><span class="p">,</span> <span class="s2">&quot;negative&quot;</span><span class="p">]</span>
-</span><span id="L-126"><a href="#L-126"><span class="linenos">126</span></a>    <span class="n">prompts</span> <span class="o">=</span> <span class="n">v</span><span class="o">.</span><span class="n">add_points</span><span class="p">(</span>
-</span><span id="L-127"><a href="#L-127"><span class="linenos">127</span></a>        <span class="n">data</span><span class="o">=</span><span class="p">[[</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">],</span> <span class="p">[</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">]],</span>  <span class="c1"># FIXME workaround</span>
-</span><span id="L-128"><a href="#L-128"><span class="linenos">128</span></a>        <span class="n">name</span><span class="o">=</span><span class="s2">&quot;point_prompts&quot;</span><span class="p">,</span>
-</span><span id="L-129"><a href="#L-129"><span class="linenos">129</span></a>        <span class="n">properties</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;label&quot;</span><span class="p">:</span> <span class="n">labels</span><span class="p">},</span>
-</span><span id="L-130"><a href="#L-130"><span class="linenos">130</span></a>        <span class="n">edge_color</span><span class="o">=</span><span class="s2">&quot;label&quot;</span><span class="p">,</span>
-</span><span id="L-131"><a href="#L-131"><span class="linenos">131</span></a>        <span class="n">edge_color_cycle</span><span class="o">=</span><span class="n">vutil</span><span class="o">.</span><span class="n">LABEL_COLOR_CYCLE</span><span class="p">,</span>
-</span><span id="L-132"><a href="#L-132"><span class="linenos">132</span></a>        <span class="n">symbol</span><span class="o">=</span><span class="s2">&quot;o&quot;</span><span class="p">,</span>
-</span><span id="L-133"><a href="#L-133"><span class="linenos">133</span></a>        <span class="n">face_color</span><span class="o">=</span><span class="s2">&quot;transparent&quot;</span><span class="p">,</span>
-</span><span id="L-134"><a href="#L-134"><span class="linenos">134</span></a>        <span class="n">edge_width</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span>
-</span><span id="L-135"><a href="#L-135"><span class="linenos">135</span></a>        <span class="n">size</span><span class="o">=</span><span class="mi">12</span><span class="p">,</span>
-</span><span id="L-136"><a href="#L-136"><span class="linenos">136</span></a>        <span class="n">ndim</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
-</span><span id="L-137"><a href="#L-137"><span class="linenos">137</span></a>    <span class="p">)</span>
-</span><span id="L-138"><a href="#L-138"><span class="linenos">138</span></a>    <span class="n">prompts</span><span class="o">.</span><span class="n">edge_color_mode</span> <span class="o">=</span> <span class="s2">&quot;cycle&quot;</span>
-</span><span id="L-139"><a href="#L-139"><span class="linenos">139</span></a>
-</span><span id="L-140"><a href="#L-140"><span class="linenos">140</span></a>    <span class="n">v</span><span class="o">.</span><span class="n">add_shapes</span><span class="p">(</span>
-</span><span id="L-141"><a href="#L-141"><span class="linenos">141</span></a>        <span class="n">face_color</span><span class="o">=</span><span class="s2">&quot;transparent&quot;</span><span class="p">,</span> <span class="n">edge_color</span><span class="o">=</span><span class="s2">&quot;green&quot;</span><span class="p">,</span> <span class="n">edge_width</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">&quot;prompts&quot;</span>
-</span><span id="L-142"><a href="#L-142"><span class="linenos">142</span></a>    <span class="p">)</span>
-</span><span id="L-143"><a href="#L-143"><span class="linenos">143</span></a>
-</span><span id="L-144"><a href="#L-144"><span class="linenos">144</span></a>    <span class="c1">#</span>
-</span><span id="L-145"><a href="#L-145"><span class="linenos">145</span></a>    <span class="c1"># add the widgets</span>
-</span><span id="L-146"><a href="#L-146"><span class="linenos">146</span></a>    <span class="c1">#</span>
-</span><span id="L-147"><a href="#L-147"><span class="linenos">147</span></a>
-</span><span id="L-148"><a href="#L-148"><span class="linenos">148</span></a>    <span class="n">prompt_widget</span> <span class="o">=</span> <span class="n">vutil</span><span class="o">.</span><span class="n">create_prompt_menu</span><span class="p">(</span><span class="n">prompts</span><span class="p">,</span> <span class="n">labels</span><span class="p">)</span>
-</span><span id="L-149"><a href="#L-149"><span class="linenos">149</span></a>    <span class="n">v</span><span class="o">.</span><span class="n">window</span><span class="o">.</span><span class="n">add_dock_widget</span><span class="p">(</span><span class="n">prompt_widget</span><span class="p">)</span>
-</span><span id="L-150"><a href="#L-150"><span class="linenos">150</span></a>
-</span><span id="L-151"><a href="#L-151"><span class="linenos">151</span></a>    <span class="n">v</span><span class="o">.</span><span class="n">window</span><span class="o">.</span><span class="n">add_dock_widget</span><span class="p">(</span><span class="n">_autosegment_widget</span><span class="p">)</span>
-</span><span id="L-152"><a href="#L-152"><span class="linenos">152</span></a>    <span class="n">v</span><span class="o">.</span><span class="n">window</span><span class="o">.</span><span class="n">add_dock_widget</span><span class="p">(</span><span class="n">_segment_widget</span><span class="p">)</span>
-</span><span id="L-153"><a href="#L-153"><span class="linenos">153</span></a>    <span class="n">v</span><span class="o">.</span><span class="n">window</span><span class="o">.</span><span class="n">add_dock_widget</span><span class="p">(</span><span class="n">vutil</span><span class="o">.</span><span class="n">_commit_segmentation_widget</span><span class="p">)</span>
-</span><span id="L-154"><a href="#L-154"><span class="linenos">154</span></a>    <span class="n">v</span><span class="o">.</span><span class="n">window</span><span class="o">.</span><span class="n">add_dock_widget</span><span class="p">(</span><span class="n">vutil</span><span class="o">.</span><span class="n">_clear_widget</span><span class="p">)</span>
-</span><span id="L-155"><a href="#L-155"><span class="linenos">155</span></a>
-</span><span id="L-156"><a href="#L-156"><span class="linenos">156</span></a>    <span class="c1">#</span>
-</span><span id="L-157"><a href="#L-157"><span class="linenos">157</span></a>    <span class="c1"># key bindings</span>
-</span><span id="L-158"><a href="#L-158"><span class="linenos">158</span></a>    <span class="c1">#</span>
-</span><span id="L-159"><a href="#L-159"><span class="linenos">159</span></a>
-</span><span id="L-160"><a href="#L-160"><span class="linenos">160</span></a>    <span class="nd">@v</span><span class="o">.</span><span class="n">bind_key</span><span class="p">(</span><span class="s2">&quot;s&quot;</span><span class="p">)</span>
-</span><span id="L-161"><a href="#L-161"><span class="linenos">161</span></a>    <span class="k">def</span> <span class="nf">_segmet</span><span class="p">(</span><span class="n">v</span><span class="p">):</span>
-</span><span id="L-162"><a href="#L-162"><span class="linenos">162</span></a>        <span class="n">_segment_widget</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
-</span><span id="L-163"><a href="#L-163"><span class="linenos">163</span></a>
-</span><span id="L-164"><a href="#L-164"><span class="linenos">164</span></a>    <span class="nd">@v</span><span class="o">.</span><span class="n">bind_key</span><span class="p">(</span><span class="s2">&quot;c&quot;</span><span class="p">)</span>
-</span><span id="L-165"><a href="#L-165"><span class="linenos">165</span></a>    <span class="k">def</span> <span class="nf">_commit</span><span class="p">(</span><span class="n">v</span><span class="p">):</span>
-</span><span id="L-166"><a href="#L-166"><span class="linenos">166</span></a>        <span class="n">vutil</span><span class="o">.</span><span class="n">_commit_segmentation_widget</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
-</span><span id="L-167"><a href="#L-167"><span class="linenos">167</span></a>
-</span><span id="L-168"><a href="#L-168"><span class="linenos">168</span></a>    <span class="nd">@v</span><span class="o">.</span><span class="n">bind_key</span><span class="p">(</span><span class="s2">&quot;t&quot;</span><span class="p">)</span>
-</span><span id="L-169"><a href="#L-169"><span class="linenos">169</span></a>    <span class="k">def</span> <span class="nf">_toggle_label</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-</span><span id="L-170"><a href="#L-170"><span class="linenos">170</span></a>        <span class="n">vutil</span><span class="o">.</span><span class="n">toggle_label</span><span class="p">(</span><span class="n">prompts</span><span class="p">)</span>
-</span><span id="L-171"><a href="#L-171"><span class="linenos">171</span></a>
-</span><span id="L-172"><a href="#L-172"><span class="linenos">172</span></a>    <span class="nd">@v</span><span class="o">.</span><span class="n">bind_key</span><span class="p">(</span><span class="s2">&quot;Shift-C&quot;</span><span class="p">)</span>
-</span><span id="L-173"><a href="#L-173"><span class="linenos">173</span></a>    <span class="k">def</span> <span class="nf">clear_prompts</span><span class="p">(</span><span class="n">v</span><span class="p">):</span>
-</span><span id="L-174"><a href="#L-174"><span class="linenos">174</span></a>        <span class="n">vutil</span><span class="o">.</span><span class="n">clear_annotations</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
-</span><span id="L-175"><a href="#L-175"><span class="linenos">175</span></a>
-</span><span id="L-176"><a href="#L-176"><span class="linenos">176</span></a>    <span class="k">return</span> <span class="n">v</span>
-</span><span id="L-177"><a href="#L-177"><span class="linenos">177</span></a>
-</span><span id="L-178"><a href="#L-178"><span class="linenos">178</span></a>
-</span><span id="L-179"><a href="#L-179"><span class="linenos">179</span></a><span class="k">def</span> <span class="nf">_update_viewer</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">raw</span><span class="p">,</span> <span class="n">show_embeddings</span><span class="p">,</span> <span class="n">segmentation_result</span><span class="p">):</span>
-</span><span id="L-180"><a href="#L-180"><span class="linenos">180</span></a>    <span class="k">if</span> <span class="n">show_embeddings</span> <span class="ow">or</span> <span class="n">segmentation_result</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-181"><a href="#L-181"><span class="linenos">181</span></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
-</span><span id="L-182"><a href="#L-182"><span class="linenos">182</span></a>
-</span><span id="L-183"><a href="#L-183"><span class="linenos">183</span></a>    <span class="c1"># update the image layer</span>
-</span><span id="L-184"><a href="#L-184"><span class="linenos">184</span></a>    <span class="n">v</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="s2">&quot;raw&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">data</span> <span class="o">=</span> <span class="n">raw</span>
-</span><span id="L-185"><a href="#L-185"><span class="linenos">185</span></a>    <span class="n">shape</span> <span class="o">=</span> <span class="n">_get_shape</span><span class="p">(</span><span class="n">raw</span><span class="p">)</span>
-</span><span id="L-186"><a href="#L-186"><span class="linenos">186</span></a>
-</span><span id="L-187"><a href="#L-187"><span class="linenos">187</span></a>    <span class="c1"># update the segmentation layers</span>
-</span><span id="L-188"><a href="#L-188"><span class="linenos">188</span></a>    <span class="n">v</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="s2">&quot;auto_segmentation&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">data</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;uint32&quot;</span><span class="p">)</span>
-</span><span id="L-189"><a href="#L-189"><span class="linenos">189</span></a>    <span class="n">v</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="s2">&quot;committed_objects&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">data</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;uint32&quot;</span><span class="p">)</span>
-</span><span id="L-190"><a href="#L-190"><span class="linenos">190</span></a>    <span class="n">v</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="s2">&quot;current_object&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">data</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;uint32&quot;</span><span class="p">)</span>
-</span><span id="L-191"><a href="#L-191"><span class="linenos">191</span></a>
-</span><span id="L-192"><a href="#L-192"><span class="linenos">192</span></a>
-</span><span id="L-193"><a href="#L-193"><span class="linenos">193</span></a><span class="k">def</span> <span class="nf">annotator_2d</span><span class="p">(</span>
-</span><span id="L-194"><a href="#L-194"><span class="linenos">194</span></a>    <span class="n">raw</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
-</span><span id="L-195"><a href="#L-195"><span class="linenos">195</span></a>    <span class="n">embedding_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-196"><a href="#L-196"><span class="linenos">196</span></a>    <span class="n">show_embeddings</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="L-197"><a href="#L-197"><span class="linenos">197</span></a>    <span class="n">segmentation_result</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-198"><a href="#L-198"><span class="linenos">198</span></a>    <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">_DEFAULT_MODEL</span><span class="p">,</span>
-</span><span id="L-199"><a href="#L-199"><span class="linenos">199</span></a>    <span class="n">tile_shape</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-200"><a href="#L-200"><span class="linenos">200</span></a>    <span class="n">halo</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-201"><a href="#L-201"><span class="linenos">201</span></a>    <span class="n">return_viewer</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="L-202"><a href="#L-202"><span class="linenos">202</span></a>    <span class="n">v</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Viewer</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-203"><a href="#L-203"><span class="linenos">203</span></a>    <span class="n">predictor</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">SamPredictor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-204"><a href="#L-204"><span class="linenos">204</span></a>    <span class="n">precompute_amg_state</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="L-205"><a href="#L-205"><span class="linenos">205</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Viewer</span><span class="p">]:</span>
-</span><span id="L-206"><a href="#L-206"><span class="linenos">206</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;The 2d annotation tool.</span>
-</span><span id="L-207"><a href="#L-207"><span class="linenos">207</span></a>
-</span><span id="L-208"><a href="#L-208"><span class="linenos">208</span></a><span class="sd">    Args:</span>
-</span><span id="L-209"><a href="#L-209"><span class="linenos">209</span></a><span class="sd">        raw: The image data.</span>
-</span><span id="L-210"><a href="#L-210"><span class="linenos">210</span></a><span class="sd">        embedding_path: Filepath where to save the embeddings.</span>
-</span><span id="L-211"><a href="#L-211"><span class="linenos">211</span></a><span class="sd">        show_embeddings: Show PCA visualization of the image embeddings.</span>
-</span><span id="L-212"><a href="#L-212"><span class="linenos">212</span></a><span class="sd">            This can be helpful to judge how well Segment Anything works for your data,</span>
-</span><span id="L-213"><a href="#L-213"><span class="linenos">213</span></a><span class="sd">            and which objects can be segmented.</span>
-</span><span id="L-214"><a href="#L-214"><span class="linenos">214</span></a><span class="sd">        segmentation_result: An initial segmentation to load.</span>
-</span><span id="L-215"><a href="#L-215"><span class="linenos">215</span></a><span class="sd">            This can be used to correct segmentations with Segment Anything or to save and load progress.</span>
-</span><span id="L-216"><a href="#L-216"><span class="linenos">216</span></a><span class="sd">            The segmentation will be loaded as the &#39;committed_objects&#39; layer.</span>
-</span><span id="L-217"><a href="#L-217"><span class="linenos">217</span></a><span class="sd">        model_type: The Segment Anything model to use. For details on the available models check out</span>
-</span><span id="L-218"><a href="#L-218"><span class="linenos">218</span></a><span class="sd">            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.</span>
-</span><span id="L-219"><a href="#L-219"><span class="linenos">219</span></a><span class="sd">        tile_shape: Shape of tiles for tiled embedding prediction.</span>
-</span><span id="L-220"><a href="#L-220"><span class="linenos">220</span></a><span class="sd">            If `None` then the whole image is passed to Segment Anything.</span>
-</span><span id="L-221"><a href="#L-221"><span class="linenos">221</span></a><span class="sd">        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.</span>
-</span><span id="L-222"><a href="#L-222"><span class="linenos">222</span></a><span class="sd">        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.</span>
-</span><span id="L-223"><a href="#L-223"><span class="linenos">223</span></a><span class="sd">        v: The viewer to which the SegmentAnything functionality should be added.</span>
-</span><span id="L-224"><a href="#L-224"><span class="linenos">224</span></a><span class="sd">            This enables using a pre-initialized viewer, for example in `sam_annotator.image_series_annotator`.</span>
-</span><span id="L-225"><a href="#L-225"><span class="linenos">225</span></a><span class="sd">        predictor: The Segment Anything model. Passing this enables using fully custom models.</span>
-</span><span id="L-226"><a href="#L-226"><span class="linenos">226</span></a><span class="sd">            If you pass `predictor` then `model_type` will be ignored.</span>
-</span><span id="L-227"><a href="#L-227"><span class="linenos">227</span></a><span class="sd">        precompute_amg_state: Whether to precompute the state for automatic mask generation.</span>
-</span><span id="L-228"><a href="#L-228"><span class="linenos">228</span></a><span class="sd">            This will take more time when precomputing embeddings, but will then make</span>
-</span><span id="L-229"><a href="#L-229"><span class="linenos">229</span></a><span class="sd">            automatic mask generation much faster.</span>
-</span><span id="L-230"><a href="#L-230"><span class="linenos">230</span></a>
-</span><span id="L-231"><a href="#L-231"><span class="linenos">231</span></a><span class="sd">    Returns:</span>
-</span><span id="L-232"><a href="#L-232"><span class="linenos">232</span></a><span class="sd">        The napari viewer, only returned if `return_viewer=True`.</span>
-</span><span id="L-233"><a href="#L-233"><span class="linenos">233</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-234"><a href="#L-234"><span class="linenos">234</span></a>    <span class="n">state</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span>
-</span><span id="L-235"><a href="#L-235"><span class="linenos">235</span></a>
-</span><span id="L-236"><a href="#L-236"><span class="linenos">236</span></a>    <span class="k">if</span> <span class="n">predictor</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-237"><a href="#L-237"><span class="linenos">237</span></a>        <span class="n">state</span><span class="o">.</span><span class="n">predictor</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">get_sam_model</span><span class="p">(</span><span class="n">model_type</span><span class="o">=</span><span class="n">model_type</span><span class="p">)</span>
-</span><span id="L-238"><a href="#L-238"><span class="linenos">238</span></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="L-239"><a href="#L-239"><span class="linenos">239</span></a>        <span class="n">state</span><span class="o">.</span><span class="n">predictor</span> <span class="o">=</span> <span class="n">predictor</span>
-</span><span id="L-240"><a href="#L-240"><span class="linenos">240</span></a>    <span class="n">state</span><span class="o">.</span><span class="n">image_shape</span> <span class="o">=</span> <span class="n">_get_shape</span><span class="p">(</span><span class="n">raw</span><span class="p">)</span>
-</span><span id="L-241"><a href="#L-241"><span class="linenos">241</span></a>
-</span><span id="L-242"><a href="#L-242"><span class="linenos">242</span></a>    <span class="n">state</span><span class="o">.</span><span class="n">image_embeddings</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">precompute_image_embeddings</span><span class="p">(</span>
-</span><span id="L-243"><a href="#L-243"><span class="linenos">243</span></a>        <span class="n">state</span><span class="o">.</span><span class="n">predictor</span><span class="p">,</span> <span class="n">raw</span><span class="p">,</span> <span class="n">save_path</span><span class="o">=</span><span class="n">embedding_path</span><span class="p">,</span> <span class="n">ndim</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">tile_shape</span><span class="o">=</span><span class="n">tile_shape</span><span class="p">,</span> <span class="n">halo</span><span class="o">=</span><span class="n">halo</span><span class="p">,</span>
-</span><span id="L-244"><a href="#L-244"><span class="linenos">244</span></a>        <span class="n">wrong_file_callback</span><span class="o">=</span><span class="n">show_wrong_file_warning</span>
-</span><span id="L-245"><a href="#L-245"><span class="linenos">245</span></a>    <span class="p">)</span>
-</span><span id="L-246"><a href="#L-246"><span class="linenos">246</span></a>    <span class="k">if</span> <span class="n">precompute_amg_state</span> <span class="ow">and</span> <span class="p">(</span><span class="n">embedding_path</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">):</span>
-</span><span id="L-247"><a href="#L-247"><span class="linenos">247</span></a>        <span class="n">state</span><span class="o">.</span><span class="n">amg</span> <span class="o">=</span> <span class="n">cache_amg_state</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">predictor</span><span class="p">,</span> <span class="n">raw</span><span class="p">,</span> <span class="n">state</span><span class="o">.</span><span class="n">image_embeddings</span><span class="p">,</span> <span class="n">embedding_path</span><span class="p">)</span>
-</span><span id="L-248"><a href="#L-248"><span class="linenos">248</span></a>
-</span><span id="L-249"><a href="#L-249"><span class="linenos">249</span></a>    <span class="c1"># we set the pre-computed image embeddings if we don&#39;t use tiling</span>
-</span><span id="L-250"><a href="#L-250"><span class="linenos">250</span></a>    <span class="c1"># (if we use tiling we cannot directly set it because the tile will be chosen dynamically)</span>
-</span><span id="L-251"><a href="#L-251"><span class="linenos">251</span></a>    <span class="k">if</span> <span class="n">tile_shape</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-252"><a href="#L-252"><span class="linenos">252</span></a>        <span class="n">util</span><span class="o">.</span><span class="n">set_precomputed</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">predictor</span><span class="p">,</span> <span class="n">state</span><span class="o">.</span><span class="n">image_embeddings</span><span class="p">)</span>
-</span><span id="L-253"><a href="#L-253"><span class="linenos">253</span></a>
-</span><span id="L-254"><a href="#L-254"><span class="linenos">254</span></a>    <span class="c1"># viewer is freshly initialized</span>
-</span><span id="L-255"><a href="#L-255"><span class="linenos">255</span></a>    <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-256"><a href="#L-256"><span class="linenos">256</span></a>        <span class="n">v</span> <span class="o">=</span> <span class="n">_initialize_viewer</span><span class="p">(</span><span class="n">raw</span><span class="p">,</span> <span class="n">segmentation_result</span><span class="p">,</span> <span class="n">tile_shape</span><span class="p">,</span> <span class="n">show_embeddings</span><span class="p">)</span>
-</span><span id="L-257"><a href="#L-257"><span class="linenos">257</span></a>    <span class="c1"># we use an existing viewer and just update all the layers</span>
-</span><span id="L-258"><a href="#L-258"><span class="linenos">258</span></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="L-259"><a href="#L-259"><span class="linenos">259</span></a>        <span class="n">_update_viewer</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">raw</span><span class="p">,</span> <span class="n">show_embeddings</span><span class="p">,</span> <span class="n">segmentation_result</span><span class="p">)</span>
-</span><span id="L-260"><a href="#L-260"><span class="linenos">260</span></a>
-</span><span id="L-261"><a href="#L-261"><span class="linenos">261</span></a>    <span class="c1">#</span>
-</span><span id="L-262"><a href="#L-262"><span class="linenos">262</span></a>    <span class="c1"># start the viewer</span>
-</span><span id="L-263"><a href="#L-263"><span class="linenos">263</span></a>    <span class="c1">#</span>
-</span><span id="L-264"><a href="#L-264"><span class="linenos">264</span></a>    <span class="n">vutil</span><span class="o">.</span><span class="n">clear_annotations</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">clear_segmentations</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-</span><span id="L-265"><a href="#L-265"><span class="linenos">265</span></a>
-</span><span id="L-266"><a href="#L-266"><span class="linenos">266</span></a>    <span class="k">if</span> <span class="n">return_viewer</span><span class="p">:</span>
-</span><span id="L-267"><a href="#L-267"><span class="linenos">267</span></a>        <span class="k">return</span> <span class="n">v</span>
-</span><span id="L-268"><a href="#L-268"><span class="linenos">268</span></a>
-</span><span id="L-269"><a href="#L-269"><span class="linenos">269</span></a>    <span class="n">napari</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
-</span><span id="L-270"><a href="#L-270"><span class="linenos">270</span></a>
-</span><span id="L-271"><a href="#L-271"><span class="linenos">271</span></a>
-</span><span id="L-272"><a href="#L-272"><span class="linenos">272</span></a><span class="k">def</span> <span class="nf">main</span><span class="p">():</span>
-</span><span id="L-273"><a href="#L-273"><span class="linenos">273</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;@private&quot;&quot;&quot;</span>
-</span><span id="L-274"><a href="#L-274"><span class="linenos">274</span></a>    <span class="n">parser</span> <span class="o">=</span> <span class="n">vutil</span><span class="o">.</span><span class="n">_initialize_parser</span><span class="p">(</span><span class="n">description</span><span class="o">=</span><span class="s2">&quot;Run interactive segmentation for an image.&quot;</span><span class="p">)</span>
-</span><span id="L-275"><a href="#L-275"><span class="linenos">275</span></a>    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--precompute_amg_state&quot;</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">)</span>
-</span><span id="L-276"><a href="#L-276"><span class="linenos">276</span></a>    <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">()</span>
-</span><span id="L-277"><a href="#L-277"><span class="linenos">277</span></a>    <span class="n">raw</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">load_image_data</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">input</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">key</span><span class="p">)</span>
-</span><span id="L-278"><a href="#L-278"><span class="linenos">278</span></a>
-</span><span id="L-279"><a href="#L-279"><span class="linenos">279</span></a>    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">segmentation_result</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-280"><a href="#L-280"><span class="linenos">280</span></a>        <span class="n">segmentation_result</span> <span class="o">=</span> <span class="kc">None</span>
-</span><span id="L-281"><a href="#L-281"><span class="linenos">281</span></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="L-282"><a href="#L-282"><span class="linenos">282</span></a>        <span class="n">segmentation_result</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">load_image_data</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">segmentation_result</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">segmentation_key</span><span class="p">)</span>
-</span><span id="L-283"><a href="#L-283"><span class="linenos">283</span></a>
-</span><span id="L-284"><a href="#L-284"><span class="linenos">284</span></a>    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">embedding_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-285"><a href="#L-285"><span class="linenos">285</span></a>        <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="s2">&quot;You have not passed an embedding_path. Restarting the annotator may take a long time.&quot;</span><span class="p">)</span>
-</span><span id="L-286"><a href="#L-286"><span class="linenos">286</span></a>
-</span><span id="L-287"><a href="#L-287"><span class="linenos">287</span></a>    <span class="n">annotator_2d</span><span class="p">(</span>
-</span><span id="L-288"><a href="#L-288"><span class="linenos">288</span></a>        <span class="n">raw</span><span class="p">,</span> <span class="n">embedding_path</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">embedding_path</span><span class="p">,</span>
-</span><span id="L-289"><a href="#L-289"><span class="linenos">289</span></a>        <span class="n">show_embeddings</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">show_embeddings</span><span class="p">,</span> <span class="n">segmentation_result</span><span class="o">=</span><span class="n">segmentation_result</span><span class="p">,</span>
-</span><span id="L-290"><a href="#L-290"><span class="linenos">290</span></a>        <span class="n">model_type</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">model_type</span><span class="p">,</span> <span class="n">tile_shape</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">tile_shape</span><span class="p">,</span> <span class="n">halo</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">halo</span><span class="p">,</span>
-</span><span id="L-291"><a href="#L-291"><span class="linenos">291</span></a>        <span class="n">precompute_amg_state</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">precompute_amg_state</span><span class="p">,</span>
-</span><span id="L-292"><a href="#L-292"><span class="linenos">292</span></a>    <span class="p">)</span>
+</span><span id="L-105"><a href="#L-105"><span class="linenos">105</span></a><span class="k">def</span> <span class="nf">main</span><span class="p">():</span>
+</span><span id="L-106"><a href="#L-106"><span class="linenos">106</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;@private&quot;&quot;&quot;</span>
+</span><span id="L-107"><a href="#L-107"><span class="linenos">107</span></a>    <span class="n">parser</span> <span class="o">=</span> <span class="n">_initialize_parser</span><span class="p">(</span><span class="n">description</span><span class="o">=</span><span class="s2">&quot;Run interactive segmentation for an image.&quot;</span><span class="p">)</span>
+</span><span id="L-108"><a href="#L-108"><span class="linenos">108</span></a>    <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">()</span>
+</span><span id="L-109"><a href="#L-109"><span class="linenos">109</span></a>    <span class="n">image</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">load_image_data</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">input</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">key</span><span class="p">)</span>
+</span><span id="L-110"><a href="#L-110"><span class="linenos">110</span></a>
+</span><span id="L-111"><a href="#L-111"><span class="linenos">111</span></a>    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">segmentation_result</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-112"><a href="#L-112"><span class="linenos">112</span></a>        <span class="n">segmentation_result</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="L-113"><a href="#L-113"><span class="linenos">113</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="L-114"><a href="#L-114"><span class="linenos">114</span></a>        <span class="n">segmentation_result</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">load_image_data</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">segmentation_result</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">segmentation_key</span><span class="p">)</span>
+</span><span id="L-115"><a href="#L-115"><span class="linenos">115</span></a>
+</span><span id="L-116"><a href="#L-116"><span class="linenos">116</span></a>    <span class="n">annotator_2d</span><span class="p">(</span>
+</span><span id="L-117"><a href="#L-117"><span class="linenos">117</span></a>        <span class="n">image</span><span class="p">,</span> <span class="n">embedding_path</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">embedding_path</span><span class="p">,</span>
+</span><span id="L-118"><a href="#L-118"><span class="linenos">118</span></a>        <span class="n">segmentation_result</span><span class="o">=</span><span class="n">segmentation_result</span><span class="p">,</span>
+</span><span id="L-119"><a href="#L-119"><span class="linenos">119</span></a>        <span class="n">model_type</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">model_type</span><span class="p">,</span> <span class="n">tile_shape</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">tile_shape</span><span class="p">,</span> <span class="n">halo</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">halo</span><span class="p">,</span>
+</span><span id="L-120"><a href="#L-120"><span class="linenos">120</span></a>        <span class="n">precompute_amg_state</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">precompute_amg_state</span><span class="p">,</span> <span class="n">checkpoint_path</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">checkpoint</span><span class="p">,</span>
+</span><span id="L-121"><a href="#L-121"><span class="linenos">121</span></a>        <span class="n">device</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">prefer_decoder</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">prefer_decoder</span><span class="p">,</span>
+</span><span id="L-122"><a href="#L-122"><span class="linenos">122</span></a>    <span class="p">)</span>
 </span></pre></div>
 
 
             </section>
+                <section id="Annotator2d">
+                            <input id="Annotator2d-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr class">
+            
+    <span class="def">class</span>
+    <span class="name">Annotator2d</span><wbr>(<span class="base"><a href="_annotator.html#_AnnotatorBase">micro_sam.sam_annotator._annotator._AnnotatorBase</a></span>):
+
+                <label class="view-source-button" for="Annotator2d-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#Annotator2d"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="Annotator2d-15"><a href="#Annotator2d-15"><span class="linenos">15</span></a><span class="k">class</span> <span class="nc">Annotator2d</span><span class="p">(</span><span class="n">_AnnotatorBase</span><span class="p">):</span>
+</span><span id="Annotator2d-16"><a href="#Annotator2d-16"><span class="linenos">16</span></a>    <span class="k">def</span> <span class="nf">_get_widgets</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span id="Annotator2d-17"><a href="#Annotator2d-17"><span class="linenos">17</span></a>        <span class="n">autosegment</span> <span class="o">=</span> <span class="n">widgets</span><span class="o">.</span><span class="n">AutoSegmentWidget</span><span class="p">(</span>
+</span><span id="Annotator2d-18"><a href="#Annotator2d-18"><span class="linenos">18</span></a>            <span class="bp">self</span><span class="o">.</span><span class="n">_viewer</span><span class="p">,</span> <span class="n">with_decoder</span><span class="o">=</span><span class="n">AnnotatorState</span><span class="p">()</span><span class="o">.</span><span class="n">decoder</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span> <span class="n">volumetric</span><span class="o">=</span><span class="kc">False</span>
+</span><span id="Annotator2d-19"><a href="#Annotator2d-19"><span class="linenos">19</span></a>        <span class="p">)</span>
+</span><span id="Annotator2d-20"><a href="#Annotator2d-20"><span class="linenos">20</span></a>        <span class="k">return</span> <span class="p">{</span>
+</span><span id="Annotator2d-21"><a href="#Annotator2d-21"><span class="linenos">21</span></a>            <span class="s2">&quot;segment&quot;</span><span class="p">:</span> <span class="n">widgets</span><span class="o">.</span><span class="n">segment</span><span class="p">(),</span>
+</span><span id="Annotator2d-22"><a href="#Annotator2d-22"><span class="linenos">22</span></a>            <span class="s2">&quot;autosegment&quot;</span><span class="p">:</span> <span class="n">autosegment</span><span class="p">,</span>
+</span><span id="Annotator2d-23"><a href="#Annotator2d-23"><span class="linenos">23</span></a>            <span class="s2">&quot;commit&quot;</span><span class="p">:</span> <span class="n">widgets</span><span class="o">.</span><span class="n">commit</span><span class="p">(),</span>
+</span><span id="Annotator2d-24"><a href="#Annotator2d-24"><span class="linenos">24</span></a>            <span class="s2">&quot;clear&quot;</span><span class="p">:</span> <span class="n">widgets</span><span class="o">.</span><span class="n">clear</span><span class="p">(),</span>
+</span><span id="Annotator2d-25"><a href="#Annotator2d-25"><span class="linenos">25</span></a>        <span class="p">}</span>
+</span><span id="Annotator2d-26"><a href="#Annotator2d-26"><span class="linenos">26</span></a>
+</span><span id="Annotator2d-27"><a href="#Annotator2d-27"><span class="linenos">27</span></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">viewer</span><span class="p">:</span> <span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="Annotator2d-28"><a href="#Annotator2d-28"><span class="linenos">28</span></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">viewer</span><span class="o">=</span><span class="n">viewer</span><span class="p">,</span> <span class="n">ndim</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Base class for micro_sam annotation plugins.</p>
+
+<p>Implements the logic for the 2d, 3d and tracking annotator.
+The annotators differ in their data dimensionality and the widgets.</p>
+</div>
+
+
+                            <div id="Annotator2d.__init__" class="classattr">
+                                        <input id="Annotator2d.__init__-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="name">Annotator2d</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">viewer</span><span class="p">:</span> <span class="n">napari</span><span class="o">.</span><span class="n">viewer</span><span class="o">.</span><span class="n">Viewer</span></span>)</span>
+
+                <label class="view-source-button" for="Annotator2d.__init__-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#Annotator2d.__init__"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="Annotator2d.__init__-27"><a href="#Annotator2d.__init__-27"><span class="linenos">27</span></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">viewer</span><span class="p">:</span> <span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="Annotator2d.__init__-28"><a href="#Annotator2d.__init__-28"><span class="linenos">28</span></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">viewer</span><span class="o">=</span><span class="n">viewer</span><span class="p">,</span> <span class="n">ndim</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Create the annotator GUI.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>viewer:</strong>  The napari viewer.</li>
+<li><strong>ndim:</strong>  The number of spatial dimension of the image data (2 or 3).</li>
+</ul>
+</div>
+
+
+                            </div>
+                            <div class="inherited">
+                                <h5>Inherited Members</h5>
+                                <dl>
+                                    <div><dt>PyQt5.QtWidgets.QWidget</dt>
+                                <dd id="Annotator2d.RenderFlag" class="class">RenderFlag</dd>
+                <dd id="Annotator2d.RenderFlags" class="class">RenderFlags</dd>
+                <dd id="Annotator2d.acceptDrops" class="function">acceptDrops</dd>
+                <dd id="Annotator2d.accessibleDescription" class="function">accessibleDescription</dd>
+                <dd id="Annotator2d.accessibleName" class="function">accessibleName</dd>
+                <dd id="Annotator2d.actionEvent" class="function">actionEvent</dd>
+                <dd id="Annotator2d.actions" class="function">actions</dd>
+                <dd id="Annotator2d.activateWindow" class="function">activateWindow</dd>
+                <dd id="Annotator2d.addAction" class="function">addAction</dd>
+                <dd id="Annotator2d.addActions" class="function">addActions</dd>
+                <dd id="Annotator2d.adjustSize" class="function">adjustSize</dd>
+                <dd id="Annotator2d.autoFillBackground" class="function">autoFillBackground</dd>
+                <dd id="Annotator2d.backgroundRole" class="function">backgroundRole</dd>
+                <dd id="Annotator2d.baseSize" class="function">baseSize</dd>
+                <dd id="Annotator2d.changeEvent" class="function">changeEvent</dd>
+                <dd id="Annotator2d.childAt" class="function">childAt</dd>
+                <dd id="Annotator2d.childrenRect" class="function">childrenRect</dd>
+                <dd id="Annotator2d.childrenRegion" class="function">childrenRegion</dd>
+                <dd id="Annotator2d.clearFocus" class="function">clearFocus</dd>
+                <dd id="Annotator2d.clearMask" class="function">clearMask</dd>
+                <dd id="Annotator2d.close" class="function">close</dd>
+                <dd id="Annotator2d.closeEvent" class="function">closeEvent</dd>
+                <dd id="Annotator2d.contentsMargins" class="function">contentsMargins</dd>
+                <dd id="Annotator2d.contentsRect" class="function">contentsRect</dd>
+                <dd id="Annotator2d.contextMenuEvent" class="function">contextMenuEvent</dd>
+                <dd id="Annotator2d.contextMenuPolicy" class="function">contextMenuPolicy</dd>
+                <dd id="Annotator2d.create" class="function">create</dd>
+                <dd id="Annotator2d.createWindowContainer" class="function">createWindowContainer</dd>
+                <dd id="Annotator2d.cursor" class="function">cursor</dd>
+                <dd id="Annotator2d.destroy" class="function">destroy</dd>
+                <dd id="Annotator2d.devType" class="function">devType</dd>
+                <dd id="Annotator2d.dragEnterEvent" class="function">dragEnterEvent</dd>
+                <dd id="Annotator2d.dragLeaveEvent" class="function">dragLeaveEvent</dd>
+                <dd id="Annotator2d.dragMoveEvent" class="function">dragMoveEvent</dd>
+                <dd id="Annotator2d.dropEvent" class="function">dropEvent</dd>
+                <dd id="Annotator2d.effectiveWinId" class="function">effectiveWinId</dd>
+                <dd id="Annotator2d.ensurePolished" class="function">ensurePolished</dd>
+                <dd id="Annotator2d.enterEvent" class="function">enterEvent</dd>
+                <dd id="Annotator2d.event" class="function">event</dd>
+                <dd id="Annotator2d.find" class="function">find</dd>
+                <dd id="Annotator2d.focusInEvent" class="function">focusInEvent</dd>
+                <dd id="Annotator2d.focusNextChild" class="function">focusNextChild</dd>
+                <dd id="Annotator2d.focusNextPrevChild" class="function">focusNextPrevChild</dd>
+                <dd id="Annotator2d.focusOutEvent" class="function">focusOutEvent</dd>
+                <dd id="Annotator2d.focusPolicy" class="function">focusPolicy</dd>
+                <dd id="Annotator2d.focusPreviousChild" class="function">focusPreviousChild</dd>
+                <dd id="Annotator2d.focusProxy" class="function">focusProxy</dd>
+                <dd id="Annotator2d.focusWidget" class="function">focusWidget</dd>
+                <dd id="Annotator2d.font" class="function">font</dd>
+                <dd id="Annotator2d.fontInfo" class="function">fontInfo</dd>
+                <dd id="Annotator2d.fontMetrics" class="function">fontMetrics</dd>
+                <dd id="Annotator2d.foregroundRole" class="function">foregroundRole</dd>
+                <dd id="Annotator2d.frameGeometry" class="function">frameGeometry</dd>
+                <dd id="Annotator2d.frameSize" class="function">frameSize</dd>
+                <dd id="Annotator2d.geometry" class="function">geometry</dd>
+                <dd id="Annotator2d.getContentsMargins" class="function">getContentsMargins</dd>
+                <dd id="Annotator2d.grab" class="function">grab</dd>
+                <dd id="Annotator2d.grabGesture" class="function">grabGesture</dd>
+                <dd id="Annotator2d.grabKeyboard" class="function">grabKeyboard</dd>
+                <dd id="Annotator2d.grabMouse" class="function">grabMouse</dd>
+                <dd id="Annotator2d.grabShortcut" class="function">grabShortcut</dd>
+                <dd id="Annotator2d.graphicsEffect" class="function">graphicsEffect</dd>
+                <dd id="Annotator2d.graphicsProxyWidget" class="function">graphicsProxyWidget</dd>
+                <dd id="Annotator2d.hasFocus" class="function">hasFocus</dd>
+                <dd id="Annotator2d.hasHeightForWidth" class="function">hasHeightForWidth</dd>
+                <dd id="Annotator2d.hasMouseTracking" class="function">hasMouseTracking</dd>
+                <dd id="Annotator2d.hasTabletTracking" class="function">hasTabletTracking</dd>
+                <dd id="Annotator2d.height" class="function">height</dd>
+                <dd id="Annotator2d.heightForWidth" class="function">heightForWidth</dd>
+                <dd id="Annotator2d.hide" class="function">hide</dd>
+                <dd id="Annotator2d.hideEvent" class="function">hideEvent</dd>
+                <dd id="Annotator2d.initPainter" class="function">initPainter</dd>
+                <dd id="Annotator2d.inputMethodEvent" class="function">inputMethodEvent</dd>
+                <dd id="Annotator2d.inputMethodHints" class="function">inputMethodHints</dd>
+                <dd id="Annotator2d.inputMethodQuery" class="function">inputMethodQuery</dd>
+                <dd id="Annotator2d.insertAction" class="function">insertAction</dd>
+                <dd id="Annotator2d.insertActions" class="function">insertActions</dd>
+                <dd id="Annotator2d.isActiveWindow" class="function">isActiveWindow</dd>
+                <dd id="Annotator2d.isAncestorOf" class="function">isAncestorOf</dd>
+                <dd id="Annotator2d.isEnabled" class="function">isEnabled</dd>
+                <dd id="Annotator2d.isEnabledTo" class="function">isEnabledTo</dd>
+                <dd id="Annotator2d.isFullScreen" class="function">isFullScreen</dd>
+                <dd id="Annotator2d.isHidden" class="function">isHidden</dd>
+                <dd id="Annotator2d.isLeftToRight" class="function">isLeftToRight</dd>
+                <dd id="Annotator2d.isMaximized" class="function">isMaximized</dd>
+                <dd id="Annotator2d.isMinimized" class="function">isMinimized</dd>
+                <dd id="Annotator2d.isModal" class="function">isModal</dd>
+                <dd id="Annotator2d.isRightToLeft" class="function">isRightToLeft</dd>
+                <dd id="Annotator2d.isVisible" class="function">isVisible</dd>
+                <dd id="Annotator2d.isVisibleTo" class="function">isVisibleTo</dd>
+                <dd id="Annotator2d.isWindow" class="function">isWindow</dd>
+                <dd id="Annotator2d.isWindowModified" class="function">isWindowModified</dd>
+                <dd id="Annotator2d.keyPressEvent" class="function">keyPressEvent</dd>
+                <dd id="Annotator2d.keyReleaseEvent" class="function">keyReleaseEvent</dd>
+                <dd id="Annotator2d.keyboardGrabber" class="function">keyboardGrabber</dd>
+                <dd id="Annotator2d.layout" class="function">layout</dd>
+                <dd id="Annotator2d.layoutDirection" class="function">layoutDirection</dd>
+                <dd id="Annotator2d.leaveEvent" class="function">leaveEvent</dd>
+                <dd id="Annotator2d.locale" class="function">locale</dd>
+                <dd id="Annotator2d.lower" class="function">lower</dd>
+                <dd id="Annotator2d.mapFrom" class="function">mapFrom</dd>
+                <dd id="Annotator2d.mapFromGlobal" class="function">mapFromGlobal</dd>
+                <dd id="Annotator2d.mapFromParent" class="function">mapFromParent</dd>
+                <dd id="Annotator2d.mapTo" class="function">mapTo</dd>
+                <dd id="Annotator2d.mapToGlobal" class="function">mapToGlobal</dd>
+                <dd id="Annotator2d.mapToParent" class="function">mapToParent</dd>
+                <dd id="Annotator2d.mask" class="function">mask</dd>
+                <dd id="Annotator2d.maximumHeight" class="function">maximumHeight</dd>
+                <dd id="Annotator2d.maximumSize" class="function">maximumSize</dd>
+                <dd id="Annotator2d.maximumWidth" class="function">maximumWidth</dd>
+                <dd id="Annotator2d.metric" class="function">metric</dd>
+                <dd id="Annotator2d.minimumHeight" class="function">minimumHeight</dd>
+                <dd id="Annotator2d.minimumSize" class="function">minimumSize</dd>
+                <dd id="Annotator2d.minimumSizeHint" class="function">minimumSizeHint</dd>
+                <dd id="Annotator2d.minimumWidth" class="function">minimumWidth</dd>
+                <dd id="Annotator2d.mouseDoubleClickEvent" class="function">mouseDoubleClickEvent</dd>
+                <dd id="Annotator2d.mouseGrabber" class="function">mouseGrabber</dd>
+                <dd id="Annotator2d.mouseMoveEvent" class="function">mouseMoveEvent</dd>
+                <dd id="Annotator2d.mousePressEvent" class="function">mousePressEvent</dd>
+                <dd id="Annotator2d.mouseReleaseEvent" class="function">mouseReleaseEvent</dd>
+                <dd id="Annotator2d.move" class="function">move</dd>
+                <dd id="Annotator2d.moveEvent" class="function">moveEvent</dd>
+                <dd id="Annotator2d.nativeEvent" class="function">nativeEvent</dd>
+                <dd id="Annotator2d.nativeParentWidget" class="function">nativeParentWidget</dd>
+                <dd id="Annotator2d.nextInFocusChain" class="function">nextInFocusChain</dd>
+                <dd id="Annotator2d.normalGeometry" class="function">normalGeometry</dd>
+                <dd id="Annotator2d.overrideWindowFlags" class="function">overrideWindowFlags</dd>
+                <dd id="Annotator2d.overrideWindowState" class="function">overrideWindowState</dd>
+                <dd id="Annotator2d.paintEngine" class="function">paintEngine</dd>
+                <dd id="Annotator2d.paintEvent" class="function">paintEvent</dd>
+                <dd id="Annotator2d.palette" class="function">palette</dd>
+                <dd id="Annotator2d.parentWidget" class="function">parentWidget</dd>
+                <dd id="Annotator2d.pos" class="function">pos</dd>
+                <dd id="Annotator2d.previousInFocusChain" class="function">previousInFocusChain</dd>
+                <dd id="Annotator2d.raise_" class="function">raise_</dd>
+                <dd id="Annotator2d.rect" class="function">rect</dd>
+                <dd id="Annotator2d.releaseKeyboard" class="function">releaseKeyboard</dd>
+                <dd id="Annotator2d.releaseMouse" class="function">releaseMouse</dd>
+                <dd id="Annotator2d.releaseShortcut" class="function">releaseShortcut</dd>
+                <dd id="Annotator2d.removeAction" class="function">removeAction</dd>
+                <dd id="Annotator2d.render" class="function">render</dd>
+                <dd id="Annotator2d.repaint" class="function">repaint</dd>
+                <dd id="Annotator2d.resize" class="function">resize</dd>
+                <dd id="Annotator2d.resizeEvent" class="function">resizeEvent</dd>
+                <dd id="Annotator2d.restoreGeometry" class="function">restoreGeometry</dd>
+                <dd id="Annotator2d.saveGeometry" class="function">saveGeometry</dd>
+                <dd id="Annotator2d.screen" class="function">screen</dd>
+                <dd id="Annotator2d.scroll" class="function">scroll</dd>
+                <dd id="Annotator2d.setAcceptDrops" class="function">setAcceptDrops</dd>
+                <dd id="Annotator2d.setAccessibleDescription" class="function">setAccessibleDescription</dd>
+                <dd id="Annotator2d.setAccessibleName" class="function">setAccessibleName</dd>
+                <dd id="Annotator2d.setAttribute" class="function">setAttribute</dd>
+                <dd id="Annotator2d.setAutoFillBackground" class="function">setAutoFillBackground</dd>
+                <dd id="Annotator2d.setBackgroundRole" class="function">setBackgroundRole</dd>
+                <dd id="Annotator2d.setBaseSize" class="function">setBaseSize</dd>
+                <dd id="Annotator2d.setContentsMargins" class="function">setContentsMargins</dd>
+                <dd id="Annotator2d.setContextMenuPolicy" class="function">setContextMenuPolicy</dd>
+                <dd id="Annotator2d.setCursor" class="function">setCursor</dd>
+                <dd id="Annotator2d.setDisabled" class="function">setDisabled</dd>
+                <dd id="Annotator2d.setEnabled" class="function">setEnabled</dd>
+                <dd id="Annotator2d.setFixedHeight" class="function">setFixedHeight</dd>
+                <dd id="Annotator2d.setFixedSize" class="function">setFixedSize</dd>
+                <dd id="Annotator2d.setFixedWidth" class="function">setFixedWidth</dd>
+                <dd id="Annotator2d.setFocus" class="function">setFocus</dd>
+                <dd id="Annotator2d.setFocusPolicy" class="function">setFocusPolicy</dd>
+                <dd id="Annotator2d.setFocusProxy" class="function">setFocusProxy</dd>
+                <dd id="Annotator2d.setFont" class="function">setFont</dd>
+                <dd id="Annotator2d.setForegroundRole" class="function">setForegroundRole</dd>
+                <dd id="Annotator2d.setGeometry" class="function">setGeometry</dd>
+                <dd id="Annotator2d.setGraphicsEffect" class="function">setGraphicsEffect</dd>
+                <dd id="Annotator2d.setHidden" class="function">setHidden</dd>
+                <dd id="Annotator2d.setInputMethodHints" class="function">setInputMethodHints</dd>
+                <dd id="Annotator2d.setLayout" class="function">setLayout</dd>
+                <dd id="Annotator2d.setLayoutDirection" class="function">setLayoutDirection</dd>
+                <dd id="Annotator2d.setLocale" class="function">setLocale</dd>
+                <dd id="Annotator2d.setMask" class="function">setMask</dd>
+                <dd id="Annotator2d.setMaximumHeight" class="function">setMaximumHeight</dd>
+                <dd id="Annotator2d.setMaximumSize" class="function">setMaximumSize</dd>
+                <dd id="Annotator2d.setMaximumWidth" class="function">setMaximumWidth</dd>
+                <dd id="Annotator2d.setMinimumHeight" class="function">setMinimumHeight</dd>
+                <dd id="Annotator2d.setMinimumSize" class="function">setMinimumSize</dd>
+                <dd id="Annotator2d.setMinimumWidth" class="function">setMinimumWidth</dd>
+                <dd id="Annotator2d.setMouseTracking" class="function">setMouseTracking</dd>
+                <dd id="Annotator2d.setPalette" class="function">setPalette</dd>
+                <dd id="Annotator2d.setParent" class="function">setParent</dd>
+                <dd id="Annotator2d.setShortcutAutoRepeat" class="function">setShortcutAutoRepeat</dd>
+                <dd id="Annotator2d.setShortcutEnabled" class="function">setShortcutEnabled</dd>
+                <dd id="Annotator2d.setSizeIncrement" class="function">setSizeIncrement</dd>
+                <dd id="Annotator2d.setSizePolicy" class="function">setSizePolicy</dd>
+                <dd id="Annotator2d.setStatusTip" class="function">setStatusTip</dd>
+                <dd id="Annotator2d.setStyle" class="function">setStyle</dd>
+                <dd id="Annotator2d.setStyleSheet" class="function">setStyleSheet</dd>
+                <dd id="Annotator2d.setTabOrder" class="function">setTabOrder</dd>
+                <dd id="Annotator2d.setTabletTracking" class="function">setTabletTracking</dd>
+                <dd id="Annotator2d.setToolTip" class="function">setToolTip</dd>
+                <dd id="Annotator2d.setToolTipDuration" class="function">setToolTipDuration</dd>
+                <dd id="Annotator2d.setUpdatesEnabled" class="function">setUpdatesEnabled</dd>
+                <dd id="Annotator2d.setVisible" class="function">setVisible</dd>
+                <dd id="Annotator2d.setWhatsThis" class="function">setWhatsThis</dd>
+                <dd id="Annotator2d.setWindowFilePath" class="function">setWindowFilePath</dd>
+                <dd id="Annotator2d.setWindowFlag" class="function">setWindowFlag</dd>
+                <dd id="Annotator2d.setWindowFlags" class="function">setWindowFlags</dd>
+                <dd id="Annotator2d.setWindowIcon" class="function">setWindowIcon</dd>
+                <dd id="Annotator2d.setWindowIconText" class="function">setWindowIconText</dd>
+                <dd id="Annotator2d.setWindowModality" class="function">setWindowModality</dd>
+                <dd id="Annotator2d.setWindowModified" class="function">setWindowModified</dd>
+                <dd id="Annotator2d.setWindowOpacity" class="function">setWindowOpacity</dd>
+                <dd id="Annotator2d.setWindowRole" class="function">setWindowRole</dd>
+                <dd id="Annotator2d.setWindowState" class="function">setWindowState</dd>
+                <dd id="Annotator2d.setWindowTitle" class="function">setWindowTitle</dd>
+                <dd id="Annotator2d.sharedPainter" class="function">sharedPainter</dd>
+                <dd id="Annotator2d.show" class="function">show</dd>
+                <dd id="Annotator2d.showEvent" class="function">showEvent</dd>
+                <dd id="Annotator2d.showFullScreen" class="function">showFullScreen</dd>
+                <dd id="Annotator2d.showMaximized" class="function">showMaximized</dd>
+                <dd id="Annotator2d.showMinimized" class="function">showMinimized</dd>
+                <dd id="Annotator2d.showNormal" class="function">showNormal</dd>
+                <dd id="Annotator2d.size" class="function">size</dd>
+                <dd id="Annotator2d.sizeHint" class="function">sizeHint</dd>
+                <dd id="Annotator2d.sizeIncrement" class="function">sizeIncrement</dd>
+                <dd id="Annotator2d.sizePolicy" class="function">sizePolicy</dd>
+                <dd id="Annotator2d.stackUnder" class="function">stackUnder</dd>
+                <dd id="Annotator2d.statusTip" class="function">statusTip</dd>
+                <dd id="Annotator2d.style" class="function">style</dd>
+                <dd id="Annotator2d.styleSheet" class="function">styleSheet</dd>
+                <dd id="Annotator2d.tabletEvent" class="function">tabletEvent</dd>
+                <dd id="Annotator2d.testAttribute" class="function">testAttribute</dd>
+                <dd id="Annotator2d.toolTip" class="function">toolTip</dd>
+                <dd id="Annotator2d.toolTipDuration" class="function">toolTipDuration</dd>
+                <dd id="Annotator2d.underMouse" class="function">underMouse</dd>
+                <dd id="Annotator2d.ungrabGesture" class="function">ungrabGesture</dd>
+                <dd id="Annotator2d.unsetCursor" class="function">unsetCursor</dd>
+                <dd id="Annotator2d.unsetLayoutDirection" class="function">unsetLayoutDirection</dd>
+                <dd id="Annotator2d.unsetLocale" class="function">unsetLocale</dd>
+                <dd id="Annotator2d.update" class="function">update</dd>
+                <dd id="Annotator2d.updateGeometry" class="function">updateGeometry</dd>
+                <dd id="Annotator2d.updateMicroFocus" class="function">updateMicroFocus</dd>
+                <dd id="Annotator2d.updatesEnabled" class="function">updatesEnabled</dd>
+                <dd id="Annotator2d.visibleRegion" class="function">visibleRegion</dd>
+                <dd id="Annotator2d.whatsThis" class="function">whatsThis</dd>
+                <dd id="Annotator2d.wheelEvent" class="function">wheelEvent</dd>
+                <dd id="Annotator2d.width" class="function">width</dd>
+                <dd id="Annotator2d.winId" class="function">winId</dd>
+                <dd id="Annotator2d.window" class="function">window</dd>
+                <dd id="Annotator2d.windowFilePath" class="function">windowFilePath</dd>
+                <dd id="Annotator2d.windowFlags" class="function">windowFlags</dd>
+                <dd id="Annotator2d.windowHandle" class="function">windowHandle</dd>
+                <dd id="Annotator2d.windowIcon" class="function">windowIcon</dd>
+                <dd id="Annotator2d.windowIconText" class="function">windowIconText</dd>
+                <dd id="Annotator2d.windowModality" class="function">windowModality</dd>
+                <dd id="Annotator2d.windowOpacity" class="function">windowOpacity</dd>
+                <dd id="Annotator2d.windowRole" class="function">windowRole</dd>
+                <dd id="Annotator2d.windowState" class="function">windowState</dd>
+                <dd id="Annotator2d.windowTitle" class="function">windowTitle</dd>
+                <dd id="Annotator2d.windowType" class="function">windowType</dd>
+                <dd id="Annotator2d.x" class="function">x</dd>
+                <dd id="Annotator2d.y" class="function">y</dd>
+                <dd id="Annotator2d.DrawChildren" class="variable">DrawChildren</dd>
+                <dd id="Annotator2d.DrawWindowBackground" class="variable">DrawWindowBackground</dd>
+                <dd id="Annotator2d.IgnoreMask" class="variable">IgnoreMask</dd>
+                <dd id="Annotator2d.windowIconTextChanged" class="function">windowIconTextChanged</dd>
+                <dd id="Annotator2d.windowIconChanged" class="function">windowIconChanged</dd>
+                <dd id="Annotator2d.windowTitleChanged" class="function">windowTitleChanged</dd>
+                <dd id="Annotator2d.customContextMenuRequested" class="function">customContextMenuRequested</dd>
+
+            </div>
+            <div><dt>PyQt5.QtCore.QObject</dt>
+                                <dd id="Annotator2d.blockSignals" class="function">blockSignals</dd>
+                <dd id="Annotator2d.childEvent" class="function">childEvent</dd>
+                <dd id="Annotator2d.children" class="function">children</dd>
+                <dd id="Annotator2d.connectNotify" class="function">connectNotify</dd>
+                <dd id="Annotator2d.customEvent" class="function">customEvent</dd>
+                <dd id="Annotator2d.deleteLater" class="function">deleteLater</dd>
+                <dd id="Annotator2d.disconnect" class="function">disconnect</dd>
+                <dd id="Annotator2d.disconnectNotify" class="function">disconnectNotify</dd>
+                <dd id="Annotator2d.dumpObjectInfo" class="function">dumpObjectInfo</dd>
+                <dd id="Annotator2d.dumpObjectTree" class="function">dumpObjectTree</dd>
+                <dd id="Annotator2d.dynamicPropertyNames" class="function">dynamicPropertyNames</dd>
+                <dd id="Annotator2d.eventFilter" class="function">eventFilter</dd>
+                <dd id="Annotator2d.findChild" class="function">findChild</dd>
+                <dd id="Annotator2d.findChildren" class="function">findChildren</dd>
+                <dd id="Annotator2d.inherits" class="function">inherits</dd>
+                <dd id="Annotator2d.installEventFilter" class="function">installEventFilter</dd>
+                <dd id="Annotator2d.isSignalConnected" class="function">isSignalConnected</dd>
+                <dd id="Annotator2d.isWidgetType" class="function">isWidgetType</dd>
+                <dd id="Annotator2d.isWindowType" class="function">isWindowType</dd>
+                <dd id="Annotator2d.killTimer" class="function">killTimer</dd>
+                <dd id="Annotator2d.metaObject" class="function">metaObject</dd>
+                <dd id="Annotator2d.moveToThread" class="function">moveToThread</dd>
+                <dd id="Annotator2d.objectName" class="function">objectName</dd>
+                <dd id="Annotator2d.parent" class="function">parent</dd>
+                <dd id="Annotator2d.property" class="function">property</dd>
+                <dd id="Annotator2d.pyqtConfigure" class="function">pyqtConfigure</dd>
+                <dd id="Annotator2d.receivers" class="function">receivers</dd>
+                <dd id="Annotator2d.removeEventFilter" class="function">removeEventFilter</dd>
+                <dd id="Annotator2d.sender" class="function">sender</dd>
+                <dd id="Annotator2d.senderSignalIndex" class="function">senderSignalIndex</dd>
+                <dd id="Annotator2d.setObjectName" class="function">setObjectName</dd>
+                <dd id="Annotator2d.setProperty" class="function">setProperty</dd>
+                <dd id="Annotator2d.signalsBlocked" class="function">signalsBlocked</dd>
+                <dd id="Annotator2d.startTimer" class="function">startTimer</dd>
+                <dd id="Annotator2d.thread" class="function">thread</dd>
+                <dd id="Annotator2d.timerEvent" class="function">timerEvent</dd>
+                <dd id="Annotator2d.tr" class="function">tr</dd>
+                <dd id="Annotator2d.staticMetaObject" class="variable">staticMetaObject</dd>
+                <dd id="Annotator2d.objectNameChanged" class="function">objectNameChanged</dd>
+                <dd id="Annotator2d.destroyed" class="function">destroyed</dd>
+
+            </div>
+            <div><dt>PyQt5.QtGui.QPaintDevice</dt>
+                                <dd id="Annotator2d.PaintDeviceMetric" class="class">PaintDeviceMetric</dd>
+                <dd id="Annotator2d.colorCount" class="function">colorCount</dd>
+                <dd id="Annotator2d.depth" class="function">depth</dd>
+                <dd id="Annotator2d.devicePixelRatio" class="function">devicePixelRatio</dd>
+                <dd id="Annotator2d.devicePixelRatioF" class="function">devicePixelRatioF</dd>
+                <dd id="Annotator2d.devicePixelRatioFScale" class="function">devicePixelRatioFScale</dd>
+                <dd id="Annotator2d.heightMM" class="function">heightMM</dd>
+                <dd id="Annotator2d.logicalDpiX" class="function">logicalDpiX</dd>
+                <dd id="Annotator2d.logicalDpiY" class="function">logicalDpiY</dd>
+                <dd id="Annotator2d.paintingActive" class="function">paintingActive</dd>
+                <dd id="Annotator2d.physicalDpiX" class="function">physicalDpiX</dd>
+                <dd id="Annotator2d.physicalDpiY" class="function">physicalDpiY</dd>
+                <dd id="Annotator2d.widthMM" class="function">widthMM</dd>
+                <dd id="Annotator2d.PdmDepth" class="variable">PdmDepth</dd>
+                <dd id="Annotator2d.PdmDevicePixelRatio" class="variable">PdmDevicePixelRatio</dd>
+                <dd id="Annotator2d.PdmDevicePixelRatioScaled" class="variable">PdmDevicePixelRatioScaled</dd>
+                <dd id="Annotator2d.PdmDpiX" class="variable">PdmDpiX</dd>
+                <dd id="Annotator2d.PdmDpiY" class="variable">PdmDpiY</dd>
+                <dd id="Annotator2d.PdmHeight" class="variable">PdmHeight</dd>
+                <dd id="Annotator2d.PdmHeightMM" class="variable">PdmHeightMM</dd>
+                <dd id="Annotator2d.PdmNumColors" class="variable">PdmNumColors</dd>
+                <dd id="Annotator2d.PdmPhysicalDpiX" class="variable">PdmPhysicalDpiX</dd>
+                <dd id="Annotator2d.PdmPhysicalDpiY" class="variable">PdmPhysicalDpiY</dd>
+                <dd id="Annotator2d.PdmWidth" class="variable">PdmWidth</dd>
+                <dd id="Annotator2d.PdmWidthMM" class="variable">PdmWidthMM</dd>
+
+            </div>
+                                </dl>
+                            </div>
+                </section>
                 <section id="annotator_2d">
                             <input id="annotator_2d-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">annotator_2d</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">raw</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>,</span><span class="param">	<span class="n">embedding_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">show_embeddings</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>,</span><span class="param">	<span class="n">segmentation_result</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;vit_h&#39;</span>,</span><span class="param">	<span class="n">tile_shape</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">halo</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">return_viewer</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>,</span><span class="param">	<span class="n">v</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">napari</span><span class="o">.</span><span class="n">viewer</span><span class="o">.</span><span class="n">Viewer</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">predictor</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">segment_anything</span><span class="o">.</span><span class="n">predictor</span><span class="o">.</span><span class="n">SamPredictor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">precompute_amg_state</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span></span><span class="return-annotation">) -> <span class="n">Optional</span><span class="p">[</span><span class="n">napari</span><span class="o">.</span><span class="n">viewer</span><span class="o">.</span><span class="n">Viewer</span><span class="p">]</span>:</span></span>
+        <span class="name">annotator_2d</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">image</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>,</span><span class="param">	<span class="n">embedding_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">segmentation_result</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;vit_l&#39;</span>,</span><span class="param">	<span class="n">tile_shape</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">halo</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">return_viewer</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>,</span><span class="param">	<span class="n">viewer</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">napari</span><span class="o">.</span><span class="n">viewer</span><span class="o">.</span><span class="n">Viewer</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">precompute_amg_state</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>,</span><span class="param">	<span class="n">checkpoint_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">device</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">NoneType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">prefer_decoder</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span></span><span class="return-annotation">) -> <span class="n">Optional</span><span class="p">[</span><span class="n">napari</span><span class="o">.</span><span class="n">viewer</span><span class="o">.</span><span class="n">Viewer</span><span class="p">]</span>:</span></span>
 
                 <label class="view-source-button" for="annotator_2d-view-source"><span>View Source</span></label>
 
     </div>
     <a class="headerlink" href="#annotator_2d"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="annotator_2d-194"><a href="#annotator_2d-194"><span class="linenos">194</span></a><span class="k">def</span> <span class="nf">annotator_2d</span><span class="p">(</span>
-</span><span id="annotator_2d-195"><a href="#annotator_2d-195"><span class="linenos">195</span></a>    <span class="n">raw</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
-</span><span id="annotator_2d-196"><a href="#annotator_2d-196"><span class="linenos">196</span></a>    <span class="n">embedding_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="annotator_2d-197"><a href="#annotator_2d-197"><span class="linenos">197</span></a>    <span class="n">show_embeddings</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="annotator_2d-198"><a href="#annotator_2d-198"><span class="linenos">198</span></a>    <span class="n">segmentation_result</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="annotator_2d-199"><a href="#annotator_2d-199"><span class="linenos">199</span></a>    <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">_DEFAULT_MODEL</span><span class="p">,</span>
-</span><span id="annotator_2d-200"><a href="#annotator_2d-200"><span class="linenos">200</span></a>    <span class="n">tile_shape</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="annotator_2d-201"><a href="#annotator_2d-201"><span class="linenos">201</span></a>    <span class="n">halo</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="annotator_2d-202"><a href="#annotator_2d-202"><span class="linenos">202</span></a>    <span class="n">return_viewer</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="annotator_2d-203"><a href="#annotator_2d-203"><span class="linenos">203</span></a>    <span class="n">v</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Viewer</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="annotator_2d-204"><a href="#annotator_2d-204"><span class="linenos">204</span></a>    <span class="n">predictor</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">SamPredictor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="annotator_2d-205"><a href="#annotator_2d-205"><span class="linenos">205</span></a>    <span class="n">precompute_amg_state</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="annotator_2d-206"><a href="#annotator_2d-206"><span class="linenos">206</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Viewer</span><span class="p">]:</span>
-</span><span id="annotator_2d-207"><a href="#annotator_2d-207"><span class="linenos">207</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;The 2d annotation tool.</span>
-</span><span id="annotator_2d-208"><a href="#annotator_2d-208"><span class="linenos">208</span></a>
-</span><span id="annotator_2d-209"><a href="#annotator_2d-209"><span class="linenos">209</span></a><span class="sd">    Args:</span>
-</span><span id="annotator_2d-210"><a href="#annotator_2d-210"><span class="linenos">210</span></a><span class="sd">        raw: The image data.</span>
-</span><span id="annotator_2d-211"><a href="#annotator_2d-211"><span class="linenos">211</span></a><span class="sd">        embedding_path: Filepath where to save the embeddings.</span>
-</span><span id="annotator_2d-212"><a href="#annotator_2d-212"><span class="linenos">212</span></a><span class="sd">        show_embeddings: Show PCA visualization of the image embeddings.</span>
-</span><span id="annotator_2d-213"><a href="#annotator_2d-213"><span class="linenos">213</span></a><span class="sd">            This can be helpful to judge how well Segment Anything works for your data,</span>
-</span><span id="annotator_2d-214"><a href="#annotator_2d-214"><span class="linenos">214</span></a><span class="sd">            and which objects can be segmented.</span>
-</span><span id="annotator_2d-215"><a href="#annotator_2d-215"><span class="linenos">215</span></a><span class="sd">        segmentation_result: An initial segmentation to load.</span>
-</span><span id="annotator_2d-216"><a href="#annotator_2d-216"><span class="linenos">216</span></a><span class="sd">            This can be used to correct segmentations with Segment Anything or to save and load progress.</span>
-</span><span id="annotator_2d-217"><a href="#annotator_2d-217"><span class="linenos">217</span></a><span class="sd">            The segmentation will be loaded as the &#39;committed_objects&#39; layer.</span>
-</span><span id="annotator_2d-218"><a href="#annotator_2d-218"><span class="linenos">218</span></a><span class="sd">        model_type: The Segment Anything model to use. For details on the available models check out</span>
-</span><span id="annotator_2d-219"><a href="#annotator_2d-219"><span class="linenos">219</span></a><span class="sd">            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.</span>
-</span><span id="annotator_2d-220"><a href="#annotator_2d-220"><span class="linenos">220</span></a><span class="sd">        tile_shape: Shape of tiles for tiled embedding prediction.</span>
-</span><span id="annotator_2d-221"><a href="#annotator_2d-221"><span class="linenos">221</span></a><span class="sd">            If `None` then the whole image is passed to Segment Anything.</span>
-</span><span id="annotator_2d-222"><a href="#annotator_2d-222"><span class="linenos">222</span></a><span class="sd">        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.</span>
-</span><span id="annotator_2d-223"><a href="#annotator_2d-223"><span class="linenos">223</span></a><span class="sd">        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.</span>
-</span><span id="annotator_2d-224"><a href="#annotator_2d-224"><span class="linenos">224</span></a><span class="sd">        v: The viewer to which the SegmentAnything functionality should be added.</span>
-</span><span id="annotator_2d-225"><a href="#annotator_2d-225"><span class="linenos">225</span></a><span class="sd">            This enables using a pre-initialized viewer, for example in `sam_annotator.image_series_annotator`.</span>
-</span><span id="annotator_2d-226"><a href="#annotator_2d-226"><span class="linenos">226</span></a><span class="sd">        predictor: The Segment Anything model. Passing this enables using fully custom models.</span>
-</span><span id="annotator_2d-227"><a href="#annotator_2d-227"><span class="linenos">227</span></a><span class="sd">            If you pass `predictor` then `model_type` will be ignored.</span>
-</span><span id="annotator_2d-228"><a href="#annotator_2d-228"><span class="linenos">228</span></a><span class="sd">        precompute_amg_state: Whether to precompute the state for automatic mask generation.</span>
-</span><span id="annotator_2d-229"><a href="#annotator_2d-229"><span class="linenos">229</span></a><span class="sd">            This will take more time when precomputing embeddings, but will then make</span>
-</span><span id="annotator_2d-230"><a href="#annotator_2d-230"><span class="linenos">230</span></a><span class="sd">            automatic mask generation much faster.</span>
-</span><span id="annotator_2d-231"><a href="#annotator_2d-231"><span class="linenos">231</span></a>
-</span><span id="annotator_2d-232"><a href="#annotator_2d-232"><span class="linenos">232</span></a><span class="sd">    Returns:</span>
-</span><span id="annotator_2d-233"><a href="#annotator_2d-233"><span class="linenos">233</span></a><span class="sd">        The napari viewer, only returned if `return_viewer=True`.</span>
-</span><span id="annotator_2d-234"><a href="#annotator_2d-234"><span class="linenos">234</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="annotator_2d-235"><a href="#annotator_2d-235"><span class="linenos">235</span></a>    <span class="n">state</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span>
-</span><span id="annotator_2d-236"><a href="#annotator_2d-236"><span class="linenos">236</span></a>
-</span><span id="annotator_2d-237"><a href="#annotator_2d-237"><span class="linenos">237</span></a>    <span class="k">if</span> <span class="n">predictor</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="annotator_2d-238"><a href="#annotator_2d-238"><span class="linenos">238</span></a>        <span class="n">state</span><span class="o">.</span><span class="n">predictor</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">get_sam_model</span><span class="p">(</span><span class="n">model_type</span><span class="o">=</span><span class="n">model_type</span><span class="p">)</span>
-</span><span id="annotator_2d-239"><a href="#annotator_2d-239"><span class="linenos">239</span></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="annotator_2d-240"><a href="#annotator_2d-240"><span class="linenos">240</span></a>        <span class="n">state</span><span class="o">.</span><span class="n">predictor</span> <span class="o">=</span> <span class="n">predictor</span>
-</span><span id="annotator_2d-241"><a href="#annotator_2d-241"><span class="linenos">241</span></a>    <span class="n">state</span><span class="o">.</span><span class="n">image_shape</span> <span class="o">=</span> <span class="n">_get_shape</span><span class="p">(</span><span class="n">raw</span><span class="p">)</span>
-</span><span id="annotator_2d-242"><a href="#annotator_2d-242"><span class="linenos">242</span></a>
-</span><span id="annotator_2d-243"><a href="#annotator_2d-243"><span class="linenos">243</span></a>    <span class="n">state</span><span class="o">.</span><span class="n">image_embeddings</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">precompute_image_embeddings</span><span class="p">(</span>
-</span><span id="annotator_2d-244"><a href="#annotator_2d-244"><span class="linenos">244</span></a>        <span class="n">state</span><span class="o">.</span><span class="n">predictor</span><span class="p">,</span> <span class="n">raw</span><span class="p">,</span> <span class="n">save_path</span><span class="o">=</span><span class="n">embedding_path</span><span class="p">,</span> <span class="n">ndim</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">tile_shape</span><span class="o">=</span><span class="n">tile_shape</span><span class="p">,</span> <span class="n">halo</span><span class="o">=</span><span class="n">halo</span><span class="p">,</span>
-</span><span id="annotator_2d-245"><a href="#annotator_2d-245"><span class="linenos">245</span></a>        <span class="n">wrong_file_callback</span><span class="o">=</span><span class="n">show_wrong_file_warning</span>
-</span><span id="annotator_2d-246"><a href="#annotator_2d-246"><span class="linenos">246</span></a>    <span class="p">)</span>
-</span><span id="annotator_2d-247"><a href="#annotator_2d-247"><span class="linenos">247</span></a>    <span class="k">if</span> <span class="n">precompute_amg_state</span> <span class="ow">and</span> <span class="p">(</span><span class="n">embedding_path</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">):</span>
-</span><span id="annotator_2d-248"><a href="#annotator_2d-248"><span class="linenos">248</span></a>        <span class="n">state</span><span class="o">.</span><span class="n">amg</span> <span class="o">=</span> <span class="n">cache_amg_state</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">predictor</span><span class="p">,</span> <span class="n">raw</span><span class="p">,</span> <span class="n">state</span><span class="o">.</span><span class="n">image_embeddings</span><span class="p">,</span> <span class="n">embedding_path</span><span class="p">)</span>
-</span><span id="annotator_2d-249"><a href="#annotator_2d-249"><span class="linenos">249</span></a>
-</span><span id="annotator_2d-250"><a href="#annotator_2d-250"><span class="linenos">250</span></a>    <span class="c1"># we set the pre-computed image embeddings if we don&#39;t use tiling</span>
-</span><span id="annotator_2d-251"><a href="#annotator_2d-251"><span class="linenos">251</span></a>    <span class="c1"># (if we use tiling we cannot directly set it because the tile will be chosen dynamically)</span>
-</span><span id="annotator_2d-252"><a href="#annotator_2d-252"><span class="linenos">252</span></a>    <span class="k">if</span> <span class="n">tile_shape</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="annotator_2d-253"><a href="#annotator_2d-253"><span class="linenos">253</span></a>        <span class="n">util</span><span class="o">.</span><span class="n">set_precomputed</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">predictor</span><span class="p">,</span> <span class="n">state</span><span class="o">.</span><span class="n">image_embeddings</span><span class="p">)</span>
-</span><span id="annotator_2d-254"><a href="#annotator_2d-254"><span class="linenos">254</span></a>
-</span><span id="annotator_2d-255"><a href="#annotator_2d-255"><span class="linenos">255</span></a>    <span class="c1"># viewer is freshly initialized</span>
-</span><span id="annotator_2d-256"><a href="#annotator_2d-256"><span class="linenos">256</span></a>    <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="annotator_2d-257"><a href="#annotator_2d-257"><span class="linenos">257</span></a>        <span class="n">v</span> <span class="o">=</span> <span class="n">_initialize_viewer</span><span class="p">(</span><span class="n">raw</span><span class="p">,</span> <span class="n">segmentation_result</span><span class="p">,</span> <span class="n">tile_shape</span><span class="p">,</span> <span class="n">show_embeddings</span><span class="p">)</span>
-</span><span id="annotator_2d-258"><a href="#annotator_2d-258"><span class="linenos">258</span></a>    <span class="c1"># we use an existing viewer and just update all the layers</span>
-</span><span id="annotator_2d-259"><a href="#annotator_2d-259"><span class="linenos">259</span></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="annotator_2d-260"><a href="#annotator_2d-260"><span class="linenos">260</span></a>        <span class="n">_update_viewer</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">raw</span><span class="p">,</span> <span class="n">show_embeddings</span><span class="p">,</span> <span class="n">segmentation_result</span><span class="p">)</span>
-</span><span id="annotator_2d-261"><a href="#annotator_2d-261"><span class="linenos">261</span></a>
-</span><span id="annotator_2d-262"><a href="#annotator_2d-262"><span class="linenos">262</span></a>    <span class="c1">#</span>
-</span><span id="annotator_2d-263"><a href="#annotator_2d-263"><span class="linenos">263</span></a>    <span class="c1"># start the viewer</span>
-</span><span id="annotator_2d-264"><a href="#annotator_2d-264"><span class="linenos">264</span></a>    <span class="c1">#</span>
-</span><span id="annotator_2d-265"><a href="#annotator_2d-265"><span class="linenos">265</span></a>    <span class="n">vutil</span><span class="o">.</span><span class="n">clear_annotations</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">clear_segmentations</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-</span><span id="annotator_2d-266"><a href="#annotator_2d-266"><span class="linenos">266</span></a>
-</span><span id="annotator_2d-267"><a href="#annotator_2d-267"><span class="linenos">267</span></a>    <span class="k">if</span> <span class="n">return_viewer</span><span class="p">:</span>
-</span><span id="annotator_2d-268"><a href="#annotator_2d-268"><span class="linenos">268</span></a>        <span class="k">return</span> <span class="n">v</span>
-</span><span id="annotator_2d-269"><a href="#annotator_2d-269"><span class="linenos">269</span></a>
-</span><span id="annotator_2d-270"><a href="#annotator_2d-270"><span class="linenos">270</span></a>    <span class="n">napari</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="annotator_2d-31"><a href="#annotator_2d-31"><span class="linenos"> 31</span></a><span class="k">def</span> <span class="nf">annotator_2d</span><span class="p">(</span>
+</span><span id="annotator_2d-32"><a href="#annotator_2d-32"><span class="linenos"> 32</span></a>    <span class="n">image</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+</span><span id="annotator_2d-33"><a href="#annotator_2d-33"><span class="linenos"> 33</span></a>    <span class="n">embedding_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="annotator_2d-34"><a href="#annotator_2d-34"><span class="linenos"> 34</span></a>    <span class="n">segmentation_result</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="annotator_2d-35"><a href="#annotator_2d-35"><span class="linenos"> 35</span></a>    <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">_DEFAULT_MODEL</span><span class="p">,</span>
+</span><span id="annotator_2d-36"><a href="#annotator_2d-36"><span class="linenos"> 36</span></a>    <span class="n">tile_shape</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="annotator_2d-37"><a href="#annotator_2d-37"><span class="linenos"> 37</span></a>    <span class="n">halo</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="annotator_2d-38"><a href="#annotator_2d-38"><span class="linenos"> 38</span></a>    <span class="n">return_viewer</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="annotator_2d-39"><a href="#annotator_2d-39"><span class="linenos"> 39</span></a>    <span class="n">viewer</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="annotator_2d-40"><a href="#annotator_2d-40"><span class="linenos"> 40</span></a>    <span class="n">precompute_amg_state</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="annotator_2d-41"><a href="#annotator_2d-41"><span class="linenos"> 41</span></a>    <span class="n">checkpoint_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="annotator_2d-42"><a href="#annotator_2d-42"><span class="linenos"> 42</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="annotator_2d-43"><a href="#annotator_2d-43"><span class="linenos"> 43</span></a>    <span class="n">prefer_decoder</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="annotator_2d-44"><a href="#annotator_2d-44"><span class="linenos"> 44</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">]:</span>
+</span><span id="annotator_2d-45"><a href="#annotator_2d-45"><span class="linenos"> 45</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Start the 2d annotation tool for a given image.</span>
+</span><span id="annotator_2d-46"><a href="#annotator_2d-46"><span class="linenos"> 46</span></a>
+</span><span id="annotator_2d-47"><a href="#annotator_2d-47"><span class="linenos"> 47</span></a><span class="sd">    Args:</span>
+</span><span id="annotator_2d-48"><a href="#annotator_2d-48"><span class="linenos"> 48</span></a><span class="sd">        image: The image data.</span>
+</span><span id="annotator_2d-49"><a href="#annotator_2d-49"><span class="linenos"> 49</span></a><span class="sd">        embedding_path: Filepath where to save the embeddings.</span>
+</span><span id="annotator_2d-50"><a href="#annotator_2d-50"><span class="linenos"> 50</span></a><span class="sd">        segmentation_result: An initial segmentation to load.</span>
+</span><span id="annotator_2d-51"><a href="#annotator_2d-51"><span class="linenos"> 51</span></a><span class="sd">            This can be used to correct segmentations with Segment Anything or to save and load progress.</span>
+</span><span id="annotator_2d-52"><a href="#annotator_2d-52"><span class="linenos"> 52</span></a><span class="sd">            The segmentation will be loaded as the &#39;committed_objects&#39; layer.</span>
+</span><span id="annotator_2d-53"><a href="#annotator_2d-53"><span class="linenos"> 53</span></a><span class="sd">        model_type: The Segment Anything model to use. For details on the available models check out</span>
+</span><span id="annotator_2d-54"><a href="#annotator_2d-54"><span class="linenos"> 54</span></a><span class="sd">            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.</span>
+</span><span id="annotator_2d-55"><a href="#annotator_2d-55"><span class="linenos"> 55</span></a><span class="sd">        tile_shape: Shape of tiles for tiled embedding prediction.</span>
+</span><span id="annotator_2d-56"><a href="#annotator_2d-56"><span class="linenos"> 56</span></a><span class="sd">            If `None` then the whole image is passed to Segment Anything.</span>
+</span><span id="annotator_2d-57"><a href="#annotator_2d-57"><span class="linenos"> 57</span></a><span class="sd">        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.</span>
+</span><span id="annotator_2d-58"><a href="#annotator_2d-58"><span class="linenos"> 58</span></a><span class="sd">        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.</span>
+</span><span id="annotator_2d-59"><a href="#annotator_2d-59"><span class="linenos"> 59</span></a><span class="sd">        viewer: The viewer to which the SegmentAnything functionality should be added.</span>
+</span><span id="annotator_2d-60"><a href="#annotator_2d-60"><span class="linenos"> 60</span></a><span class="sd">            This enables using a pre-initialized viewer.</span>
+</span><span id="annotator_2d-61"><a href="#annotator_2d-61"><span class="linenos"> 61</span></a><span class="sd">        precompute_amg_state: Whether to precompute the state for automatic mask generation.</span>
+</span><span id="annotator_2d-62"><a href="#annotator_2d-62"><span class="linenos"> 62</span></a><span class="sd">            This will take more time when precomputing embeddings, but will then make</span>
+</span><span id="annotator_2d-63"><a href="#annotator_2d-63"><span class="linenos"> 63</span></a><span class="sd">            automatic mask generation much faster.</span>
+</span><span id="annotator_2d-64"><a href="#annotator_2d-64"><span class="linenos"> 64</span></a><span class="sd">        checkpoint_path: Path to a custom checkpoint from which to load the SAM model.</span>
+</span><span id="annotator_2d-65"><a href="#annotator_2d-65"><span class="linenos"> 65</span></a><span class="sd">        device: The computational device to use for the SAM model.</span>
+</span><span id="annotator_2d-66"><a href="#annotator_2d-66"><span class="linenos"> 66</span></a><span class="sd">        prefer_decoder: Whether to use decoder based instance segmentation if</span>
+</span><span id="annotator_2d-67"><a href="#annotator_2d-67"><span class="linenos"> 67</span></a><span class="sd">            the model used has an additional decoder for instance segmentation.</span>
+</span><span id="annotator_2d-68"><a href="#annotator_2d-68"><span class="linenos"> 68</span></a>
+</span><span id="annotator_2d-69"><a href="#annotator_2d-69"><span class="linenos"> 69</span></a><span class="sd">    Returns:</span>
+</span><span id="annotator_2d-70"><a href="#annotator_2d-70"><span class="linenos"> 70</span></a><span class="sd">        The napari viewer, only returned if `return_viewer=True`.</span>
+</span><span id="annotator_2d-71"><a href="#annotator_2d-71"><span class="linenos"> 71</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="annotator_2d-72"><a href="#annotator_2d-72"><span class="linenos"> 72</span></a>
+</span><span id="annotator_2d-73"><a href="#annotator_2d-73"><span class="linenos"> 73</span></a>    <span class="n">state</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span>
+</span><span id="annotator_2d-74"><a href="#annotator_2d-74"><span class="linenos"> 74</span></a>    <span class="n">state</span><span class="o">.</span><span class="n">image_shape</span> <span class="o">=</span> <span class="n">image</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="k">if</span> <span class="n">image</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">3</span> <span class="k">else</span> <span class="n">image</span><span class="o">.</span><span class="n">shape</span>
+</span><span id="annotator_2d-75"><a href="#annotator_2d-75"><span class="linenos"> 75</span></a>
+</span><span id="annotator_2d-76"><a href="#annotator_2d-76"><span class="linenos"> 76</span></a>    <span class="n">state</span><span class="o">.</span><span class="n">initialize_predictor</span><span class="p">(</span>
+</span><span id="annotator_2d-77"><a href="#annotator_2d-77"><span class="linenos"> 77</span></a>        <span class="n">image</span><span class="p">,</span> <span class="n">model_type</span><span class="o">=</span><span class="n">model_type</span><span class="p">,</span> <span class="n">save_path</span><span class="o">=</span><span class="n">embedding_path</span><span class="p">,</span>
+</span><span id="annotator_2d-78"><a href="#annotator_2d-78"><span class="linenos"> 78</span></a>        <span class="n">halo</span><span class="o">=</span><span class="n">halo</span><span class="p">,</span> <span class="n">tile_shape</span><span class="o">=</span><span class="n">tile_shape</span><span class="p">,</span> <span class="n">precompute_amg_state</span><span class="o">=</span><span class="n">precompute_amg_state</span><span class="p">,</span>
+</span><span id="annotator_2d-79"><a href="#annotator_2d-79"><span class="linenos"> 79</span></a>        <span class="n">ndim</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">checkpoint_path</span><span class="o">=</span><span class="n">checkpoint_path</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">prefer_decoder</span><span class="o">=</span><span class="n">prefer_decoder</span><span class="p">,</span>
+</span><span id="annotator_2d-80"><a href="#annotator_2d-80"><span class="linenos"> 80</span></a>    <span class="p">)</span>
+</span><span id="annotator_2d-81"><a href="#annotator_2d-81"><span class="linenos"> 81</span></a>
+</span><span id="annotator_2d-82"><a href="#annotator_2d-82"><span class="linenos"> 82</span></a>    <span class="k">if</span> <span class="n">viewer</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="annotator_2d-83"><a href="#annotator_2d-83"><span class="linenos"> 83</span></a>        <span class="n">viewer</span> <span class="o">=</span> <span class="n">napari</span><span class="o">.</span><span class="n">Viewer</span><span class="p">()</span>
+</span><span id="annotator_2d-84"><a href="#annotator_2d-84"><span class="linenos"> 84</span></a>
+</span><span id="annotator_2d-85"><a href="#annotator_2d-85"><span class="linenos"> 85</span></a>    <span class="n">viewer</span><span class="o">.</span><span class="n">add_image</span><span class="p">(</span><span class="n">image</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">&quot;image&quot;</span><span class="p">)</span>
+</span><span id="annotator_2d-86"><a href="#annotator_2d-86"><span class="linenos"> 86</span></a>    <span class="n">annotator</span> <span class="o">=</span> <span class="n">Annotator2d</span><span class="p">(</span><span class="n">viewer</span><span class="p">)</span>
+</span><span id="annotator_2d-87"><a href="#annotator_2d-87"><span class="linenos"> 87</span></a>
+</span><span id="annotator_2d-88"><a href="#annotator_2d-88"><span class="linenos"> 88</span></a>    <span class="c1"># Trigger layer update of the annotator so that layers have the correct shape.</span>
+</span><span id="annotator_2d-89"><a href="#annotator_2d-89"><span class="linenos"> 89</span></a>    <span class="c1"># And initialize the &#39;committed_objects&#39; with the segmentation result if it was given.</span>
+</span><span id="annotator_2d-90"><a href="#annotator_2d-90"><span class="linenos"> 90</span></a>    <span class="n">annotator</span><span class="o">.</span><span class="n">_update_image</span><span class="p">(</span><span class="n">segmentation_result</span><span class="o">=</span><span class="n">segmentation_result</span><span class="p">)</span>
+</span><span id="annotator_2d-91"><a href="#annotator_2d-91"><span class="linenos"> 91</span></a>
+</span><span id="annotator_2d-92"><a href="#annotator_2d-92"><span class="linenos"> 92</span></a>    <span class="c1"># Add the annotator widget to the viewer and sync widgets.</span>
+</span><span id="annotator_2d-93"><a href="#annotator_2d-93"><span class="linenos"> 93</span></a>    <span class="n">viewer</span><span class="o">.</span><span class="n">window</span><span class="o">.</span><span class="n">add_dock_widget</span><span class="p">(</span><span class="n">annotator</span><span class="p">)</span>
+</span><span id="annotator_2d-94"><a href="#annotator_2d-94"><span class="linenos"> 94</span></a>    <span class="n">_sync_embedding_widget</span><span class="p">(</span>
+</span><span id="annotator_2d-95"><a href="#annotator_2d-95"><span class="linenos"> 95</span></a>        <span class="n">state</span><span class="o">.</span><span class="n">widgets</span><span class="p">[</span><span class="s2">&quot;embeddings&quot;</span><span class="p">],</span> <span class="n">model_type</span><span class="p">,</span>
+</span><span id="annotator_2d-96"><a href="#annotator_2d-96"><span class="linenos"> 96</span></a>        <span class="n">save_path</span><span class="o">=</span><span class="n">embedding_path</span><span class="p">,</span> <span class="n">checkpoint_path</span><span class="o">=</span><span class="n">checkpoint_path</span><span class="p">,</span>
+</span><span id="annotator_2d-97"><a href="#annotator_2d-97"><span class="linenos"> 97</span></a>        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">tile_shape</span><span class="o">=</span><span class="n">tile_shape</span><span class="p">,</span> <span class="n">halo</span><span class="o">=</span><span class="n">halo</span>
+</span><span id="annotator_2d-98"><a href="#annotator_2d-98"><span class="linenos"> 98</span></a>    <span class="p">)</span>
+</span><span id="annotator_2d-99"><a href="#annotator_2d-99"><span class="linenos"> 99</span></a>
+</span><span id="annotator_2d-100"><a href="#annotator_2d-100"><span class="linenos">100</span></a>    <span class="k">if</span> <span class="n">return_viewer</span><span class="p">:</span>
+</span><span id="annotator_2d-101"><a href="#annotator_2d-101"><span class="linenos">101</span></a>        <span class="k">return</span> <span class="n">viewer</span>
+</span><span id="annotator_2d-102"><a href="#annotator_2d-102"><span class="linenos">102</span></a>
+</span><span id="annotator_2d-103"><a href="#annotator_2d-103"><span class="linenos">103</span></a>    <span class="n">napari</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
 </span></pre></div>
 
 
-            <div class="docstring"><p>The 2d annotation tool.</p>
+            <div class="docstring"><p>Start the 2d annotation tool for a given image.</p>
 
 <h6 id="arguments">Arguments:</h6>
 
 <ul>
-<li><strong>raw:</strong>  The image data.</li>
+<li><strong>image:</strong>  The image data.</li>
 <li><strong>embedding_path:</strong>  Filepath where to save the embeddings.</li>
-<li><strong>show_embeddings:</strong>  Show PCA visualization of the image embeddings.
-This can be helpful to judge how well Segment Anything works for your data,
-and which objects can be segmented.</li>
 <li><strong>segmentation_result:</strong>  An initial segmentation to load.
 This can be used to correct segmentations with Segment Anything or to save and load progress.
 The segmentation will be loaded as the 'committed_objects' layer.</li>
@@ -461,13 +699,15 @@ The segmentation will be loaded as the 'committed_objects' layer.</li>
 If <code>None</code> then the whole image is passed to Segment Anything.</li>
 <li><strong>halo:</strong>  Shape of the overlap between tiles, which is needed to segment objects on tile boarders.</li>
 <li><strong>return_viewer:</strong>  Whether to return the napari viewer to further modify it before starting the tool.</li>
-<li><strong>v:</strong>  The viewer to which the SegmentAnything functionality should be added.
-This enables using a pre-initialized viewer, for example in <code>sam_annotator.image_series_annotator</code>.</li>
-<li><strong>predictor:</strong>  The Segment Anything model. Passing this enables using fully custom models.
-If you pass <code>predictor</code> then <code>model_type</code> will be ignored.</li>
+<li><strong>viewer:</strong>  The viewer to which the SegmentAnything functionality should be added.
+This enables using a pre-initialized viewer.</li>
 <li><strong>precompute_amg_state:</strong>  Whether to precompute the state for automatic mask generation.
 This will take more time when precomputing embeddings, but will then make
 automatic mask generation much faster.</li>
+<li><strong>checkpoint_path:</strong>  Path to a custom checkpoint from which to load the SAM model.</li>
+<li><strong>device:</strong>  The computational device to use for the SAM model.</li>
+<li><strong>prefer_decoder:</strong>  Whether to use decoder based instance segmentation if
+the model used has an additional decoder for instance segmentation.</li>
 </ul>
 
 <h6 id="returns">Returns:</h6>

@@ -79,6 +79,7 @@
 
             <h2>Submodules</h2>
             <ul>
+                    <li><a href="micro_sam/bioimageio.html">bioimageio</a></li>
                     <li><a href="micro_sam/evaluation.html">evaluation</a></li>
                     <li><a href="micro_sam/inference.html">inference</a></li>
                     <li><a href="micro_sam/instance_segmentation.html">instance_segmentation</a></li>
@@ -176,7 +177,7 @@ For now, check out <a href="https://github.com/computational-cell-analytics/micr
 <ul>
 <li><a href="#from-mamba">From mamba</a> is the recommended way if you want to use all functionality.</li>
 <li><a href="#from-source">From source</a> for setting up a development environment to use the latest version and be able to change and contribute to our software.</li>
-<li><a href="#from-installer">From installer</a> to install without having to use conda (supported platforms: Windows and Linux, only for CPU users). </li>
+<li><a href="#from-installer">From installer</a> to install without having to use mamba (supported platforms: Windows and Linux, only for CPU users). </li>
 </ul>
 
 <h2 id="from-mamba">From mamba</h2>
@@ -828,15 +829,15 @@ git checkout -b my-new-feature
 <p>This software consists of four different python (sub-)modules:</p>
 
 <ul>
-<li>The top-level <code><a href="">micro_sam</a></code> module implements general purpose functionality for using Segment Anything for multi-dimension data.</li>
+<li>The top-level <code><a href="">micro_sam</a></code> module implements general purpose functionality for using Segment Anything for multi-dimensional data.</li>
 <li><code><a href="micro_sam/evaluation.html">micro_sam.evaluation</a></code> provides functionality to evaluate Segment Anything models on (microscopy) segmentation tasks.</li>
-<li><code>micro_sam.traning</code> implements the training functionality to finetune Segment Anything on custom segmentation datasets.</li>
+<li><code>micro_sam.traning</code> implements the training functionality to finetune Segment Anything for custom segmentation datasets.</li>
 <li><code><a href="micro_sam/sam_annotator.html">micro_sam.sam_annotator</a></code> implements the interactive annotation tools.</li>
 </ul>
 
 <h2 id="annotation-tools-2">Annotation Tools</h2>
 
-<p>The annotation tools are currently implemented as stand-alone napari applications. We are in the process of implementing them as napari plugins instead (see <a href="https://github.com/computational-cell-analytics/micro-sam/issues/167">https://github.com/computational-cell-analytics/micro-sam/issues/167</a> for details), and the descriptions here refer to the planned architecture for the plugins.</p>
+<p>The annotation tools are implemented as napari plugins.</p>
 
 <p>There are four annotation tools:</p>
 
@@ -844,7 +845,7 @@ git checkout -b my-new-feature
 <li><code><a href="micro_sam/sam_annotator/annotator_2d.html">micro_sam.sam_annotator.annotator_2d</a></code>: for interactive segmentation of 2d images.</li>
 <li><code><a href="micro_sam/sam_annotator/annotator_3d.html">micro_sam.sam_annotator.annotator_3d</a></code>: for interactive segmentation of volumetric images.</li>
 <li><code><a href="micro_sam/sam_annotator/annotator_tracking.html">micro_sam.sam_annotator.annotator_tracking</a></code>: for interactive tracking in timeseries of 2d images.</li>
-<li><code><a href="micro_sam/sam_annotator/image_series_annotator.html">micro_sam.sam_annotator.image_series_annotator</a></code>: for applying the 2d annotation tool to a series of images.</li>
+<li><code><a href="micro_sam/sam_annotator/image_series_annotator.html">micro_sam.sam_annotator.image_series_annotator</a></code>: for applying the 2d annotation tool to a series of images. This is not implemented as a separate plugin, but as a function that runns annotator 2d for multiple images.</li>
 </ul>
 
 <p>An overview of the functionality of the different tools:</p>
@@ -866,7 +867,7 @@ git checkout -b my-new-feature
   <td>Yes</td>
 </tr>
 <tr>
-  <td>For multiple objects at a time</td>
+  <td>Interactive segmentation for multiple objects at a time</td>
   <td>Yes</td>
   <td>No</td>
   <td>No</td>
@@ -886,13 +887,13 @@ git checkout -b my-new-feature
 <tr>
   <td>Automatic segmentation</td>
   <td>Yes</td>
-  <td>Yes (on <code>dev</code>)</td>
+  <td>Yes</td>
   <td>No</td>
 </tr>
 </tbody>
 </table>
 
-<p>The functionality for the <code>image_series_annotator</code> is not listed because it is identical with the functionality of the <code>annotator_2d</code>.</p>
+<p>The functionality for <code>image_series_annotator</code> is not listed because it is identical with the functionality of <code>annotator_2d</code>.</p>
 
 <p>Each tool implements the follwing core logic:</p>
 
@@ -901,20 +902,28 @@ git checkout -b my-new-feature
 <li>Interactive (and automatic) segmentation functionality is implemented by a UI based on <code>napari</code> and <code>magicgui</code> functionality.</li>
 </ol>
 
-<p>Each tool has two different entry points:</p>
+<p>Each tool has three different entry points:</p>
 
 <ul>
-<li>From napari plugin menu, e.g. <code>plugin-&gt;micro_sam-&gt;annotator_2d</code> (This entry point is called <em>plugin</em> in the following).</li>
-<li>From the command line, e.g. <code>micro_sam.annotator_2d -i /path/to/image</code> (This entry point is called <em>CLI</em> in the following).</li>
+<li>From napari plugin menu, e.g. <code>plugin-&gt;micro_sam-&gt;Annotator 2d</code>. (Called <em>plugin</em> in the following).</li>
+<li>From a python function, e.g. <code><a href="micro_sam/sam_annotator/annotator_2d.html">micro_sam.sam_annotator.annotator_2d</a>:annotator_2d</code>.  (Called <em>function</em> in the following.)</li>
+<li>From the command line, e.g. <code>micro_sam.annotator_2d</code>. (Called <em>CLI</em> in the following).</li>
 </ul>
 
-<p>The tools are implemented their own submodules, e.g. <code><a href="micro_sam/sam_annotator/annotator_2d.html">micro_sam.sam_annotator.annotator_2d</a></code> with shared functionality implemented in <code><a href="micro_sam/sam_annotator/util.html">micro_sam.sam_annotator.util</a></code>. The function <code>micro_sam.sam_annotator.annotator_2d.annotator_2d_plugin</code> implements the <em>plugin</em> entry point, using the <code>magicgui.magic_factory</code> decorator. <code><a href="micro_sam/sam_annotator/annotator_2d.html#annotator_2d">micro_sam.sam_annotator.annotator_2d.annotator_2d</a></code>  implements the <em>CLI</em> entry point; it calls the <code>annotator_2d_plugin</code> function internally.
-The image embeddings are computed by the <code>embedding widget</code> (@GenevieveBuckley: will need to be implemented in your PR), which takes the image data from an image layer.
-In case of the <em>plugin</em> entry point this image layer is created by the user (by loading an image into napari), and the user can then select in the <code>embedding widget</code> which layer to use for embedding computation. 
-In case of <em>CLI</em> the image data is specified via the <code>-i</code> parameter, the layer is created for that image and the embeddings are computed for it automatically.
+<p>Each tool is implemented in its own submodule, e.g. <code><a href="micro_sam/sam_annotator/annotator_2d.html">micro_sam.sam_annotator.annotator_2d</a></code>.
+The napari plugin is implemented by a class, e.g. <code><a href="micro_sam/sam_annotator/annotator_2d.html">micro_sam.sam_annotator.annotator_2d</a>:Annotator2d</code>, inheriting from <code>micro_sam.sam_annotator._annotator._AnnotatorBase</code>. This class implements the core logic for the plugins.
+The concrete annotation tools are instantiated by passing widgets from <code>micro_sam.sam_annotator._widgets</code> to it, 
+which implement the interactive segmentation in 2d, 3d etc.
+These plugins are designed so that image embeddings can be computed for user-specified image layers in napari.</p>
+
+<p>The <em>function</em> and <em>CLI</em> entry points are implemented by <code><a href="micro_sam/sam_annotator/annotator_2d.html">micro_sam.sam_annotator.annotator_2d</a>:annotator_2d</code> (and corresponding functions for the other annotation tools). They are called with image data, precompute the embeddings for that image and start a napari viewer with this image and the annotation plugin.</p>
+
+<p><!--
+TODO update the flow chart so that it matches the new design.
 The same overall design holds true for the other plugins. The flow chart below shows a flow chart with a simplified overview of the design of the 2d annotation tool. Rounded squares represent functions or the corresponding widget and squares napari layers or other data, orange represents the <em>plugin</em> enty point, cyan <em>CLI</em>. Arrows that do not have a label correspond to a simple input/output relation.</p>
 
-<p><img src="./images/2d-annotator-flow.png" alt="annotator 2d flow diagram" /></p>
+<p><img src="./images/2d-annotator-flow.png" alt="annotator 2d flow diagram" />
+--></p>
 
 <p><!---
 Source for the diagram is here:

@@ -36,6 +36,7 @@
                     <li><a href="evaluation/instance_segmentation.html">instance_segmentation</a></li>
                     <li><a href="evaluation/livecell.html">livecell</a></li>
                     <li><a href="evaluation/model_comparison.html">model_comparison</a></li>
+                    <li><a href="evaluation/multi_dimensional_segmentation.html">multi_dimensional_segmentation</a></li>
             </ul>
 
 
@@ -67,19 +68,21 @@
 </span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a>    <span class="n">run_instance_segmentation_grid_search</span><span class="p">,</span>
 </span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a>    <span class="n">run_instance_segmentation_grid_search_and_inference</span><span class="p">,</span>
 </span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="p">)</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="kn">from</span> <span class="nn">.evaluation</span> <span class="kn">import</span> <span class="n">run_evaluation</span>
-</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="kn">from</span> <span class="nn">.inference</span> <span class="kn">import</span> <span class="p">(</span>
-</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>    <span class="n">get_predictor</span><span class="p">,</span>
-</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a>    <span class="n">run_inference_with_iterative_prompting</span><span class="p">,</span>
-</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>    <span class="n">run_inference_with_prompts</span><span class="p">,</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>    <span class="n">precompute_all_embeddings</span><span class="p">,</span>
-</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>    <span class="n">precompute_all_prompts</span><span class="p">,</span>
-</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a><span class="p">)</span>
-</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a><span class="kn">from</span> <span class="nn">.experiments</span> <span class="kn">import</span> <span class="p">(</span>
-</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>    <span class="n">default_experiment_settings</span><span class="p">,</span>
-</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a>    <span class="n">full_experiment_settings</span><span class="p">,</span>
-</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>    <span class="n">get_experiment_setting_name</span><span class="p">,</span>
-</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a><span class="p">)</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="kn">from</span> <span class="nn">.evaluation</span> <span class="kn">import</span> <span class="p">(</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a>    <span class="n">run_evaluation</span><span class="p">,</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>    <span class="n">run_evaluation_for_iterative_prompting</span><span class="p">,</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="p">)</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a><span class="kn">from</span> <span class="nn">.inference</span> <span class="kn">import</span> <span class="p">(</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>    <span class="n">run_inference_with_iterative_prompting</span><span class="p">,</span>
+</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>    <span class="n">run_inference_with_prompts</span><span class="p">,</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a>    <span class="n">precompute_all_embeddings</span><span class="p">,</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>    <span class="n">precompute_all_prompts</span><span class="p">,</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a><span class="p">)</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a><span class="kn">from</span> <span class="nn">.experiments</span> <span class="kn">import</span> <span class="p">(</span>
+</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>    <span class="n">default_experiment_settings</span><span class="p">,</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a>    <span class="n">full_experiment_settings</span><span class="p">,</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a>    <span class="n">get_experiment_setting_name</span><span class="p">,</span>
+</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a><span class="p">)</span>
 </span></pre></div>
 
 
