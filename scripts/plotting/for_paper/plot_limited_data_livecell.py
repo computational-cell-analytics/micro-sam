@@ -11,15 +11,15 @@ import matplotlib.pyplot as plt
 ROOT = "/home/anwai/results/dfki/R3/"
 
 PALETTE = {
-    "ais": "#045275",
-    "amg": "#089099",
-    "point": "#7CCBA2",
-    r"i$_{p}$": "#FCDE9C",
-    "box": "#F0746E",
-    r"i$_{b}$": "#90477F"
+    "AIS": "#045275",
+    "AMG": "#089099",
+    "Point": "#7CCBA2",
+    r"I$_{P}$": "#FCDE9C",
+    "Box": "#F0746E",
+    r"I$_{B}$": "#90477F"
 }
 
-plt.rcParams.update({"font.size": 24})
+plt.rcParams.update({"font.size": 30})
 
 
 def get_limited_data_livecell(res_root, model):
@@ -48,12 +48,12 @@ def get_limited_data_livecell(res_root, model):
 
         res = {
             "experiment": int(experiment_name.split("_")[0]),
-            "ais": ais.iloc[0]["msa"],
-            "amg": amg.iloc[0]["msa"],
-            "point": ip.iloc[0]["msa"],
-            "box": ib.iloc[0]["msa"],
-            r"i$_{p}$": ip.iloc[-1]["msa"],
-            r"i$_{b}$": ib.iloc[-1]["msa"]
+            "AIS": ais.iloc[0]["msa"],
+            "AMG": amg.iloc[0]["msa"],
+            "Point": ip.iloc[0]["msa"],
+            "Box": ib.iloc[0]["msa"],
+            r"I$_{P}$": ip.iloc[-1]["msa"],
+            r"I$_{B}$": ib.iloc[-1]["msa"]
         }
         all_results.append(pd.DataFrame.from_dict([res]))
 
@@ -79,14 +79,14 @@ def get_vanilla_and_finetuned_results(res_root, model):
 
         res = {
             "experiment": 0 if method == "vanilla" else 100,
-            "amg": amg.iloc[0]["msa"],
-            "point": ip.iloc[0]["msa"],
-            "box": ib.iloc[0]["msa"],
-            r"i$_{p}$": ip.iloc[-1]["msa"],
-            r"i$_{b}$": ib.iloc[-1]["msa"]
+            "AMG": amg.iloc[0]["msa"],
+            "Point": ip.iloc[0]["msa"],
+            "Box": ib.iloc[0]["msa"],
+            r"I$_{P}$": ip.iloc[-1]["msa"],
+            r"I$_{B}$": ib.iloc[-1]["msa"]
         }
         if have_ais:
-            res["ais"] = ais.iloc[0]["msa"]
+            res["AIS"] = ais.iloc[0]["msa"]
 
         return pd.DataFrame.from_dict([res])
 
@@ -100,10 +100,12 @@ def get_plots(res_root, model, for_supp=None):
     plt.figure(figsize=(30, 15))
     res = get_vanilla_and_finetuned_results(res_root, model)
     sns.lineplot(
-        data=pd.melt(res, "experiment"), x="experiment", y="value", hue="variable", marker="d", palette=PALETTE, markersize=20
+        data=pd.melt(res, "experiment"),
+        x="experiment", y="value", hue="variable", marker="d",
+        palette=PALETTE, markersize=20, linewidth=3,
     )
-    plt.ylabel("Segmentation Accuracy")
-    plt.xlabel("Percent of Data")
+    plt.ylabel("Segmentation Accuracy", labelpad=10)
+    plt.xlabel("Percent of Data", labelpad=10)
     plt.legend(loc="lower center", ncol=6)
     if for_supp is None:
         save_path = f"livecell_{model}_reduce_data.svg"
