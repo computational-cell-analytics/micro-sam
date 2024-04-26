@@ -2,6 +2,8 @@
 
 All the fullscale experiment in `micro-sam` have been performed on A100s. Can we finetune Segment Anything on limited resources?
 
+TLDR: Finetuning `vit_b` is the best bet on most workstation / cluster-level GPUs. Reduce the number of objects per batch to fit to your desired resource. Feel free to read ahead if you want more specifics on this, or let us know for further discussion.
+
 ## Available Resource Combinations:
 - `medium` (CPU - SCC)
 - `gtx1080`: (GPU - SCC) 8GB
@@ -78,10 +80,14 @@ All jobs are tested on `medium` partition.
     - `vit_t`: freeze `image_encoder`
     - `n_objects`: 1
 
-
 ## Scripts:
 
- TODO: need to explain what are the purpose of the scripts in brief.
+- `check_training_times.py`: The scripts to check the time taken to achieve the best model. The reported times are menioned in [results](#results) below.
+- `covid_if_finetuning.py`: The finetuning scripts for segmenting cells in immunofluorescence data.
+- `plot_experiments.py`: The scripts for plotting the quantitative results for the resource-efficient finetuning experiments.
+- `run_evaluations.py`: The scripts to run quantitative evaluation for different resource efficient finetuned SAM models.
+- `run_resource_efficient_finetuning,py`: Convenience scripts for submitting batch jobs via slurm to HLRN for finetuning SAM on Covid IF.
+
 
 
  ## Results:
