@@ -1,10 +1,5 @@
-import os
-import pickle
-from glob import glob
-from pathlib import Path
 from typing import Optional, Tuple, Union
 
-import h5py
 import napari
 import numpy as np
 import torch
@@ -12,45 +7,8 @@ import torch
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
 from . import _widgets as widgets
-from .util import _initialize_parser, _sync_embedding_widget
+from .util import _initialize_parser, _sync_embedding_widget, _load_amg_state, _load_is_state
 from .. import util
-
-
-def _load_amg_state(embedding_path):
-    if embedding_path is None or not os.path.exists(embedding_path):
-        return {"cache_folder": None}
-
-    cache_folder = os.path.join(embedding_path, "amg_state")
-    os.makedirs(cache_folder, exist_ok=True)
-    amg_state = {"cache_folder": cache_folder}
-
-    state_paths = glob(os.path.join(cache_folder, "*.pkl"))
-    for path in state_paths:
-        with open(path, "rb") as f:
-            state = pickle.load(f)
-        i = int(Path(path).stem.split("-")[-1])
-        amg_state[i] = state
-    return amg_state
-
-
-def _load_is_state(embedding_path):
-    if embedding_path is None or not os.path.exists(embedding_path):
-        return {"cache_path": None}
-
-    cache_path = os.path.join(embedding_path, "is_state.h5")
-    is_state = {"cache_path": cache_path}
-
-    with h5py.File(cache_path, "a") as f:
-        for name, g in f.items():
-            i = int(name.split("-")[-1])
-            state = {
-                "foreground": g["foreground"][:],
-                "boundary_distances": g["boundary_distances"][:],
-                "center_distances": g["center_distances"][:],
-            }
-            is_state[i] = state
-
-    return is_state
 
 
 class Annotator3d(_AnnotatorBase):

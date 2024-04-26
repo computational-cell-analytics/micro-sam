@@ -93,8 +93,9 @@ def cache_is_state(
     save_path: Union[str, os.PathLike],
     verbose: bool = True,
     i: Optional[int] = None,
+    skip_load: bool = False,
     **kwargs,
-) -> instance_segmentation.AMGBase:
+) -> Optional[instance_segmentation.AMGBase]:
     """Compute and cache or load the state for the automatic mask generator.
 
     Args:
@@ -105,6 +106,7 @@ def cache_is_state(
         save_path: The embedding save path. The AMG state will be stored in 'save_path/amg_state.pickle'.
         verbose: Whether to run the computation verbose.
         i: The index for which to cache the state.
+        skip_load: Skip loading the state if it is precomputed.
         kwargs: The keyword arguments for the amg class.
 
     Returns:
@@ -120,6 +122,9 @@ def cache_is_state(
 
     with h5py.File(save_path, "a") as f:
         if save_key in f:
+            if skip_load:  # Skip loading to speed this up for cases where we don't need the return val.
+                return
+
             if verbose:
                 print("Load instance segmentation state from", save_path, ":", save_key)
             g = f[save_key]
