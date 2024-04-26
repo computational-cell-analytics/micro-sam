@@ -959,7 +959,7 @@ class EmbeddingWidget(_WidgetBase):
         )
         setting_values.layout().addWidget(widget)
 
-        settings = _make_collapsible(setting_values, title="Settings")
+        settings = _make_collapsible(setting_values, title="Embedding Settings")
         return settings
 
     def _validate_inputs(self):
@@ -1166,7 +1166,7 @@ class SegmentNDWidget(_WidgetBase):
                 )
             setting_values.layout().addLayout(layout)
 
-        settings = _make_collapsible(setting_values, title="Settings")
+        settings = _make_collapsible(setting_values, title="Segmentation Settings")
         return settings
 
     def _run_tracking(self):
@@ -1486,8 +1486,8 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _create_settings(self):
         setting_values = self._ais_settings() if self.with_decoder else self._amg_settings()
-        settings = _make_collapsible(setting_values, title="Settings")
-        settings.setToolTip(get_tooltip("segmentnd", "projection_dropdown"))
+        settings = _make_collapsible(setting_values, title="Automatic Segmentation Settings")
+        settings.setToolTip(get_tooltip("autosegment", "projection_dropdown"))
         return settings
 
     def _run_segmentation_2d(self, kwargs, i=None):
