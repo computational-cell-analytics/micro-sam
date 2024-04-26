@@ -284,7 +284,7 @@ def main():
 
     args = parser.parse_args()
     precompute_state(
-        args.input_path, args.output_path, args.model_type, args.checkpoint,
+        args.input_path, args.embedding_path, args.model_type, args.checkpoint,
         key=args.key, tile_shape=args.tile_shape, halo=args.halo, ndim=args.ndim,
         precompute_amg_state=args.precompute_amg_state,
     )
