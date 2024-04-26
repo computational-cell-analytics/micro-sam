@@ -191,6 +191,9 @@ def image_series_annotator(
         # Save the current segmentation.
         _save_segmentation(images[next_image_id], next_image_id, segmentation)
 
+        # Clear the segmentation already to avoid lagging removal.
+        viewer.layers["committed_objects"].data = np.zeros_like(viewer.layers["committed_objects"].data)
+
         # Load the next image.
         next_image_id += 1
         if next_image_id == len(images):
