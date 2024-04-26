@@ -10,6 +10,7 @@ from typing import Optional, Tuple, Union, List
 
 import h5py
 import numpy as np
+import imageio.v3 as imageio
 import torch
 import torch.nn as nn
 from segment_anything.predictor import SamPredictor
@@ -176,15 +177,25 @@ def _precompute_state_for_files(
     decoder: Optional["nn.Module"] = None,
 ):
     os.makedirs(output_path, exist_ok=True)
-    for i, file_path in enumerate(tqdm(input_files, total=len(input_files), desc="Precompute state for files")):
 
-        if isinstance(file_path, np.ndarray):
-            out_path = os.path.join(output_path, f"embedding_{i:05}.tif")
-        else:
-            out_path = os.path.join(output_path, os.path.basename(file_path))
+    if ndim == 2:
+        for i, file_path in enumerate(tqdm(input_files, total=len(input_files), desc="Precompute state for files")):
+            if isinstance(file_path, np.ndarray):
+                out_path = os.path.join(output_path, f"embedding_{i:05}.tif")
+            else:
+                out_path = os.path.join(output_path, os.path.basename(file_path))
 
+            _precompute_state_for_file(
+                predictor, file_path, out_path,
+                key=None, ndim=ndim, tile_shape=tile_shape, halo=halo,
+                precompute_amg_state=precompute_amg_state, decoder=decoder,
+            )
+
+    else:  # precomputing embeddings for 3d volume
+        image_data = [imageio.imread(file_path) for file_path in input_files]
+        image_data = np.stack(image_data, axis=0)
         _precompute_state_for_file(
-            predictor, file_path, out_path,
+            predictor, image_data, output_path,
             key=None, ndim=ndim, tile_shape=tile_shape, halo=halo,
             precompute_amg_state=precompute_amg_state, decoder=decoder,
         )
