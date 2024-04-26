@@ -93,8 +93,9 @@ def cache_is_state(
     save_path: Union[str, os.PathLike],
     verbose: bool = True,
     i: Optional[int] = None,
+    skip_load: bool = False,
     **kwargs,
-) -> instance_segmentation.AMGBase:
+) -> Optional[instance_segmentation.AMGBase]:
     """Compute and cache or load the state for the automatic mask generator.
 
     Args:
@@ -105,6 +106,7 @@ def cache_is_state(
         save_path: The embedding save path. The AMG state will be stored in 'save_path/amg_state.pickle'.
         verbose: Whether to run the computation verbose.
         i: The index for which to cache the state.
+        skip_load: Skip loading the state if it is precomputed.
         kwargs: The keyword arguments for the amg class.
 
     Returns:
@@ -120,6 +122,9 @@ def cache_is_state(
 
     with h5py.File(save_path, "a") as f:
         if save_key in f:
+            if skip_load:  # Skip loading to speed this up for cases where we don't need the return val.
+                return
+
             if verbose:
                 print("Load instance segmentation state from", save_path, ":", save_key)
             g = f[save_key]
@@ -169,6 +174,7 @@ def _precompute_state_for_files(
     predictor: SamPredictor,
     input_files: Union[List[Union[os.PathLike, str]], List[np.ndarray]],
     output_path: Union[os.PathLike, str],
+    key: Optional[str] = None,
     ndim: Optional[int] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
@@ -185,7 +191,7 @@ def _precompute_state_for_files(
 
         _precompute_state_for_file(
             predictor, file_path, out_path,
-            key=None, ndim=ndim, tile_shape=tile_shape, halo=halo,
+            key=key, ndim=ndim, tile_shape=tile_shape, halo=halo,
             precompute_amg_state=precompute_amg_state, decoder=decoder,
         )
 
@@ -193,6 +199,7 @@ def _precompute_state_for_files(
 def precompute_state(
     input_path: Union[os.PathLike, str],
     output_path: Union[os.PathLike, str],
+    pattern: Optional[str] = None,
     model_type: str = util._DEFAULT_MODEL,
     checkpoint_path: Optional[Union[os.PathLike, str]] = None,
     key: Optional[str] = None,
@@ -209,31 +216,41 @@ def precompute_state(
             In case of a container file the argument `key` must be given. In case of a folder
             it can be given to provide a glob pattern to subselect files from the folder.
         output_path: The output path were the embeddings and other state will be saved.
+        pattern: Glob pattern to select files in a folder. The embeddings will be computed
+            for each of these files. To select all files in a folder pass "*".
         model_type: The SegmentAnything model to use. Will use the standard vit_h model by default.
         checkpoint_path: Path to a checkpoint for a custom model.
         key: The key to the input file. This is needed for contaner files (e.g. hdf5 or zarr)
-            and can be used to provide a glob pattern if the input is a folder with image files.
+            or to load several images as 3d volume. Provide a glob pattern, e.g. "*.tif", for this case.
         ndim: The dimensionality of the data.
         tile_shape: Shape of tiles for tiled prediction. By default prediction is run without tiling.
         halo: Overlap of the tiles for tiled prediction.
         precompute_amg_state: Whether to precompute the state for automatic instance segmentation
             in addition to the image embeddings.
     """
-    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path)
-    # check if we precompute the state for a single file or for a folder with image files
-    if os.path.isdir(input_path) and Path(input_path).suffix not in (".n5", ".zarr"):
-        pattern = "*" if key is None else key
-        input_files = glob(os.path.join(input_path, pattern))
-        _precompute_state_for_files(
-            predictor, input_files, output_path,
-            ndim=ndim, tile_shape=tile_shape, halo=halo,
-            precompute_amg_state=precompute_amg_state,
-        )
+    predictor, state = util.get_sam_model(
+        model_type=model_type, checkpoint_path=checkpoint_path, return_state=True,
+    )
+    if "decoder_state" in state:
+        decoder = instance_segmentation.get_decoder(predictor.model.image_encoder, state["decoder_state"])
     else:
+        decoder = None
+
+    # Check if we precompute the state for a single file or for a folder with image files.
+    if pattern is None:
         _precompute_state_for_file(
             predictor, input_path, output_path, key,
             ndim=ndim, tile_shape=tile_shape, halo=halo,
             precompute_amg_state=precompute_amg_state,
+            decoder=decoder,
+        )
+    else:
+        input_files = glob(os.path.join(input_path, pattern))
+        _precompute_state_for_files(
+            predictor, input_files, output_path, key=key,
+            ndim=ndim, tile_shape=tile_shape, halo=halo,
+            precompute_amg_state=precompute_amg_state,
+            decoder=decoder,
         )
 
 
@@ -253,11 +270,16 @@ def main():
     parser.add_argument(
         "-e", "--embedding_path", required=True, help="The path where the embeddings will be saved."
     )
+
+    parser.add_argument(
+        "--pattern", help="Pattern / wildcard for selecting files in a folder. To select all files use '*'."
+    )
     parser.add_argument(
         "-k", "--key",
         help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
-        "for a image series it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
+        "for an image stack it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
     )
+
     parser.add_argument(
         "-m", "--model_type", default=util._DEFAULT_MODEL,
         help=f"The segment anything model that will be used, one of {available_models}."
@@ -284,8 +306,10 @@ def main():
 
     args = parser.parse_args()
     precompute_state(
-        args.input_path, args.embedding_path, args.model_type, args.checkpoint,
-        key=args.key, tile_shape=args.tile_shape, halo=args.halo, ndim=args.ndim,
+        args.input_path, args.embedding_path,
+        model_type=args.model_type, checkpoint_path=args.checkpoint,
+        pattern=args.pattern, key=args.key,
+        tile_shape=args.tile_shape, halo=args.halo, ndim=args.ndim,
         precompute_amg_state=args.precompute_amg_state,
     )
 

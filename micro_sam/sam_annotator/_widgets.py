@@ -891,11 +891,22 @@ class EmbeddingWidget(_WidgetBase):
             tile_shape=[self.tile_x, self.tile_y],
             halo=[self.halo_x, self.halo_y]
         )
+
+        # Set the default settings for this model in the autosegment widget if it is part of
+        # the currently used plugin.
         if "autosegment" in state.widgets:
             with_decoder = state.decoder is not None
             vutil._sync_autosegment_widget(
                 state.widgets["autosegment"], self.model_type, self.custom_weights, update_decoder=with_decoder
             )
+            # Load the AMG/AIS state if we have a 3d segmentation plugin.
+            if state.widgets["autosegment"].volumetric and with_decoder:
+                state.amg_state = vutil._load_is_state(state.embedding_path)
+            elif state.widgets["autosegment"].volumetric and not with_decoder:
+                state.amg_state = vutil._load_amg_state(state.embedding_path)
+
+        # Set the default settings for this model in the nd-segmentation widget if it is part of
+        # the currently used plugin.
         if "segment_nd" in state.widgets:
             vutil._sync_ndsegment_widget(state.widgets["segment_nd"], self.model_type, self.custom_weights)
 
