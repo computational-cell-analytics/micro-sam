@@ -62,7 +62,7 @@ class Annotator3d(_AnnotatorBase):
             "segment_nd": segment_nd,
             "autosegment": autosegment,
             "commit": widgets.commit(),
-            "clear": widgets.clear(),
+            "clear": widgets.clear_volume(),
         }
 
     def __init__(self, viewer: "napari.viewer.Viewer") -> None:
