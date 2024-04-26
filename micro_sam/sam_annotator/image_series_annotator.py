@@ -364,7 +364,7 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         )
         setting_values.layout().addLayout(layout)
 
-        settings = widgets._make_collapsible(setting_values, title="Settings")
+        settings = widgets._make_collapsible(setting_values, title="Embedding Settings")
         return settings
 
     def _validate_inputs(self):
