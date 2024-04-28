@@ -162,7 +162,7 @@ def plot_all_experiments():
 
             plt.gca().yaxis.set_major_formatter(FuncFormatter(format_y_tick_label))
 
-            plt.text(x=-5.8, y=0.4, s="Segmentation Accuracy at IoU 50%", rotation=90, fontweight="bold")
+            plt.text(x=-5.8, y=0.35, s="Segmentation Accuracy at IoU 50%", rotation=90, fontweight="bold")
 
             plt.subplots_adjust(wspace=0.1, hspace=0.15)
 
