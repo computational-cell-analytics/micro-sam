@@ -4,6 +4,7 @@
 import os
 import pickle
 
+from functools import partial
 from glob import glob
 from pathlib import Path
 from typing import Optional, Tuple, Union, List
@@ -159,15 +160,33 @@ def _precompute_state_for_file(
     else:
         image_data = util.load_image_data(input_path, key)
 
+    # Precompute the image embeddings.
     output_path = Path(output_path).with_suffix(".zarr")
     embeddings = util.precompute_image_embeddings(
         predictor, image_data, output_path, ndim=ndim, tile_shape=tile_shape, halo=halo,
     )
+
+    # Precompute the state for automatic instance segmnetaiton (AMG or AIS).
     if precompute_amg_state:
         if decoder is None:
-            cache_amg_state(predictor, image_data, embeddings, output_path, verbose=True)
+            cache_function = partial(
+                cache_amg_state, predictor=predictor, image_embeddings=embeddings, save_path=output_path
+            )
         else:
-            cache_is_state(predictor, decoder, image_data, embeddings, output_path, verbose=True)
+            cache_function = partial(
+                cache_is_state, predictor=predictor, decoder=decoder,
+                image_embeddings=embeddings, save_path=output_path
+            )
+
+        if ndim is None:
+            ndim = image_data.ndim
+
+        if ndim == 2:
+            cache_function(raw=image_data, verbose=True)
+        else:
+            n = image_data.shape[0]
+            for i in tqdm(range(n), total=n, desc="Precompute instance segmentation state"):
+                cache_function(raw=image_data, i=i, verbose=False)
 
 
 def _precompute_state_for_files(
