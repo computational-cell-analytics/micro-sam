@@ -104,11 +104,11 @@ def get_plots(res_root, model, for_supp=None):
         x="experiment", y="value", hue="variable", marker="d",
         palette=PALETTE, markersize=20, linewidth=3,
     )
-    plt.ylabel("Segmentation Accuracy", labelpad=10)
-    plt.xlabel("Percent of Data", labelpad=10)
+    plt.ylabel("Segmentation Accuracy", labelpad=10, fontweight="bold")
+    plt.xlabel("Percent of Data", labelpad=10, fontweight="bold")
     plt.legend(loc="lower center", ncol=6)
     if for_supp is None:
-        save_path = f"livecell_{model}_reduce_data.svg"
+        save_path = "fig_2_c.svg"
     else:
         plt.title(for_supp)
         save_path = f"livecell_supplementary_{model}_reduce_data.svg"
