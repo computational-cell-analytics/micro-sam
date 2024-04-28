@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from plot_all_evaluation import EXPERIMENT_ROOT
 
 
-TOP_BAR_COLOR, BOTTOM_BAR_COLOR = "#F0746E", "#01B3B7"
+TOP_BAR_COLOR, BOTTOM_BAR_COLOR = "#F0746E", "#089099"
 
 MODEL_CHOICE = "vit_l"
 ALL_MODELS = ["vit_t", "vit_b", "vit_l", "vit_h"]
@@ -92,16 +92,16 @@ def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
         ax.errorbar(
             x=ip_data['iteration'], y=ip_data['result'], yerr=ip_data['error'], fmt='none', c='black', capsize=10
         )
-    ax.set_xlabel("Iterations", labelpad=10)
-    ax.set_ylabel("Segmentation Accuracy", labelpad=10)
+    ax.set_xlabel("Iterations", labelpad=10, fontweight="bold")
+    ax.set_ylabel("Segmentation Accuracy", labelpad=10, fontweight="bold")
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
     ax.set_title(name, fontweight="bold")
 
     if amg is not None:
-        ax.axhline(y=amg, label="AMG", color="#DC3977", lw=5)
+        ax.axhline(y=amg, label="AMG", color="#FCDE9C", lw=5)
     if ais is not None:
-        ax.axhline(y=ais, label="AIS", color="#E19951", lw=5)
-    ax.axhline(y=cellpose, label="CellPose", color="#5454DA", lw=5)
+        ax.axhline(y=ais, label="AIS", color="#045275", lw=5)
+    ax.axhline(y=cellpose, label="CellPose", color="#DC3977", lw=5)
 
 
 def plot_for_livecell(benchmark_choice, results_with_logits, model_choice=MODEL_CHOICE):
