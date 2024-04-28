@@ -12,11 +12,11 @@ ROOT = "/home/anwai/results/dfki/R3/"
 
 PALETTE = {
     "AIS": "#045275",
-    "AMG": "#089099",
+    "AMG": "#FCDE9C",
     "Point": "#7CCBA2",
-    r"I$_{P}$": "#FCDE9C",
-    "Box": "#F0746E",
-    r"I$_{B}$": "#90477F"
+    r"I$_{P}$": "#089099",
+    "Box": "#90477F",
+    r"I$_{B}$": "#F0746E"
 }
 
 plt.rcParams.update({"font.size": 30})
