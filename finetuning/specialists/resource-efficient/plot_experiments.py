@@ -13,7 +13,13 @@ from matplotlib.ticker import FormatStrFormatter
 
 ROOT = "/scratch/users/archit/experiments"
 
-PALETTE = {"ais": "#7CCBA2", "amg": "#7C1D6F", "point": "#F0746E", "box": "#089099"}
+PALETTE = {
+    "AIS": "#045275",
+    "AMG": "#FCDE9C",
+    "Point": "#7CCBA2",
+    "Box": "#90477F",
+}
+
 RNAME_MAPPING = {
     "cpu_32G-mem_16-cores": "Intel Cascade Lake Xeon Platinum 9242 (32GB CPU RAM)",
     "cpu_64G-mem_16-cores": "Intel Cascade Lake Xeon Platinum 9242 (64GB CPU RAM)",
@@ -22,7 +28,7 @@ RNAME_MAPPING = {
     "gtx1080": "NVIDIA GeForce GTX 1080 (8GB VRAM)"
 }
 
-plt.rcParams.update({"font.size": 24})
+plt.rcParams.update({"font.size": 30})
 
 
 def _get_all_results(name, all_res_paths):
@@ -35,11 +41,13 @@ def _get_all_results(name, all_res_paths):
             continue
 
         if res_name.endswith("point"):
-            res_name = "point"
+            res_name = "Point"
         elif res_name.endswith("box"):
-            res_name = "box"
+            res_name = "Box"
         elif res_name.endswith("decoder"):
-            res_name = "ais"
+            res_name = "AIS"
+        else:  # amg
+            res_name = res_name.upper()
 
         res_df = pd.DataFrame(
             {"name": name, "type": res_name, "results": res.iloc[0]["sa50"]}, index=[i]
@@ -161,7 +169,7 @@ def plot_all_experiments():
 
             _rname = RNAME_MAPPING[resource_name]  # for supplementary
             fig.suptitle(f"{_rname}")
-            
+
             save_path = f"./figures/{resource_name}/results.png"
             try:
                 plt.savefig(save_path)
