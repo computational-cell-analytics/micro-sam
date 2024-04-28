@@ -887,7 +887,7 @@ class InstanceSegmentationWithDecoder:
             pbar_update: Callback to update an external progress bar.
         """
         _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
-        pbar_init(1, "Initialize instannce segmentation with decoder")
+        pbar_init(1, "Initialize instance segmentation with decoder")
 
         if image_embeddings is None:
             image_embeddings = util.precompute_image_embeddings(self._predictor, image)
@@ -1071,7 +1071,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         tiling = blocking([0, 0], original_size, tile_shape)
 
         _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
-        pbar_init(tiling.numberOfBlocks, "Initialize tiled instannce segmentation with decoder")
+        pbar_init(tiling.numberOfBlocks, "Initialize tiled instance segmentation with decoder")
 
         foreground = np.zeros(original_size, dtype="float32")
         center_distances = np.zeros(original_size, dtype="float32")
