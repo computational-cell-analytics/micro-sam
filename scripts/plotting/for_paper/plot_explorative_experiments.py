@@ -68,7 +68,13 @@ def get_partial_finetuning_plots():
     all_combinations = get_partial_finetuning_combinations()
 
     # custom naming for plotting purpose
-    partial_finetuning_combinations = [r"${all}$", "PE, MD", "IE, MD", "IE, PE", "MD", "PE", "IE"]
+    partial_finetuning_combinations = [
+        r"${all}$",
+        "Prompt Encoder,\nMask Decoder",
+        "Image Encoder,\nMask Decoder",
+        "Image Encoder,\nPrompt Encoder",
+        "Mask Decoder", "Prompt Encoder", "Image Encoder"
+    ]
 
     res_list = []
 
@@ -109,14 +115,14 @@ def get_partial_finetuning_plots():
                 line.patches[k].set_hatch('///')
                 line.patches[k].set_edgecolor('white')
 
-    plt.xlabel("Finetuned Parts", labelpad=10)
-    plt.ylabel("Segmentation Accuracy", labelpad=10)
+    plt.xlabel("Finetuned Parts", labelpad=15, fontweight="bold")
+    plt.ylabel("Segmentation Accuracy", labelpad=10, fontweight="bold")
     plt.legend(loc="upper center", ncol=6)
     plt.tight_layout()
 
     # plt.subplots_adjust(top=0.9, right=0.95, left=0.15, bottom=0.1)
 
-    save_path = "livecell_vit_l_partial_finetuning.svg"
+    save_path = "fig_2_b.svg"
     plt.savefig(save_path)
     plt.savefig(Path(save_path).with_suffix(".pdf"))
     print(f"Plot saved at {save_path}")
