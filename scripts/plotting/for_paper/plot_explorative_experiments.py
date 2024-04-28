@@ -115,7 +115,7 @@ def get_partial_finetuning_plots():
                 line.patches[k].set_hatch('///')
                 line.patches[k].set_edgecolor('white')
 
-    plt.xlabel("Finetuned Parts of Segment Anything", labelpad=15, fontweight="bold")
+    plt.xlabel("Finetuned Parts (SAM)", labelpad=15, fontweight="bold")
     plt.ylabel("Segmentation Accuracy", labelpad=10, fontweight="bold")
     plt.legend(loc="upper center", ncol=6)
     plt.tight_layout()

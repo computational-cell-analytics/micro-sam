@@ -10,12 +10,12 @@ EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/"
 
 # adding a fixed color palette to each experiments, for consistency in plotting the legends
 PALETTE = {
-    "ais": "#045275",
-    "amg": "#089099",
-    "point": "#7CCBA2",
-    r"i$_{p}$": "#FCDE9C",
-    "box": "#F0746E",
-    r"i$_{b}$": "#90477F"
+    "AIS": "#045275",
+    "AMG": "#FCDE9C",
+    "Point": "#7CCBA2",
+    r"I$_{P}$": "#089099",
+    "Box": "#90477F",
+    r"I$_{B}$": "#F0746E"
 }
 
 TITLE = {
@@ -62,9 +62,9 @@ MODELS = {
     "vit_t": 'ViT Tiny'
 }
 
-FIG_ASPECT = (25, 22)
+FIG_ASPECT = (30, 30)
 
-plt.rcParams.update({'font.size': 24})
+plt.rcParams.update({'font.size': 30})
 
 
 def gather_all_results(dataset, modality, model_type):
@@ -75,8 +75,7 @@ def gather_all_results(dataset, modality, model_type):
         if experiment_name == "vanilla":  # easy fix to alter the name
             experiment_name = "default"
 
-        if modality == "em" and experiment_name == "generalist":
-            experiment_name = "finetuned"
+        experiment_name = experiment_name.title()
 
         res_list_per_experiment = []
         for i, result_path in enumerate(sorted(glob(os.path.join(experiment_dir, model_type, "results", "*")))):
@@ -90,7 +89,7 @@ def gather_all_results(dataset, modality, model_type):
                 res_df = pd.DataFrame(
                     {
                         "name": experiment_name,
-                        "type": Path(result_path).stem if len(setting_name) == 3 else "ais",
+                        "type": Path(result_path).stem.upper() if len(setting_name) == 3 else "AIS",
                         "results": res.iloc[0]["msa"]
                     }, index=[i]
                 )
@@ -99,13 +98,13 @@ def gather_all_results(dataset, modality, model_type):
                 res_df = pd.concat(
                     [
                         pd.DataFrame(
-                            {"name": experiment_name, "type": prompt_name, "results": res.iloc[0]["msa"]},
+                            {"name": experiment_name, "type": prompt_name.title(), "results": res.iloc[0]["msa"]},
                             index=[i]
                         ),
                         pd.DataFrame(
                             {
                                 "name": experiment_name,
-                                "type": r"i$_{p}$" if prompt_name[0] == "p" else r"i$_{b}$",
+                                "type": r"I$_{P}$" if prompt_name[0] == "p" else r"I$_{B}$",
                                 "results": res.iloc[-1]["msa"]
                             },
                             index=[i]
@@ -151,7 +150,7 @@ def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice=None, 
     sns.barplot(x="name", y="results", hue="type", data=res_df, ax=ax, palette=PALETTE, hue_order=PALETTE.keys())
     lines, labels = ax.get_legend_handles_labels()
     for line, label in zip(lines, labels):
-        if label == "ais":
+        if label == "AIS":
             for k in range(len(line)):
                 line.patches[k].set_hatch('///')
                 line.patches[k].set_edgecolor('white')
@@ -167,7 +166,8 @@ def get_barplots(ax, dataset_name, modality, model_type, benchmark_choice=None, 
         benchmark_name = "cellpose" if modality == "lm" else "mitonet"
         benchmark_res = get_benchmark_results(dataset_name, benchmark_name, benchmark_choice)
         if benchmark_res is not None:
-            ax.axhline(y=benchmark_res, label=benchmark_name, color="#DC3977")
+            benchmark_title = "CellPose" if modality == "lm" else "MitoNet"
+            ax.axhline(y=benchmark_res, label=benchmark_title, color="#DC3977", lw=3)
 
 
 def _get_plot_postprocessing(
@@ -211,7 +211,7 @@ def _get_plot_postprocessing(
     if x_loc is not None:
         x = x_loc
 
-    plt.text(x=x, y=y, s="Segmentation Accuracy", rotation=90, fontsize=30)
+    plt.text(x=x, y=y, s="Segmentation Accuracy", rotation=90, fontweight="bold")
 
     if bbox_to_anchor is not None:
         bbox_to_anchor = bba
@@ -246,7 +246,11 @@ def plot_evaluation_for_lm_datasets(model_type):
     get_barplots(ax[2, 2], "mouse-embryo", modality, model_type, benchmark_choice="cyto2")
 
     _get_plot_postprocessing(
-        fig=fig, experiment_title="Light Microscopy", save_path=f"lm_{model_type}_evaluation.svg"
+        fig=fig,
+        experiment_title="Light Microscopy",
+        save_path=f"lm_{model_type}_evaluation.svg",
+        bba=(0.5, 0.05),
+        y_loc=1
     )
 
 
@@ -305,7 +309,11 @@ def plot_evaluation_for_em_datasets(model_type):
     get_barplots(ax[2, 2], "vnc", modality, model_type)
 
     _get_plot_postprocessing(
-        fig=fig, experiment_title="Electron Microscopy", save_path=f"em_{model_type}_evaluation.svg"
+        fig=fig,
+        experiment_title="Electron Microscopy",
+        save_path=f"em_{model_type}_evaluation.svg",
+        bba=(0.5, 0.05),
+        y_loc=0.8,
     )
 
 
@@ -355,7 +363,7 @@ def plot_em_specialists(dataset_name):
     get_barplots(ax[3], dataset_name, modality, "vit_h", title_as_model_name=True)
 
     if dataset_name != "cremi":
-        dsplit =  dataset_name.split("/")
+        dsplit = dataset_name.split("/")
         dataset_name = dsplit[0].upper() + f" ({dsplit[1].upper()})"
 
     _get_plot_postprocessing(
@@ -372,13 +380,13 @@ def plot_em_specialists(dataset_name):
 
 
 def main():
-    plot_em_specialists("cremi")
-    plot_em_specialists("asem/er")
+    # plot_em_specialists("cremi")
+    # plot_em_specialists("asem/er")
+
+    plot_evaluation_for_lm_datasets("vit_l")
+    plot_evaluation_for_em_datasets("vit_l")
 
     return
-
-    # plot_evaluation_for_lm_datasets("vit_l")
-    # plot_evaluation_for_em_datasets("vit_l")
 
     all_models = ["vit_t", "vit_b", "vit_l", "vit_h"]
     for model in all_models:
