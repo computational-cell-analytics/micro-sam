@@ -85,7 +85,7 @@ def _create_test_inputs_and_outputs(
     point_prompt_path = os.path.join(tmp_dir, "point_prompts.npy")
     point_label_path = os.path.join(tmp_dir, "point_labels.npy")
     mask_prompt_path = os.path.join(tmp_dir, "mask_prompts.npy")
-    np.save(box_prompt_path, box_prompts)
+    np.save(box_prompt_path, box_prompts.astype("int64"))
     np.save(point_prompt_path, point_prompts)
     np.save(point_label_path, point_labels)
     np.save(mask_prompt_path, mask_prompts)
@@ -321,7 +321,6 @@ def export_sam_model(
                         id=spec.AxisId("object"),
                         size=spec.ARBITRARY_SIZE
                     ),
-                    # TODO double check the axis names
                     spec.ChannelAxis(channel_names=[spec.Identifier(bname) for bname in "hwxy"]),
                 ],
                 test_tensor=spec.FileDescr(source=input_paths["box_prompts"]),
