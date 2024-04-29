@@ -34,7 +34,7 @@ class TestModelExport(unittest.TestCase):
 
         self.assertTrue(os.path.exists(export_path))
 
-        # TODO more tests: run prediction with models for different prompt settings
+        # Potential more tests: run prediction with models for different prompt settings.
 
 
 if __name__ == "__main__":

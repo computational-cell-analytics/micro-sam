@@ -15,7 +15,7 @@ dependencies:
     - pytorch
     - segment-anything
     - torchvision
-    - torch_em >=0.7.0
+    - torch_em >=0.7.1
     - tqdm
     - timm
     - pip:

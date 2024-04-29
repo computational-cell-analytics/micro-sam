@@ -515,13 +515,12 @@ def export_sam_model(
             tags=kwargs.get("tags", DEFAULTS["tags"]),
             covers=covers,
             **extra_kwargs,
-            # TODO write specific settings in the config
+            # We may want to write specific settings in the config.
             # dict with yaml values, key must be a str
             # micro_sam: ...
             # config=
         )
 
-        # TODO this requires the new bioimageio.core release
-        # _check_model(model_description, input_paths, result_paths)
+        _check_model(model_description, input_paths, result_paths)
 
         save_bioimageio_package(model_description, output_path=output_path)
