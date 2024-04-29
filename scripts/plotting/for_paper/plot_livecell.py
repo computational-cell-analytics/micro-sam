@@ -84,16 +84,16 @@ def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
     sns.barplot(x="iteration", y="result", hue="name", data=ib_data, ax=ax, palette=[TOP_BAR_COLOR])
     if "error" in ib_data:
         ax.errorbar(
-            x=ib_data['iteration'], y=ib_data['result'], yerr=ib_data['error'], fmt='none', c='black', capsize=10
+            x=ib_data['iteration'], y=ib_data['result'], yerr=ib_data['error'], fmt='none', c='black', capsize=20
         )
 
     sns.barplot(x="iteration", y="result", hue="name", data=ip_data, ax=ax, palette=[BOTTOM_BAR_COLOR])
     if "error" in ip_data:
         ax.errorbar(
-            x=ip_data['iteration'], y=ip_data['result'], yerr=ip_data['error'], fmt='none', c='black', capsize=10
+            x=ip_data['iteration'], y=ip_data['result'], yerr=ip_data['error'], fmt='none', c='black', capsize=20
         )
     ax.set_xlabel("Iterations", labelpad=10, fontweight="bold")
-    ax.set_ylabel("Segmentation Accuracy", labelpad=10, fontweight="bold")
+    ax.set_ylabel("Mean Segmentation Accuracy", labelpad=10, fontweight="bold")
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
     ax.set_title(name, fontweight="bold")
 
@@ -208,7 +208,7 @@ def plot_all_livecell(benchmark_choice, model_type):
 
     plt.show()
     plt.tight_layout()
-    plt.subplots_adjust(top=0.865, right=0.95, left=0.075, bottom=0.05)
+    plt.subplots_adjust(top=0.9, bottom=0.1)
     fig.suptitle(MODEL_NAME_MAP[model_type], fontsize=36, x=0.515, y=0.97)
     _path = f"livecell_supplementary_{model_type}.svg"
     plt.savefig(_path)
@@ -219,9 +219,11 @@ def plot_all_livecell(benchmark_choice, model_type):
 def main():
     plot_for_livecell(benchmark_choice="livecell", results_with_logits=False)
 
-    # for model in ALL_MODELS:
-    #     plot_for_livecell(benchmark_choice="livecell", results_with_logits=True, model_choice=model)
-    #     plot_all_livecell(benchmark_choice="livecell", model_type=model)
+    return
+
+    for model in ALL_MODELS:
+        plot_for_livecell(benchmark_choice="livecell", results_with_logits=True, model_choice=model)
+        plot_all_livecell(benchmark_choice="livecell", model_type=model)
 
 
 if __name__ == "__main__":

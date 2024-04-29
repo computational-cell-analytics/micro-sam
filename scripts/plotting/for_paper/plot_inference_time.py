@@ -12,6 +12,10 @@ PALETTE = {"ViT Tiny": "#089099", "ViT Base": "#7CCBA2", "ViT Large": "#7C1D6F",
 MODELS = ['ViT Huge', 'ViT Large', 'ViT Base', 'ViT Tiny']
 
 
+# TODO:
+# changed to grouped bar plots
+
+
 VIT_T_GPU = [
     {"benchmark": "embeddings", "runtimes": 0.039},
     {"benchmark": "prompt-p1n0", "runtimes": 0.009},
