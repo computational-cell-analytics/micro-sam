@@ -214,7 +214,10 @@ def segment_mask_in_volume(
 
 def _preprocess_closing(slice_segmentation, gap_closing, pbar_update):
     binarized = slice_segmentation > 0
-    closed_segmentation = binary_closing(binarized, iterations=gap_closing)
+    # Use a structuring element that only closes elements in z, to avoid merging objects in-plane.
+    structuring_element = np.zeros((3, 1, 1))
+    structuring_element[:, 0, 0] = 1
+    closed_segmentation = binary_closing(binarized, iterations=gap_closing, structure=structuring_element)
 
     new_segmentation = np.zeros_like(slice_segmentation)
     n_slices = new_segmentation.shape[0]

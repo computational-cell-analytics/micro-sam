@@ -341,7 +341,7 @@ def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None
         vutil.clear_annotations_slice(viewer, i=i)
 
 
-def _commit_impl(viewer, layer):
+def _commit_impl(viewer, layer, preserve_committed):
     # Check if we have a z_range. If yes, use it to set a bounding box.
     state = AnnotatorState()
     if state.z_range is None:
@@ -368,6 +368,9 @@ def _commit_impl(viewer, layer):
     mask = elf.parallel.apply_operation(
         seg, 0, np.not_equal, out=mask, block_shape=util.get_block_shape(shape)
     )
+    if preserve_committed:
+        prev_seg = viewer.layers["committed_objects"].data[bb]
+        mask[prev_seg != 0] = 0
 
     # Write the current object to committed objects.
     seg[mask] += id_offset
@@ -473,6 +476,7 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
 def commit(
     viewer: "napari.viewer.Viewer",
     layer: str = "current_object",
+    preserve_committed: bool = True,
     commit_path: Optional[Path] = None,
 ) -> None:
     """Widget for committing the segmented objects from automatic or interactive segmentation.
@@ -481,10 +485,11 @@ def commit(
         viewer: The napari viewer.
         layer: Select the layer to commit. Can be either 'current_object' to commit interacitve segmentation results.
             Or 'auto_segmentation' to commit automatic segmentation results.
+        preserve_committed: If active already committted objects are not over-written by new commits.
         commit_path: Select a file path where the committed results and prompts will be saved.
             This feature is still experimental.
     """
-    _, seg, mask, bb = _commit_impl(viewer, layer)
+    _, seg, mask, bb = _commit_impl(viewer, layer, preserve_committed)
 
     if commit_path is not None:
         _commit_to_file(commit_path, viewer, layer, seg, mask, bb)
@@ -507,6 +512,7 @@ def commit(
 def commit_track(
     viewer: "napari.viewer.Viewer",
     layer: str = "current_object",
+    preserve_committed: bool = True,
     commit_path: Optional[Path] = None,
 ) -> None:
     """Widget for committing the objects from interactive tracking.
@@ -515,11 +521,12 @@ def commit_track(
         viewer: The napari viewer.
         layer: Select the layer to commit. Can be either 'current_object' to commit interacitve segmentation results.
             Or 'auto_segmentation' to commit automatic segmentation results.
+        preserve_committed: If active already committted objects are not over-written by new commits.
         commit_path: Select a file path where the committed results and prompts will be saved.
             This feature is still experimental.
     """
     # Commit the segmentation layer.
-    id_offset, seg, mask, bb = _commit_impl(viewer, layer)
+    id_offset, seg, mask, bb = _commit_impl(viewer, layer, preserve_committed)
 
     # Update the lineages.
     state = AnnotatorState()
@@ -884,11 +891,22 @@ class EmbeddingWidget(_WidgetBase):
             tile_shape=[self.tile_x, self.tile_y],
             halo=[self.halo_x, self.halo_y]
         )
+
+        # Set the default settings for this model in the autosegment widget if it is part of
+        # the currently used plugin.
         if "autosegment" in state.widgets:
             with_decoder = state.decoder is not None
             vutil._sync_autosegment_widget(
                 state.widgets["autosegment"], self.model_type, self.custom_weights, update_decoder=with_decoder
             )
+            # Load the AMG/AIS state if we have a 3d segmentation plugin.
+            if state.widgets["autosegment"].volumetric and with_decoder:
+                state.amg_state = vutil._load_is_state(state.embedding_path)
+            elif state.widgets["autosegment"].volumetric and not with_decoder:
+                state.amg_state = vutil._load_amg_state(state.embedding_path)
+
+        # Set the default settings for this model in the nd-segmentation widget if it is part of
+        # the currently used plugin.
         if "segment_nd" in state.widgets:
             vutil._sync_ndsegment_widget(state.widgets["segment_nd"], self.model_type, self.custom_weights)
 

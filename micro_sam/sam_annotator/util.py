@@ -1,7 +1,13 @@
 import argparse
+import os
+import pickle
 import warnings
+
+from glob import glob
+from pathlib import Path
 from typing import List, Optional, Tuple
 
+import h5py
 import napari
 import numpy as np
 
@@ -729,3 +735,40 @@ def _sync_ndsegment_widget(widget, model_type, checkpoint_path):
     for param in params:
         if param in settings:
             getattr(widget, f"{param}_param").setValue(settings[param])
+
+
+def _load_amg_state(embedding_path):
+    if embedding_path is None or not os.path.exists(embedding_path):
+        return {"cache_folder": None}
+
+    cache_folder = os.path.join(embedding_path, "amg_state")
+    os.makedirs(cache_folder, exist_ok=True)
+    amg_state = {"cache_folder": cache_folder}
+
+    state_paths = glob(os.path.join(cache_folder, "*.pkl"))
+    for path in state_paths:
+        with open(path, "rb") as f:
+            state = pickle.load(f)
+        i = int(Path(path).stem.split("-")[-1])
+        amg_state[i] = state
+    return amg_state
+
+
+def _load_is_state(embedding_path):
+    if embedding_path is None or not os.path.exists(embedding_path):
+        return {"cache_path": None}
+
+    cache_path = os.path.join(embedding_path, "is_state.h5")
+    is_state = {"cache_path": cache_path}
+
+    with h5py.File(cache_path, "a") as f:
+        for name, g in f.items():
+            i = int(name.split("-")[-1])
+            state = {
+                "foreground": g["foreground"][:],
+                "boundary_distances": g["boundary_distances"][:],
+                "center_distances": g["center_distances"][:],
+            }
+            is_state[i] = state
+
+    return is_state
