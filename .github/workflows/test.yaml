@@ -43,7 +43,7 @@ jobs:
         run: pip install --no-deps -e .
 
       - name: Run tests
-        uses: aganders3/headless-gui@v1
+        uses: aganders3/headless-gui@v2
         with:
           shell: bash -l {0}
           run: pytest

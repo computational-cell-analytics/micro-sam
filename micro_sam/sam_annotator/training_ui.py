@@ -10,14 +10,26 @@ from torch.utils.data import random_split
 import micro_sam.util as util
 import micro_sam.sam_annotator._widgets as widgets
 from ._tooltips import get_tooltip
-from micro_sam.training import default_sam_dataset, train_sam_for_setting, SETTINGS
+from micro_sam.training import default_sam_dataset, train_sam_for_configuration, CONFIGURATIONS
 
 
-def _find_best_setting():
+def _find_best_configuration():
     if torch.cuda.is_available():
-        # TODO
-        # can we check the GPU type and use it to match the setting?
-        return "rtx5000"
+
+        # Check how much memory we have and select the best matching GPU
+        # for the available VRAM size.
+        _, vram = torch.cuda.mem_get_info()
+        vram = vram / 1e9  # in GB
+
+        # Maybe we can get more configurations in the future.
+        if vram > 80:  # More than 80 GB: use the A100 configurations.
+            return "A100"
+        elif vram > 30:  # More than 30 GB: use the V100 configurations.
+            return "V100"
+        elif vram > 14:  # More than 14 GB: use the RTX5000 configurations.
+            return "rtx5000"
+        else:  # Otherwise: not enough memory to train on the GPU, use CPU instead.
+            return "CPU"
     else:
         return "CPU"
 
@@ -40,42 +52,42 @@ class TrainingWidget(widgets._WidgetBase):
     def _create_options(self):
         self.raw_path = None
         _, layout = self._add_path_param(
-            "raw_path", self.raw_path, "both", placeholder="Image data ...",
+            "Path to images", self.raw_path, "both", placeholder="/path/to/images",
             tooltip=get_tooltip("training", "raw_path")
         )
         self.layout().addLayout(layout)
 
         self.raw_key = None
         _, layout = self._add_string_param(
-            "raw_key", self.raw_key, placeholder="Image data key ...",
+            "Image data key", self.raw_key, placeholder="e.g. \"*.tif\"",
             tooltip=get_tooltip("training", "raw_key")
         )
         self.layout().addLayout(layout)
 
         self.label_path = None
         _, layout = self._add_path_param(
-            "label_path", self.label_path, "both", placeholder="Label data ...",
+            "Path to labels", self.label_path, "both", placeholder="/path/to/labels",
             tooltip=get_tooltip("training", "label_path")
         )
         self.layout().addLayout(layout)
 
         self.label_key = None
         _, layout = self._add_string_param(
-            "label_key", self.label_key, placeholder="Label data key ...",
+            "Label data key", self.label_key, placeholder="e.g. \"*.tif\"",
             tooltip=get_tooltip("training", "label_key")
         )
         self.layout().addLayout(layout)
 
-        self.setting = _find_best_setting()
+        self.configuration = _find_best_configuration()
         self.setting_dropdown, layout = self._add_choice_param(
-            "setting", self.setting, list(SETTINGS.keys()),
-            tooltip=get_tooltip("training", "setting")
+            "Configuration", self.configuration, list(CONFIGURATIONS.keys()),
+            tooltip=get_tooltip("training", "configuration")
         )
         self.layout().addLayout(layout)
 
         self.with_segmentation_decoder = True
         self.layout().addWidget(self._add_boolean_param(
-            "with_segmentation_decoder", self.with_segmentation_decoder,
+            "With segmentation decoder", self.with_segmentation_decoder,
             tooltip=get_tooltip("training", "segmentation_decoder")
         ))
 
@@ -88,14 +100,13 @@ class TrainingWidget(widgets._WidgetBase):
         self.device = "auto"
         device_options = ["auto"] + util._available_devices()
         self.device_dropdown, layout = self._add_choice_param(
-            "device", self.device, device_options,
-            tooltip=get_tooltip("training", "device")
+            "Device", self.device, device_options, tooltip=get_tooltip("training", "device")
         )
         setting_values.layout().addLayout(layout)
 
         self.patch_x, self.patch_y = 512, 512
         self.patch_x_param, self.patch_y_param, layout = self._add_shape_param(
-            ("patch_x", "patch_y"), (self.patch_x, self.patch_y), min_val=0, max_val=2048,
+            ("Patch size x", "Patch size y"), (self.patch_x, self.patch_y), min_val=0, max_val=2048,
             tooltip=get_tooltip("training", "patch")
         )
         setting_values.layout().addLayout(layout)
@@ -103,14 +114,14 @@ class TrainingWidget(widgets._WidgetBase):
         # Paths for validation data.
         self.raw_path_val = None
         _, layout = self._add_path_param(
-            "raw_path_val", self.raw_path_val, "both", placeholder="Image data for validation ...",
+            "Path to validation images", self.raw_path_val, "both", placeholder="/path/to/images",
             tooltip=get_tooltip("training", "raw_path_val")
         )
         setting_values.layout().addLayout(layout)
 
         self.label_path_val = None
         _, layout = self._add_path_param(
-            "label_path_val", self.label_path_val, "both", placeholder="Label data for validation ...",
+            "Path to validation labels", self.label_path_val, "both", placeholder="/path/to/images",
             tooltip=get_tooltip("training", "label_path_val")
         )
         setting_values.layout().addLayout(layout)
@@ -119,19 +130,32 @@ class TrainingWidget(widgets._WidgetBase):
         # on top of which the finetuning is run.
         self.name = "sam_model"
         self.name_param, layout = self._add_string_param(
-            "name", self.name, tooltip=get_tooltip("training", "name")
+            "Model name", self.name, tooltip=get_tooltip("training", "name")
         )
         setting_values.layout().addLayout(layout)
 
         self.initial_model = None
         self.initial_model_param, layout = self._add_string_param(
-            "initial_model", self.initial_model, tooltip=get_tooltip("training", "initial_model")
-            )
+            "Initial model", self.initial_model, tooltip=get_tooltip("training", "initial_model")
+        )
         setting_values.layout().addLayout(layout)
 
         self.checkpoint = None
         self.checkpoint_param, layout = self._add_string_param(
-            "checkpoint", self.name, tooltip=get_tooltip("training", "checkpoint")
+            "Checkpoint", self.name, tooltip=get_tooltip("training", "checkpoint")
+        )
+        setting_values.layout().addLayout(layout)
+
+        self.output_path = None
+        self.output_path_param, layout = self._add_string_param(
+            "Output Path", self.output_path, tooltip=get_tooltip("training", "output_path")
+        )
+        setting_values.layout().addLayout(layout)
+
+        self.n_epochs = 100
+        self.n_epochs_param, layout = self._add_int_param(
+            "Number of epochs", self.n_epochs, tooltip=get_tooltip("training", "n_epochs"),
+            min_val=1, max_val=1000,
         )
         setting_values.layout().addLayout(layout)
 
@@ -150,8 +174,9 @@ class TrainingWidget(widgets._WidgetBase):
 
         raw_path_val, label_path_val = self.raw_path_val, self.label_path_val
         if raw_path_val is None:
-            # TODO better heuristic for the split?
-            train_dataset, val_dataset = random_split(dataset, lengths=[len(dataset) - 1, 1])
+            # Use 10% of the dataset - at least one image - for validation.
+            n_val = min(1, int(0.1 * len(dataset)))
+            train_dataset, val_dataset = random_split(dataset, lengths=[len(dataset) - n_val, n_val])
         else:
             train_dataset = dataset
             val_dataset = default_sam_dataset(
@@ -168,15 +193,15 @@ class TrainingWidget(widgets._WidgetBase):
         return train_loader, val_loader
 
     def _get_model_type(self):
-        # Consolidate initial model name, the checkpoint path and the model type according to the settings.
+        # Consolidate initial model name, the checkpoint path and the model type according to the configuration.
         if self.initial_model is None or self.initial_model in ("None", ""):
-            model_type = SETTINGS[self.setting]["model_type"]
+            model_type = CONFIGURATIONS[self.configuration]["model_type"]
         else:
             model_type = self.initial_model[:5]
-            if model_type != SETTINGS[self.setting]["model_type"]:
+            if model_type != CONFIGURATIONS[self.configuration]["model_type"]:
                 warnings.warn(
-                    f"You have changed the model type for your chosen setting {self.setting} "
-                    f"from {SETTINGS[self.setting]['model_type']} to {model_type}. "
+                    f"You have changed the model type for your chosen configuration {self.configuration} "
+                    f"from {CONFIGURATIONS[self.configuration]['model_type']} to {model_type}. "
                     "The training may be very slow or not work at all."
                 )
         assert model_type is not None
@@ -214,19 +239,62 @@ class TrainingWidget(widgets._WidgetBase):
         @thread_worker()
         def run_training():
             train_loader, val_loader = self._get_loaders()
-            train_sam_for_setting(
-                name=self.name, setting=self.setting,
+            train_sam_for_configuration(
+                name=self.name, configuration=self.configuration,
                 train_loader=train_loader, val_loader=val_loader,
                 checkpoint_path=checkpoint_path,
                 with_segmentation_decoder=self.with_segmentation_decoder,
                 model_type=model_type, device=self.device,
-                pbar_signals=pbar_signals,
+                n_epochs=self.n_epochs, pbar_signals=pbar_signals,
             )
 
-            # TODO implement exporting the model to SAM (state dict) or bioimage.io format.
+            # The best checkpoint after training.
+            export_checkpoint = os.path.join("checkpoints", self.name, "best.pt")
+            assert os.path.exists(export_checkpoint), export_checkpoint
 
-            pbar_signals.pbar_stop.emit()
+            # Export the model if an output path was given.
+            if self.output_path:
+
+                # If the output path has a pytorch specific ending then
+                # we just export the checkpoint.
+                if os.path.splitext(self.output_path)[1] in (".pt", ".pth"):
+                    util.export_custom_sam_model(
+                        checkpoint_path=export_checkpoint, model_type=model_type, save_path=self.output_path,
+                    )
+
+                # Otherwise we export it as bioimage.io model.
+                else:
+                    from micro_sam.bioimageio import export_sam_model
+
+                    # Load image and label image from the val loader.
+                    with torch.no_grad():
+                        image, label_image = next(iter(val_loader))
+                        image, label_image = image.cpu().numpy().squeeze(), label_image.cpu().numpy().squeeze()
+
+                    # Select the last channel of the label image if we have a channel axis.
+                    # (This contains the labels.)
+                    if label_image.ndim == 3:
+                        label_image = label_image[0]
+                    assert image.shape == label_image.shape
+                    label_image = label_image.astype("uint32")
+
+                    export_sam_model(
+                        image=image,
+                        label_image=label_image,
+                        model_type=model_type,
+                        name=self.name,
+                        output_path=self.output_path,
+                        checkpoint_path=export_checkpoint,
+                    )
+
+                pbar_signals.pbar_stop.emit()
+                return self.output_path
+
+            else:
+                pbar_signals.pbar_stop.emit()
+                return export_checkpoint
 
         worker = run_training()
+        worker.returned.connect(lambda path: print(f"Training has finished. The trained model is saved at {path}."))
         worker.start()
         return worker

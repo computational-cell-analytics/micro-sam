@@ -85,7 +85,7 @@ def _create_test_inputs_and_outputs(
     point_prompt_path = os.path.join(tmp_dir, "point_prompts.npy")
     point_label_path = os.path.join(tmp_dir, "point_labels.npy")
     mask_prompt_path = os.path.join(tmp_dir, "mask_prompts.npy")
-    np.save(box_prompt_path, box_prompts)
+    np.save(box_prompt_path, box_prompts.astype("int64"))
     np.save(point_prompt_path, point_prompts)
     np.save(point_label_path, point_labels)
     np.save(mask_prompt_path, mask_prompts)
@@ -321,7 +321,6 @@ def export_sam_model(
                         id=spec.AxisId("object"),
                         size=spec.ARBITRARY_SIZE
                     ),
-                    # TODO double check the axis names
                     spec.ChannelAxis(channel_names=[spec.Identifier(bname) for bname in "hwxy"]),
                 ],
                 test_tensor=spec.FileDescr(source=input_paths["box_prompts"]),
@@ -489,11 +488,6 @@ def export_sam_model(
         else:
             assert all(os.path.exists(cov) for cov in covers)
 
-        if decoder_path is None:
-            attachments = None
-        else:
-            attachments = [spec.FileDescr(source=decoder_path)]
-
         # the uploader information is only added if explicitly passed
         extra_kwargs = {}
         if "id" in kwargs:
@@ -502,6 +496,9 @@ def export_sam_model(
             extra_kwargs["id_emoji"] = kwargs["id_emoji"]
         if "uploader" in kwargs:
             extra_kwargs["uploader"] = kwargs["uploader"]
+
+        if decoder_path is not None:
+            extra_kwargs["attachments"] = [spec.FileDescr(source=decoder_path)]
 
         model_description = spec.ModelDescr(
             name=name,
@@ -516,7 +513,6 @@ def export_sam_model(
             git_repo=spec.HttpUrl("https://github.com/computational-cell-analytics/micro-sam"),
             tags=kwargs.get("tags", DEFAULTS["tags"]),
             covers=covers,
-            attachments=attachments,
             **extra_kwargs,
             # TODO write specific settings in the config
             # dict with yaml values, key must be a str

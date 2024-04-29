@@ -3,7 +3,7 @@
 There are three ways to install `micro_sam`:
 - [From mamba](#from-mamba) is the recommended way if you want to use all functionality.
 - [From source](#from-source) for setting up a development environment to use the latest version and be able to change and contribute to our software.
-- [From installer](#from-installer) to install without having to use conda (supported platforms: Windows and Linux, only for CPU users). 
+- [From installer](#from-installer) to install without having to use mamba (supported platforms: Windows and Linux, only for CPU users). 
 
 ## From mamba
 

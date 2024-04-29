@@ -126,7 +126,9 @@ class AnnotatorState(metaclass=Singleton):
             if save_path is None:
                 raise RuntimeError("Require a save path to precompute the amg state")
 
-            cache_state = cache_amg_state if self.decoder is None else partial(cache_is_state, decoder=self.decoder)
+            cache_state = cache_amg_state if self.decoder is None else partial(
+                cache_is_state, decoder=self.decoder, skip_load=True,
+            )
 
             if ndim == 2:
                 self.amg = cache_state(
