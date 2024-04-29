@@ -1487,7 +1487,6 @@ class AutoSegmentWidget(_WidgetBase):
     def _create_settings(self):
         setting_values = self._ais_settings() if self.with_decoder else self._amg_settings()
         settings = _make_collapsible(setting_values, title="Automatic Segmentation Settings")
-        settings.setToolTip(get_tooltip("autosegment", "projection_dropdown"))
         return settings
 
     def _run_segmentation_2d(self, kwargs, i=None):
