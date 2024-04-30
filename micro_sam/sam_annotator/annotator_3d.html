@@ -64,180 +64,138 @@
 
                         <label class="view-source-button" for="mod-annotator_3d-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">  1</span></a><span class="kn">import</span> <span class="nn">os</span>
-</span><span id="L-2"><a href="#L-2"><span class="linenos">  2</span></a><span class="kn">import</span> <span class="nn">pickle</span>
-</span><span id="L-3"><a href="#L-3"><span class="linenos">  3</span></a><span class="kn">from</span> <span class="nn">glob</span> <span class="kn">import</span> <span class="n">glob</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos">  4</span></a><span class="kn">from</span> <span class="nn">pathlib</span> <span class="kn">import</span> <span class="n">Path</span>
-</span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">Union</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">  1</span></a><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">Union</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">  2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">  3</span></a><span class="kn">import</span> <span class="nn">napari</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">  4</span></a><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a><span class="kn">import</span> <span class="nn">torch</span>
 </span><span id="L-6"><a href="#L-6"><span class="linenos">  6</span></a>
-</span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a><span class="kn">import</span> <span class="nn">h5py</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="kn">import</span> <span class="nn">napari</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
-</span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a><span class="kn">import</span> <span class="nn">torch</span>
-</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a>
-</span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a><span class="kn">from</span> <span class="nn">._annotator</span> <span class="kn">import</span> <span class="n">_AnnotatorBase</span>
-</span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a><span class="kn">from</span> <span class="nn">._state</span> <span class="kn">import</span> <span class="n">AnnotatorState</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="kn">from</span> <span class="nn">.</span> <span class="kn">import</span> <span class="n">_widgets</span> <span class="k">as</span> <span class="n">widgets</span>
-</span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a><span class="kn">from</span> <span class="nn">.util</span> <span class="kn">import</span> <span class="n">_initialize_parser</span><span class="p">,</span> <span class="n">_sync_embedding_widget</span>
-</span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a><span class="kn">from</span> <span class="nn">..</span> <span class="kn">import</span> <span class="n">util</span>
-</span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a>
-</span><span id="L-18"><a href="#L-18"><span class="linenos"> 18</span></a>
-</span><span id="L-19"><a href="#L-19"><span class="linenos"> 19</span></a><span class="k">def</span> <span class="nf">_load_amg_state</span><span class="p">(</span><span class="n">embedding_path</span><span class="p">):</span>
-</span><span id="L-20"><a href="#L-20"><span class="linenos"> 20</span></a>    <span class="k">if</span> <span class="n">embedding_path</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">embedding_path</span><span class="p">):</span>
-</span><span id="L-21"><a href="#L-21"><span class="linenos"> 21</span></a>        <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;cache_folder&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">}</span>
-</span><span id="L-22"><a href="#L-22"><span class="linenos"> 22</span></a>
-</span><span id="L-23"><a href="#L-23"><span class="linenos"> 23</span></a>    <span class="n">cache_folder</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">embedding_path</span><span class="p">,</span> <span class="s2">&quot;amg_state&quot;</span><span class="p">)</span>
-</span><span id="L-24"><a href="#L-24"><span class="linenos"> 24</span></a>    <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">cache_folder</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="L-25"><a href="#L-25"><span class="linenos"> 25</span></a>    <span class="n">amg_state</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;cache_folder&quot;</span><span class="p">:</span> <span class="n">cache_folder</span><span class="p">}</span>
-</span><span id="L-26"><a href="#L-26"><span class="linenos"> 26</span></a>
-</span><span id="L-27"><a href="#L-27"><span class="linenos"> 27</span></a>    <span class="n">state_paths</span> <span class="o">=</span> <span class="n">glob</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">cache_folder</span><span class="p">,</span> <span class="s2">&quot;*.pkl&quot;</span><span class="p">))</span>
-</span><span id="L-28"><a href="#L-28"><span class="linenos"> 28</span></a>    <span class="k">for</span> <span class="n">path</span> <span class="ow">in</span> <span class="n">state_paths</span><span class="p">:</span>
-</span><span id="L-29"><a href="#L-29"><span class="linenos"> 29</span></a>        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="s2">&quot;rb&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-</span><span id="L-30"><a href="#L-30"><span class="linenos"> 30</span></a>            <span class="n">state</span> <span class="o">=</span> <span class="n">pickle</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
-</span><span id="L-31"><a href="#L-31"><span class="linenos"> 31</span></a>        <span class="n">i</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="n">path</span><span class="p">)</span><span class="o">.</span><span class="n">stem</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;-&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
-</span><span id="L-32"><a href="#L-32"><span class="linenos"> 32</span></a>        <span class="n">amg_state</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">state</span>
-</span><span id="L-33"><a href="#L-33"><span class="linenos"> 33</span></a>    <span class="k">return</span> <span class="n">amg_state</span>
-</span><span id="L-34"><a href="#L-34"><span class="linenos"> 34</span></a>
-</span><span id="L-35"><a href="#L-35"><span class="linenos"> 35</span></a>
-</span><span id="L-36"><a href="#L-36"><span class="linenos"> 36</span></a><span class="k">def</span> <span class="nf">_load_is_state</span><span class="p">(</span><span class="n">embedding_path</span><span class="p">):</span>
-</span><span id="L-37"><a href="#L-37"><span class="linenos"> 37</span></a>    <span class="k">if</span> <span class="n">embedding_path</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">embedding_path</span><span class="p">):</span>
-</span><span id="L-38"><a href="#L-38"><span class="linenos"> 38</span></a>        <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;cache_path&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">}</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a><span class="kn">from</span> <span class="nn">._annotator</span> <span class="kn">import</span> <span class="n">_AnnotatorBase</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="kn">from</span> <span class="nn">._state</span> <span class="kn">import</span> <span class="n">AnnotatorState</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a><span class="kn">from</span> <span class="nn">.</span> <span class="kn">import</span> <span class="n">_widgets</span> <span class="k">as</span> <span class="n">widgets</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a><span class="kn">from</span> <span class="nn">.util</span> <span class="kn">import</span> <span class="n">_initialize_parser</span><span class="p">,</span> <span class="n">_sync_embedding_widget</span><span class="p">,</span> <span class="n">_load_amg_state</span><span class="p">,</span> <span class="n">_load_is_state</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a><span class="kn">from</span> <span class="nn">..</span> <span class="kn">import</span> <span class="n">util</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a>
+</span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a>
+</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="k">class</span> <span class="nc">Annotator3d</span><span class="p">(</span><span class="n">_AnnotatorBase</span><span class="p">):</span>
+</span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a>    <span class="k">def</span> <span class="nf">_get_widgets</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a>        <span class="n">autosegment</span> <span class="o">=</span> <span class="n">widgets</span><span class="o">.</span><span class="n">AutoSegmentWidget</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_viewer</span><span class="p">,</span> <span class="n">with_decoder</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_with_decoder</span><span class="p">,</span> <span class="n">volumetric</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a>        <span class="n">segment_nd</span> <span class="o">=</span> <span class="n">widgets</span><span class="o">.</span><span class="n">SegmentNDWidget</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_viewer</span><span class="p">,</span> <span class="n">tracking</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos"> 18</span></a>        <span class="k">return</span> <span class="p">{</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos"> 19</span></a>            <span class="s2">&quot;segment&quot;</span><span class="p">:</span> <span class="n">widgets</span><span class="o">.</span><span class="n">segment_slice</span><span class="p">(),</span>
+</span><span id="L-20"><a href="#L-20"><span class="linenos"> 20</span></a>            <span class="s2">&quot;segment_nd&quot;</span><span class="p">:</span> <span class="n">segment_nd</span><span class="p">,</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos"> 21</span></a>            <span class="s2">&quot;autosegment&quot;</span><span class="p">:</span> <span class="n">autosegment</span><span class="p">,</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos"> 22</span></a>            <span class="s2">&quot;commit&quot;</span><span class="p">:</span> <span class="n">widgets</span><span class="o">.</span><span class="n">commit</span><span class="p">(),</span>
+</span><span id="L-23"><a href="#L-23"><span class="linenos"> 23</span></a>            <span class="s2">&quot;clear&quot;</span><span class="p">:</span> <span class="n">widgets</span><span class="o">.</span><span class="n">clear_volume</span><span class="p">(),</span>
+</span><span id="L-24"><a href="#L-24"><span class="linenos"> 24</span></a>        <span class="p">}</span>
+</span><span id="L-25"><a href="#L-25"><span class="linenos"> 25</span></a>
+</span><span id="L-26"><a href="#L-26"><span class="linenos"> 26</span></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">viewer</span><span class="p">:</span> <span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-27"><a href="#L-27"><span class="linenos"> 27</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_with_decoder</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span><span class="o">.</span><span class="n">decoder</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+</span><span id="L-28"><a href="#L-28"><span class="linenos"> 28</span></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">viewer</span><span class="o">=</span><span class="n">viewer</span><span class="p">,</span> <span class="n">ndim</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos"> 29</span></a>
+</span><span id="L-30"><a href="#L-30"><span class="linenos"> 30</span></a>    <span class="k">def</span> <span class="nf">_update_image</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">segmentation_result</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+</span><span id="L-31"><a href="#L-31"><span class="linenos"> 31</span></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">_update_image</span><span class="p">(</span><span class="n">segmentation_result</span><span class="o">=</span><span class="n">segmentation_result</span><span class="p">)</span>
+</span><span id="L-32"><a href="#L-32"><span class="linenos"> 32</span></a>        <span class="c1"># Load the amg state from the embedding path.</span>
+</span><span id="L-33"><a href="#L-33"><span class="linenos"> 33</span></a>        <span class="n">state</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span>
+</span><span id="L-34"><a href="#L-34"><span class="linenos"> 34</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_with_decoder</span><span class="p">:</span>
+</span><span id="L-35"><a href="#L-35"><span class="linenos"> 35</span></a>            <span class="n">state</span><span class="o">.</span><span class="n">amg_state</span> <span class="o">=</span> <span class="n">_load_is_state</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">embedding_path</span><span class="p">)</span>
+</span><span id="L-36"><a href="#L-36"><span class="linenos"> 36</span></a>        <span class="k">else</span><span class="p">:</span>
+</span><span id="L-37"><a href="#L-37"><span class="linenos"> 37</span></a>            <span class="n">state</span><span class="o">.</span><span class="n">amg_state</span> <span class="o">=</span> <span class="n">_load_amg_state</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">embedding_path</span><span class="p">)</span>
+</span><span id="L-38"><a href="#L-38"><span class="linenos"> 38</span></a>
 </span><span id="L-39"><a href="#L-39"><span class="linenos"> 39</span></a>
-</span><span id="L-40"><a href="#L-40"><span class="linenos"> 40</span></a>    <span class="n">cache_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">embedding_path</span><span class="p">,</span> <span class="s2">&quot;is_state.h5&quot;</span><span class="p">)</span>
-</span><span id="L-41"><a href="#L-41"><span class="linenos"> 41</span></a>    <span class="n">is_state</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;cache_path&quot;</span><span class="p">:</span> <span class="n">cache_path</span><span class="p">}</span>
-</span><span id="L-42"><a href="#L-42"><span class="linenos"> 42</span></a>
-</span><span id="L-43"><a href="#L-43"><span class="linenos"> 43</span></a>    <span class="k">with</span> <span class="n">h5py</span><span class="o">.</span><span class="n">File</span><span class="p">(</span><span class="n">cache_path</span><span class="p">,</span> <span class="s2">&quot;a&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-</span><span id="L-44"><a href="#L-44"><span class="linenos"> 44</span></a>        <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">g</span> <span class="ow">in</span> <span class="n">f</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-</span><span id="L-45"><a href="#L-45"><span class="linenos"> 45</span></a>            <span class="n">i</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">name</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;-&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
-</span><span id="L-46"><a href="#L-46"><span class="linenos"> 46</span></a>            <span class="n">state</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="L-47"><a href="#L-47"><span class="linenos"> 47</span></a>                <span class="s2">&quot;foreground&quot;</span><span class="p">:</span> <span class="n">g</span><span class="p">[</span><span class="s2">&quot;foreground&quot;</span><span class="p">][:],</span>
-</span><span id="L-48"><a href="#L-48"><span class="linenos"> 48</span></a>                <span class="s2">&quot;boundary_distances&quot;</span><span class="p">:</span> <span class="n">g</span><span class="p">[</span><span class="s2">&quot;boundary_distances&quot;</span><span class="p">][:],</span>
-</span><span id="L-49"><a href="#L-49"><span class="linenos"> 49</span></a>                <span class="s2">&quot;center_distances&quot;</span><span class="p">:</span> <span class="n">g</span><span class="p">[</span><span class="s2">&quot;center_distances&quot;</span><span class="p">][:],</span>
-</span><span id="L-50"><a href="#L-50"><span class="linenos"> 50</span></a>            <span class="p">}</span>
-</span><span id="L-51"><a href="#L-51"><span class="linenos"> 51</span></a>            <span class="n">is_state</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">state</span>
-</span><span id="L-52"><a href="#L-52"><span class="linenos"> 52</span></a>
-</span><span id="L-53"><a href="#L-53"><span class="linenos"> 53</span></a>    <span class="k">return</span> <span class="n">is_state</span>
-</span><span id="L-54"><a href="#L-54"><span class="linenos"> 54</span></a>
+</span><span id="L-40"><a href="#L-40"><span class="linenos"> 40</span></a><span class="k">def</span> <span class="nf">annotator_3d</span><span class="p">(</span>
+</span><span id="L-41"><a href="#L-41"><span class="linenos"> 41</span></a>    <span class="n">image</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+</span><span id="L-42"><a href="#L-42"><span class="linenos"> 42</span></a>    <span class="n">embedding_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos"> 43</span></a>    <span class="n">segmentation_result</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-44"><a href="#L-44"><span class="linenos"> 44</span></a>    <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">_DEFAULT_MODEL</span><span class="p">,</span>
+</span><span id="L-45"><a href="#L-45"><span class="linenos"> 45</span></a>    <span class="n">tile_shape</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-46"><a href="#L-46"><span class="linenos"> 46</span></a>    <span class="n">halo</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-47"><a href="#L-47"><span class="linenos"> 47</span></a>    <span class="n">return_viewer</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="L-48"><a href="#L-48"><span class="linenos"> 48</span></a>    <span class="n">viewer</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-49"><a href="#L-49"><span class="linenos"> 49</span></a>    <span class="n">precompute_amg_state</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="L-50"><a href="#L-50"><span class="linenos"> 50</span></a>    <span class="n">checkpoint_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-51"><a href="#L-51"><span class="linenos"> 51</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-52"><a href="#L-52"><span class="linenos"> 52</span></a>    <span class="n">prefer_decoder</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="L-53"><a href="#L-53"><span class="linenos"> 53</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">]:</span>
+</span><span id="L-54"><a href="#L-54"><span class="linenos"> 54</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Start the 3d annotation tool for a given image volume.</span>
 </span><span id="L-55"><a href="#L-55"><span class="linenos"> 55</span></a>
-</span><span id="L-56"><a href="#L-56"><span class="linenos"> 56</span></a><span class="k">class</span> <span class="nc">Annotator3d</span><span class="p">(</span><span class="n">_AnnotatorBase</span><span class="p">):</span>
-</span><span id="L-57"><a href="#L-57"><span class="linenos"> 57</span></a>    <span class="k">def</span> <span class="nf">_get_widgets</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-</span><span id="L-58"><a href="#L-58"><span class="linenos"> 58</span></a>        <span class="n">autosegment</span> <span class="o">=</span> <span class="n">widgets</span><span class="o">.</span><span class="n">AutoSegmentWidget</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_viewer</span><span class="p">,</span> <span class="n">with_decoder</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_with_decoder</span><span class="p">,</span> <span class="n">volumetric</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="L-59"><a href="#L-59"><span class="linenos"> 59</span></a>        <span class="n">segment_nd</span> <span class="o">=</span> <span class="n">widgets</span><span class="o">.</span><span class="n">SegmentNDWidget</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_viewer</span><span class="p">,</span> <span class="n">tracking</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-</span><span id="L-60"><a href="#L-60"><span class="linenos"> 60</span></a>        <span class="k">return</span> <span class="p">{</span>
-</span><span id="L-61"><a href="#L-61"><span class="linenos"> 61</span></a>            <span class="s2">&quot;segment&quot;</span><span class="p">:</span> <span class="n">widgets</span><span class="o">.</span><span class="n">segment_slice</span><span class="p">(),</span>
-</span><span id="L-62"><a href="#L-62"><span class="linenos"> 62</span></a>            <span class="s2">&quot;segment_nd&quot;</span><span class="p">:</span> <span class="n">segment_nd</span><span class="p">,</span>
-</span><span id="L-63"><a href="#L-63"><span class="linenos"> 63</span></a>            <span class="s2">&quot;autosegment&quot;</span><span class="p">:</span> <span class="n">autosegment</span><span class="p">,</span>
-</span><span id="L-64"><a href="#L-64"><span class="linenos"> 64</span></a>            <span class="s2">&quot;commit&quot;</span><span class="p">:</span> <span class="n">widgets</span><span class="o">.</span><span class="n">commit</span><span class="p">(),</span>
-</span><span id="L-65"><a href="#L-65"><span class="linenos"> 65</span></a>            <span class="s2">&quot;clear&quot;</span><span class="p">:</span> <span class="n">widgets</span><span class="o">.</span><span class="n">clear</span><span class="p">(),</span>
-</span><span id="L-66"><a href="#L-66"><span class="linenos"> 66</span></a>        <span class="p">}</span>
-</span><span id="L-67"><a href="#L-67"><span class="linenos"> 67</span></a>
-</span><span id="L-68"><a href="#L-68"><span class="linenos"> 68</span></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">viewer</span><span class="p">:</span> <span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-69"><a href="#L-69"><span class="linenos"> 69</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_with_decoder</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span><span class="o">.</span><span class="n">decoder</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-</span><span id="L-70"><a href="#L-70"><span class="linenos"> 70</span></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">viewer</span><span class="o">=</span><span class="n">viewer</span><span class="p">,</span> <span class="n">ndim</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
-</span><span id="L-71"><a href="#L-71"><span class="linenos"> 71</span></a>
-</span><span id="L-72"><a href="#L-72"><span class="linenos"> 72</span></a>    <span class="k">def</span> <span class="nf">_update_image</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">segmentation_result</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-</span><span id="L-73"><a href="#L-73"><span class="linenos"> 73</span></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">_update_image</span><span class="p">(</span><span class="n">segmentation_result</span><span class="o">=</span><span class="n">segmentation_result</span><span class="p">)</span>
-</span><span id="L-74"><a href="#L-74"><span class="linenos"> 74</span></a>        <span class="c1"># Load the amg state from the embedding path.</span>
-</span><span id="L-75"><a href="#L-75"><span class="linenos"> 75</span></a>        <span class="n">state</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span>
-</span><span id="L-76"><a href="#L-76"><span class="linenos"> 76</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_with_decoder</span><span class="p">:</span>
-</span><span id="L-77"><a href="#L-77"><span class="linenos"> 77</span></a>            <span class="n">state</span><span class="o">.</span><span class="n">amg_state</span> <span class="o">=</span> <span class="n">_load_is_state</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">embedding_path</span><span class="p">)</span>
-</span><span id="L-78"><a href="#L-78"><span class="linenos"> 78</span></a>        <span class="k">else</span><span class="p">:</span>
-</span><span id="L-79"><a href="#L-79"><span class="linenos"> 79</span></a>            <span class="n">state</span><span class="o">.</span><span class="n">amg_state</span> <span class="o">=</span> <span class="n">_load_amg_state</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">embedding_path</span><span class="p">)</span>
-</span><span id="L-80"><a href="#L-80"><span class="linenos"> 80</span></a>
+</span><span id="L-56"><a href="#L-56"><span class="linenos"> 56</span></a><span class="sd">    Args:</span>
+</span><span id="L-57"><a href="#L-57"><span class="linenos"> 57</span></a><span class="sd">        image: The volumetric image data.</span>
+</span><span id="L-58"><a href="#L-58"><span class="linenos"> 58</span></a><span class="sd">        embedding_path: Filepath for saving the precomputed embeddings.</span>
+</span><span id="L-59"><a href="#L-59"><span class="linenos"> 59</span></a><span class="sd">        segmentation_result: An initial segmentation to load.</span>
+</span><span id="L-60"><a href="#L-60"><span class="linenos"> 60</span></a><span class="sd">            This can be used to correct segmentations with Segment Anything or to save and load progress.</span>
+</span><span id="L-61"><a href="#L-61"><span class="linenos"> 61</span></a><span class="sd">            The segmentation will be loaded as the &#39;committed_objects&#39; layer.</span>
+</span><span id="L-62"><a href="#L-62"><span class="linenos"> 62</span></a><span class="sd">        model_type: The Segment Anything model to use. For details on the available models check out</span>
+</span><span id="L-63"><a href="#L-63"><span class="linenos"> 63</span></a><span class="sd">            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.</span>
+</span><span id="L-64"><a href="#L-64"><span class="linenos"> 64</span></a><span class="sd">        tile_shape: Shape of tiles for tiled embedding prediction.</span>
+</span><span id="L-65"><a href="#L-65"><span class="linenos"> 65</span></a><span class="sd">            If `None` then the whole image is passed to Segment Anything.</span>
+</span><span id="L-66"><a href="#L-66"><span class="linenos"> 66</span></a><span class="sd">        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.</span>
+</span><span id="L-67"><a href="#L-67"><span class="linenos"> 67</span></a><span class="sd">        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.</span>
+</span><span id="L-68"><a href="#L-68"><span class="linenos"> 68</span></a><span class="sd">        viewer: The viewer to which the SegmentAnything functionality should be added.</span>
+</span><span id="L-69"><a href="#L-69"><span class="linenos"> 69</span></a><span class="sd">            This enables using a pre-initialized viewer.</span>
+</span><span id="L-70"><a href="#L-70"><span class="linenos"> 70</span></a><span class="sd">        precompute_amg_state: Whether to precompute the state for automatic mask generation.</span>
+</span><span id="L-71"><a href="#L-71"><span class="linenos"> 71</span></a><span class="sd">            This will take more time when precomputing embeddings, but will then make</span>
+</span><span id="L-72"><a href="#L-72"><span class="linenos"> 72</span></a><span class="sd">            automatic mask generation much faster.</span>
+</span><span id="L-73"><a href="#L-73"><span class="linenos"> 73</span></a><span class="sd">        checkpoint_path: Path to a custom checkpoint from which to load the SAM model.</span>
+</span><span id="L-74"><a href="#L-74"><span class="linenos"> 74</span></a><span class="sd">        device: The computational device to use for the SAM model.</span>
+</span><span id="L-75"><a href="#L-75"><span class="linenos"> 75</span></a><span class="sd">        prefer_decoder: Whether to use decoder based instance segmentation if</span>
+</span><span id="L-76"><a href="#L-76"><span class="linenos"> 76</span></a><span class="sd">            the model used has an additional decoder for instance segmentation.</span>
+</span><span id="L-77"><a href="#L-77"><span class="linenos"> 77</span></a>
+</span><span id="L-78"><a href="#L-78"><span class="linenos"> 78</span></a><span class="sd">    Returns:</span>
+</span><span id="L-79"><a href="#L-79"><span class="linenos"> 79</span></a><span class="sd">        The napari viewer, only returned if `return_viewer=True`.</span>
+</span><span id="L-80"><a href="#L-80"><span class="linenos"> 80</span></a><span class="sd">    &quot;&quot;&quot;</span>
 </span><span id="L-81"><a href="#L-81"><span class="linenos"> 81</span></a>
-</span><span id="L-82"><a href="#L-82"><span class="linenos"> 82</span></a><span class="k">def</span> <span class="nf">annotator_3d</span><span class="p">(</span>
-</span><span id="L-83"><a href="#L-83"><span class="linenos"> 83</span></a>    <span class="n">image</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
-</span><span id="L-84"><a href="#L-84"><span class="linenos"> 84</span></a>    <span class="n">embedding_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-85"><a href="#L-85"><span class="linenos"> 85</span></a>    <span class="n">segmentation_result</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-86"><a href="#L-86"><span class="linenos"> 86</span></a>    <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">_DEFAULT_MODEL</span><span class="p">,</span>
-</span><span id="L-87"><a href="#L-87"><span class="linenos"> 87</span></a>    <span class="n">tile_shape</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-88"><a href="#L-88"><span class="linenos"> 88</span></a>    <span class="n">halo</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-89"><a href="#L-89"><span class="linenos"> 89</span></a>    <span class="n">return_viewer</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="L-90"><a href="#L-90"><span class="linenos"> 90</span></a>    <span class="n">viewer</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-91"><a href="#L-91"><span class="linenos"> 91</span></a>    <span class="n">precompute_amg_state</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="L-92"><a href="#L-92"><span class="linenos"> 92</span></a>    <span class="n">checkpoint_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-93"><a href="#L-93"><span class="linenos"> 93</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-94"><a href="#L-94"><span class="linenos"> 94</span></a>    <span class="n">prefer_decoder</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-</span><span id="L-95"><a href="#L-95"><span class="linenos"> 95</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">]:</span>
-</span><span id="L-96"><a href="#L-96"><span class="linenos"> 96</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Start the 3d annotation tool for a given image volume.</span>
-</span><span id="L-97"><a href="#L-97"><span class="linenos"> 97</span></a>
-</span><span id="L-98"><a href="#L-98"><span class="linenos"> 98</span></a><span class="sd">    Args:</span>
-</span><span id="L-99"><a href="#L-99"><span class="linenos"> 99</span></a><span class="sd">        image: The volumetric image data.</span>
-</span><span id="L-100"><a href="#L-100"><span class="linenos">100</span></a><span class="sd">        embedding_path: Filepath for saving the precomputed embeddings.</span>
-</span><span id="L-101"><a href="#L-101"><span class="linenos">101</span></a><span class="sd">        segmentation_result: An initial segmentation to load.</span>
-</span><span id="L-102"><a href="#L-102"><span class="linenos">102</span></a><span class="sd">            This can be used to correct segmentations with Segment Anything or to save and load progress.</span>
-</span><span id="L-103"><a href="#L-103"><span class="linenos">103</span></a><span class="sd">            The segmentation will be loaded as the &#39;committed_objects&#39; layer.</span>
-</span><span id="L-104"><a href="#L-104"><span class="linenos">104</span></a><span class="sd">        model_type: The Segment Anything model to use. For details on the available models check out</span>
-</span><span id="L-105"><a href="#L-105"><span class="linenos">105</span></a><span class="sd">            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.</span>
-</span><span id="L-106"><a href="#L-106"><span class="linenos">106</span></a><span class="sd">        tile_shape: Shape of tiles for tiled embedding prediction.</span>
-</span><span id="L-107"><a href="#L-107"><span class="linenos">107</span></a><span class="sd">            If `None` then the whole image is passed to Segment Anything.</span>
-</span><span id="L-108"><a href="#L-108"><span class="linenos">108</span></a><span class="sd">        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.</span>
-</span><span id="L-109"><a href="#L-109"><span class="linenos">109</span></a><span class="sd">        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.</span>
-</span><span id="L-110"><a href="#L-110"><span class="linenos">110</span></a><span class="sd">        viewer: The viewer to which the SegmentAnything functionality should be added.</span>
-</span><span id="L-111"><a href="#L-111"><span class="linenos">111</span></a><span class="sd">            This enables using a pre-initialized viewer.</span>
-</span><span id="L-112"><a href="#L-112"><span class="linenos">112</span></a><span class="sd">        precompute_amg_state: Whether to precompute the state for automatic mask generation.</span>
-</span><span id="L-113"><a href="#L-113"><span class="linenos">113</span></a><span class="sd">            This will take more time when precomputing embeddings, but will then make</span>
-</span><span id="L-114"><a href="#L-114"><span class="linenos">114</span></a><span class="sd">            automatic mask generation much faster.</span>
-</span><span id="L-115"><a href="#L-115"><span class="linenos">115</span></a><span class="sd">        checkpoint_path: Path to a custom checkpoint from which to load the SAM model.</span>
-</span><span id="L-116"><a href="#L-116"><span class="linenos">116</span></a><span class="sd">        device: The computational device to use for the SAM model.</span>
-</span><span id="L-117"><a href="#L-117"><span class="linenos">117</span></a><span class="sd">        prefer_decoder: Whether to use decoder based instance segmentation if</span>
-</span><span id="L-118"><a href="#L-118"><span class="linenos">118</span></a><span class="sd">            the model used has an additional decoder for instance segmentation.</span>
-</span><span id="L-119"><a href="#L-119"><span class="linenos">119</span></a>
-</span><span id="L-120"><a href="#L-120"><span class="linenos">120</span></a><span class="sd">    Returns:</span>
-</span><span id="L-121"><a href="#L-121"><span class="linenos">121</span></a><span class="sd">        The napari viewer, only returned if `return_viewer=True`.</span>
-</span><span id="L-122"><a href="#L-122"><span class="linenos">122</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-123"><a href="#L-123"><span class="linenos">123</span></a>
-</span><span id="L-124"><a href="#L-124"><span class="linenos">124</span></a>    <span class="c1"># Initialize the predictor state.</span>
-</span><span id="L-125"><a href="#L-125"><span class="linenos">125</span></a>    <span class="n">state</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span>
-</span><span id="L-126"><a href="#L-126"><span class="linenos">126</span></a>    <span class="n">state</span><span class="o">.</span><span class="n">image_shape</span> <span class="o">=</span> <span class="n">image</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="k">if</span> <span class="n">image</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">4</span> <span class="k">else</span> <span class="n">image</span><span class="o">.</span><span class="n">shape</span>
-</span><span id="L-127"><a href="#L-127"><span class="linenos">127</span></a>    <span class="n">state</span><span class="o">.</span><span class="n">initialize_predictor</span><span class="p">(</span>
-</span><span id="L-128"><a href="#L-128"><span class="linenos">128</span></a>        <span class="n">image</span><span class="p">,</span> <span class="n">model_type</span><span class="o">=</span><span class="n">model_type</span><span class="p">,</span> <span class="n">save_path</span><span class="o">=</span><span class="n">embedding_path</span><span class="p">,</span>
-</span><span id="L-129"><a href="#L-129"><span class="linenos">129</span></a>        <span class="n">halo</span><span class="o">=</span><span class="n">halo</span><span class="p">,</span> <span class="n">tile_shape</span><span class="o">=</span><span class="n">tile_shape</span><span class="p">,</span> <span class="n">ndim</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">precompute_amg_state</span><span class="o">=</span><span class="n">precompute_amg_state</span><span class="p">,</span>
-</span><span id="L-130"><a href="#L-130"><span class="linenos">130</span></a>        <span class="n">checkpoint_path</span><span class="o">=</span><span class="n">checkpoint_path</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">prefer_decoder</span><span class="o">=</span><span class="n">prefer_decoder</span><span class="p">,</span>
-</span><span id="L-131"><a href="#L-131"><span class="linenos">131</span></a>    <span class="p">)</span>
-</span><span id="L-132"><a href="#L-132"><span class="linenos">132</span></a>
-</span><span id="L-133"><a href="#L-133"><span class="linenos">133</span></a>    <span class="k">if</span> <span class="n">viewer</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-134"><a href="#L-134"><span class="linenos">134</span></a>        <span class="n">viewer</span> <span class="o">=</span> <span class="n">napari</span><span class="o">.</span><span class="n">Viewer</span><span class="p">()</span>
-</span><span id="L-135"><a href="#L-135"><span class="linenos">135</span></a>
-</span><span id="L-136"><a href="#L-136"><span class="linenos">136</span></a>    <span class="n">viewer</span><span class="o">.</span><span class="n">add_image</span><span class="p">(</span><span class="n">image</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">&quot;image&quot;</span><span class="p">)</span>
-</span><span id="L-137"><a href="#L-137"><span class="linenos">137</span></a>    <span class="n">annotator</span> <span class="o">=</span> <span class="n">Annotator3d</span><span class="p">(</span><span class="n">viewer</span><span class="p">)</span>
-</span><span id="L-138"><a href="#L-138"><span class="linenos">138</span></a>
-</span><span id="L-139"><a href="#L-139"><span class="linenos">139</span></a>    <span class="c1"># Trigger layer update of the annotator so that layers have the correct shape.</span>
-</span><span id="L-140"><a href="#L-140"><span class="linenos">140</span></a>    <span class="c1"># And initialize the &#39;committed_objects&#39; with the segmentation result if it was given.</span>
-</span><span id="L-141"><a href="#L-141"><span class="linenos">141</span></a>    <span class="n">annotator</span><span class="o">.</span><span class="n">_update_image</span><span class="p">(</span><span class="n">segmentation_result</span><span class="o">=</span><span class="n">segmentation_result</span><span class="p">)</span>
-</span><span id="L-142"><a href="#L-142"><span class="linenos">142</span></a>
-</span><span id="L-143"><a href="#L-143"><span class="linenos">143</span></a>    <span class="c1"># Add the annotator widget to the viewer and sync widgets.</span>
-</span><span id="L-144"><a href="#L-144"><span class="linenos">144</span></a>    <span class="n">viewer</span><span class="o">.</span><span class="n">window</span><span class="o">.</span><span class="n">add_dock_widget</span><span class="p">(</span><span class="n">annotator</span><span class="p">)</span>
-</span><span id="L-145"><a href="#L-145"><span class="linenos">145</span></a>    <span class="n">_sync_embedding_widget</span><span class="p">(</span>
-</span><span id="L-146"><a href="#L-146"><span class="linenos">146</span></a>        <span class="n">state</span><span class="o">.</span><span class="n">widgets</span><span class="p">[</span><span class="s2">&quot;embeddings&quot;</span><span class="p">],</span> <span class="n">model_type</span><span class="p">,</span>
-</span><span id="L-147"><a href="#L-147"><span class="linenos">147</span></a>        <span class="n">save_path</span><span class="o">=</span><span class="n">embedding_path</span><span class="p">,</span> <span class="n">checkpoint_path</span><span class="o">=</span><span class="n">checkpoint_path</span><span class="p">,</span>
-</span><span id="L-148"><a href="#L-148"><span class="linenos">148</span></a>        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">tile_shape</span><span class="o">=</span><span class="n">tile_shape</span><span class="p">,</span> <span class="n">halo</span><span class="o">=</span><span class="n">halo</span>
-</span><span id="L-149"><a href="#L-149"><span class="linenos">149</span></a>    <span class="p">)</span>
-</span><span id="L-150"><a href="#L-150"><span class="linenos">150</span></a>
-</span><span id="L-151"><a href="#L-151"><span class="linenos">151</span></a>    <span class="k">if</span> <span class="n">return_viewer</span><span class="p">:</span>
-</span><span id="L-152"><a href="#L-152"><span class="linenos">152</span></a>        <span class="k">return</span> <span class="n">viewer</span>
-</span><span id="L-153"><a href="#L-153"><span class="linenos">153</span></a>
-</span><span id="L-154"><a href="#L-154"><span class="linenos">154</span></a>    <span class="n">napari</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
-</span><span id="L-155"><a href="#L-155"><span class="linenos">155</span></a>
-</span><span id="L-156"><a href="#L-156"><span class="linenos">156</span></a>
-</span><span id="L-157"><a href="#L-157"><span class="linenos">157</span></a><span class="k">def</span> <span class="nf">main</span><span class="p">():</span>
-</span><span id="L-158"><a href="#L-158"><span class="linenos">158</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;@private&quot;&quot;&quot;</span>
-</span><span id="L-159"><a href="#L-159"><span class="linenos">159</span></a>    <span class="n">parser</span> <span class="o">=</span> <span class="n">_initialize_parser</span><span class="p">(</span><span class="n">description</span><span class="o">=</span><span class="s2">&quot;Run interactive segmentation for an image volume.&quot;</span><span class="p">)</span>
-</span><span id="L-160"><a href="#L-160"><span class="linenos">160</span></a>    <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">()</span>
-</span><span id="L-161"><a href="#L-161"><span class="linenos">161</span></a>    <span class="n">image</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">load_image_data</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">input</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">key</span><span class="p">)</span>
-</span><span id="L-162"><a href="#L-162"><span class="linenos">162</span></a>
-</span><span id="L-163"><a href="#L-163"><span class="linenos">163</span></a>    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">segmentation_result</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-164"><a href="#L-164"><span class="linenos">164</span></a>        <span class="n">segmentation_result</span> <span class="o">=</span> <span class="kc">None</span>
-</span><span id="L-165"><a href="#L-165"><span class="linenos">165</span></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="L-166"><a href="#L-166"><span class="linenos">166</span></a>        <span class="n">segmentation_result</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">load_image_data</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">segmentation_result</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">segmentation_key</span><span class="p">)</span>
-</span><span id="L-167"><a href="#L-167"><span class="linenos">167</span></a>
-</span><span id="L-168"><a href="#L-168"><span class="linenos">168</span></a>    <span class="n">annotator_3d</span><span class="p">(</span>
-</span><span id="L-169"><a href="#L-169"><span class="linenos">169</span></a>        <span class="n">image</span><span class="p">,</span> <span class="n">embedding_path</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">embedding_path</span><span class="p">,</span>
-</span><span id="L-170"><a href="#L-170"><span class="linenos">170</span></a>        <span class="n">segmentation_result</span><span class="o">=</span><span class="n">segmentation_result</span><span class="p">,</span>
-</span><span id="L-171"><a href="#L-171"><span class="linenos">171</span></a>        <span class="n">model_type</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">model_type</span><span class="p">,</span> <span class="n">tile_shape</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">tile_shape</span><span class="p">,</span> <span class="n">halo</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">halo</span><span class="p">,</span>
-</span><span id="L-172"><a href="#L-172"><span class="linenos">172</span></a>        <span class="n">checkpoint_path</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">checkpoint</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">device</span><span class="p">,</span>
-</span><span id="L-173"><a href="#L-173"><span class="linenos">173</span></a>        <span class="n">precompute_amg_state</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">precompute_amg_state</span><span class="p">,</span> <span class="n">prefer_decoder</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">prefer_decoder</span><span class="p">,</span>
-</span><span id="L-174"><a href="#L-174"><span class="linenos">174</span></a>    <span class="p">)</span>
+</span><span id="L-82"><a href="#L-82"><span class="linenos"> 82</span></a>    <span class="c1"># Initialize the predictor state.</span>
+</span><span id="L-83"><a href="#L-83"><span class="linenos"> 83</span></a>    <span class="n">state</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span>
+</span><span id="L-84"><a href="#L-84"><span class="linenos"> 84</span></a>    <span class="n">state</span><span class="o">.</span><span class="n">image_shape</span> <span class="o">=</span> <span class="n">image</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="k">if</span> <span class="n">image</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">4</span> <span class="k">else</span> <span class="n">image</span><span class="o">.</span><span class="n">shape</span>
+</span><span id="L-85"><a href="#L-85"><span class="linenos"> 85</span></a>    <span class="n">state</span><span class="o">.</span><span class="n">initialize_predictor</span><span class="p">(</span>
+</span><span id="L-86"><a href="#L-86"><span class="linenos"> 86</span></a>        <span class="n">image</span><span class="p">,</span> <span class="n">model_type</span><span class="o">=</span><span class="n">model_type</span><span class="p">,</span> <span class="n">save_path</span><span class="o">=</span><span class="n">embedding_path</span><span class="p">,</span>
+</span><span id="L-87"><a href="#L-87"><span class="linenos"> 87</span></a>        <span class="n">halo</span><span class="o">=</span><span class="n">halo</span><span class="p">,</span> <span class="n">tile_shape</span><span class="o">=</span><span class="n">tile_shape</span><span class="p">,</span> <span class="n">ndim</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">precompute_amg_state</span><span class="o">=</span><span class="n">precompute_amg_state</span><span class="p">,</span>
+</span><span id="L-88"><a href="#L-88"><span class="linenos"> 88</span></a>        <span class="n">checkpoint_path</span><span class="o">=</span><span class="n">checkpoint_path</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">prefer_decoder</span><span class="o">=</span><span class="n">prefer_decoder</span><span class="p">,</span>
+</span><span id="L-89"><a href="#L-89"><span class="linenos"> 89</span></a>    <span class="p">)</span>
+</span><span id="L-90"><a href="#L-90"><span class="linenos"> 90</span></a>
+</span><span id="L-91"><a href="#L-91"><span class="linenos"> 91</span></a>    <span class="k">if</span> <span class="n">viewer</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-92"><a href="#L-92"><span class="linenos"> 92</span></a>        <span class="n">viewer</span> <span class="o">=</span> <span class="n">napari</span><span class="o">.</span><span class="n">Viewer</span><span class="p">()</span>
+</span><span id="L-93"><a href="#L-93"><span class="linenos"> 93</span></a>
+</span><span id="L-94"><a href="#L-94"><span class="linenos"> 94</span></a>    <span class="n">viewer</span><span class="o">.</span><span class="n">add_image</span><span class="p">(</span><span class="n">image</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">&quot;image&quot;</span><span class="p">)</span>
+</span><span id="L-95"><a href="#L-95"><span class="linenos"> 95</span></a>    <span class="n">annotator</span> <span class="o">=</span> <span class="n">Annotator3d</span><span class="p">(</span><span class="n">viewer</span><span class="p">)</span>
+</span><span id="L-96"><a href="#L-96"><span class="linenos"> 96</span></a>
+</span><span id="L-97"><a href="#L-97"><span class="linenos"> 97</span></a>    <span class="c1"># Trigger layer update of the annotator so that layers have the correct shape.</span>
+</span><span id="L-98"><a href="#L-98"><span class="linenos"> 98</span></a>    <span class="c1"># And initialize the &#39;committed_objects&#39; with the segmentation result if it was given.</span>
+</span><span id="L-99"><a href="#L-99"><span class="linenos"> 99</span></a>    <span class="n">annotator</span><span class="o">.</span><span class="n">_update_image</span><span class="p">(</span><span class="n">segmentation_result</span><span class="o">=</span><span class="n">segmentation_result</span><span class="p">)</span>
+</span><span id="L-100"><a href="#L-100"><span class="linenos">100</span></a>
+</span><span id="L-101"><a href="#L-101"><span class="linenos">101</span></a>    <span class="c1"># Add the annotator widget to the viewer and sync widgets.</span>
+</span><span id="L-102"><a href="#L-102"><span class="linenos">102</span></a>    <span class="n">viewer</span><span class="o">.</span><span class="n">window</span><span class="o">.</span><span class="n">add_dock_widget</span><span class="p">(</span><span class="n">annotator</span><span class="p">)</span>
+</span><span id="L-103"><a href="#L-103"><span class="linenos">103</span></a>    <span class="n">_sync_embedding_widget</span><span class="p">(</span>
+</span><span id="L-104"><a href="#L-104"><span class="linenos">104</span></a>        <span class="n">state</span><span class="o">.</span><span class="n">widgets</span><span class="p">[</span><span class="s2">&quot;embeddings&quot;</span><span class="p">],</span> <span class="n">model_type</span><span class="p">,</span>
+</span><span id="L-105"><a href="#L-105"><span class="linenos">105</span></a>        <span class="n">save_path</span><span class="o">=</span><span class="n">embedding_path</span><span class="p">,</span> <span class="n">checkpoint_path</span><span class="o">=</span><span class="n">checkpoint_path</span><span class="p">,</span>
+</span><span id="L-106"><a href="#L-106"><span class="linenos">106</span></a>        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">tile_shape</span><span class="o">=</span><span class="n">tile_shape</span><span class="p">,</span> <span class="n">halo</span><span class="o">=</span><span class="n">halo</span>
+</span><span id="L-107"><a href="#L-107"><span class="linenos">107</span></a>    <span class="p">)</span>
+</span><span id="L-108"><a href="#L-108"><span class="linenos">108</span></a>
+</span><span id="L-109"><a href="#L-109"><span class="linenos">109</span></a>    <span class="k">if</span> <span class="n">return_viewer</span><span class="p">:</span>
+</span><span id="L-110"><a href="#L-110"><span class="linenos">110</span></a>        <span class="k">return</span> <span class="n">viewer</span>
+</span><span id="L-111"><a href="#L-111"><span class="linenos">111</span></a>
+</span><span id="L-112"><a href="#L-112"><span class="linenos">112</span></a>    <span class="n">napari</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
+</span><span id="L-113"><a href="#L-113"><span class="linenos">113</span></a>
+</span><span id="L-114"><a href="#L-114"><span class="linenos">114</span></a>
+</span><span id="L-115"><a href="#L-115"><span class="linenos">115</span></a><span class="k">def</span> <span class="nf">main</span><span class="p">():</span>
+</span><span id="L-116"><a href="#L-116"><span class="linenos">116</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;@private&quot;&quot;&quot;</span>
+</span><span id="L-117"><a href="#L-117"><span class="linenos">117</span></a>    <span class="n">parser</span> <span class="o">=</span> <span class="n">_initialize_parser</span><span class="p">(</span><span class="n">description</span><span class="o">=</span><span class="s2">&quot;Run interactive segmentation for an image volume.&quot;</span><span class="p">)</span>
+</span><span id="L-118"><a href="#L-118"><span class="linenos">118</span></a>    <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">()</span>
+</span><span id="L-119"><a href="#L-119"><span class="linenos">119</span></a>    <span class="n">image</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">load_image_data</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">input</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">key</span><span class="p">)</span>
+</span><span id="L-120"><a href="#L-120"><span class="linenos">120</span></a>
+</span><span id="L-121"><a href="#L-121"><span class="linenos">121</span></a>    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">segmentation_result</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-122"><a href="#L-122"><span class="linenos">122</span></a>        <span class="n">segmentation_result</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="L-123"><a href="#L-123"><span class="linenos">123</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="L-124"><a href="#L-124"><span class="linenos">124</span></a>        <span class="n">segmentation_result</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">load_image_data</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">segmentation_result</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">segmentation_key</span><span class="p">)</span>
+</span><span id="L-125"><a href="#L-125"><span class="linenos">125</span></a>
+</span><span id="L-126"><a href="#L-126"><span class="linenos">126</span></a>    <span class="n">annotator_3d</span><span class="p">(</span>
+</span><span id="L-127"><a href="#L-127"><span class="linenos">127</span></a>        <span class="n">image</span><span class="p">,</span> <span class="n">embedding_path</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">embedding_path</span><span class="p">,</span>
+</span><span id="L-128"><a href="#L-128"><span class="linenos">128</span></a>        <span class="n">segmentation_result</span><span class="o">=</span><span class="n">segmentation_result</span><span class="p">,</span>
+</span><span id="L-129"><a href="#L-129"><span class="linenos">129</span></a>        <span class="n">model_type</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">model_type</span><span class="p">,</span> <span class="n">tile_shape</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">tile_shape</span><span class="p">,</span> <span class="n">halo</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">halo</span><span class="p">,</span>
+</span><span id="L-130"><a href="#L-130"><span class="linenos">130</span></a>        <span class="n">checkpoint_path</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">checkpoint</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">device</span><span class="p">,</span>
+</span><span id="L-131"><a href="#L-131"><span class="linenos">131</span></a>        <span class="n">precompute_amg_state</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">precompute_amg_state</span><span class="p">,</span> <span class="n">prefer_decoder</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">prefer_decoder</span><span class="p">,</span>
+</span><span id="L-132"><a href="#L-132"><span class="linenos">132</span></a>    <span class="p">)</span>
 </span></pre></div>
 
 
@@ -253,30 +211,30 @@
 
     </div>
     <a class="headerlink" href="#Annotator3d"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="Annotator3d-57"><a href="#Annotator3d-57"><span class="linenos">57</span></a><span class="k">class</span> <span class="nc">Annotator3d</span><span class="p">(</span><span class="n">_AnnotatorBase</span><span class="p">):</span>
-</span><span id="Annotator3d-58"><a href="#Annotator3d-58"><span class="linenos">58</span></a>    <span class="k">def</span> <span class="nf">_get_widgets</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-</span><span id="Annotator3d-59"><a href="#Annotator3d-59"><span class="linenos">59</span></a>        <span class="n">autosegment</span> <span class="o">=</span> <span class="n">widgets</span><span class="o">.</span><span class="n">AutoSegmentWidget</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_viewer</span><span class="p">,</span> <span class="n">with_decoder</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_with_decoder</span><span class="p">,</span> <span class="n">volumetric</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="Annotator3d-60"><a href="#Annotator3d-60"><span class="linenos">60</span></a>        <span class="n">segment_nd</span> <span class="o">=</span> <span class="n">widgets</span><span class="o">.</span><span class="n">SegmentNDWidget</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_viewer</span><span class="p">,</span> <span class="n">tracking</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-</span><span id="Annotator3d-61"><a href="#Annotator3d-61"><span class="linenos">61</span></a>        <span class="k">return</span> <span class="p">{</span>
-</span><span id="Annotator3d-62"><a href="#Annotator3d-62"><span class="linenos">62</span></a>            <span class="s2">&quot;segment&quot;</span><span class="p">:</span> <span class="n">widgets</span><span class="o">.</span><span class="n">segment_slice</span><span class="p">(),</span>
-</span><span id="Annotator3d-63"><a href="#Annotator3d-63"><span class="linenos">63</span></a>            <span class="s2">&quot;segment_nd&quot;</span><span class="p">:</span> <span class="n">segment_nd</span><span class="p">,</span>
-</span><span id="Annotator3d-64"><a href="#Annotator3d-64"><span class="linenos">64</span></a>            <span class="s2">&quot;autosegment&quot;</span><span class="p">:</span> <span class="n">autosegment</span><span class="p">,</span>
-</span><span id="Annotator3d-65"><a href="#Annotator3d-65"><span class="linenos">65</span></a>            <span class="s2">&quot;commit&quot;</span><span class="p">:</span> <span class="n">widgets</span><span class="o">.</span><span class="n">commit</span><span class="p">(),</span>
-</span><span id="Annotator3d-66"><a href="#Annotator3d-66"><span class="linenos">66</span></a>            <span class="s2">&quot;clear&quot;</span><span class="p">:</span> <span class="n">widgets</span><span class="o">.</span><span class="n">clear</span><span class="p">(),</span>
-</span><span id="Annotator3d-67"><a href="#Annotator3d-67"><span class="linenos">67</span></a>        <span class="p">}</span>
-</span><span id="Annotator3d-68"><a href="#Annotator3d-68"><span class="linenos">68</span></a>
-</span><span id="Annotator3d-69"><a href="#Annotator3d-69"><span class="linenos">69</span></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">viewer</span><span class="p">:</span> <span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="Annotator3d-70"><a href="#Annotator3d-70"><span class="linenos">70</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_with_decoder</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span><span class="o">.</span><span class="n">decoder</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-</span><span id="Annotator3d-71"><a href="#Annotator3d-71"><span class="linenos">71</span></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">viewer</span><span class="o">=</span><span class="n">viewer</span><span class="p">,</span> <span class="n">ndim</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
-</span><span id="Annotator3d-72"><a href="#Annotator3d-72"><span class="linenos">72</span></a>
-</span><span id="Annotator3d-73"><a href="#Annotator3d-73"><span class="linenos">73</span></a>    <span class="k">def</span> <span class="nf">_update_image</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">segmentation_result</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-</span><span id="Annotator3d-74"><a href="#Annotator3d-74"><span class="linenos">74</span></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">_update_image</span><span class="p">(</span><span class="n">segmentation_result</span><span class="o">=</span><span class="n">segmentation_result</span><span class="p">)</span>
-</span><span id="Annotator3d-75"><a href="#Annotator3d-75"><span class="linenos">75</span></a>        <span class="c1"># Load the amg state from the embedding path.</span>
-</span><span id="Annotator3d-76"><a href="#Annotator3d-76"><span class="linenos">76</span></a>        <span class="n">state</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span>
-</span><span id="Annotator3d-77"><a href="#Annotator3d-77"><span class="linenos">77</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_with_decoder</span><span class="p">:</span>
-</span><span id="Annotator3d-78"><a href="#Annotator3d-78"><span class="linenos">78</span></a>            <span class="n">state</span><span class="o">.</span><span class="n">amg_state</span> <span class="o">=</span> <span class="n">_load_is_state</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">embedding_path</span><span class="p">)</span>
-</span><span id="Annotator3d-79"><a href="#Annotator3d-79"><span class="linenos">79</span></a>        <span class="k">else</span><span class="p">:</span>
-</span><span id="Annotator3d-80"><a href="#Annotator3d-80"><span class="linenos">80</span></a>            <span class="n">state</span><span class="o">.</span><span class="n">amg_state</span> <span class="o">=</span> <span class="n">_load_amg_state</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">embedding_path</span><span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="Annotator3d-15"><a href="#Annotator3d-15"><span class="linenos">15</span></a><span class="k">class</span> <span class="nc">Annotator3d</span><span class="p">(</span><span class="n">_AnnotatorBase</span><span class="p">):</span>
+</span><span id="Annotator3d-16"><a href="#Annotator3d-16"><span class="linenos">16</span></a>    <span class="k">def</span> <span class="nf">_get_widgets</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span id="Annotator3d-17"><a href="#Annotator3d-17"><span class="linenos">17</span></a>        <span class="n">autosegment</span> <span class="o">=</span> <span class="n">widgets</span><span class="o">.</span><span class="n">AutoSegmentWidget</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_viewer</span><span class="p">,</span> <span class="n">with_decoder</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_with_decoder</span><span class="p">,</span> <span class="n">volumetric</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="Annotator3d-18"><a href="#Annotator3d-18"><span class="linenos">18</span></a>        <span class="n">segment_nd</span> <span class="o">=</span> <span class="n">widgets</span><span class="o">.</span><span class="n">SegmentNDWidget</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_viewer</span><span class="p">,</span> <span class="n">tracking</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span><span id="Annotator3d-19"><a href="#Annotator3d-19"><span class="linenos">19</span></a>        <span class="k">return</span> <span class="p">{</span>
+</span><span id="Annotator3d-20"><a href="#Annotator3d-20"><span class="linenos">20</span></a>            <span class="s2">&quot;segment&quot;</span><span class="p">:</span> <span class="n">widgets</span><span class="o">.</span><span class="n">segment_slice</span><span class="p">(),</span>
+</span><span id="Annotator3d-21"><a href="#Annotator3d-21"><span class="linenos">21</span></a>            <span class="s2">&quot;segment_nd&quot;</span><span class="p">:</span> <span class="n">segment_nd</span><span class="p">,</span>
+</span><span id="Annotator3d-22"><a href="#Annotator3d-22"><span class="linenos">22</span></a>            <span class="s2">&quot;autosegment&quot;</span><span class="p">:</span> <span class="n">autosegment</span><span class="p">,</span>
+</span><span id="Annotator3d-23"><a href="#Annotator3d-23"><span class="linenos">23</span></a>            <span class="s2">&quot;commit&quot;</span><span class="p">:</span> <span class="n">widgets</span><span class="o">.</span><span class="n">commit</span><span class="p">(),</span>
+</span><span id="Annotator3d-24"><a href="#Annotator3d-24"><span class="linenos">24</span></a>            <span class="s2">&quot;clear&quot;</span><span class="p">:</span> <span class="n">widgets</span><span class="o">.</span><span class="n">clear_volume</span><span class="p">(),</span>
+</span><span id="Annotator3d-25"><a href="#Annotator3d-25"><span class="linenos">25</span></a>        <span class="p">}</span>
+</span><span id="Annotator3d-26"><a href="#Annotator3d-26"><span class="linenos">26</span></a>
+</span><span id="Annotator3d-27"><a href="#Annotator3d-27"><span class="linenos">27</span></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">viewer</span><span class="p">:</span> <span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="Annotator3d-28"><a href="#Annotator3d-28"><span class="linenos">28</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_with_decoder</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span><span class="o">.</span><span class="n">decoder</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+</span><span id="Annotator3d-29"><a href="#Annotator3d-29"><span class="linenos">29</span></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">viewer</span><span class="o">=</span><span class="n">viewer</span><span class="p">,</span> <span class="n">ndim</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+</span><span id="Annotator3d-30"><a href="#Annotator3d-30"><span class="linenos">30</span></a>
+</span><span id="Annotator3d-31"><a href="#Annotator3d-31"><span class="linenos">31</span></a>    <span class="k">def</span> <span class="nf">_update_image</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">segmentation_result</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+</span><span id="Annotator3d-32"><a href="#Annotator3d-32"><span class="linenos">32</span></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">_update_image</span><span class="p">(</span><span class="n">segmentation_result</span><span class="o">=</span><span class="n">segmentation_result</span><span class="p">)</span>
+</span><span id="Annotator3d-33"><a href="#Annotator3d-33"><span class="linenos">33</span></a>        <span class="c1"># Load the amg state from the embedding path.</span>
+</span><span id="Annotator3d-34"><a href="#Annotator3d-34"><span class="linenos">34</span></a>        <span class="n">state</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span>
+</span><span id="Annotator3d-35"><a href="#Annotator3d-35"><span class="linenos">35</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_with_decoder</span><span class="p">:</span>
+</span><span id="Annotator3d-36"><a href="#Annotator3d-36"><span class="linenos">36</span></a>            <span class="n">state</span><span class="o">.</span><span class="n">amg_state</span> <span class="o">=</span> <span class="n">_load_is_state</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">embedding_path</span><span class="p">)</span>
+</span><span id="Annotator3d-37"><a href="#Annotator3d-37"><span class="linenos">37</span></a>        <span class="k">else</span><span class="p">:</span>
+</span><span id="Annotator3d-38"><a href="#Annotator3d-38"><span class="linenos">38</span></a>            <span class="n">state</span><span class="o">.</span><span class="n">amg_state</span> <span class="o">=</span> <span class="n">_load_amg_state</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">embedding_path</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -297,9 +255,9 @@ The annotators differ in their data dimensionality and the widgets.</p>
 
     </div>
     <a class="headerlink" href="#Annotator3d.__init__"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="Annotator3d.__init__-69"><a href="#Annotator3d.__init__-69"><span class="linenos">69</span></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">viewer</span><span class="p">:</span> <span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="Annotator3d.__init__-70"><a href="#Annotator3d.__init__-70"><span class="linenos">70</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_with_decoder</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span><span class="o">.</span><span class="n">decoder</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-</span><span id="Annotator3d.__init__-71"><a href="#Annotator3d.__init__-71"><span class="linenos">71</span></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">viewer</span><span class="o">=</span><span class="n">viewer</span><span class="p">,</span> <span class="n">ndim</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="Annotator3d.__init__-27"><a href="#Annotator3d.__init__-27"><span class="linenos">27</span></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">viewer</span><span class="p">:</span> <span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="Annotator3d.__init__-28"><a href="#Annotator3d.__init__-28"><span class="linenos">28</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_with_decoder</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span><span class="o">.</span><span class="n">decoder</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+</span><span id="Annotator3d.__init__-29"><a href="#Annotator3d.__init__-29"><span class="linenos">29</span></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">viewer</span><span class="o">=</span><span class="n">viewer</span><span class="p">,</span> <span class="n">ndim</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -318,7 +276,101 @@ The annotators differ in their data dimensionality and the widgets.</p>
                             <div class="inherited">
                                 <h5>Inherited Members</h5>
                                 <dl>
-                                    <div><dt>PyQt5.QtWidgets.QWidget</dt>
+                                    <div><dt>PyQt5.QtWidgets.QScrollArea</dt>
+                                <dd id="Annotator3d.alignment" class="function">alignment</dd>
+                <dd id="Annotator3d.ensureVisible" class="function">ensureVisible</dd>
+                <dd id="Annotator3d.ensureWidgetVisible" class="function">ensureWidgetVisible</dd>
+                <dd id="Annotator3d.event" class="function">event</dd>
+                <dd id="Annotator3d.eventFilter" class="function">eventFilter</dd>
+                <dd id="Annotator3d.focusNextPrevChild" class="function">focusNextPrevChild</dd>
+                <dd id="Annotator3d.resizeEvent" class="function">resizeEvent</dd>
+                <dd id="Annotator3d.scrollContentsBy" class="function">scrollContentsBy</dd>
+                <dd id="Annotator3d.setAlignment" class="function">setAlignment</dd>
+                <dd id="Annotator3d.setWidget" class="function">setWidget</dd>
+                <dd id="Annotator3d.setWidgetResizable" class="function">setWidgetResizable</dd>
+                <dd id="Annotator3d.sizeHint" class="function">sizeHint</dd>
+                <dd id="Annotator3d.takeWidget" class="function">takeWidget</dd>
+                <dd id="Annotator3d.viewportSizeHint" class="function">viewportSizeHint</dd>
+                <dd id="Annotator3d.widget" class="function">widget</dd>
+                <dd id="Annotator3d.widgetResizable" class="function">widgetResizable</dd>
+
+            </div>
+            <div><dt>PyQt5.QtWidgets.QAbstractScrollArea</dt>
+                                <dd id="Annotator3d.SizeAdjustPolicy" class="class">SizeAdjustPolicy</dd>
+                <dd id="Annotator3d.addScrollBarWidget" class="function">addScrollBarWidget</dd>
+                <dd id="Annotator3d.contextMenuEvent" class="function">contextMenuEvent</dd>
+                <dd id="Annotator3d.cornerWidget" class="function">cornerWidget</dd>
+                <dd id="Annotator3d.dragEnterEvent" class="function">dragEnterEvent</dd>
+                <dd id="Annotator3d.dragLeaveEvent" class="function">dragLeaveEvent</dd>
+                <dd id="Annotator3d.dragMoveEvent" class="function">dragMoveEvent</dd>
+                <dd id="Annotator3d.dropEvent" class="function">dropEvent</dd>
+                <dd id="Annotator3d.horizontalScrollBar" class="function">horizontalScrollBar</dd>
+                <dd id="Annotator3d.horizontalScrollBarPolicy" class="function">horizontalScrollBarPolicy</dd>
+                <dd id="Annotator3d.keyPressEvent" class="function">keyPressEvent</dd>
+                <dd id="Annotator3d.maximumViewportSize" class="function">maximumViewportSize</dd>
+                <dd id="Annotator3d.minimumSizeHint" class="function">minimumSizeHint</dd>
+                <dd id="Annotator3d.mouseDoubleClickEvent" class="function">mouseDoubleClickEvent</dd>
+                <dd id="Annotator3d.mouseMoveEvent" class="function">mouseMoveEvent</dd>
+                <dd id="Annotator3d.mousePressEvent" class="function">mousePressEvent</dd>
+                <dd id="Annotator3d.mouseReleaseEvent" class="function">mouseReleaseEvent</dd>
+                <dd id="Annotator3d.paintEvent" class="function">paintEvent</dd>
+                <dd id="Annotator3d.scrollBarWidgets" class="function">scrollBarWidgets</dd>
+                <dd id="Annotator3d.setCornerWidget" class="function">setCornerWidget</dd>
+                <dd id="Annotator3d.setHorizontalScrollBar" class="function">setHorizontalScrollBar</dd>
+                <dd id="Annotator3d.setHorizontalScrollBarPolicy" class="function">setHorizontalScrollBarPolicy</dd>
+                <dd id="Annotator3d.setSizeAdjustPolicy" class="function">setSizeAdjustPolicy</dd>
+                <dd id="Annotator3d.setVerticalScrollBar" class="function">setVerticalScrollBar</dd>
+                <dd id="Annotator3d.setVerticalScrollBarPolicy" class="function">setVerticalScrollBarPolicy</dd>
+                <dd id="Annotator3d.setViewport" class="function">setViewport</dd>
+                <dd id="Annotator3d.setViewportMargins" class="function">setViewportMargins</dd>
+                <dd id="Annotator3d.setupViewport" class="function">setupViewport</dd>
+                <dd id="Annotator3d.sizeAdjustPolicy" class="function">sizeAdjustPolicy</dd>
+                <dd id="Annotator3d.verticalScrollBar" class="function">verticalScrollBar</dd>
+                <dd id="Annotator3d.verticalScrollBarPolicy" class="function">verticalScrollBarPolicy</dd>
+                <dd id="Annotator3d.viewport" class="function">viewport</dd>
+                <dd id="Annotator3d.viewportEvent" class="function">viewportEvent</dd>
+                <dd id="Annotator3d.viewportMargins" class="function">viewportMargins</dd>
+                <dd id="Annotator3d.wheelEvent" class="function">wheelEvent</dd>
+                <dd id="Annotator3d.AdjustIgnored" class="variable">AdjustIgnored</dd>
+                <dd id="Annotator3d.AdjustToContents" class="variable">AdjustToContents</dd>
+                <dd id="Annotator3d.AdjustToContentsOnFirstShow" class="variable">AdjustToContentsOnFirstShow</dd>
+
+            </div>
+            <div><dt>PyQt5.QtWidgets.QFrame</dt>
+                                <dd id="Annotator3d.Shadow" class="class">Shadow</dd>
+                <dd id="Annotator3d.Shape" class="class">Shape</dd>
+                <dd id="Annotator3d.StyleMask" class="class">StyleMask</dd>
+                <dd id="Annotator3d.changeEvent" class="function">changeEvent</dd>
+                <dd id="Annotator3d.drawFrame" class="function">drawFrame</dd>
+                <dd id="Annotator3d.frameRect" class="function">frameRect</dd>
+                <dd id="Annotator3d.frameShadow" class="function">frameShadow</dd>
+                <dd id="Annotator3d.frameShape" class="function">frameShape</dd>
+                <dd id="Annotator3d.frameStyle" class="function">frameStyle</dd>
+                <dd id="Annotator3d.frameWidth" class="function">frameWidth</dd>
+                <dd id="Annotator3d.initStyleOption" class="function">initStyleOption</dd>
+                <dd id="Annotator3d.lineWidth" class="function">lineWidth</dd>
+                <dd id="Annotator3d.midLineWidth" class="function">midLineWidth</dd>
+                <dd id="Annotator3d.setFrameRect" class="function">setFrameRect</dd>
+                <dd id="Annotator3d.setFrameShadow" class="function">setFrameShadow</dd>
+                <dd id="Annotator3d.setFrameShape" class="function">setFrameShape</dd>
+                <dd id="Annotator3d.setFrameStyle" class="function">setFrameStyle</dd>
+                <dd id="Annotator3d.setLineWidth" class="function">setLineWidth</dd>
+                <dd id="Annotator3d.setMidLineWidth" class="function">setMidLineWidth</dd>
+                <dd id="Annotator3d.Box" class="variable">Box</dd>
+                <dd id="Annotator3d.HLine" class="variable">HLine</dd>
+                <dd id="Annotator3d.NoFrame" class="variable">NoFrame</dd>
+                <dd id="Annotator3d.Panel" class="variable">Panel</dd>
+                <dd id="Annotator3d.Plain" class="variable">Plain</dd>
+                <dd id="Annotator3d.Raised" class="variable">Raised</dd>
+                <dd id="Annotator3d.Shadow_Mask" class="variable">Shadow_Mask</dd>
+                <dd id="Annotator3d.Shape_Mask" class="variable">Shape_Mask</dd>
+                <dd id="Annotator3d.StyledPanel" class="variable">StyledPanel</dd>
+                <dd id="Annotator3d.Sunken" class="variable">Sunken</dd>
+                <dd id="Annotator3d.VLine" class="variable">VLine</dd>
+                <dd id="Annotator3d.WinPanel" class="variable">WinPanel</dd>
+
+            </div>
+            <div><dt>PyQt5.QtWidgets.QWidget</dt>
                                 <dd id="Annotator3d.RenderFlag" class="class">RenderFlag</dd>
                 <dd id="Annotator3d.RenderFlags" class="class">RenderFlags</dd>
                 <dd id="Annotator3d.acceptDrops" class="function">acceptDrops</dd>
@@ -333,7 +385,6 @@ The annotators differ in their data dimensionality and the widgets.</p>
                 <dd id="Annotator3d.autoFillBackground" class="function">autoFillBackground</dd>
                 <dd id="Annotator3d.backgroundRole" class="function">backgroundRole</dd>
                 <dd id="Annotator3d.baseSize" class="function">baseSize</dd>
-                <dd id="Annotator3d.changeEvent" class="function">changeEvent</dd>
                 <dd id="Annotator3d.childAt" class="function">childAt</dd>
                 <dd id="Annotator3d.childrenRect" class="function">childrenRect</dd>
                 <dd id="Annotator3d.childrenRegion" class="function">childrenRegion</dd>
@@ -343,25 +394,18 @@ The annotators differ in their data dimensionality and the widgets.</p>
                 <dd id="Annotator3d.closeEvent" class="function">closeEvent</dd>
                 <dd id="Annotator3d.contentsMargins" class="function">contentsMargins</dd>
                 <dd id="Annotator3d.contentsRect" class="function">contentsRect</dd>
-                <dd id="Annotator3d.contextMenuEvent" class="function">contextMenuEvent</dd>
                 <dd id="Annotator3d.contextMenuPolicy" class="function">contextMenuPolicy</dd>
                 <dd id="Annotator3d.create" class="function">create</dd>
                 <dd id="Annotator3d.createWindowContainer" class="function">createWindowContainer</dd>
                 <dd id="Annotator3d.cursor" class="function">cursor</dd>
                 <dd id="Annotator3d.destroy" class="function">destroy</dd>
                 <dd id="Annotator3d.devType" class="function">devType</dd>
-                <dd id="Annotator3d.dragEnterEvent" class="function">dragEnterEvent</dd>
-                <dd id="Annotator3d.dragLeaveEvent" class="function">dragLeaveEvent</dd>
-                <dd id="Annotator3d.dragMoveEvent" class="function">dragMoveEvent</dd>
-                <dd id="Annotator3d.dropEvent" class="function">dropEvent</dd>
                 <dd id="Annotator3d.effectiveWinId" class="function">effectiveWinId</dd>
                 <dd id="Annotator3d.ensurePolished" class="function">ensurePolished</dd>
                 <dd id="Annotator3d.enterEvent" class="function">enterEvent</dd>
-                <dd id="Annotator3d.event" class="function">event</dd>
                 <dd id="Annotator3d.find" class="function">find</dd>
                 <dd id="Annotator3d.focusInEvent" class="function">focusInEvent</dd>
                 <dd id="Annotator3d.focusNextChild" class="function">focusNextChild</dd>
-                <dd id="Annotator3d.focusNextPrevChild" class="function">focusNextPrevChild</dd>
                 <dd id="Annotator3d.focusOutEvent" class="function">focusOutEvent</dd>
                 <dd id="Annotator3d.focusPolicy" class="function">focusPolicy</dd>
                 <dd id="Annotator3d.focusPreviousChild" class="function">focusPreviousChild</dd>
@@ -411,7 +455,6 @@ The annotators differ in their data dimensionality and the widgets.</p>
                 <dd id="Annotator3d.isVisibleTo" class="function">isVisibleTo</dd>
                 <dd id="Annotator3d.isWindow" class="function">isWindow</dd>
                 <dd id="Annotator3d.isWindowModified" class="function">isWindowModified</dd>
-                <dd id="Annotator3d.keyPressEvent" class="function">keyPressEvent</dd>
                 <dd id="Annotator3d.keyReleaseEvent" class="function">keyReleaseEvent</dd>
                 <dd id="Annotator3d.keyboardGrabber" class="function">keyboardGrabber</dd>
                 <dd id="Annotator3d.layout" class="function">layout</dd>
@@ -432,13 +475,8 @@ The annotators differ in their data dimensionality and the widgets.</p>
                 <dd id="Annotator3d.metric" class="function">metric</dd>
                 <dd id="Annotator3d.minimumHeight" class="function">minimumHeight</dd>
                 <dd id="Annotator3d.minimumSize" class="function">minimumSize</dd>
-                <dd id="Annotator3d.minimumSizeHint" class="function">minimumSizeHint</dd>
                 <dd id="Annotator3d.minimumWidth" class="function">minimumWidth</dd>
-                <dd id="Annotator3d.mouseDoubleClickEvent" class="function">mouseDoubleClickEvent</dd>
                 <dd id="Annotator3d.mouseGrabber" class="function">mouseGrabber</dd>
-                <dd id="Annotator3d.mouseMoveEvent" class="function">mouseMoveEvent</dd>
-                <dd id="Annotator3d.mousePressEvent" class="function">mousePressEvent</dd>
-                <dd id="Annotator3d.mouseReleaseEvent" class="function">mouseReleaseEvent</dd>
                 <dd id="Annotator3d.move" class="function">move</dd>
                 <dd id="Annotator3d.moveEvent" class="function">moveEvent</dd>
                 <dd id="Annotator3d.nativeEvent" class="function">nativeEvent</dd>
@@ -448,7 +486,6 @@ The annotators differ in their data dimensionality and the widgets.</p>
                 <dd id="Annotator3d.overrideWindowFlags" class="function">overrideWindowFlags</dd>
                 <dd id="Annotator3d.overrideWindowState" class="function">overrideWindowState</dd>
                 <dd id="Annotator3d.paintEngine" class="function">paintEngine</dd>
-                <dd id="Annotator3d.paintEvent" class="function">paintEvent</dd>
                 <dd id="Annotator3d.palette" class="function">palette</dd>
                 <dd id="Annotator3d.parentWidget" class="function">parentWidget</dd>
                 <dd id="Annotator3d.pos" class="function">pos</dd>
@@ -462,7 +499,6 @@ The annotators differ in their data dimensionality and the widgets.</p>
                 <dd id="Annotator3d.render" class="function">render</dd>
                 <dd id="Annotator3d.repaint" class="function">repaint</dd>
                 <dd id="Annotator3d.resize" class="function">resize</dd>
-                <dd id="Annotator3d.resizeEvent" class="function">resizeEvent</dd>
                 <dd id="Annotator3d.restoreGeometry" class="function">restoreGeometry</dd>
                 <dd id="Annotator3d.saveGeometry" class="function">saveGeometry</dd>
                 <dd id="Annotator3d.screen" class="function">screen</dd>
@@ -537,7 +573,6 @@ The annotators differ in their data dimensionality and the widgets.</p>
                 <dd id="Annotator3d.showMinimized" class="function">showMinimized</dd>
                 <dd id="Annotator3d.showNormal" class="function">showNormal</dd>
                 <dd id="Annotator3d.size" class="function">size</dd>
-                <dd id="Annotator3d.sizeHint" class="function">sizeHint</dd>
                 <dd id="Annotator3d.sizeIncrement" class="function">sizeIncrement</dd>
                 <dd id="Annotator3d.sizePolicy" class="function">sizePolicy</dd>
                 <dd id="Annotator3d.stackUnder" class="function">stackUnder</dd>
@@ -559,7 +594,6 @@ The annotators differ in their data dimensionality and the widgets.</p>
                 <dd id="Annotator3d.updatesEnabled" class="function">updatesEnabled</dd>
                 <dd id="Annotator3d.visibleRegion" class="function">visibleRegion</dd>
                 <dd id="Annotator3d.whatsThis" class="function">whatsThis</dd>
-                <dd id="Annotator3d.wheelEvent" class="function">wheelEvent</dd>
                 <dd id="Annotator3d.width" class="function">width</dd>
                 <dd id="Annotator3d.winId" class="function">winId</dd>
                 <dd id="Annotator3d.window" class="function">window</dd>
@@ -597,7 +631,6 @@ The annotators differ in their data dimensionality and the widgets.</p>
                 <dd id="Annotator3d.dumpObjectInfo" class="function">dumpObjectInfo</dd>
                 <dd id="Annotator3d.dumpObjectTree" class="function">dumpObjectTree</dd>
                 <dd id="Annotator3d.dynamicPropertyNames" class="function">dynamicPropertyNames</dd>
-                <dd id="Annotator3d.eventFilter" class="function">eventFilter</dd>
                 <dd id="Annotator3d.findChild" class="function">findChild</dd>
                 <dd id="Annotator3d.findChildren" class="function">findChildren</dd>
                 <dd id="Annotator3d.inherits" class="function">inherits</dd>
@@ -670,79 +703,79 @@ The annotators differ in their data dimensionality and the widgets.</p>
 
     </div>
     <a class="headerlink" href="#annotator_3d"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="annotator_3d-83"><a href="#annotator_3d-83"><span class="linenos"> 83</span></a><span class="k">def</span> <span class="nf">annotator_3d</span><span class="p">(</span>
-</span><span id="annotator_3d-84"><a href="#annotator_3d-84"><span class="linenos"> 84</span></a>    <span class="n">image</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
-</span><span id="annotator_3d-85"><a href="#annotator_3d-85"><span class="linenos"> 85</span></a>    <span class="n">embedding_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="annotator_3d-86"><a href="#annotator_3d-86"><span class="linenos"> 86</span></a>    <span class="n">segmentation_result</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="annotator_3d-87"><a href="#annotator_3d-87"><span class="linenos"> 87</span></a>    <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">_DEFAULT_MODEL</span><span class="p">,</span>
-</span><span id="annotator_3d-88"><a href="#annotator_3d-88"><span class="linenos"> 88</span></a>    <span class="n">tile_shape</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="annotator_3d-89"><a href="#annotator_3d-89"><span class="linenos"> 89</span></a>    <span class="n">halo</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="annotator_3d-90"><a href="#annotator_3d-90"><span class="linenos"> 90</span></a>    <span class="n">return_viewer</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="annotator_3d-91"><a href="#annotator_3d-91"><span class="linenos"> 91</span></a>    <span class="n">viewer</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="annotator_3d-92"><a href="#annotator_3d-92"><span class="linenos"> 92</span></a>    <span class="n">precompute_amg_state</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="annotator_3d-93"><a href="#annotator_3d-93"><span class="linenos"> 93</span></a>    <span class="n">checkpoint_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="annotator_3d-94"><a href="#annotator_3d-94"><span class="linenos"> 94</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="annotator_3d-95"><a href="#annotator_3d-95"><span class="linenos"> 95</span></a>    <span class="n">prefer_decoder</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-</span><span id="annotator_3d-96"><a href="#annotator_3d-96"><span class="linenos"> 96</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">]:</span>
-</span><span id="annotator_3d-97"><a href="#annotator_3d-97"><span class="linenos"> 97</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Start the 3d annotation tool for a given image volume.</span>
-</span><span id="annotator_3d-98"><a href="#annotator_3d-98"><span class="linenos"> 98</span></a>
-</span><span id="annotator_3d-99"><a href="#annotator_3d-99"><span class="linenos"> 99</span></a><span class="sd">    Args:</span>
-</span><span id="annotator_3d-100"><a href="#annotator_3d-100"><span class="linenos">100</span></a><span class="sd">        image: The volumetric image data.</span>
-</span><span id="annotator_3d-101"><a href="#annotator_3d-101"><span class="linenos">101</span></a><span class="sd">        embedding_path: Filepath for saving the precomputed embeddings.</span>
-</span><span id="annotator_3d-102"><a href="#annotator_3d-102"><span class="linenos">102</span></a><span class="sd">        segmentation_result: An initial segmentation to load.</span>
-</span><span id="annotator_3d-103"><a href="#annotator_3d-103"><span class="linenos">103</span></a><span class="sd">            This can be used to correct segmentations with Segment Anything or to save and load progress.</span>
-</span><span id="annotator_3d-104"><a href="#annotator_3d-104"><span class="linenos">104</span></a><span class="sd">            The segmentation will be loaded as the &#39;committed_objects&#39; layer.</span>
-</span><span id="annotator_3d-105"><a href="#annotator_3d-105"><span class="linenos">105</span></a><span class="sd">        model_type: The Segment Anything model to use. For details on the available models check out</span>
-</span><span id="annotator_3d-106"><a href="#annotator_3d-106"><span class="linenos">106</span></a><span class="sd">            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.</span>
-</span><span id="annotator_3d-107"><a href="#annotator_3d-107"><span class="linenos">107</span></a><span class="sd">        tile_shape: Shape of tiles for tiled embedding prediction.</span>
-</span><span id="annotator_3d-108"><a href="#annotator_3d-108"><span class="linenos">108</span></a><span class="sd">            If `None` then the whole image is passed to Segment Anything.</span>
-</span><span id="annotator_3d-109"><a href="#annotator_3d-109"><span class="linenos">109</span></a><span class="sd">        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.</span>
-</span><span id="annotator_3d-110"><a href="#annotator_3d-110"><span class="linenos">110</span></a><span class="sd">        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.</span>
-</span><span id="annotator_3d-111"><a href="#annotator_3d-111"><span class="linenos">111</span></a><span class="sd">        viewer: The viewer to which the SegmentAnything functionality should be added.</span>
-</span><span id="annotator_3d-112"><a href="#annotator_3d-112"><span class="linenos">112</span></a><span class="sd">            This enables using a pre-initialized viewer.</span>
-</span><span id="annotator_3d-113"><a href="#annotator_3d-113"><span class="linenos">113</span></a><span class="sd">        precompute_amg_state: Whether to precompute the state for automatic mask generation.</span>
-</span><span id="annotator_3d-114"><a href="#annotator_3d-114"><span class="linenos">114</span></a><span class="sd">            This will take more time when precomputing embeddings, but will then make</span>
-</span><span id="annotator_3d-115"><a href="#annotator_3d-115"><span class="linenos">115</span></a><span class="sd">            automatic mask generation much faster.</span>
-</span><span id="annotator_3d-116"><a href="#annotator_3d-116"><span class="linenos">116</span></a><span class="sd">        checkpoint_path: Path to a custom checkpoint from which to load the SAM model.</span>
-</span><span id="annotator_3d-117"><a href="#annotator_3d-117"><span class="linenos">117</span></a><span class="sd">        device: The computational device to use for the SAM model.</span>
-</span><span id="annotator_3d-118"><a href="#annotator_3d-118"><span class="linenos">118</span></a><span class="sd">        prefer_decoder: Whether to use decoder based instance segmentation if</span>
-</span><span id="annotator_3d-119"><a href="#annotator_3d-119"><span class="linenos">119</span></a><span class="sd">            the model used has an additional decoder for instance segmentation.</span>
-</span><span id="annotator_3d-120"><a href="#annotator_3d-120"><span class="linenos">120</span></a>
-</span><span id="annotator_3d-121"><a href="#annotator_3d-121"><span class="linenos">121</span></a><span class="sd">    Returns:</span>
-</span><span id="annotator_3d-122"><a href="#annotator_3d-122"><span class="linenos">122</span></a><span class="sd">        The napari viewer, only returned if `return_viewer=True`.</span>
-</span><span id="annotator_3d-123"><a href="#annotator_3d-123"><span class="linenos">123</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="annotator_3d-124"><a href="#annotator_3d-124"><span class="linenos">124</span></a>
-</span><span id="annotator_3d-125"><a href="#annotator_3d-125"><span class="linenos">125</span></a>    <span class="c1"># Initialize the predictor state.</span>
-</span><span id="annotator_3d-126"><a href="#annotator_3d-126"><span class="linenos">126</span></a>    <span class="n">state</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span>
-</span><span id="annotator_3d-127"><a href="#annotator_3d-127"><span class="linenos">127</span></a>    <span class="n">state</span><span class="o">.</span><span class="n">image_shape</span> <span class="o">=</span> <span class="n">image</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="k">if</span> <span class="n">image</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">4</span> <span class="k">else</span> <span class="n">image</span><span class="o">.</span><span class="n">shape</span>
-</span><span id="annotator_3d-128"><a href="#annotator_3d-128"><span class="linenos">128</span></a>    <span class="n">state</span><span class="o">.</span><span class="n">initialize_predictor</span><span class="p">(</span>
-</span><span id="annotator_3d-129"><a href="#annotator_3d-129"><span class="linenos">129</span></a>        <span class="n">image</span><span class="p">,</span> <span class="n">model_type</span><span class="o">=</span><span class="n">model_type</span><span class="p">,</span> <span class="n">save_path</span><span class="o">=</span><span class="n">embedding_path</span><span class="p">,</span>
-</span><span id="annotator_3d-130"><a href="#annotator_3d-130"><span class="linenos">130</span></a>        <span class="n">halo</span><span class="o">=</span><span class="n">halo</span><span class="p">,</span> <span class="n">tile_shape</span><span class="o">=</span><span class="n">tile_shape</span><span class="p">,</span> <span class="n">ndim</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">precompute_amg_state</span><span class="o">=</span><span class="n">precompute_amg_state</span><span class="p">,</span>
-</span><span id="annotator_3d-131"><a href="#annotator_3d-131"><span class="linenos">131</span></a>        <span class="n">checkpoint_path</span><span class="o">=</span><span class="n">checkpoint_path</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">prefer_decoder</span><span class="o">=</span><span class="n">prefer_decoder</span><span class="p">,</span>
-</span><span id="annotator_3d-132"><a href="#annotator_3d-132"><span class="linenos">132</span></a>    <span class="p">)</span>
-</span><span id="annotator_3d-133"><a href="#annotator_3d-133"><span class="linenos">133</span></a>
-</span><span id="annotator_3d-134"><a href="#annotator_3d-134"><span class="linenos">134</span></a>    <span class="k">if</span> <span class="n">viewer</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="annotator_3d-135"><a href="#annotator_3d-135"><span class="linenos">135</span></a>        <span class="n">viewer</span> <span class="o">=</span> <span class="n">napari</span><span class="o">.</span><span class="n">Viewer</span><span class="p">()</span>
-</span><span id="annotator_3d-136"><a href="#annotator_3d-136"><span class="linenos">136</span></a>
-</span><span id="annotator_3d-137"><a href="#annotator_3d-137"><span class="linenos">137</span></a>    <span class="n">viewer</span><span class="o">.</span><span class="n">add_image</span><span class="p">(</span><span class="n">image</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">&quot;image&quot;</span><span class="p">)</span>
-</span><span id="annotator_3d-138"><a href="#annotator_3d-138"><span class="linenos">138</span></a>    <span class="n">annotator</span> <span class="o">=</span> <span class="n">Annotator3d</span><span class="p">(</span><span class="n">viewer</span><span class="p">)</span>
-</span><span id="annotator_3d-139"><a href="#annotator_3d-139"><span class="linenos">139</span></a>
-</span><span id="annotator_3d-140"><a href="#annotator_3d-140"><span class="linenos">140</span></a>    <span class="c1"># Trigger layer update of the annotator so that layers have the correct shape.</span>
-</span><span id="annotator_3d-141"><a href="#annotator_3d-141"><span class="linenos">141</span></a>    <span class="c1"># And initialize the &#39;committed_objects&#39; with the segmentation result if it was given.</span>
-</span><span id="annotator_3d-142"><a href="#annotator_3d-142"><span class="linenos">142</span></a>    <span class="n">annotator</span><span class="o">.</span><span class="n">_update_image</span><span class="p">(</span><span class="n">segmentation_result</span><span class="o">=</span><span class="n">segmentation_result</span><span class="p">)</span>
-</span><span id="annotator_3d-143"><a href="#annotator_3d-143"><span class="linenos">143</span></a>
-</span><span id="annotator_3d-144"><a href="#annotator_3d-144"><span class="linenos">144</span></a>    <span class="c1"># Add the annotator widget to the viewer and sync widgets.</span>
-</span><span id="annotator_3d-145"><a href="#annotator_3d-145"><span class="linenos">145</span></a>    <span class="n">viewer</span><span class="o">.</span><span class="n">window</span><span class="o">.</span><span class="n">add_dock_widget</span><span class="p">(</span><span class="n">annotator</span><span class="p">)</span>
-</span><span id="annotator_3d-146"><a href="#annotator_3d-146"><span class="linenos">146</span></a>    <span class="n">_sync_embedding_widget</span><span class="p">(</span>
-</span><span id="annotator_3d-147"><a href="#annotator_3d-147"><span class="linenos">147</span></a>        <span class="n">state</span><span class="o">.</span><span class="n">widgets</span><span class="p">[</span><span class="s2">&quot;embeddings&quot;</span><span class="p">],</span> <span class="n">model_type</span><span class="p">,</span>
-</span><span id="annotator_3d-148"><a href="#annotator_3d-148"><span class="linenos">148</span></a>        <span class="n">save_path</span><span class="o">=</span><span class="n">embedding_path</span><span class="p">,</span> <span class="n">checkpoint_path</span><span class="o">=</span><span class="n">checkpoint_path</span><span class="p">,</span>
-</span><span id="annotator_3d-149"><a href="#annotator_3d-149"><span class="linenos">149</span></a>        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">tile_shape</span><span class="o">=</span><span class="n">tile_shape</span><span class="p">,</span> <span class="n">halo</span><span class="o">=</span><span class="n">halo</span>
-</span><span id="annotator_3d-150"><a href="#annotator_3d-150"><span class="linenos">150</span></a>    <span class="p">)</span>
-</span><span id="annotator_3d-151"><a href="#annotator_3d-151"><span class="linenos">151</span></a>
-</span><span id="annotator_3d-152"><a href="#annotator_3d-152"><span class="linenos">152</span></a>    <span class="k">if</span> <span class="n">return_viewer</span><span class="p">:</span>
-</span><span id="annotator_3d-153"><a href="#annotator_3d-153"><span class="linenos">153</span></a>        <span class="k">return</span> <span class="n">viewer</span>
-</span><span id="annotator_3d-154"><a href="#annotator_3d-154"><span class="linenos">154</span></a>
-</span><span id="annotator_3d-155"><a href="#annotator_3d-155"><span class="linenos">155</span></a>    <span class="n">napari</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="annotator_3d-41"><a href="#annotator_3d-41"><span class="linenos"> 41</span></a><span class="k">def</span> <span class="nf">annotator_3d</span><span class="p">(</span>
+</span><span id="annotator_3d-42"><a href="#annotator_3d-42"><span class="linenos"> 42</span></a>    <span class="n">image</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+</span><span id="annotator_3d-43"><a href="#annotator_3d-43"><span class="linenos"> 43</span></a>    <span class="n">embedding_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="annotator_3d-44"><a href="#annotator_3d-44"><span class="linenos"> 44</span></a>    <span class="n">segmentation_result</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="annotator_3d-45"><a href="#annotator_3d-45"><span class="linenos"> 45</span></a>    <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">util</span><span class="o">.</span><span class="n">_DEFAULT_MODEL</span><span class="p">,</span>
+</span><span id="annotator_3d-46"><a href="#annotator_3d-46"><span class="linenos"> 46</span></a>    <span class="n">tile_shape</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="annotator_3d-47"><a href="#annotator_3d-47"><span class="linenos"> 47</span></a>    <span class="n">halo</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="annotator_3d-48"><a href="#annotator_3d-48"><span class="linenos"> 48</span></a>    <span class="n">return_viewer</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="annotator_3d-49"><a href="#annotator_3d-49"><span class="linenos"> 49</span></a>    <span class="n">viewer</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="annotator_3d-50"><a href="#annotator_3d-50"><span class="linenos"> 50</span></a>    <span class="n">precompute_amg_state</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="annotator_3d-51"><a href="#annotator_3d-51"><span class="linenos"> 51</span></a>    <span class="n">checkpoint_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="annotator_3d-52"><a href="#annotator_3d-52"><span class="linenos"> 52</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="annotator_3d-53"><a href="#annotator_3d-53"><span class="linenos"> 53</span></a>    <span class="n">prefer_decoder</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="annotator_3d-54"><a href="#annotator_3d-54"><span class="linenos"> 54</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="s2">&quot;napari.viewer.Viewer&quot;</span><span class="p">]:</span>
+</span><span id="annotator_3d-55"><a href="#annotator_3d-55"><span class="linenos"> 55</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Start the 3d annotation tool for a given image volume.</span>
+</span><span id="annotator_3d-56"><a href="#annotator_3d-56"><span class="linenos"> 56</span></a>
+</span><span id="annotator_3d-57"><a href="#annotator_3d-57"><span class="linenos"> 57</span></a><span class="sd">    Args:</span>
+</span><span id="annotator_3d-58"><a href="#annotator_3d-58"><span class="linenos"> 58</span></a><span class="sd">        image: The volumetric image data.</span>
+</span><span id="annotator_3d-59"><a href="#annotator_3d-59"><span class="linenos"> 59</span></a><span class="sd">        embedding_path: Filepath for saving the precomputed embeddings.</span>
+</span><span id="annotator_3d-60"><a href="#annotator_3d-60"><span class="linenos"> 60</span></a><span class="sd">        segmentation_result: An initial segmentation to load.</span>
+</span><span id="annotator_3d-61"><a href="#annotator_3d-61"><span class="linenos"> 61</span></a><span class="sd">            This can be used to correct segmentations with Segment Anything or to save and load progress.</span>
+</span><span id="annotator_3d-62"><a href="#annotator_3d-62"><span class="linenos"> 62</span></a><span class="sd">            The segmentation will be loaded as the &#39;committed_objects&#39; layer.</span>
+</span><span id="annotator_3d-63"><a href="#annotator_3d-63"><span class="linenos"> 63</span></a><span class="sd">        model_type: The Segment Anything model to use. For details on the available models check out</span>
+</span><span id="annotator_3d-64"><a href="#annotator_3d-64"><span class="linenos"> 64</span></a><span class="sd">            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.</span>
+</span><span id="annotator_3d-65"><a href="#annotator_3d-65"><span class="linenos"> 65</span></a><span class="sd">        tile_shape: Shape of tiles for tiled embedding prediction.</span>
+</span><span id="annotator_3d-66"><a href="#annotator_3d-66"><span class="linenos"> 66</span></a><span class="sd">            If `None` then the whole image is passed to Segment Anything.</span>
+</span><span id="annotator_3d-67"><a href="#annotator_3d-67"><span class="linenos"> 67</span></a><span class="sd">        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.</span>
+</span><span id="annotator_3d-68"><a href="#annotator_3d-68"><span class="linenos"> 68</span></a><span class="sd">        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.</span>
+</span><span id="annotator_3d-69"><a href="#annotator_3d-69"><span class="linenos"> 69</span></a><span class="sd">        viewer: The viewer to which the SegmentAnything functionality should be added.</span>
+</span><span id="annotator_3d-70"><a href="#annotator_3d-70"><span class="linenos"> 70</span></a><span class="sd">            This enables using a pre-initialized viewer.</span>
+</span><span id="annotator_3d-71"><a href="#annotator_3d-71"><span class="linenos"> 71</span></a><span class="sd">        precompute_amg_state: Whether to precompute the state for automatic mask generation.</span>
+</span><span id="annotator_3d-72"><a href="#annotator_3d-72"><span class="linenos"> 72</span></a><span class="sd">            This will take more time when precomputing embeddings, but will then make</span>
+</span><span id="annotator_3d-73"><a href="#annotator_3d-73"><span class="linenos"> 73</span></a><span class="sd">            automatic mask generation much faster.</span>
+</span><span id="annotator_3d-74"><a href="#annotator_3d-74"><span class="linenos"> 74</span></a><span class="sd">        checkpoint_path: Path to a custom checkpoint from which to load the SAM model.</span>
+</span><span id="annotator_3d-75"><a href="#annotator_3d-75"><span class="linenos"> 75</span></a><span class="sd">        device: The computational device to use for the SAM model.</span>
+</span><span id="annotator_3d-76"><a href="#annotator_3d-76"><span class="linenos"> 76</span></a><span class="sd">        prefer_decoder: Whether to use decoder based instance segmentation if</span>
+</span><span id="annotator_3d-77"><a href="#annotator_3d-77"><span class="linenos"> 77</span></a><span class="sd">            the model used has an additional decoder for instance segmentation.</span>
+</span><span id="annotator_3d-78"><a href="#annotator_3d-78"><span class="linenos"> 78</span></a>
+</span><span id="annotator_3d-79"><a href="#annotator_3d-79"><span class="linenos"> 79</span></a><span class="sd">    Returns:</span>
+</span><span id="annotator_3d-80"><a href="#annotator_3d-80"><span class="linenos"> 80</span></a><span class="sd">        The napari viewer, only returned if `return_viewer=True`.</span>
+</span><span id="annotator_3d-81"><a href="#annotator_3d-81"><span class="linenos"> 81</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="annotator_3d-82"><a href="#annotator_3d-82"><span class="linenos"> 82</span></a>
+</span><span id="annotator_3d-83"><a href="#annotator_3d-83"><span class="linenos"> 83</span></a>    <span class="c1"># Initialize the predictor state.</span>
+</span><span id="annotator_3d-84"><a href="#annotator_3d-84"><span class="linenos"> 84</span></a>    <span class="n">state</span> <span class="o">=</span> <span class="n">AnnotatorState</span><span class="p">()</span>
+</span><span id="annotator_3d-85"><a href="#annotator_3d-85"><span class="linenos"> 85</span></a>    <span class="n">state</span><span class="o">.</span><span class="n">image_shape</span> <span class="o">=</span> <span class="n">image</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="k">if</span> <span class="n">image</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">4</span> <span class="k">else</span> <span class="n">image</span><span class="o">.</span><span class="n">shape</span>
+</span><span id="annotator_3d-86"><a href="#annotator_3d-86"><span class="linenos"> 86</span></a>    <span class="n">state</span><span class="o">.</span><span class="n">initialize_predictor</span><span class="p">(</span>
+</span><span id="annotator_3d-87"><a href="#annotator_3d-87"><span class="linenos"> 87</span></a>        <span class="n">image</span><span class="p">,</span> <span class="n">model_type</span><span class="o">=</span><span class="n">model_type</span><span class="p">,</span> <span class="n">save_path</span><span class="o">=</span><span class="n">embedding_path</span><span class="p">,</span>
+</span><span id="annotator_3d-88"><a href="#annotator_3d-88"><span class="linenos"> 88</span></a>        <span class="n">halo</span><span class="o">=</span><span class="n">halo</span><span class="p">,</span> <span class="n">tile_shape</span><span class="o">=</span><span class="n">tile_shape</span><span class="p">,</span> <span class="n">ndim</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">precompute_amg_state</span><span class="o">=</span><span class="n">precompute_amg_state</span><span class="p">,</span>
+</span><span id="annotator_3d-89"><a href="#annotator_3d-89"><span class="linenos"> 89</span></a>        <span class="n">checkpoint_path</span><span class="o">=</span><span class="n">checkpoint_path</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">prefer_decoder</span><span class="o">=</span><span class="n">prefer_decoder</span><span class="p">,</span>
+</span><span id="annotator_3d-90"><a href="#annotator_3d-90"><span class="linenos"> 90</span></a>    <span class="p">)</span>
+</span><span id="annotator_3d-91"><a href="#annotator_3d-91"><span class="linenos"> 91</span></a>
+</span><span id="annotator_3d-92"><a href="#annotator_3d-92"><span class="linenos"> 92</span></a>    <span class="k">if</span> <span class="n">viewer</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="annotator_3d-93"><a href="#annotator_3d-93"><span class="linenos"> 93</span></a>        <span class="n">viewer</span> <span class="o">=</span> <span class="n">napari</span><span class="o">.</span><span class="n">Viewer</span><span class="p">()</span>
+</span><span id="annotator_3d-94"><a href="#annotator_3d-94"><span class="linenos"> 94</span></a>
+</span><span id="annotator_3d-95"><a href="#annotator_3d-95"><span class="linenos"> 95</span></a>    <span class="n">viewer</span><span class="o">.</span><span class="n">add_image</span><span class="p">(</span><span class="n">image</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">&quot;image&quot;</span><span class="p">)</span>
+</span><span id="annotator_3d-96"><a href="#annotator_3d-96"><span class="linenos"> 96</span></a>    <span class="n">annotator</span> <span class="o">=</span> <span class="n">Annotator3d</span><span class="p">(</span><span class="n">viewer</span><span class="p">)</span>
+</span><span id="annotator_3d-97"><a href="#annotator_3d-97"><span class="linenos"> 97</span></a>
+</span><span id="annotator_3d-98"><a href="#annotator_3d-98"><span class="linenos"> 98</span></a>    <span class="c1"># Trigger layer update of the annotator so that layers have the correct shape.</span>
+</span><span id="annotator_3d-99"><a href="#annotator_3d-99"><span class="linenos"> 99</span></a>    <span class="c1"># And initialize the &#39;committed_objects&#39; with the segmentation result if it was given.</span>
+</span><span id="annotator_3d-100"><a href="#annotator_3d-100"><span class="linenos">100</span></a>    <span class="n">annotator</span><span class="o">.</span><span class="n">_update_image</span><span class="p">(</span><span class="n">segmentation_result</span><span class="o">=</span><span class="n">segmentation_result</span><span class="p">)</span>
+</span><span id="annotator_3d-101"><a href="#annotator_3d-101"><span class="linenos">101</span></a>
+</span><span id="annotator_3d-102"><a href="#annotator_3d-102"><span class="linenos">102</span></a>    <span class="c1"># Add the annotator widget to the viewer and sync widgets.</span>
+</span><span id="annotator_3d-103"><a href="#annotator_3d-103"><span class="linenos">103</span></a>    <span class="n">viewer</span><span class="o">.</span><span class="n">window</span><span class="o">.</span><span class="n">add_dock_widget</span><span class="p">(</span><span class="n">annotator</span><span class="p">)</span>
+</span><span id="annotator_3d-104"><a href="#annotator_3d-104"><span class="linenos">104</span></a>    <span class="n">_sync_embedding_widget</span><span class="p">(</span>
+</span><span id="annotator_3d-105"><a href="#annotator_3d-105"><span class="linenos">105</span></a>        <span class="n">state</span><span class="o">.</span><span class="n">widgets</span><span class="p">[</span><span class="s2">&quot;embeddings&quot;</span><span class="p">],</span> <span class="n">model_type</span><span class="p">,</span>
+</span><span id="annotator_3d-106"><a href="#annotator_3d-106"><span class="linenos">106</span></a>        <span class="n">save_path</span><span class="o">=</span><span class="n">embedding_path</span><span class="p">,</span> <span class="n">checkpoint_path</span><span class="o">=</span><span class="n">checkpoint_path</span><span class="p">,</span>
+</span><span id="annotator_3d-107"><a href="#annotator_3d-107"><span class="linenos">107</span></a>        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">tile_shape</span><span class="o">=</span><span class="n">tile_shape</span><span class="p">,</span> <span class="n">halo</span><span class="o">=</span><span class="n">halo</span>
+</span><span id="annotator_3d-108"><a href="#annotator_3d-108"><span class="linenos">108</span></a>    <span class="p">)</span>
+</span><span id="annotator_3d-109"><a href="#annotator_3d-109"><span class="linenos">109</span></a>
+</span><span id="annotator_3d-110"><a href="#annotator_3d-110"><span class="linenos">110</span></a>    <span class="k">if</span> <span class="n">return_viewer</span><span class="p">:</span>
+</span><span id="annotator_3d-111"><a href="#annotator_3d-111"><span class="linenos">111</span></a>        <span class="k">return</span> <span class="n">viewer</span>
+</span><span id="annotator_3d-112"><a href="#annotator_3d-112"><span class="linenos">112</span></a>
+</span><span id="annotator_3d-113"><a href="#annotator_3d-113"><span class="linenos">113</span></a>    <span class="n">napari</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
 </span></pre></div>
 
 

@@ -37,23 +37,24 @@
   </ul></li>
   <li><a href="#annotation-tools">Annotation Tools</a>
   <ul>
-    <li><a href="#starting-via-gui">Starting via GUI</a></li>
     <li><a href="#annotator-2d">Annotator 2D</a></li>
     <li><a href="#annotator-3d">Annotator 3D</a></li>
     <li><a href="#annotator-tracking">Annotator Tracking</a></li>
+    <li><a href="#image-series-annotator">Image Series Annotator</a></li>
+    <li><a href="#finetuning-ui">Finetuning UI</a></li>
     <li><a href="#tips-tricks">Tips &amp; Tricks</a></li>
     <li><a href="#known-limitations">Known limitations</a></li>
   </ul></li>
-  <li><a href="#how-to-use-the-python-library">How to use the Python Library</a>
+  <li><a href="#using-the-python-library">Using the Python Library</a>
   <ul>
     <li><a href="#training-your-own-model">Training your own model</a></li>
   </ul></li>
   <li><a href="#finetuned-models">Finetuned models</a>
   <ul>
-    <li><a href="#which-model-should-i-choose">Which model should I choose?</a></li>
-    <li><a href="#model-sources">Model Sources</a></li>
+    <li><a href="#choosing-a-model">Choosing a Model</a></li>
+    <li><a href="#older-models">Older Models</a></li>
   </ul></li>
-  <li><a href="#how-to-contribute">How to contribute</a>
+  <li><a href="#contribution-guide">Contribution Guide</a>
   <ul>
     <li><a href="#discuss-your-ideas">Discuss your ideas</a></li>
     <li><a href="#clone-the-repository">Clone the repository</a></li>
@@ -63,10 +64,6 @@
     <li><a href="#open-a-pull-request">Open a pull request</a></li>
     <li><a href="#optional-build-the-documentation">Optional: Build the documentation</a></li>
     <li><a href="#optional-benchmark-performance">Optional: Benchmark performance</a></li>
-  </ul></li>
-  <li><a href="#for-developers">For Developers</a>
-  <ul>
-    <li><a href="#annotation-tools-2">Annotation Tools</a></li>
   </ul></li>
   <li><a href="#using-micro_sam-on-band">Using micro_sam on BAND</a>
   <ul>
@@ -114,51 +111,48 @@ micro_sam    </h1>
 Its core components are:</p>
 
 <ul>
-<li>The <code><a href="">micro_sam</a></code> tools for interactive data annotation with <a href="https://napari.org/stable/">napari</a>.</li>
+<li>The <code><a href="">micro_sam</a></code> tools for interactive data annotation, built as <a href="https://napari.org/stable/">napari</a> plugin.</li>
 <li>The <code><a href="">micro_sam</a></code> library to apply Segment Anything to 2d and 3d data or fine-tune it on your data.</li>
-<li>The <code><a href="">micro_sam</a></code> models that are fine-tuned on publicly available microscopy data.</li>
+<li>The <code><a href="">micro_sam</a></code> models that are fine-tuned on publicly available microscopy data and that are available on <a href="https://bioimage.io/#/">BioImage.IO</a>.</li>
 </ul>
 
-<p>Our goal is to build fast and interactive annotation tools for microscopy data, like interactive cell segmentation from bounding boxes:</p>
+<p>Based on these components <code><a href="">micro_sam</a></code> enables fast interactive and automatic annotation for microscopy data, like interactive cell segmentation from bounding boxes:</p>
 
 <p><img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/d04cb158-9f5b-4460-98cd-023c4f19cccd" alt="box-prompts" /></p>
 
-<p><code><a href="">micro_sam</a></code> is under active development, but our goal is to keep the changes to the user interface and the interface of the python library as small as possible.
-On our roadmap for more functionality are:</p>
+<p><code><a href="">micro_sam</a></code> is now available as stable version 1.0 and we will not change its user interface significantly in the foreseeable future.
+We are still working on improving and extending its functionality. The current roadmap includes:</p>
 
 <ul>
-<li>Providing an installer for running <code><a href="">micro_sam</a></code> as a standalone application.</li>
-<li>Releasing more and better finetuned models as well as the code for fine-tuning.</li>
-<li>Integration of the finetuned models with <a href="https://bioimage.io/#/">bioimage.io</a></li>
-<li>Implementing a napari plugin for <code><a href="">micro_sam</a></code>.</li>
+<li>Releasing more and better finetuned models.</li>
+<li>Integrating parameter efficient training and compressed models for faster fine-tuning.</li>
+<li>Improving the 3D segmentation and tracking functionality.</li>
 </ul>
 
-<p>If you run into any problems or have questions please open an issue on Github or reach out via <a href="https://forum.image.sc/">image.sc</a> using the tag <code>micro-sam</code> and tagging @constantinpape.</p>
+<p>If you run into any problems or have questions please <a href="">open an issue</a> or reach out via <a href="https://forum.image.sc/">image.sc</a> using the tag <code>micro-sam</code>.</p>
 
 <h2 id="quickstart">Quickstart</h2>
 
-<p>You can install <code><a href="">micro_sam</a></code> via conda:</p>
+<p>You can install <code><a href="">micro_sam</a></code> via mamba:</p>
 
-<pre><code>$ conda install -c conda-forge micro_sam napari pyqt
+<pre><code>$ mamba install -c conda-forge micro_sam
 </code></pre>
 
-<p>We also provide experimental installers for all operating systems.
-For more details on the available installation options check out <a href="#installation">the installation section</a>.</p>
+<p>We also provide installers for Windows and Linux. For more details on the available installation options check out <a href="#installation">the installation section</a>.</p>
 
-<p>After installing <code><a href="">micro_sam</a></code> you can run the annotation tool via <code>$ micro_sam.annotator</code>, which opens a menu for selecting the annotation tool and its inputs.
-See <a href="#annotation-tools">the annotation tool section</a> for an overview and explanation of the annotation functionality.</p>
+<p>After installing <code><a href="">micro_sam</a></code> you can start napari and select the annotation tool you want to use from <code>Plugins-&gt;Segment Anything for Microscopy</code>. Check out the <a href="TODO">quickstart tutorial video</a> for a short introduction and  <a href="#annotation-tools">the annotation tool section</a> for details.</p>
 
-<p>The <code><a href="">micro_sam</a></code> python library can be used via</p>
+<p>The <code><a href="">micro_sam</a></code> python library can be imported via</p>
 
 <div class="pdoc-code codehilite">
 <pre><span></span><code><span class="kn">import</span> <span class="nn">micro_sam</span>
 </code></pre>
 </div>
 
-<p>It is explained in more detail <a href="#how-to-use-the-python-library">here</a>.</p>
+<p>It is explained in more detail <a href="#using-the-python-library">here</a>.</p>
 
-<p>Our support for finetuned models is still experimental. We will soon release better finetuned models and host them on zenodo.
-For now, check out <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/sam_annotator_2d.py#L62">the example script for the 2d annotator</a> to see how the finetuned models can be used within <code><a href="">micro_sam</a></code>.</p>
+<p>We provide different finetuned models for microscopy that can be used within our tools or any other tool that supports Segment Anything. See <a href="#finetuned-models">finetuned models</a> for details on the available models.
+You can also train models on your own data, see <a href="#training-your-own-model">here for details</a>.</p>
 
 <h2 id="citation">Citation</h2>
 
@@ -176,8 +170,8 @@ For now, check out <a href="https://github.com/computational-cell-analytics/micr
 
 <ul>
 <li><a href="#from-mamba">From mamba</a> is the recommended way if you want to use all functionality.</li>
-<li><a href="#from-source">From source</a> for setting up a development environment to use the latest version and be able to change and contribute to our software.</li>
-<li><a href="#from-installer">From installer</a> to install without having to use mamba (supported platforms: Windows and Linux, only for CPU users). </li>
+<li><a href="#from-source">From source</a> for setting up a development environment to use the development version and to change and contribute to our software.</li>
+<li><a href="#from-installer">From installer</a> to install it without having to use mamba (supported platforms: Windows and Linux, only for CPU users). </li>
 </ul>
 
 <h2 id="from-mamba">From mamba</h2>
@@ -193,7 +187,7 @@ You can follow the instructions <a href="https://mamba.readthedocs.io/en/latest/
 <pre><code>$ mamba install -c conda-forge micro_sam
 </code></pre>
 
-<p>or you should create a new environment (here called <code>micro-sam</code>) via:</p>
+<p>or you can create a new environment (here called <code>micro-sam</code>) with it via:</p>
 
 <pre><code>$ mamba create -c conda-forge -n micro-sam micro_sam
 </code></pre>
@@ -203,14 +197,7 @@ You can follow the instructions <a href="https://mamba.readthedocs.io/en/latest/
 <pre><code>$ mamba create -c pytorch -c nvidia -c conda-forge micro_sam pytorch pytorch-cuda=12.1
 </code></pre>
 
-<p>You may need to change this command to install the correct CUDA version for your computer, see <a href="https://pytorch.org/">https://pytorch.org/</a> for details.</p>
-
-<p>You also need to install napari to use the annotation tool:</p>
-
-<pre><code>$ mamba install -c conda-forge napari pyqt
-</code></pre>
-
-<p>(We don't include napari in the default installation dependencies to keep the choice of rendering backend flexible.)</p>
+<p>You may need to change this command to install the correct CUDA version for your system, see <a href="https://pytorch.org/">https://pytorch.org/</a> for details.</p>
 
 <h2 id="from-source">From source</h2>
 
@@ -258,40 +245,19 @@ You can follow the instructions <a href="https://mamba.readthedocs.io/en/latest/
 <pre><code>$ pip install -e .
 </code></pre>
 
-<p><strong>Troubleshooting:</strong></p>
-
-<ul>
-<li>Installation on MAC with a M1 or M2 processor:
-<ul>
-<li>The pytorch installation from <code>environment_cpu.yaml</code> does not work with a MAC that has an M1 or M2 processor. Instead you need to:
-<ul>
-<li>Create a new environment: <code>mamba create -c conda-forge python pip -n sam</code></li>
-<li>Activate it va <code>mamba activate sam</code></li>
-<li>Follow the instructions for how to install pytorch for MAC via conda from <a href="https://pytorch.org/">pytorch.org</a>.</li>
-<li>Install additional dependencies: <code>mamba install -c conda-forge napari python-elf tqdm</code></li>
-<li>Install SegmentAnything: <code>pip install git+https://github.com/facebookresearch/segment-anything.git</code></li>
-<li>Install <code><a href="">micro_sam</a></code> by running <code>pip install -e .</code> in this folder.</li>
-</ul></li>
-<li><strong>Note:</strong> we have seen many issues with the pytorch installation on MAC. If a wrong pytorch version is installed for you (which will cause pytorch errors once you run the application) please try again with a clean <code>mambaforge</code> installation. Please install the <code>OS X, arm64</code> version from <a href="https://github.com/conda-forge/miniforge#mambaforge">here</a>.</li>
-<li>Some MACs require a specific installation order of packages. If the steps layed out above don't work for you please check out the procedure described <a href="https://github.com/computational-cell-analytics/micro-sam/issues/77">in this github issue</a>.</li>
-</ul></li>
-</ul>
-
 <h2 id="from-installer">From installer</h2>
 
 <p>We also provide installers for Linux and Windows:</p>
 
 <ul>
-<li><a href="https://owncloud.gwdg.de/index.php/s/hM1bQ108YmcwyDn">Linux</a></li>
-<li><a href="https://owncloud.gwdg.de/index.php/s/T1weJclOiYUUULE">Windows</a>
+<li><a href="TODO">Linux</a></li>
+<li><a href="TODO">Windows</a>
 <!---</li>
 <li><a href="https://owncloud.gwdg.de/index.php/s/7YupGgACw9SHy2P">Mac</a>
 --></li>
 </ul>
 
-<p><strong>The installers are still experimental and not fully tested.</strong> Mac is not supported yet, but we are working on also providing an installer for it.</p>
-
-<p>If you encounter problems with them then please consider installing <code><a href="">micro_sam</a></code> via <a href="#from-mamba">mamba</a> instead.</p>
+<p>The installers will not enable you to use a GPU, so if you have one then please consider installing <code><a href="">micro_sam</a></code> via <a href="#from-mamba">mamba</a> instead. They will also not enable using the python library.</p>
 
 <p><strong>Linux Installer:</strong></p>
 
@@ -311,17 +277,6 @@ You can follow the instructions <a href="https://mamba.readthedocs.io/en/latest/
 </ul></li>
 </ul>
 
-<p><!---
-<strong>Mac Installer:</strong></p>
-
-<p>To use the Mac installer you will need to enable installing unsigned applications. Please follow <a href="https://disable-gatekeeper.github.io/">the instructions for 'Disabling Gatekeeper for one application only' here</a>.</p>
-
-<p>Alternative link on how to disable gatekeeper.
-<a href="https://www.makeuseof.com/how-to-disable-gatekeeper-mac/">https://www.makeuseof.com/how-to-disable-gatekeeper-mac/</a></p>
-
-<p>TODO detailed instruction
---></p>
-
 <p><strong>Windows Installer:</strong></p>
 
 <ul>
@@ -335,6 +290,17 @@ You can follow the instructions <a href="https://mamba.readthedocs.io/en/latest/
 <li>After the installation you can start the annotator by double clicking on <code>.\micro_sam\Scripts\micro_sam.annotator.exe</code> or  with the command <code>.\micro_sam\Scripts\micro_sam.annotator.exe</code> from the Command Prompt.</li>
 </ul>
 
+<p><!---
+<strong>Mac Installer:</strong></p>
+
+<p>To use the Mac installer you will need to enable installing unsigned applications. Please follow <a href="https://disable-gatekeeper.github.io/">the instructions for 'Disabling Gatekeeper for one application only' here</a>.</p>
+
+<p>Alternative link on how to disable gatekeeper.
+<a href="https://www.makeuseof.com/how-to-disable-gatekeeper-mac/">https://www.makeuseof.com/how-to-disable-gatekeeper-mac/</a></p>
+
+<p>TODO detailed instruction
+--></p>
+
 <h1 id="annotation-tools">Annotation Tools</h1>
 
 <p><code><a href="">micro_sam</a></code> provides applications for fast interactive 2d segmentation, 3d segmentation and tracking.
@@ -345,132 +311,153 @@ of mitochondria in volume EM (middle) and interactive tracking of cells (right).
 <img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/dfca3d9b-dba5-440b-b0f9-72a0683ac410" width="256">
 <img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/aefbf99f-e73a-4125-bb49-2e6592367a64" width="256"></p>
 
-<p>The annotation tools can be started from the <code><a href="">micro_sam</a></code> GUI, the command line or from python scripts. The <code><a href="">micro_sam</a></code> GUI can be started by</p>
+<p>The annotation tools can be started from the napari plugin menu, the command line or from python scripts.
+They are built as napari plugin and make use of existing napari functionality wherever possible. If you are not familiar with napari yet, <a href="https://napari.org/stable/tutorials/fundamentals/quick_start.html">start here</a>.
+The <code><a href="">micro_sam</a></code> tools mainly use <a href="https://napari.org/stable/howtos/layers/points.html">the point layer</a>, <a href="https://napari.org/stable/howtos/layers/shapes.html">shape layer</a> and <a href="https://napari.org/stable/howtos/layers/labels.html">label layer</a>.</p>
 
-<pre><code>$ micro_sam.annotator
-</code></pre>
+<p>The annotation tools are explained in detail below. We also provide <a href="TODO">video tutorials</a>.</p>
 
-<p>They are built using <a href="https://napari.org/stable/">napari</a> and <a href="https://pyapp-kit.github.io/magicgui/">magicgui</a> to provide the viewer and user interface.
-If you are not familiar with napari yet, <a href="https://napari.org/stable/tutorials/fundamentals/quick_start.html">start here</a>.
-The <code><a href="">micro_sam</a></code> tools use <a href="https://napari.org/stable/howtos/layers/points.html">the point layer</a>, <a href="https://napari.org/stable/howtos/layers/shapes.html">shape layer</a> and <a href="https://napari.org/stable/howtos/layers/labels.html">label layer</a>.</p>
-
-<p>The annotation tools are explained in detail below. In addition to the documentation here we also provide <a href="https://www.youtube.com/watch?v=ket7bDUP9tI&list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO">video tutorials</a>.</p>
-
-<h2 id="starting-via-gui">Starting via GUI</h2>
-
-<p>The annotation toools can be started from a central GUI, which can be started with the command <code>$ micro_sam.annotator</code> or using the executable <a href="#from-installer">from an installer</a>.</p>
-
-<p>In the GUI you can select with of the four annotation tools you want to use:
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/micro-sam-gui.png"></p>
-
-<p>And after selecting them a new window will open where you can select the input file path and other optional parameter. Then click the top button to start the tool. <strong>Note: If you are not starting the annotation tool with a path to pre-computed embeddings then it can take several minutes to open napari after pressing the button because the embeddings are being computed.</strong></p>
-
-<p><strong>Changes in version 0.3:</strong></p>
-
-<p>We have made two changes in version 0.3 that are not reflected in the documentation below yet:</p>
-
-<ul>
-<li>We now support prompts from box, ellipse and polygon annotations. To reflect this we have renamed the <code>box_prompts</code> layer to <code>prompts</code> and the <code>prompts</code> layer to <code>point_prompts</code>.</li>
-<li>We support automatic segmentation in 3d! To use it, you can first run automated segmentation in the current slice via <code>Automatic Segmentation</code>, and then extend the segmentation of these objects to 3d by running <code>Segment All Slices</code> with <code>layer: auto segmentation</code>.</li>
-</ul>
+<p>The annotation tools can be started from the napari plugin menu:
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/napari-plugin.png" width="768"></p>
 
 <h2 id="annotator-2d">Annotator 2D</h2>
 
 <p>The 2d annotator can be started by</p>
 
 <ul>
-<li>clicking <code>2d annotator</code> in the <code><a href="">micro_sam</a></code> GUI.</li>
-<li>running <code>$ micro_sam.annotator_2d</code> in the command line. Run <code>micro_sam.annotator_2d -h</code> for details.</li>
+<li>clicking <code>Annotator 2d</code> in the plugin menu.</li>
+<li>running <code>$ micro_sam.annotator_2d</code> in the command line.</li>
 <li>calling <code><a href="micro_sam/sam_annotator/annotator_2d.html">micro_sam.sam_annotator.annotator_2d</a></code> in a python script. Check out <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py">examples/annotator_2d.py</a> for details. </li>
 </ul>
 
 <p>The user interface of the 2d annotator looks like this:</p>
 
-<p><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/2d-annotator-menu.png" width="768"></p>
+<p><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/2d-annotator-menu.png" width="1024"></p>
 
 <p>It contains the following elements:</p>
 
 <ol>
-<li>The napari layers for the image, segmentations and prompts:
+<li>The napari layers for the segmentations and prompts:
 <ul>
-<li><code>box_prompts</code>: shape layer that is used to provide box prompts to SegmentAnything.</li>
-<li><code>prompts</code>: point layer that is used to provide prompts to SegmentAnything. Positive prompts (green points) for marking the object you want to segment, negative prompts (red points) for marking the outside of the object.</li>
-<li><code>current_object</code>: label layer that contains the object you're currently segmenting.</li>
+<li><code>prompts</code>: shape layer that is used to provide box prompts to SegmentAnything. Annotations can be given as rectangle (box prompt in the image), ellipse or polygon.</li>
+<li><code>point_prompts</code>: point layer that is used to provide point prompts to SegmentAnything. Positive prompts (green points) for marking the object you want to segment, negative prompts (red points) for marking the outside of the object.</li>
 <li><code>committed_objects</code>: label layer with the objects that have already been segmented.</li>
-<li><code>auto_segmentation</code>: label layer results from using SegmentAnything for automatic instance segmentation.</li>
-<li><code>raw</code>: image layer that shows the image data.</li>
+<li><code>auto_segmentation</code>: label layer with the results from automatic instance segmentation.</li>
+<li><code>current_object</code>: label layer for the object(s) you're currently segmenting.</li>
 </ul></li>
-<li>The prompt menu for changing the currently selected point from positive to negative and vice versa. This can also be done by pressing <code>t</code>.</li>
-<li>The menu for automatic segmentation. Pressing <code>Segment All Objects</code> will run automatic segmentation. The results will be displayed in the <code>auto_segmentation</code> layer. Change the parameters <code>pred iou thresh</code> and <code>stability score thresh</code> to control how many objects are segmented.</li>
-<li>The menu for interactive segmentation. Pressing <code>Segment Object</code> (or <code>s</code>) will run segmentation for the current prompts. The result is displayed in <code>current_object</code></li>
-<li>The menu for commiting the segmentation. When pressing <code>Commit</code> (or <code>c</code>) the result from the selected layer (either <code>current_object</code> or <code>auto_segmentation</code>) will be transferred from the respective layer to <code>committed_objects</code>.</li>
-<li>The menu for clearing the current annotations. Pressing <code>Clear Annotations</code> (or <code>shift c</code>) will clear the current annotations and the current segmentation.</li>
+<li>The embedding menu. For selecting the image to process, the Segment Anything model that is used and computing the image embeddings with the model. The <code>Embedding Settings</code> contain advanced settings for loading cached embeddings from file or using tiled embeddings.</li>
+<li>The prompt menu for changing whether the currently selected point is a positive or a negative prompt. This can also be done by pressing <code>T</code>.</li>
+<li>The menu for interactive segmentation. Clicking <code>Segment Object</code> (or pressing <code>S</code>) will run segmentation for the current prompts. The result is displayed in <code>current_object</code>. Activating <code>batched</code> enables segmentation of multiple objects with point prompts. In this case an object will be segmented per positive prompt.</li>
+<li>The menu for automatic segmentation. Clicking <code>Automatic Segmentation</code> will segment all objects n the image. The results will be displayed in the <code>auto_segmentation</code> layer. We support two different methods for automatic segmentation: automatic mask generation (supported for all models) and instance segmentation with an additional decoder (only supported for our models).
+Changing the parameters under <code>Automatic Segmentation Settings</code> controls the segmentation results, check the tooltips for details.</li>
+<li>The menu for commiting the segmentation. When clicking <code>Commit</code> (or pressing <code>C</code>) the result from the selected layer (either <code>current_object</code> or <code>auto_segmentation</code>) will be transferred from the respective layer to <code>committed_objects</code>.
+When <code>commit_path</code> is given the results will automatically be saved there.</li>
+<li>The menu for clearing the current annotations. Clicking <code>Clear Annotations</code> (or pressing <code>Shift + C</code>) will clear the current annotations and the current segmentation.</li>
 </ol>
 
-<p>Note that point prompts and box prompts can be combined. When you're using point prompts you can only segment one object at a time. With box prompts you can segment several objects at once.</p>
+<p>Note that point prompts and box prompts can be combined. When you're using point prompts you can only segment one object at a time, unless the <code>batched</code> mode is activated. With box prompts you can segment several objects at once, both in the normal and <code>batched</code> mode.</p>
 
-<p>Check out <a href="https://youtu.be/ket7bDUP9tI">this video</a> for a tutorial for the 2d annotation tool.</p>
-
-<p>We also provide the <code>image series annotator</code>, which can be used for running the 2d annotator for several images in a folder. You can start by clicking <code>Image series annotator</code> in the GUI, running <code>micro_sam.image_series_annotator</code> in the command line or from a <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/image_series_annotator.py">python script</a>.</p>
+<p>Check out <a href="TODO">this video</a> for a tutorial for this tool.</p>
 
 <h2 id="annotator-3d">Annotator 3D</h2>
 
 <p>The 3d annotator can be started by</p>
 
 <ul>
-<li>clicking <code>3d annotator</code> in the <code><a href="">micro_sam</a></code> GUI.</li>
-<li>running <code>$ micro_sam.annotator_3d</code> in the command line. Run <code>micro_sam.annotator_3d -h</code> for details.</li>
+<li>clicking <code>Annotator 3d</code> in the plugin menu.</li>
+<li>running <code>$ micro_sam.annotator_3d</code> in the command line.</li>
 <li>calling <code><a href="micro_sam/sam_annotator/annotator_3d.html">micro_sam.sam_annotator.annotator_3d</a></code> in a python script. Check out <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_3d.py">examples/annotator_3d.py</a> for details.</li>
 </ul>
 
 <p>The user interface of the 3d annotator looks like this:</p>
 
-<p><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/3d-annotator-menu.png" width="768"></p>
+<p><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/3d-annotator-menu.png" width="1024"></p>
 
 <p>Most elements are the same as in <a href="#annotator-2d">the 2d annotator</a>:</p>
 
 <ol>
-<li>The napari layers that contain the image, segmentation and prompts. Same as for <a href="#annotator-2d">the 2d annotator</a> but without the <code>auto_segmentation</code> layer.</li>
+<li>The napari layers that contain the segmentations and prompts.</li>
+<li>The embedding menu.</li>
 <li>The prompt menu.</li>
 <li>The menu for interactive segmentation.</li>
-<li>The 3d segmentation menu. Pressing <code>Segment All Slices</code> (or <code>Shift-S</code>) will extend the segmentation for the current object across the volume.</li>
-<li>The menu for committing the segmentation.</li>
-<li>The menu for clearing the current annotations.</li>
+<li>The menu for interactive 3d segmentation. Clicking <code>Segment All Slices</code> (or <code>Shift + S</code>) will extend the segmentation for the current object across the volume by projecting prompts across slices. The parameters for prompt projection can be set in <code>Segmentation Settings</code>, please refer to the tooltips for details.</li>
+<li>The menu for automatic segmentation. The overall functionality is the same as <a href="#annotator-2d">for the 2d annotator</a>. To segment the full volume <code>Apply to Volume</code> needs to be checked, otherwise only the current slice will be segmented. Note that 3D segmentation can take quite long without a GPU.</li>
+<li>The menu for committing the current object.</li>
+<li>The menu for clearing the current annotations. If <code>all slices</code> is set all annotations will be cleared, otherwise they are only cleared for the current slice.</li>
 </ol>
 
-<p>Note that you can only segment one object at a time with the 3d annotator.</p>
+<p>Note that you can only segment one object at a time using the interactive segmentation functionality with this tool.</p>
 
-<p>Check out <a href="https://youtu.be/PEy9-rTCdS4">this video</a> for a tutorial for the 3d annotation tool.</p>
+<p>Check out <a href="TODO">this video</a> for a tutorial for the 3d annotation tool.</p>
 
 <h2 id="annotator-tracking">Annotator Tracking</h2>
 
 <p>The tracking annotator can be started by</p>
 
 <ul>
-<li>clicking <code>Tracking annotator</code> in the <code><a href="">micro_sam</a></code> GUI.</li>
-<li>running <code>$ micro_sam.annotator_tracking</code> in the command line. Run <code>micro_sam.annotator_tracking -h</code> for details.</li>
+<li>clicking <code>Annotator Tracking</code> in the plugin menu.</li>
+<li>running <code>$ micro_sam.annotator_tracking</code> in the command line.</li>
 <li>calling <code><a href="micro_sam/sam_annotator/annotator_tracking.html">micro_sam.sam_annotator.annotator_tracking</a></code> in a python script. Check out <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_tracking.py">examples/annotator_tracking.py</a> for details. </li>
 </ul>
 
 <p>The user interface of the tracking annotator looks like this:</p>
 
-<p><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/tracking-annotator-menu.png" width="768"></p>
+<p><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/tracking-annotator-menu.png" width="1024"></p>
 
 <p>Most elements are the same as in <a href="#annotator-2d">the 2d annotator</a>:</p>
 
 <ol>
-<li>The napari layers that contain the image, segmentation and prompts. Same as for <a href="#annotator-2d">the 2d segmentation app</a> but without the <code>auto_segmentation</code> layer, <code>current_tracks</code> and <code>committed_tracks</code> are the equivalent of <code>current_object</code> and <code>committed_objects</code>.</li>
+<li>The napari layers that contain the segmentations and prompts. Same as for <a href="#annotator-2d">the 2d segmentation app</a> but without the <code>auto_segmentation</code> layer.</li>
+<li>The embedding menu.</li>
 <li>The prompt menu.</li>
 <li>The menu with tracking settings: <code>track_state</code> is used to indicate that the object you are tracking is dividing in the current frame. <code>track_id</code> is used to select which of the tracks after division you are following.</li>
 <li>The menu for interactive segmentation.</li>
-<li>The tracking menu. Press <code>Track Object</code> (or <code>Shift-S</code>) to segment the current object across time.</li>
+<li>The menu for interactive tracking menu. Click <code>Track Object</code> (or press <code>Shift + S</code>) to segment the current object across time.</li>
 <li>The menu for committing the current tracking result.</li>
 <li>The menu for clearing the current annotations.</li>
 </ol>
 
-<p>Note that the tracking annotator only supports 2d image data, volumetric data is not supported.</p>
+<p>Note that the tracking annotator only supports 2d image data, volumetric data is not supported. We also do not support automatic tracking yet.</p>
 
-<p>Check out <a href="https://youtu.be/Xi5pRWMO6_w">this video</a> for a tutorial for how to use the tracking annotation tool.</p>
+<p>Check out <a href="TODO">this video</a> for a tutorial for how to use the tracking annotation tool.</p>
+
+<h2 id="image-series-annotator">Image Series Annotator</h2>
+
+<p>The image series annotation tool enables running the <a href="#annotator-2d">2d annotator</a> or <a href="#annotator-3d">2d annotator</a> for multiple images that are saved within an folder. This makes it convenient to annotate many images without having to close the tool. It can be started by</p>
+
+<ul>
+<li>clicking <code>Image Series Annotator</code> in the plugin menu.</li>
+<li>running <code>$ micro_sam.image_series_annotator</code> in the command line.</li>
+<li>calling <code><a href="micro_sam/sam_annotator/image_series_annotator.html">micro_sam.sam_annotator.image_series_annotator</a></code> in a python script. Check out <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/image_series_annotator.py">examples/image_series_annotator.py</a> for details. </li>
+</ul>
+
+<p>When starting this tool via the plugin menu the following interface opens:</p>
+
+<p><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/series-menu.png" width="512"></p>
+
+<p>You can select the folder where your image data is saved with <code>Input Folder</code>. The annotation results will be saved in <code>Output Folder</code>.
+You can specify a rule for loading only a subset of images via <code>pattern</code>, for example <code>*.tif</code> to only load tif images. Set <code>is_volumetric</code> if the data you want to annotate is 3d. The rest of the options are settings for the image embedding computation and are the same as for the embedding menu (see above).
+Once you click <code>Annotate Images</code> the images from the folder you have specified will be loaded and the annotation tool is started for them.</p>
+
+<p>This menu will not open if you start the image series annotator from the command line or via python. In this case the input folder and other settings are passed as parameters instead.</p>
+
+<p>Check out <a href="TODO">this video</a> for a tutorial for how to use the image series annotator.</p>
+
+<h2 id="finetuning-ui">Finetuning UI</h2>
+
+<p>We also provide a graphical tool for finetuning models on your own data. It can be started by clicking <code>Finetuning</code> in the plugin menu.</p>
+
+<p><strong>Note:</strong> if you know a bit of python programming we recommend to use a script for model finetuning instead. This will give you more options to configure the training. See <a href="training-your-own-model">these instructions</a> for details.</p>
+
+<p>When starting this tool via the plugin menu the following interface opens:</p>
+
+<p><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/finetuning-menu.png" width="512"></p>
+
+<p>You can select the image data via <code>Path to images</code>. We can either load images from a folder or select a single file for training. By providing <code>Image data key</code> you can either provide a pattern for selecting files from a folder or provide an internal filepath for hdf5, zarr or similar fileformats.</p>
+
+<p>You can select the label data via <code>Path to labels</code> and <code>Label data key</code>, following the same logic as for the image data. We expect label masks stored in the same size as the image data for training. You can for example use annotations created with one of the <code><a href="">micro_sam</a></code> annotation tools for this, they are stored in the correct format!</p>
+
+<p>The <code>Configuration</code> option allows you to choose the hardware configuration for training. We try to automatically select the correct setting for your system, but it can also be changed. Please refer to the tooltips for the other parameters.</p>
 
 <h2 id="tips-tricks">Tips &amp; Tricks</h2>
 
@@ -479,13 +466,16 @@ The <code><a href="">micro_sam</a></code> tools use <a href="https://napari.org/
 To address this image we implement tiling: cutting up the input image into tiles of a fixed size (with a fixed overlap) and running Segment Anything for the individual tiles.
 You can activate tiling by passing the parameters <code>tile_shape</code>, which determines the size of the inner tile and <code>halo</code>, which determines the size of the additional overlap.
 <ul>
-<li>If you're using the <code><a href="">micro_sam</a></code> GUI you can specify the values for the <code>halo</code> and <code>tile_shape</code> via the <code>Tile X</code>, <code>Tile Y</code>, <code>Halo X</code> and <code>Halo Y</code>.</li>
+<li>If you're using the <code><a href="">micro_sam</a></code> GUI you can specify the values for the <code>halo</code> and <code>tile_shape</code> via the <code>Tile X</code>, <code>Tile Y</code>, <code>Halo X</code> and <code>Halo Y</code> by clicking on <code>Embeddings Settings</code>.</li>
 <li>If you're using a python script you can pass them as tuples, e.g. <code>tile_shape=(1024, 1024), halo=(128, 128)</code>. See also <a href="https://github.com/computational-cell-analytics/micro-sam/blob/0921581e2964139194d235a87cb002d3f3667f45/examples/annotator_2d.py#L40">the wholeslide_annotator example</a>.</li>
 <li>If you're using the command line functions you can pass them via the options <code>--tile_shape 1024 1024 --halo 128 128</code></li>
 <li>Note that prediction with tiling only works when the embeddings are cached to file, so you must specify an <code>embedding_path</code> (<code>-e</code> in the CLI).</li>
 <li>You should choose the <code>halo</code> such that it is larger than half of the maximal radius of the objects your segmenting.</li>
 </ul></li>
-<li>The applications pre-compute the image embeddings produced by SegmentAnything and (optionally) store them on disc. If you are using a CPU this step can take a while for 3d data or timeseries (you will see a progress bar with a time estimate). If you have access to a GPU without graphical interface (e.g. via a local computer cluster or a cloud provider), you can also pre-compute the embeddings there and then copy them to your laptop / local machine to speed this up. You can use the command <code>micro_sam.precompute_embeddings</code> for this (it is installed with the rest of the applications). You can specify the location of the precomputed embeddings via the <code>embedding_path</code> argument.</li>
+<li>The applications pre-compute the image embeddings produced by SegmentAnything and (optionally) store them on disc. If you are using a CPU this step can take a while for 3d data or timeseries (you will see a progress bar with a time estimate). If you have access to a GPU without graphical interface (e.g. via a local computer cluster or a cloud provider), you can also pre-compute the embeddings there and then copy them to your laptop / local machine to speed this up. You can use the command <code>micro_sam.precompute_embeddings</code> for this (it is installed with the rest of the applications). You can specify the location of the precomputed embeddings via the <code>embedding_path</code> argument.
+<ul>
+<li>If you use the GUI to save or load embeddings, simply specify an <code>embeddings save path</code>. Existing embeddings are loaded from the specified path or embeddings are computed and the path is used to save them. </li>
+</ul></li>
 <li>Most other processing steps are very fast even on a CPU, so interactive annotation is possible. An exception is the automatic segmentation step (2d segmentation), which takes several minutes without a GPU (depending on the image size). For large volumes and timeseries segmenting an object in 3d / tracking across time can take a couple settings with a CPU (it is very fast with a GPU).</li>
 <li>You can also try using a smaller version of the SegmentAnything model to speed up the computations. For this you can pass the <code>model_type</code> argument and either set it to <code>vit_b</code> or to <code>vit_l</code> (default is <code>vit_h</code>). However, this may lead to worse results.</li>
 <li>You can save and load the results from the <code>committed_objects</code> / <code>committed_tracks</code> layer to correct segmentations you obtained from another tool (e.g. CellPose) or to save intermediate annotation results. The results can be saved via <code>File -&gt; Save Selected Layer(s) ...</code> in the napari menu (see the tutorial videos for details). They can be loaded again by specifying the corresponding location via the <code>segmentation_result</code> (2d and 3d segmentation) or <code>tracking_result</code> (tracking) argument.</li>
@@ -495,11 +485,11 @@ You can activate tiling by passing the parameters <code>tile_shape</code>, which
 
 <ul>
 <li>Segment Anything does not work well for very small or fine-grained objects (e.g. filaments).</li>
-<li>For the automatic segmentation functionality we currently rely on the automatic mask generation provided by SegmentAnything. It is slow and often misses objects in microscopy images. For now, we only offer this functionality in the 2d segmentation app; we are working on improving it and extending it to 3d segmentation and tracking.</li>
+<li>For the automatic segmentation functionality we currently rely on the automatic mask generation provided by SegmentAnything. It is slow and often misses objects in microscopy images.</li>
 <li>Prompt bounding boxes do not provide the full functionality for tracking yet (they cannot be used for divisions or for starting new tracks). See also <a href="https://github.com/computational-cell-analytics/micro-sam/issues/23">this github issue</a>.</li>
 </ul>
 
-<h1 id="how-to-use-the-python-library">How to use the Python Library</h1>
+<h1 id="using-the-python-library">Using the Python Library</h1>
 
 <p>The python library can be imported via</p>
 
@@ -508,11 +498,11 @@ You can activate tiling by passing the parameters <code>tile_shape</code>, which
 </code></pre>
 </div>
 
-<p>The library</p>
+<p>This library extends the <a href="https://github.com/facebookresearch/segment-anything">Segment Anything library</a> and</p>
 
 <ul>
-<li>implements function to apply Segment Anything to 2d and 3d data more conveniently in <code><a href="micro_sam/prompt_based_segmentation.html">micro_sam.prompt_based_segmentation</a></code>.</li>
-<li>provides more and improved automatic instance segmentation functionality in <code><a href="micro_sam/instance_segmentation.html">micro_sam.instance_segmentation</a></code>.</li>
+<li>implements functions to apply Segment Anything to 2d and 3d data in <code><a href="micro_sam/prompt_based_segmentation.html">micro_sam.prompt_based_segmentation</a></code>.</li>
+<li>provides improved automatic instance segmentation functionality in <code><a href="micro_sam/instance_segmentation.html">micro_sam.instance_segmentation</a></code>.</li>
 <li>implements training functionality that can be used for finetuning on your own data in <code><a href="micro_sam/training.html">micro_sam.training</a></code>.</li>
 <li>provides functionality for quantitative and qualitative evaluation of Segment Anything models in <code><a href="micro_sam/evaluation.html">micro_sam.evaluation</a></code>.</li>
 </ul>
@@ -526,41 +516,44 @@ You can activate tiling by passing the parameters <code>tile_shape</code>, which
 </code></pre>
 </div>
 
-<p>This functionality is used to implement the interactive annotation tools and can also be used as a standalone python library.
-Some preliminary examples for how to use the python library can be found <a href="https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/use_as_library">here</a>. Check out the <code>Submodules</code> documentation for more details.</p>
+<p>This functionality is used to implement the interactive annotation tools in <code><a href="micro_sam/sam_annotator.html">micro_sam.sam_annotator</a></code> and can be used as a standalone python library.
+We provide jupyter notebooks that demonstrate how to use it <a href="https://github.com/computational-cell-analytics/micro-sam/tree/master/notebooks">here</a>. You can find the full library documentation by scrolling to the end of this page. </p>
 
 <h2 id="training-your-own-model">Training your own model</h2>
 
 <p>We reimplement the training logic described in the <a href="https://arxiv.org/abs/2304.02643">Segment Anything publication</a> to enable finetuning on custom data.
-We use this functionality to provide the <a href="#finetuned-models">finetuned microscopy models</a> and it can also be used to finetune models on your own data.
+We use this functionality to provide the <a href="#finetuned-models">finetuned microscopy models</a> and it can also be used to train models on your own data.
 In fact the best results can be expected when finetuning on your own data, and we found that it does not require much annotated training data to get siginficant improvements in model performance.
-So a good strategy is to annotate a few images with one of the provided models using one of the interactive annotation tools and, if the annotation is not working as good as expected yet, finetune on the annotated data.
+So a good strategy is to annotate a few images with one of the provided models using our interactive annotation tools and, if the model is not working as good as required for your use-case, finetune on the annotated data.
 <!--
 TODO: provide link to the paper with results on how much data is needed
 --></p>
 
-<p>The training logic is implemented in <code><a href="micro_sam/training.html">micro_sam.training</a></code> and is based on <a href="https://github.com/constantinpape/torch-em">torch-em</a>. Please check out <a href="https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/finetuning">examples/finetuning</a> to see how you can finetune on your own data with it. The script <code>finetune_hela.py</code> contains an example for finetuning on a small custom microscopy dataset and <code>use_finetuned_model.py</code> shows how this model can then be used in the interactive annotation tools.</p>
+<p>The training logic is implemented in <code><a href="micro_sam/training.html">micro_sam.training</a></code> and is based on <a href="https://github.com/constantinpape/torch-em">torch-em</a>. Check out <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/micro-sam-finetuning.ipynb">the finetuning notebook</a> to see how to use it.</p>
 
-<p>Since release v0.4.0 we also support training an additional decoder for automatic instance segmentation. This yields better results than the automatic mask generation of segment anything and is significantly faster.
-You can enable training of the decoder by setting <code>train_instance_segmentation = True</code> <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/finetuning/finetune_hela.py#L165">here</a>.
-The script <code>instance_segmentation_with_finetuned_model.py</code> shows how to use it for automatic instance segmentation.
-We will fully integrate this functionality with the annotation tool in the next release.</p>
+<p>We also support training an additional decoder for automatic instance segmentation. This yields better results than the automatic mask generation of segment anything and is significantly faster.
+The notebook explains how to activate training it together with the rest of SAM and how to then use it.</p>
 
-<p>More advanced examples, including quantitative and qualitative evaluation, of finetuned models can be found in <a href="https://github.com/computational-cell-analytics/micro-sam/tree/master/finetuning">finetuning</a>, which contains the code for training and evaluating our microscopy models.</p>
+<p>More advanced examples, including quantitative and qualitative evaluation, of finetuned models can be found in <a href="https://github.com/computational-cell-analytics/micro-sam/tree/master/finetuning">finetuning</a>, which contains the code for training and evaluating <a href="finetuned-models">our models</a>.</p>
 
 <h1 id="finetuned-models">Finetuned models</h1>
 
-<p>In addition to the original Segment anything models, we provide models that finetuned on microscopy data using the functionality from <code><a href="micro_sam/training.html">micro_sam.training</a></code>.
-The models are hosted on zenodo. We currently offer the following models:</p>
+<p>In addition to the original Segment Anything models, we provide models that are finetuned on microscopy data.
+The additional models are available in the <a href="https://bioimage.io/#/">bioimage.io modelzoo</a> and are also hosted on zenodo.</p>
+
+<p>We currently offer the following models:</p>
 
 <ul>
 <li><code>vit_h</code>: Default Segment Anything model with vit-h backbone.</li>
 <li><code>vit_l</code>: Default Segment Anything model with vit-l backbone.</li>
 <li><code>vit_b</code>: Default Segment Anything model with vit-b backbone.</li>
 <li><code>vit_t</code>: Segment Anything model with vit-tiny backbone. From the <a href="https://arxiv.org/abs/2306.14289">Mobile SAM publication</a>. </li>
-<li><code>vit_b_lm</code>: Finetuned Segment Anything model for cells and nuclei in light microscopy data with vit-b backbone.</li>
-<li><code>vit_b_em_organelles</code>: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with vit-b backbone.</li>
-<li><code>vit_b_em_boundaries</code>: Finetuned Segment Anything model for neurites and cells in electron microscopy data with vit-b backbone.</li>
+<li><code>vit_l_lm</code>: Finetuned Segment Anything model for cells and nuclei in light microscopy data with vit-l backbone. (<a href="TODO">zenodo</a>, <a href="TODO">bioimage.io</a>)</li>
+<li><code>vit_b_lm</code>: Finetuned Segment Anything model for cells and nuclei in light microscopy data with vit-b backbone. (<a href="TODO">zenodo</a>, <a href="TODO">bioimage.io</a>)</li>
+<li><code>vit_t_lm</code>: Finetuned Segment Anything model for cells and nuclei in light microscopy data with vit-t backbone. (<a href="TODO">zenodo</a>, <a href="TODO">bioimage.io</a>)</li>
+<li><code>vit_l_em_organelles</code>: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with vit-l backbone. (<a href="TODO">zenodo</a>, <a href="TODO">bioimage.io</a>)</li>
+<li><code>vit_b_em_organelles</code>: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with vit-b backbone. (<a href="TODO">zenodo</a>, <a href="TODO">bioimage.io</a>)</li>
+<li><code>vit_t_em_organelles</code>: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with vit-t backbone. (<a href="TODO">zenodo</a>, <a href="TODO">bioimage.io</a>)</li>
 </ul>
 
 <p>See the two figures below of the improvements through the finetuned model for LM and EM data. </p>
@@ -569,46 +562,42 @@ The models are hosted on zenodo. We currently offer the following models:</p>
 
 <p><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/em_comparison.png" width="768"></p>
 
-<p>You can select which of the models is used in the annotation tools by selecting the corresponding name from the <code>Model Type</code> menu:</p>
+<p>You can select which model to use for annotation by selecting the corresponding name in the embedding menu:</p>
 
 <p><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/model-type-selector.png" width="256"></p>
 
 <p>To use a specific model in the python library you need to pass the corresponding name as value to the <code>model_type</code> parameter exposed by all relevant functions.
-See for example the <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py#L62">2d annotator example</a> where <code>use_finetuned_model</code> can be set to <code>True</code> to use the <code>vit_b_lm</code> model.</p>
+See for example the <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py#L62">2d annotator example</a>.</p>
 
-<p>Note that we are still working on improving these models and may update them from time to time. All older models will stay available for download on zenodo, see <a href="#model-sources">model sources</a> below</p>
-
-<h2 id="which-model-should-i-choose">Which model should I choose?</h2>
+<h2 id="choosing-a-model">Choosing a Model</h2>
 
 <p>As a rule of thumb:</p>
 
 <ul>
-<li>Use the <code>vit_b_lm</code> model for segmenting cells or nuclei in light microscopy.</li>
-<li>Use the <code>vit_b_em_organelles</code> models for segmenting mitochondria, nuclei or other organelles in electron microscopy.</li>
-<li>Use the <code>vit_b_em_boundaries</code> models for segmenting cells or neurites in electron microscopy.</li>
+<li>Use the <code>vit_l_lm</code> or <code>vit_b_lm</code> model for segmenting cells or nuclei in light microscopy. The larger model (<code>vit_l_lm</code>) yields a bit better segmentation quality, especially for automatic segmentation, but needs more computational resources.</li>
+<li>Use the <code>vit_l_em_organelles</code> or <code>vit_b_em_organelles</code> models for segmenting mitochondria, nuclei or other  roundish organelles in electron microscopy.</li>
 <li>For other use-cases use one of the default models.</li>
+<li>The <code>vit_t_...</code> models run much faster than other models, but yield inferior quality for many applications. It can still make sense to try them for your use-case if your working on a laptop and want to annotate many images or volumetric data. </li>
 </ul>
 
-<p>See also the figures above for examples where the finetuned models work better than the vanilla models.
-Currently the model <code>vit_h</code> is used by default.</p>
+<p>See also the figures above for examples where the finetuned models work better than the default models.
+We are working on further improving these models and adding new models for other biomedical imaging domains.</p>
 
-<p>We are working on further improving these models and adding new models for other biomedical imaging domains.</p>
+<h2 id="older-models">Older Models</h2>
 
-<h2 id="model-sources">Model Sources</h2>
-
-<p>Here is an overview of all finetuned models we have released to zenodo so far:</p>
+<p>Previous versions of our models are available on zenodo:</p>
 
 <ul>
 <li><a href="https://zenodo.org/records/10524894">vit_b_em_boundaries</a>: for segmenting compartments delineated by boundaries such as cells or neurites in EM.</li>
 <li><a href="https://zenodo.org/records/10524828">vit_b_em_organelles</a>: for segmenting mitochondria, nuclei or other organelles in EM.</li>
 <li><a href="https://zenodo.org/records/10524791">vit_b_lm</a>: for segmenting cells and nuclei in LM.</li>
-<li><a href="https://zenodo.org/records/8250291">vit_h_em</a>: this model is outdated.</li>
-<li><a href="https://zenodo.org/records/8250299">vit_h_lm</a>: this model is outdated.</li>
+<li><a href="https://zenodo.org/records/8250291">vit_h_em</a>: for general EM segmentation.</li>
+<li><a href="https://zenodo.org/records/8250299">vit_h_lm</a>: for general LM segmentation.</li>
 </ul>
 
-<p>Some of these models contain multiple versions.</p>
+<p>We do not recommend to use these models since our new models improve upon them significantly. But we provide the links here in case they are needed to reproduce older segmentation workflows.</p>
 
-<h1 id="how-to-contribute">How to contribute</h1>
+<h1 id="contribution-guide">Contribution Guide</h1>
 
 <ul>
 <li><a href="#discuss-your-ideas">Discuss your ideas</a></li>
@@ -823,112 +812,6 @@ git checkout -b my-new-feature
 </blockquote>
 
 <p>For more details about how to use memray, see <a href="https://bloomberg.github.io/memray/getting_started.html">the documentation</a>.</p>
-
-<h1 id="for-developers">For Developers</h1>
-
-<p>This software consists of four different python (sub-)modules:</p>
-
-<ul>
-<li>The top-level <code><a href="">micro_sam</a></code> module implements general purpose functionality for using Segment Anything for multi-dimensional data.</li>
-<li><code><a href="micro_sam/evaluation.html">micro_sam.evaluation</a></code> provides functionality to evaluate Segment Anything models on (microscopy) segmentation tasks.</li>
-<li><code>micro_sam.traning</code> implements the training functionality to finetune Segment Anything for custom segmentation datasets.</li>
-<li><code><a href="micro_sam/sam_annotator.html">micro_sam.sam_annotator</a></code> implements the interactive annotation tools.</li>
-</ul>
-
-<h2 id="annotation-tools-2">Annotation Tools</h2>
-
-<p>The annotation tools are implemented as napari plugins.</p>
-
-<p>There are four annotation tools:</p>
-
-<ul>
-<li><code><a href="micro_sam/sam_annotator/annotator_2d.html">micro_sam.sam_annotator.annotator_2d</a></code>: for interactive segmentation of 2d images.</li>
-<li><code><a href="micro_sam/sam_annotator/annotator_3d.html">micro_sam.sam_annotator.annotator_3d</a></code>: for interactive segmentation of volumetric images.</li>
-<li><code><a href="micro_sam/sam_annotator/annotator_tracking.html">micro_sam.sam_annotator.annotator_tracking</a></code>: for interactive tracking in timeseries of 2d images.</li>
-<li><code><a href="micro_sam/sam_annotator/image_series_annotator.html">micro_sam.sam_annotator.image_series_annotator</a></code>: for applying the 2d annotation tool to a series of images. This is not implemented as a separate plugin, but as a function that runns annotator 2d for multiple images.</li>
-</ul>
-
-<p>An overview of the functionality of the different tools:</p>
-
-<table>
-<thead>
-<tr>
-  <th>Functionality</th>
-  <th>annotator_2d</th>
-  <th>annotator_3d</th>
-  <th>annotator_tracking</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-  <td>Interactive segmentation</td>
-  <td>Yes</td>
-  <td>Yes</td>
-  <td>Yes</td>
-</tr>
-<tr>
-  <td>Interactive segmentation for multiple objects at a time</td>
-  <td>Yes</td>
-  <td>No</td>
-  <td>No</td>
-</tr>
-<tr>
-  <td>Interactive 3d segmentation via projection</td>
-  <td>No</td>
-  <td>Yes</td>
-  <td>Yes</td>
-</tr>
-<tr>
-  <td>Support for dividing objects</td>
-  <td>No</td>
-  <td>No</td>
-  <td>Yes</td>
-</tr>
-<tr>
-  <td>Automatic segmentation</td>
-  <td>Yes</td>
-  <td>Yes</td>
-  <td>No</td>
-</tr>
-</tbody>
-</table>
-
-<p>The functionality for <code>image_series_annotator</code> is not listed because it is identical with the functionality of <code>annotator_2d</code>.</p>
-
-<p>Each tool implements the follwing core logic:</p>
-
-<ol>
-<li>The image embeddings (prediction from SAM image encoder) are pre-computed for the input data (2d image, image volume or timeseries). These embeddings can be cached to a zarr file.</li>
-<li>Interactive (and automatic) segmentation functionality is implemented by a UI based on <code>napari</code> and <code>magicgui</code> functionality.</li>
-</ol>
-
-<p>Each tool has three different entry points:</p>
-
-<ul>
-<li>From napari plugin menu, e.g. <code>plugin-&gt;micro_sam-&gt;Annotator 2d</code>. (Called <em>plugin</em> in the following).</li>
-<li>From a python function, e.g. <code><a href="micro_sam/sam_annotator/annotator_2d.html">micro_sam.sam_annotator.annotator_2d</a>:annotator_2d</code>.  (Called <em>function</em> in the following.)</li>
-<li>From the command line, e.g. <code>micro_sam.annotator_2d</code>. (Called <em>CLI</em> in the following).</li>
-</ul>
-
-<p>Each tool is implemented in its own submodule, e.g. <code><a href="micro_sam/sam_annotator/annotator_2d.html">micro_sam.sam_annotator.annotator_2d</a></code>.
-The napari plugin is implemented by a class, e.g. <code><a href="micro_sam/sam_annotator/annotator_2d.html">micro_sam.sam_annotator.annotator_2d</a>:Annotator2d</code>, inheriting from <code>micro_sam.sam_annotator._annotator._AnnotatorBase</code>. This class implements the core logic for the plugins.
-The concrete annotation tools are instantiated by passing widgets from <code>micro_sam.sam_annotator._widgets</code> to it, 
-which implement the interactive segmentation in 2d, 3d etc.
-These plugins are designed so that image embeddings can be computed for user-specified image layers in napari.</p>
-
-<p>The <em>function</em> and <em>CLI</em> entry points are implemented by <code><a href="micro_sam/sam_annotator/annotator_2d.html">micro_sam.sam_annotator.annotator_2d</a>:annotator_2d</code> (and corresponding functions for the other annotation tools). They are called with image data, precompute the embeddings for that image and start a napari viewer with this image and the annotation plugin.</p>
-
-<p><!--
-TODO update the flow chart so that it matches the new design.
-The same overall design holds true for the other plugins. The flow chart below shows a flow chart with a simplified overview of the design of the 2d annotation tool. Rounded squares represent functions or the corresponding widget and squares napari layers or other data, orange represents the <em>plugin</em> enty point, cyan <em>CLI</em>. Arrows that do not have a label correspond to a simple input/output relation.</p>
-
-<p><img src="./images/2d-annotator-flow.png" alt="annotator 2d flow diagram" />
---></p>
-
-<p><!---
-Source for the diagram is here:
-<a href="https://docs.google.com/presentation/d/1fMDNBYMYxeqe4dk6OmmFxoI8sYvCu4EPZS_LyTsTg_s/edit#slide=id.p">https://docs.google.com/presentation/d/1fMDNBYMYxeqe4dk6OmmFxoI8sYvCu4EPZS_LyTsTg_s/edit#slide=id.p</a>
---></p>
 
 <h1 id="using-micro_sam-on-band">Using micro_sam on BAND</h1>
 
