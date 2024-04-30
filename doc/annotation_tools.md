@@ -84,29 +84,30 @@ The user interface of the tracking annotator looks like this:
 <img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/tracking-annotator-menu.png" width="768">
 
 Most elements are the same as in [the 2d annotator](#annotator-2d):
-1. The napari layers that contain the image, segmentation and prompts. Same as for [the 2d segmentation app](#annotator-2d) but without the `auto_segmentation` layer, `current_tracks` and `committed_tracks` are the equivalent of `current_object` and `committed_objects`.
-2. The prompt menu.
-3. The menu with tracking settings: `track_state` is used to indicate that the object you are tracking is dividing in the current frame. `track_id` is used to select which of the tracks after division you are following.
-4. The menu for interactive segmentation.
-5. The tracking menu. Press `Track Object` (or `Shift-S`) to segment the current object across time.
-6. The menu for committing the current tracking result.
-7. The menu for clearing the current annotations.
+1. The napari layers that contain the segmentations and prompts. Same as for [the 2d segmentation app](#annotator-2d) but without the `auto_segmentation` layer.
+2. The embedding menu.
+3. The prompt menu.
+4. The menu with tracking settings: `track_state` is used to indicate that the object you are tracking is dividing in the current frame. `track_id` is used to select which of the tracks after division you are following.
+5. The menu for interactive segmentation.
+6. The menu for interactive tracking menu. Click `Track Object` (or press `Shift + S`) to segment the current object across time.
+7. The menu for committing the current tracking result.
+8. The menu for clearing the current annotations.
 
-Note that the tracking annotator only supports 2d image data, volumetric data is not supported.
+Note that the tracking annotator only supports 2d image data, volumetric data is not supported. We also do not support automatic tracking yet.
 
 Check out [this video](TODO) for a tutorial for how to use the tracking annotation tool.
 
 
 ## Image Series Annotator
 
-TODO
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/series-menu.png" width="1024">
 
 We also provide the `image series annotator`, which can be used for running the 2d annotator for several images in a folder. You can start by clicking `Image series annotator` in the GUI, running `micro_sam.image_series_annotator` in the command line or from a [python script](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/image_series_annotator.py).
 
 
 ## Finetuning Tool
 
-TODO
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/finetuning-menu.png" width="1024">
 
 
 ## Tips & Tricks

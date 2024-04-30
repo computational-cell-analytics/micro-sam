@@ -1,4 +1,4 @@
-# How to use the Python Library
+# Using the Python Library
 
 The python library can be imported via
 ```python
