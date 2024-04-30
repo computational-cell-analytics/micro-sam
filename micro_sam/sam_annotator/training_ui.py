@@ -159,7 +159,7 @@ class TrainingWidget(widgets._WidgetBase):
         )
         setting_values.layout().addLayout(layout)
 
-        settings = widgets._make_collapsible(setting_values, title="Advanced")
+        settings = widgets._make_collapsible(setting_values, title="Advanced Settings")
         return settings
 
     def _get_loaders(self):
