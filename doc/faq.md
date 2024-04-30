@@ -76,7 +76,13 @@ Ans. TODO: @CP: We discussed this about storing the input prompts smh, I totally
 
 
 ### 7. I have complex objects to segment. Both, the default Segment Anything models and `micro-sam` generalist models do not work for my data. What should I do?
-Ans. `micro-sam` supports interactive annotation using positive and negative point prompts, box prompts and freehand polygon tool. You can combine multiple types of prompts from above to improve the segmentation quality. In case the aforementioned suggestions do not work as desired, `micro-sam` now supports finetuning using the napari-tool and the python library. We recommend the following: a) Check which of the provided model(s) perform relatively good on your data, b) Choose the better performing model as the starting point to train your own specialist model for the desired segmentation task. 
+Ans. `micro-sam` supports interactive annotation using positive and negative point prompts, box prompts and freehand polygon tool. You can combine multiple types of prompts from above to improve the segmentation quality. In case the aforementioned suggestions do not work as desired, `micro-sam` now supports finetuning using the napari-tool and the python library. We recommend the following: a) Check which of the provided model(s) perform relatively good on your data, b) Choose the better performing model as the starting point to train your own specialist model for the desired segmentation task.
+
+
+### 8. I am using the annotator tool, napari outputs the following error: `While emmitting signal ... an error ocurred in callback ... This is not a bug in psygnal. See ... above for details.`
+Ans. These errors could be raised for the few known reasons listed below:
+- While using `Automatic Segmentation` from the finetuned Segment Anything models, the model does not segment any objects. This often happens with the finetuned models, which need lower values for the `pred_iou_thresh` and the `stability_score_thresh`. You can change these in the GUI (under `Settings` in the `Automatic Segmentation` widget console for AMG-based segmentation). The best approach is the following: lower these thresholds to smaller values (e.g. 0.5 for both). This segments the objects you are interested in, however it also segments unwanted objects. Then choose higher values for the thresholds until the unwanted objects disappear (rerunning this step with different values will be fast after you run the segmentation the first time with lower values).
+- While using interactive annotations, this could happen if the prompts are placed outside the image, the object is segmented using a negative point prompt, or the projection along multidimensional inputs places a projected prompt along the consecutive slices outside the image (etc.). The best approach here is: to clear the annotations and place fresh annotations to segment the object with an updated prompt-placement heuristic.
 
 
 ## Fine-tuning
