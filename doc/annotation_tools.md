@@ -12,22 +12,16 @@ The annotation tools can be started from the napari plugin menu, the command lin
 They are built as napari plugin and make use of existing napari functionality wherever possible. If you are not familiar with napari yet, [start here](https://napari.org/stable/tutorials/fundamentals/quick_start.html).
 The `micro_sam` tools mainly use [the point layer](https://napari.org/stable/howtos/layers/points.html), [shape layer](https://napari.org/stable/howtos/layers/shapes.html) and [label layer](https://napari.org/stable/howtos/layers/labels.html).
 
-The annotation tools are explained in detail below. In addition to the documentation here we also provide [video tutorials](TODO).
+The annotation tools are explained in detail below. We also provide [video tutorials](TODO).
 
+The annotation tools can be started from the napari plugin menu:
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/napari-plugin.png">
 
-## Starting via napari plugin menu
-
-The annotation tools can be started from a central GUI, which can be started with the command `$ micro_sam.annotator` or using the executable [from an installer](#from-installer).
-
-In the GUI you can select with of the four annotation tools you want to use:
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/micro-sam-gui.png">
-
-And after selecting them a new window will open where you can select the input file path and other optional parameter. Then click the top button to start the tool. **Note: If you are not starting the annotation tool with a path to pre-computed embeddings then it can take several minutes to open napari after pressing the button because the embeddings are being computed.**
 
 ## Annotator 2D
 
 The 2d annotator can be started by
-- clicking `2d annotator` in the `micro_sam` GUI.
+- clicking `Annotator 2d` in the plugin menu.
 - running `$ micro_sam.annotator_2d` in the command line. Run `micro_sam.annotator_2d -h` for details.
 - calling `micro_sam.sam_annotator.annotator_2d` in a python script. Check out [examples/annotator_2d.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py) for details. 
 
@@ -51,14 +45,13 @@ It contains the following elements:
 
 Note that point prompts and box prompts can be combined. When you're using point prompts you can only segment one object at a time. With box prompts you can segment several objects at once.
 
-Check out [this video](https://youtu.be/ket7bDUP9tI) for a tutorial for the 2d annotation tool.
+Check out [this video](TODO) for a tutorial for the 2d annotation tool.
 
-We also provide the `image series annotator`, which can be used for running the 2d annotator for several images in a folder. You can start by clicking `Image series annotator` in the GUI, running `micro_sam.image_series_annotator` in the command line or from a [python script](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/image_series_annotator.py).
 
 ## Annotator 3D
 
 The 3d annotator can be started by
-- clicking `3d annotator` in the `micro_sam` GUI.
+- clicking `Annotator 3d` in the plugin menu.
 - running `$ micro_sam.annotator_3d` in the command line. Run `micro_sam.annotator_3d -h` for details.
 - calling `micro_sam.sam_annotator.annotator_3d` in a python script. Check out [examples/annotator_3d.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_3d.py) for details.
 
@@ -76,12 +69,13 @@ Most elements are the same as in [the 2d annotator](#annotator-2d):
 
 Note that you can only segment one object at a time with the 3d annotator.
 
-Check out [this video](https://youtu.be/PEy9-rTCdS4) for a tutorial for the 3d annotation tool.
+Check out [this video](TODO) for a tutorial for the 3d annotation tool.
+
 
 ## Annotator Tracking
 
 The tracking annotator can be started by
-- clicking `Tracking annotator` in the `micro_sam` GUI.
+- clicking `Annotator Tracking` in the plugin menu.
 - running `$ micro_sam.annotator_tracking` in the command line. Run `micro_sam.annotator_tracking -h` for details.
 - calling `micro_sam.sam_annotator.annotator_tracking` in a python script. Check out [examples/annotator_tracking.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_tracking.py) for details. 
 
@@ -100,7 +94,20 @@ Most elements are the same as in [the 2d annotator](#annotator-2d):
 
 Note that the tracking annotator only supports 2d image data, volumetric data is not supported.
 
-Check out [this video](https://youtu.be/Xi5pRWMO6_w) for a tutorial for how to use the tracking annotation tool.
+Check out [this video](TODO) for a tutorial for how to use the tracking annotation tool.
+
+
+## Image Series Annotator
+
+TODO
+
+We also provide the `image series annotator`, which can be used for running the 2d annotator for several images in a folder. You can start by clicking `Image series annotator` in the GUI, running `micro_sam.image_series_annotator` in the command line or from a [python script](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/image_series_annotator.py).
+
+
+## Finetuning Tool
+
+TODO
+
 
 ## Tips & Tricks
 
