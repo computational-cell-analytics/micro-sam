@@ -42,7 +42,7 @@ jobs:
 
       - name: Push tag
         id: tag-version
-        #if: steps.check-version.outputs.previous-version != steps.check-version.outputs.current-version
+        if: steps.check-version.outputs.previous-version != steps.check-version.outputs.current-version
         uses: mathieudutour/github-tag-action@v6.1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
