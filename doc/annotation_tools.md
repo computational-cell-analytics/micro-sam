@@ -15,59 +15,63 @@ The `micro_sam` tools mainly use [the point layer](https://napari.org/stable/how
 The annotation tools are explained in detail below. We also provide [video tutorials](TODO).
 
 The annotation tools can be started from the napari plugin menu:
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/napari-plugin.png">
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/napari-plugin.png" width="768">
 
 
 ## Annotator 2D
 
 The 2d annotator can be started by
 - clicking `Annotator 2d` in the plugin menu.
-- running `$ micro_sam.annotator_2d` in the command line. Run `micro_sam.annotator_2d -h` for details.
+- running `$ micro_sam.annotator_2d` in the command line.
 - calling `micro_sam.sam_annotator.annotator_2d` in a python script. Check out [examples/annotator_2d.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py) for details. 
 
 The user interface of the 2d annotator looks like this:
 
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/2d-annotator-menu.png" width="768">
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/2d-annotator-menu.png" width="1024">
 
 It contains the following elements:
-1. The napari layers for the image, segmentations and prompts:
-    - `box_prompts`: shape layer that is used to provide box prompts to SegmentAnything.
-    - `prompts`: point layer that is used to provide prompts to SegmentAnything. Positive prompts (green points) for marking the object you want to segment, negative prompts (red points) for marking the outside of the object.
-    - `current_object`: label layer that contains the object you're currently segmenting.
+1. The napari layers for the segmentations and prompts:
+    - `prompts`: shape layer that is used to provide box prompts to SegmentAnything. Annotations can be given as rectangle (box prompt in the image), ellipse or polygon.
+    - `point_prompts`: point layer that is used to provide point prompts to SegmentAnything. Positive prompts (green points) for marking the object you want to segment, negative prompts (red points) for marking the outside of the object.
     - `committed_objects`: label layer with the objects that have already been segmented.
-    - `auto_segmentation`: label layer results from using SegmentAnything for automatic instance segmentation.
-    - `raw`: image layer that shows the image data.
-2. The prompt menu for changing the currently selected point from positive to negative and vice versa. This can also be done by pressing `t`.
-3. The menu for automatic segmentation. Pressing `Segment All Objects` will run automatic segmentation. The results will be displayed in the `auto_segmentation` layer. Change the parameters `pred iou thresh` and `stability score thresh` to control how many objects are segmented.
-4. The menu for interactive segmentation. Pressing `Segment Object` (or `s`) will run segmentation for the current prompts. The result is displayed in `current_object`
-5. The menu for commiting the segmentation. When pressing `Commit` (or `c`) the result from the selected layer (either `current_object` or `auto_segmentation`) will be transferred from the respective layer to `committed_objects`.
-6. The menu for clearing the current annotations. Pressing `Clear Annotations` (or `shift c`) will clear the current annotations and the current segmentation.
+    - `auto_segmentation`: label layer with the results from automatic instance segmentation.
+    - `current_object`: label layer for the object(s) you're currently segmenting.
+2. The embedding menu. For selecting the image to process, the Segment Anything model that is used and computing the image embeddings with the model. The `Embedding Settings` contain advanced settings for loading cached embeddings from file or using tiled embeddings.
+3. The prompt menu for changing whether the currently selected point is a positive or a negative prompt. This can also be done by pressing `T`.
+4. The menu for interactive segmentation. Clicking `Segment Object` (or pressing `S`) will run segmentation for the current prompts. The result is displayed in `current_object`. Activating `batched` enables segmentation of multiple objects with point prompts. In this case an object will be segmented per positive prompt.
+5. The menu for automatic segmentation. Clicking `Automatic Segmentation` will segment all objects n the image. The results will be displayed in the `auto_segmentation` layer. We support two different methods for automatic segmentation: automatic mask generation (supported for all models) and instance segmentation with an additional decoder (only supported for our models).
+Changing the parameters under `Automatic Segmentation Settings` controls the segmentation results, check the tooltips for details.
+6. The menu for commiting the segmentation. When clicking `Commit` (or pressing `C`) the result from the selected layer (either `current_object` or `auto_segmentation`) will be transferred from the respective layer to `committed_objects`.
+When `commit_path` is given the results will automatically be saved there.
+7. The menu for clearing the current annotations. Clicking `Clear Annotations` (or pressing `Shift + C`) will clear the current annotations and the current segmentation.
 
-Note that point prompts and box prompts can be combined. When you're using point prompts you can only segment one object at a time. With box prompts you can segment several objects at once.
+Note that point prompts and box prompts can be combined. When you're using point prompts you can only segment one object at a time, unless the `batched` mode is activated. With box prompts you can segment several objects at once, both in the normal and `batched` mode.
 
-Check out [this video](TODO) for a tutorial for the 2d annotation tool.
+Check out [this video](TODO) for a tutorial for this tool.
 
 
 ## Annotator 3D
 
 The 3d annotator can be started by
 - clicking `Annotator 3d` in the plugin menu.
-- running `$ micro_sam.annotator_3d` in the command line. Run `micro_sam.annotator_3d -h` for details.
+- running `$ micro_sam.annotator_3d` in the command line.
 - calling `micro_sam.sam_annotator.annotator_3d` in a python script. Check out [examples/annotator_3d.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_3d.py) for details.
 
 The user interface of the 3d annotator looks like this:
 
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/3d-annotator-menu.png" width="768">
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/3d-annotator-menu.png" width="1024">
 
 Most elements are the same as in [the 2d annotator](#annotator-2d):
-1. The napari layers that contain the image, segmentation and prompts. Same as for [the 2d annotator](#annotator-2d) but without the `auto_segmentation` layer.
-2. The prompt menu.
-3. The menu for interactive segmentation.
-4. The 3d segmentation menu. Pressing `Segment All Slices` (or `Shift-S`) will extend the segmentation for the current object across the volume.
-5. The menu for committing the segmentation.
-6. The menu for clearing the current annotations.
+1. The napari layers that contain the segmentations and prompts.
+2. The embedding menu.
+3. The prompt menu.
+4. The menu for interactive segmentation.
+5. The menu for interactive 3d segmentation. Clicking `Segment All Slices` (or `Shift + S`) will extend the segmentation for the current object across the volume by projecting prompts across slices. The parameters for prompt projection can be set in `Segmentation Settings`, please refer to the tooltips for details.
+6. The menu for automatic segmentation. The overall functionality is the same as [for the 2d annotator](#annotator-2d). To segment the full volume `Apply to Volume` needs to be checked, otherwise only the current slice will be segmented. Note that 3D segmentation can take quite long without a GPU.
+7. The menu for committing the current object.
+8. The menu for clearing the current annotations. If `all slices` is set all annotations will be cleared, otherwise they are only cleared for the current slice.
 
-Note that you can only segment one object at a time with the 3d annotator.
+Note that you can only segment one object at a time using the interactive segmentation functionality with this tool.
 
 Check out [this video](TODO) for a tutorial for the 3d annotation tool.
 
@@ -76,12 +80,12 @@ Check out [this video](TODO) for a tutorial for the 3d annotation tool.
 
 The tracking annotator can be started by
 - clicking `Annotator Tracking` in the plugin menu.
-- running `$ micro_sam.annotator_tracking` in the command line. Run `micro_sam.annotator_tracking -h` for details.
+- running `$ micro_sam.annotator_tracking` in the command line.
 - calling `micro_sam.sam_annotator.annotator_tracking` in a python script. Check out [examples/annotator_tracking.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_tracking.py) for details. 
 
 The user interface of the tracking annotator looks like this:
 
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/tracking-annotator-menu.png" width="768">
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/tracking-annotator-menu.png" width="1024">
 
 Most elements are the same as in [the 2d annotator](#annotator-2d):
 1. The napari layers that contain the image, segmentation and prompts. Same as for [the 2d segmentation app](#annotator-2d) but without the `auto_segmentation` layer, `current_tracks` and `committed_tracks` are the equivalent of `current_object` and `committed_objects`.
