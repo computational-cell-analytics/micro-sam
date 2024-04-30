@@ -3,6 +3,7 @@ import unittest
 from shutil import rmtree
 
 import numpy as np
+import requests
 import torch
 import zarr
 
@@ -21,6 +22,25 @@ class TestUtil(unittest.TestCase):
     def tearDown(self):
         rmtree(self.tmp_folder)
 
+    # Check that the URLs for all models are valid.
+    def test_model_registry(self):
+        from micro_sam.util import models
+
+        def check_url(url):
+            try:
+                # Make a HEAD request to the URL, which fetches HTTP headers but no content.
+                response = requests.head(url, allow_redirects=True)
+                # Check if the HTTP status code is one that indicates availability (200 <= code < 400).
+                return response.status_code < 400
+            except requests.RequestException:
+                # Handle connection exceptions
+                return False
+
+        registry = models()
+        for name in registry.registry.keys():
+            url_exists = check_url(registry.get_url(name))
+            self.assertTrue(url_exists)
+
     def test_get_sam_model(self):
         from micro_sam.util import get_sam_model
 
@@ -29,13 +49,18 @@ class TestUtil(unittest.TestCase):
             self.assertEqual(predictor.model_type, self.model_type)
             self.assertTrue(predictor._hash.startswith("xxh128"))
 
-        # check predictor with download
+        # Check predictor with download.
         predictor = get_sam_model(model_type=self.model_type)
         check_predictor(predictor)
 
-        # check predictor with checkpoint path (using the cached model)
+        # Check predictor with checkpoint path (using the cached model).
         checkpoint_path = os.path.join(get_cache_directory(), "models", self.model_type)
         predictor = get_sam_model(model_type=self.model_type, checkpoint_path=checkpoint_path)
+        check_predictor(predictor)
+
+        # Check predictor for one of our models.
+        model_type = self.model_type + "_lm"
+        predictor = get_sam_model(model_type=model_type)
         check_predictor(predictor)
 
     def test_compute_iou(self):

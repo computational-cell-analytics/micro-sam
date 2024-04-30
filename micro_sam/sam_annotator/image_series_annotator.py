@@ -20,6 +20,7 @@ from .annotator_2d import Annotator2d
 from .annotator_3d import Annotator3d
 from ._state import AnnotatorState
 from .util import _sync_embedding_widget
+from ._tooltips import get_tooltip
 
 
 def _precompute(
@@ -180,18 +181,29 @@ def image_series_annotator(
         nonlocal next_image_id
 
         segmentation = viewer.layers["committed_objects"].data
+        abort = False
         if segmentation.sum() == 0:
-            print("Nothing is segmented yet. Not advancing to next image.")
-            return
+            msg = "Nothing is segmented yet. Do you wish to continue to the next image?"
+            abort = widgets._generate_message("info", msg)
+            if abort:
+                return
 
         # Save the current segmentation.
         _save_segmentation(images[next_image_id], next_image_id, segmentation)
 
+        # Clear the segmentation already to avoid lagging removal.
+        viewer.layers["committed_objects"].data = np.zeros_like(viewer.layers["committed_objects"].data)
+
         # Load the next image.
         next_image_id += 1
         if next_image_id == len(images):
-            print("You have annotated the last image.")
-            viewer.close()
+            msg = "You have annotated the last image. Do you wish to close napari?"
+            print(msg)
+            abort = False
+            # inform the user via dialog
+            abort = widgets._generate_message("info", msg)
+            if not abort:
+                viewer.close()
             return
 
         print(
@@ -283,21 +295,25 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         self.folder = None
         _, layout = self._add_path_param(
             "folder", self.folder, "directory",
-            title="Input Folder", placeholder="Folder with images ..."
+            title="Input Folder", placeholder="Folder with images ...",
+            tooltip=get_tooltip("image_series_annotator", "folder")
         )
         self.layout().addLayout(layout)
 
         self.output_folder = None
         _, layout = self._add_path_param(
             "output_folder", self.output_folder, "directory",
-            title="Output Folder", placeholder="Folder to save the results ..."
+            title="Output Folder", placeholder="Folder to save the results ...",
+            tooltip=get_tooltip("image_series_annotator", "output_folder")
         )
         self.layout().addLayout(layout)
 
         self.model_type = util._DEFAULT_MODEL
         model_options = list(util.models().urls.keys())
+        model_options = [model for model in model_options if not model.endswith("decoder")]
         _, layout = self._add_choice_param(
             "model_type", self.model_type, model_options, title="Model:",
+            tooltip=get_tooltip("embedding", "model")
         )
         self.layout().addLayout(layout)
 
@@ -307,39 +323,47 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
 
         self.pattern = "*"
         _, layout = self._add_string_param(
-            "", self.pattern,
+            "", self.pattern, tooltip=get_tooltip("image_series_annotator", "pattern")
         )
         setting_values.layout().addLayout(layout)
 
         self.is_volumetric = False
-        setting_values.layout().addWidget(self._add_boolean_param("is_volumetric", self.is_volumetric))
+        setting_values.layout().addWidget(self._add_boolean_param(
+            "is_volumetric", self.is_volumetric, tooltip=get_tooltip("image_series_annotator", "is_volumetric")
+        ))
 
         self.device = "auto"
         device_options = ["auto"] + util._available_devices()
-        self.device_dropdown, layout = self._add_choice_param("device", self.device, device_options)
+        self.device_dropdown, layout = self._add_choice_param(
+            "device", self.device, device_options, tooltip=get_tooltip("embedding", "device")
+        )
         setting_values.layout().addLayout(layout)
 
         self.embeddings_save_path = None
         _, layout = self._add_path_param(
-            "embeddings_save_path", self.embeddings_save_path, "directory", title="embeddings save path:"
+            "embeddings_save_path", self.embeddings_save_path, "directory", title="embeddings save path:",
+            tooltip=get_tooltip("embedding", "embeddings_save_path")
         )
         setting_values.layout().addLayout(layout)
 
         self.custom_weights = None  # select_file
         _, layout = self._add_path_param(
-            "custom_weights", self.custom_weights, "file", title="custom weights path:"
+            "custom_weights", self.custom_weights, "file", title="custom weights path:",
+            tooltip=get_tooltip("embedding", "custom_weights")
         )
         setting_values.layout().addLayout(layout)
 
         self.tile_x, self.tile_y = 0, 0
         self.tile_x_param, self.tile_y_param, layout = self._add_shape_param(
-            ("tile_x", "tile_y"), (self.tile_x, self.tile_y), min_val=0, max_val=2048, step=16
+            ("tile_x", "tile_y"), (self.tile_x, self.tile_y), min_val=0, max_val=2048, step=16,
+            tooltip=get_tooltip("embedding", "tiling")
         )
         setting_values.layout().addLayout(layout)
 
         self.halo_x, self.halo_y = 0, 0
         self.halo_x_param, self.halo_y_param, layout = self._add_shape_param(
-            ("halo_x", "halo_y"), (self.halo_x, self.halo_y), min_val=0, max_val=512
+            ("halo_x", "halo_y"), (self.halo_x, self.halo_y), min_val=0, max_val=512,
+            tooltip=get_tooltip("embedding", "halo")
         )
         setting_values.layout().addLayout(layout)
 
@@ -369,7 +393,7 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
             embedding_path=self.embeddings_save_path,
             tile_shape=tile_shape, halo=halo, checkpoint_path=self.custom_weights,
             device=self.device, is_volumetric=self.is_volumetric,
-            viewer=self._viewer,
+            viewer=self._viewer, return_viewer=True,
         )
 
 

@@ -2,8 +2,9 @@
 
 All the fullscale experiment in `micro-sam` have been performed on A100s. Can we finetune Segment Anything on limited resources?
 
+TLDR: Finetuning `vit_b` is the best bet on most workstation / cluster-level GPUs. Reduce the number of objects per batch to fit to your desired resource. Feel free to read ahead if you want more specifics on this, or let us know for further discussion.
+
 ## Available Resource Combinations:
-- `xps13` (CPU - local)
 - `medium` (CPU - SCC)
 - `gtx1080`: (GPU - SCC) 8GB
 - `rtx5000`: (GPU - SCC) 16GB
@@ -79,9 +80,57 @@ All jobs are tested on `medium` partition.
     - `vit_t`: freeze `image_encoder`
     - `n_objects`: 1
 
-5. `XPS13`:
-    - TODO
-
 ## Scripts:
 
- TODO: need to explain what are the purpose of the scripts in brief.
+- `check_training_times.py`: The scripts to check the time taken to achieve the best model. The reported times are menioned in [results](#results) below.
+- `covid_if_finetuning.py`: The finetuning scripts for segmenting cells in immunofluorescence data.
+- `plot_experiments.py`: The scripts for plotting the quantitative results for the resource-efficient finetuning experiments.
+- `run_evaluations.py`: The scripts to run quantitative evaluation for different resource efficient finetuned SAM models.
+- `run_resource_efficient_finetuning,py`: Convenience scripts for submitting batch jobs via slurm to HLRN for finetuning SAM on Covid IF.
+
+
+
+ ## Results:
+
+| Resource | Finetuned Model        | Number of Images | Best Epoch | Train Time |
+|----------|------------------------|------------------|------------|------------|
+| v100     | vit_b (freeze None)    | 1                | 9          | 752.39     |
+| v100     | vit_b (freeze None)    | 2                | 26         | 2051.77    |
+| v100     | vit_b (freeze None)    | 5                | 21         | 1653.99    |
+| v100     | vit_b (freeze None)    | 10               | 39         | 2998.08    |
+| v100     | vit_b_lm (freeze None) | 1                | 24         | 1874.83    |
+| v100     | vit_b_lm (freeze None) | 2                | 42         | 3205.59    |
+| v100     | vit_b_lm (freeze None) | 5                | 42         | 3196.15    |
+| v100     | vit_b_lm (freeze None) | 10               | 34         | 2612.99    |
+| rtx5000  | vit_b (freeze None)    | 1                | 17         | 1192.79    |
+| rtx5000  | vit_b (freeze None)    | 2                | 10         | 725.15     |
+| rtx5000  | vit_b (freeze None)    | 5                | 56         | 3759.01    |
+| rtx5000  | vit_b (freeze None)    | 10               | 36         | 2427.17    |
+| rtx5000  | vit_b_lm (freeze None) | 1                | 31         | 2089.22    |
+| rtx5000  | vit_b_lm (freeze None) | 2                | 24         | 1622.69    |
+| rtx5000  | vit_b_lm (freeze None) | 5                | 53         | 3477.83    |
+| rtx5000  | vit_b_lm (freeze None) | 10               | 28         | 1869.33    |
+| gtx1080  | vit_b (freeze image_encoder)    | 1                | 22         | 2629.69    |
+| gtx1080  | vit_b (freeze image_encoder)    | 2                | 22         | 2664.08    |
+| gtx1080  | vit_b (freeze image_encoder)    | 5                | 12         | 1523.38    |
+| gtx1080  | vit_b (freeze image_encoder)    | 10               | 49         | 5858.78    |
+| gtx1080  | vit_b_lm (freeze image_encoder) | 1                | 18         | 2186.33    |
+| gtx1080  | vit_b_lm (freeze image_encoder) | 2                | 13         | 1608.46    |
+| gtx1080  | vit_b_lm (freeze image_encoder) | 5                | 23         | 2762.22    |
+| gtx1080  | vit_b_lm (freeze image_encoder) | 10               | 22         | 2617.61    |
+| cpu32g  | vit_b (freeze None)    | 1                 | 5          | 6302.03    |
+| cpu32g  | vit_b (freeze None)    | 2                 | 27         | 29153.65   |
+| cpu32g  | vit_b (freeze None)    | 5                 | 46         | 53502.85   |
+| cpu32g  | vit_b (freeze None)    | 10                | 25         | 20885.33   |
+| cpu32g  | vit_b_lm (freeze None) | 1                 | 27         | 21711.23   |
+| cpu32g  | vit_b_lm (freeze None) | 2                 | 35         | 34443.09   |
+| cpu32g  | vit_b_lm (freeze None) | 5                 | 25         | 32750.22   |
+| cpu32g  | vit_b_lm (freeze None) | 10                | 22         | 19229.84   |
+| cpu64g  | vit_b (freeze None)    | 1                 | 12         | 11439.01   |
+| cpu64g  | vit_b (freeze None)    | 2                 | 23         | 26225.69   |
+| cpu64g  | vit_b (freeze None)    | 5                 | 21         | 18675.01   |
+| cpu64g  | vit_b (freeze None)    | 10                | 43         | 50894.71   |
+| cpu64g  | vit_b_lm (freeze None) | 1                 | 25         | 23291.25   |
+| cpu64g  | vit_b_lm (freeze None) | 2                 | 41         | 40262.73   |
+| cpu64g  | vit_b_lm (freeze None) | 5                 | 33         | 33137.21   |
+| cpu64g  | vit_b_lm (freeze None) | 10                | 37         | 47490.61   |

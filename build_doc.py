@@ -25,14 +25,14 @@ def check_docs_completeness():
         )
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     check_docs_completeness()
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", "-o", action="store_true")
     args = parser.parse_args()
 
-    logo_url = "https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/micro-sam-logo.png"
+    logo_url = "https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/logo/logo_and_text.png"
     cmd = ["pdoc", "--docformat", "google", "--logo", logo_url]
 
     if args.out:

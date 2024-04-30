@@ -9,6 +9,7 @@ from magicgui.widgets import ComboBox, Container
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
 from . import util as vutil
+from ._tooltips import get_tooltip
 from . import _widgets as widgets
 from .. import util
 
@@ -22,8 +23,9 @@ def create_tracking_menu(points_layer, box_layer, states, track_ids):
     """@private"""
     state = AnnotatorState()
 
-    state_menu = ComboBox(label="track_state", choices=states)
-    track_id_menu = ComboBox(label="track_id", choices=list(map(str, track_ids)))
+    state_menu = ComboBox(label="track_state", choices=states, tooltip=get_tooltip("annotator_tracking", "track_state"))
+    track_id_menu = ComboBox(label="track_id", choices=list(map(str, track_ids)),
+                             tooltip=get_tooltip("annotator_tracking", "track_id"))
     tracking_widget = Container(widgets=[state_menu, track_id_menu])
 
     def update_state(event):

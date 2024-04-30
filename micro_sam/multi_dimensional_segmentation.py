@@ -214,7 +214,10 @@ def segment_mask_in_volume(
 
 def _preprocess_closing(slice_segmentation, gap_closing, pbar_update):
     binarized = slice_segmentation > 0
-    closed_segmentation = binary_closing(binarized, iterations=gap_closing)
+    # Use a structuring element that only closes elements in z, to avoid merging objects in-plane.
+    structuring_element = np.zeros((3, 1, 1))
+    structuring_element[:, 0, 0] = 1
+    closed_segmentation = binary_closing(binarized, iterations=gap_closing, structure=structuring_element)
 
     new_segmentation = np.zeros_like(slice_segmentation)
     n_slices = new_segmentation.shape[0]
@@ -305,7 +308,7 @@ def merge_instance_segmentation_3d(
     Returns:
         The merged segmentation.
     """
-    _, pbar_init, pbar_update = util.handle_pbar(verbose, pbar_init, pbar_update)
+    _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
 
     if gap_closing is not None and gap_closing > 0:
         pbar_init(slice_segmentation.shape[0] + 1, "Merge segmentation")
@@ -343,7 +346,9 @@ def merge_instance_segmentation_3d(
                 filter_ids.append(prop.label)
         if filter_ids:
             segmentation[np.isin(segmentation, filter_ids)] = 0
+
     pbar_update(1)
+    pbar_close()
 
     return segmentation
 

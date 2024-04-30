@@ -9,7 +9,7 @@ from . import util as vutil
 from ._state import AnnotatorState
 
 
-class _AnnotatorBase(QtWidgets.QWidget):
+class _AnnotatorBase(QtWidgets.QScrollArea):
     """Base class for micro_sam annotation plugins.
 
     Implements the logic for the 2d, 3d and tracking annotator.
@@ -54,7 +54,7 @@ class _AnnotatorBase(QtWidgets.QWidget):
         # Connect events for the image selection box.
         self._viewer.layers.events.inserted.connect(self._embedding_widget.image_selection.reset_choices)
         self._viewer.layers.events.removed.connect(self._embedding_widget.image_selection.reset_choices)
-        # Connect the run button with the fundtion to update the image.
+        # Connect the run button with the function to update the image.
         self._embedding_widget.run_button.clicked.connect(self._update_image)
 
         # Create the prompt widget. (The same for all plugins.)
@@ -103,7 +103,8 @@ class _AnnotatorBase(QtWidgets.QWidget):
         """
         super().__init__()
         self._viewer = viewer
-        self.setLayout(QtWidgets.QVBoxLayout())
+        self._annotator_widget = QtWidgets.QWidget()
+        self._annotator_widget.setLayout(QtWidgets.QVBoxLayout())
 
         # Add the layers for prompts and segmented obejcts.
         # Initialize with a dummy shape, which is reset to the correct shape once an image is set.
@@ -123,13 +124,17 @@ class _AnnotatorBase(QtWidgets.QWidget):
                 # This is a qt type and we add the widget directly.
                 widget_layout.addWidget(widget)
             widget_frame.setLayout(widget_layout)
-            self.layout().addWidget(widget_frame)
+            self._annotator_widget.layout().addWidget(widget_frame)
 
         # Add the widgets to the state.
         AnnotatorState().widgets = self._widgets
 
         # Add the key bindings in common between all annotators.
         self._create_keybindings()
+
+        # Add the widget to the scroll area.
+        self.setWidgetResizable(True)  # Allow widget to resize within scroll area.
+        self.setWidget(self._annotator_widget)
 
     def _update_image(self, segmentation_result=None):
         state = AnnotatorState()

@@ -3,15 +3,24 @@ from glob import glob
 from pathlib import Path
 from natsort import natsorted
 
+import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
+from matplotlib.ticker import FormatStrFormatter
 
 
 ROOT = "/scratch/users/archit/experiments"
 
 PALETTE = {"ais": "#7CCBA2", "amg": "#7C1D6F", "point": "#F0746E", "box": "#089099"}
+RNAME_MAPPING = {
+    "cpu_32G-mem_16-cores": "Intel Cascade Lake Xeon Platinum 9242 (32GB CPU RAM)",
+    "cpu_64G-mem_16-cores": "Intel Cascade Lake Xeon Platinum 9242 (64GB CPU RAM)",
+    "rtx5000": "NVIDIA Quadro RTX5000 (16GB VRAM)",
+    "v100": "NVIDIA Tesla V100 (32GB VRAM)",
+    "gtx1080": "NVIDIA GeForce GTX 1080 (8GB VRAM)"
+}
 
 plt.rcParams.update({"font.size": 24})
 
@@ -33,7 +42,7 @@ def _get_all_results(name, all_res_paths):
             res_name = "ais"
 
         res_df = pd.DataFrame(
-            {"name": name, "type": res_name, "results": res.iloc[0]["msa"]}, index=[i]
+            {"name": name, "type": res_name, "results": res.iloc[0]["sa50"]}, index=[i]
         )
         if res_name == "box":
             all_box_res_list.append(res_df)
@@ -66,7 +75,7 @@ def plot_all_experiments():
         for model_path in all_model_paths:
             model_name = os.path.split(model_path)[-1]
             all_res_paths = sorted(glob(os.path.join(model_path, "results", "*")))
-            benchmark_df, benchmark_box_df = _get_all_results("initial", all_res_paths)
+            benchmark_df, benchmark_box_df = _get_all_results("$\it{initial}$", all_res_paths)
             this_name = model_name if experiment_name == "vanilla" else f"{model_name}_lm"
             all_benchmark_results[this_name] = benchmark_df
             all_benchmark_box_results[this_name] = benchmark_box_df
@@ -74,6 +83,7 @@ def plot_all_experiments():
     # now, let's get the resource efficient fine-tuning
     for exp_path in sorted(resource_experiment_paths):
         fig, ax = plt.subplots(2, 2, figsize=(22, 15), sharey="row")
+
         resource_name = os.path.split(exp_path)[-1]
         all_model_paths = glob(os.path.join(exp_path, "*"))
         idx = 0
@@ -95,22 +105,27 @@ def plot_all_experiments():
             this_res = pd.concat([all_benchmark_results[model_name], *all_res_list])
             this_box_res = pd.concat([all_benchmark_box_results[model_name], *all_box_res_list])
 
-            sns.lineplot(
-                x="name", y="results", hue="type", data=this_res,
-                ax=ax[0, idx], palette=PALETTE, hue_order=PALETTE.keys(),
-                marker="o", markersize=8
-            )
-            _title = "Generalist" if model_name.endswith("lm") else "Vanilla"
-            ax[0, idx].set_title(_title, fontsize=13, fontweight="bold")
-            ax[0, idx].set(xlabel=None, ylabel=None)
+            _title = "Generalist" if model_name.endswith("lm") else "Default"
 
             sns.lineplot(
                 x="name", y="results", hue="type", data=this_box_res,
-                ax=ax[1, idx], palette=PALETTE, hue_order=PALETTE.keys(),
-                marker="o", markersize=8
+                ax=ax[0, idx], palette=PALETTE, hue_order=PALETTE.keys(),
+                marker="o", markersize=12, linewidth=3
             )
-            ax[1, idx].set_title(_title, fontsize=13, fontweight="bold")
+            ax[0, idx].set_title(_title, fontweight="bold")
+            ax[0, idx].set(xlabel=None, ylabel=None)
+            ax[0, idx].set_yticks(np.linspace(0.8, 1, 5))
+            ax[0, idx].yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
+
+            sns.lineplot(
+                x="name", y="results", hue="type", data=this_res,
+                ax=ax[1, idx], palette=PALETTE, hue_order=PALETTE.keys(),
+                marker="o", markersize=12, linewidth=3
+            )
+            # ax[1, idx].set_title(_title, fontweight="bold")
             ax[1, idx].set(xlabel=None, ylabel=None)
+            ax[1, idx].set_yticks(np.linspace(0.1, 0.6, 6))
+            ax[1, idx].yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
 
             idx += 1
 
@@ -125,23 +140,28 @@ def plot_all_experiments():
                         all_labels.append(label)
                 ax.get_legend().remove()
 
-            fig.legend(all_lines, all_labels, loc="upper left")
+            fig.legend(all_lines, all_labels, loc="lower center", ncols=4, bbox_to_anchor=(0.5, 0.02))
 
             def format_y_tick_label(value, pos):
                 return "{:.2f}".format(value)
 
             plt.gca().yaxis.set_major_formatter(FuncFormatter(format_y_tick_label))
 
-            plt.text(
-                x=0.6425, y=2.35, s=" X-Axis: Number of Images \n Y-Axis: Segmentation Accuracy ", ha='left',
-                transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#D6D6D6", "boxstyle": "round"},
-                fontsize=16,
-            )
+            # plt.text(
+            #     x=0.6425, y=2.35, s=" X-Axis: Number of Images \n Y-Axis: Segmentation Accuracy ", ha='left',
+            #     transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#D6D6D6", "boxstyle": "round"},
+            #     fontsize=16,
+            # )
+            plt.text(x=-6, y=0.6, s="SA50", fontsize=36, rotation=90)
 
-            plt.subplots_adjust(top=0.865, right=0.95, left=0.15, bottom=0.05, wspace=0.05)
-            _rname = "CPU" if resource_name.startswith("cpu") else "GPU"
-            fig.suptitle(f"Resource Efficient Finetuning ({_rname})", fontsize=26, x=0.515, y=0.95)
+            plt.subplots_adjust(wspace=0.1, hspace=0.15)
 
+            # _rname = "CPU" if resource_name.startswith("cpu") else "GPU"  # for figure 5
+            # fig.suptitle(f"Resource Efficient Finetuning ({_rname})")
+
+            _rname = RNAME_MAPPING[resource_name]  # for supplementary
+            fig.suptitle(f"{_rname}")
+            
             save_path = f"./figures/{resource_name}/results.png"
             try:
                 plt.savefig(save_path)
