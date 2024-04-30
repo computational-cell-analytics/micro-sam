@@ -2,6 +2,7 @@ name: Release Drafter
 
 on:
   push:
+    # optional
     # tags:
     #   - '*.*.*'
     # branches to consider in the event; optional, defaults to all
