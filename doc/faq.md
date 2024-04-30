@@ -11,6 +11,7 @@ Ans. The [installation](https://computational-cell-analytics.github.io/micro-sam
 Ans. The installer should work out-of-the-box on Windows and Linux platforms. It's currently supported only for CPU users. [Here](https://github.com/computational-cell-analytics/micro-sam/issues/541) is a known issue for the Windows installer, which is already fixed in version 1.0.0. Feel free to report any issues encountered.
 >NOTE: The installers are a quick-starter for `micro-sam`. We highly recommend using the installation from mamba / from source for making use of all the supported functionalities seamlessly.
 
+
 ### 3. What is the minimum system requirement for `micro-sam`?
 Ans. From our experience, `micro-sam` works seamlessly on most CPU resources over 8GB RAM for the annotator tool. You might encounter some `napari`-related slowness for $\leq$ 8GB RAM. The resources `micro-sam`'s annotation tool has been tested on are:
 - Windows:
@@ -63,17 +64,19 @@ Ans. `micro-sam` pre-computes the image embeddings produced by the vision transf
 ### 4. Can I use `micro-sam` on a CPU?
 Ans. Most other processing steps that are very fast even on a CPU, the automatic segmentation step for the default Segment Anything models (typically called as the "Segment Anything" feature or AMG - Automatic Mask Generation) takes several minutes without a GPU (depending on the image size). For large volumes and time-series, segmenting an object interactively in 3d / tracking across time can take a couple of seconds with a CPU (it is very fast with a GPU).
 
+> HINT: All the tutorial videos have been created on CPU resources.
+
 
 ### 5. I generated some segmentations from another tool, can I use it as a starting point in `micro-sam`?
 Ans. You can save and load the results from the `committed_objects` layer to correct segmentations you obtained from another tool (e.g. CellPose) or o save intermediate annotation results. The results can be saved via `File` -> `Save Selected Layers (s) ...` in the napari menu-bar on top (see the tutorial videos for details). They can be loaded again by specifying the corresponding location via the `segmentation_result` (2d and 3d segmentation).
 
 
-### 6. I am using 'micro-sam' for segmenting objects. I would like to report the steps for reproducability. How can this be done?
-Ans. TODO
+### 6. I am using `micro-sam` for segmenting objects. I would like to report the steps for reproducability. How can this be done?
+Ans. TODO: @CP: We discussed this about storing the input prompts smh, I totally forgot the status of it. Could you check this one out? Thanks!
 
 
-### 7. I have complex objects to segment. Both, the default and generalist models do not work for me. What should I do?
-Ans. TODO: Hint towards finet-uning a specialist.
+### 7. I have complex objects to segment. Both, the default Segment Anything models and `micro-sam` generalist models do not work for my data. What should I do?
+Ans. `micro-sam` supports interactive annotation using positive and negative point prompts, box prompts and freehand polygon tool. You can combine multiple types of prompts from above to improve the segmentation quality. In case the aforementioned suggestions do not work as desired, `micro-sam` now supports finetuning using the napari-tool and the python library. We recommend the following: a) Check which of the provided model(s) perform relatively good on your data, b) Choose the better performing model as the starting point to train your own specialist model for the desired segmentation task. 
 
 
 ## Fine-tuning
