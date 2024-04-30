@@ -2,11 +2,11 @@ name: Release Drafter
 
 on:
   push:
-    tags:
-      - '*.*.*'
+    # tags:
+    #   - '*.*.*'
     # branches to consider in the event; optional, defaults to all
-    # branches:
-    #   - master
+    branches:
+      - master
 
   # # pull_request event is required only for autolabeler
   # pull_request:
