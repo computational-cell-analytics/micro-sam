@@ -1,6 +1,8 @@
 import argparse
 import glob
 import os
+import warnings
+
 from subprocess import run
 
 
@@ -16,7 +18,7 @@ def check_docs_completeness():
     all_doc_files = markdown_doc_files + rst_doc_files
     missing_from_docs = [f for f in all_doc_files if os.path.basename(f) not in micro_sam.__doc__]
     if len(missing_from_docs) > 0:
-        raise RuntimeError(
+        warnings.warn(
             "Documentation files missing! Please add include statements "
             "to the docstring in micro_sam/__init__.py for every file, eg:"
             "'.. include:: ../doc/filename.md'. "

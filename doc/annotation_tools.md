@@ -8,21 +8,16 @@ of mitochondria in volume EM (middle) and interactive tracking of cells (right).
 <img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/dfca3d9b-dba5-440b-b0f9-72a0683ac410" width="256">
 <img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/aefbf99f-e73a-4125-bb49-2e6592367a64" width="256">
 
-The annotation tools can be started from the `micro_sam` GUI, the command line or from python scripts. The `micro_sam` GUI can be started by
-```
-$ micro_sam.annotator
-```
+The annotation tools can be started from the napari plugin menu, the command line or from python scripts.
+They are built as napari plugin and make use of existing napari functionality wherever possible. If you are not familiar with napari yet, [start here](https://napari.org/stable/tutorials/fundamentals/quick_start.html).
+The `micro_sam` tools mainly use [the point layer](https://napari.org/stable/howtos/layers/points.html), [shape layer](https://napari.org/stable/howtos/layers/shapes.html) and [label layer](https://napari.org/stable/howtos/layers/labels.html).
 
-They are built using [napari](https://napari.org/stable/) and [magicgui](https://pyapp-kit.github.io/magicgui/) to provide the viewer and user interface.
-If you are not familiar with napari yet, [start here](https://napari.org/stable/tutorials/fundamentals/quick_start.html).
-The `micro_sam` tools use [the point layer](https://napari.org/stable/howtos/layers/points.html), [shape layer](https://napari.org/stable/howtos/layers/shapes.html) and [label layer](https://napari.org/stable/howtos/layers/labels.html).
-
-The annotation tools are explained in detail below. In addition to the documentation here we also provide [video tutorials](https://www.youtube.com/watch?v=ket7bDUP9tI&list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO).
+The annotation tools are explained in detail below. In addition to the documentation here we also provide [video tutorials](TODO).
 
 
-## Starting via GUI
+## Starting via napari plugin menu
 
-The annotation toools can be started from a central GUI, which can be started with the command `$ micro_sam.annotator` or using the executable [from an installer](#from-installer).
+The annotation tools can be started from a central GUI, which can be started with the command `$ micro_sam.annotator` or using the executable [from an installer](#from-installer).
 
 In the GUI you can select with of the four annotation tools you want to use:
 <img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/micro-sam-gui.png">
