@@ -1552,9 +1552,13 @@ class AutoSegmentWidget(_WidgetBase):
         return True
 
     def _run_segmentation_3d(self, kwargs):
-        if not self._allow_segment_3d():
-            print("Volumetric segmentation with AMG is only supported if you have a GPU.")
-            return
+        allow_segment_3d = self._allow_segment_3d()
+        if not allow_segment_3d:
+            val_results = {
+                "message_type": "error",
+                "message": "Volumetric segmentation with AMG is only supported if you have a GPU."
+            }
+            return _generate_message(val_results["message_type"], val_results["message"])
 
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
