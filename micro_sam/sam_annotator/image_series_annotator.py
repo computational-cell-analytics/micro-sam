@@ -323,7 +323,7 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
 
         self.pattern = "*"
         _, layout = self._add_string_param(
-            "", self.pattern, tooltip=get_tooltip("image_series_annotator", "pattern")
+            "pattern", self.pattern, tooltip=get_tooltip("image_series_annotator", "pattern")
         )
         setting_values.layout().addLayout(layout)
 

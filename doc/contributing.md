@@ -1,4 +1,4 @@
-# How to contribute
+# Contribution Guide
 
 * [Discuss your ideas](#discuss-your-ideas)
 * [Clone the repository](#clone-the-repository)

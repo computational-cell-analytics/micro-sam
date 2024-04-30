@@ -104,15 +104,39 @@ Check out [this video](TODO) for a tutorial for how to use the tracking annotati
 
 ## Image Series Annotator
 
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/series-menu.png" width="1024">
+The image series annotation tool enables running the [2d annotator](#annotator-2d) or [2d annotator](#annotator-3d) for multiple images that are saved within an folder. This makes it convenient to annotate many images without having to close the tool. It can be started by
+- clicking `Image Series Annotator` in the plugin menu.
+- running `$ micro_sam.image_series_annotator` in the command line.
+- calling `micro_sam.sam_annotator.image_series_annotator` in a python script. Check out [examples/image_series_annotator.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/image_series_annotator.py) for details. 
 
-We also provide the `image series annotator`, which can be used for running the 2d annotator for several images in a folder. You can start by clicking `Image series annotator` in the GUI, running `micro_sam.image_series_annotator` in the command line or from a [python script](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/image_series_annotator.py).
+When starting this tool via the plugin menu the following interface opens:
+
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/series-menu.png" width="512">
+
+You can select the folder where your image data is saved with `Input Folder`. The annotation results will be saved in `Output Folder`.
+You can specify a rule for loading only a subset of images via `pattern`, for example `*.tif` to only load tif images. Set `is_volumetric` if the data you want to annotate is 3d. The rest of the options are settings for the image embedding computation and are the same as for the embedding menu (see above).
+Once you click `Annotate Images` the images from the folder you have specified will be loaded and the annotation tool is started for them.
+
+This menu will not open if you start the image series annotator from the command line or via python. In this case the input folder and other settings are passed as parameters instead.
+
+Check out [this video](TODO) for a tutorial for how to use the image series annotator.
 
 
-## Finetuning Tool
+## Finetuning UI
 
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/finetuning-menu.png" width="1024">
+We also provide a graphical tool for finetuning models on your own data. It can be started by clicking `Finetuning` in the plugin menu.
 
+**Note:** if you know a bit of python programming we recommend to use a script for model finetuning instead. This will give you more options to configure the training. See [these instructions](training-your-own-model) for details.
+
+When starting this tool via the plugin menu the following interface opens:
+
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/finetuning-menu.png" width="512">
+
+You can select the image data via `Path to images`. We can either load images from a folder or select a single file for training. By providing `Image data key` you can either provide a pattern for selecting files from a folder or provide an internal filepath for hdf5, zarr or similar fileformats.
+
+You can select the label data via `Path to labels` and `Label data key`, following the same logic as for the image data. We expect label masks stored in the same size as the image data for training. You can for example use annotations created with one of the `micro_sam` annotation tools for this, they are stored in the correct format!
+
+The `Configuration` option allows you to choose the hardware configuration for training. We try to automatically select the correct setting for your system, but it can also be changed. Please refer to the tooltips for the other parameters.
 
 ## Tips & Tricks
 
