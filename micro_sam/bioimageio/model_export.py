@@ -237,8 +237,8 @@ def _check_model(model_description, input_paths, result_paths):
         ).as_single_block()
         prediction = pp.predict_sample_block(sample)
 
-        assert len(prediction) == 3
-        predicted_mask = prediction[0]
+        predicted_mask = prediction.blocks["masks"].data.data
+        assert predicted_mask.shape == mask.shape
         assert np.allclose(mask, predicted_mask)
 
         # Run the checks with partial prompts.
@@ -262,8 +262,7 @@ def _check_model(model_description, input_paths, result_paths):
                 model=model_description, image=image, embeddings=embeddings, **kwargs
             ).as_single_block()
             prediction = pp.predict_sample_block(sample)
-            assert len(prediction) == 3
-            predicted_mask = prediction[0]
+            predicted_mask = prediction.blocks["masks"].data.data
             assert predicted_mask.shape == mask.shape
 
 
@@ -520,7 +519,6 @@ def export_sam_model(
             # config=
         )
 
-        # TODO this requires the new bioimageio.core release
-        # _check_model(model_description, input_paths, result_paths)
+        _check_model(model_description, input_paths, result_paths)
 
         save_bioimageio_package(model_description, output_path=output_path)
