@@ -72,8 +72,7 @@ Ans. You can save and load the results from the `committed_objects` layer to cor
 
 
 ### 6. I am using `micro-sam` for segmenting objects. I would like to report the steps for reproducability. How can this be done?
-Ans. TODO: @CP: We discussed this about storing the input prompts smh, I totally forgot the status of it. Could you check this one out? Thanks!
-
+Ans. TODO: @CP: We discussed this about storing the input prompts smh, I totally forgot the status of it. Could you check this one out? Thanks! (reference [issue](https://github.com/computational-cell-analytics/micro-sam/issues/408))
 
 ### 7. I have complex objects to segment. Both, the default Segment Anything models and `micro-sam` generalist models do not work for my data. What should I do?
 Ans. `micro-sam` supports interactive annotation using positive and negative point prompts, box prompts and freehand polygon tool. You can combine multiple types of prompts from above to improve the segmentation quality. In case the aforementioned suggestions do not work as desired, `micro-sam` now supports finetuning using the napari-tool and the python library. We recommend the following: a) Check which of the provided model(s) perform relatively good on your data, b) Choose the better performing model as the starting point to train your own specialist model for the desired segmentation task.
@@ -83,6 +82,22 @@ Ans. `micro-sam` supports interactive annotation using positive and negative poi
 Ans. These errors could be raised for the few known reasons listed below:
 - While using `Automatic Segmentation` from the finetuned Segment Anything models, the model does not segment any objects. This often happens with the finetuned models, which need lower values for the `pred_iou_thresh` and the `stability_score_thresh`. You can change these in the GUI (under `Settings` in the `Automatic Segmentation` widget console for AMG-based segmentation). The best approach is the following: lower these thresholds to smaller values (e.g. 0.5 for both). This segments the objects you are interested in, however it also segments unwanted objects. Then choose higher values for the thresholds until the unwanted objects disappear (rerunning this step with different values will be fast after you run the segmentation the first time with lower values).
 - While using interactive annotations, this could happen if the prompts are placed outside the image, the object is segmented using a negative point prompt, or the projection along multidimensional inputs places a projected prompt along the consecutive slices outside the image (etc.). The best approach here is: to clear the annotations and place fresh annotations to segment the object with an updated prompt-placement heuristic.
+
+
+### 9. The objects are not segmented in my 3d data using the interactive annotation tool.
+Ans. The first thing to check is: a) make sure you are using the latest version of `micro-sam` (pull the latest commit from master if your installation is from source, or update the installation from conda / mamba using `mamba update micro_sam`), and b) try out the steps from the [3d annotator tutorial video](TODO) to verify if this shows the same behaviour (or the same errors) as you faced. For 3d images, it's important to pass the inputs in the python axis convention, ZYX.
+
+
+### 10. I have very small structures in my high-resolution microscopic images. Can I use `micro-sam` to annotate them?
+Ans. Segment Anything does not work well for very small or fine-grained objects (e.g. filaments). In these cases, you could try to use tiling to improve results (see [Point 2](#2-i-have-high-resolution-large-tomograms-micro-sam-does-not-seem-to-work) above for details).
+
+
+### 11. napari seems to be very slow for large images.
+Ans. Editing (drawing / erasing) very large 2d images or 3d volumes is known to be slow at the moment, as the objects in the layer list are stored as arrays in-memory, leading the cause for the slowness for large inputs (see the related WIP [issue](https://github.com/computational-cell-analytics/micro-sam/issues/39) on this)
+
+
+### 12. While computing the embeddings (and / or automatic segmentation), napari returns a window stating: `"napari" is not responding.`
+Ans. We think that `napari` expects to maintain an idle state while performing expensive computations in the background (like, computing the image embeddings, automatic mask generation, etc.). Our recommendation would be to avoid accessing any features in the napari GUI until the progress bar (on bottom-right) completes the background computations.
 
 
 ## Fine-tuning
@@ -101,9 +116,17 @@ Ans. Yes, you can fine-tune Segment Anything on your custom datasets on Kaggle (
 Ans. `micro-sam` is flexible in supporting the loading of custom weights out-of-the-box in the napari tool (add the path of your model checkpoints to `custom_weight_paths` in the `Settings` drop-down menu in the `Compute Embeddings` console), for initializing Segment Anything with your own finetuned models and using it for automatic and interactive segementation.
 
 
-## Known Limitations
+### 4. What is the background of the new AIS (Automatic Instance Segmentation) feature in `micro-sam`?
+Ans. `micro-sam` introduces a new segmentation decoder to the Segment Anything backbone, for enabling faster and accurate automatic instance segmentation, by learning the [distances](https://github.com/constantinpape/torch-em/blob/main/torch_em/transform/label.py#L284) per object (to the center and to the boundary) and the foreground region, and performs seeded watershed-based [postprocessing](https://github.com/constantinpape/torch-em/blob/main/torch_em/util/segmentation.py#L122) to obtain the instances. However, it's a flexible wrap around the Segment Anything model, which provides the users to either fine-tune the Segment Anything model as it is, or the choice to fine-tune the Segment Anything model with an additional instance segmentation decoder (see the [example](https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/finetuning#example-for-model-finetuning) for finetuning with both the objectives). The finetuned models provided by `micro-sam` use the AIS feature for improving the segmentation experience for the light microscopy and electron microscopy domains.
 
-- Segment Anything does not work well for very small or fine-grained objects (e.g. filaments)
+
+### 5. I have a NVIDIA RTX 4090Ti GPU with 24GB VRAM. Can I finetune Segment Anything?
+Ans. Finetuning Segment Anything is possible in most consumer-grade GPU and CPU resources (the latter is infamous for taking significantly more time than the former). For the mentioned resource, it should be possible to finetune a ViT Base (also abbreviated as `vit_b`) by reducing the number of objects per image to ~15 (from our experience, this parameters complements to a fair share of impact on the GPU memory consumption, however the segmentation quality for finetuned models with a (much) lower number of objects than mentioned above is not detrimental - our latest [preprint](#how-to-cite-our-work) details out the aforementioned discussion).
+
+
+### 6. I want to create dataloaders for my own data, for finetuning Segment Anything.
+Ans. Thanks to `torch-em`, a) Creating PyTorch-supported datasets and dataloaders using the python library is convenient and supported for various data formats and multiple data structures. See the [tutorial](https://github.com/constantinpape/torch-em/blob/main/notebooks/tutorial_create_dataloaders.ipynb) notebook on how to create dataloaders using `torch-em` and the [documentation](https://github.com/constantinpape/torch-em/blob/main/doc/datasets_and_dataloaders.md) on supporting the details for creating your own datasets and dataloaders; and b) Finetuning using the `napari` tool eases the aforementioned process, by allowing you to add the input parameters (path to the directory for inputs, training parameters, etc.) directly in the tool.
+> NOTE: If you have images with large input shapes with a sparse density of instance segmentations, we recommend using [`sampler`](https://github.com/constantinpape/torch-em/blob/main/torch_em/data/sampler.py) for choosing the patches with valid segmentation for the finetuning purpose (see the [example] for PlantSeg (Root) specialist model in `micro-sam`).
 
 
 ## How to cite our work?
