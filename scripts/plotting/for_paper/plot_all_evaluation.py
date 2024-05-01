@@ -211,7 +211,7 @@ def _get_plot_postprocessing(
     if x_loc is not None:
         x = x_loc
 
-    plt.text(x=x, y=y, s="Segmentation Accuracy", rotation=90, fontweight="bold")
+    plt.text(x=x, y=y, s="Mean Segmentation Accuracy", rotation=90, fontweight="bold")
 
     if bbox_to_anchor is not None:
         bbox_to_anchor = bba
