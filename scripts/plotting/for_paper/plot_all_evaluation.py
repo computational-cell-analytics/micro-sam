@@ -359,7 +359,7 @@ def plot_evaluation_for_all_em_datasets(model_type):
 
 def plot_em_specialists(dataset_name):
     modality = "em"
-    fig, ax = plt.subplots(1, 4, figsize=(35, 10), sharey=True)
+    fig, ax = plt.subplots(1, 4, figsize=(40, 12.5), sharey=True)
 
     get_barplots(ax[0], dataset_name, modality, "vit_t", title_as_model_name=True)
     get_barplots(ax[1], dataset_name, modality, "vit_b", title_as_model_name=True)
@@ -379,21 +379,21 @@ def plot_em_specialists(dataset_name):
         ylabel_choice="em",
         bba=(0.5, -0.01),
         adj_params={"wspace": 0.05, "top": 0.85, "bottom": 0.15},
-        y_loc=0.16, x_loc=-10.7,
+        y_loc=0.05, x_loc=-10.7,
     )
 
 
 def main():
-    # plot_em_specialists("cremi")
-    # plot_em_specialists("asem/er")
-
     # plot_evaluation_for_lm_datasets("vit_l")
     # plot_evaluation_for_em_datasets("vit_l")
 
-    all_models = ["vit_t", "vit_b", "vit_l", "vit_h"]
-    for model in all_models:
-        plot_evaluation_for_all_em_datasets(model)
-        plot_evaluation_for_all_lm_datasets(model)
+    # all_models = ["vit_t", "vit_b", "vit_l", "vit_h"]
+    # for model in all_models:
+    #     plot_evaluation_for_all_em_datasets(model)
+    #     plot_evaluation_for_all_lm_datasets(model)
+
+    plot_em_specialists("cremi")
+    plot_em_specialists("asem/er")
 
 
 if __name__ == "__main__":
