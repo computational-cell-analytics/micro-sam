@@ -202,7 +202,7 @@ def _get_plot_postprocessing(
             x = -3.5
     else:
         bbox_to_anchor = (0.5, 0.04)
-        hspace = 0.25
+        hspace = 0.4
         x, y = -5.8, 1
 
     if y_loc is not None:
@@ -256,7 +256,7 @@ def plot_evaluation_for_lm_datasets(model_type):
 
 def plot_evaluation_for_all_lm_datasets(model_type):
     modality = "lm"
-    fig, ax = plt.subplots(6, 2, figsize=(17.5, 30))
+    fig, ax = plt.subplots(6, 2, figsize=(25, 30))
 
     # choices:
     # "livecell", "tissuenet" (one_chan OR multi_chan), "deepbacs", "covid_if", "plantseg/root", "hpa",
@@ -282,6 +282,8 @@ def plot_evaluation_for_all_lm_datasets(model_type):
         save_path=f"lm_all_{model_type}_evaluation.svg",
         ignore_legends=True,
         ylabel_choice="lm",
+        bba=(0.5, 0.05),
+        x_loc=-3.25
     )
 
 
@@ -319,7 +321,7 @@ def plot_evaluation_for_em_datasets(model_type):
 
 def plot_evaluation_for_all_em_datasets(model_type):
     modality = "em"
-    fig, ax = plt.subplots(5, 3, figsize=(25, 30))
+    fig, ax = plt.subplots(5, 3, figsize=(30, 30))
 
     # choices:
     # for mito-nuc
@@ -350,6 +352,8 @@ def plot_evaluation_for_all_em_datasets(model_type):
         save_path=f"em_all_{model_type}_evaluation.svg",
         ignore_legends=True,
         ylabel_choice="em",
+        bba=(0.5, 0.05),
+        x_loc=-5.75
     )
 
 
@@ -383,10 +387,8 @@ def main():
     # plot_em_specialists("cremi")
     # plot_em_specialists("asem/er")
 
-    plot_evaluation_for_lm_datasets("vit_l")
-    plot_evaluation_for_em_datasets("vit_l")
-
-    return
+    # plot_evaluation_for_lm_datasets("vit_l")
+    # plot_evaluation_for_em_datasets("vit_l")
 
     all_models = ["vit_t", "vit_b", "vit_l", "vit_h"]
     for model in all_models:
