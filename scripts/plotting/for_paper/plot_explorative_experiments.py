@@ -144,7 +144,7 @@ def get_n_objects_plots(max_objects=45):
         _itp_p_last_list.append(_itp_p)
         _itp_b_last_list.append(_itp_b)
 
-    plt.figure(figsize=(25, 30))
+    plt.figure(figsize=(30, 30))
 
     res = {
         "name": list(range(1, len(amg_list) + 1)),
@@ -196,13 +196,13 @@ def get_n_objects_plots(max_objects=45):
     _get_all_interval_fills(r"i$_{b}$", color="#440154")
 
     ax.set_xticks(np.arange(0, 6))
-    ax.set_xticklabels(["amg", "ais", "point", "box", r"i$_{p}$", r"i$_{b}$"])
+    ax.set_xticklabels(["AMG", "AIS", "Point", "Box", r"I$_{P}$", r"I$_{B}$"])
 
     ax.set_xlim(-0.5, len(res_df.columns[1:]) - 0.5)
 
-    plt.suptitle("Number of Objects per Batch", x=0.45, y=0.9)
-    plt.xlabel("Inference Settings", labelpad=15)
-    plt.ylabel("Segmentation Accuracy", labelpad=30)
+    plt.suptitle(r"Number of Objects ${(Per}$ ${Image)}$", x=0.45, y=0.9)
+    plt.xlabel("Inference Settings", labelpad=15, fontweight="bold")
+    plt.ylabel("Mean Segmentation Accuracy", labelpad=30, fontweight="bold")
 
     save_path = "livecell_vit_b_n_objects.svg"
     plt.savefig(save_path)
@@ -212,8 +212,8 @@ def get_n_objects_plots(max_objects=45):
 
 
 def main():
-    get_partial_finetuning_plots()
-    # get_n_objects_plots()
+    # get_partial_finetuning_plots()
+    get_n_objects_plots()
 
 
 if __name__ == "__main__":
