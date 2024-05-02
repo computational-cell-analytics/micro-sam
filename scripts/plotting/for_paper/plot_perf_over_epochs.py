@@ -4,14 +4,19 @@ import pandas as pd
 import seaborn as sns
 from glob import glob
 import matplotlib.pyplot as plt
+import matplotlib.lines as mlines
 from matplotlib.ticker import FormatStrFormatter
 
 
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/from_carolin/perf_over_epochs/"
 
 # adding a fixed color palette to each experiments, for consistency in plotting the legends
-# PALETTE = {"vit_t": "#DC3977", "vit_b": "#E19951", "vit_l": "#5454DA", "vit_h": "#41EAD4"}
-PALETTE = {"vit_t": "#089099", "vit_b": "#7CCBA2", "vit_l": "#7C1D6F", "vit_h": "#F0746E"}
+PALETTE = {
+    "vit_t": "#089099",
+    "vit_b": "#7CCBA2",
+    "vit_l": "#7C1D6F",
+    "vit_h": "#F0746E"
+}
 
 MODELS = {
     "vit_h": 'ViT Huge',
@@ -20,7 +25,7 @@ MODELS = {
     "vit_t": 'ViT Tiny'
 }
 
-plt.rcParams.update({"font.size": 24})
+plt.rcParams.update({"font.size": 30})
 
 
 def gather_all_results():
@@ -88,13 +93,13 @@ def get_plots(ax, data, experiment_name):
 
     ax.set(xlabel=None, ylabel=None)
     ax.legend(title="Models", bbox_to_anchor=(1, 1))
-    ax.set_title(experiment_name)
+    ax.set_title(experiment_name, fontweight="bold")
     ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
 
 
 def plot_perf_over_epochs():
     all_data = gather_all_results()
-    fig, ax = plt.subplots(3, 2, figsize=(25, 30))
+    fig, ax = plt.subplots(3, 2, figsize=(30, 30))
 
     amg = all_data[all_data["name"] == "amg"]
     ais = all_data[all_data["name"] == "instance_segmentation_with_decoder"]
@@ -120,15 +125,20 @@ def plot_perf_over_epochs():
                 all_labels.append(label)
         ax.get_legend().remove()
 
-    labels = [MODELS[_l] for _l in labels]
-    fig.legend(all_lines, labels, loc="lower center", ncols=4, bbox_to_anchor=(0.5, 0.02))
+    custom_handles = []
+    for color in PALETTE.values():
+        line = mlines.Line2D([], [], color=color, linestyle='-', linewidth=7.5)
+        custom_handles.append(line)
+
+    labels = ["ViT Tiny", "ViT Base", "ViT Large", "ViT Huge"]
+    fig.legend(custom_handles, labels, loc="lower center", ncols=4, bbox_to_anchor=(0.5, 0.02))
     plt.tight_layout()
 
     plt.show()
     plt.subplots_adjust(top=0.9, bottom=0.1, right=0.9, left=0.1, wspace=0.2, hspace=0.2)
 
-    plt.text(x=-100, y=1, s="Segmentation Accuracy", fontsize=30, rotation=90)
-    plt.text(x=-15, y=0.24, s="Epochs", fontsize=30)
+    plt.text(x=-100, y=1, s="Mean Segmentation Accuracy", rotation=90, fontweight="bold")
+    plt.text(x=-15, y=0.24, s="Epochs", fontweight="bold")
 
     fig.suptitle("Performance over Epochs", y=0.95, fontsize=40)
     save_path = "plot_perf_over_epochs.svg"

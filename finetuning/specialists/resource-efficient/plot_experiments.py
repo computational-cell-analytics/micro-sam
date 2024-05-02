@@ -7,13 +7,20 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import matplotlib.lines as mlines
 from matplotlib.ticker import FuncFormatter
 from matplotlib.ticker import FormatStrFormatter
 
 
-ROOT = "/scratch/users/archit/experiments"
+ROOT = "/scratch/usr/nimanwai/experiments/resource-efficient-finetuning/"
 
-PALETTE = {"ais": "#7CCBA2", "amg": "#7C1D6F", "point": "#F0746E", "box": "#089099"}
+PALETTE = {
+    "AIS": "#045275",
+    "AMG": "#FCDE9C",
+    "Point": "#7CCBA2",
+    "Box": "#90477F",
+}
+
 RNAME_MAPPING = {
     "cpu_32G-mem_16-cores": "Intel Cascade Lake Xeon Platinum 9242 (32GB CPU RAM)",
     "cpu_64G-mem_16-cores": "Intel Cascade Lake Xeon Platinum 9242 (64GB CPU RAM)",
@@ -22,7 +29,7 @@ RNAME_MAPPING = {
     "gtx1080": "NVIDIA GeForce GTX 1080 (8GB VRAM)"
 }
 
-plt.rcParams.update({"font.size": 24})
+plt.rcParams.update({"font.size": 30})
 
 
 def _get_all_results(name, all_res_paths):
@@ -35,16 +42,18 @@ def _get_all_results(name, all_res_paths):
             continue
 
         if res_name.endswith("point"):
-            res_name = "point"
+            res_name = "Point"
         elif res_name.endswith("box"):
-            res_name = "box"
+            res_name = "Box"
         elif res_name.endswith("decoder"):
-            res_name = "ais"
+            res_name = "AIS"
+        else:  # amg
+            res_name = res_name.upper()
 
         res_df = pd.DataFrame(
             {"name": name, "type": res_name, "results": res.iloc[0]["sa50"]}, index=[i]
         )
-        if res_name == "box":
+        if res_name == "Box":
             all_box_res_list.append(res_df)
         else:
             all_res_list.append(res_df)
@@ -81,8 +90,8 @@ def plot_all_experiments():
             all_benchmark_box_results[this_name] = benchmark_box_df
 
     # now, let's get the resource efficient fine-tuning
-    for exp_path in sorted(resource_experiment_paths):
-        fig, ax = plt.subplots(2, 2, figsize=(22, 15), sharey="row")
+    for i, exp_path in enumerate(sorted(resource_experiment_paths)):
+        fig, ax = plt.subplots(2, 2, figsize=(30, 20), sharey="row")
 
         resource_name = os.path.split(exp_path)[-1]
         all_model_paths = glob(os.path.join(exp_path, "*"))
@@ -110,7 +119,7 @@ def plot_all_experiments():
             sns.lineplot(
                 x="name", y="results", hue="type", data=this_box_res,
                 ax=ax[0, idx], palette=PALETTE, hue_order=PALETTE.keys(),
-                marker="o", markersize=12, linewidth=3
+                marker="o", markersize=15, linewidth=5
             )
             ax[0, idx].set_title(_title, fontweight="bold")
             ax[0, idx].set(xlabel=None, ylabel=None)
@@ -120,7 +129,7 @@ def plot_all_experiments():
             sns.lineplot(
                 x="name", y="results", hue="type", data=this_res,
                 ax=ax[1, idx], palette=PALETTE, hue_order=PALETTE.keys(),
-                marker="o", markersize=12, linewidth=3
+                marker="o", markersize=15, linewidth=5
             )
             # ax[1, idx].set_title(_title, fontweight="bold")
             ax[1, idx].set(xlabel=None, ylabel=None)
@@ -129,7 +138,7 @@ def plot_all_experiments():
 
             idx += 1
 
-        if idx > 0:
+        if idx > 0:  # to avoid using vit_t model
             # here, we remove the legends for each subplot, and get one common legend for all
             all_lines, all_labels = [], []
             for ax in fig.axes:
@@ -140,28 +149,33 @@ def plot_all_experiments():
                         all_labels.append(label)
                 ax.get_legend().remove()
 
-            fig.legend(all_lines, all_labels, loc="lower center", ncols=4, bbox_to_anchor=(0.5, 0.02))
+            custom_handles = []
+            for color in PALETTE.values():
+                line = mlines.Line2D([], [], color=color, markersize=15, marker='o', linestyle='-', linewidth=5)
+                custom_handles.append(line)
+
+            fig.legend(custom_handles, PALETTE.keys(), loc="lower center", ncols=4, bbox_to_anchor=(0.5, 0))
 
             def format_y_tick_label(value, pos):
                 return "{:.2f}".format(value)
 
             plt.gca().yaxis.set_major_formatter(FuncFormatter(format_y_tick_label))
 
-            # plt.text(
-            #     x=0.6425, y=2.35, s=" X-Axis: Number of Images \n Y-Axis: Segmentation Accuracy ", ha='left',
-            #     transform=plt.gca().transAxes, bbox={"facecolor": "None", "edgecolor": "#D6D6D6", "boxstyle": "round"},
-            #     fontsize=16,
-            # )
-            plt.text(x=-6, y=0.6, s="SA50", fontsize=36, rotation=90)
+            plt.text(x=-5.8, y=0.36, s="Segmentation Accuracy at IoU 50%", rotation=90, fontweight="bold")
+            plt.text(x=-1.35, y=-0.075, s="Number of Images", fontweight="bold")
 
-            plt.subplots_adjust(wspace=0.1, hspace=0.15)
+            plt.subplots_adjust(wspace=0.1, hspace=0.15, bottom=0.12, top=0.88)
 
-            # _rname = "CPU" if resource_name.startswith("cpu") else "GPU"  # for figure 5
-            # fig.suptitle(f"Resource Efficient Finetuning ({_rname})")
+            if resource_name == "cpu_32G-mem_16-cores":
+                fig.suptitle("Resource Efficient Finetuning (CPU)", y=0.95, x=0.51)
+                save_path = "./5_b.png"
+                plt.savefig(save_path)
+                plt.savefig(Path(save_path).with_suffix(".svg"))
+                plt.savefig(Path(save_path).with_suffix(".pdf"))
 
             _rname = RNAME_MAPPING[resource_name]  # for supplementary
-            fig.suptitle(f"{_rname}")
-            
+            fig.suptitle(f"{_rname}", y=0.95, x=0.515)
+
             save_path = f"./figures/{resource_name}/results.png"
             try:
                 plt.savefig(save_path)
