@@ -5,7 +5,7 @@
             {
                 "script": "${PREFIX}/Scripts/napari.exe",
 				"name": "micro_sam",
-				"icon": "${PREFIX}/Menu/micro-sam-logo.ico",
+				"icon": "${PREFIX}/Menu/logo.ico",
 				"workdir": "${PREFIX}",
                 "desktop": true,
                 "quicklaunch": true
