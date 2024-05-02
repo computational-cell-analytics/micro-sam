@@ -40,7 +40,7 @@ Fixed parameters:
 
 ### GPU Resources
 
-(32G CPU memory, 8 CPU cores)
+(32GB CPU memory, 8 CPU cores)
 
 1. `gtx1080`:
     - `vit_t`: finetune all layers
