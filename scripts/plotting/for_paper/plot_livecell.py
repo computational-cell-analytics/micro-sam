@@ -195,7 +195,7 @@ def plot_all_livecell(benchmark_choice, model_type):
     amg_res = np.mean([res for res in amg_list if res is not None])
 
     get_barplots("Default SAM", ax[0], ib_vanilla_res, ip_vanilla_res, amg_vanilla_res, cellpose_res)
-    get_barplots("Finetuned SAM", ax[1], ib_res, ip_res, amg_res, cellpose_res, ais_res)
+    get_barplots("Finetuned SAM", ax[1], ib_res, ip_res, amg_res, cellpose_res, ais_res, get_ylabel=False)
 
     # here, we remove the legends for each subplot, and get one common legend for all
     all_lines, all_labels = [], []
@@ -223,8 +223,6 @@ def plot_all_livecell(benchmark_choice, model_type):
 
 def main():
     plot_for_livecell(benchmark_choice="livecell", results_with_logits=False)
-
-    return
 
     for model in ALL_MODELS:
         plot_for_livecell(benchmark_choice="livecell", results_with_logits=True, model_choice=model)
