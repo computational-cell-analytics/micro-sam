@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import matplotlib.lines as mlines
 from matplotlib.ticker import FuncFormatter
 from matplotlib.ticker import FormatStrFormatter
 
@@ -147,8 +148,6 @@ def plot_all_experiments():
                         all_lines.append(line)
                         all_labels.append(label)
                 ax.get_legend().remove()
-
-            import matplotlib.lines as mlines
 
             custom_handles = []
             for color in PALETTE.values():
