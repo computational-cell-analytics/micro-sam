@@ -124,9 +124,7 @@ def get_plots(res_root, model, for_supp=None):
 
 def main():
     # for figure 2
-    get_plots(ROOT, "vit_l")
-
-    return
+    # get_plots(ROOT, "vit_l")
 
     # for supplementary figure 1
     get_plots(ROOT, "vit_t", "ViT Tiny")
