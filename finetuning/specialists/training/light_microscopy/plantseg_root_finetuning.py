@@ -26,7 +26,7 @@ def get_dataloaders(patch_shape, data_path):
     """
     raw_transform = ResizeRawTrafo(patch_shape, do_rescaling=False)
     label_transform = ResizeLabelTrafo(patch_shape)
-    sampler = MinInstanceSampler(min_num_instances=10)
+    sampler = MinInstanceSampler(min_num_instances=10)  # ensures a minimum of 10 instances (inc. background)
     label_dtype = torch.float32
 
     train_loader = get_plantseg_loader(

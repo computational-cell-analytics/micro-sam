@@ -977,7 +977,7 @@ class EmbeddingWidget(_WidgetBase):
         )
         setting_values.layout().addWidget(widget)
 
-        settings = _make_collapsible(setting_values, title="Settings")
+        settings = _make_collapsible(setting_values, title="Embedding Settings")
         return settings
 
     def _validate_inputs(self):
@@ -1184,7 +1184,7 @@ class SegmentNDWidget(_WidgetBase):
                 )
             setting_values.layout().addLayout(layout)
 
-        settings = _make_collapsible(setting_values, title="Settings")
+        settings = _make_collapsible(setting_values, title="Segmentation Settings")
         return settings
 
     def _run_tracking(self):
@@ -1504,9 +1504,16 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _create_settings(self):
         setting_values = self._ais_settings() if self.with_decoder else self._amg_settings()
-        settings = _make_collapsible(setting_values, title="Settings")
-        settings.setToolTip(get_tooltip("segmentnd", "projection_dropdown"))
+        settings = _make_collapsible(setting_values, title="Automatic Segmentation Settings")
         return settings
+
+    def _empty_segmentation_warning(self):
+        msg = "The automatic segmentation result does not contain any objects."
+        msg += "Setting a smaller value for 'min_object_size' may help."
+        if not self.with_decoder:
+            msg += "Setting smaller values for 'pred_iou_thresh' and 'stability_score_thresh' may also help."
+        val_results = {"message_type": "error", "message": msg}
+        return _generate_message(val_results["message_type"], val_results["message"])
 
     def _run_segmentation_2d(self, kwargs, i=None):
         pbar, pbar_signals = _create_pbar_for_threadworker()
@@ -1527,6 +1534,10 @@ class AutoSegmentWidget(_WidgetBase):
             return seg
 
         def update_segmentation(seg):
+            is_empty = seg.max() == 0
+            if is_empty:
+                self._empty_segmentation_warning()
+
             if i is None:
                 self._viewer.layers["auto_segmentation"].data = seg
             else:
@@ -1553,9 +1564,13 @@ class AutoSegmentWidget(_WidgetBase):
         return True
 
     def _run_segmentation_3d(self, kwargs):
-        if not self._allow_segment_3d():
-            print("Volumetric segmentation with AMG is only supported if you have a GPU.")
-            return
+        allow_segment_3d = self._allow_segment_3d()
+        if not allow_segment_3d:
+            val_results = {
+                "message_type": "error",
+                "message": "Volumetric segmentation with AMG is only supported if you have a GPU."
+            }
+            return _generate_message(val_results["message_type"], val_results["message"])
 
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
@@ -1592,6 +1607,9 @@ class AutoSegmentWidget(_WidgetBase):
             return segmentation
 
         def update_segmentation(segmentation):
+            is_empty = segmentation.max() == 0
+            if is_empty:
+                self._empty_segmentation_warning()
             self._viewer.layers["auto_segmentation"].data = segmentation
             self._viewer.layers["auto_segmentation"].refresh()
 

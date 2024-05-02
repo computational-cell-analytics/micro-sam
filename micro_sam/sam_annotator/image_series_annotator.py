@@ -323,7 +323,7 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
 
         self.pattern = "*"
         _, layout = self._add_string_param(
-            "", self.pattern, tooltip=get_tooltip("image_series_annotator", "pattern")
+            "pattern", self.pattern, tooltip=get_tooltip("image_series_annotator", "pattern")
         )
         setting_values.layout().addLayout(layout)
 
@@ -367,7 +367,7 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         )
         setting_values.layout().addLayout(layout)
 
-        settings = widgets._make_collapsible(setting_values, title="Settings")
+        settings = widgets._make_collapsible(setting_values, title="Advanced Settings")
         return settings
 
     def _validate_inputs(self):
