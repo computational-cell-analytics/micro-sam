@@ -89,7 +89,7 @@ def plot_all_experiments():
             all_benchmark_box_results[this_name] = benchmark_box_df
 
     # now, let's get the resource efficient fine-tuning
-    for exp_path in sorted(resource_experiment_paths):
+    for i, exp_path in enumerate(sorted(resource_experiment_paths)):
         fig, ax = plt.subplots(2, 2, figsize=(30, 20), sharey="row")
 
         resource_name = os.path.split(exp_path)[-1]
@@ -137,7 +137,7 @@ def plot_all_experiments():
 
             idx += 1
 
-        if idx > 0:
+        if idx > 0:  # to avoid using vit_t model
             # here, we remove the legends for each subplot, and get one common legend for all
             all_lines, all_labels = [], []
             for ax in fig.axes:
@@ -162,20 +162,20 @@ def plot_all_experiments():
 
             plt.gca().yaxis.set_major_formatter(FuncFormatter(format_y_tick_label))
 
-            plt.text(x=-5.8, y=0.35, s="Segmentation Accuracy at IoU 50%", rotation=90, fontweight="bold")
+            plt.text(x=-5.8, y=0.36, s="Segmentation Accuracy at IoU 50%", rotation=90, fontweight="bold")
             plt.text(x=-1.35, y=-0.075, s="Number of Images", fontweight="bold")
 
             plt.subplots_adjust(wspace=0.1, hspace=0.15, bottom=0.12, top=0.88)
 
             if resource_name == "cpu_32G-mem_16-cores":
-                fig.suptitle("Resource Efficient Finetuning (CPU)")
+                fig.suptitle("Resource Efficient Finetuning (CPU)", y=0.95, x=0.51)
                 save_path = "./5_b.png"
                 plt.savefig(save_path)
                 plt.savefig(Path(save_path).with_suffix(".svg"))
                 plt.savefig(Path(save_path).with_suffix(".pdf"))
 
             _rname = RNAME_MAPPING[resource_name]  # for supplementary
-            fig.suptitle(f"{_rname}")
+            fig.suptitle(f"{_rname}", y=0.95, x=0.515)
 
             save_path = f"./figures/{resource_name}/results.png"
             try:

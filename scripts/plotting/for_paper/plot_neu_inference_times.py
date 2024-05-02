@@ -153,6 +153,7 @@ def _get_inference_timings_plots():
         ax.get_legend().remove()
 
     plt.legend(loc="lower center", ncol=4, bbox_to_anchor=(0, -0.325))
+    fig.suptitle("Inference Timings", y=0.95, x=0.51)
 
     plt.subplots_adjust(wspace=0.1, hspace=0.15)
 
