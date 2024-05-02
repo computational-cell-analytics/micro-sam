@@ -299,7 +299,7 @@ def export_sam_model(
             spec.InputTensorDescr(
                 id=spec.TensorId("image"),
                 axes=[
-                    spec.BatchAxis(),
+                    spec.BatchAxis(size=1),
                     # NOTE: to support 1 and 3 channels we can add another preprocessing.
                     # Best solution: Have a pre-processing for this! (1C -> RGB)
                     spec.ChannelAxis(channel_names=[spec.Identifier(cname) for cname in "RGB"]),
@@ -315,7 +315,7 @@ def export_sam_model(
                 id=spec.TensorId("box_prompts"),
                 optional=True,
                 axes=[
-                    spec.BatchAxis(),
+                    spec.BatchAxis(size=1),
                     spec.IndexInputAxis(
                         id=spec.AxisId("object"),
                         size=spec.ARBITRARY_SIZE
@@ -331,7 +331,7 @@ def export_sam_model(
                 id=spec.TensorId("point_prompts"),
                 optional=True,
                 axes=[
-                    spec.BatchAxis(),
+                    spec.BatchAxis(size=1),
                     spec.IndexInputAxis(
                         id=spec.AxisId("object"),
                         size=spec.ARBITRARY_SIZE
@@ -351,7 +351,7 @@ def export_sam_model(
                 id=spec.TensorId("point_labels"),
                 optional=True,
                 axes=[
-                    spec.BatchAxis(),
+                    spec.BatchAxis(size=1),
                     spec.IndexInputAxis(
                         id=spec.AxisId("object"),
                         size=spec.ARBITRARY_SIZE
@@ -370,7 +370,7 @@ def export_sam_model(
                 id=spec.TensorId("mask_prompts"),
                 optional=True,
                 axes=[
-                    spec.BatchAxis(),
+                    spec.BatchAxis(size=1),
                     spec.IndexInputAxis(
                         id=spec.AxisId("object"),
                         size=spec.ARBITRARY_SIZE
@@ -388,7 +388,7 @@ def export_sam_model(
                 id=spec.TensorId("embeddings"),
                 optional=True,
                 axes=[
-                    spec.BatchAxis(),
+                    spec.BatchAxis(size=1),
                     # NOTE: we currently have to specify all the channel names
                     # (It would be nice to also support size)
                     spec.ChannelAxis(channel_names=[spec.Identifier(f"c{i}") for i in range(256)]),
@@ -406,7 +406,7 @@ def export_sam_model(
             spec.OutputTensorDescr(
                 id=spec.TensorId("masks"),
                 axes=[
-                    spec.BatchAxis(),
+                    spec.BatchAxis(size=1),
                     # NOTE: we use the data dependent size here to avoid dependency on optional inputs
                     spec.IndexOutputAxis(
                         id=spec.AxisId("object"), size=spec.DataDependentSize(),
@@ -434,7 +434,7 @@ def export_sam_model(
             spec.OutputTensorDescr(
                 id=spec.TensorId("scores"),
                 axes=[
-                    spec.BatchAxis(),
+                    spec.BatchAxis(size=1),
                     # NOTE: we use the data dependent size here to avoid dependency on optional inputs
                     spec.IndexOutputAxis(
                         id=spec.AxisId("object"), size=spec.DataDependentSize(),
@@ -450,7 +450,7 @@ def export_sam_model(
             spec.OutputTensorDescr(
                 id=spec.TensorId("embeddings"),
                 axes=[
-                    spec.BatchAxis(),
+                    spec.BatchAxis(size=1),
                     spec.ChannelAxis(channel_names=[spec.Identifier(f"c{i}") for i in range(256)]),
                     spec.SpaceOutputAxis(id=spec.AxisId("y"), size=64),
                     spec.SpaceOutputAxis(id=spec.AxisId("x"), size=64),
