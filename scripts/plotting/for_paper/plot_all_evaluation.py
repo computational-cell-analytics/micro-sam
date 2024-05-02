@@ -211,7 +211,7 @@ def _get_plot_postprocessing(
     if x_loc is not None:
         x = x_loc
 
-    plt.text(x=x, y=y, s="Mean Segmentation Accuracy", rotation=90, fontweight="bold")
+    plt.text(x=x, y=y, s="Mean Segmentation Accuracy", rotation=90, fontweight="bold", fontsize=36)
 
     if bbox_to_anchor is not None:
         bbox_to_anchor = bba
@@ -250,7 +250,7 @@ def plot_evaluation_for_lm_datasets(model_type):
         experiment_title="Light Microscopy",
         save_path=f"lm_{model_type}_evaluation.svg",
         bba=(0.5, 0.05),
-        y_loc=1
+        y_loc=0.88
     )
 
 
@@ -313,7 +313,7 @@ def plot_evaluation_for_em_datasets(model_type):
         experiment_title="Electron Microscopy",
         save_path=f"em_{model_type}_evaluation.svg",
         bba=(0.5, 0.05),
-        y_loc=0.8,
+        y_loc=0.7,
     )
 
 

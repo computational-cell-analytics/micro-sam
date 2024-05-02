@@ -106,7 +106,7 @@ plt.rcParams.update({'font.size': 30})
 
 
 def _get_inference_timings_plots():
-    fig, ax = plt.subplots(2, 2, figsize=(30, 30), sharey="row")
+    fig, ax = plt.subplots(2, 2, figsize=(30, 20), sharey="row")
 
     df = pd.DataFrame(VIT_T_GPU_BATCH + VIT_B_GPU_BATCH + VIT_L_GPU_BATCH + VIT_H_GPU_BATCH)
     df['model'] = ['ViT Tiny'] * 3 + ['ViT Base'] * 3 + ['ViT Large'] * 3 + ['ViT Huge'] * 3
@@ -152,9 +152,9 @@ def _get_inference_timings_plots():
                 all_labels.append(label)
         ax.get_legend().remove()
 
-    plt.legend(loc="lower center", ncol=4, bbox_to_anchor=(0, -0.25))
+    plt.legend(loc="lower center", ncol=4, bbox_to_anchor=(0, -0.325))
 
-    plt.subplots_adjust(wspace=0.05)
+    plt.subplots_adjust(wspace=0.1, hspace=0.15)
 
     plt.savefig("5_a.svg")
     plt.savefig("5_a.pdf")

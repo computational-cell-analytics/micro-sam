@@ -80,7 +80,7 @@ def gather_livecell_results(model_type, experiment_name, benchmark_choice, resul
     return amg_score, ais_score, ib_score, ip_score, cellpose_res
 
 
-def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
+def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None, get_ylabel=True):
     sns.barplot(x="iteration", y="result", hue="name", data=ib_data, ax=ax, palette=[TOP_BAR_COLOR])
     if "error" in ib_data:
         ax.errorbar(
@@ -93,7 +93,12 @@ def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
             x=ip_data['iteration'], y=ip_data['result'], yerr=ip_data['error'], fmt='none', c='black', capsize=20
         )
     ax.set_xlabel("Iterations", labelpad=10, fontweight="bold")
-    ax.set_ylabel("Mean Segmentation Accuracy", labelpad=10, fontweight="bold")
+
+    if get_ylabel:
+        ax.set_ylabel("Mean Segmentation Accuracy", labelpad=10, fontweight="bold")
+    else:
+        ax.set_ylabel(None)
+
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
     ax.set_title(name, fontweight="bold")
 
@@ -116,7 +121,7 @@ def plot_for_livecell(benchmark_choice, results_with_logits, model_choice=MODEL_
     amg, ais, ib, ip, cellpose_res = gather_livecell_results(
         model_choice, COMPARE_WITH, benchmark_choice, result_type
     )
-    get_barplots("Finetuned SAM", ax[1], ib, ip, amg, cellpose_res, ais)
+    get_barplots("Finetuned SAM", ax[1], ib, ip, amg, cellpose_res, ais, get_ylabel=False)
 
     # here, we remove the legends for each subplot, and get one common legend for all
     all_lines, all_labels = [], []

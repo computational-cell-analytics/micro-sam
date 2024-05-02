@@ -155,7 +155,7 @@ def plot_all_experiments():
                 line = mlines.Line2D([], [], color=color, markersize=15, marker='o', linestyle='-', linewidth=5)
                 custom_handles.append(line)
 
-            fig.legend(custom_handles, PALETTE.keys(), loc="lower center", ncols=4, bbox_to_anchor=(0.5, 0.02))
+            fig.legend(custom_handles, PALETTE.keys(), loc="lower center", ncols=4, bbox_to_anchor=(0.5, 0))
 
             def format_y_tick_label(value, pos):
                 return "{:.2f}".format(value)
@@ -163,30 +163,30 @@ def plot_all_experiments():
             plt.gca().yaxis.set_major_formatter(FuncFormatter(format_y_tick_label))
 
             plt.text(x=-5.8, y=0.35, s="Segmentation Accuracy at IoU 50%", rotation=90, fontweight="bold")
+            plt.text(x=-1.35, y=-0.075, s="Number of Images", fontweight="bold")
 
-            plt.subplots_adjust(wspace=0.1, hspace=0.15)
+            plt.subplots_adjust(wspace=0.1, hspace=0.15, bottom=0.12, top=0.88)
 
             if resource_name == "cpu_32G-mem_16-cores":
-                fig.suptitle("Resource Efficient Finetuning (CPU)", y=0.95)
+                fig.suptitle("Resource Efficient Finetuning (CPU)")
                 save_path = "./5_b.png"
                 plt.savefig(save_path)
                 plt.savefig(Path(save_path).with_suffix(".svg"))
                 plt.savefig(Path(save_path).with_suffix(".pdf"))
 
-            else:
-                _rname = RNAME_MAPPING[resource_name]  # for supplementary
-                fig.suptitle(f"{_rname}")
+            _rname = RNAME_MAPPING[resource_name]  # for supplementary
+            fig.suptitle(f"{_rname}")
 
-                save_path = f"./figures/{resource_name}/results.png"
-                try:
-                    plt.savefig(save_path)
-                    plt.savefig(Path(save_path).with_suffix(".svg"))
-                    plt.savefig(Path(save_path).with_suffix(".pdf"))
-                except FileNotFoundError:
-                    os.makedirs(os.path.split(save_path)[0])
-                    plt.savefig(save_path)
-                    plt.savefig(Path(save_path).with_suffix(".svg"))
-                    plt.savefig(Path(save_path).with_suffix(".pdf"))
+            save_path = f"./figures/{resource_name}/results.png"
+            try:
+                plt.savefig(save_path)
+                plt.savefig(Path(save_path).with_suffix(".svg"))
+                plt.savefig(Path(save_path).with_suffix(".pdf"))
+            except FileNotFoundError:
+                os.makedirs(os.path.split(save_path)[0])
+                plt.savefig(save_path)
+                plt.savefig(Path(save_path).with_suffix(".svg"))
+                plt.savefig(Path(save_path).with_suffix(".pdf"))
 
             plt.close()
             print()
