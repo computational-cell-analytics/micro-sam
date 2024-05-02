@@ -1,6 +1,6 @@
 # Segment Anything Finetuning
 
-Code for finetuning segment anything data on microscopy data and evaluating the finetuned models.
+Code for finetuning Segment Anything data on microscopy data and evaluating the finetuned models.
 
 ## Example: LIVECell
 
@@ -68,12 +68,15 @@ This will create a folder `experiment/results` with csv tables with the results 
 
 ## Finetuning and Evaluation code
 
-TODO: hint the users to the `generalist/`, `specialist/` and `evaluation/` scripts with a bit of hints
-
 The subfolders contain the code for different finetuning and evaluation experiments for microscopy data:
-- `livecell`: TODO
-- `generalist`: TODO
-- `specialist`: TODO
-- `evaluation`: TODO
-
-Note: we still need to clean up most of this code and will add it later.
+- `livecell`: Experiments with the LIVECell dataset.
+- `generalist`: Experiments for generalist models with microscopy datasets.
+    - `training`:
+        - `light_microscopy`: The finetuning script for light microscopy datasets.
+        - `electron_microscopy/mito_nuc`: The finetuning script for organelle segmentation in electron microscopy datasets.
+- `specialist`: Experiments for specialist models with microscopy datasets.
+    - `resource-efficient`: The resource efficient experiments on Covid IF dataset.
+    - `training`:
+        - `light_microscopy`: The finetuning script(s) for multiple light microscopy datasets.
+        - `electron_microscopy`: The finetuning script(s) for multiple electron microscopy datasets.
+- `evaluation`: Scripts to evaluate the Segment Anything models. See `evaluation/README.md` for details.

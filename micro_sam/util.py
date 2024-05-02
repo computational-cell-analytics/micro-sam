@@ -4,23 +4,26 @@ Helper functions for downloading Segment Anything models and predicting image em
 
 import hashlib
 import os
-from pathlib import Path
 import pickle
 import warnings
 from collections import OrderedDict
-from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
+from pathlib import Path
+from typing import Any, Dict, Iterable, Optional, Tuple, Union
 
 import imageio.v3 as imageio
 import numpy as np
 import pooch
 import torch
 import vigra
+import xxhash
 import zarr
 
 from elf.io import open_file
 from nifty.tools import blocking
 from skimage.measure import regionprops
 from skimage.segmentation import relabel_sequential
+
+from .__version__ import __version__
 
 try:
     # Avoid import warnigns from mobile_sam
@@ -33,24 +36,17 @@ except ImportError:
     VIT_T_SUPPORT = False
 
 try:
-    import xxhash
-    HAS_XXH128 = hasattr(xxhash, "xxh128")
-except ImportError:
-    HAS_XXH128 = False
-
-try:
     from napari.utils import progress as tqdm
 except ImportError:
     from tqdm import tqdm
 
-
 # this is the default model used in micro_sam
 # currently set to the default vit_h
-_DEFAULT_MODEL = "vit_h"
+_DEFAULT_MODEL = "vit_l"
 
 # The valid model types. Each type corresponds to the architecture of the
 # vision transformer used within SAM.
-_MODEL_TYPES = ("vit_h", "vit_b", "vit_l", "vit_t")
+_MODEL_TYPES = ("vit_l", "vit_b", "vit_h", "vit_t")
 
 
 # TODO define the proper type for image embeddings
@@ -93,57 +89,70 @@ def models():
     are respected.
     """
 
-    # Provide hashes in both xxh128 (fast, but not cryptographically secure),
-    # and as sha256 (as a fallback) to validate if the file has been correctly
-    # downloaded.
+    # We use xxhash to compute the hash of the models, see
     # https://github.com/computational-cell-analytics/micro-sam/issues/283
-    # To generate the xxh128 hash
-    #
+    # (It is now a dependency, so we don't provide the sha256 fallback anymore.)
+    # To generate the xxh128 hash:
     #     xxh128sum filename
-    #
-    # You may need to install xxhash with conda or your system package manager.
-    registry_sha256 = {
-        # the default segment anything models
-        "vit_h": "sha256:a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e",
-        "vit_l": "sha256:3adcc4315b642a4d2101128f611684e8734c41232a17c648ed1693702a49a622",
-        "vit_b": "sha256:ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
-        # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
-        "vit_t": "sha256:6dbb90523a35330fedd7f1d3dfc66f995213d81b29a5ca8108dbcdd4e37d6c2f",
-        # first version of finetuned models on zenodo
-        "vit_b_lm": "sha256:e8f5feb1ad837a7507935409c7f83f7c8af11c6e39cfe3df03f8d3bd4a358449",
-        "vit_b_em_organelles": "sha256:8fabbe38a427a0c91bbe6518a5c0f103f36b73e6ee6c86fbacd32b4fc66294b4",
-        "vit_b_em_boundaries": "sha256:d87348b2adef30ab427fb787d458643300eb30624a0e808bf36af21764705f4f",
-    }
-    registry_xxh128 = {
-        # the default segment anything models
-        "vit_h": "xxh128:97698fac30bd929c2e6d8d8cc15933c2",
+    encoder_registry = {
+        # The default segment anything models:
         "vit_l": "xxh128:a82beb3c660661e3dd38d999cc860e9a",
+        "vit_h": "xxh128:97698fac30bd929c2e6d8d8cc15933c2",
         "vit_b": "xxh128:6923c33df3637b6a922d7682bfc9a86b",
-        # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
+        # The model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM.
         "vit_t": "xxh128:8eadbc88aeb9d8c7e0b4b60c3db48bd0",
-        # first version of finetuned models on zenodo
-        "vit_b_lm": "xxh128:6b061eb8684d9d5f55545330d6dce50d",
-        "vit_b_em_organelles": "xxh128:3919c2b761beba7d3f4ece342c9f5369",
-        "vit_b_em_boundaries": "xxh128:3099fe6339f5be91ca84db889db1909f",
+        # The current version of our models in the modelzoo.
+        # LM generalist models:
+        "vit_l_lm": "xxh128:ad3afe783b0d05a788eaf3cc24b308d2",
+        "vit_b_lm": "xxh128:61ce01ea731d89ae41a252480368f886",
+        "vit_t_lm": "xxh128:f90e2ba3dd3d5b935aa870cf2e48f689",
+        # EM models:
+        "vit_l_em_organelles": "xxh128:096c9695966803ca6fde24f4c1e3c3fb",
+        "vit_b_em_organelles": "xxh128:f6f6593aeecd0e15a07bdac86360b6cc",
+        "vit_t_em_organelles": "xxh128:253474720c497cce605e57c9b1d18fd9",
     }
+    # Additional decoders for instance segmentation.
+    decoder_registry = {
+        # LM generalist models:
+        "vit_l_lm_decoder": "xxh128:40c1ae378cfdce24008b9be24889a5b1",
+        "vit_b_lm_decoder": "xxh128:1bac305195777ba7375634ca15a3c370",
+        "vit_t_lm_decoder": "xxh128:82d3604e64f289bb66ec46a5643da169",
+        # EM models:
+        "vit_l_em_organelles_decoder": "xxh128:d60fd96bd6060856f6430f29e42568fb",
+        "vit_b_em_organelles_decoder": "xxh128:b2d4dcffb99f76d83497d39ee500088f",
+        "vit_t_em_organelles_decoder": "xxh128:8f897c7bb93174a4d1638827c4dd6f44",
+    }
+    registry = {**encoder_registry, **decoder_registry}
+
+    # Note: the modelzoo urls should be updated at some point to not point at 'staged' but 'published'.
+    encoder_urls = {
+        "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
+        "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
+        "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
+        "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
+        "vit_l_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/staged/1/files/vit_l.pt",
+        "vit_b_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/staged/1/files/vit_b.pt",
+        "vit_t_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/staged/1/files/vit_t.pt",
+        "vit_l_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/staged/1/files/vit_l.pt",
+        "vit_b_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/staged/1/files/vit_b.pt",
+        "vit_t_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/staged/1/files/vit_t.pt",
+    }
+
+    decoder_urls = {
+        "vit_l_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/staged/1/files/vit_l_decoder.pt",
+        "vit_b_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/staged/1/files/vit_b_decoder.pt",
+        "vit_t_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/staged/1/files/vit_t_decoder.pt",
+        "vit_l_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/staged/1/files/vit_l_decoder.pt",
+        "vit_b_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/staged/1/files/vit_b_decoder.pt",
+        "vit_t_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/staged/1/files/vit_t_decoder.pt",
+    }
+    urls = {**encoder_urls, **decoder_urls}
 
     models = pooch.create(
         path=os.path.join(microsam_cachedir(), "models"),
         base_url="",
-        registry=registry_xxh128 if HAS_XXH128 else registry_sha256,
-        # Now specify custom URLs for some of the files in the registry.
-        urls={
-            # the default segment anything models
-            "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
-            "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
-            "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
-            # the model with vit tiny backend fom https://github.com/ChaoningZhang/MobileSAM
-            "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
-            # first version of finetuned models on zenodo
-            "vit_b_lm": "https://zenodo.org/records/10524791/files/vit_b_lm.pth?download=1",
-            "vit_b_em_organelles": "https://zenodo.org/records/10524828/files/vit_b_em_organelles.pth?download=1",
-            "vit_b_em_boundaries": "https://zenodo.org/records/10524894/files/vit_b_em_boundaries.pth?download=1",
-        },
+        registry=registry,
+        urls=urls,
     )
     return models
 
@@ -222,6 +231,40 @@ class _CustomUnpickler(pickle.Unpickler):
             return None
 
 
+def _compute_hash(path, chunk_size=8192):
+    hash_obj = xxhash.xxh128()
+    with open(path, "rb") as f:
+        chunk = f.read(chunk_size)
+        while chunk:
+            hash_obj.update(chunk)
+            chunk = f.read(chunk_size)
+    hash_val = hash_obj.hexdigest()
+    return f"xxh128:{hash_val}"
+
+
+# Load the state from a checkpoint.
+# The checkpoint can either contain a sam encoder state
+# or it can be a checkpoint for model finetuning.
+def _load_checkpoint(checkpoint_path):
+    # Over-ride the unpickler with our custom one.
+    # This enables imports from torch_em checkpoints even if it cannot be fully unpickled.
+    custom_pickle = pickle
+    custom_pickle.Unpickler = _CustomUnpickler
+
+    state = torch.load(checkpoint_path, map_location="cpu", pickle_module=custom_pickle)
+    if "model_state" in state:
+        # Copy the model weights from torch_em's training format.
+        model_state = state["model_state"]
+        sam_prefix = "sam."
+        model_state = OrderedDict(
+            [(k[len(sam_prefix):] if k.startswith(sam_prefix) else k, v) for k, v in model_state.items()]
+        )
+    else:
+        model_state = state
+
+    return state, model_state
+
+
 def get_sam_model(
     model_type: str = _DEFAULT_MODEL,
     device: Optional[Union[str, torch.device]] = None,
@@ -275,6 +318,13 @@ def get_sam_model(
     if checkpoint_path is None:
         model_registry = models()
         checkpoint_path = model_registry.fetch(model_type)
+        model_hash = model_registry.registry[model_type]
+
+        # If we have a custom model then we may also have a decoder checkpoint.
+        # Download it here, so that we can add it to the state.
+        decoder_name = f"{model_type}_decoder"
+        decoder_path = model_registry.fetch(decoder_name) if decoder_name in model_registry.registry else None
+
     # checkpoint_path has been passed, we use it instead of downloading a model.
     else:
         # Check if the file exists and raise an error otherwise.
@@ -282,6 +332,8 @@ def get_sam_model(
         # (If it isn't the model creation will fail below.)
         if not os.path.exists(checkpoint_path):
             raise ValueError(f"Checkpoint at {checkpoint_path} could not be found.")
+        model_hash = _compute_hash(checkpoint_path)
+        decoder_path = None
 
     # Our fine-tuned model types have a suffix "_...". This suffix needs to be stripped
     # before calling sam_model_registry.
@@ -294,28 +346,19 @@ def get_sam_model(
             "You can install it via 'pip install git+https://github.com/ChaoningZhang/MobileSAM.git'"
         )
 
-    # Over-ride the unpickler with our custom one.
-    # This enables imports from torch_em checkpoints even if it cannot be fully unpickled.
-    custom_pickle = pickle
-    custom_pickle.Unpickler = _CustomUnpickler
-
-    state = torch.load(checkpoint_path, map_location="cpu", pickle_module=custom_pickle)
-    if "model_state" in state:
-        # Copy the model weights from torch_em's training format.
-        model_state = state["model_state"]
-        sam_prefix = "sam."
-        model_state = OrderedDict(
-            [(k[len(sam_prefix):] if k.startswith(sam_prefix) else k, v) for k, v in model_state.items()]
-        )
-    else:
-        model_state = state
-
+    state, model_state = _load_checkpoint(checkpoint_path)
     sam = sam_model_registry[abbreviated_model_type]()
     sam.load_state_dict(model_state)
-
     sam.to(device=device)
+
     predictor = SamPredictor(sam)
     predictor.model_type = abbreviated_model_type
+    predictor._hash = model_hash
+    predictor.model_name = model_type
+
+    # Add the decoder to the state if we have one and if the state is returned.
+    if decoder_path is not None and return_state:
+        state["decoder_state"] = torch.load(decoder_path, map_location=device)
 
     if return_sam and return_state:
         return predictor, sam, state
@@ -358,7 +401,7 @@ def get_model_names() -> Iterable:
 
 
 #
-# Functionality for precomputing embeddings and other state
+# Functionality for precomputing image embeddings.
 #
 
 
@@ -379,19 +422,17 @@ def _to_image(input_):
     return image
 
 
-def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, verbose=True):
+def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update):
     tiling = blocking([0, 0], input_.shape[:2], tile_shape)
     n_tiles = tiling.numberOfBlocks
-
-    f.attrs["input_size"] = None
-    f.attrs["original_size"] = None
 
     features = f.require_group("features")
     features.attrs["shape"] = input_.shape[:2]
     features.attrs["tile_shape"] = tile_shape
     features.attrs["halo"] = halo
 
-    for tile_id in tqdm(range(n_tiles), total=n_tiles, desc="Predict image embeddings for tiles", disable=not verbose):
+    pbar_init(n_tiles, "Compute Image Embeddings 2D tiled.")
+    for tile_id in range(n_tiles):
         tile = tiling.getBlockWithHalo(tile_id, list(halo))
         outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end))
 
@@ -407,19 +448,20 @@ def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, verbose=T
         )
         ds.attrs["original_size"] = original_size
         ds.attrs["input_size"] = input_size
+        pbar_update(1)
 
+    _write_embedding_signature(
+        f, input_, predictor, tile_shape, halo, input_size=None, original_size=None,
+    )
     return features
 
 
-def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, verbose=True):
+def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update):
     assert input_.ndim == 3
 
     shape = input_.shape[1:]
     tiling = blocking([0, 0], shape, tile_shape)
     n_tiles = tiling.numberOfBlocks
-
-    f.attrs["input_size"] = None
-    f.attrs["original_size"] = None
 
     features = f.require_group("features")
     features.attrs["shape"] = shape
@@ -427,7 +469,7 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, verbose=T
     features.attrs["halo"] = halo
 
     n_slices = input_.shape[0]
-    pbar = tqdm(total=n_tiles * n_slices, desc="Predict image embeddings for tiles and slices", disable=not verbose)
+    pbar_init(n_tiles * n_slices, "Compute Image Embeddings 3D tiled.")
 
     for tile_id in range(n_tiles):
         tile = tiling.getBlockWithHalo(tile_id, list(halo))
@@ -448,7 +490,7 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, verbose=T
                 )
 
             ds[z] = tile_features.cpu().numpy()
-            pbar.update(1)
+            pbar_update(1)
 
         original_size = predictor.original_size
         input_size = predictor.input_size
@@ -456,13 +498,17 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, verbose=T
         ds.attrs["original_size"] = original_size
         ds.attrs["input_size"] = input_size
 
+    _write_embedding_signature(
+        f, input_, predictor, tile_shape, halo, input_size=None, original_size=None,
+    )
+
     return features
 
 
-def _compute_2d(input_, predictor, f, save_path):
+def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
     # Check if the embeddings are already cached.
     if save_path is not None and "input_size" in f.attrs:
-        # In this case we load the embeddings..
+        # In this case we load the embeddings.
         features = f["features"][:]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
         image_embeddings = {
@@ -472,20 +518,23 @@ def _compute_2d(input_, predictor, f, save_path):
         set_precomputed(predictor, image_embeddings)
         return image_embeddings
 
+    pbar_init(1, "Compute Image Embeddings 2D.")
     # Otherwise we have to compute the embeddings.
     predictor.reset_image()
     predictor.set_image(_to_image(input_))
     features = predictor.get_image_embedding().cpu().numpy()
     original_size = predictor.original_size
     input_size = predictor.input_size
+    pbar_update(1)
 
     # Save the embeddings if we have a save_path.
     if save_path is not None:
         f.create_dataset(
             "features", data=features, compression="gzip", chunks=features.shape
         )
-        f.attrs["input_size"] = input_size
-        f.attrs["original_size"] = original_size
+        _write_embedding_signature(
+            f, input_, predictor, tile_shape=None, halo=None, input_size=input_size, original_size=original_size,
+        )
 
     image_embeddings = {
         "features": features, "input_size": input_size, "original_size": original_size,
@@ -493,7 +542,7 @@ def _compute_2d(input_, predictor, f, save_path):
     return image_embeddings
 
 
-def _compute_tiled_2d(input_, predictor, tile_shape, halo, f):
+def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update):
     # Check if the features are already computed.
     if "input_size" in f.attrs:
         features = f["features"]
@@ -505,16 +554,12 @@ def _compute_tiled_2d(input_, predictor, tile_shape, halo, f):
 
     # Otherwise compute them. Note: saving happens automatically because we
     # always write the features to zarr. If no save path is given we use an in-memory zarr.
-    features = _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f)
-    original_size, input_size = None, None
-
-    image_embeddings = {
-        "features": features, "input_size": input_size, "original_size": original_size,
-    }
+    features = _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update)
+    image_embeddings = {"features": features, "input_size": None, "original_size": None}
     return image_embeddings
 
 
-def _compute_3d(input_, predictor, f, save_path, lazy_loading):
+def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_update):
     # Check if the embeddings are already fully cached.
     if save_path is not None and "input_size" in f.attrs:
         # In this case we load the embeddings.
@@ -546,8 +591,11 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading):
             partial_features = False
             features = f.create_dataset("features", shape=shape, chunks=chunks, dtype="float32")
 
+    # Initialize the pbar.
+    pbar_init(input_.shape[0], "Compute Image Embeddings 3D")
+
     # Compute the embeddings for each slice.
-    for z, z_slice in tqdm(enumerate(input_), total=input_.shape[0], desc="Precompute Image Embeddings"):
+    for z, z_slice in enumerate(input_):
         # Skip feature computation in case of partial features in non-zero slice.
         if partial_features and np.count_nonzero(features[z]) != 0:
             continue
@@ -561,21 +609,21 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading):
             features[z] = embedding.cpu().numpy()
         else:
             features.append(embedding[None])
+        pbar_update(1)
 
     if save_features:
-        f.attrs["input_size"] = input_size
-        f.attrs["original_size"] = original_size
+        _write_embedding_signature(
+            f, input_, predictor, tile_shape=None, halo=None, input_size=input_size, original_size=original_size,
+        )
     else:
         # Concatenate across the z axis.
         features = torch.cat(features).cpu().numpy()
 
-    image_embeddings = {
-        "features": features, "input_size": input_size, "original_size": original_size,
-    }
+    image_embeddings = {"features": features, "input_size": input_size, "original_size": original_size}
     return image_embeddings
 
 
-def _compute_tiled_3d(input_, predictor, tile_shape, halo, f):
+def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update):
     # Check if the features are already computed.
     if "input_size" in f.attrs:
         features = f["features"]
@@ -587,12 +635,8 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f):
 
     # Otherwise compute them. Note: saving happens automatically because we
     # always write the features to zarr. If no save path is given we use an in-memory zarr.
-    features = _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f)
-    original_size, input_size = None, None
-
-    image_embeddings = {
-        "features": features, "input_size": input_size, "original_size": original_size,
-    }
+    features = _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update)
+    image_embeddings = {"features": features, "input_size": None, "original_size": None}
     return image_embeddings
 
 
@@ -601,42 +645,92 @@ def _compute_data_signature(input_):
     return data_signature
 
 
-def _check_existing_embeddings(
-    input_,
-    predictor,
-    f,
-    save_path=None,
-    tile_shape=None,
-    halo=None,
-    wrong_file_callback=None,
-) -> zarr.Group:
-    data_signature = _compute_data_signature(input_)
-    key_vals = [
-        ("data_signature", data_signature),
-        ("tile_shape", tile_shape if tile_shape is None else list(tile_shape)),
-        ("halo", halo if halo is None else list(halo)),
-        ("model_type", predictor.model_type)
-    ]
-    if "input_size" in f.attrs:  # we have computed the embeddings already and perform checks
-        for key, val in key_vals:
-            if val is None:
-                continue
-            # check whether the key signature does not match or is not in the file
-            if key not in f.attrs or f.attrs[key] != val:
-                raise RuntimeError(
-                    f"Embeddings file {save_path} is invalid due to unmatching {key}: "
-                    f"{f.attrs.get(key)} != {val}.Please recompute embeddings in a new file."
+# Create all metadata that is stored along with the embeddings.
+def _get_embedding_signature(input_, predictor, tile_shape, halo, data_signature=None):
+    if data_signature is None:
+        data_signature = _compute_data_signature(input_)
+    signature = {
+        "data_signature": data_signature,
+        "tile_shape": tile_shape if tile_shape is None else list(tile_shape),
+        "halo": halo if halo is None else list(halo),
+        "model_type": predictor.model_type,
+        "model_name": predictor.model_name,
+        "micro_sam_version": __version__,
+        "model_hash": getattr(predictor, "_hash", None),
+    }
+    return signature
+
+
+# Note: the input size and orginal size are different if embeddings are tiled or not.
+# That's why we do not include them in the main signature that is being checked
+# (_get_embedding_signature), but just add it for serialization here.
+def _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size, original_size):
+    signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
+    signature.update({"input_size": input_size, "original_size": original_size})
+    for key, val in signature.items():
+        f.attrs[key] = val
+
+
+def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
+    # We may have an empty zarr file that was already created to save the embeddings in.
+    # In this case the embeddings will be computed and we don't need to perform any checks.
+    if "input_size" not in f.attrs:
+        return
+    signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
+    for key, val in signature.items():
+        # Check whether the key is missing from the attrs or if the value is not matching.
+        if key not in f.attrs or f.attrs[key] != val:
+            # These keys were recently added, so we don't want to fail yet if they don't
+            # match in order to not invalidate previous embedding files.
+            # Instead we just raise a warning. (For the version we probably also don't want to fail
+            # i the future since it should not invalidate the embeddings).
+            if key in ("micro_sam_version", "model_hash", "model_name"):
+                warnings.warn(
+                    f"The signature for {key} in embeddings file {save_path} has a mismatch: "
+                    f"{f.attrs.get(key)} != {val}. This key was recently added, so your embeddings are likely correct. "
+                    "But please recompute them if model predictions don't look as expected."
                 )
-            if wrong_file_callback is not None:
-                save_path = wrong_file_callback(save_path)
-                f = zarr.open(save_path, "a")
-            break
+            else:
+                raise RuntimeError(
+                    f"Embeddings file {save_path} is invalid due to mismatch in {key}: "
+                    f"{f.attrs.get(key)} != {val}. Please recompute embeddings in a new file."
+                )
 
-    for key, val in key_vals:
-        if key not in f.attrs:
-            f.attrs[key] = val
 
-    return f
+# Helper function for optional external progress bars.
+def handle_pbar(verbose, pbar_init, pbar_update):
+    """@private"""
+
+    # Noop to provide dummy functions.
+    def noop(*args):
+        pass
+
+    if verbose and pbar_init is None:  # we are verbose and don't have an external progress bar.
+        assert pbar_update is None  # avoid inconsistent state of callbacks
+
+        # Create our own progress bar and callbacks
+        pbar = tqdm()
+
+        def pbar_init(total, description):
+            pbar.total = total
+            pbar.set_description(description)
+
+        def pbar_update(update):
+            pbar.update(update)
+
+        def pbar_close():
+            pbar.close()
+
+    elif verbose and pbar_init is not None:  # external pbar -> we don't have to do anything
+        assert pbar_update is not None
+        pbar = None
+        pbar_close = noop
+
+    else:  # we are not verbose, do nothing
+        pbar = None
+        pbar_init, pbar_update, pbar_close = noop, noop, noop
+
+    return pbar, pbar_init, pbar_update, pbar_close
 
 
 def precompute_image_embeddings(
@@ -647,7 +741,9 @@ def precompute_image_embeddings(
     ndim: Optional[int] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
-    wrong_file_callback: Optional[Callable] = None,
+    verbose: bool = True,
+    pbar_init: Optional[callable] = None,
+    pbar_update: Optional[callable] = None,
 ) -> ImageEmbeddings:
     """Compute the image embeddings (output of the encoder) for the input.
 
@@ -663,32 +759,48 @@ def precompute_image_embeddings(
         ndim: The dimensionality of the data. If not given will be deduced from the input data.
         tile_shape: Shape of tiles for tiled prediction. By default prediction is run without tiling.
         halo: Overlap of the tiles for tiled prediction.
-        wrong_file_callback [callable]: Function to call when an embedding file with wrong file signature
-            is passed. If none is given a wrong file signature will cause a warning.
-            The callback ,ust have the signature 'def callback(save_path: str) -> str',
-            where the return value is the (potentially updated) embedding save path.
+        verbose: Whether to be verbose in the computation.
+        pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
+            Can be used together with pbar_update to handle napari progress bar in other thread.
+            To enables using this function within a threadworker.
+        pbar_update: Callback to update an external progress bar.
+
+    Returns:
+        The image embeddings.
     """
     ndim = input_.ndim if ndim is None else ndim
 
+    # Handle the embedding save_path.
+    # We don't have a save path, open in memory zarr file to hold tiled embeddings.
     if save_path is None:
         f = zarr.group()
-    else:
-        save_path = str(save_path)
+
+    # We have a save path and it already exists. Embeddings will be loaded from it,
+    # check that the saved embeddings in there match the parameters of the function call.
+    elif os.path.exists(save_path):
         f = zarr.open(save_path, "a")
-        f = _check_existing_embeddings(input_, predictor, f, save_path, tile_shape, halo, wrong_file_callback)
+        _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo)
 
-    if ndim == 2:
-        image_embeddings = _compute_2d(input_, predictor, f, save_path) if tile_shape is None else\
-            _compute_tiled_2d(input_, predictor, tile_shape, halo, f)
+    # We have a save path and it does not exist yet. Create the zarr file to which the
+    # embeddings will then be saved.
+    else:
+        f = zarr.open(save_path, "a")
 
-    elif ndim == 3:
-        image_embeddings = _compute_3d(input_, predictor, f, save_path, lazy_loading) if tile_shape is None else\
-            _compute_tiled_3d(input_, predictor, tile_shape, halo, f)
+    _, pbar_init, pbar_update, pbar_close = handle_pbar(verbose, pbar_init, pbar_update)
 
+    if ndim == 2 and tile_shape is None:
+        embeddings = _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update)
+    elif ndim == 2 and tile_shape is not None:
+        embeddings = _compute_tiled_2d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update)
+    elif ndim == 3 and tile_shape is None:
+        embeddings = _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_update)
+    elif ndim == 3 and tile_shape is not None:
+        embeddings = _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update)
     else:
         raise ValueError(f"Invalid dimesionality {input_.ndim}, expect 2 or 3 dim data.")
 
-    return image_embeddings
+    pbar_close()
+    return embeddings
 
 
 def set_precomputed(

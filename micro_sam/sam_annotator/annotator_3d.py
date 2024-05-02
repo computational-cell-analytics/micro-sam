@@ -1,11 +1,5 @@
-import os
-import pickle
-import warnings
-from glob import glob
-from pathlib import Path
 from typing import Optional, Tuple, Union
 
-import h5py
 import napari
 import numpy as np
 import torch
@@ -13,59 +7,25 @@ import torch
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
 from . import _widgets as widgets
-from .util import _initialize_parser
+from .util import _initialize_parser, _sync_embedding_widget, _load_amg_state, _load_is_state
 from .. import util
 
 
-def _load_amg_state(embedding_path):
-    if embedding_path is None or not os.path.exists(embedding_path):
-        return {"cache_folder": None}
-
-    cache_folder = os.path.join(embedding_path, "amg_state")
-    os.makedirs(cache_folder, exist_ok=True)
-    amg_state = {"cache_folder": cache_folder}
-
-    state_paths = glob(os.path.join(cache_folder, "*.pkl"))
-    for path in state_paths:
-        with open(path, "rb") as f:
-            state = pickle.load(f)
-        i = int(Path(path).stem.split("-")[-1])
-        amg_state[i] = state
-    return amg_state
-
-
-def _load_is_state(embedding_path):
-    if embedding_path is None or not os.path.exists(embedding_path):
-        return {"cache_path": None}
-
-    cache_path = os.path.join(embedding_path, "is_state.h5")
-    is_state = {"cache_path": cache_path}
-
-    with h5py.File(cache_path, "a") as f:
-        for name, g in f.items():
-            i = int(name.split("-")[-1])
-            state = {
-                "foreground": g["foreground"][:],
-                "boundary_distances": g["boundary_distances"][:],
-                "center_distances": g["center_distances"][:],
-            }
-            is_state[i] = state
-
-    return is_state
-
-
 class Annotator3d(_AnnotatorBase):
+    def _get_widgets(self):
+        autosegment = widgets.AutoSegmentWidget(self._viewer, with_decoder=self._with_decoder, volumetric=True)
+        segment_nd = widgets.SegmentNDWidget(self._viewer, tracking=False)
+        return {
+            "segment": widgets.segment_slice(),
+            "segment_nd": segment_nd,
+            "autosegment": autosegment,
+            "commit": widgets.commit(),
+            "clear": widgets.clear_volume(),
+        }
+
     def __init__(self, viewer: "napari.viewer.Viewer") -> None:
         self._with_decoder = AnnotatorState().decoder is not None
-        autosegment_widget = widgets.instance_seg_3d if self._with_decoder else widgets.amg_3d
-        super().__init__(
-            viewer=viewer,
-            ndim=3,
-            segment_widget=widgets.segment_slice,
-            segment_nd_widget=widgets.segment_object,
-            autosegment_widget=autosegment_widget,
-            clear_widget=widgets.clear_volume,
-        )
+        super().__init__(viewer=viewer, ndim=3)
 
     def _update_image(self, segmentation_result=None):
         super()._update_image(segmentation_result=segmentation_result)
@@ -138,8 +98,13 @@ def annotator_3d(
     # And initialize the 'committed_objects' with the segmentation result if it was given.
     annotator._update_image(segmentation_result=segmentation_result)
 
-    # Add the annotator widget to the viewer.
+    # Add the annotator widget to the viewer and sync widgets.
     viewer.window.add_dock_widget(annotator)
+    _sync_embedding_widget(
+        state.widgets["embeddings"], model_type,
+        save_path=embedding_path, checkpoint_path=checkpoint_path,
+        device=device, tile_shape=tile_shape, halo=halo
+    )
 
     if return_viewer:
         return viewer
@@ -157,9 +122,6 @@ def main():
         segmentation_result = None
     else:
         segmentation_result = util.load_image_data(args.segmentation_result, key=args.segmentation_key)
-
-    if args.embedding_path is None:
-        warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
 
     annotator_3d(
         image, embedding_path=args.embedding_path,

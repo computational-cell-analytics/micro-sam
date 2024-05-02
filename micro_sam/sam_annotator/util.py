@@ -1,7 +1,13 @@
 import argparse
+import os
+import pickle
 import warnings
+
+from glob import glob
+from pathlib import Path
 from typing import List, Optional, Tuple
 
+import h5py
 import napari
 import numpy as np
 
@@ -9,6 +15,7 @@ from scipy.ndimage import shift
 from skimage import draw
 
 from .. import prompt_based_segmentation, util
+from .. import _model_settings as model_settings
 from ..multi_dimensional_segmentation import _validate_projection
 
 # Green and Red
@@ -43,7 +50,7 @@ def _initialize_parser(description, with_segmentation_result=True, with_instance
     parser.add_argument(
         "-i", "--input", required=True,
         help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
-        "or elf.io.open_file (e.g. hdf5, zarr, mrc) For the latter you also need to pass the 'key' parameter."
+        "or elf.io.open_file (e.g. hdf5, zarr, mrc). For the latter you also need to pass the 'key' parameter."
     )
     parser.add_argument(
         "-k", "--key",
@@ -54,8 +61,8 @@ def _initialize_parser(description, with_segmentation_result=True, with_instance
     parser.add_argument(
         "-e", "--embedding_path",
         help="The filepath for saving/loading the pre-computed image embeddings. "
-        "NOTE: It is recommended to pass this argument and store the embeddings, "
-        "otherwise they will be recomputed every time (which can take a long time)."
+        "It is recommended to pass this argument and store the embeddings if you want to open the annotator "
+        "multiple times for this image. Otherwise the embeddings will be recomputed every time."
     )
 
     if with_segmentation_result:
@@ -339,7 +346,7 @@ def prompt_layers_to_state(
 
 
 def segment_slices_with_prompts(
-    predictor, point_prompts, box_prompts, image_embeddings, shape, progress_bar=None, track_id=None
+    predictor, point_prompts, box_prompts, image_embeddings, shape, track_id=None, update_progress=None,
 ):
     """@private"""
     assert len(shape) == 3
@@ -363,9 +370,9 @@ def segment_slices_with_prompts(
     slices = np.unique(np.concatenate([z_values, z_values_boxes])).astype("int")
     stop_lower, stop_upper = False, False
 
-    def _update_progress():
-        if progress_bar is not None:
-            progress_bar.update(1)
+    if update_progress is None:
+        def update_progress(*args):
+            pass
 
     for i in slices:
         points_i = point_layer_to_prompts(point_prompts, i, track_id)
@@ -373,15 +380,21 @@ def segment_slices_with_prompts(
         # do we end the segmentation at the outer slices?
         if points_i is None:
 
-            if i == slices[0]:
+            if i == slices[0]:  # The bottom slice is a stop slice.
                 stop_lower = True
-            elif i == slices[-1]:
+                seg[i] = 0
+            elif i == slices[-1]:  # The top sloce is a stop slice.
                 stop_upper = True
-            else:
-                raise RuntimeError("Stop slices can only be at the start or end")
+                seg[i] = 0
+            else:  # We have a stop annotation somewhere in the middle. Ignore this.
+                # Remove this slice from the annotated slices, so that it is segmented via
+                # projection in the next step.
+                slices = np.setdiff1d(slices, i)
+                print(f"You have provided a stop annotation (single red point) in slice {i},")
+                print("but you have annotated slices above or below it. This stop annotation will")
+                print(f"be ignored and the slice {i} will be segmented normally.")
 
-            seg[i] = 0
-            _update_progress()
+            update_progress(1)
             continue
 
         boxes, masks = shape_layer_to_prompts(box_prompts, image_shape, i=i, track_id=track_id)
@@ -398,33 +411,105 @@ def segment_slices_with_prompts(
             continue
 
         seg[i] = seg_i
-        _update_progress()
+        update_progress(1)
 
     return seg, slices, stop_lower, stop_upper
 
 
+# For advanced batching: match prompts to already segmented objects and continue segmentation.
+def _match_prompts(previous_segmentation, points, boxes, seg_ids):
+    # Create a mapping between ids and prompts.
+    batched_prompts = {}
+    # seg_boundaries = find_boundaries(previous_segmentation, mode="inner")
+    # indices = distance_transform_edt(seg_boundaries, return_distance=False, return_index=True)
+    return batched_prompts
+
+
+def _batched_interactive_segmentation(predictor, points, labels, boxes, image_embeddings, i, previous_segmentation):
+    prev_seg = previous_segmentation if i is None else previous_segmentation[i]
+    seg = np.zeros(prev_seg.shape, dtype="uint32")
+
+    # seg_ids = np.unique(previous_segmentation)
+    # assert seg_ids[0] == 0
+
+    batched_points, batched_labels = [], []
+    negative_points, negative_labels = [], []
+    for j in range(len(points)):
+        if labels[j] == 1:  # positive point
+            batched_points.append(points[j:j+1])
+            batched_labels.append(labels[j:j+1])
+        else:  # negative points
+            negative_points.append(points[j:j+1])
+            negative_labels.append(labels[j:j+1])
+
+    batched_prompts = [(None, point, label) for point, label in zip(batched_points, batched_labels)]
+    batched_prompts.extend([(box, None, None) for box in boxes])
+    batched_prompts = {i: prompt for i, prompt in enumerate(batched_prompts, 1)}
+
+    # For advanced batching: match prompts to already segmented objects and continue segmentation.
+    # (This is left here as a reference for how this can be implemented.
+    #  I have not decided yet if this is actually a good idea or not.)
+    # # If we have no objects: this is the first call for a batched segmentation.
+    # # We treat each positive point or box as a separate obejct.
+    # if len(seg_ids) == 1:
+    #     # Create a list of all prompts.
+    #     batched_prompts = [(None, point, label) for point, label in zip(batched_points, batched_labels)]
+    #     batched_prompts.extend([(box, None, None) for box in boxes])
+    #     batched_prompts = {i: prompt for i, prompt in enumerate(batched_prompts, 1)}
+
+    # # Otherwise we match the prompts to existing objects.
+    # else:
+    #     batched_prompts = _match_prompts(prev_seg, batched_points, boxes, seg_ids)
+
+    for seg_id, prompt in batched_prompts.items():
+        box, point, label = prompt
+        if len(negative_points) > 0:
+            if point is None:
+                point, label = negative_points, negative_labels
+            else:
+                point = np.concatenate([point] + negative_points)
+                label = np.concatenate([label] + negative_labels)
+
+        if (box is not None) and (point is not None):
+            prediction = prompt_based_segmentation.segment_from_box_and_points(
+                predictor, box, point, label, image_embeddings=image_embeddings, i=i
+            ).squeeze()
+        elif (box is not None) and (point is None):
+            prediction = prompt_based_segmentation.segment_from_box(
+                predictor, box, image_embeddings=image_embeddings, i=i
+            ).squeeze()
+        else:
+            prediction = prompt_based_segmentation.segment_from_points(
+                predictor, point, label, image_embeddings=image_embeddings, i=i
+            ).squeeze()
+
+        seg[prediction] = seg_id
+
+    return seg
+
+
 def prompt_segmentation(
     predictor, points, labels, boxes, masks, shape, multiple_box_prompts,
-    image_embeddings=None, i=None, box_extension=0, multiple_point_prompts=None,
+    image_embeddings=None, i=None, box_extension=0, batched=None,
+    previous_segmentation=None,
 ):
     """@private"""
     assert len(points) == len(labels)
     have_points = len(points) > 0
     have_boxes = len(boxes) > 0
 
-    # no prompts were given, return None
+    # No prompts were given, return None.
     if not have_points and not have_boxes:
         return
 
-    # we use the batched point prompt segmentation mode, but
-    # have a box prompt -> this does not work
-    elif multiple_point_prompts and have_boxes:
-        print("You have activated batched point segmentation but have passed a box prompt.")
-        print("This setting is currently not supported.")
-        print("Provide a single positive point prompt per object when using batched point segmentation.")
-        return
+    # Batched interactive segmentation.
+    elif batched:
+        assert previous_segmentation is not None
+        seg = _batched_interactive_segmentation(
+            predictor, points, labels, boxes, image_embeddings, i, previous_segmentation
+        )
 
-    # box and point prompts were given
+    # Box and point prompts were given.
     elif have_points and have_boxes:
         if len(boxes) > 1:
             print("You have provided point prompts and more than one box prompt.")
@@ -441,36 +526,13 @@ def prompt_segmentation(
                 predictor, mask, box=boxes[0], points=points, labels=labels, image_embeddings=image_embeddings, i=i
             ).squeeze()
 
-    # only point prompts were given
+    # Only point prompts were given.
     elif have_points and not have_boxes:
+        seg = prompt_based_segmentation.segment_from_points(
+            predictor, points, labels, image_embeddings=image_embeddings, i=i
+        ).squeeze()
 
-        if multiple_point_prompts:
-            seg = np.zeros(shape, dtype="uint32")
-            batched_points, batched_labels = [], []
-            negative_points, negative_labels = [], []
-            for j in range(len(points)):
-                if labels[j] == 1:  # positive point
-                    batched_points.append(points[j:j+1])
-                    batched_labels.append(labels[j:j+1])
-                else:  # negative points
-                    negative_points.append(points[j:j+1])
-                    negative_labels.append(labels[j:j+1])
-
-            # Batch this?
-            for seg_id, (point, label) in enumerate(zip(batched_points, batched_labels), 1):
-                if len(negative_points) > 0:
-                    point = np.concatenate([point] + negative_points)
-                    label = np.concatenate([label] + negative_labels)
-                prediction = prompt_based_segmentation.segment_from_points(
-                    predictor, point, label, image_embeddings=image_embeddings, i=i
-                ).squeeze()
-                seg[prediction] = seg_id
-        else:
-            seg = prompt_based_segmentation.segment_from_points(
-                predictor, points, labels, image_embeddings=image_embeddings, i=i
-            ).squeeze()
-
-    # only box prompts were given
+    # Only box prompts were given.
     elif not have_points and have_boxes:
         seg = np.zeros(shape, dtype="uint32")
 
@@ -519,15 +581,15 @@ def _shift_object(mask, motion_model):
 def track_from_prompts(
     point_prompts, box_prompts, seg, predictor, slices, image_embeddings,
     stop_upper, threshold, projection,
-    progress_bar=None, motion_smoothing=0.5, box_extension=0,
+    motion_smoothing=0.5, box_extension=0, update_progress=None,
 ):
     """@private
     """
     use_box, use_mask, use_points, use_single_point = _validate_projection(projection)
 
-    def _update_progress():
-        if progress_bar is not None:
-            progress_bar.update(1)
+    if update_progress is None:
+        def update_progress(*args):
+            pass
 
     # shift the segmentation based on the motion model and update the motion model
     def _update_motion_model(seg, t, t0, motion_model):
@@ -585,7 +647,7 @@ def track_from_prompts(
             if t < slices[-1]:
                 seg_prev = None
 
-            _update_progress()
+            update_progress(1)
 
         if (threshold is not None) and (seg_prev is not None):
             iou = util.compute_iou(seg_prev, seg_t)
@@ -611,3 +673,102 @@ def track_from_prompts(
             break
 
     return seg, has_division
+
+
+def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, device, tile_shape, halo):
+    widget.model_type = model_type
+    index = widget.model_dropdown.findText(model_type)
+    if index > 0:
+        widget.model_dropdown.setCurrentIndex(index)
+
+    if save_path is not None:
+        widget.embeddings_save_path_param.setText(save_path)
+
+    if checkpoint_path is not None:
+        widget.custom_weights_param.setText(checkpoint_path)
+
+    if device is not None:
+        widget.device = device
+        index = widget.device_dropdown.findText(device)
+        widget.device_dropdown.setCurrentIndex(index)
+
+    if tile_shape is not None:
+        widget.tile_x_param.setValue(tile_shape[0])
+        widget.tile_y_param.setValue(tile_shape[1])
+
+    if halo is not None:
+        widget.halo_x_param.setValue(halo[0])
+        widget.halo_y_param.setValue(halo[1])
+
+
+# Read parameters from checkpoint path if it is given instead.
+def _sync_autosegment_widget(widget, model_type, checkpoint_path, update_decoder=None):
+    if update_decoder is not None:
+        widget._reset_segmentation_mode(update_decoder)
+
+    if widget.with_decoder:
+        settings = model_settings.AIS_SETTINGS.get(model_type, {})
+        params = ("center_distance_thresh", "boundary_distance_thresh")
+        for param in params:
+            if param in settings:
+                getattr(widget, f"{param}_param").setValue(settings[param])
+    else:
+        settings = model_settings.AMG_SETTINGS.get(model_type, {})
+        params = ("pred_iou_thresh", "stability_score_thresh", "min_object_size")
+        for param in params:
+            if param in settings:
+                getattr(widget, f"{param}_param").setValue(settings[param])
+
+
+# Read parameters from checkpoint path if it is given instead.
+def _sync_ndsegment_widget(widget, model_type, checkpoint_path):
+    settings = model_settings.ND_SEGMENT_SETTINGS.get(model_type, {})
+
+    if "projection_mode" in settings:
+        projection_mode = settings["projection_mode"]
+        widget.projection = projection_mode
+        index = widget.projection_dropdown.findText(projection_mode)
+        if index > 0:
+            widget.projection_dropdown.setCurrentIndex(index)
+
+    params = ("iou_threshold", "box_extension")
+    for param in params:
+        if param in settings:
+            getattr(widget, f"{param}_param").setValue(settings[param])
+
+
+def _load_amg_state(embedding_path):
+    if embedding_path is None or not os.path.exists(embedding_path):
+        return {"cache_folder": None}
+
+    cache_folder = os.path.join(embedding_path, "amg_state")
+    os.makedirs(cache_folder, exist_ok=True)
+    amg_state = {"cache_folder": cache_folder}
+
+    state_paths = glob(os.path.join(cache_folder, "*.pkl"))
+    for path in state_paths:
+        with open(path, "rb") as f:
+            state = pickle.load(f)
+        i = int(Path(path).stem.split("-")[-1])
+        amg_state[i] = state
+    return amg_state
+
+
+def _load_is_state(embedding_path):
+    if embedding_path is None or not os.path.exists(embedding_path):
+        return {"cache_path": None}
+
+    cache_path = os.path.join(embedding_path, "is_state.h5")
+    is_state = {"cache_path": cache_path}
+
+    with h5py.File(cache_path, "a") as f:
+        for name, g in f.items():
+            i = int(name.split("-")[-1])
+            state = {
+                "foreground": g["foreground"][:],
+                "boundary_distances": g["boundary_distances"][:],
+                "center_distances": g["center_distances"][:],
+            }
+            is_state[i] = state
+
+    return is_state

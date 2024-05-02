@@ -1,20 +1,24 @@
 import os
 import shutil
-import numpy as np
 from glob import glob
 from tqdm import tqdm
 from pathlib import Path
 
 import h5py
 import z5py
+import numpy as np
 import imageio.v3 as imageio
-
-from skimage.measure import label
+from scipy.ndimage import binary_closing
+from skimage.measure import label as connected_components
 
 from elf.wrapper import RoiWrapper
 
 from torch_em.data import datasets
+from torch_em.data import MinForegroundSampler
+from torch_em.util.segmentation import size_filter
 from torch_em.transform.raw import normalize, normalize_percentile
+
+from micro_sam.training import identity
 
 from util import download_all_datasets, ROOT
 
@@ -96,7 +100,7 @@ def save_to_tif(i, _raw, _label, crop_shape, raw_dir, labels_dir, do_connected_c
     # we only save labels with foreground
     if has_foreground(_label):
         if do_connected_components:
-            instances = label(_label)
+            instances = connected_components(_label)
         else:
             instances = _label
 
@@ -235,9 +239,9 @@ def for_platynereis(save_dir, choice):
         the training volumes have labels only
         for validation: we take volume 03
         for test: we take volume 01 and 02
-    for nuclei:
+    for nuclei: (in-domain case)
         for validation: we take volume 01
-        for testing: we take volume [02-12]
+        for testing: we take volume [09-12]
     for cells (membrane):
         for validation: we take volume 07 and 08
         for testing: we take volume 09
@@ -257,10 +261,19 @@ def for_platynereis(save_dir, choice):
             )
 
     elif choice == "nuclei":
+        chosen_test_ids = ["09", "10", "11", "12"]
+        chosen_val_ids = ["01"]
         vol_paths = sorted(glob(os.path.join(ROOT, "platynereis", "nuclei", "*")))
         for vol_path in vol_paths:
             vol_id = os.path.split(vol_path)[-1].split(".")[0][-2:]
-            split = "val" if vol_id == "01" else "test"  # volumes 01 for val, rest for test
+            if vol_id in chosen_val_ids:
+                split = "val"
+            elif vol_id in chosen_test_ids:
+                split = "test"
+            else:
+                continue
+
+            print("Creating slices from volume:", vol_id)
             from_h5_to_tif(
                 h5_vol_path=vol_path,
                 raw_key="volumes/raw",
@@ -355,7 +368,7 @@ def for_mitolab(save_dir):
                 slice_mito = make_center_crop(slice_mito, (1024, 1024))
 
             if has_foreground(slice_mito):
-                instances = label(slice_mito)
+                instances = connected_components(slice_mito)
 
                 raw_path = os.path.join(save_dir, dataset_id, "raw", f"{dataset_id}_{i+1:05}.tif")
                 labels_path = os.path.join(save_dir, dataset_id, "labels", f"{dataset_id}_{i+1:05}.tif")
@@ -482,7 +495,7 @@ def for_isbi(save_dir):
 def for_axondeepseg(save_dir):
     """
     (we use the tem modality)
-    for validation: first 10 slices
+    for validation: first 15 slices
     for testing: rest all
     """
     vol_paths = sorted(glob(os.path.join(ROOT, "axondeepseg", "tem", "*.h5")))
@@ -501,6 +514,86 @@ def for_axondeepseg(save_dir):
         )
 
     make_custom_splits(15, save_dir)
+
+
+def for_vnc(save_dir):
+    """
+    for validation: first 5 slices
+    for testing: rest
+    """
+    vol_path = os.path.join(ROOT, "vnc", "vnc_train.h5")
+
+    from_h5_to_tif(
+        h5_vol_path=vol_path,
+        raw_key="raw",
+        raw_dir=os.path.join(save_dir, "raw"),
+        labels_key="labels/mitochondria",
+        labels_dir=os.path.join(save_dir, "labels"),
+        slice_prefix_name="vnc_train",
+    )
+
+    make_custom_splits(5, save_dir)
+
+
+class FilterObjectsLabelTrafo:
+    def __init__(self, min_size=0, gap_closing=0):
+        self.min_size = min_size
+        self.gap_closing = gap_closing
+
+    def __call__(self, labels):
+        if self.gap_closing > 0:
+            labels = binary_closing(labels, iterations=self.gap_closing)
+
+        if self.min_size > 0:
+            labels = size_filter(labels, min_size=self.min_size)
+
+        labels = connected_components(labels)
+
+        return labels
+
+
+def for_asem(save_dir, choice):
+    """
+    for simplicity, I will use the dataloader to get the samples.
+    for validation: 50 samples
+    for testing: 181 samples
+    """
+    save_dir = os.path.join(save_dir, choice)
+    loader = datasets.get_asem_loader(
+        os.path.join(ROOT, "asem"),
+        patch_shape=(1, 512, 512),
+        batch_size=1,
+        ndim=2,
+        organelles=choice,
+        volume_ids="cell_6",
+        sampler=MinForegroundSampler(min_fraction=0.01),
+        raw_transform=identity,
+        num_workers=16,
+        shuffle=True,
+        label_transform=FilterObjectsLabelTrafo(min_size=100, gap_closing=3)
+    )
+
+    n_desired = 500
+    counter = 0
+    for x, y in tqdm(loader):
+        image = x.squeeze().numpy()
+        labels = y.squeeze().numpy()
+
+        image_path = os.path.join(save_dir, "raw", f"asem_{choice}_{counter:05}.tif")
+        label_path = os.path.join(save_dir, "labels", f"asem_{choice}_{counter:05}.tif")
+
+        os.makedirs(os.path.split(image_path)[0], exist_ok=True)
+        os.makedirs(os.path.split(label_path)[0], exist_ok=True)
+
+        imageio.imwrite(image_path, image, compression="zlib")
+        imageio.imwrite(label_path, labels, compression="zlib")
+        counter += 1
+
+        if counter > n_desired:
+            # it's not needed to run the loader further, hence ciao
+            break
+
+    make_custom_splits(50, save_dir)
 
 
 #
@@ -530,30 +623,32 @@ def for_covid_if(save_dir):
     make_custom_splits(val_samples=5, save_dir=save_dir)
 
 
-def for_tissuenet(save_dir):
+def for_tissuenet(save_dir, to_one_chan):
     """
     all test volumes to the val set, 100 volumes from val to val slices (all in org. resolution)
     """
     tissuenet_val_paths = sorted(glob(os.path.join(ROOT, "tissuenet", "val", "*.zarr")))
     tissuenet_test_paths = sorted(glob(os.path.join(ROOT, "tissuenet", "test", "*.zarr")))
 
-    def save_slices_per_split(all_vol_paths, split):
+    def save_slices_per_split(all_vol_paths, split, to_one_chan):
         for vol_path in all_vol_paths:
             vol_id = Path(vol_path).stem
+
+            _choice = "one_chan" if to_one_chan else "multi_chan"
 
             from_h5_to_tif(
                 h5_vol_path=vol_path,
                 raw_key="raw/rgb",
-                raw_dir=os.path.join(save_dir, split, "raw"),
+                raw_dir=os.path.join(save_dir, _choice, split, "raw"),
                 labels_key="labels/cell",
-                labels_dir=os.path.join(save_dir, split, "labels"),
+                labels_dir=os.path.join(save_dir, _choice, split, "labels"),
                 slice_prefix_name=f"tissuenet_{split}_{vol_id}",
                 interface=z5py,
-                to_one_channel=True
+                to_one_channel=to_one_chan
             )
 
-    save_slices_per_split(tissuenet_val_paths[:100], "val")
-    save_slices_per_split(tissuenet_test_paths, "test")
+    save_slices_per_split(tissuenet_val_paths[:100], "val", to_one_chan=to_one_chan)
+    save_slices_per_split(tissuenet_test_paths, "test", to_one_chan=to_one_chan)
 
 
 def for_plantseg(save_dir):
@@ -664,8 +759,6 @@ def for_ctc(save_dir):
     We only infer on DIC-HeLa for now.
     for validation: first 10 slices from `train`
     for testing: rest slices from `train`
-
-    TODO: add all datasets later for inference, ideally get dataloaders in torch-em for all of them.
     """
     all_hela_image_paths = sorted(
         glob(os.path.join(ROOT, "ctc", "hela_samples", "DIC-C2DH-HeLa.zip.unzip", "DIC-C2DH-HeLa", "01", "*"))
@@ -692,7 +785,7 @@ def for_ctc(save_dir):
     make_custom_splits(10, save_dir)
 
 
-def for_neurips_cellseg(save_dir, use_tuning_set=False):
+def for_neurips_cellseg(save_dir, chosen_set, desired_shape=(1024, 1024)):
     """
     we infer on the `TuningSet` - the data for open-evaluation on grand-challenge
 
@@ -718,43 +811,66 @@ def for_neurips_cellseg(save_dir, use_tuning_set=False):
         os.path.join(ROOT, "neurips-cell-seg"), split="val", val_fraction=0.1
     )
 
-    os.makedirs(os.path.join(save_dir, "val", "raw"), exist_ok=True)
-    os.makedirs(os.path.join(save_dir, "val", "labels"), exist_ok=True)
+    os.makedirs(os.path.join(save_dir, chosen_set, "val", "raw"), exist_ok=True)
+    os.makedirs(os.path.join(save_dir, chosen_set, "val", "labels"), exist_ok=True)
 
-    for image_path, label_path in tqdm(zip(val_label_paths, val_label_paths), total=len(val_image_paths)):
-        image_id = os.path.split(image_path)[-1]
-        dst_image_path = os.path.join(save_dir, "val", "raw", image_id)
-        # converting all images to one channel image - same as generalist training logic
-        imageio.imwrite(dst_image_path, neurips_raw_trafo(imageio.imread(image_path)))
-
+    for image_path, label_path in tqdm(zip(val_image_paths, val_label_paths), total=len(val_image_paths)):
+        image_id = Path(image_path).stem
         label_id = os.path.split(label_path)[-1]
-        dst_label_path = os.path.join(save_dir, "val", "labels", label_id)
-        shutil.copy(label_path, dst_label_path)
+        dst_image_path = os.path.join(save_dir, chosen_set, "val", "raw", f"val_{image_id}.tif")
+        dst_label_path = os.path.join(save_dir, chosen_set, "val", "labels", f"val_{label_id}")
+
+        raw = neurips_raw_trafo(imageio.imread(image_path))
+        gt = imageio.imread(label_path)
+
+        if gt.shape > desired_shape:
+            if has_foreground(make_center_crop(gt, desired_shape)):
+                imageio.imwrite(dst_image_path, make_center_crop(raw, desired_shape))
+                imageio.imwrite(dst_label_path, make_center_crop(gt, desired_shape))
+        else:
+            # converting all images to one channel image - same as generalist training logic
+            imageio.imwrite(dst_image_path, neurips_raw_trafo(imageio.imread(image_path)))
+            shutil.copy(label_path, dst_label_path)
 
     # now, let's get the test slices
-    test_image_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "TestForSam", "images", "*")))
-    test_label_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "TestForSam", "labels", "*")))
+    self_test_image_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "TestForSam", "images", "*")))
+    self_test_label_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "TestForSam", "labels", "*")))
 
-    if use_tuning_set:
-        test_image_paths.extend(
-            sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "new", "Tuning", "images", "*")))
-        )
-        test_label_paths.extend(
-            sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "new", "Tuning", "labels", "*")))
-        )
+    tuning_image_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "new", "Tuning", "images", "*")))
+    tuning_label_paths = sorted(glob(os.path.join(ROOT, "neurips-cell-seg", "new", "Tuning", "labels", "*")))
 
-    os.makedirs(os.path.join(save_dir, "test", "raw"), exist_ok=True)
-    os.makedirs(os.path.join(save_dir, "test", "labels"), exist_ok=True)
+    if chosen_set == "all":
+        test_image_paths = [*self_test_image_paths, *tuning_image_paths]
+        test_label_paths = [*self_test_label_paths, *tuning_label_paths]
+    elif chosen_set == "self":
+        test_image_paths = self_test_image_paths
+        test_label_paths = self_test_label_paths
+    elif chosen_set == "tuning":
+        test_image_paths = tuning_image_paths
+        test_label_paths = tuning_label_paths
+    else:
+        raise ValueError("Choose from 'all' / 'self' / 'tuning'.")
+
+    os.makedirs(os.path.join(save_dir, chosen_set, "test", "raw"), exist_ok=True)
+    os.makedirs(os.path.join(save_dir, chosen_set, "test", "labels"), exist_ok=True)
 
     for image_path, label_path in tqdm(zip(test_image_paths, test_label_paths), total=len(test_image_paths)):
         image_id = Path(image_path).stem
-        dst_image_path = os.path.join(save_dir, "test", "raw", f"{image_id}.tif")
-        # converting all images to one channel image - same as generalist training logic
-        imageio.imwrite(dst_image_path, neurips_raw_trafo(imageio.imread(image_path)))
-
         label_id = os.path.split(label_path)[-1]
-        dst_label_path = os.path.join(save_dir, "test", "labels", label_id)
-        shutil.copy(label_path, dst_label_path)
+        dst_image_path = os.path.join(save_dir, chosen_set, "test", "raw", f"test_{image_id}.tif")
+        dst_label_path = os.path.join(save_dir, chosen_set, "test", "labels", f"test_{label_id}")
+
+        raw = neurips_raw_trafo(imageio.imread(image_path))
+        gt = imageio.imread(label_path)
+
+        if gt.shape > desired_shape:
+            if has_foreground(make_center_crop(gt, desired_shape)):
+                imageio.imwrite(dst_image_path, make_center_crop(raw, desired_shape))
+                imageio.imwrite(dst_label_path, make_center_crop(gt, desired_shape))
+        else:
+            # converting all images to one channel image - same as generalist training logic
+            imageio.imwrite(dst_image_path, neurips_raw_trafo(imageio.imread(image_path)))
+            shutil.copy(label_path, dst_label_path)
 
 
 def for_deepbacs(save_dir):
@@ -777,16 +893,85 @@ def for_deepbacs(save_dir):
             shutil.copy(src_label_path, dst_label_path)
 
 
+def for_dynamicnuclearnet(save_dir):
+    """
+    for validation: take first 100 images from the validation set
+    for testing: take all images from the test set
+    """
+    all_val_paths = sorted(glob(os.path.join(ROOT, "dynamicnuclearnet", "val", "*.zarr")))
+    all_test_paths = sorted(glob(os.path.join(ROOT, "dynamicnuclearnet", "test", "*.zarr")))
+
+    def save_slices_per_split(all_vol_paths, split):
+        for vol_path in all_vol_paths:
+            vol_id = Path(vol_path).stem
+
+            from_h5_to_tif(
+                h5_vol_path=vol_path,
+                raw_key="raw",
+                raw_dir=os.path.join(save_dir, split, "raw"),
+                labels_key="labels",
+                labels_dir=os.path.join(save_dir, split, "labels"),
+                slice_prefix_name=f"dynamicnuclearnet_{split}_{vol_id}",
+                interface=z5py
+            )
+
+    save_slices_per_split(all_val_paths[:100], "val")
+    save_slices_per_split(all_test_paths, "test")
+
+
+def for_pannuke(save_dir, make_one_chan=True):
+    """
+    take 500 samples per fold (total - 1500)
+    for validation: first 50 images per fold
+    for testing: rest all
+    """
+    all_vol_paths = sorted(glob(os.path.join(ROOT, "pannuke", "*.h5")))
+
+    for vol_path in tqdm(all_vol_paths, desc="Processing the pannuke folds"):
+        fold_name = Path(vol_path).stem
+
+        with h5py.File(vol_path, "r") as f:
+            raw = f["images"][:]
+            labels = f["labels/instances"][:]
+
+            raw = raw.transpose(1, 2, 3, 0)  # transpose it to B * H * W * C
+
+            def _save_per_split(raw_here, labels_here, split, offset=0):
+                for i, (s_raw, s_labels) in enumerate(zip(raw_here, labels_here)):
+                    i += offset
+                    fname = f"{fold_name}_{i:04}.tif"
+                    image_path = os.path.join(save_dir, split, "raw", fname)
+                    labels_path = os.path.join(save_dir, split, "labels", fname)
+
+                    os.makedirs(os.path.split(image_path)[0], exist_ok=True)
+                    os.makedirs(os.path.split(labels_path)[0], exist_ok=True)
+
+                    if make_one_chan:
+                        s_raw = s_raw.mean(axis=-1)
+
+                    if has_foreground(s_labels):
+                        imageio.imwrite(image_path, s_raw, compression="zlib")
+                        imageio.imwrite(labels_path, s_labels, compression="zlib")
+
+            _save_per_split(raw[:50], labels[:50], "val")  # choose first 50 samples per fold
+            _save_per_split(raw[50: 500], labels[50: 500], "test", offset=50)  # choose next 450 samples per fold
+
+
 def preprocess_lm_datasets():
     for_covid_if(os.path.join(ROOT, "covid_if", "slices"))
-    for_tissuenet(os.path.join(ROOT, "tissuenet", "slices"))
+    for_tissuenet(os.path.join(ROOT, "tissuenet", "slices"), to_one_chan=True)
+    for_tissuenet(os.path.join(ROOT, "tissuenet", "slices"), to_one_chan=False)
     for_plantseg((os.path.join(ROOT, "plantseg", "slices")))
     for_hpa(os.path.join(ROOT, "hpa", "slices"))
     for_lizard(os.path.join(ROOT, "lizard", "slices"))
     for_mouse_embryo(os.path.join(ROOT, "mouse-embryo", "slices"))
     for_ctc((os.path.join(ROOT, "ctc/hela_samples", "slices")))
-    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"))
+    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"), chosen_set="all")
+    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"), chosen_set="self")
+    for_neurips_cellseg(os.path.join(ROOT, "neurips-cell-seg", "slices"), chosen_set="tuning")
     for_deepbacs(os.path.join(ROOT, "deepbacs", "slices"))
+    for_dynamicnuclearnet(os.path.join(ROOT, "dynamicnuclearnet", "slices"))
+    for_pannuke(os.path.join(ROOT, "pannuke", "slices"))
 
 
 def preprocess_em_datasets():
@@ -803,9 +988,15 @@ def preprocess_em_datasets():
     for_isbi(os.path.join(ROOT, "isbi", "slices"))
     for_axondeepseg(os.path.join(ROOT, "axondeepseg", "slices"))
     for_cremi(os.path.join(ROOT, "cremi", "slices"))
+    for_vnc(os.path.join(ROOT, "vnc", "slices"))
+    for_asem(os.path.join(ROOT, "asem", "slices"), choice="mito")
+    for_asem(os.path.join(ROOT, "asem", "slices"), choice="er")
 
 
 def main():
+    print("The preprocessing has been done.")
+    return
+
     # let's ensure all the data is downloaded
     download_all_datasets(ROOT)
 

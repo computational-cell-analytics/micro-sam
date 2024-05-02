@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest, macos-14]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.10"]
 
     steps:
@@ -43,7 +43,7 @@ jobs:
         run: pip install --no-deps -e .
 
       - name: Run tests
-        uses: aganders3/headless-gui@v1
+        uses: aganders3/headless-gui@v2
         with:
           shell: bash -l {0}
           run: pytest
