@@ -75,12 +75,13 @@ The installers will not enable you to use a GPU, so if you have one then please 
 
 To use the installer:
 - Unpack the zip file you have downloaded.
-- Make the installer executable: `$ chmod +x micro_sam-0.2.0post1-Linux-x86_64.sh`
-- Run the installer: `$./micro_sam-0.2.0post1-Linux-x86_64.sh$` 
+- Make the installer executable: `$ chmod +x micro_sam-1.0.0post0-Linux-x86_64.sh`
+- Run the installer: `./micro_sam-1.0.0post0-Linux-x86_64.sh` 
     - You can select where to install `micro_sam` during the installation. By default it will be installed in `$HOME/micro_sam`.
     - The installer will unpack all `micro_sam` files to the installation directory.
-- After the installation you can start the annotator with the command `.../micro_sam/bin/micro_sam.annotator`.
-    - To make it easier to run the annotation tool you can add `.../micro_sam/bin` to your `PATH` or set a softlink to `.../micro_sam/bin/micro_sam.annotator`.
+- After the installation you can start the annotator with the command `.../micro_sam/bin/napari`.
+    - Proceed with the steps described in [Annotation Tools](#annotation-tools)
+    - To make it easier to run the annotation tool you can add `.../micro_sam/bin` to your `PATH` or set a softlink to `.../micro_sam/bin/napari`.
 
 **Windows Installer:**
 
@@ -89,7 +90,8 @@ To use the installer:
 - Choose installation type: `Just Me(recommended)` or `All Users(requires admin privileges)`.
 - Choose installation path. By default it will be installed in `C:\Users\<Username>\micro_sam` for `Just Me` installation or in `C:\ProgramData\micro_sam` for `All Users`.
 	- The installer will unpack all micro_sam files to the installation directory.
-- After the installation you can start the annotator by double clicking on `.\micro_sam\Scripts\micro_sam.annotator.exe` or  with the command `.\micro_sam\Scripts\micro_sam.annotator.exe` from the Command Prompt.
+- After the installation you can start the annotator by double clicking on `.\micro_sam\Scripts\micro_sam.annotator.exe` or  with the command `.\micro_sam\Scripts\napari.exe` from the Command Prompt.
+- Proceed with the steps described in [Annotation Tools](#annotation-tools) 
 
 <!---
 **Mac Installer:**
