@@ -1,7 +1,7 @@
 # FAQ
 
 Here we provide frequently asked questions and common issues.
-If you encounter a problem or question not addressed here feel free to [open an issue](https://github.com/computational-cell-analytics/micro-sam/issues) or to ask your question on [image.sc](https://forum.image.sc/) with the tag `micro-sam`.
+If you encounter a problem or question not addressed here feel free to [open an issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) or to ask your question on [image.sc](https://forum.image.sc/) with the tag `micro-sam`.
 
 ## Installation questions
 
@@ -17,8 +17,12 @@ From our experience, the `micro_sam` annotation tools work seamlessly on most la
 You might encounter some slowness for $\leq$ 8GB RAM. The resources `micro_sam`'s annotation tools have been tested on are:
 - Windows:
     - Windows 10 Pro, Intel i5 7th Gen, 8GB RAM
+    - Windows 10 Enterprise LTSC, Intel i7 13th Gen, 32GB RAM
+    - Windows 10 Pro for Workstations, Intel Xeon W-2295, 128GB RAM
+    
 - Linux:
     - Ubuntu 22.04, Intel i7 12th Gen, 32GB RAM
+
 - Mac:
     - macOS Sonoma 14.4.1
         - M1 Chip, 8GB RAM
