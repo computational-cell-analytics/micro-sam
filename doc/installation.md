@@ -16,15 +16,15 @@ You can follow the instructions [here](https://mamba.readthedocs.io/en/latest/in
 **IMPORTANT**: Make sure to avoid installing anything in the base environment.
 
 `micro_sam` can be installed in an existing environment via:
-```
+```bash
 $ mamba install -c conda-forge micro_sam
 ```
 or you can create a new environment (here called `micro-sam`) with it via:
-```
+```bash
 $ mamba create -c conda-forge -n micro-sam micro_sam
 ```
 if you want to use the GPU you need to install PyTorch from the `pytorch` channel instead of `conda-forge`. For example:
-```
+```bash
 $ mamba create -c pytorch -c nvidia -c conda-forge micro_sam pytorch pytorch-cuda=12.1
 ```
 You may need to change this command to install the correct CUDA version for your system, see [https://pytorch.org/](https://pytorch.org/) for details.
@@ -39,24 +39,32 @@ To install `micro_sam` from source, we recommend to first set up an environment 
 To create one of these environments and install `micro_sam` into it follow these steps
 
 1. Clone the repository:
-```
+
+```bash
 $ git clone https://github.com/computational-cell-analytics/micro-sam
 ```
+
 2. Enter it:
-```
+
+```bash
 $ cd micro-sam
 ```
+
 3. Create the GPU or CPU environment:
 
-```
+```bash
 $ mamba env create -f <ENV_FILE>.yaml
 ```
+
 4. Activate the environment:
-```
+
+```bash
 $ mamba activate sam
 ```
+
 5. Install `micro_sam`:
-```
+
+```bash
 $ pip install -e .
 ```
 
@@ -71,7 +79,7 @@ We also provide installers for Linux and Windows:
 
 The installers will not enable you to use a GPU, so if you have one then please consider installing `micro_sam` via [mamba](#from-mamba) instead. They will also not enable using the python library.
 
-**Linux Installer:**
+### Linux Installer:
 
 To use the installer:
 - Unpack the zip file you have downloaded.
@@ -82,7 +90,7 @@ To use the installer:
 - After the installation you can start the annotator with the command `.../micro_sam/bin/micro_sam.annotator`.
     - To make it easier to run the annotation tool you can add `.../micro_sam/bin` to your `PATH` or set a softlink to `.../micro_sam/bin/micro_sam.annotator`.
 
-**Windows Installer:**
+### Windows Installer:
 
 - Unpack the zip file you have downloaded.
 - Run the installer by double clicking on it.

@@ -1,19 +1,19 @@
 # Finetuned models
 
 In addition to the original Segment Anything models, we provide models that are finetuned on microscopy data.
-The additional models are available in the [bioimage.io modelzoo](https://bioimage.io/#/) and are also hosted on zenodo.
+The additional models are available in the [BioImage.IO Model Zoo](https://bioimage.io/#/) and are also hosted on Zenodo.
 
 We currently offer the following models:
-- `vit_h`: Default Segment Anything model with vit-h backbone.
-- `vit_l`: Default Segment Anything model with vit-l backbone.
-- `vit_b`: Default Segment Anything model with vit-b backbone.
-- `vit_t`: Segment Anything model with vit-tiny backbone. From the [Mobile SAM publication](https://arxiv.org/abs/2306.14289). 
-- `vit_l_lm`: Finetuned Segment Anything model for cells and nuclei in light microscopy data with vit-l backbone. ([zenodo](TODO), [bioimage.io](TODO))
-- `vit_b_lm`: Finetuned Segment Anything model for cells and nuclei in light microscopy data with vit-b backbone. ([zenodo](https://zenodo.org/doi/10.5281/zenodo.11103797), [diplomatic-bug on bioimage.io](TODO))
-- `vit_t_lm`: Finetuned Segment Anything model for cells and nuclei in light microscopy data with vit-t backbone. ([zenodo](TODO), [bioimage.io](TODO))
-- `vit_l_em_organelles`: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with vit-l backbone. ([zenodo](TODO), [bioimage.io](TODO))
-- `vit_b_em_organelles`: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with vit-b backbone. ([zenodo](TODO), [bioimage.io](TODO))
-- `vit_t_em_organelles`: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with vit-t backbone. ([zenodo](TODO), [bioimage.io](TODO))
+- `vit_h`: Default Segment Anything model with ViT Huge backbone.
+- `vit_l`: Default Segment Anything model with ViT Large backbone.
+- `vit_b`: Default Segment Anything model with ViT Base backbone.
+- `vit_t`: Segment Anything model with ViT Tiny backbone. From the [Mobile SAM publication](https://arxiv.org/abs/2306.14289). 
+- `vit_l_lm`: Finetuned Segment Anything model for cells and nuclei in light microscopy data with ViT Large backbone. ([Zenodo](TODO), [BioImage.IO](TODO))
+- `vit_b_lm`: Finetuned Segment Anything model for cells and nuclei in light microscopy data with ViT Base backbone. ([Zenodo](https://zenodo.org/doi/10.5281/zenodo.11103797), [diplomatic-bug on BioImage.IO](TODO))
+- `vit_t_lm`: Finetuned Segment Anything model for cells and nuclei in light microscopy data with ViT Tiny backbone. ([Zenodo](TODO), [BioImage.IO](TODO))
+- `vit_l_em_organelles`: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with ViT Large backbone. ([Zenodo](TODO), [BioImage.IO](TODO))
+- `vit_b_em_organelles`: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with ViT Base backbone. ([Zenodo](TODO), [BioImage.IO](TODO))
+- `vit_t_em_organelles`: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with ViT Tiny backbone. ([Zenodo](TODO), [BioImage.IO](TODO))
 
 See the two figures below of the improvements through the finetuned model for LM and EM data. 
 
@@ -21,7 +21,7 @@ See the two figures below of the improvements through the finetuned model for LM
 
 <img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/em_comparison.png" width="768">
 
-You can select which model to use for annotation by selecting the corresponding name in the embedding menu:
+You can select which model to use for annotation by selecting the corresponding name in the `Model:` drop-down menu in the embedding widget console:
 
 <img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/model-type-selector.png" width="256">
 
@@ -43,7 +43,7 @@ We are working on further improving these models and adding new models for other
 
 ## Older Models
 
-Previous versions of our models are available on zenodo:
+Previous versions of our models are available on Zenodo:
 - [vit_b_em_boundaries](https://zenodo.org/records/10524894): for segmenting compartments delineated by boundaries such as cells or neurites in EM.
 - [vit_b_em_organelles](https://zenodo.org/records/10524828): for segmenting mitochondria, nuclei or other organelles in EM.
 - [vit_b_lm](https://zenodo.org/records/10524791): for segmenting cells and nuclei in LM.
