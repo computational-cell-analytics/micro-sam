@@ -42,8 +42,6 @@
     <li><a href="#annotator-tracking">Annotator Tracking</a></li>
     <li><a href="#image-series-annotator">Image Series Annotator</a></li>
     <li><a href="#finetuning-ui">Finetuning UI</a></li>
-    <li><a href="#tips-tricks">Tips &amp; Tricks</a></li>
-    <li><a href="#known-limitations">Known limitations</a></li>
   </ul></li>
   <li><a href="#using-the-python-library">Using the Python Library</a>
   <ul>
@@ -53,6 +51,12 @@
   <ul>
     <li><a href="#choosing-a-model">Choosing a Model</a></li>
     <li><a href="#older-models">Older Models</a></li>
+  </ul></li>
+  <li><a href="#faq">FAQ</a>
+  <ul>
+    <li><a href="#installation-questions">Installation questions</a></li>
+    <li><a href="#usage-questions">Usage questions</a></li>
+    <li><a href="#fine-tuning-questions">Fine-tuning questions</a></li>
   </ul></li>
   <li><a href="#contribution-guide">Contribution Guide</a>
   <ul>
@@ -174,6 +178,8 @@ You can also train models on your own data, see <a href="#training-your-own-mode
 <li><a href="#from-installer">From installer</a> to install it without having to use mamba (supported platforms: Windows and Linux, only for CPU users). </li>
 </ul>
 
+<p>You can find more information on the installation and how to troubleshoot it in <a href="installation-questions">the FAQ section</a>.</p>
+
 <h2 id="from-mamba">From mamba</h2>
 
 <p><a href="https://mamba.readthedocs.io/en/latest/">mamba</a> is a drop-in replacement for conda, but much faster.
@@ -250,8 +256,8 @@ You can follow the instructions <a href="https://mamba.readthedocs.io/en/latest/
 <p>We also provide installers for Linux and Windows:</p>
 
 <ul>
-<li><a href="TODO">Linux</a></li>
-<li><a href="TODO">Windows</a>
+<li><a href="https://owncloud.gwdg.de/index.php/s/nrNBuHr9ncJqid6">Linux</a></li>
+<li><a href="https://owncloud.gwdg.de/index.php/s/kZmpAIBDmUSu4e9">Windows</a>
 <!---</li>
 <li><a href="https://owncloud.gwdg.de/index.php/s/7YupGgACw9SHy2P">Mac</a>
 --></li>
@@ -319,6 +325,8 @@ The <code><a href="">micro_sam</a></code> tools mainly use <a href="https://napa
 
 <p>The annotation tools can be started from the napari plugin menu:
 <img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/napari-plugin.png" width="768"></p>
+
+<p>You can find additional information on the annotation tools <a href="usage-question">in the FAQ section</a>.</p>
 
 <h2 id="annotator-2d">Annotator 2D</h2>
 
@@ -459,36 +467,6 @@ Once you click <code>Annotate Images</code> the images from the folder you have 
 
 <p>The <code>Configuration</code> option allows you to choose the hardware configuration for training. We try to automatically select the correct setting for your system, but it can also be changed. Please refer to the tooltips for the other parameters.</p>
 
-<h2 id="tips-tricks">Tips &amp; Tricks</h2>
-
-<ul>
-<li>Segment Anything was trained with a fixed image size of 1024 x 1024 pixels. Inputs that do not match this size will be internally resized to match it. Hence, applying Segment Anything to a much larger image will often lead to inferior results, because it will be downsampled by a large factor and the objects in the image become too small.
-To address this image we implement tiling: cutting up the input image into tiles of a fixed size (with a fixed overlap) and running Segment Anything for the individual tiles.
-You can activate tiling by passing the parameters <code>tile_shape</code>, which determines the size of the inner tile and <code>halo</code>, which determines the size of the additional overlap.
-<ul>
-<li>If you're using the <code><a href="">micro_sam</a></code> GUI you can specify the values for the <code>halo</code> and <code>tile_shape</code> via the <code>Tile X</code>, <code>Tile Y</code>, <code>Halo X</code> and <code>Halo Y</code> by clicking on <code>Embeddings Settings</code>.</li>
-<li>If you're using a python script you can pass them as tuples, e.g. <code>tile_shape=(1024, 1024), halo=(128, 128)</code>. See also <a href="https://github.com/computational-cell-analytics/micro-sam/blob/0921581e2964139194d235a87cb002d3f3667f45/examples/annotator_2d.py#L40">the wholeslide_annotator example</a>.</li>
-<li>If you're using the command line functions you can pass them via the options <code>--tile_shape 1024 1024 --halo 128 128</code></li>
-<li>Note that prediction with tiling only works when the embeddings are cached to file, so you must specify an <code>embedding_path</code> (<code>-e</code> in the CLI).</li>
-<li>You should choose the <code>halo</code> such that it is larger than half of the maximal radius of the objects your segmenting.</li>
-</ul></li>
-<li>The applications pre-compute the image embeddings produced by SegmentAnything and (optionally) store them on disc. If you are using a CPU this step can take a while for 3d data or timeseries (you will see a progress bar with a time estimate). If you have access to a GPU without graphical interface (e.g. via a local computer cluster or a cloud provider), you can also pre-compute the embeddings there and then copy them to your laptop / local machine to speed this up. You can use the command <code>micro_sam.precompute_embeddings</code> for this (it is installed with the rest of the applications). You can specify the location of the precomputed embeddings via the <code>embedding_path</code> argument.
-<ul>
-<li>If you use the GUI to save or load embeddings, simply specify an <code>embeddings save path</code>. Existing embeddings are loaded from the specified path or embeddings are computed and the path is used to save them. </li>
-</ul></li>
-<li>Most other processing steps are very fast even on a CPU, so interactive annotation is possible. An exception is the automatic segmentation step (2d segmentation), which takes several minutes without a GPU (depending on the image size). For large volumes and timeseries segmenting an object in 3d / tracking across time can take a couple settings with a CPU (it is very fast with a GPU).</li>
-<li>You can also try using a smaller version of the SegmentAnything model to speed up the computations. For this you can pass the <code>model_type</code> argument and either set it to <code>vit_b</code> or to <code>vit_l</code> (default is <code>vit_h</code>). However, this may lead to worse results.</li>
-<li>You can save and load the results from the <code>committed_objects</code> / <code>committed_tracks</code> layer to correct segmentations you obtained from another tool (e.g. CellPose) or to save intermediate annotation results. The results can be saved via <code>File -&gt; Save Selected Layer(s) ...</code> in the napari menu (see the tutorial videos for details). They can be loaded again by specifying the corresponding location via the <code>segmentation_result</code> (2d and 3d segmentation) or <code>tracking_result</code> (tracking) argument.</li>
-</ul>
-
-<h2 id="known-limitations">Known limitations</h2>
-
-<ul>
-<li>Segment Anything does not work well for very small or fine-grained objects (e.g. filaments).</li>
-<li>For the automatic segmentation functionality we currently rely on the automatic mask generation provided by SegmentAnything. It is slow and often misses objects in microscopy images.</li>
-<li>Prompt bounding boxes do not provide the full functionality for tracking yet (they cannot be used for divisions or for starting new tracks). See also <a href="https://github.com/computational-cell-analytics/micro-sam/issues/23">this github issue</a>.</li>
-</ul>
-
 <h1 id="using-the-python-library">Using the Python Library</h1>
 
 <p>The python library can be imported via</p>
@@ -534,7 +512,7 @@ TODO: provide link to the paper with results on how much data is needed
 <p>We also support training an additional decoder for automatic instance segmentation. This yields better results than the automatic mask generation of segment anything and is significantly faster.
 The notebook explains how to activate training it together with the rest of SAM and how to then use it.</p>
 
-<p>More advanced examples, including quantitative and qualitative evaluation, of finetuned models can be found in <a href="https://github.com/computational-cell-analytics/micro-sam/tree/master/finetuning">finetuning</a>, which contains the code for training and evaluating <a href="finetuned-models">our models</a>.</p>
+<p>More advanced examples, including quantitative and qualitative evaluation, of finetuned models can be found in <a href="https://github.com/computational-cell-analytics/micro-sam/tree/master/finetuning">finetuning</a>, which contains the code for training and evaluating <a href="finetuned-models">our models</a>. You can find further information on model training in the <a href="fine-tuning-questions">FAQ section</a>.</p>
 
 <h1 id="finetuned-models">Finetuned models</h1>
 
@@ -549,7 +527,7 @@ The additional models are available in the <a href="https://bioimage.io/#/">bioi
 <li><code>vit_b</code>: Default Segment Anything model with vit-b backbone.</li>
 <li><code>vit_t</code>: Segment Anything model with vit-tiny backbone. From the <a href="https://arxiv.org/abs/2306.14289">Mobile SAM publication</a>. </li>
 <li><code>vit_l_lm</code>: Finetuned Segment Anything model for cells and nuclei in light microscopy data with vit-l backbone. (<a href="TODO">zenodo</a>, <a href="TODO">bioimage.io</a>)</li>
-<li><code>vit_b_lm</code>: Finetuned Segment Anything model for cells and nuclei in light microscopy data with vit-b backbone. (<a href="TODO">zenodo</a>, <a href="TODO">bioimage.io</a>)</li>
+<li><code>vit_b_lm</code>: Finetuned Segment Anything model for cells and nuclei in light microscopy data with vit-b backbone. (<a href="https://zenodo.org/doi/10.5281/zenodo.11103797">zenodo</a>, <a href="TODO">diplomatic-bug on bioimage.io</a>)</li>
 <li><code>vit_t_lm</code>: Finetuned Segment Anything model for cells and nuclei in light microscopy data with vit-t backbone. (<a href="TODO">zenodo</a>, <a href="TODO">bioimage.io</a>)</li>
 <li><code>vit_l_em_organelles</code>: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with vit-l backbone. (<a href="TODO">zenodo</a>, <a href="TODO">bioimage.io</a>)</li>
 <li><code>vit_b_em_organelles</code>: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with vit-b backbone. (<a href="TODO">zenodo</a>, <a href="TODO">bioimage.io</a>)</li>
@@ -596,6 +574,216 @@ We are working on further improving these models and adding new models for other
 </ul>
 
 <p>We do not recommend to use these models since our new models improve upon them significantly. But we provide the links here in case they are needed to reproduce older segmentation workflows.</p>
+
+<h1 id="faq">FAQ</h1>
+
+<p>Here we provide frequently asked questions and common issues.
+If you encounter a problem or question not addressed here feel free to <a href="https://github.com/computational-cell-analytics/micro-sam/issues">open an issue</a> or to ask your question on <a href="https://forum.image.sc/">image.sc</a> with the tag <code>micro-sam</code>.</p>
+
+<h2 id="installation-questions">Installation questions</h2>
+
+<h3 id="1-how-to-install-micro_sam">1. How to install <code><a href="">micro_sam</a></code>?</h3>
+
+<p>The <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation">installation</a> for <code><a href="">micro_sam</a></code> is supported in three ways: <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-mamba">from mamba</a> (recommended), <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-source">from source</a> and <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-installer">from installers</a>. Check out our <a href="TODO">tutorial video</a> to get started with <code><a href="">micro_sam</a></code>, briefly walking you through the installation process and how to start the tool.</p>
+
+<h3 id="2-i-cannot-install-micro_sam-using-the-installer-i-am-getting-some-errors">2. I cannot install <code><a href="">micro_sam</a></code> using the installer, I am getting some errors.</h3>
+
+<p>The installer should work out-of-the-box on Windows and Linux platforms. Please open an issue to report the error you encounter.</p>
+
+<blockquote>
+  <p>NOTE: The installers enable using <code><a href="">micro_sam</a></code> without mamba or conda. However, we recommend the installation from mamba / from source to use all its features seamlessly. Specifically, the installers currently only support the CPU and won't enable you to use the GPU (if you have one). </p>
+</blockquote>
+
+<h3 id="3-what-is-the-minimum-system-requirement-for-micro_sam">3. What is the minimum system requirement for <code><a href="">micro_sam</a></code>?</h3>
+
+<p>From our experience, the <code><a href="">micro_sam</a></code> annotation tools work seamlessly on most laptop or workstation CPUs and with &gt; 8GB RAM.
+You might encounter some slowness for $leq$ 8GB RAM. The resources <code><a href="">micro_sam</a></code>'s annotation tools have been tested on are:</p>
+
+<ul>
+<li>Windows:
+<ul>
+<li>Windows 10 Pro, Intel i5 7th Gen, 8GB RAM</li>
+</ul></li>
+<li>Linux:
+<ul>
+<li>Ubuntu 22.04, Intel i7 12th Gen, 32GB RAM</li>
+</ul></li>
+<li>Mac:
+<ul>
+<li>macOS Sonoma 14.4.1
+<ul>
+<li>M1 Chip, 8GB RAM</li>
+<li>M3 Max Chip, 36GB RAM</li>
+</ul></li>
+</ul></li>
+</ul>
+
+<p>Having a GPU will significantly speed up the annotation tools and especially the model finetuning.</p>
+
+<h3 id="4-what-is-the-recommended-pytorch-version">4. What is the recommended PyTorch version?</h3>
+
+<p><code><a href="">micro_sam</a></code> has been tested mostly with CUDA 12.1 and PyTorch [2.1.1, 2.2.0]. However, the tool and the library is not constrained to a specific PyTorch or CUDA version. So it should work fine with the standard PyTorch installation for your system.</p>
+
+<h3 id="5-i-am-missing-a-few-packages-eg-modulenotfounderror-no-module-named-elfio-what-should-i-do">5. I am missing a few packages (eg. <code>ModuleNotFoundError: No module named 'elf.io</code>). What should I do?</h3>
+
+<p>With the latest release 1.0.0, the installation from mamba and source should take care of this and install all the relevant packages for you.
+So please reinstall <code><a href="">micro_sam</a></code>.</p>
+
+<h3 id="6-can-i-install-micro_sam-using-pip">6. Can I install <code><a href="">micro_sam</a></code> using pip?</h3>
+
+<p>The installation is not supported via pip.</p>
+
+<h3 id="7-i-get-the-following-error-importerror-cannot-import-name-unetr-from-torch_emmodel">7. I get the following error: <code>importError: cannot import name 'UNETR' from 'torch_em.model'</code>.</h3>
+
+<p>It's possible that you have an older version of <code>torch-em</code> installed. Similar errors could often be raised from other libraries, the reasons being: a) Outdated packages installed, or b) Some non-existent module being called. If the source of such error is from <code><a href="">micro_sam</a></code>, then <code>a)</code> is most likely the reason . We recommend installing the latest version following the <a href="https://github.com/constantinpape/torch-em?tab=readme-ov-file#installation">installation instructions</a>.</p>
+
+<h2 id="usage-questions">Usage questions</h2>
+
+<p><!---
+TODO provide relevant links here.
+--></p>
+
+<h3 id="1-i-have-some-micropscopy-images-can-i-use-the-annotator-tool-for-segmenting-them">1. I have some micropscopy images. Can I use the annotator tool for segmenting them?</h3>
+
+<p>Yes, you can use the annotator tool for:</p>
+
+<ul>
+<li>Segmenting objects in 2d images (using automatic and/or interactive segmentation).</li>
+<li>Segmenting objects in 3d volumes (using automatic and/or interactive segmentation for the entire object(s)).</li>
+<li>Tracking objects over time in time-series data.</li>
+<li>Segmenting objects in a series of 2d / 3d images.</li>
+<li>(OPTIONAL) You can finetune the Segment Anything / <code><a href="">micro_sam</a></code> models on your own microscopy data, in case the provided models do not suffice your needs. One caveat: You need to annotate a few objects before-hand (<code><a href="">micro_sam</a></code> has the potential of improving interactive segmentation with only a few annotated objects) to proceed with the supervised finetuning procedure.</li>
+</ul>
+
+<h3 id="2-which-model-should-i-use-for-my-data">2. Which model should I use for my data?</h3>
+
+<p>We currently provide three different kind of models: the default models <code>vit_h</code>, <code>vit_l</code>, <code>vit_b</code> and <code>vit_t</code>; the models for light microscopy <code>vit_l_lm</code>, <code>vit_b_lm</code> and <code>vit_t_lm</code>; the models for electron microscopy <code>vit_l_em_organelles</code>, <code>vit_b_em_organelles</code> and <code>vit_t_em_organelles</code>.
+You should first try the model that best fits the segmentation task your interested in, a <code>lm</code> model for cell or nucleus segmentation in light microscopy or a <code>em_organelles</code> model for segmenting nuclei, mitochondria or other roundish organelles in electron microscopy.
+If your segmentation problem does not meet these descriptions, or if these models don't work well, you should try one of the default models instead.
+The letter after <code>vit</code> denotes the size of the image encoder in SAM, <code>h</code> (huge) being the largest and <code>t</code> (tiny) the smallest. The smaller models are faster but may yield worse results. We recommend to either use a <code>vit_l</code> or <code>vit_b</code> model, they offer the best trade-off between speed and segmentation quality.
+You can find more information on model choice <a href="#choosing-a-model">here</a>.</p>
+
+<h3 id="3-i-have-high-resolution-microscopy-images-micro_sam-does-not-seem-to-work">3. I have high-resolution microscopy images, 'micro_sam' does not seem to work.</h3>
+
+<p>The Segment Anything model expects inputs of shape 1024 x 1024 pixels. Inputs that do not match this size will be internally resized to match it. Hence, applying Segment Anything to a much larger image will often lead to inferior results, or somethimes not work at all. To address this, <code><a href="">micro_sam</a></code> implements tiling: cutting up the input image into tiles of a fixed size (with a fixed overlap) and running Segment Anything for the individual tiles. You can activate tiling with the <code>tile_shape</code> parameter, which determines the size of the inner tile and <code>halo</code>, which determines the size of the additional overlap.</p>
+
+<ul>
+<li>If you are using the <code><a href="">micro_sam</a></code> annotation tools, you can specify the values for the <code>tile_shape</code> and <code>halo</code> via the <code>tile_x</code>, <code>tile_y</code>, <code>halo_x</code> and <code>halo_y</code> parameters in the <code>Embedding Settings</code> drop-down menu.</li>
+<li>If you are using the <code><a href="">micro_sam</a></code> library in a python script, you can pass them as tuples, e.g. <code>tile_shape=(1024, 1024), halo=(256, 256)</code>. See also the <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py#L47-L63">wholeslide annotator example</a>.</li>
+<li>If you are using the command line functionality, you can pass them via the options <code>--tile_shape 1024 1024 --halo 256 256</code>.</li>
+</ul>
+
+<blockquote>
+  <p>NOTE: It's recommended to choose the <code>halo</code> so that it is larger than half of the maximal radius of the objects you want to segment.</p>
+</blockquote>
+
+<h3 id="4-the-computation-of-image-embeddings-takes-very-long-in-napari">4. The computation of image embeddings takes very long in napari.</h3>
+
+<p><code><a href="">micro_sam</a></code> pre-computes the image embeddings produced by the vision transformer backbone in Segment Anything, and (optionally) store them on disc. I fyou are using a CPU, this step can take a while for 3d data or time-series (you will see a progress bar in the command-line interface / on the bootom right of napari). If you have access to a GPU without graphical interface (e.g. via a local computer cluster or a cloud provider), you can also pre-compute the embeddings there and then copy them over to your laptop / local machine to speed this up.</p>
+
+<ul>
+<li>You can use the command <code>micro_sam.precompute_embeddings</code> for this (it is installed with the rest of the software). You can specify the location of the precomputed embeddings via the <code>embedding_path</code> argument.</li>
+<li>You can cache the computed embedding in the napari tool (to avoid recomputing the embeddings again) by passing the path to store the embeddings in the <code>embeddings_save_path</code> option in the <code>Embedding Settings</code> drop-down. You can later load the precomputed image embeddings by entering the path to the stored embeddings there as well.</li>
+</ul>
+
+<h3 id="5-can-i-use-micro_sam-on-a-cpu">5. Can I use <code><a href="">micro_sam</a></code> on a CPU?</h3>
+
+<p>Most other processing steps that are very fast even on a CPU, the automatic segmentation step for the default Segment Anything models (typically called as the "Segment Anything" feature or AMG - Automatic Mask Generation) takes several minutes without a GPU (depending on the image size). For large volumes and time-series, segmenting an object interactively in 3d / tracking across time can take a couple of seconds with a CPU (it is very fast with a GPU).</p>
+
+<blockquote>
+  <p>HINT: All the tutorial videos have been created on CPU resources.</p>
+</blockquote>
+
+<h3 id="6-i-generated-some-segmentations-from-another-tool-can-i-use-it-as-a-starting-point-in-micro_sam">6. I generated some segmentations from another tool, can I use it as a starting point in <code><a href="">micro_sam</a></code>?</h3>
+
+<p>You can save and load the results from the <code>committed_objects</code> layer to correct segmentations you obtained from another tool (e.g. CellPose) or  save intermediate annotation results. The results can be saved via <code>File</code> -> <code>Save Selected Layers (s) ...</code> in the napari menu-bar on top (see the tutorial videos for details). They can be loaded again by specifying the corresponding location via the <code>segmentation_result</code> parameter in the CLI or python script (2d and 3d segmentation).
+If you are using an annotation tool you can load the segmentation you want to edit as segmentation layer and renae it to <code>committed_objects</code>.</p>
+
+<h3 id="7-i-am-using-micro_sam-for-segmenting-objects-i-would-like-to-report-the-steps-for-reproducability-how-can-this-be-done">7. I am using <code><a href="">micro_sam</a></code> for segmenting objects. I would like to report the steps for reproducability. How can this be done?</h3>
+
+<p>The annotation steps and segmentation results can be saved to a zarr file by providing the <code>commit_path</code> in the <code>commit</code> widget. This file will contain all relevant information to reproduce the segmentation.</p>
+
+<blockquote>
+  <p>NOTE: This feature is still under development and we have not implemented rerunning the segmentation from this file yet. See <a href="https://github.com/computational-cell-analytics/micro-sam/issues/408">this issue</a> for details.</p>
+</blockquote>
+
+<h3 id="8-i-want-to-segment-complex-objects-both-the-default-segment-anything-models-and-the-micro_sam-generalist-models-do-not-work-for-my-data-what-should-i-do">8. I want to segment complex objects. Both the default Segment Anything models and the <code><a href="">micro_sam</a></code> generalist models do not work for my data. What should I do?</h3>
+
+<p><code><a href="">micro_sam</a></code> supports interactive annotation using positive and negative point prompts, box prompts and polygon drawing. You can combine multiple types of prompts to improve the segmentation quality. In case the aforementioned suggestions do not work as desired, <code><a href="">micro_sam</a></code> also supports finetuning a model on your data (see the next section). We recommend the following: a) Check which of the provided models performs relatively good on your data, b) Choose the best model as the starting point to train your own specialist model for the desired segmentation task.</p>
+
+<h3 id="9-i-am-using-the-annotation-tool-and-napari-outputs-the-following-error-while-emmitting-signal-an-error-ocurred-in-callback-this-is-not-a-bug-in-psygnal-see-above-for-details">9. I am using the annotation tool and napari outputs the following error: <code>While emmitting signal ... an error ocurred in callback ... This is not a bug in psygnal. See ... above for details.</code></h3>
+
+<p>These messages occur when an internal error happens in <code><a href="">micro_sam</a></code>. In most cases this is due to inconsistent annotations and you can fix them by clearing the annotations.
+We want to remove these errors, so we would be very grateful if you can <a href="https://github.com/computational-cell-analytics/micro-sam/issues">open an issue</a> and describe the steps you did when encountering it.</p>
+
+<h3 id="10-the-objects-are-not-segmented-in-my-3d-data-using-the-interactive-annotation-tool">10. The objects are not segmented in my 3d data using the interactive annotation tool.</h3>
+
+<p>The first thing to check is: a) make sure you are using the latest version of <code><a href="">micro_sam</a></code> (pull the latest commit from master if your installation is from source, or update the installation from conda / mamba using <code>mamba update micro_sam</code>), and b) try out the steps from the <a href="TODO">3d annotator tutorial video</a> to verify if this shows the same behaviour (or the same errors) as you faced. For 3d images, it's important to pass the inputs in the python axis convention, ZYX.
+c) try using a different model and change the projection mode for 3d segmentation. This is also explained in the video.</p>
+
+<h3 id="11-i-have-very-small-or-fine-grained-structures-in-my-high-resolution-microscopic-images-can-i-use-micro_sam-to-annotate-them">11. I have very small or fine-grained structures in my high-resolution microscopic images. Can I use <code><a href="">micro_sam</a></code> to annotate them?</h3>
+
+<p>Segment Anything does not work well for very small or fine-grained objects (e.g. filaments). In these cases, you could try to use tiling to improve results (see <a href="#3-i-have-high-resolution-large-tomograms-micro-sam-does-not-seem-to-work">Point 3</a> above for details).</p>
+
+<h3 id="12-napari-seems-to-be-very-slow-for-large-images">12. napari seems to be very slow for large images.</h3>
+
+<p>Editing (drawing / erasing) very large 2d images or 3d volumes is known to be slow at the moment, as the objects in the layers are stored in-memory. See the related <a href="https://github.com/computational-cell-analytics/micro-sam/issues/39">issue</a>.</p>
+
+<h3 id="13-while-computing-the-embeddings-and-or-automatic-segmentation-a-window-stating-napari-is-not-responding-pops-up">13. While computing the embeddings (and / or automatic segmentation), a window stating: <code>"napari" is not responding.</code> pops up.</h3>
+
+<p>This can happen for long running computations. You just need to wait a bit longer and the computation will finish.</p>
+
+<h2 id="fine-tuning-questions">Fine-tuning questions</h2>
+
+<h3 id="1-i-have-a-microscopy-dataset-i-would-like-to-fine-tune-segment-anything-for-is-it-possible-using-micro_sam">1. I have a microscopy dataset I would like to fine-tune Segment Anything for. Is it possible using 'micro_sam'?</h3>
+
+<p>Yes, you can fine-tune Segment Anything on your own dataset. Here's how you can do it:</p>
+
+<ul>
+<li>Check out the <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/micro-sam-finetuning.ipynb">tutorial notebook</a> on how to fine-tune Segment Anything with our <code><a href="micro_sam/training.html">micro_sam.training</a></code> library.</li>
+<li>Or check the <a href="https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/finetuning">examples</a> for additional scripts that demonstrate finetuning.</li>
+<li>If you are not familiar with coding in python at all then you can also use the <a href="finetuning-ui">graphical interface for finetuning</a>. But we recommend using a script for more flexibility and reproducibility.</li>
+</ul>
+
+<h3 id="2-i-would-like-to-fine-tune-segment-anything-on-open-source-cloud-services-eg-kaggle-notebooks-is-it-possible">2. I would like to fine-tune Segment Anything on open-source cloud services (e.g. Kaggle Notebooks), is it possible?</h3>
+
+<p>Yes, you can fine-tune Segment Anything on your custom datasets on Kaggle (and <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#using-micro_sam-on-band">BAND</a>). Check out our <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/micro-sam-finetuning.ipynb">tutorial notebook</a> for this.</p>
+
+<h3 id="3-what-kind-of-annotations-do-i-need-to-finetune-segment-anything">3. What kind of annotations do I need to finetune Segment Anything?</h3>
+
+<p>TODO: explain instance segmentation labels, that you can get them by annotation with micro_sam, and dense vs. sparse annotation (for training without / with decoder)</p>
+
+<h3 id="4-i-have-finetuned-segment-anything-on-my-microscopy-data-how-can-i-use-it-for-annotating-new-images">4. I have finetuned Segment Anything on my microscopy data. How can I use it for annotating new images?</h3>
+
+<p>You can load your finetuned model by entering the path to its checkpoint in the <code>custom_weights_path</code> field in the <code>Embedding Settings</code> drop-down menu.
+If you are using the python library or CLI you can specify this path with the <code>checkpoint_path</code> parameter.</p>
+
+<h3 id="5-what-is-the-background-of-the-new-ais-automatic-instance-segmentation-feature-in-micro_sam">5. What is the background of the new AIS (Automatic Instance Segmentation) feature in <code><a href="">micro_sam</a></code>?</h3>
+
+<p><code><a href="">micro_sam</a></code> introduces a new segmentation decoder to the Segment Anything backbone, for enabling faster and accurate automatic instance segmentation, by predicting the <a href="https://github.com/constantinpape/torch-em/blob/main/torch_em/transform/label.py#L284">distances to the object center and boundary</a> as well as predicting foregrund, and performing <a href="https://github.com/constantinpape/torch-em/blob/main/torch_em/util/segmentation.py#L122">seeded watershed-based postprocessing</a> to obtain the instances.
+<!--- This text is a bit confusing, not sure if we need to mention anything else here, leaving it for reference.
+However, it's a flexible wrap around the Segment Anything model, which provides the users to either fine-tune the Segment Anything model as it is, or the choice to fine-tune the Segment Anything model with an additional instance segmentation decoder (see the <a href="https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/finetuning#example-for-model-finetuning">example</a> for finetuning with both the objectives). The finetuned models provided by <code><a href="">micro_sam</a></code> use the AIS feature for improving the segmentation experience for the light microscopy and electron microscopy domains.
+--></p>
+
+<h3 id="6-i-have-a-nvidia-rtx-4090ti-gpu-with-24gb-vram-can-i-finetune-segment-anything">6. I have a NVIDIA RTX 4090Ti GPU with 24GB VRAM. Can I finetune Segment Anything?</h3>
+
+<p>Finetuning Segment Anything is possible in most consumer-grade GPU and CPU resources (but training being a lot slower on the CPU). For the mentioned resource, it should be possible to finetune a ViT Base (also abbreviated as <code>vit_b</code>) by reducing the number of objects per image to 15.
+This parameter has the biggest impact on the VRAM consumption and quality of the finetuned model.
+You can find an overview of the resources we have tested for finetuning <a href="TODO">here</a>.
+We also provide a the convenience function <code>micro_sam.training.train_sam_for_configuration</code> that selects the best training settings for these configuration. This function is also used by the finetuning UI.</p>
+
+<h3 id="7-i-want-to-create-a-dataloader-for-my-data-for-finetuning-segment-anything">7. I want to create a dataloader for my data, for finetuning Segment Anything.</h3>
+
+<p>Thanks to <code>torch-em</code>, a) Creating PyTorch datasets and dataloaders using the python library is convenient and supported for various data formats and data structures.
+See the <a href="https://github.com/constantinpape/torch-em/blob/main/notebooks/tutorial_create_dataloaders.ipynb">tutorial notebook</a> on how to create dataloaders using <code>torch-em</code> and the <a href="https://github.com/constantinpape/torch-em/blob/main/doc/datasets_and_dataloaders.md">documentation</a> for details on creating your own datasets and dataloaders; and b) finetuning using the <code>napari</code> tool eases the aforementioned process, by allowing you to add the input parameters (path to the directory for inputs and labels etc.) directly in the tool.</p>
+
+<blockquote>
+  <p>NOTE: If you have images with large input shapes with a sparse density of instance segmentations, we recommend using <a href="https://github.com/constantinpape/torch-em/blob/main/torch_em/data/sampler.py"><code>sampler</code></a> for choosing the patches with valid segmentation for the finetuning purpose (see the <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/finetuning/specialists/training/light_microscopy/plantseg_root_finetuning.py#L29">example</a> for PlantSeg (Root) specialist model in <code><a href="">micro_sam</a></code>).</p>
+</blockquote>
+
+<h3 id="8-how-can-i-evaluate-a-model-i-have-finetuned">8. How can I evaluate a model I have finetuned?</h3>
+
+<p>TODO: move the content of <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/doc/bioimageio/validation.md">https://github.com/computational-cell-analytics/micro-sam/blob/master/doc/bioimageio/validation.md</a> here.</p>
 
 <h1 id="contribution-guide">Contribution Guide</h1>
 
@@ -869,15 +1057,16 @@ In order to use BAND and start <code><a href="">micro_sam</a></code> on it follo
 </span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="sd">.. include:: ../doc/annotation_tools.md</span>
 </span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="sd">.. include:: ../doc/python_library.md</span>
 </span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a><span class="sd">.. include:: ../doc/finetuned_models.md</span>
-</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="sd">.. include:: ../doc/contributing.md</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="sd">.. include:: ../doc/development.md</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="sd">.. include:: ../doc/band.md</span>
-</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="kn">import</span> <span class="nn">os</span>
-</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a>
-</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a><span class="kn">from</span> <span class="nn">.__version__</span> <span class="kn">import</span> <span class="n">__version__</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>
-</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;PYTORCH_ENABLE_MPS_FALLBACK&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;1&quot;</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="sd">.. include:: ../doc/faq.md</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="sd">.. include:: ../doc/contributing.md</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="sd">.. include:: ../doc/development.md</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="sd">.. include:: ../doc/band.md</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="kn">import</span> <span class="nn">os</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>
+</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a><span class="kn">from</span> <span class="nn">.__version__</span> <span class="kn">import</span> <span class="n">__version__</span>
+</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>
+</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;PYTORCH_ENABLE_MPS_FALLBACK&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;1&quot;</span>
 </span></pre></div>
 
 
