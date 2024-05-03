@@ -14,7 +14,7 @@ import xxhash
 from micro_sam.bioimageio import export_sam_model
 from skimage.measure import label
 
-from models import get_id_and_emoji
+from models import get_id_and_emoji, MODEL_TO_NAME
 
 BUF_SIZE = 65536  # lets read stuff in 64kb chunks!
 
@@ -82,19 +82,20 @@ def export_model(model_path, model_type, modality, version, email):
     output_folder = os.path.join(OUTPUT_FOLDER, modality)
     os.makedirs(output_folder, exist_ok=True)
 
-    export_name = f"{model_type}_{modality}"
-    output_path = os.path.join(output_folder, export_name)
+    model_name = f"{model_type}_{modality}"
+    output_path = os.path.join(output_folder, model_name)
     if os.path.exists(output_path):
-        print("The model", export_name, "has already been exported.")
+        print("The model", model_name, "has already been exported.")
         return
 
     image, label_image = get_data(modality)
     covers = get_covers(modality)
     doc = create_doc(model_type, modality, version)
 
-    model_id, emoji = get_id_and_emoji(export_name)
+    model_id, emoji = get_id_and_emoji(model_name)
     uploader = spec.Uploader(email=email)
 
+    export_name = MODEL_TO_NAME[model_name]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         export_sam_model(
@@ -114,22 +115,22 @@ def export_model(model_path, model_type, modality, version, email):
     encoder_path = os.path.join(output_path + ".unzip", f"{model_type}.pt")
     encoder_checksum = compute_checksum(encoder_path)
     print("Encoder:")
-    print(export_name, f"xxh128:{encoder_checksum}")
+    print(model_name, f"xxh128:{encoder_checksum}")
 
     decoder_path = os.path.join(output_path + ".unzip", f"{model_type}_decoder.pt")
     decoder_checksum = compute_checksum(decoder_path)
     print("Decoder:")
-    print(f"{export_name}_decoder", f"xxh128:{decoder_checksum}")
+    print(f"{model_name}_decoder", f"xxh128:{decoder_checksum}")
 
 
-def export_all_models(email):
-    models = glob(os.path.join("./v2/**/vit*"))
+def export_all_models(email, version):
+    models = glob(os.path.join(f"./v{version}/**/vit*"))
     for path in models:
         modality, model_type = path.split("/")[-2:]
         # print(model_path, modality, model_type)
         model_path = os.path.join(path, "best.pt")
         assert os.path.exists(model_path), model_path
-        export_model(model_path, model_type, modality, version=2, email=email)
+        export_model(model_path, model_type, modality, version=version, email=email)
 
 
 # For testing.
@@ -142,9 +143,10 @@ def export_vit_t_lm(email):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--email", required=True)
+    parser.add_argument("-v", "--version", default=2, type=int)
     args = parser.parse_args()
 
-    export_all_models(args.email)
+    export_all_models(args.email, args.version)
 
 
 if __name__ == "__main__":
