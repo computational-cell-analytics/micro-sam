@@ -1,6 +1,6 @@
 # Light Microscopy Datasets
 
-The `LM generalist v2` model was trained on seven different light microscopy datasets with segmentation annotations for cells and nuclei:
+The `LM Generalist v2` model was trained on seven different light microscopy datasets with segmentation annotations for cells and nuclei:
 
 1. [LIVECell](https://sartorius-research.github.io/LIVECell/): containing cell segmentation annotations for phase-contrast microscopy.
 2. [DeepBacs](https://github.com/HenriquesLab/DeepBacs): containing segmentation annotations for bacteria in different label-free microscopy modalities.

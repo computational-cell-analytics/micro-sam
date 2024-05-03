@@ -9,8 +9,8 @@ of mitochondria in volume EM (middle) and interactive tracking of cells (right).
 <img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/aefbf99f-e73a-4125-bb49-2e6592367a64" width="256">
 
 The annotation tools can be started from the napari plugin menu, the command line or from python scripts.
-They are built as napari plugin and make use of existing napari functionality wherever possible. If you are not familiar with napari yet, [start here](https://napari.org/stable/tutorials/fundamentals/quick_start.html).
-The `micro_sam` tools mainly use [the point layer](https://napari.org/stable/howtos/layers/points.html), [shape layer](https://napari.org/stable/howtos/layers/shapes.html) and [label layer](https://napari.org/stable/howtos/layers/labels.html).
+They are built as napari plugin and make use of existing napari functionality wherever possible. If you are not familiar with napari, we recommend to [start here](https://napari.org/stable/tutorials/fundamentals/quick_start.html).
+The `micro_sam` tools mainly use the [point layer](https://napari.org/stable/howtos/layers/points.html), [shape layer](https://napari.org/stable/howtos/layers/shapes.html) and [label layer](https://napari.org/stable/howtos/layers/labels.html).
 
 The annotation tools are explained in detail below. We also provide [video tutorials](TODO).
 
@@ -25,7 +25,7 @@ You can find additional information on the annotation tools [in the FAQ section]
 The 2d annotator can be started by
 - clicking `Annotator 2d` in the plugin menu.
 - running `$ micro_sam.annotator_2d` in the command line.
-- calling `micro_sam.sam_annotator.annotator_2d` in a python script. Check out [examples/annotator_2d.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py) for details. 
+- calling `micro_sam.sam_annotator.annotator_2d` in a python script. Check out [`examples/annotator_2d.py`](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py) for details.
 
 The user interface of the 2d annotator looks like this:
 
@@ -57,7 +57,7 @@ Check out [this video](TODO) for a tutorial for this tool.
 The 3d annotator can be started by
 - clicking `Annotator 3d` in the plugin menu.
 - running `$ micro_sam.annotator_3d` in the command line.
-- calling `micro_sam.sam_annotator.annotator_3d` in a python script. Check out [examples/annotator_3d.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_3d.py) for details.
+- calling `micro_sam.sam_annotator.annotator_3d` in a python script. Check out [`examples/annotator_3d.py`](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_3d.py) for details.
 
 The user interface of the 3d annotator looks like this:
 
@@ -83,14 +83,14 @@ Check out [this video](TODO) for a tutorial for the 3d annotation tool.
 The tracking annotator can be started by
 - clicking `Annotator Tracking` in the plugin menu.
 - running `$ micro_sam.annotator_tracking` in the command line.
-- calling `micro_sam.sam_annotator.annotator_tracking` in a python script. Check out [examples/annotator_tracking.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_tracking.py) for details. 
+- calling `micro_sam.sam_annotator.annotator_tracking` in a python script. Check out [`examples/annotator_tracking.py`](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_tracking.py) for details. 
 
 The user interface of the tracking annotator looks like this:
 
 <img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/tracking-annotator-menu.png" width="1024">
 
 Most elements are the same as in [the 2d annotator](#annotator-2d):
-1. The napari layers that contain the segmentations and prompts. Same as for [the 2d segmentation app](#annotator-2d) but without the `auto_segmentation` layer.
+1. The napari layers that contain the segmentations and prompts. Same as for [the 2d segmentation application](#annotator-2d) but without the `auto_segmentation` layer.
 2. The embedding menu.
 3. The prompt menu.
 4. The menu with tracking settings: `track_state` is used to indicate that the object you are tracking is dividing in the current frame. `track_id` is used to select which of the tracks after division you are following.
@@ -106,10 +106,10 @@ Check out [this video](TODO) for a tutorial for how to use the tracking annotati
 
 ## Image Series Annotator
 
-The image series annotation tool enables running the [2d annotator](#annotator-2d) or [2d annotator](#annotator-3d) for multiple images that are saved within an folder. This makes it convenient to annotate many images without having to close the tool. It can be started by
+The image series annotation tool enables running the [2d annotator](#annotator-2d) or [3d annotator](#annotator-3d) for multiple images that are saved within an folder. This makes it convenient to annotate many images without having to close the tool. It can be started by
 - clicking `Image Series Annotator` in the plugin menu.
 - running `$ micro_sam.image_series_annotator` in the command line.
-- calling `micro_sam.sam_annotator.image_series_annotator` in a python script. Check out [examples/image_series_annotator.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/image_series_annotator.py) for details. 
+- calling `micro_sam.sam_annotator.image_series_annotator` in a python script. Check out [`examples/image_series_annotator.py`](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/image_series_annotator.py) for details. 
 
 When starting this tool via the plugin menu the following interface opens:
 
@@ -126,7 +126,7 @@ Check out [this video](TODO) for a tutorial for how to use the image series anno
 
 ## Finetuning UI
 
-We also provide a graphical tool for finetuning models on your own data. It can be started by clicking `Finetuning` in the plugin menu.
+We also provide a tool with graphical inferface for finetuning models on your own data. It can be started by clicking `Finetuning` in the plugin menu.
 
 **Note:** if you know a bit of python programming we recommend to use a script for model finetuning instead. This will give you more options to configure the training. See [these instructions](training-your-own-model) for details.
 
@@ -134,7 +134,7 @@ When starting this tool via the plugin menu the following interface opens:
 
 <img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/finetuning-menu.png" width="512">
 
-You can select the image data via `Path to images`. We can either load images from a folder or select a single file for training. By providing `Image data key` you can either provide a pattern for selecting files from a folder or provide an internal filepath for hdf5, zarr or similar fileformats.
+You can select the image data via `Path to images`. We can either load images from a folder or select a single file for training. By providing `Image data key` you can either provide a pattern for selecting files from a folder or provide an internal filepath for HDF5, Zarr or similar fileformats.
 
 You can select the label data via `Path to labels` and `Label data key`, following the same logic as for the image data. We expect label masks stored in the same size as the image data for training. You can for example use annotations created with one of the `micro_sam` annotation tools for this, they are stored in the correct format!
 

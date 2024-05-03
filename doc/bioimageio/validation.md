@@ -10,4 +10,4 @@ We provide functionality to evaluate the models for interactive and for automati
 - You can use [run_inference_with_iterative_prompting](https://computational-cell-analytics.github.io/micro-sam/micro_sam/evaluation/inference.html#run_inference_with_iterative_prompting) to evaluate models for interactive segmentation.
 - You can use [run_instance_segmentation_grid_search_and_inference](https://computational-cell-analytics.github.io/micro-sam/micro_sam/evaluation/instance_segmentation.html#run_instance_segmentation_grid_search_and_inference) to evaluate models for automatic segmentation.
 
-We provide [an example notebook](TODO) that shows how to use this evaluation functionality.
+We provide [an example notebook](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/automatic_segmentation.ipynb) that shows how to use this evaluation functionality.
