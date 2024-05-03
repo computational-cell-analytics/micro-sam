@@ -17,13 +17,8 @@
 
 ## Discuss your ideas
 
-We welcome new contributions!
-
-First, discuss your idea by opening a [new issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) in micro-sam.
-
+We welcome new contributions! First, discuss your idea by opening a [new issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) in micro-sam.
 This allows you to ask questions, and have the current developers make suggestions about the best way to implement your ideas.
-
-You may also find it helpful to look at this [developer guide](#for-developers), which explains the organization of the micro-sam code.
 
 ## Clone the repository
 
