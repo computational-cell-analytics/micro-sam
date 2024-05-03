@@ -17,6 +17,8 @@ The annotation tools are explained in detail below. We also provide [video tutor
 The annotation tools can be started from the napari plugin menu:
 <img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/napari-plugin.png" width="768">
 
+You can find additional information on the annotation tools [in the FAQ section](usage-question).
+
 
 ## Annotator 2D
 

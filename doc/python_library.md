@@ -36,4 +36,4 @@ The training logic is implemented in `micro_sam.training` and is based on [torch
 We also support training an additional decoder for automatic instance segmentation. This yields better results than the automatic mask generation of segment anything and is significantly faster.
 The notebook explains how to activate training it together with the rest of SAM and how to then use it.
 
-More advanced examples, including quantitative and qualitative evaluation, of finetuned models can be found in [finetuning](https://github.com/computational-cell-analytics/micro-sam/tree/master/finetuning), which contains the code for training and evaluating [our models](finetuned-models).
+More advanced examples, including quantitative and qualitative evaluation, of finetuned models can be found in [finetuning](https://github.com/computational-cell-analytics/micro-sam/tree/master/finetuning), which contains the code for training and evaluating [our models](finetuned-models). You can find further information on model training in the [FAQ section](fine-tuning-questions).

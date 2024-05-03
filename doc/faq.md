@@ -116,23 +116,29 @@ Yes, you can fine-tune Segment Anything on your own dataset. Here's how you can 
 ### 2. I would like to fine-tune Segment Anything on open-source cloud services (e.g. Kaggle Notebooks), is it possible?
 Yes, you can fine-tune Segment Anything on your custom datasets on Kaggle (and [BAND](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#using-micro_sam-on-band)). Check out our [tutorial notebook](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/micro-sam-finetuning.ipynb) for this.
 
-### 3. I have finetuned Segment Anything on my microscopy data. How can I use it for annotating new images?
+### 3. What kind of annotations do I need to finetune Segment Anything?
+TODO: explain instance segmentation labels, that you can get them by annotation with micro_sam, and dense vs. sparse annotation (for training without / with decoder)
+
+### 4. I have finetuned Segment Anything on my microscopy data. How can I use it for annotating new images?
 You can load your finetuned model by entering the path to its checkpoint in the `custom_weights_path` field in the `Embedding Settings` drop-down menu.
 If you are using the python library or CLI you can specify this path with the `checkpoint_path` parameter.
 
-### 4. What is the background of the new AIS (Automatic Instance Segmentation) feature in `micro_sam`?
+### 5. What is the background of the new AIS (Automatic Instance Segmentation) feature in `micro_sam`?
 `micro_sam` introduces a new segmentation decoder to the Segment Anything backbone, for enabling faster and accurate automatic instance segmentation, by predicting the [distances to the object center and boundary](https://github.com/constantinpape/torch-em/blob/main/torch_em/transform/label.py#L284) as well as predicting foregrund, and performing [seeded watershed-based postprocessing](https://github.com/constantinpape/torch-em/blob/main/torch_em/util/segmentation.py#L122) to obtain the instances.
 <!--- This text is a bit confusing, not sure if we need to mention anything else here, leaving it for reference.
 However, it's a flexible wrap around the Segment Anything model, which provides the users to either fine-tune the Segment Anything model as it is, or the choice to fine-tune the Segment Anything model with an additional instance segmentation decoder (see the [example](https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/finetuning#example-for-model-finetuning) for finetuning with both the objectives). The finetuned models provided by `micro_sam` use the AIS feature for improving the segmentation experience for the light microscopy and electron microscopy domains.
 -->
 
-### 5. I have a NVIDIA RTX 4090Ti GPU with 24GB VRAM. Can I finetune Segment Anything?
+### 6. I have a NVIDIA RTX 4090Ti GPU with 24GB VRAM. Can I finetune Segment Anything?
 Finetuning Segment Anything is possible in most consumer-grade GPU and CPU resources (but training being a lot slower on the CPU). For the mentioned resource, it should be possible to finetune a ViT Base (also abbreviated as `vit_b`) by reducing the number of objects per image to 15.
 This parameter has the biggest impact on the VRAM consumption and quality of the finetuned model.
 You can find an overview of the resources we have tested for finetuning [here](TODO).
 We also provide a the convenience function `micro_sam.training.train_sam_for_configuration` that selects the best training settings for these configuration. This function is also used by the finetuning UI.
 
-### 6. I want to create a dataloader for my data, for finetuning Segment Anything.
+### 7. I want to create a dataloader for my data, for finetuning Segment Anything.
 Thanks to `torch-em`, a) Creating PyTorch datasets and dataloaders using the python library is convenient and supported for various data formats and data structures.
 See the [tutorial notebook](https://github.com/constantinpape/torch-em/blob/main/notebooks/tutorial_create_dataloaders.ipynb) on how to create dataloaders using `torch-em` and the [documentation](https://github.com/constantinpape/torch-em/blob/main/doc/datasets_and_dataloaders.md) for details on creating your own datasets and dataloaders; and b) finetuning using the `napari` tool eases the aforementioned process, by allowing you to add the input parameters (path to the directory for inputs and labels etc.) directly in the tool.
 > NOTE: If you have images with large input shapes with a sparse density of instance segmentations, we recommend using [`sampler`](https://github.com/constantinpape/torch-em/blob/main/torch_em/data/sampler.py) for choosing the patches with valid segmentation for the finetuning purpose (see the [example](https://github.com/computational-cell-analytics/micro-sam/blob/master/finetuning/specialists/training/light_microscopy/plantseg_root_finetuning.py#L29) for PlantSeg (Root) specialist model in `micro_sam`).
+
+### 8. How can I evaluate a model I have finetuned?
+TODO: move the content of https://github.com/computational-cell-analytics/micro-sam/blob/master/doc/bioimageio/validation.md here.
