@@ -5,6 +5,8 @@ There are three ways to install `micro_sam`:
 - [From source](#from-source) for setting up a development environment to use the development version and to change and contribute to our software.
 - [From installer](#from-installer) to install it without having to use mamba (supported platforms: Windows and Linux, only for CPU users). 
 
+You can find more information on the installation and how to troubleshoot it in [the FAQ section](installation-questions).
+
 ## From mamba
 
 [mamba](https://mamba.readthedocs.io/en/latest/) is a drop-in replacement for conda, but much faster.
@@ -61,8 +63,8 @@ $ pip install -e .
 ## From installer
 
 We also provide installers for Linux and Windows:
-- [Linux](TODO)
-- [Windows](TODO)
+- [Linux](https://owncloud.gwdg.de/index.php/s/nrNBuHr9ncJqid6)
+- [Windows](https://owncloud.gwdg.de/index.php/s/kZmpAIBDmUSu4e9)
 <!---
 - [Mac](https://owncloud.gwdg.de/index.php/s/7YupGgACw9SHy2P)
 -->
