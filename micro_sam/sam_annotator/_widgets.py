@@ -1507,6 +1507,14 @@ class AutoSegmentWidget(_WidgetBase):
         settings = _make_collapsible(setting_values, title="Automatic Segmentation Settings")
         return settings
 
+    def _empty_segmentation_warning(self):
+        msg = "The automatic segmentation result does not contain any objects."
+        msg += "Setting a smaller value for 'min_object_size' may help."
+        if not self.with_decoder:
+            msg += "Setting smaller values for 'pred_iou_thresh' and 'stability_score_thresh' may also help."
+        val_results = {"message_type": "error", "message": msg}
+        return _generate_message(val_results["message_type"], val_results["message"])
+
     def _run_segmentation_2d(self, kwargs, i=None):
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
@@ -1526,6 +1534,10 @@ class AutoSegmentWidget(_WidgetBase):
             return seg
 
         def update_segmentation(seg):
+            is_empty = seg.max() == 0
+            if is_empty:
+                self._empty_segmentation_warning()
+
             if i is None:
                 self._viewer.layers["auto_segmentation"].data = seg
             else:
@@ -1595,6 +1607,9 @@ class AutoSegmentWidget(_WidgetBase):
             return segmentation
 
         def update_segmentation(segmentation):
+            is_empty = segmentation.max() == 0
+            if is_empty:
+                self._empty_segmentation_warning()
             self._viewer.layers["auto_segmentation"].data = segmentation
             self._viewer.layers["auto_segmentation"].refresh()
 

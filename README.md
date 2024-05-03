@@ -5,8 +5,6 @@
 
 # Segment Anything for Microscopy
 
-**Attention: We are currently updating our software to a new release that will improve it and introduce new features. The documentation is not up-to-date with these changes yet, we will update it as soon as possible!**
-
 Tools for segmentation and tracking in microscopy build on top of [Segment Anything](https://segment-anything.com/).
 Segment and track objects in microscopy images interactively with a few clicks!
 
@@ -24,14 +22,14 @@ If you run into any problems or have questions regarding our tool please open an
 
 ## Installation and Usage
 
-Please check [the documentation](https://computational-cell-analytics.github.io/micro-sam/) for details on how to install and use `micro_sam`. You can also find a quickstart guide in [this video](TODO) and find all video tutorials [here](https://www.youtube.com/watch?v=ket7bDUP9tI&list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO&pp=gAQBiAQB). 
+Please check [the documentation](https://computational-cell-analytics.github.io/micro-sam/) for details on how to install and use `micro_sam`. You can also find a quickstart guide in [this video](TODO) and find all video tutorials [here](TODO). 
 
 
 ## Contributing
 
 We welcome new contributions!
 
-If you are interested in contributing to micro-sam, please see the [contributing guide](doc/contributing.md) and [developer documentation](doc/development.md). The first step is to [discuss your idea in a new issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) with the current developers.
+If you are interested in contributing to micro-sam, please see the [contributing guide](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#contribution-guide). The first step is to [discuss your idea in a new issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) with the current developers.
 
 
 ## Citation
@@ -54,6 +52,14 @@ Compared to these we support more applications (2d, 3d and tracking), and provid
 
 
 ## Release Overview
+
+**New in version 1.0.0**
+
+- TODO
+
+**New in version 0.5.0**
+
+- TODO
 
 **New in version 0.4.1**
 
