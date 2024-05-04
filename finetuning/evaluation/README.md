@@ -30,7 +30,9 @@ python <SCRIPT>.py -m <MODEL_NAME>  # the segment anything model type
                    --use_masks  # use logits masks from previous iterations
 ```
 
-### NOTE:
+### How to run the evaluation scripts on your own data?
+
+Below are some specifications on how to run the evaluation scripts (automatic mask generation (AMG), automatic instance segmentation (AIS) and interactive instance segmentation (using iterative prompting starting with points / box and improving the segmentation quality with positive and / or negative points))
 - \*adapt: For making your scripts work on your custom dataset, you need to overwrite the `get_paths` function to create your own heuristic to pass the paths to all the images (and respective labels). Here's an example overwrite (REMEMBER: to comment out the `get_paths` import from `util`):
 
     ```python
