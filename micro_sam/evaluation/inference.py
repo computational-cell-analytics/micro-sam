@@ -391,7 +391,7 @@ def _run_inference_with_iterative_prompting_for_image(
     embedding_path,
     n_iterations,
     prediction_paths,
-    use_masks=False,
+    use_masks=False
 ) -> None:
     verbose_embeddings = False
 
@@ -477,7 +477,7 @@ def run_inference_with_iterative_prompting(
     dilation: int = 5,
     batch_size: int = 32,
     n_iterations: int = 8,
-    use_masks: bool = False,
+    use_masks: bool = False
 ) -> None:
     """Run segment anything inference for multiple images using prompts iteratively
         derived from model outputs and groundtruth
@@ -527,16 +527,9 @@ def run_inference_with_iterative_prompting(
         embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
 
         _run_inference_with_iterative_prompting_for_image(
-            predictor=predictor,
-            image=image,
-            gt=gt,
-            start_with_box_prompt=start_with_box_prompt,
-            dilation=dilation,
-            batch_size=batch_size,
-            embedding_path=embedding_path,
-            n_iterations=n_iterations,
-            prediction_paths=prediction_paths,
-            use_masks=use_masks,
+            predictor, image, gt, start_with_box_prompt=start_with_box_prompt,
+            dilation=dilation, batch_size=batch_size, embedding_path=embedding_path,
+            n_iterations=n_iterations, prediction_paths=prediction_paths, use_masks=use_masks
         )
 
 
@@ -576,14 +569,9 @@ def run_amg(
     )
 
     instance_segmentation.run_instance_segmentation_grid_search_and_inference(
-        segmenter=amg,
-        grid_search_values=grid_search_values,
-        val_image_paths=val_image_paths,
-        val_gt_paths=val_gt_paths,
-        test_image_paths=test_image_paths,
-        embedding_dir=embedding_folder,
-        prediction_dir=prediction_folder,
-        result_dir=gs_result_folder,
+        amg, grid_search_values,
+        val_image_paths, val_gt_paths, test_image_paths,
+        embedding_folder, prediction_folder, gs_result_folder,
     )
     return prediction_folder
 
