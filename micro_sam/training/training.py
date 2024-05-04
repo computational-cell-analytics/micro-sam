@@ -10,7 +10,7 @@ from elf.io import open_file
 
 try:
     from qtpy.QtCore import QObject
-except ModuleNotFoundError:
+except Exception:
     QObject = Any
 
 from torch.optim.lr_scheduler import _LRScheduler
