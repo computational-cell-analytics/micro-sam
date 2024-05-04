@@ -392,8 +392,9 @@ def _run_inference_with_iterative_prompting_for_image(
     n_iterations,
     prediction_paths,
     use_masks=False,
-    verbose=True,
 ) -> None:
+    verbose_embeddings = False
+
     prompt_generator = IterativePromptGenerator()
 
     gt_ids = np.unique(gt)[1:]
@@ -437,7 +438,7 @@ def _run_inference_with_iterative_prompting_for_image(
             embedding_path=embedding_path,
             return_instance_segmentation=False,
             logits_masks=logits_masks,
-            verbose=verbose,
+            verbose_embeddings=verbose_embeddings,
         )
 
         # switching off multimasking after first iter, as next iters (with multiple prompts) don't expect multimasking
@@ -477,7 +478,6 @@ def run_inference_with_iterative_prompting(
     batch_size: int = 32,
     n_iterations: int = 8,
     use_masks: bool = False,
-    verbose=True,
 ) -> None:
     """Run segment anything inference for multiple images using prompts iteratively
         derived from model outputs and groundtruth
@@ -494,7 +494,6 @@ def run_inference_with_iterative_prompting(
         batch_size: The batch size used for batched predictions.
         n_iterations: The number of iterations for iterative prompting.
         use_masks: Whether to make use of logits from previous prompt-based segmentation.
-        verbose: Whether to show the outputs of the progress bar.
     """
     if len(image_paths) != len(gt_paths):
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
@@ -538,7 +537,6 @@ def run_inference_with_iterative_prompting(
             n_iterations=n_iterations,
             prediction_paths=prediction_paths,
             use_masks=use_masks,
-            verbose=verbose,
         )
 
 
@@ -556,7 +554,6 @@ def run_amg(
     test_image_paths: List[Union[str, os.PathLike]],
     iou_thresh_values: Optional[List[float]] = None,
     stability_score_values: Optional[List[float]] = None,
-    verbose: bool = True,
 ) -> str:
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
@@ -587,7 +584,6 @@ def run_amg(
         embedding_dir=embedding_folder,
         prediction_dir=prediction_folder,
         result_dir=gs_result_folder,
-        verbose_gs=verbose,
     )
     return prediction_folder
 

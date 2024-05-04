@@ -188,6 +188,8 @@ def run_instance_segmentation_grid_search(
             If not given a simple image format like tif is assumed.
         rois: Region of interests to resetrict the evaluation to.
     """
+    verbose_embeddings = False
+
     assert len(image_paths) == len(gt_paths)
     fixed_generate_kwargs = {} if fixed_generate_kwargs is None else fixed_generate_kwargs
 
@@ -230,7 +232,7 @@ def run_instance_segmentation_grid_search(
             assert predictor is not None
             embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
             image_embeddings = util.precompute_image_embeddings(
-                predictor, image, embedding_path, ndim=2, verbose=verbose_gs
+                predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings
             )
             segmenter.initialize(image, image_embeddings)
 
@@ -246,7 +248,6 @@ def run_instance_segmentation_inference(
     embedding_dir: Union[str, os.PathLike],
     prediction_dir: Union[str, os.PathLike],
     generate_kwargs: Optional[Dict[str, Any]] = None,
-    verbose: bool = True,
 ) -> None:
     """Run inference for automatic mask generation.
 
@@ -257,6 +258,8 @@ def run_instance_segmentation_inference(
         prediction_dir: Folder to save the predictions.
         generate_kwargs: The keyword arguments for the `generate` method of the segmenter.
     """
+
+    verbose_embeddings = False
 
     generate_kwargs = {} if generate_kwargs is None else generate_kwargs
     predictor = segmenter._predictor
@@ -274,7 +277,9 @@ def run_instance_segmentation_inference(
         image = imageio.imread(image_path)
 
         embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
-        image_embeddings = util.precompute_image_embeddings(predictor, image, embedding_path, ndim=2, verbose=verbose)
+        image_embeddings = util.precompute_image_embeddings(
+            predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings
+        )
 
         segmenter.initialize(image, image_embeddings)
         masks = segmenter.generate(**generate_kwargs)
@@ -387,6 +392,7 @@ def run_instance_segmentation_grid_search_and_inference(
     best_kwargs, best_msa = evaluate_instance_segmentation_grid_search(result_dir, list(grid_search_values.keys()))
     best_param_str = ", ".join(f"{k} = {v}" for k, v in best_kwargs.items())
     print("Best grid-search result:", best_msa, "with parmeters:\n", best_param_str)
+    print()
 
     save_grid_search_best_params(best_kwargs, best_msa, Path(embedding_dir).parent)
 
@@ -394,5 +400,5 @@ def run_instance_segmentation_grid_search_and_inference(
     generate_kwargs.update(best_kwargs)
 
     run_instance_segmentation_inference(
-        segmenter, test_image_paths, embedding_dir, prediction_dir, generate_kwargs, verbose_gs,
+        segmenter, test_image_paths, embedding_dir, prediction_dir, generate_kwargs
     )
