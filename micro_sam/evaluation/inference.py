@@ -510,7 +510,6 @@ def run_inference_with_iterative_prompting(
         zip(image_paths, gt_paths),
         total=len(image_paths),
         desc="Run inference with iterative prompting for all images",
-        disable=not verbose,
     ):
         image_name = os.path.basename(image_path)
 
