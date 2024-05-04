@@ -26,7 +26,8 @@ def batched_inference(
     return_instance_segmentation: bool = True,
     segmentation_ids: Optional[list] = None,
     reduce_multimasking: bool = True,
-    logits_masks: Optional[torch.Tensor] = None
+    logits_masks: Optional[torch.Tensor] = None,
+    verbose: bool = True,
 ):
     """Run batched inference for input prompts.
 
@@ -51,6 +52,7 @@ def batched_inference(
             highest ious from multimasking
         logits_masks: The logits masks. Array of shape N_PROMPTS x 1 x 256 x 256.
             Whether to use the logits masks from previous segmentation.
+        verbose: Whether to show the outputs of the progress bar.
 
     Returns:
         The predicted segmentation masks.
@@ -103,7 +105,7 @@ def batched_inference(
         )
 
     # Compute the image embeddings.
-    image_embeddings = util.precompute_image_embeddings(predictor, image, embedding_path, ndim=2)
+    image_embeddings = util.precompute_image_embeddings(predictor, image, embedding_path, ndim=2, verbose=verbose)
     util.set_precomputed(predictor, image_embeddings)
 
     # Determine the number of batches.
