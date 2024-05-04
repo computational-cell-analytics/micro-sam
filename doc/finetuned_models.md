@@ -1,4 +1,4 @@
-# Finetuned models
+# Finetuned Models
 
 In addition to the original Segment Anything models, we provide models that are finetuned on microscopy data.
 The additional models are available in the [BioImage.IO Model Zoo](https://bioimage.io/#/) and are also hosted on Zenodo.
@@ -8,13 +8,13 @@ We currently offer the following models:
 - `vit_h`: Default Segment Anything model with vit-h backbone.
 - `vit_l`: Default Segment Anything model with vit-l backbone.
 - `vit_b`: Default Segment Anything model with vit-b backbone.
-- `vit_t`: Segment Anything model with vit-tiny backbone. From the [Mobile SAM publication](https://arxiv.org/abs/2306.14289). 
-- `vit_l_lm`: Finetuned Segment Anything model for cells and nuclei in light microscopy data with vit-l backbone. ([zenodo](TODO), [idealistic-rat on bioimage.io](TODO))
-- `vit_b_lm`: Finetuned Segment Anything model for cells and nuclei in light microscopy data with vit-b backbone. ([zenodo](https://zenodo.org/doi/10.5281/zenodo.11103797), [diplomatic-bug on bioimage.io](TODO))
-- `vit_t_lm`: Finetuned Segment Anything model for cells and nuclei in light microscopy data with vit-t backbone. ([zenodo](TODO), [faithful-chicken bioimage.io](TODO))
-- `vit_l_em_organelles`: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with vit-l backbone. ([zenodo](TODO), [humorous-crab on bioimage.io](TODO))
-- `vit_b_em_organelles`: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with vit-b backbone. ([zenodo](TODO), [noisy-ox on bioimage.io](TODO))
-- `vit_t_em_organelles`: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with vit-t backbone. ([zenodo](TODO), [greedy-whale on bioimage.io](https://doi.org/10.5281/zenodo.11110950))
+- `vit_t`: Segment Anything model with vit-tiny backbone. From the [Mobile SAM publication](https://arxiv.org/abs/2306.14289).
+- `vit_l_lm`: Finetuned Segment Anything model for cells and nuclei in light microscopy data with vit-l backbone. ([Zenodo](TODO)) ([idealistic-rat on BioImage.IO](TODO))
+- `vit_b_lm`: Finetuned Segment Anything model for cells and nuclei in light microscopy data with vit-b backbone. ([Zenodo](https://zenodo.org/doi/10.5281/zenodo.11103797)) ([diplomatic-bug on BioImage.IO](TODO))
+- `vit_t_lm`: Finetuned Segment Anything model for cells and nuclei in light microscopy data with vit-t backbone. ([Zenodo](TODO)) ([faithful-chicken BioImage.IO](TODO))
+- `vit_l_em_organelles`: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with vit-l backbone. ([Zenodo](TODO)) ([humorous-crab on BioImage.IO](TODO))
+- `vit_b_em_organelles`: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with vit-b backbone. ([Zenodo](TODO)) ([noisy-ox on BioImage.IO](TODO))
+- `vit_t_em_organelles`: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with vit-t backbone. ([Zenodo](TODO)) ([greedy-whale on BioImage.IO](https://doi.org/10.5281/zenodo.11110950))
 
 See the two figures below of the improvements through the finetuned model for LM and EM data. 
 
