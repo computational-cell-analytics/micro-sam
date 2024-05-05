@@ -113,7 +113,7 @@ def _get_inference_timings_plots():
     sns.barplot(
         x="benchmark", y="runtimes", hue="model", data=df, ax=ax[0, 0], palette=PALETTE
     )
-    ax[0, 0].set_xlabel("Batched Mode", fontweight="bold", labelpad=10)
+    ax[0, 0].set_xlabel(None)
     ax[0, 0].set_ylabel("Time Per Image $\it{(in}$ $\it{seconds)}$", fontweight="bold", labelpad=10)
     ax[0, 0].set_title("GPU", fontweight="bold")
 
@@ -122,7 +122,7 @@ def _get_inference_timings_plots():
     sns.barplot(
         x="benchmark", y="runtimes", hue="model", data=df, ax=ax[0, 1], palette=PALETTE
     )
-    ax[0, 1].set_xlabel("Batched Mode", fontweight="bold", labelpad=10)
+    ax[0, 1].set_xlabel(None)
     ax[0, 1].set_ylabel(None)
     ax[0, 1].set_title("CPU", fontweight="bold")
 
@@ -131,7 +131,7 @@ def _get_inference_timings_plots():
     sns.barplot(
         x="benchmark", y="runtimes", hue="model", data=df, ax=ax[1, 0], palette=PALETTE
     )
-    ax[1, 0].set_xlabel("Interactive Mode", fontweight="bold", labelpad=10)
+    ax[1, 0].set_xlabel(None)
     ax[1, 0].set_ylabel("Time Per Object $\it{(in}$ $\it{milliseconds)}$", fontweight="bold", labelpad=10)
 
     df = pd.DataFrame(VIT_T_CPU_INT + VIT_B_CPU_INT + VIT_L_CPU_INT + VIT_H_CPU_INT)
@@ -139,7 +139,7 @@ def _get_inference_timings_plots():
     sns.barplot(
         x="benchmark", y="runtimes", hue="model", data=df, ax=ax[1, 1], palette=PALETTE
     )
-    ax[1, 1].set_xlabel("Interactive Mode", fontweight="bold", labelpad=10)
+    ax[1, 1].set_xlabel(None)
     ax[1, 1].set_ylabel(None)
 
     # here, we remove the legends for each subplot, and get one common legend for all
@@ -152,10 +152,8 @@ def _get_inference_timings_plots():
                 all_labels.append(label)
         ax.get_legend().remove()
 
-    plt.legend(loc="lower center", ncol=4, bbox_to_anchor=(0, -0.325))
+    plt.legend(loc="lower center", ncol=4, bbox_to_anchor=(-0.1, -0.25))
     fig.suptitle("Inference Timings", y=0.95, x=0.51)
-
-    plt.subplots_adjust(wspace=0.1, hspace=0.15)
 
     plt.savefig("5_a.svg")
     plt.savefig("5_a.pdf")
