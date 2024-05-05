@@ -2,10 +2,10 @@
 
 There are three ways to install `micro_sam`:
 - [From mamba](#from-mamba) is the recommended way if you want to use all functionality.
-- [From source](#from-source) for setting up a development environment to use the development version and to change and contribute to our software.
-- [From installer](#from-installer) to install it without having to use mamba (supported platforms: Windows and Linux, only for CPU users). 
+- [From source](#from-source) for setting up a development environment to use the latest version and to change and contribute to our software.
+- [From installer](#from-installer) to install it without having to use mamba (supported platforms: Windows and Linux, supports only CPU). 
 
-You can find more information on the installation and how to troubleshoot it in [the FAQ section](installation-questions).
+You can find more information on the installation and how to troubleshoot it in [the FAQ section](#installation-questions).
 
 ## From mamba
 
@@ -19,7 +19,7 @@ You can follow the instructions [here](https://mamba.readthedocs.io/en/latest/in
 ```bash
 $ mamba install -c conda-forge micro_sam
 ```
-or you can create a new environment (here called `micro-sam`) with it via:
+or you can create a new environment (here called `micro-sam`) via:
 ```bash
 $ mamba create -c conda-forge -n micro-sam micro_sam
 ```

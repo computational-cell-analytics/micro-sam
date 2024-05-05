@@ -22,7 +22,7 @@ If you run into any problems or have questions regarding our tool please open an
 
 ## Installation and Usage
 
-Please check [the documentation](https://computational-cell-analytics.github.io/micro-sam/) for details on how to install and use `micro_sam`. You can also find a quickstart guide in [this video](TODO) and find all video tutorials [here](TODO). 
+Please check [the documentation](https://computational-cell-analytics.github.io/micro-sam/) for details on how to install and use `micro_sam`. You can also watch [the quickstart video](https://youtu.be/HauT-D2BHKc) or [all video tutorials](https://youtube.com/playlist?list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO&si=qNbB8IFXqAX33r_Z).
 
 
 ## Contributing
@@ -35,7 +35,7 @@ If you are interested in contributing to micro-sam, please see the [contributing
 ## Citation
 
 If you are using this repository in your research please cite
-- Our [preprint](https://doi.org/10.1101/2023.08.21.554208)
+- our [preprint](https://doi.org/10.1101/2023.08.21.554208)
 - and the original [Segment Anything publication](https://arxiv.org/abs/2304.02643).
 - If you use a `vit-tiny` models please also cite [Mobile SAM](https://arxiv.org/abs/2306.14289).
 
@@ -55,11 +55,15 @@ Compared to these we support more applications (2d, 3d and tracking), and provid
 
 **New in version 1.0.0**
 
-- TODO
+This release mainly fixes issues with the previous release and marks the napari user interface as stable.
 
 **New in version 0.5.0**
 
-- TODO
+This version includes a lot of new functionality and improvements. The most important changes are:
+- Re-implementation of the annotation tools. The tools are now implemented as napari plugin.
+- Using our improved functionality for automatic instance segmentation in the annotation tools, including automatic segmentation for 3D data.
+- New widgets to use the finetuning and image series annotation functionality from napari.
+- Improved finetuned models for light microscopy and electron microscopy data that are available via bioimage.io.
 
 **New in version 0.4.1**
 

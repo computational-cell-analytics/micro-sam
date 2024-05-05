@@ -33,8 +33,9 @@ So a good strategy is to annotate a few images with one of the provided models u
 We recommend checking out our latest [preprint](https://doi.org/10.1101/2023.08.21.554208) for details on the results on how much data is required for finetuning Segment Anything.
 
 The training logic is implemented in `micro_sam.training` and is based on [torch-em](https://github.com/constantinpape/torch-em). Check out [the finetuning notebook](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb) to see how to use it.
-
 We also support training an additional decoder for automatic instance segmentation. This yields better results than the automatic mask generation of segment anything and is significantly faster.
-The notebook explains how to activate training it together with the rest of SAM and how to then use it.
+The notebook explains how to train it together with the rest of SAM and how to then use it.
 
-More advanced examples, including quantitative and qualitative evaluation, of finetuned models can be found in [finetuning](https://github.com/computational-cell-analytics/micro-sam/tree/master/finetuning), which contains the code for training and evaluating [our models](finetuned-models). You can find further information on model training in the [FAQ section](fine-tuning-questions).
+More advanced examples, including quantitative and qualitative evaluation, can be found in [the finetuning directory](https://github.com/computational-cell-analytics/micro-sam/tree/master/finetuning), which contains the code for training and evaluating [our models](finetuned-models). You can find further information on model training in the [FAQ section](fine-tuning-questions).
+
+TODO put table with resources here
