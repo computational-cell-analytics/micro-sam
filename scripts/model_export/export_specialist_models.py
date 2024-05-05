@@ -18,6 +18,7 @@ from models import get_id_and_emoji
 
 
 MODEL_TO_NAME = {
+    # light microscopy specialists
     "vit_t_livecell_lm": "SAM LIVECell LM Specialist (ViT-T)",
     "vit_b_livecell_lm": "SAM LIVECell LM Specialist (ViT-B)",
     "vit_l_livecell_lm": "SAM LIVECell LM Specialist (ViT-L)",
@@ -38,11 +39,22 @@ MODEL_TO_NAME = {
     "vit_b_plantseg_root_lm": "SAM PlantSeg (Root) LM Specialist (ViT-B)",
     "vit_l_plantseg_root_lm": "SAM PlantSeg (Root) LM Specialist (ViT-L)",
     "vit_h_plantseg_root_lm": "SAM PlantSeg (Root) LM Specialist (ViT-H)",
-
+    # electron microscopy specialists
     "vit_t_asem_er_em_organelles": "SAM ASEM (ER) EM Specialist (ViT-T)",
     "vit_b_asem_er_em_organelles": "SAM ASEM (ER) EM Specialist (ViT-B)",
     "vit_l_asem_er_em_organelles": "SAM ASEM (ER) EM Specialist (ViT-L)",
     "vit_h_asem_er_em_organelles": "SAM ASEM (ER) EM Specialist (ViT-H)",
+    "vit_t_cremi_em_boundaries": "SAM CREMI EM Specialist (ViT-T)",
+    "vit_b_cremi_em_boundaries": "SAM CREMI EM Specialist (ViT-B)",
+    "vit_l_cremi_em_boundaries": "SAM CREMI EM Specialist (ViT-L)",
+    "vit_h_cremi_em_boundaries": "SAM CREMI EM Specialist (ViT-H)",
+    # vit_h models for the generalist models
+    "vit_h_lm": "SAM LM Generalist (ViT-H)",
+    "vit_h_em_organelles": "SAM EM Organelles Generalist (ViT-H)",
+    # user study models
+    "vit_b_2d_user_study_lm": "SAM 2d User Study Finetuned (ViT-B)",
+    "vit_b_3d_user_study_em_organelles": "SAM 3d User Study Finetuned (ViT-B)",
+    "vit_l_tracking_user_study_lm": "SAM Tracking User Study Finetuned (ViT-L)",
 }
 
 BUF_SIZE = 65536  # lets read stuff in 64kb chunks!
@@ -62,7 +74,7 @@ class FilterObjectsLabelTrafo:
 
 
 def create_doc(model_type, modality, version):
-    if modality not in ("lm", "em_organelles"):
+    if modality not in ("lm", "em_organelles", "em_boundaries"):
         raise ValueError(f"Invalid modality template {modality}")
 
     template_file = os.path.join(
