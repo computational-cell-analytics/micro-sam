@@ -49,7 +49,7 @@ When `commit_path` is given the results will automatically be saved there.
 
 Point prompts and box prompts can be combined. When you're using point prompts you can only segment one object at a time, unless the `batched` mode is activated. With box prompts you can segment several objects at once, both in the normal and `batched` mode.
 
-Check out [the video tutorial](https://youtu.be/E1pk01R5-4g) for an in-depth explanation on how to use this tool.
+Check out [the video tutorial](https://youtu.be/9xjJBg_Bfuc) for an in-depth explanation on how to use this tool.
 
 
 ## Annotator 3D
@@ -75,7 +75,7 @@ Most elements are the same as in [the 2d annotator](#annotator-2d):
 
 You can only segment one object at a time using the interactive segmentation functionality with this tool.
 
-Check out [the video tutorial](https://youtu.be/WacPJrY0mcQ) for an in-depth explanation on how to use this tool.
+Check out [the video tutorial](https://youtu.be/nqpyNQSyu74) for an in-depth explanation on how to use this tool.
 
 
 ## Annotator Tracking
