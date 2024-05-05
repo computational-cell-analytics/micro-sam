@@ -1,6 +1,6 @@
 # Segment Anything for Microscopy
 
-Segment Anything for Microscopy implements automatic and interactive annotation for microscopy data. It is built on top of [Segment Anything](https://segment-anything.com/) by Meta AI and specializes it for microscopy and other bio-imaging data.
+Segment Anything for Microscopy implements automatic and interactive annotation for microscopy data. It is built on top of [Segment Anything](https://segment-anything.com/) by Meta AI and specializes it for microscopy and other biomedical imaging data.
 Its core components are:
 - The `micro_sam` tools for interactive data annotation, built as [napari](https://napari.org/stable/) plugin.
 - The `micro_sam` library to apply Segment Anything to 2d and 3d data or fine-tune it on your data.
@@ -27,7 +27,7 @@ $ mamba install -c conda-forge micro_sam
 ```
 We also provide installers for Windows and Linux. For more details on the available installation options, check out [the installation section](#installation).
 
-After installing `micro_sam` you can start napari and select the annotation tool you want to use from `Plugins -> SegmentAnything for Microscopy`. Check out the [quickstart tutorial video](TODO) for a short introduction and [the annotation tool section](#annotation-tools) for details.
+After installing `micro_sam` you can start napari and select the annotation tool you want to use from `Plugins -> SegmentAnything for Microscopy`. Check out the [quickstart tutorial video](https://youtu.be/HauT-D2BHKc) for a short introduction and [the annotation tool section](#annotation-tools) for details.
 
 The `micro_sam` python library can be imported via
 
@@ -43,6 +43,6 @@ You can also train models on your own data, see [here for details](#training-you
 ## Citation
 
 If you are using `micro_sam` in your research please cite
-- Our [preprint](https://doi.org/10.1101/2023.08.21.554208).
+- our [preprint](https://doi.org/10.1101/2023.08.21.554208)
 - and the original [Segment Anything publication](https://arxiv.org/abs/2304.02643).
 - If you use a `vit-tiny` models, please also cite [Mobile SAM](https://arxiv.org/abs/2306.14289).

@@ -15,12 +15,12 @@
     * [Snakeviz visualization](#snakeviz-visualization)
     * [Memory profiling with memray](#memory-profiling-with-memray)
 
-## Discuss your ideas
+### Discuss your ideas
 
 We welcome new contributions! First, discuss your idea by opening a [new issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) in micro-sam.
 This allows you to ask questions, and have the current developers make suggestions about the best way to implement your ideas.
 
-## Clone the repository
+### Clone the repository
 
 We use [git](https://git-scm.com/) for version control.
 
@@ -31,7 +31,7 @@ $ cd micro-sam
 $ git checkout dev
 ```
 
-## Create your development environment
+### Create your development environment
 
 We use [conda](https://docs.conda.io/en/latest/) to [manage our environments](https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html). If you don't have this already, install [miniconda](https://docs.conda.io/projects/miniconda/en/latest/) or [mamba](https://mamba.readthedocs.io/en/latest/) to get started.
 
@@ -43,7 +43,7 @@ $ python -m pip install requirements-dev.txt
 $ python -m pip install -e .
 ```
 
-## Make your changes
+### Make your changes
 
 Now it's time to make your code changes.
 
@@ -92,13 +92,13 @@ The [Coverage Gutters VSCode extension](https://marketplace.visualstudio.com/ite
 
 We also use [codecov.io](https://app.codecov.io/gh/computational-cell-analytics/micro-sam) to display the code coverage results from our Github Actions continuous integration.
 
-## Open a pull request
+### Open a pull request
 
 Once you've made changes to the code and written some tests to go with it, you are ready to [open a pull request](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/about-pull-requests). You can [mark your pull request as a draft](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/about-pull-requests#draft-pull-requests) if you are still working on it, and still get the benefit of discussing the best approach with maintainers.
 
 Remember that typically changes to micro-sam are made branching off from the development branch. So, you will need to open your pull request to merge back into the `dev` branch [like this](https://github.com/computational-cell-analytics/micro-sam/compare/dev...dev).
 
-## Optional: Build the documentation
+### Optional: Build the documentation
 
 We use [pdoc](https://pdoc.dev/docs/pdoc.html) to build the documentation.
 
@@ -122,7 +122,7 @@ You can add content to the documentation in two ways:
 2. By adding or editing markdown files in the micro-sam `doc` directory.
     * If you add a new markdown file to the documentation, you must tell [pdoc](https://pdoc.dev/docs/pdoc.html) that it exists by adding a line to the `micro_sam/__init__.py` module docstring (eg: `.. include:: ../doc/my_amazing_new_docs_page.md`). Otherwise it will not be included in the final documentation build!
 
-## Optional: Benchmark performance
+### Optional: Benchmark performance
 
 There are a number of options you can use to benchmark performance, and identify problems like slow run times or high memory use in micro-sam.
 
@@ -131,7 +131,7 @@ There are a number of options you can use to benchmark performance, and identify
 * [Snakeviz visualization](#snakeviz-visualization)
 * [Memory profiling with memray](#memory-profiling-with-memray)
 
-### Run the benchmark script
+#### Run the benchmark script
 
 There is a performance benchmark script available in the micro-sam repository at `development/benchmark.py`.
 
@@ -145,7 +145,7 @@ For more details about the user input arguments for the micro-sam benchmark scri
 $ python development/benchmark.py --help
 ```
 
-### Line profiling
+#### Line profiling
 
 For more detailed line by line performance results, we can use [line-profiler](https://github.com/pyutils/line_profiler).
 
@@ -163,7 +163,7 @@ For more details about the user input arguments for the micro-sam benchmark scri
 $ python development/benchmark.py --help
 ```
 
-### Snakeviz visualization
+#### Snakeviz visualization
 
 For more detailed visualizations of profiling results, we use [snakeviz](https://jiffyclub.github.io/snakeviz/).
 
@@ -175,10 +175,14 @@ For more detailed visualizations of profiling results, we use [snakeviz](https:/
 
 For more details about how to use snakeviz, see [the documentation](https://jiffyclub.github.io/snakeviz/).
 
-### Memory profiling with memray
+#### Memory profiling with memray
 
 If you need to investigate memory use specifically, we use [memray](https://github.com/bloomberg/memray).
 
 > Memray is a memory profiler for Python. It can track memory allocations in Python code, in native extension modules, and in the Python interpreter itself. It can generate several different types of reports to help you analyze the captured memory usage data. While commonly used as a CLI tool, it can also be used as a library to perform more fine-grained profiling tasks.
 
 For more details about how to use memray, see [the documentation](https://bloomberg.github.io/memray/getting_started.html).
+
+## Creating a new release
+
+To create a new release you have to edit the version number in [micro_sam/__version__.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/micro_sam/__version__.py) in a PR. After merging this PR the release will automatically be done by the CI.
