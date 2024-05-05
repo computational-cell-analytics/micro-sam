@@ -22,6 +22,27 @@ MODEL_TO_NAME = {
     "vit_b_livecell_lm": "SAM LIVECell LM Specialist (ViT-B)",
     "vit_l_livecell_lm": "SAM LIVECell LM Specialist (ViT-L)",
     "vit_h_livecell_lm": "SAM LIVECell LM Specialist (ViT-H)",
+    "vit_t_deepbacs_lm": "SAM DeepBacs LM Specialist (ViT-T)",
+    "vit_b_deepbacs_lm": "SAM DeepBacs LM Specialist (ViT-B)",
+    "vit_l_deepbacs_lm": "SAM DeepBacs LM Specialist (ViT-L)",
+    "vit_h_deepbacs_lm": "SAM DeepBacs LM Specialist (ViT-H)",
+    "vit_t_tissuenet_lm": "SAM TissueNet LM Specialist (ViT-T)",
+    "vit_b_tissuenet_lm": "SAM TissueNet LM Specialist (ViT-B)",
+    "vit_l_tissuenet_lm": "SAM TissueNet LM Specialist (ViT-L)",
+    "vit_h_tissuenet_lm": "SAM TissueNet LM Specialist (ViT-H)",
+    "vit_t_neurips_cellseg_lm": "SAM NeurIPS CellSeg LM Specialist (ViT-T)",
+    "vit_b_neurips_cellseg_lm": "SAM NeurIPS CellSeg LM Specialist (ViT-B)",
+    "vit_l_neurips_cellseg_lm": "SAM NeurIPS CellSeg LM Specialist (ViT-L)",
+    "vit_h_neurips_cellseg_lm": "SAM NeurIPS CellSeg LM Specialist (ViT-H)",
+    "vit_t_plantseg_root_lm": "SAM PlantSeg (Root) LM Specialist (ViT-T)",
+    "vit_b_plantseg_root_lm": "SAM PlantSeg (Root) LM Specialist (ViT-B)",
+    "vit_l_plantseg_root_lm": "SAM PlantSeg (Root) LM Specialist (ViT-L)",
+    "vit_h_plantseg_root_lm": "SAM PlantSeg (Root) LM Specialist (ViT-H)",
+
+    "vit_t_asem_er_em_organelles": "SAM ASEM (ER) EM Specialist (ViT-T)",
+    "vit_b_asem_er_em_organelles": "SAM ASEM (ER) EM Specialist (ViT-B)",
+    "vit_l_asem_er_em_organelles": "SAM ASEM (ER) EM Specialist (ViT-L)",
+    "vit_h_asem_er_em_organelles": "SAM ASEM (ER) EM Specialist (ViT-H)",
 }
 
 BUF_SIZE = 65536  # lets read stuff in 64kb chunks!
@@ -31,6 +52,13 @@ OUTPUT_FOLDER = "/scratch/usr/nimanwai/exported_models/"
 
 LIVECELL_ROOT = "/scratch/usr/nimanwai/data/livecell/"
 KASTHURI_ROOT = "/scratch/usr/nimanwai/data/em/kasthuri"
+
+
+class FilterObjectsLabelTrafo:
+    """Dummy interface for the namespace to dodge errors with ASEM (ER) specialist.
+    """
+    def __init__(self):
+        pass
 
 
 def create_doc(model_type, modality, version):
@@ -149,7 +177,7 @@ def main():
     export_model(
         model_path=args.checkpoint,
         model_type=args.model_type,
-        modality="lm",
+        modality=args.modality,
         version=2,
         email=args.email,
         dataset=args.dataset,
