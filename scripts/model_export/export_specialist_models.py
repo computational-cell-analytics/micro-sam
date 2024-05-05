@@ -1,25 +1,36 @@
 """Helper scripts to export models for upload to bioimageio/zenodo.
 """
 
-import argparse
 import os
+import argparse
 import warnings
-from glob import glob
 
-import bioimageio.spec.model.v0_5 as spec
 import h5py
-import imageio.v3 as imageio
 import xxhash
-
-from micro_sam.bioimageio import export_sam_model
+import imageio.v3 as imageio
 from skimage.measure import label
 
-from models import get_id_and_emoji, MODEL_TO_NAME
+import bioimageio.spec.model.v0_5 as spec
+
+from micro_sam.bioimageio import export_sam_model
+
+from models import get_id_and_emoji
+
+
+MODEL_TO_NAME = {
+    "vit_t_livecell_lm": "SAM LIVECell LM Specialist (ViT-T)",
+    "vit_b_livecell_lm": "SAM LIVECell LM Specialist (ViT-B)",
+    "vit_l_livecell_lm": "SAM LIVECell LM Specialist (ViT-L)",
+    "vit_h_livecell_lm": "SAM LIVECell LM Specialist (ViT-H)",
+}
 
 BUF_SIZE = 65536  # lets read stuff in 64kb chunks!
 
-INPUT_FOLDER = "./v2"
-OUTPUT_FOLDER = "./exported_models"
+INPUT_FOLDER = "/scratch/usr/nimanwai/micro-sam/checkpoints/"
+OUTPUT_FOLDER = "/scratch/usr/nimanwai/exported_models/"
+
+LIVECELL_ROOT = "/scratch/usr/nimanwai/data/livecell/"
+KASTHURI_ROOT = "/scratch/usr/nimanwai/data/em/kasthuri"
 
 
 def create_doc(model_type, modality, version):
@@ -40,17 +51,15 @@ def create_doc(model_type, modality, version):
 def get_data(modality):
     if modality == "lm":
         image_path = os.path.join(
-            "/home/pape/Work/data/incu_cyte/livecell/images",
-            "livecell_train_val_images/A172_Phase_A7_1_00d00h00m_1.tif"
+            LIVECELL_ROOT, "images", "livecell_train_val_images", "A172_Phase_A7_1_00d00h00m_1.tif"
         )
         label_path = os.path.join(
-            "/home/pape/Work/data/incu_cyte/livecell/annotations",
-            "livecell_train_val_images/A172/A172_Phase_A7_1_00d00h00m_1.tif"
+            LIVECELL_ROOT, "annotations", "livecell_train_val_images", "A172/A172_Phase_A7_1_00d00h00m_1.tif"
         )
         image = imageio.imread(image_path)
         label_image = imageio.imread(label_path)
     else:
-        path = "/home/pape/Work/data/kasthuri/kasthuri_train.h5"
+        path = os.path.join(KASTHURI_ROOT, "kasthuri_train.h5")
         with h5py.File(path, "r") as f:
             image = f["raw"][0]
             label_image = f["labels"][0]
@@ -78,11 +87,15 @@ def compute_checksum(path):
     return xxh_checksum.hexdigest()
 
 
-def export_model(model_path, model_type, modality, version, email):
+def export_model(model_path, model_type, modality, version, email, dataset=None):
     output_folder = os.path.join(OUTPUT_FOLDER, modality)
     os.makedirs(output_folder, exist_ok=True)
 
-    model_name = f"{model_type}_{modality}"
+    if dataset is None:
+        model_name = f"{model_type}_{modality}"
+    else:
+        model_name = f"{model_type}_{dataset}_{modality}"
+
     output_path = os.path.join(output_folder, model_name)
     if os.path.exists(output_path):
         print("The model", model_name, "has already been exported.")
@@ -123,30 +136,24 @@ def export_model(model_path, model_type, modality, version, email):
     print(f"{model_name}_decoder", f"xxh128:{decoder_checksum}")
 
 
-def export_all_models(email, version):
-    models = glob(os.path.join(f"./v{version}/**/vit*"))
-    for path in models:
-        modality, model_type = path.split("/")[-2:]
-        # print(model_path, modality, model_type)
-        model_path = os.path.join(path, "best.pt")
-        assert os.path.exists(model_path), model_path
-        export_model(model_path, model_type, modality, version=version, email=email)
-
-
-# For testing.
-def export_vit_t_lm(email):
-    model_type = "vit_t"
-    model_path = os.path.join(INPUT_FOLDER, "lm", "generalist", model_type, "best.pt")
-    export_model(model_path, model_type, "lm", version=2, email=email)
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--email", required=True)
     parser.add_argument("-v", "--version", default=2, type=int)
+    parser.add_argument("-c", "--checkpoint", required=True, type=str)
+    parser.add_argument("-m", "--model_type", required=True, type=str)
+    parser.add_argument("-d", "--dataset", default=None, type=str)
+    parser.add_argument("--modality", required=True, type=str)
     args = parser.parse_args()
 
-    export_all_models(args.email, args.version)
+    export_model(
+        model_path=args.checkpoint,
+        model_type=args.model_type,
+        modality="lm",
+        version=2,
+        email=args.email,
+        dataset=args.dataset,
+    )
 
 
 if __name__ == "__main__":
