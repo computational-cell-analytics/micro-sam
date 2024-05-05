@@ -82,7 +82,7 @@
 </span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a>
 </span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a><span class="k">try</span><span class="p">:</span>
 </span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a>    <span class="kn">from</span> <span class="nn">qtpy.QtCore</span> <span class="kn">import</span> <span class="n">QObject</span>
-</span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a><span class="k">except</span> <span class="ne">ModuleNotFoundError</span><span class="p">:</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a><span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
 </span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a>    <span class="n">QObject</span> <span class="o">=</span> <span class="n">Any</span>
 </span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a>
 </span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a><span class="kn">from</span> <span class="nn">torch.optim.lr_scheduler</span> <span class="kn">import</span> <span class="n">_LRScheduler</span>
