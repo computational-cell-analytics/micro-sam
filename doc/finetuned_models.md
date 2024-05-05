@@ -54,11 +54,13 @@ Previous versions of our models are available on Zenodo:
 We do not recommend to use these models since our new models improve upon them significantly. But we provide the links here in case they are needed to reproduce older segmentation workflows.
 
 We also provide additional models that were used for experiments in our publication on zenodo:
-- [LIVECell Specialist Models](https://zenodo.org/records/11115426)
-- [TissueNet Specialist Models](TODO)
-- [NEURIPS Cell Seg Specialist Models](TODO)
-- [DeepBacs Specialist Models](TODO)
-- [PlantSeg (Ovules) Specialist Models](TODO)
-- [CREMI Specialist Models](TODO)
-- [ASEM ER Specialist Models](TODO)
-- [VIT-H Generalist Models and User Study Models](TODO)
+- [LIVECell Specialist Models](https://doi.org/10.5281/zenodo.11115426)
+- [TissueNet Specialist Models](https://doi.org/10.5281/zenodo.11115998)
+- [NeurIPS CellSeg Specialist Models](https://doi.org/10.5281/zenodo.11116407)
+- [DeepBacs Specialist Models](https://doi.org/10.5281/zenodo.11115827)
+- [PlantSeg (Root) Specialist Models](https://doi.org/10.5281/zenodo.11116603)
+- [CREMI Specialist Models](https://doi.org/10.5281/zenodo.11117314)
+- [ASEM (ER) Specialist Models](https://doi.org/10.5281/zenodo.11117144)
+- `vit_h_lm`: Finetuned Segment Anything model for cells and nuclei in light microscopy data with ViT Huge backbone. ([Zenodo](https://doi.org/10.5281/zenodo.11117559))
+- `vit_h_em_organelles`: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with ViT Huge backbone. ([Zenodo](https://doi.org/10.5281/zenodo.11117495))
+- [User Study Finetuned Models](https://doi.org/10.5281/zenodo.11117615)
