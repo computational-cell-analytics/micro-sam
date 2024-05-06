@@ -837,6 +837,41 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
     return tile_shape, halo
 
 
+class _LevelSelector(QtWidgets.QDialog):
+    selected_level = Signal(int)
+
+    def __init__(self, image):
+        super().__init__()
+        self.setWindowTitle("Select Level")
+        layout = QtWidgets.QVBoxLayout()
+
+        shapes = [data.shape for data in image.data]
+
+        message = "You have selected a multiscale image with scale levels:\n"
+        for level, shape in enumerate(shapes):
+            message += f"{level}: Shape: {' X '.join(map(str, shape))}\n"
+        message += "Please select the level to use for embedding computation."
+        layout.addWidget(QtWidgets.QLabel(message))
+
+        n_levels = len(shapes)
+        levels = [str(i) for i in range(n_levels)]
+
+        self.combo_box = QtWidgets.QComboBox(self)
+        self.combo_box.addItems(levels)
+        layout.addWidget(self.combo_box)
+
+        # Create a button to close the window.
+        close_button = QtWidgets.QPushButton("Close")
+        close_button.clicked.connect(self.button_clicked)
+        layout.addWidget(close_button)
+
+        self.setLayout(layout)
+
+    def button_clicked(self, button):
+        self.selected_level.emit(int(self.combo_box.currentText()))
+        self.accept()
+
+
 class EmbeddingWidget(_WidgetBase):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
@@ -1063,6 +1098,22 @@ class EmbeddingWidget(_WidgetBase):
         # Get the image.
         image = self.image_selection.get_value()
 
+        # Check if we have a multiscale image.
+        if image.multiscale:
+            level = None
+
+            def _handle_selection(selected_level):
+                nonlocal level
+                level = selected_level
+
+            selector = _LevelSelector(image)
+            selector.selected_level.connect(_handle_selection)
+            selector.exec_()
+
+            image_data = image.data[level]
+        else:
+            image_data = image.data
+
         # Update the image embeddings:
         # Reset the state.
         state = AnnotatorState()
@@ -1070,16 +1121,15 @@ class EmbeddingWidget(_WidgetBase):
 
         # Get image dimensions.
         if image.rgb:
-            ndim = image.data.ndim - 1
-            state.image_shape = image.data.shape[:-1]
+            ndim = image_data.ndim - 1
+            state.image_shape = image_data.shape[:-1]
         else:
-            ndim = image.data.ndim
-            state.image_shape = image.data.shape
+            ndim = image_data.ndim
+            state.image_shape = image_data.shape
 
         # Process tile_shape and halo, set other data.
         tile_shape, halo = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
         save_path = None if self.embeddings_save_path == "" else self.embeddings_save_path
-        image_data = image.data
 
         # Set up progress bar and signals for using it within a threadworker.
         pbar, pbar_signals = _create_pbar_for_threadworker()
