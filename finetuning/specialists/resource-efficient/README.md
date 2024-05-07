@@ -1,8 +1,10 @@
 # Resource Efficient Finetuning of Segment Anything
 
-All the fullscale experiment in `micro-sam` have been performed on A100s. Can we finetune Segment Anything on limited resources?
+All the fullscale experiment in `micro-sam` have been performed on A100s.
 
-TLDR: Finetuning `vit_b` is the best bet on most workstation / cluster-level GPUs. Reduce the number of objects per batch to fit to your desired resource. Feel free to read ahead if you want more specifics on this, or let us know for further discussion.
+Question: Can we finetune Segment Anything on limited resources?
+
+TLDR: Finetuning ViT Base (`vit_b`) is the best bet on most workstation / cluster-level GPUs. Reduce the number of objects per batch to fit to your desired resource. Feel free to read ahead if you want more specifics on this, or let us know for further discussion (see our [documentation](https://computational-cell-analytics.github.io/micro-sam/) for more details on this)
 
 ## Available Resource Combinations:
 - `medium` (CPU - SCC)
@@ -92,7 +94,7 @@ All jobs are tested on `medium` partition.
 
  ## Results:
 
-| Resource | Finetuned Model        | Number of Images | Best Epoch | Train Time |
+| Resource | Finetuned Model        | Number of Images | Best Epoch | Train Time *(in s)* |
 |----------|------------------------|------------------|------------|------------|
 | v100     | vit_b (freeze None)    | 1                | 9          | 752.39     |
 | v100     | vit_b (freeze None)    | 2                | 26         | 2051.77    |
