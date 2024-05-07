@@ -2,7 +2,7 @@
 
 This directory consists of python scripts used for generating plots for `micro-sam`.
 
-### Relevant SCripts
+### Relevant Scripts
 The scripts located at `for_paper/` are all the valid plotting scripts.
 
 ### Outdated

@@ -1,6 +1,6 @@
 # Segment Anything Evaluation
 
-Scripts for evaluating Segment Anything models and the finetuned models.
+Scripts for evaluating Segment Anything models and the finetuned `micro_sam` models.
 
 ## Benchmark Methods
 
