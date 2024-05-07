@@ -38,4 +38,18 @@ The notebook explains how to train it together with the rest of SAM and how to t
 
 More advanced examples, including quantitative and qualitative evaluation, can be found in [the finetuning directory](https://github.com/computational-cell-analytics/micro-sam/tree/master/finetuning), which contains the code for training and evaluating [our models](finetuned-models). You can find further information on model training in the [FAQ section](fine-tuning-questions).
 
-TODO put table with resources here
+Here is a list of resources (with the recommended settings), on which `micro_sam` has been tested for finetuning Segment Anything:
+
+| Resource Name               | Capacity | Model Type | Batch Size | Finetuned Parts              | Number of Objects|
+|-----------------------------|----------|------------|------------|------------------------------|------------------|
+| CPU                         | 32GB     | ViT Base   | 1          | *all*                        | 10               |
+| CPU                         | 64GB     | ViT Base   | 1          | *all*                        | 15               |
+| GPU (NVIDIA GTX 1080Ti)     | 8GB      | ViT Base   | 1          | Mask Decoder, Prompt Encoder | 10               |
+| GPU (NVIDIA Quadro RTX5000) | 16GB     | ViT Base   | 1          | *all*                        | 10               |
+| GPU (Tesla V100)            | 32GB     | ViT Base   | 1          | *all*                        | 10               |
+| GPU (NVIDIA A100)           | 80GB     | ViT Tiny   | 2          | *all*                        | 50               |
+| GPU (NVIDIA A100)           | 80GB     | ViT Base   | 2          | *all*                        | 40               |
+| GPU (NVIDIA A100)           | 80GB     | ViT Large  | 2          | *all*                        | 30               |
+| GPU (NVIDIA A100)           | 80GB     | ViT Huge   | 2          | *all*                        | 25               |
+
+> NOTE: The parameters can be altered based on your choice, make sure you are aware of the impact of the parameters as the number of objects per image, the batch size, and the type of model have a strong impact on the cost of your compute memory. See the [example finetuning script on HeLa](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/finetuning/finetune_hela.py) or the [finetuning notebook](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/automatic_segmentation.ipynb) for a brief introduction to these parameters.
