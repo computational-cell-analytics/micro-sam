@@ -42,16 +42,6 @@ jobs:
         shell: bash -l {0}
         run: pip install --no-deps -e .
 
-      - name: which python, which pip, which conda
-        run: |
-          which python
-          which pip
-          pip list
-          which conda
-
-      - name: conda list
-        run: conda list
-
       - name: Run tests
         uses: aganders3/headless-gui@v2
         with:
