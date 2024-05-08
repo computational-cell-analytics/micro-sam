@@ -31,7 +31,7 @@ jobs:
         with:
           environment-file: environment_cpu.yaml
 
-      # Setup Qt libraries for GUI testing
+      # Setup Qt libraries for GUI testing on Linux
       - uses: tlambert03/setup-qt-libs@v1
 
       - name: Install additional dev requirements
@@ -41,6 +41,9 @@ jobs:
       - name: Install micro-sam
         shell: bash -l {0}
         run: pip install --no-deps -e .
+
+      - name: conda list
+        run: conda list
 
       - name: Run tests
         uses: aganders3/headless-gui@v2
