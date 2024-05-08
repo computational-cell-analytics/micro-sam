@@ -38,7 +38,7 @@ The notebook explains how to train it together with the rest of SAM and how to t
 
 More advanced examples, including quantitative and qualitative evaluation, can be found in [the finetuning directory](https://github.com/computational-cell-analytics/micro-sam/tree/master/finetuning), which contains the code for training and evaluating [our models](finetuned-models). You can find further information on model training in the [FAQ section](fine-tuning-questions).
 
-Here is a list of resources (with the recommended settings), on which `micro_sam` has been tested for finetuning Segment Anything:
+Here is a list of resources, together with their recommended training settings, for which we have tested model finetuning:
 
 | Resource Name               | Capacity | Model Type | Batch Size | Finetuned Parts              | Number of Objects|
 |-----------------------------|----------|------------|------------|------------------------------|------------------|
@@ -52,4 +52,4 @@ Here is a list of resources (with the recommended settings), on which `micro_sam
 | GPU (NVIDIA A100)           | 80GB     | ViT Large  | 2          | *all*                        | 30               |
 | GPU (NVIDIA A100)           | 80GB     | ViT Huge   | 2          | *all*                        | 25               |
 
-> NOTE: The parameters can be altered based on your choice, make sure you are aware of the impact of the parameters as the number of objects per image, the batch size, and the type of model have a strong impact on the cost of your compute memory. See the [example finetuning script on HeLa](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/finetuning/finetune_hela.py) or the [finetuning notebook](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/automatic_segmentation.ipynb) for a brief introduction to these parameters.
+> NOTE: If you use the [finetuning UI](#finetuning-ui) or `micro_sam.training.training.train_sam_for_configuration` you can specify the hardware configuration and the best settings for it will be set automatically. If your hardware is not in the settings we have tested choose the closest match. You can set the training parameters yourself when using `micro_sam.training.training.train_sam`. Be aware that the choice for the number of objects per image, the batch size, and the type of model have a strong impact on the VRAM needed for training and the duration of training. See the [finetuning notebook](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb) for an overview of these parameters.
