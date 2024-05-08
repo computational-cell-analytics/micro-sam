@@ -31,7 +31,7 @@ jobs:
         with:
           environment-file: environment_cpu.yaml
 
-      # Setup Qt libraries for GUI testing
+      # Setup Qt libraries for GUI testing on Linux
       - uses: tlambert03/setup-qt-libs@v1
 
       - name: Install additional dev requirements
