@@ -1,7 +1,7 @@
 # Finetuned Models
 
 In addition to the original Segment Anything models, we provide models that are finetuned on microscopy data.
-The additional models are available in the [BioImage.IO Model Zoo](https://bioimage.io/#/) and are also hosted on Zenodo.
+They are available in the [BioImage.IO Model Zoo](https://bioimage.io/#/) and are also hosted on Zenodo.
 
 We currently offer the following models:
 
@@ -53,7 +53,7 @@ Previous versions of our models are available on Zenodo:
 
 We do not recommend to use these models since our new models improve upon them significantly. But we provide the links here in case they are needed to reproduce older segmentation workflows.
 
-We also provide additional models that were used for experiments in our publication on zenodo:
+We provide additional models that were used for experiments in our publication on Zenodo:
 - [LIVECell Specialist Models](https://doi.org/10.5281/zenodo.11115426)
 - [TissueNet Specialist Models](https://doi.org/10.5281/zenodo.11115998)
 - [NeurIPS CellSeg Specialist Models](https://doi.org/10.5281/zenodo.11116407)
@@ -61,6 +61,6 @@ We also provide additional models that were used for experiments in our publicat
 - [PlantSeg (Root) Specialist Models](https://doi.org/10.5281/zenodo.11116603)
 - [CREMI Specialist Models](https://doi.org/10.5281/zenodo.11117314)
 - [ASEM (ER) Specialist Models](https://doi.org/10.5281/zenodo.11117144)
-- `vit_h_lm`: Finetuned Segment Anything model for cells and nuclei in light microscopy data with ViT Huge backbone. ([Zenodo](https://doi.org/10.5281/zenodo.11117559))
-- `vit_h_em_organelles`: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with ViT Huge backbone. ([Zenodo](https://doi.org/10.5281/zenodo.11117495))
-- [User Study Finetuned Models](https://doi.org/10.5281/zenodo.11117615)
+- [The LM Generalist Model with ViT-H backend (vit_h_lm)](https://doi.org/10.5281/zenodo.11117559)
+- [The EM Generalist Model with ViT-H backend (vit_h_em_organelles)](https://doi.org/10.5281/zenodo.11117495)
+- [Finetuned Models for the user studies](https://doi.org/10.5281/zenodo.11117615)

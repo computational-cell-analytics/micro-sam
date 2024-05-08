@@ -7,7 +7,7 @@ If you encounter a problem or question not addressed here feel free to [open an 
 
 
 ### 1. How to install `micro_sam`?
-The [installation](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation) for `micro_sam` is supported in three ways: [from mamba](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-mamba) (recommended), [from source](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-source) and [from installers](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-installer). Check out our [tutorial video](TODO) to get started with `micro_sam`, briefly walking you through the installation process and how to start the tool.
+The [installation](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation) for `micro_sam` is supported in three ways: [from mamba](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-mamba) (recommended), [from source](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-source) and [from installers](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-installer). Check out our [tutorial video](https://youtu.be/gcv0fa84mCc) to get started with `micro_sam`, briefly walking you through the installation process and how to start the tool.
 
 
 ### 2. I cannot install `micro_sam` using the installer, I am getting some errors.
@@ -113,7 +113,7 @@ We want to remove these errors, so we would be very grateful if you can [open an
 
 
 ### 10. The objects are not segmented in my 3d data using the interactive annotation tool.
-The first thing to check is: a) make sure you are using the latest version of `micro_sam` (pull the latest commit from master if your installation is from source, or update the installation from conda / mamba using `mamba update micro_sam`), and b) try out the steps from the [3d annotator tutorial video](TODO) to verify if this shows the same behaviour (or the same errors) as you faced. For 3d images, it's important to pass the inputs in the python axis convention, ZYX.
+The first thing to check is: a) make sure you are using the latest version of `micro_sam` (pull the latest commit from master if your installation is from source, or update the installation from conda / mamba using `mamba update micro_sam`), and b) try out the steps from the [3d annotation tutorial video](https://youtu.be/nqpyNQSyu74) to verify if this shows the same behaviour (or the same errors) as you faced. For 3d images, it's important to pass the inputs in the python axis convention, ZYX.
 c) try using a different model and change the projection mode for 3d segmentation. This is also explained in the video.
 
 
@@ -143,6 +143,9 @@ Yes, you can fine-tune Segment Anything on your own dataset. Here's how you can 
 Yes, you can fine-tune Segment Anything on your custom datasets on Kaggle (and [BAND](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#using-micro_sam-on-band)). Check out our [tutorial notebook](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/micro-sam-finetuning.ipynb) for this.
 
 
+<!---
+TODO: we should improve this explanation and add a small image that visualizes the labels.
+-->
 ### 3. What kind of annotations do I need to finetune Segment Anything?
 Annotations are referred to the instance segmentation labels, i.e. each object of interests in your microscopy images have an individual id to uniquely identify all the segmented objects. You can obtain them by `micro_sam`'s annotation tools. In `micro_sam`, it's expected to provide dense segmentations (i.e. all objects per image are annotated) for finetuning Segment Anything with the additional decoder, however it's okay to use sparse segmentations (i.e. few objects per image are annotated) for just finetuning Segment Anything (without the additional decoder).
 
@@ -156,8 +159,8 @@ If you are using the python library or CLI you can specify this path with the `c
 `micro_sam` introduces a new segmentation decoder to the Segment Anything backbone, for enabling faster and accurate automatic instance segmentation, by predicting the [distances to the object center and boundary](https://github.com/constantinpape/torch-em/blob/main/torch_em/transform/label.py#L284) as well as predicting foregrund, and performing [seeded watershed-based postprocessing](https://github.com/constantinpape/torch-em/blob/main/torch_em/util/segmentation.py#L122) to obtain the instances.
 
 
-### 6: I want to finetune only the Segment Anything model without the additional instance decoder.
-The additional instance segmentation decoder is a flexible wrap around the Segment Anything model, which enables the users to either fine-tune the Segment Anything model as it is, or to fine-tune the Segment Anything model with the additional instance segmentation decoder for improved automatic instance segmentation experience (see the [example](https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/finetuning#example-for-model-finetuning) for finetuning with both the objectives).
+### 6. I want to finetune only the Segment Anything model without the additional instance decoder.
+The instance segmentation decoder is optional. So you can only finetune SAM or SAM and the additional decoder. Finetuning with the decoder will increase training times, but will enable you to use AIS. See [this example](https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/finetuning#example-for-model-finetuning) for finetuning with both the objectives.
 
 > NOTE: To try out the other way round (i.e. the automatic instance segmentation framework without the interactive capability, i.e. a UNETR: a vision transformer encoder and a convolutional decoder), you can take inspiration from this [example on LIVECell](https://github.com/constantinpape/torch-em/blob/main/experiments/vision-transformer/unetr/for_vimunet_benchmarking/run_livecell.py).
 
@@ -165,11 +168,11 @@ The additional instance segmentation decoder is a flexible wrap around the Segme
 ### 7. I have a NVIDIA RTX 4090Ti GPU with 24GB VRAM. Can I finetune Segment Anything?
 Finetuning Segment Anything is possible in most consumer-grade GPU and CPU resources (but training being a lot slower on the CPU). For the mentioned resource, it should be possible to finetune a ViT Base (also abbreviated as `vit_b`) by reducing the number of objects per image to 15.
 This parameter has the biggest impact on the VRAM consumption and quality of the finetuned model.
-You can find an overview of the resources we have tested for finetuning [here](TODO).
+You can find an overview of the resources we have tested for finetuning [here](#training-your-own-model).
 We also provide a the convenience function `micro_sam.training.train_sam_for_configuration` that selects the best training settings for these configuration. This function is also used by the finetuning UI.
 
              
-### 8. I want to create a dataloader for my data, for finetuning Segment Anything.
+### 8. I want to create a dataloader for my data, to finetune Segment Anything.
 Thanks to `torch-em`, a) Creating PyTorch datasets and dataloaders using the python library is convenient and supported for various data formats and data structures.
 See the [tutorial notebook](https://github.com/constantinpape/torch-em/blob/main/notebooks/tutorial_create_dataloaders.ipynb) on how to create dataloaders using `torch-em` and the [documentation](https://github.com/constantinpape/torch-em/blob/main/doc/datasets_and_dataloaders.md) for details on creating your own datasets and dataloaders; and b) finetuning using the `napari` tool eases the aforementioned process, by allowing you to add the input parameters (path to the directory for inputs and labels etc.) directly in the tool.
 > NOTE: If you have images with large input shapes with a sparse density of instance segmentations, we recommend using [`sampler`](https://github.com/constantinpape/torch-em/blob/main/torch_em/data/sampler.py) for choosing the patches with valid segmentation for the finetuning purpose (see the [example](https://github.com/computational-cell-analytics/micro-sam/blob/master/finetuning/specialists/training/light_microscopy/plantseg_root_finetuning.py#L29) for PlantSeg (Root) specialist model in `micro_sam`).
@@ -179,8 +182,8 @@ See the [tutorial notebook](https://github.com/constantinpape/torch-em/blob/main
 To validate a Segment Anything model for your data, you have different options, depending on the task you want to solve and whether you have segmentation annotations for your data.
 
 - If you don't have any annotations you will have to validate the model visually. We suggest doing this with the `micro_sam` GUI tools. You can learn how to use them in the `micro_sam` documentation.
-- If you have segmentation annotations you can use the `micro_sam` library to evaluate the segmentation quality of different SAM models. We provide functionality to evaluate the models for interactive and for automatic segmentation:
-    - You can use `run_inference_with_iterative_prompting` to evaluate models for interactive segmentation.
-    - You can use `run_instance_segmentation_grid_search_and_inference` to evaluate models for automatic segmentation.
+- If you have segmentation annotations you can use the `micro_sam` python library to evaluate the segmentation quality of different models. We provide functionality to evaluate the models for interactive and for automatic segmentation:
+    - You can use `micro_sam.evaluation.evaluation.run_evaluation_for_iterative_prompting` to evaluate models for interactive segmentation.
+    - You can use `micro_sam.evaluation.instance_segmentation.run_instance_segmentation_grid_search_and_inference` to evaluate models for automatic segmentation.
 
 We provide an [example notebook](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/inference_and_evaluation.ipynb) that shows how to use this evaluation functionality.
