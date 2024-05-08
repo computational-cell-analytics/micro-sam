@@ -177,7 +177,7 @@ You can also train models on your own data, see <a href="#training-your-own-mode
 <h2 id="from-mamba">From mamba</h2>
 
 <p><a href="https://mamba.readthedocs.io/en/latest/">mamba</a> is a drop-in replacement for conda, but much faster.
-While the steps below may also work with <code>conda</code>, we highly recommend using <code>mamba</code>.
+The steps below may also work with <code>conda</code>, but we recommend using <code>mamba</code>, especially if the installation does not work with <code>conda</code>.
 You can follow the instructions <a href="https://mamba.readthedocs.io/en/latest/installation/mamba-installation.html">here</a> to install <code>mamba</code>.</p>
 
 <p><strong>IMPORTANT</strong>: Make sure to avoid installing anything in the base environment.</p>
@@ -199,7 +199,7 @@ You can follow the instructions <a href="https://mamba.readthedocs.io/en/latest/
 <p>if you want to use the GPU you need to install PyTorch from the <code>pytorch</code> channel instead of <code>conda-forge</code>. For example:</p>
 
 <div class="pdoc-code codehilite">
-<pre><span></span><code>$<span class="w"> </span>mamba<span class="w"> </span>create<span class="w"> </span>-c<span class="w"> </span>pytorch<span class="w"> </span>-c<span class="w"> </span>nvidia<span class="w"> </span>-c<span class="w"> </span>conda-forge<span class="w"> </span>micro_sam<span class="w"> </span>pytorch<span class="w"> </span>pytorch-cuda<span class="o">=</span><span class="m">12</span>.1
+<pre><span></span><code>$<span class="w"> </span>mamba<span class="w"> </span>create<span class="w"> </span>-c<span class="w"> </span>pytorch<span class="w"> </span>-c<span class="w"> </span>nvidia<span class="w"> </span>-c<span class="w"> </span>conda-forge<span class="w"> </span>-n<span class="w"> </span>micro-sam<span class="w"> </span>micro_sam<span class="w"> </span>pytorch<span class="w"> </span>pytorch-cuda<span class="o">=</span><span class="m">12</span>.1
 </code></pre>
 </div>
 
@@ -437,9 +437,9 @@ When <code>commit_path</code> is given the results will automatically be saved t
 <li>The menu for clearing the current annotations.</li>
 </ol>
 
-<p>The tracking annotator only supports 2d image data, volumetric data is not supported. We also do not support automatic tracking yet.</p>
+<p>The tracking annotator only supports 2d image data with a time dimension, volumetric data + time is not supported. We also do not support automatic tracking yet.</p>
 
-<p>Check out <a href="TODO">the video tutorial</a> (coming soon!) for an in-depth explanation on how to use this tool.</p>
+<p>Check out <a href="https://youtu.be/1gg8OPHqOyc">the video tutorial</a> for an in-depth explanation on how to use this tool.</p>
 
 <h2 id="image-series-annotator">Image Series Annotator</h2>
 
@@ -461,7 +461,7 @@ Once you click <code>Annotate Images</code> the images from the folder you have 
 
 <p>This menu will not open if you start the image series annotator from the command line or via python. In this case the input folder and other settings are passed as parameters instead.</p>
 
-<p>Check out <a href="TODO">the video tutorial</a> (coming soon!) for an in-depth explanation on how to use the image series annotator.</p>
+<p>Check out <a href="https://youtu.be/HqRoImdTX3c">the video tutorial</a> for an in-depth explanation on how to use the image series annotator.</p>
 
 <h2 id="finetuning-ui">Finetuning UI</h2>
 
@@ -523,12 +523,103 @@ The notebook explains how to train it together with the rest of SAM and how to t
 
 <p>More advanced examples, including quantitative and qualitative evaluation, can be found in <a href="https://github.com/computational-cell-analytics/micro-sam/tree/master/finetuning">the finetuning directory</a>, which contains the code for training and evaluating <a href="finetuned-models">our models</a>. You can find further information on model training in the <a href="fine-tuning-questions">FAQ section</a>.</p>
 
-<p>TODO put table with resources here</p>
+<p>Here is a list of resources, together with their recommended training settings, for which we have tested model finetuning:</p>
+
+<table>
+<thead>
+<tr>
+  <th>Resource Name</th>
+  <th>Capacity</th>
+  <th>Model Type</th>
+  <th>Batch Size</th>
+  <th>Finetuned Parts</th>
+  <th>Number of Objects</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>CPU</td>
+  <td>32GB</td>
+  <td>ViT Base</td>
+  <td>1</td>
+  <td><em>all</em></td>
+  <td>10</td>
+</tr>
+<tr>
+  <td>CPU</td>
+  <td>64GB</td>
+  <td>ViT Base</td>
+  <td>1</td>
+  <td><em>all</em></td>
+  <td>15</td>
+</tr>
+<tr>
+  <td>GPU (NVIDIA GTX 1080Ti)</td>
+  <td>8GB</td>
+  <td>ViT Base</td>
+  <td>1</td>
+  <td>Mask Decoder, Prompt Encoder</td>
+  <td>10</td>
+</tr>
+<tr>
+  <td>GPU (NVIDIA Quadro RTX5000)</td>
+  <td>16GB</td>
+  <td>ViT Base</td>
+  <td>1</td>
+  <td><em>all</em></td>
+  <td>10</td>
+</tr>
+<tr>
+  <td>GPU (Tesla V100)</td>
+  <td>32GB</td>
+  <td>ViT Base</td>
+  <td>1</td>
+  <td><em>all</em></td>
+  <td>10</td>
+</tr>
+<tr>
+  <td>GPU (NVIDIA A100)</td>
+  <td>80GB</td>
+  <td>ViT Tiny</td>
+  <td>2</td>
+  <td><em>all</em></td>
+  <td>50</td>
+</tr>
+<tr>
+  <td>GPU (NVIDIA A100)</td>
+  <td>80GB</td>
+  <td>ViT Base</td>
+  <td>2</td>
+  <td><em>all</em></td>
+  <td>40</td>
+</tr>
+<tr>
+  <td>GPU (NVIDIA A100)</td>
+  <td>80GB</td>
+  <td>ViT Large</td>
+  <td>2</td>
+  <td><em>all</em></td>
+  <td>30</td>
+</tr>
+<tr>
+  <td>GPU (NVIDIA A100)</td>
+  <td>80GB</td>
+  <td>ViT Huge</td>
+  <td>2</td>
+  <td><em>all</em></td>
+  <td>25</td>
+</tr>
+</tbody>
+</table>
+
+<blockquote>
+  <p>NOTE: If you use the <a href="#finetuning-ui">finetuning UI</a> or <code><a href="micro_sam/training/training.html#train_sam_for_configuration">micro_sam.training.training.train_sam_for_configuration</a></code> you can specify the hardware configuration and the best settings for it will be set automatically. If your hardware is not in the settings we have tested choose the closest match. You can set the training parameters yourself when using <code><a href="micro_sam/training/training.html#train_sam">micro_sam.training.training.train_sam</a></code>. Be aware that the choice for the number of objects per image, the batch size, and the type of model have a strong impact on the VRAM needed for training and the duration of training. See the <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb">finetuning notebook</a> for an overview of these parameters.</p>
+</blockquote>
 
 <h1 id="finetuned-models">Finetuned Models</h1>
 
 <p>In addition to the original Segment Anything models, we provide models that are finetuned on microscopy data.
-The additional models are available in the <a href="https://bioimage.io/#/">BioImage.IO Model Zoo</a> and are also hosted on Zenodo.</p>
+They are available in the <a href="https://bioimage.io/#/">BioImage.IO Model Zoo</a> and are also hosted on Zenodo.</p>
 
 <p>We currently offer the following models:</p>
 
@@ -586,17 +677,19 @@ We are working on further improving these models and adding new models for other
 
 <p>We do not recommend to use these models since our new models improve upon them significantly. But we provide the links here in case they are needed to reproduce older segmentation workflows.</p>
 
-<p>We also provide additional models that were used for experiments in our publication on zenodo:</p>
+<p>We provide additional models that were used for experiments in our publication on Zenodo:</p>
 
 <ul>
-<li><a href="https://zenodo.org/records/11115426">LIVECell Specialist Models</a></li>
-<li><a href="TODO">TissueNet Specialist Models</a></li>
-<li><a href="TODO">NEURIPS Cell Seg Specialist Models</a></li>
-<li><a href="TODO">DeepBacs Specialist Models</a></li>
-<li><a href="TODO">PlantSeg (Ovules) Specialist Models</a></li>
-<li><a href="TODO">CREMI Specialist Models</a></li>
-<li><a href="TODO">ASEM ER Specialist Models</a></li>
-<li><a href="TODO">VIT-H Generalist Models and User Study Models</a></li>
+<li><a href="https://doi.org/10.5281/zenodo.11115426">LIVECell Specialist Models</a></li>
+<li><a href="https://doi.org/10.5281/zenodo.11115998">TissueNet Specialist Models</a></li>
+<li><a href="https://doi.org/10.5281/zenodo.11116407">NeurIPS CellSeg Specialist Models</a></li>
+<li><a href="https://doi.org/10.5281/zenodo.11115827">DeepBacs Specialist Models</a></li>
+<li><a href="https://doi.org/10.5281/zenodo.11116603">PlantSeg (Root) Specialist Models</a></li>
+<li><a href="https://doi.org/10.5281/zenodo.11117314">CREMI Specialist Models</a></li>
+<li><a href="https://doi.org/10.5281/zenodo.11117144">ASEM (ER) Specialist Models</a></li>
+<li><a href="https://doi.org/10.5281/zenodo.11117559">The LM Generalist Model with ViT-H backend (vit_h_lm)</a></li>
+<li><a href="https://doi.org/10.5281/zenodo.11117495">The EM Generalist Model with ViT-H backend (vit_h_em_organelles)</a></li>
+<li><a href="https://doi.org/10.5281/zenodo.11117615">Finetuned Models for the user studies</a></li>
 </ul>
 
 <h1 id="faq">FAQ</h1>
@@ -608,7 +701,7 @@ If you encounter a problem or question not addressed here feel free to <a href="
 
 <h3 id="1-how-to-install-micro_sam">1. How to install <code><a href="">micro_sam</a></code>?</h3>
 
-<p>The <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation">installation</a> for <code><a href="">micro_sam</a></code> is supported in three ways: <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-mamba">from mamba</a> (recommended), <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-source">from source</a> and <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-installer">from installers</a>. Check out our <a href="TODO">tutorial video</a> to get started with <code><a href="">micro_sam</a></code>, briefly walking you through the installation process and how to start the tool.</p>
+<p>The <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation">installation</a> for <code><a href="">micro_sam</a></code> is supported in three ways: <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-mamba">from mamba</a> (recommended), <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-source">from source</a> and <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-installer">from installers</a>. Check out our <a href="https://youtu.be/gcv0fa84mCc">tutorial video</a> to get started with <code><a href="">micro_sam</a></code>, briefly walking you through the installation process and how to start the tool.</p>
 
 <h3 id="2-i-cannot-install-micro_sam-using-the-installer-i-am-getting-some-errors">2. I cannot install <code><a href="">micro_sam</a></code> using the installer, I am getting some errors.</h3>
 
@@ -750,7 +843,7 @@ We want to remove these errors, so we would be very grateful if you can <a href=
 
 <h3 id="10-the-objects-are-not-segmented-in-my-3d-data-using-the-interactive-annotation-tool">10. The objects are not segmented in my 3d data using the interactive annotation tool.</h3>
 
-<p>The first thing to check is: a) make sure you are using the latest version of <code><a href="">micro_sam</a></code> (pull the latest commit from master if your installation is from source, or update the installation from conda / mamba using <code>mamba update micro_sam</code>), and b) try out the steps from the <a href="TODO">3d annotator tutorial video</a> to verify if this shows the same behaviour (or the same errors) as you faced. For 3d images, it's important to pass the inputs in the python axis convention, ZYX.
+<p>The first thing to check is: a) make sure you are using the latest version of <code><a href="">micro_sam</a></code> (pull the latest commit from master if your installation is from source, or update the installation from conda / mamba using <code>mamba update micro_sam</code>), and b) try out the steps from the <a href="https://youtu.be/nqpyNQSyu74">3d annotation tutorial video</a> to verify if this shows the same behaviour (or the same errors) as you faced. For 3d images, it's important to pass the inputs in the python axis convention, ZYX.
 c) try using a different model and change the projection mode for 3d segmentation. This is also explained in the video.</p>
 
 <h3 id="11-i-have-very-small-or-fine-grained-structures-in-my-high-resolution-microscopic-images-can-i-use-micro_sam-to-annotate-them">11. I have very small or fine-grained structures in my high-resolution microscopic images. Can I use <code><a href="">micro_sam</a></code> to annotate them?</h3>
@@ -767,7 +860,7 @@ c) try using a different model and change the projection mode for 3d segmentatio
 
 <h2 id="fine-tuning-questions">Fine-tuning questions</h2>
 
-<h3 id="1-i-have-a-microscopy-dataset-i-would-like-to-fine-tune-segment-anything-for-is-it-possible-using-micro_sam">1. I have a microscopy dataset I would like to fine-tune Segment Anything for. Is it possible using 'micro_sam'?</h3>
+<h3 id="1-i-have-a-microscopy-dataset-i-would-like-to-fine-tune-segment-anything-for-is-it-possible-using-micro_sam">1. I have a microscopy dataset I would like to fine-tune Segment Anything for. Is it possible using <code><a href="">micro_sam</a></code>?</h3>
 
 <p>Yes, you can fine-tune Segment Anything on your own dataset. Here's how you can do it:</p>
 
@@ -781,9 +874,13 @@ c) try using a different model and change the projection mode for 3d segmentatio
 
 <p>Yes, you can fine-tune Segment Anything on your custom datasets on Kaggle (and <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#using-micro_sam-on-band">BAND</a>). Check out our <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/micro-sam-finetuning.ipynb">tutorial notebook</a> for this.</p>
 
+<p><!---
+TODO: we should improve this explanation and add a small image that visualizes the labels.
+--></p>
+
 <h3 id="3-what-kind-of-annotations-do-i-need-to-finetune-segment-anything">3. What kind of annotations do I need to finetune Segment Anything?</h3>
 
-<p>TODO: explain instance segmentation labels, that you can get them by annotation with micro_sam, and dense vs. sparse annotation (for training without / with decoder)</p>
+<p>Annotations are referred to the instance segmentation labels, i.e. each object of interests in your microscopy images have an individual id to uniquely identify all the segmented objects. You can obtain them by <code><a href="">micro_sam</a></code>'s annotation tools. In <code><a href="">micro_sam</a></code>, it's expected to provide dense segmentations (i.e. all objects per image are annotated) for finetuning Segment Anything with the additional decoder, however it's okay to use sparse segmentations (i.e. few objects per image are annotated) for just finetuning Segment Anything (without the additional decoder).</p>
 
 <h3 id="4-i-have-finetuned-segment-anything-on-my-microscopy-data-how-can-i-use-it-for-annotating-new-images">4. I have finetuned Segment Anything on my microscopy data. How can I use it for annotating new images?</h3>
 
@@ -792,19 +889,24 @@ If you are using the python library or CLI you can specify this path with the <c
 
 <h3 id="5-what-is-the-background-of-the-new-ais-automatic-instance-segmentation-feature-in-micro_sam">5. What is the background of the new AIS (Automatic Instance Segmentation) feature in <code><a href="">micro_sam</a></code>?</h3>
 
-<p><code><a href="">micro_sam</a></code> introduces a new segmentation decoder to the Segment Anything backbone, for enabling faster and accurate automatic instance segmentation, by predicting the <a href="https://github.com/constantinpape/torch-em/blob/main/torch_em/transform/label.py#L284">distances to the object center and boundary</a> as well as predicting foregrund, and performing <a href="https://github.com/constantinpape/torch-em/blob/main/torch_em/util/segmentation.py#L122">seeded watershed-based postprocessing</a> to obtain the instances.
-<!--- This text is a bit confusing, not sure if we need to mention anything else here, leaving it for reference.
-However, it's a flexible wrap around the Segment Anything model, which provides the users to either fine-tune the Segment Anything model as it is, or the choice to fine-tune the Segment Anything model with an additional instance segmentation decoder (see the <a href="https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/finetuning#example-for-model-finetuning">example</a> for finetuning with both the objectives). The finetuned models provided by <code><a href="">micro_sam</a></code> use the AIS feature for improving the segmentation experience for the light microscopy and electron microscopy domains.
---></p>
+<p><code><a href="">micro_sam</a></code> introduces a new segmentation decoder to the Segment Anything backbone, for enabling faster and accurate automatic instance segmentation, by predicting the <a href="https://github.com/constantinpape/torch-em/blob/main/torch_em/transform/label.py#L284">distances to the object center and boundary</a> as well as predicting foregrund, and performing <a href="https://github.com/constantinpape/torch-em/blob/main/torch_em/util/segmentation.py#L122">seeded watershed-based postprocessing</a> to obtain the instances.</p>
 
-<h3 id="6-i-have-a-nvidia-rtx-4090ti-gpu-with-24gb-vram-can-i-finetune-segment-anything">6. I have a NVIDIA RTX 4090Ti GPU with 24GB VRAM. Can I finetune Segment Anything?</h3>
+<h3 id="6-i-want-to-finetune-only-the-segment-anything-model-without-the-additional-instance-decoder">6. I want to finetune only the Segment Anything model without the additional instance decoder.</h3>
+
+<p>The instance segmentation decoder is optional. So you can only finetune SAM or SAM and the additional decoder. Finetuning with the decoder will increase training times, but will enable you to use AIS. See <a href="https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/finetuning#example-for-model-finetuning">this example</a> for finetuning with both the objectives.</p>
+
+<blockquote>
+  <p>NOTE: To try out the other way round (i.e. the automatic instance segmentation framework without the interactive capability, i.e. a UNETR: a vision transformer encoder and a convolutional decoder), you can take inspiration from this <a href="https://github.com/constantinpape/torch-em/blob/main/experiments/vision-transformer/unetr/for_vimunet_benchmarking/run_livecell.py">example on LIVECell</a>.</p>
+</blockquote>
+
+<h3 id="7-i-have-a-nvidia-rtx-4090ti-gpu-with-24gb-vram-can-i-finetune-segment-anything">7. I have a NVIDIA RTX 4090Ti GPU with 24GB VRAM. Can I finetune Segment Anything?</h3>
 
 <p>Finetuning Segment Anything is possible in most consumer-grade GPU and CPU resources (but training being a lot slower on the CPU). For the mentioned resource, it should be possible to finetune a ViT Base (also abbreviated as <code>vit_b</code>) by reducing the number of objects per image to 15.
 This parameter has the biggest impact on the VRAM consumption and quality of the finetuned model.
-You can find an overview of the resources we have tested for finetuning <a href="TODO">here</a>.
+You can find an overview of the resources we have tested for finetuning <a href="#training-your-own-model">here</a>.
 We also provide a the convenience function <code>micro_sam.training.train_sam_for_configuration</code> that selects the best training settings for these configuration. This function is also used by the finetuning UI.</p>
 
-<h3 id="7-i-want-to-create-a-dataloader-for-my-data-for-finetuning-segment-anything">7. I want to create a dataloader for my data, for finetuning Segment Anything.</h3>
+<h3 id="8-i-want-to-create-a-dataloader-for-my-data-to-finetune-segment-anything">8. I want to create a dataloader for my data, to finetune Segment Anything.</h3>
 
 <p>Thanks to <code>torch-em</code>, a) Creating PyTorch datasets and dataloaders using the python library is convenient and supported for various data formats and data structures.
 See the <a href="https://github.com/constantinpape/torch-em/blob/main/notebooks/tutorial_create_dataloaders.ipynb">tutorial notebook</a> on how to create dataloaders using <code>torch-em</code> and the <a href="https://github.com/constantinpape/torch-em/blob/main/doc/datasets_and_dataloaders.md">documentation</a> for details on creating your own datasets and dataloaders; and b) finetuning using the <code>napari</code> tool eases the aforementioned process, by allowing you to add the input parameters (path to the directory for inputs and labels etc.) directly in the tool.</p>
@@ -813,9 +915,20 @@ See the <a href="https://github.com/constantinpape/torch-em/blob/main/notebooks/
   <p>NOTE: If you have images with large input shapes with a sparse density of instance segmentations, we recommend using <a href="https://github.com/constantinpape/torch-em/blob/main/torch_em/data/sampler.py"><code>sampler</code></a> for choosing the patches with valid segmentation for the finetuning purpose (see the <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/finetuning/specialists/training/light_microscopy/plantseg_root_finetuning.py#L29">example</a> for PlantSeg (Root) specialist model in <code><a href="">micro_sam</a></code>).</p>
 </blockquote>
 
-<h3 id="8-how-can-i-evaluate-a-model-i-have-finetuned">8. How can I evaluate a model I have finetuned?</h3>
+<h3 id="9-how-can-i-evaluate-a-model-i-have-finetuned">9. How can I evaluate a model I have finetuned?</h3>
 
-<p>TODO: move the content of <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/doc/bioimageio/validation.md">https://github.com/computational-cell-analytics/micro-sam/blob/master/doc/bioimageio/validation.md</a> here.</p>
+<p>To validate a Segment Anything model for your data, you have different options, depending on the task you want to solve and whether you have segmentation annotations for your data.</p>
+
+<ul>
+<li>If you don't have any annotations you will have to validate the model visually. We suggest doing this with the <code><a href="">micro_sam</a></code> GUI tools. You can learn how to use them in the <code><a href="">micro_sam</a></code> documentation.</li>
+<li>If you have segmentation annotations you can use the <code><a href="">micro_sam</a></code> python library to evaluate the segmentation quality of different models. We provide functionality to evaluate the models for interactive and for automatic segmentation:
+<ul>
+<li>You can use <code><a href="micro_sam/evaluation/evaluation.html#run_evaluation_for_iterative_prompting">micro_sam.evaluation.evaluation.run_evaluation_for_iterative_prompting</a></code> to evaluate models for interactive segmentation.</li>
+<li>You can use <code><a href="micro_sam/evaluation/instance_segmentation.html#run_instance_segmentation_grid_search_and_inference">micro_sam.evaluation.instance_segmentation.run_instance_segmentation_grid_search_and_inference</a></code> to evaluate models for automatic segmentation.</li>
+</ul></li>
+</ul>
+
+<p>We provide an <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/inference_and_evaluation.ipynb">example notebook</a> that shows how to use this evaluation functionality.</p>
 
 <h1 id="contribution-guide">Contribution Guide</h1>
 
