@@ -46,6 +46,7 @@ jobs:
         run: |
           which python
           which pip
+          pip list
           which conda
 
       - name: conda list
