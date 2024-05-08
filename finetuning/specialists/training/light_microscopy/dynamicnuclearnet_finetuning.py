@@ -23,6 +23,8 @@ def get_dataloaders(patch_shape, data_path):
     It will not automatically download the dynamicnuclearnet data.
     See `torch_em.data.datasets.dynamicnuclearnet.get_dynamicnuclearnet_dataset` for details.
 
+    NOTE: This dataset is the "DynamicNuclearNet Segmentation" dataset from https://datasets.deepcell.org/data.
+
     Note: to replace this with another data loader you need to return a torch data loader
     that retuns `x, y` tensors, where `x` is the image data and `y` are the labels.
     The labels have to be in a label mask instance segmentation format.
