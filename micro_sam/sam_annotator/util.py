@@ -13,7 +13,6 @@ import numpy as np
 
 from scipy.ndimage import shift
 from skimage import draw
-from skimage.transform import rescale
 
 from .. import prompt_based_segmentation, util
 from .. import _model_settings as model_settings
@@ -347,7 +346,8 @@ def prompt_layers_to_state(
 
 
 def segment_slices_with_prompts(
-    predictor, point_prompts, box_prompts, image_embeddings, shape, track_id=None, update_progress=None,
+    predictor, point_prompts, box_prompts, image_embeddings, shape,
+    track_id=None, update_progress=None, scale_factor=None,
 ):
     """@private"""
     assert len(shape) == 3
@@ -403,7 +403,7 @@ def segment_slices_with_prompts(
 
         seg_i = prompt_segmentation(
             predictor, points, labels, boxes, masks, image_shape, multiple_box_prompts=False,
-            image_embeddings=image_embeddings, i=i
+            image_embeddings=image_embeddings, i=i, scale_factor=scale_factor
         )
         if seg_i is None:
             print(f"The prompts at slice or frame {i} are invalid and the segmentation was skipped.")
@@ -506,14 +506,6 @@ def _scale_boxes(boxes, scale_factor):
     return scaled_boxes
 
 
-# TODO this looks weird
-def _scale_mask(mask, scale_factor):
-    if scale_factor is None:
-        return mask
-    scaled_mask = rescale(mask, scale_factor, order=0, anti_aliasing=False, preserve_range=True).astype(mask.dtype)
-    return scaled_mask
-
-
 def prompt_segmentation(
     predictor, points, labels, boxes, masks, shape, multiple_box_prompts,
     image_embeddings=None, i=None, box_extension=0, batched=None,
@@ -545,13 +537,14 @@ def prompt_segmentation(
             print("This setting is currently not supported.")
             print("When providing both points and prompts you can only segment one object at a time.")
             return
+
+        # We don't have to scale the masks, because it gets resized internally anyways.
         mask = masks[0]
         if mask is None:
             seg = prompt_based_segmentation.segment_from_box_and_points(
                 predictor, boxes[0], points, labels, image_embeddings=image_embeddings, i=i
             ).squeeze()
         else:
-            mask = _scale_mask(mask, scale_factor)
             seg = prompt_based_segmentation.segment_from_mask(
                 predictor, mask, box=boxes[0], points=points, labels=labels, image_embeddings=image_embeddings, i=i
             ).squeeze()
@@ -578,7 +571,6 @@ def prompt_segmentation(
                     predictor, box, image_embeddings=image_embeddings, i=i
                 ).squeeze()
             else:
-                mask = _scale_mask(mask, scale_factor)
                 prediction = prompt_based_segmentation.segment_from_mask(
                     predictor, mask, box=box, image_embeddings=image_embeddings, i=i,
                     box_extension=box_extension,

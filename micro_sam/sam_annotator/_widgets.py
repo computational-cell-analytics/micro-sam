@@ -745,7 +745,7 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
     state = AnnotatorState()
     seg = vutil.prompt_segmentation(
         state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
-        image_embeddings=state.image_embeddings, i=z,
+        image_embeddings=state.image_embeddings, i=z, scale_factor=state.scale_factor,
     )
 
     # no prompts were given or prompts were invalid, skip segmentation
@@ -783,7 +783,7 @@ def segment_frame(viewer: "napari.viewer.Viewer") -> None:
 
     seg = vutil.prompt_segmentation(
         state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
-        image_embeddings=state.image_embeddings, i=t
+        image_embeddings=state.image_embeddings, i=t, scale_factor=state.scale_factor,
     )
 
     # no prompts were given or prompts were invalid, skip segmentation
@@ -1264,6 +1264,7 @@ class SegmentNDWidget(_WidgetBase):
                 state.predictor, self._viewer.layers["point_prompts"], self._viewer.layers["prompts"],
                 state.image_embeddings, shape, track_id=state.current_track_id,
                 update_progress=lambda update: pbar_signals.pbar_update.emit(update),
+                scale_factor=state.scale_factor
             )
 
             # Step 2: Track the object starting from the lowest annotated slice.
@@ -1315,6 +1316,7 @@ class SegmentNDWidget(_WidgetBase):
                 state.predictor, self._viewer.layers["point_prompts"], self._viewer.layers["prompts"],
                 state.image_embeddings, shape,
                 update_progress=lambda update: pbar_signals.pbar_update.emit(update),
+                scale_factor=state.scale_factor,
             )
 
             # Step 2: Segment the rest of the volume based on projecting prompts.
