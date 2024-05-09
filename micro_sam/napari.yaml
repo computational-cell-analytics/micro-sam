@@ -1,8 +1,9 @@
 name: micro-sam
 display_name: SegmentAnything for Microscopy
+# see https://napari.org/stable/plugins/manifest.html for valid categories
+categories: ["Segmentation", "Annotation"]
 contributions:
   commands:
-
     # Commands for sample data.
     # We don't provide the sample data for image series via napari for now,
     # because the image series annotator cannot be called for image layers in napari (yet),
