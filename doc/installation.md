@@ -10,7 +10,7 @@ You can find more information on the installation and how to troubleshoot it in 
 ## From mamba
 
 [mamba](https://mamba.readthedocs.io/en/latest/) is a drop-in replacement for conda, but much faster.
-While the steps below may also work with `conda`, we highly recommend using `mamba`.
+The steps below may also work with `conda`, but we recommend using `mamba`, especially if the installation does not work with `conda`.
 You can follow the instructions [here](https://mamba.readthedocs.io/en/latest/installation/mamba-installation.html) to install `mamba`.
 
 **IMPORTANT**: Make sure to avoid installing anything in the base environment.
@@ -25,7 +25,7 @@ $ mamba create -c conda-forge -n micro-sam micro_sam
 ```
 if you want to use the GPU you need to install PyTorch from the `pytorch` channel instead of `conda-forge`. For example:
 ```bash
-$ mamba create -c pytorch -c nvidia -c conda-forge micro_sam pytorch pytorch-cuda=12.1
+$ mamba create -c pytorch -c nvidia -c conda-forge -n micro-sam micro_sam pytorch pytorch-cuda=12.1
 ```
 You may need to change this command to install the correct CUDA version for your system, see [https://pytorch.org/](https://pytorch.org/) for details.
 

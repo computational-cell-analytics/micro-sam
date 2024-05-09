@@ -15,7 +15,7 @@ $ python livecell_finetuning.py -i /path/to/livecell
                                 -s /path/to/save/checkpoints
                                 --export_path /path/to/save/exported/model.pth
 ```
-The arguments `-i`, `-m`, `-s` and `--export_path`specify where the input dataset (LIVECell) is stored, which Segment Anything model to finetune, where the checkpoints and logs for the finetuned models will be stored, and the exported model for making use of the annotator tool, respectively.
+The arguments `-i`, `-m`, `-s` and `--export_path` specify where the input dataset (LIVECell) is stored, which Segment Anything model to finetune, where the checkpoints and logs for the finetuned models will be stored, and the exported model for making use of the annotator tool, respectively.
 
 **Inference**
 
@@ -66,7 +66,7 @@ $ python livecell_evaluation.py -i /path/to/livecell -e /path/to/stored/experime
 This will create a folder `experiment/results` with csv tables with the results per cell type and averaged over all images.
 
 
-## Finetuning and Evaluation code
+## Finetuning and Evaluation Scripts
 
 The subfolders contain the code for different finetuning and evaluation experiments for microscopy data:
 - `livecell`: Experiments with the LIVECell dataset.

@@ -1,6 +1,6 @@
 # Segment Anything Finetuning for Specialist Models
 
-Code for finetuning segment anything data on specific microscopy datasets.
+Code for finetuning Segment Anything on specific microscopy datasets.
 
 ## Finetuning Scripts
 

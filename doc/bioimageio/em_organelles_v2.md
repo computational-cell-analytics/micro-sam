@@ -13,5 +13,5 @@ See [the dataset overview](https://github.com/computational-cell-analytics/micro
 ## Validation
 
 The easiest way to validate the model is to visually check the segmentation quality for your data.
-If you have annotations you can use for validation you can also quantitative validation, see [here for details](https://github.com/computational-cell-analytics/micro-sam/blob/master/doc/bioimageio/validation.md).
+If you have annotations you can use for validation you can also quantitative validation, see [here for details](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#9-how-can-i-evaluate-a-model-i-have-finetuned).
 Please note that the required quality for segmentation always depends on the analysis task you want to solve.

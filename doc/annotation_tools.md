@@ -99,9 +99,9 @@ Most elements are the same as in [the 2d annotator](#annotator-2d):
 7. The menu for committing the current tracking result.
 8. The menu for clearing the current annotations.
 
-The tracking annotator only supports 2d image data, volumetric data is not supported. We also do not support automatic tracking yet.
+The tracking annotator only supports 2d image data with a time dimension, volumetric data + time is not supported. We also do not support automatic tracking yet.
 
-Check out [the video tutorial](TODO) (coming soon!) for an in-depth explanation on how to use this tool.
+Check out [the video tutorial](https://youtu.be/1gg8OPHqOyc) for an in-depth explanation on how to use this tool.
 
 
 ## Image Series Annotator
@@ -121,7 +121,7 @@ Once you click `Annotate Images` the images from the folder you have specified w
 
 This menu will not open if you start the image series annotator from the command line or via python. In this case the input folder and other settings are passed as parameters instead.
 
-Check out [the video tutorial](TODO) (coming soon!) for an in-depth explanation on how to use the image series annotator.
+Check out [the video tutorial](https://youtu.be/HqRoImdTX3c) for an in-depth explanation on how to use the image series annotator.
 
 
 ## Finetuning UI
