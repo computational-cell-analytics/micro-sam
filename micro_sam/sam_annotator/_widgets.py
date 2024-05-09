@@ -700,11 +700,13 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
     boxes, masks = vutil.shape_layer_to_prompts(viewer.layers["prompts"], shape)
     points, labels = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], with_stop_annotation=False)
 
-    predictor = AnnotatorState().predictor
-    image_embeddings = AnnotatorState().image_embeddings
+    state = AnnotatorState()
+    predictor = state.predictor
+    image_embeddings = state.image_embeddings
     seg = vutil.prompt_segmentation(
         predictor, points, labels, boxes, masks, shape, image_embeddings=image_embeddings,
         multiple_box_prompts=True, batched=batched, previous_segmentation=viewer.layers["current_object"].data,
+        scale_factor=state.scale_factor
     )
 
     # no prompts were given or prompts were invalid, skip segmentation
@@ -1098,6 +1100,11 @@ class EmbeddingWidget(_WidgetBase):
         # Get the image.
         image = self.image_selection.get_value()
 
+        # Update the image embeddings:
+        # Reset the state.
+        state = AnnotatorState()
+        state.reset_state()
+
         # Check if we have a multiscale image.
         if image.multiscale:
             level = None
@@ -1111,13 +1118,17 @@ class EmbeddingWidget(_WidgetBase):
             selector.exec_()
 
             image_data = image.data[level]
+
+            # Set the scale factor of this image w.r.t. the full scale.
+            if level > 0:
+                scale_factor = tuple(
+                    float(fsh) / sh for fsh, sh in zip(image.data[0].shape, image_data.shape)
+                )
+                state.scale_factor = scale_factor
+                print(scale_factor)
+
         else:
             image_data = image.data
-
-        # Update the image embeddings:
-        # Reset the state.
-        state = AnnotatorState()
-        state.reset_state()
 
         # Get image dimensions.
         if image.rgb:

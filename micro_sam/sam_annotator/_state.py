@@ -63,6 +63,9 @@ class AnnotatorState(metaclass=Singleton):
     # z-range to limit the data being committed in 3d / tracking.
     z_range: Optional[Tuple[int, int]] = None
 
+    # Scale factor for segmentation on multi-scale data.
+    scale_factor: Optional[tuple[int]] = None
+
     def initialize_predictor(
         self,
         image_data,
@@ -205,4 +208,5 @@ class AnnotatorState(metaclass=Singleton):
         self.committed_lineages = None
         self.z_range = None
         self.data_signature = None
+        self.scale_factor = None
         # Note: we don't clear the widgets here, because they are fixed for a viewer session.
