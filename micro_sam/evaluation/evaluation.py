@@ -115,7 +115,7 @@ def run_evaluation_for_iterative_prompting(
     list_of_results = []
     prediction_folders = sorted(glob(os.path.join(prediction_root, "iteration*")))
     for pred_folder in prediction_folders:
-        print("Evaluating", pred_folder)
+        print("Evaluating", os.path.split(pred_folder)[-1])
         pred_paths = sorted(glob(os.path.join(pred_folder, "*")))
         result = run_evaluation(gt_paths=gt_paths, prediction_paths=pred_paths, save_path=None)
         list_of_results.append(result)
@@ -123,6 +123,3 @@ def run_evaluation_for_iterative_prompting(
 
     res_df = pd.concat(list_of_results, ignore_index=True)
     res_df.to_csv(csv_path)
-
-
-# TODO function to evaluate full experiment and resave in one table

@@ -1,3 +1,9 @@
+# NOTE:
+# This script below the following:
+#  - stacks indivudual slice images into one volume for segmenting in empanada-napari
+#  - evaluates the segmentations with the mean segmentation accuracy metric
+
+
 import os
 from glob import glob
 

@@ -3,6 +3,7 @@ from glob import glob
 from pathlib import Path
 from natsort import natsorted
 
+import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -11,15 +12,15 @@ import matplotlib.pyplot as plt
 ROOT = "/home/anwai/results/dfki/R3/"
 
 PALETTE = {
-    "ais": "#045275",
-    "amg": "#089099",
-    "point": "#7CCBA2",
-    r"i$_{p}$": "#FCDE9C",
-    "box": "#F0746E",
-    r"i$_{b}$": "#90477F"
+    "AIS": "#045275",
+    "AMG": "#FCDE9C",
+    "Point": "#7CCBA2",
+    r"I$_{P}$": "#089099",
+    "Box": "#90477F",
+    r"I$_{B}$": "#F0746E"
 }
 
-plt.rcParams.update({"font.size": 24})
+plt.rcParams.update({"font.size": 30})
 
 
 def get_limited_data_livecell(res_root, model):
@@ -48,12 +49,12 @@ def get_limited_data_livecell(res_root, model):
 
         res = {
             "experiment": int(experiment_name.split("_")[0]),
-            "ais": ais.iloc[0]["msa"],
-            "amg": amg.iloc[0]["msa"],
-            "point": ip.iloc[0]["msa"],
-            "box": ib.iloc[0]["msa"],
-            r"i$_{p}$": ip.iloc[-1]["msa"],
-            r"i$_{b}$": ib.iloc[-1]["msa"]
+            "AIS": ais.iloc[0]["msa"],
+            "AMG": amg.iloc[0]["msa"],
+            "Point": ip.iloc[0]["msa"],
+            "Box": ib.iloc[0]["msa"],
+            r"I$_{P}$": ip.iloc[-1]["msa"],
+            r"I$_{B}$": ib.iloc[-1]["msa"]
         }
         all_results.append(pd.DataFrame.from_dict([res]))
 
@@ -79,14 +80,14 @@ def get_vanilla_and_finetuned_results(res_root, model):
 
         res = {
             "experiment": 0 if method == "vanilla" else 100,
-            "amg": amg.iloc[0]["msa"],
-            "point": ip.iloc[0]["msa"],
-            "box": ib.iloc[0]["msa"],
-            r"i$_{p}$": ip.iloc[-1]["msa"],
-            r"i$_{b}$": ib.iloc[-1]["msa"]
+            "AMG": amg.iloc[0]["msa"],
+            "Point": ip.iloc[0]["msa"],
+            "Box": ib.iloc[0]["msa"],
+            r"I$_{P}$": ip.iloc[-1]["msa"],
+            r"I$_{B}$": ib.iloc[-1]["msa"]
         }
         if have_ais:
-            res["ais"] = ais.iloc[0]["msa"]
+            res["AIS"] = ais.iloc[0]["msa"]
 
         return pd.DataFrame.from_dict([res])
 
@@ -97,28 +98,33 @@ def get_vanilla_and_finetuned_results(res_root, model):
 
 
 def get_plots(res_root, model, for_supp=None):
-    plt.figure(figsize=(20, 10))
+    plt.figure(figsize=(30, 15))
     res = get_vanilla_and_finetuned_results(res_root, model)
-    sns.lineplot(
-        data=pd.melt(res, "experiment"), x="experiment", y="value", hue="variable", marker="d", palette=PALETTE
+    ax = sns.lineplot(
+        data=pd.melt(res, "experiment"),
+        x="experiment", y="value", hue="variable", marker="d",
+        palette=PALETTE, markersize=20, linewidth=3,
     )
-    plt.ylabel("Segmentation Accuracy", labelpad=15)
-    plt.xlabel("Percent of Data", labelpad=15)
+
+    ax.set_yticks(np.linspace(0.1, 1, 10)[:-1])
+
+    plt.ylabel("Mean Segmentation Accuracy", labelpad=10, fontweight="bold")
+    plt.xlabel("Percent of Data", labelpad=10, fontweight="bold")
     plt.legend(loc="lower center", ncol=6)
     if for_supp is None:
-        plt.title("Finetuning with Reduced Data")
-        save_path = f"livecell_{model}_reduce_data.svg"
+        save_path = "2_c.svg"
     else:
         plt.title(for_supp)
         save_path = f"livecell_supplementary_{model}_reduce_data.svg"
 
+    plt.tight_layout()
     plt.savefig(save_path)
     plt.savefig(Path(save_path).with_suffix(".pdf"))
 
 
 def main():
     # for figure 2
-    get_plots(ROOT, "vit_l")
+    # get_plots(ROOT, "vit_l")
 
     # for supplementary figure 1
     get_plots(ROOT, "vit_t", "ViT Tiny")

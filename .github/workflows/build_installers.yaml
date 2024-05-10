@@ -18,12 +18,11 @@ jobs:
         cd deployment
         mamba install -y -c conda-forge constructor
         mamba install -y -c conda-forge ruamel.yaml
-
         mamba env create --file=../environment_cpu.yaml -n __MICROSAM_BUILD_ENV__
-        mamba activate __MICROSAM_BUILD_ENV__
+        conda activate __MICROSAM_BUILD_ENV__
         # TODO get the current version here and use it for pinning or enable passing this from dispatch
-        mamba install -c conda-forge micro_sam
-        mamba activate base
+        mamba install -y -c conda-forge micro_sam
+        conda activate base
 
       RUN_SCRIPT: |
         python version_getter.py
@@ -35,20 +34,27 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.ref }}
+      # - name: lint check
+      #   if: matrix.os == 'ubuntu-latest'
+      #   shell: bash -el {0}
+      #   run: |
+      #     bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+      #     ./actionlint
 
       - name: setup conda
-        if: matrix.os == "windows-latest" || matrix.os == "ubuntu-latest"
+        if: matrix.os == 'windows-latest' || matrix.os == 'ubuntu-latest'
         uses: conda-incubator/setup-miniconda@v2
         with:
           miniconda-version: "latest"
           auto-activate-base: true
           activate-environment: ""
+          channels: conda-forge
           mamba-version: "*"
         env:
           ACTIONS_ALLOW_UNSECURE_COMMANDS: true
 
       - name: build ${{ matrix.os }}_x86_64
-        if: matrix.os == "windows-latest"
+        if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           ${{ env.PREPARE_SCRIPT }}
@@ -59,21 +65,21 @@ jobs:
           ${{ env.RUN_SCRIPT }}
 
       - name: build ${{ matrix.os }}_x86_64
-        if: matrix.os == "ubuntu-latest"
+        if: matrix.os == 'ubuntu-latest'
         shell: bash -el {0}
         run: |
           ${{ env.PREPARE_SCRIPT }}
           ${{ env.RUN_SCRIPT }}
 
       - name: build ${{ matrix.os }}_x86_64_step1
-        if: matrix.os == "macos-latest"
+        if: matrix.os == 'macos-latest'
         shell: bash -el {0}
         run: |
           brew install micromamba
           /usr/local/opt/micromamba/bin/micromamba shell init -s bash -p ~/micromamba
 
       - name: build ${{ matrix.os }}_x86_64_step2
-        if: matrix.os == "macos-latest"
+        if: matrix.os == 'macos-latest'
         shell: bash -el {0}
         run: |
           cd deployment

@@ -3,6 +3,7 @@ import unittest
 from shutil import rmtree
 
 import numpy as np
+import requests
 import torch
 import zarr
 
@@ -20,6 +21,25 @@ class TestUtil(unittest.TestCase):
 
     def tearDown(self):
         rmtree(self.tmp_folder)
+
+    # Check that the URLs for all models are valid.
+    def test_model_registry(self):
+        from micro_sam.util import models
+
+        def check_url(url):
+            try:
+                # Make a HEAD request to the URL, which fetches HTTP headers but no content.
+                response = requests.head(url, allow_redirects=True)
+                # Check if the HTTP status code is one that indicates availability (200 <= code < 400).
+                return response.status_code < 400
+            except requests.RequestException:
+                # Handle connection exceptions
+                return False
+
+        registry = models()
+        for name in registry.registry.keys():
+            url_exists = check_url(registry.get_url(name))
+            self.assertTrue(url_exists)
 
     def test_get_sam_model(self):
         from micro_sam.util import get_sam_model

@@ -1,7 +1,13 @@
 import argparse
+import os
+import pickle
 import warnings
+
+from glob import glob
+from pathlib import Path
 from typing import List, Optional, Tuple
 
+import h5py
 import napari
 import numpy as np
 
@@ -9,6 +15,7 @@ from scipy.ndimage import shift
 from skimage import draw
 
 from .. import prompt_based_segmentation, util
+from .. import _model_settings as model_settings
 from ..multi_dimensional_segmentation import _validate_projection
 
 # Green and Red
@@ -674,7 +681,11 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
     if index > 0:
         widget.model_dropdown.setCurrentIndex(index)
 
-    # TODO update save path and checkpoint path
+    if save_path is not None:
+        widget.embeddings_save_path_param.setText(save_path)
+
+    if checkpoint_path is not None:
+        widget.custom_weights_param.setText(checkpoint_path)
 
     if device is not None:
         widget.device = device
@@ -690,30 +701,74 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
         widget.halo_y_param.setValue(halo[1])
 
 
-# TODO
-def _sync_autosegment_widget(widget, model_type, checkpoint_path):
+# Read parameters from checkpoint path if it is given instead.
+def _sync_autosegment_widget(widget, model_type, checkpoint_path, update_decoder=None):
+    if update_decoder is not None:
+        widget._reset_segmentation_mode(update_decoder)
+
     if widget.with_decoder:
-        # Here's how to set the relevant params:
-        # widget.center_distance_thresh_param.setValue(0.5)
-        # widget.boundary_distance_thresh_param.setValue(0.5)
-        pass
+        settings = model_settings.AIS_SETTINGS.get(model_type, {})
+        params = ("center_distance_thresh", "boundary_distance_thresh")
+        for param in params:
+            if param in settings:
+                getattr(widget, f"{param}_param").setValue(settings[param])
     else:
-        # Here's how to set the relevant values:
-        # widget.pred_iou_thresh_param.setValue(0.88)
-        # widget.stability_score_thresh_param.setValue(0.95)
-        # widget.min_object_size_param.setValue(100)
-        pass
+        settings = model_settings.AMG_SETTINGS.get(model_type, {})
+        params = ("pred_iou_thresh", "stability_score_thresh", "min_object_size")
+        for param in params:
+            if param in settings:
+                getattr(widget, f"{param}_param").setValue(settings[param])
 
 
-# TODO
+# Read parameters from checkpoint path if it is given instead.
 def _sync_ndsegment_widget(widget, model_type, checkpoint_path):
-    # Here's how to set the relevant parameters:
+    settings = model_settings.ND_SEGMENT_SETTINGS.get(model_type, {})
 
-    # widget.projection = projection_mode
-    # index = widget.projection_dropdown.findText(projection_mode)
-    # if index > 0:
-    #   widget.projection_dropdown.setCurrentIndex(index)
+    if "projection_mode" in settings:
+        projection_mode = settings["projection_mode"]
+        widget.projection = projection_mode
+        index = widget.projection_dropdown.findText(projection_mode)
+        if index > 0:
+            widget.projection_dropdown.setCurrentIndex(index)
 
-    # widget.iou_threshold_param.setValue(0.5)
-    # widget.box_extension_param.setValue(0.05)
-    pass
+    params = ("iou_threshold", "box_extension")
+    for param in params:
+        if param in settings:
+            getattr(widget, f"{param}_param").setValue(settings[param])
+
+
+def _load_amg_state(embedding_path):
+    if embedding_path is None or not os.path.exists(embedding_path):
+        return {"cache_folder": None}
+
+    cache_folder = os.path.join(embedding_path, "amg_state")
+    os.makedirs(cache_folder, exist_ok=True)
+    amg_state = {"cache_folder": cache_folder}
+
+    state_paths = glob(os.path.join(cache_folder, "*.pkl"))
+    for path in state_paths:
+        with open(path, "rb") as f:
+            state = pickle.load(f)
+        i = int(Path(path).stem.split("-")[-1])
+        amg_state[i] = state
+    return amg_state
+
+
+def _load_is_state(embedding_path):
+    if embedding_path is None or not os.path.exists(embedding_path):
+        return {"cache_path": None}
+
+    cache_path = os.path.join(embedding_path, "is_state.h5")
+    is_state = {"cache_path": cache_path}
+
+    with h5py.File(cache_path, "a") as f:
+        for name, g in f.items():
+            i = int(name.split("-")[-1])
+            state = {
+                "foreground": g["foreground"][:],
+                "boundary_distances": g["boundary_distances"][:],
+                "center_distances": g["center_distances"][:],
+            }
+            is_state[i] = state
+
+    return is_state

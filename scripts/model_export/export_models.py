@@ -3,18 +3,18 @@
 
 import argparse
 import os
-import json
 import warnings
 from glob import glob
 
 import bioimageio.spec.model.v0_5 as spec
+import h5py
 import imageio.v3 as imageio
-import numpy as np
-import requests
 import xxhash
-import yaml
 
 from micro_sam.bioimageio import export_sam_model
+from skimage.measure import label
+
+from models import get_id_and_emoji, MODEL_TO_NAME
 
 BUF_SIZE = 65536  # lets read stuff in 64kb chunks!
 
@@ -23,7 +23,7 @@ OUTPUT_FOLDER = "./exported_models"
 
 
 def create_doc(model_type, modality, version):
-    if modality not in ("lm", "em_mito"):
+    if modality not in ("lm", "em_organelles"):
         raise ValueError(f"Invalid modality template {modality}")
 
     template_file = os.path.join(
@@ -35,62 +35,6 @@ def create_doc(model_type, modality, version):
 
     doc = template % (model_type, version)
     return doc
-
-
-def download_file(url, filename):
-    if os.path.exists(filename):
-        return
-
-    # Send HTTP GET request to the URL
-    response = requests.get(url)
-
-    # Check if the request was successful
-    if response.status_code == 200:
-        # Open a local file in write-text mode
-        with open(filename, "w", encoding=response.encoding or "utf-8") as file:
-            file.write(response.text)  # Using .text instead of .content
-        print(f"File '{filename}' has been downloaded successfully.")
-    else:
-        print(f"Failed to download the file. Status code: {response.status_code}")
-
-
-def get_id_and_emoji():
-    addjective_url = "https://raw.githubusercontent.com/bioimage-io/collection-bioimage-io/main/adjectives.txt"
-    animal_url = "https://raw.githubusercontent.com/bioimage-io/collection-bioimage-io/main/animals.yaml"
-    collection_url = "https://raw.githubusercontent.com/bioimage-io/collection-bioimage-io/gh-pages/collection.json"
-
-    adjective_file = "adjectives.txt"
-    download_file(addjective_url, adjective_file)
-    adjectives = []
-    with open(adjective_file) as f:
-        for adj in f.readlines():
-            adjectives.append(adj.rstrip("\n"))
-
-    animal_file = "animals.yaml"
-    download_file(animal_url, animal_file)
-    with open(animal_file) as f:
-        animal_dict = yaml.safe_load(f)
-    animal_names = list(animal_dict.keys())
-
-    collection_file = "collection.json"
-    download_file(collection_url, collection_file)
-    with open(collection_file) as f:
-        collection = json.load(f)["collection"]
-
-    existing_ids = []
-    for entry in collection:
-        this_id = entry.get("nickname", None)
-        if this_id is None:
-            continue
-        existing_ids.append(this_id)
-
-    adj, name = np.random.choice(adjectives), np.random.choice(animal_names)
-    model_id = f"{adj}-{name}"
-    while model_id in existing_ids:
-        adj, name = np.random.choice(adjectives), np.random.choice(animal_names)
-        model_id = f"{adj}-{name}"
-
-    return model_id, animal_dict[name]
 
 
 def get_data(modality):
@@ -105,16 +49,22 @@ def get_data(modality):
         )
         image = imageio.imread(image_path)
         label_image = imageio.imread(label_path)
-        assert image.shape == label_image.shape
     else:
-        raise RuntimeError(modality)
+        path = "/home/pape/Work/data/kasthuri/kasthuri_train.h5"
+        with h5py.File(path, "r") as f:
+            image = f["raw"][0]
+            label_image = f["labels"][0]
+            label_image = label(label_image == 1)
 
+    assert image.shape == label_image.shape
     return image, label_image
 
 
-# TODO
 def get_covers(modality):
-    return None
+    if modality == "lm":
+        return ["./covers/cover_lm.png"]
+    else:
+        return ["./covers/cover_em.png"]
 
 
 def compute_checksum(path):
@@ -132,19 +82,20 @@ def export_model(model_path, model_type, modality, version, email):
     output_folder = os.path.join(OUTPUT_FOLDER, modality)
     os.makedirs(output_folder, exist_ok=True)
 
-    export_name = f"{model_type}_{modality}"
-    output_path = os.path.join(output_folder, export_name)
+    model_name = f"{model_type}_{modality}"
+    output_path = os.path.join(output_folder, model_name)
     if os.path.exists(output_path):
-        print("The model", export_name, "has already been exported.")
+        print("The model", model_name, "has already been exported.")
         return
 
     image, label_image = get_data(modality)
     covers = get_covers(modality)
     doc = create_doc(model_type, modality, version)
 
-    model_id, emoji = get_id_and_emoji()
+    model_id, emoji = get_id_and_emoji(model_name)
     uploader = spec.Uploader(email=email)
 
+    export_name = MODEL_TO_NAME[model_name]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         export_sam_model(
@@ -164,57 +115,38 @@ def export_model(model_path, model_type, modality, version, email):
     encoder_path = os.path.join(output_path + ".unzip", f"{model_type}.pt")
     encoder_checksum = compute_checksum(encoder_path)
     print("Encoder:")
-    print(export_name, f"xxh128:{encoder_checksum}")
+    print(model_name, f"xxh128:{encoder_checksum}")
 
     decoder_path = os.path.join(output_path + ".unzip", f"{model_type}_decoder.pt")
     decoder_checksum = compute_checksum(decoder_path)
     print("Decoder:")
-    print(f"{export_name}_decoder", f"xxh128:{decoder_checksum}")
+    print(f"{model_name}_decoder", f"xxh128:{decoder_checksum}")
 
 
-def export_all_models():
-    models = glob(os.path.join("./new_models/*.pt"))
-    model_type = "vit_b"
-    for model_path in models:
-        export_name = os.path.basename(model_path).replace(".pt", ".pth")
-        export_model(model_path, model_type, export_name)
+def export_all_models(email, version):
+    models = glob(os.path.join(f"./v{version}/**/vit*"))
+    for path in models:
+        modality, model_type = path.split("/")[-2:]
+        # print(model_path, modality, model_type)
+        model_path = os.path.join(path, "best.pt")
+        assert os.path.exists(model_path), model_path
+        export_model(model_path, model_type, modality, version=version, email=email)
 
 
+# For testing.
 def export_vit_t_lm(email):
     model_type = "vit_t"
     model_path = os.path.join(INPUT_FOLDER, "lm", "generalist", model_type, "best.pt")
     export_model(model_path, model_type, "lm", version=2, email=email)
 
 
-# Snippets from Fynn to automate the workflow execution.
-
-# def workflow_dispatch(workflow_name: str, inputs: Dict[str, Any]):
-#     g = github.Github(login_or_token=os.environ["GITHUB_PAT"])
-#
-#     repo = g.get_repo("bioimage-io/collection")
-#
-#     workflow = repo.get_workflow(workflow_name)
-#
-#     ref = repo.get_branch("main")
-#     ok = workflow.create_dispatch(ref=ref, inputs=inputs)
-#     assert ok
-
-# workflow_dispatch(
-#   "stage.yaml",
-#   {"resource_id": rd.id,
-#    "package_url": f"https://{client.host}/{client.bucket}/{client.root_folder}/{fname}",
-#   },
-# )
-
-
-# Update this to automate model exports more.
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--email", required=True)
+    parser.add_argument("-v", "--version", default=2, type=int)
     args = parser.parse_args()
 
-    export_vit_t_lm(args.email)
-    # export_all_models()
+    export_all_models(args.email, args.version)
 
 
 if __name__ == "__main__":

@@ -85,7 +85,7 @@ def _create_test_inputs_and_outputs(
     point_prompt_path = os.path.join(tmp_dir, "point_prompts.npy")
     point_label_path = os.path.join(tmp_dir, "point_labels.npy")
     mask_prompt_path = os.path.join(tmp_dir, "mask_prompts.npy")
-    np.save(box_prompt_path, box_prompts)
+    np.save(box_prompt_path, box_prompts.astype("int64"))
     np.save(point_prompt_path, point_prompts)
     np.save(point_label_path, point_labels)
     np.save(mask_prompt_path, mask_prompts)
@@ -237,8 +237,8 @@ def _check_model(model_description, input_paths, result_paths):
         ).as_single_block()
         prediction = pp.predict_sample_block(sample)
 
-        assert len(prediction) == 3
-        predicted_mask = prediction[0]
+        predicted_mask = prediction.blocks["masks"].data.data
+        assert predicted_mask.shape == mask.shape
         assert np.allclose(mask, predicted_mask)
 
         # Run the checks with partial prompts.
@@ -262,8 +262,7 @@ def _check_model(model_description, input_paths, result_paths):
                 model=model_description, image=image, embeddings=embeddings, **kwargs
             ).as_single_block()
             prediction = pp.predict_sample_block(sample)
-            assert len(prediction) == 3
-            predicted_mask = prediction[0]
+            predicted_mask = prediction.blocks["masks"].data.data
             assert predicted_mask.shape == mask.shape
 
 
@@ -300,7 +299,7 @@ def export_sam_model(
             spec.InputTensorDescr(
                 id=spec.TensorId("image"),
                 axes=[
-                    spec.BatchAxis(),
+                    spec.BatchAxis(size=1),
                     # NOTE: to support 1 and 3 channels we can add another preprocessing.
                     # Best solution: Have a pre-processing for this! (1C -> RGB)
                     spec.ChannelAxis(channel_names=[spec.Identifier(cname) for cname in "RGB"]),
@@ -316,12 +315,11 @@ def export_sam_model(
                 id=spec.TensorId("box_prompts"),
                 optional=True,
                 axes=[
-                    spec.BatchAxis(),
+                    spec.BatchAxis(size=1),
                     spec.IndexInputAxis(
                         id=spec.AxisId("object"),
                         size=spec.ARBITRARY_SIZE
                     ),
-                    # TODO double check the axis names
                     spec.ChannelAxis(channel_names=[spec.Identifier(bname) for bname in "hwxy"]),
                 ],
                 test_tensor=spec.FileDescr(source=input_paths["box_prompts"]),
@@ -333,7 +331,7 @@ def export_sam_model(
                 id=spec.TensorId("point_prompts"),
                 optional=True,
                 axes=[
-                    spec.BatchAxis(),
+                    spec.BatchAxis(size=1),
                     spec.IndexInputAxis(
                         id=spec.AxisId("object"),
                         size=spec.ARBITRARY_SIZE
@@ -353,7 +351,7 @@ def export_sam_model(
                 id=spec.TensorId("point_labels"),
                 optional=True,
                 axes=[
-                    spec.BatchAxis(),
+                    spec.BatchAxis(size=1),
                     spec.IndexInputAxis(
                         id=spec.AxisId("object"),
                         size=spec.ARBITRARY_SIZE
@@ -372,7 +370,7 @@ def export_sam_model(
                 id=spec.TensorId("mask_prompts"),
                 optional=True,
                 axes=[
-                    spec.BatchAxis(),
+                    spec.BatchAxis(size=1),
                     spec.IndexInputAxis(
                         id=spec.AxisId("object"),
                         size=spec.ARBITRARY_SIZE
@@ -390,7 +388,7 @@ def export_sam_model(
                 id=spec.TensorId("embeddings"),
                 optional=True,
                 axes=[
-                    spec.BatchAxis(),
+                    spec.BatchAxis(size=1),
                     # NOTE: we currently have to specify all the channel names
                     # (It would be nice to also support size)
                     spec.ChannelAxis(channel_names=[spec.Identifier(f"c{i}") for i in range(256)]),
@@ -408,7 +406,7 @@ def export_sam_model(
             spec.OutputTensorDescr(
                 id=spec.TensorId("masks"),
                 axes=[
-                    spec.BatchAxis(),
+                    spec.BatchAxis(size=1),
                     # NOTE: we use the data dependent size here to avoid dependency on optional inputs
                     spec.IndexOutputAxis(
                         id=spec.AxisId("object"), size=spec.DataDependentSize(),
@@ -436,7 +434,7 @@ def export_sam_model(
             spec.OutputTensorDescr(
                 id=spec.TensorId("scores"),
                 axes=[
-                    spec.BatchAxis(),
+                    spec.BatchAxis(size=1),
                     # NOTE: we use the data dependent size here to avoid dependency on optional inputs
                     spec.IndexOutputAxis(
                         id=spec.AxisId("object"), size=spec.DataDependentSize(),
@@ -452,7 +450,7 @@ def export_sam_model(
             spec.OutputTensorDescr(
                 id=spec.TensorId("embeddings"),
                 axes=[
-                    spec.BatchAxis(),
+                    spec.BatchAxis(size=1),
                     spec.ChannelAxis(channel_names=[spec.Identifier(f"c{i}") for i in range(256)]),
                     spec.SpaceOutputAxis(id=spec.AxisId("y"), size=64),
                     spec.SpaceOutputAxis(id=spec.AxisId("x"), size=64),
@@ -489,11 +487,6 @@ def export_sam_model(
         else:
             assert all(os.path.exists(cov) for cov in covers)
 
-        if decoder_path is None:
-            attachments = None
-        else:
-            attachments = [spec.FileDescr(source=decoder_path)]
-
         # the uploader information is only added if explicitly passed
         extra_kwargs = {}
         if "id" in kwargs:
@@ -502,6 +495,9 @@ def export_sam_model(
             extra_kwargs["id_emoji"] = kwargs["id_emoji"]
         if "uploader" in kwargs:
             extra_kwargs["uploader"] = kwargs["uploader"]
+
+        if decoder_path is not None:
+            extra_kwargs["attachments"] = [spec.FileDescr(source=decoder_path)]
 
         model_description = spec.ModelDescr(
             name=name,
@@ -516,7 +512,6 @@ def export_sam_model(
             git_repo=spec.HttpUrl("https://github.com/computational-cell-analytics/micro-sam"),
             tags=kwargs.get("tags", DEFAULTS["tags"]),
             covers=covers,
-            attachments=attachments,
             **extra_kwargs,
             # TODO write specific settings in the config
             # dict with yaml values, key must be a str
@@ -524,7 +519,6 @@ def export_sam_model(
             # config=
         )
 
-        # TODO this requires the new bioimageio.core release
-        # _check_model(model_description, input_paths, result_paths)
+        _check_model(model_description, input_paths, result_paths)
 
         save_bioimageio_package(model_description, output_path=output_path)

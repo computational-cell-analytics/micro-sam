@@ -360,6 +360,26 @@ def _save_segmentation(masks, prediction_path):
     imageio.imwrite(prediction_path, segmentation, compression=5)
 
 
+def _get_batched_iterative_prompts(sampled_binary_gt, masks, batch_size, prompt_generator):
+    n_samples = sampled_binary_gt.shape[0]
+    n_batches = int(np.ceil(float(n_samples) / batch_size))
+    next_coords, next_labels = [], []
+    for batch_idx in range(n_batches):
+        batch_start = batch_idx * batch_size
+        batch_stop = min((batch_idx + 1) * batch_size, n_samples)
+
+        batch_coords, batch_labels, _, _ = prompt_generator(
+            sampled_binary_gt[batch_start: batch_stop], masks[batch_start: batch_stop]
+        )
+        next_coords.append(batch_coords)
+        next_labels.append(batch_labels)
+
+    next_coords = torch.concatenate(next_coords)
+    next_labels = torch.concatenate(next_labels)
+
+    return next_coords, next_labels
+
+
 @torch.no_grad()
 def _run_inference_with_iterative_prompting_for_image(
     predictor,
@@ -373,6 +393,8 @@ def _run_inference_with_iterative_prompting_for_image(
     prediction_paths,
     use_masks=False
 ) -> None:
+    verbose_embeddings = False
+
     prompt_generator = IterativePromptGenerator()
 
     gt_ids = np.unique(gt)[1:]
@@ -406,10 +428,17 @@ def _run_inference_with_iterative_prompting_for_image(
                 logits_masks = None
 
         batched_outputs = batched_inference(
-            predictor, image, batch_size,
-            boxes=boxes, points=points, point_labels=point_labels,
-            multimasking=multimasking, embedding_path=embedding_path,
-            return_instance_segmentation=False, logits_masks=logits_masks
+            predictor=predictor,
+            image=image,
+            batch_size=batch_size,
+            boxes=boxes,
+            points=points,
+            point_labels=point_labels,
+            multimasking=multimasking,
+            embedding_path=embedding_path,
+            return_instance_segmentation=False,
+            logits_masks=logits_masks,
+            verbose_embeddings=verbose_embeddings,
         )
 
         # switching off multimasking after first iter, as next iters (with multiple prompts) don't expect multimasking
@@ -417,7 +446,9 @@ def _run_inference_with_iterative_prompting_for_image(
 
         masks = torch.stack([m["segmentation"][None] for m in batched_outputs]).to(torch.float32)
 
-        next_coords, next_labels, _, _ = prompt_generator(sampled_binary_gt, masks)
+        next_coords, next_labels = _get_batched_iterative_prompts(
+            sampled_binary_gt, masks, batch_size, prompt_generator
+        )
         next_coords, next_labels = next_coords.detach().cpu().numpy(), next_labels.detach().cpu().numpy()
 
         if points is not None:
@@ -462,7 +493,7 @@ def run_inference_with_iterative_prompting(
             around which points will not be sampled.
         batch_size: The batch size used for batched predictions.
         n_iterations: The number of iterations for iterative prompting.
-        use_masks: Whether to make use of logits from previous prompt-based segmentation
+        use_masks: Whether to make use of logits from previous prompt-based segmentation.
     """
     if len(image_paths) != len(gt_paths):
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
@@ -475,7 +506,9 @@ def run_inference_with_iterative_prompting(
         print("The iterative prompting will make use of logits masks from previous iterations.")
 
     for image_path, gt_path in tqdm(
-        zip(image_paths, gt_paths), total=len(image_paths), desc="Run inference with iterative prompting for all images"
+        zip(image_paths, gt_paths),
+        total=len(image_paths),
+        desc="Run inference with iterative prompting for all images",
     ):
         image_name = os.path.basename(image_path)
 

@@ -12,11 +12,17 @@ import imageio.v3 as imageio
 
 
 ALL_SCRIPTS = [
-    "../../evaluation/precompute_embeddings",
+    # "../../evaluation/precompute_embeddings",
+    # "../../evaluation/iterative_prompting",
     "../../evaluation/evaluate_amg",
-    "../../evaluation/iterative_prompting",
     "../../evaluation/evaluate_instance_segmentation"
 ]
+
+ROOT = "/scratch/usr/nimanwai/experiments/resource-efficient-finetuning/"  # for hlrn
+# ROOT = "/scratch/users/archit/experiments/"  # for scc
+
+DATA_DIR = "/scratch/projects/nim00007/sam/data/covid_if/"  # for hlrn
+# DATA_DIR = "/scratch/users/archit/data/covid-if"  # for scc
 
 
 def process_covid_if(input_path):
@@ -60,7 +66,9 @@ def process_covid_if(input_path):
 def write_slurm_scripts(
     inference_setup, env_name, checkpoint, model_type, experiment_folder, out_path
 ):
-    batch_script = f"""#!/bin/bash
+    on_scc = False
+    if on_scc:
+        batch_script = f"""#!/bin/bash
 #SBATCH -c 8
 #SBATCH --mem 16G
 #SBATCH -t 2-00:00:00
@@ -68,11 +76,21 @@ def write_slurm_scripts(
 #SBATCH -G v100:1
 #SBATCH --job-name={Path(inference_setup).stem}
 
-source ~/.bashrc
-mamba activate {env_name} \n"""
+source activate {env_name} \n"""
+
+    else:
+        batch_script = f"""#!/bin/bash
+#SBATCH -c 8
+#SBATCH --mem 16G
+#SBATCH -t 2-00:00:00
+#SBATCH -p grete:shared
+#SBATCH -G A100:1
+#SBATCH --job-name={Path(inference_setup).stem}
+
+source activate {env_name} \n"""
 
     # python script
-    batch_script += f"python {inference_setup}.py -c {checkpoint} -m {model_type} -e {experiment_folder} -d covid-if "
+    batch_script += f"python {inference_setup}.py -c {checkpoint} -m {model_type} -e {experiment_folder} -d covid_if "
 
     _op = out_path[:-3] + f"_{Path(inference_setup).stem}.sh"
 
@@ -137,33 +155,22 @@ def main(args):
     # results on vanilla models
     run_slurm_scripts(
         model_type="vit_b",
-        checkpoint="/scratch/users/archit/segment-anything/sam_vit_b_01ec64.pth",
-        experiment_folder="/scratch/users/archit/experiments/vanilla/vit_b",
-        scripts=ALL_SCRIPTS[:-1]
-    )
-
-    run_slurm_scripts(
-        model_type="vit_t",
-        checkpoint="/scratch/users/archit/segment-anything/vit_t_mobile_sam.pth",
-        experiment_folder="/scratch/users/archit/experiments/vanilla/vit_t",
+        checkpoint=None,
+        experiment_folder=os.path.join(ROOT, "vanilla", "vit_b"),
         scripts=ALL_SCRIPTS[:-1]
     )
 
     # results on generalist models
+    # vit_b_lm_path = "/scratch/users/archit/micro-sam/vit_b/lm_generalist/best.pt"  # on scc
+    vit_b_lm_path = "/scratch/usr/nimanwai/micro-sam/checkpoints/vit_b/lm_generalist_sam/best.pt"  # on hlrn
     run_slurm_scripts(
         model_type="vit_b",
-        checkpoint="/scratch/users/archit/micro-sam/vit_b/lm_generalist/best.pt",
-        experiment_folder="/scratch/users/archit/experiments/generalist/vit_b"
-    )
-
-    run_slurm_scripts(
-        model_type="vit_t",
-        checkpoint="/scratch/users/archit/micro-sam/vit_t/lm_generalist/best.pt",
-        experiment_folder="/scratch/users/archit/experiments/generalist/vit_t"
+        checkpoint=vit_b_lm_path,
+        experiment_folder=os.path.join(ROOT, "generalist", "vit_b")
     )
 
     # results on resource-efficient finetuned checkpoints
-    all_checkpoint_paths = glob("/scratch/users/archit/experiments/**/best.pt", recursive=True)
+    all_checkpoint_paths = glob(os.path.join(ROOT, "**", "best.pt"), recursive=True)
 
     # let's get all gpu jobs and run evaluation for them
     all_checkpoint_paths = [
@@ -171,6 +178,11 @@ def main(args):
     ]
 
     for checkpoint_path in all_checkpoint_paths:
+        # NOTE: run this for vit_b
+        _searcher = checkpoint_path.find("vit_b")
+        if _searcher == -1:
+            continue
+
         experiment_folder = os.path.join("/", *checkpoint_path.split("/")[:-4])
         run_slurm_scripts(
             model_type=checkpoint_path.split("/")[-3],
@@ -178,12 +190,10 @@ def main(args):
             experiment_folder=experiment_folder
         )
 
-        breakpoint()
-
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("-i", "--input_path", type=str, default="/scratch/users/archit/data/covid-if")
+    parser.add_argument("-i", "--input_path", type=str, default=DATA_DIR)
     args = parser.parse_args()
     main(args)
