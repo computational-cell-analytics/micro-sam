@@ -709,9 +709,10 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
         scale_factor=state.scale_factor
     )
 
-    # no prompts were given or prompts were invalid, skip segmentation
-    if seg is None:
-        print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
+    # No prompts were given or prompts were invalid, skip segmentation.
+    if isinstance(seg, str):
+        msg = f"Interactive segmentation failed due to the following reason:\n {seg}"
+        _generate_message("error", msg)
         return
 
     viewer.layers["current_object"].data = seg
@@ -732,7 +733,9 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
 
     shape = viewer.layers["current_object"].data.shape[1:]
     position = viewer.cursor.position
-    z = int(position[0])
+    print("!!!", position)
+    z = int(round(position[0]))
+    print(z)
 
     point_prompts = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], z)
     # this is a stop prompt, we do nothing
@@ -748,9 +751,10 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
         image_embeddings=state.image_embeddings, i=z, scale_factor=state.scale_factor,
     )
 
-    # no prompts were given or prompts were invalid, skip segmentation
-    if seg is None:
-        print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
+    # No prompts were given or prompts were invalid, skip segmentation.
+    if isinstance(seg, str):
+        msg = f"Interactive segmentation failed due to the following reason:\n {seg}"
+        _generate_message("error", msg)
         return
 
     viewer.layers["current_object"].data[z] = seg
@@ -786,9 +790,10 @@ def segment_frame(viewer: "napari.viewer.Viewer") -> None:
         image_embeddings=state.image_embeddings, i=t, scale_factor=state.scale_factor,
     )
 
-    # no prompts were given or prompts were invalid, skip segmentation
-    if seg is None:
-        print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
+    # No prompts were given or prompts were invalid, skip segmentation.
+    if isinstance(seg, str):
+        msg = f"Interactive segmentation failed due to the following reason:\n {seg}"
+        _generate_message("error", msg)
         return
 
     # clear the old segmentation for this track_id
@@ -1473,7 +1478,7 @@ class AutoSegmentWidget(_WidgetBase):
         return self._add_boolean_param(
             "apply_to_volume", self.apply_to_volume, title="Apply to Volume",
             tooltip=get_tooltip("autosegment", "apply_to_volume")
-            )
+        )
 
     def _add_common_settings(self, settings):
         # Create the UI element for min object size.
