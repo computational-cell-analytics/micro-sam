@@ -1,4 +1,4 @@
-# Example Noteboks
+# Example Notebooks
 
 We provide three example notebooks that demonstrate how the `micro_sam` python library can be used for:
 - Running automatic instance segmentation in `automatic_segmentation.ipynb`.
