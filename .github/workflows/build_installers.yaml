@@ -27,7 +27,7 @@ jobs:
       RUN_SCRIPT: |
         python version_getter.py
         mkdir ./${{ matrix.os }}_x86_64
-        constructor --output-dir ./${{ matrix.os }}_x86_64 .
+        constructor --output-dir ./${{ matrix.os }}_x86_64 --config-filename construct_${{ matrix.os }}.yaml . 
 
     steps:
       - name: checkout
