@@ -1,3 +1,4 @@
+build
 coverage
 line-profiler
 pdoc
@@ -6,3 +7,4 @@ pytest-cov
 pytest-qt
 snakeviz
 tabulate
+twine
