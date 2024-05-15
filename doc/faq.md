@@ -41,12 +41,14 @@ Having a GPU will significantly speed up the annotation tools and especially the
 
 ### 5. I am missing a few packages (eg. `ModuleNotFoundError: No module named 'elf.io`). What should I do?
 With the latest release 1.0.0, the installation from mamba and source should take care of this and install all the relevant packages for you.
-So please reinstall `micro_sam`.
-
+So please reinstall `micro_sam`, following [the installation guide](#installation).
 
 ### 6. Can I install `micro_sam` using pip?
-The installation is not supported via pip.
+We do *not* recommend installing `micro-sam` with pip. It has several dependencies that are only avaoiable from conda-forge, which will not install correctly via pip.
 
+Please see [the installation guide](#installation) for the recommended way to install `micro-sam`.
+
+The PyPI page for `micro-sam` exists only so that the [napari-hub](https://www.napari-hub.org/) can find it.
 
 ### 7. I get the following error: `importError: cannot import name 'UNETR' from 'torch_em.model'`.
 It's possible that you have an older version of `torch-em` installed. Similar errors could often be raised from other libraries, the reasons being: a) Outdated packages installed, or b) Some non-existent module being called. If the source of such error is from `micro_sam`, then `a)` is most likely the reason . We recommend installing the latest version following the [installation instructions](https://github.com/constantinpape/torch-em?tab=readme-ov-file#installation).
