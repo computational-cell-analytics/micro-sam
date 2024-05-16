@@ -1330,9 +1330,9 @@ def _handle_amg_state(state, i, pbar_init, pbar_update):
                 save_key = f"state-{i}"
                 with h5py.File(cache_path, "a") as f:
                     g = f.create_group(save_key)
-                    g.create_dataset("foreground", data=state["foreground"], compression="gzip")
-                    g.create_dataset("boundary_distances", data=state["boundary_distances"], compression="gzip")
-                    g.create_dataset("center_distances", data=state["center_distances"], compression="gzip")
+                    g.create_dataset("foreground", data=amg_state_i["foreground"], compression="gzip")
+                    g.create_dataset("boundary_distances", data=amg_state_i["boundary_distances"], compression="gzip")
+                    g.create_dataset("center_distances", data=amg_state_i["center_distances"], compression="gzip")
 
     # Otherwise (2d segmentation) we just check if the amg is initialized or not.
     elif not state.amg.is_initialized:
