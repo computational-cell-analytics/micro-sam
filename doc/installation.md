@@ -7,6 +7,8 @@ There are three ways to install `micro_sam`:
 
 You can find more information on the installation and how to troubleshoot it in [the FAQ section](#installation-questions).
 
+We do *not* recommend installing `micro-sam` with pip.
+
 ## From mamba
 
 [mamba](https://mamba.readthedocs.io/en/latest/) is a drop-in replacement for conda, but much faster.
