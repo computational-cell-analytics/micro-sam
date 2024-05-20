@@ -321,7 +321,7 @@ def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> Non
     if all_slices:
         vutil.clear_annotations(viewer)
     else:
-        i = int(viewer.cursor.position[0])
+        i = viewer.dims.current_step[0]
         vutil.clear_annotations_slice(viewer, i=i)
 
 
@@ -337,7 +337,7 @@ def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None
         _reset_tracking_state(viewer)
         vutil.clear_annotations(viewer)
     else:
-        i = int(viewer.cursor.position[0])
+        i = viewer.dims.current_step[0]
         vutil.clear_annotations_slice(viewer, i=i)
 
 
@@ -732,23 +732,26 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
         return None
 
     shape = viewer.layers["current_object"].data.shape[1:]
-    position = viewer.cursor.position
-    print("!!!", position)
-    z = int(round(position[0]))
-    print(z)
+    z = viewer.dims.current_step[0]
 
-    point_prompts = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], z)
-    # this is a stop prompt, we do nothing
+    state = AnnotatorState()
+    scale_factor = state.scale_factor
+
+    point_prompts = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], i=z, scale_factor=scale_factor)
+    # This is a stop prompt, we do nothing.
     if not point_prompts:
         return
 
+    # TODO
     boxes, masks = vutil.shape_layer_to_prompts(viewer.layers["prompts"], shape, i=z)
     points, labels = point_prompts
 
-    state = AnnotatorState()
+    # Set the correct slice if we have a scale factor.
+    if scale_factor is not None:
+        z = int(z / scale_factor[0])
     seg = vutil.prompt_segmentation(
         state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
-        image_embeddings=state.image_embeddings, i=z, scale_factor=state.scale_factor,
+        image_embeddings=state.image_embeddings, i=z, scale_factor=scale_factor,
     )
 
     # No prompts were given or prompts were invalid, skip segmentation.
@@ -772,10 +775,10 @@ def segment_frame(viewer: "napari.viewer.Viewer") -> None:
         return None
     if _validate_prompts(viewer):
         return None
+
     state = AnnotatorState()
     shape = state.image_shape[1:]
-    position = viewer.cursor.position
-    t = int(position[0])
+    t = viewer.dims.current_step[0]
 
     point_prompts = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], i=t, track_id=state.current_track_id)
     # this is a stop prompt, we do nothing
@@ -796,10 +799,11 @@ def segment_frame(viewer: "napari.viewer.Viewer") -> None:
         _generate_message("error", msg)
         return
 
-    # clear the old segmentation for this track_id
+    # Clear the old segmentation for this track_id.
     old_mask = viewer.layers["current_object"].data[t] == state.current_track_id
     viewer.layers["current_object"].data[t][old_mask] = 0
-    # set the new segmentation
+
+    # Set the new segmentation.
     new_mask = seg.squeeze() == 1
     viewer.layers["current_object"].data[t][new_mask] = state.current_track_id
     viewer.layers["current_object"].refresh()
@@ -1705,7 +1709,7 @@ class AutoSegmentWidget(_WidgetBase):
         if self.volumetric and self.apply_to_volume:
             worker = self._run_segmentation_3d(kwargs)
         elif self.volumetric and not self.apply_to_volume:
-            i = int(self._viewer.cursor.position[0])
+            i = self._viewer.dims.current_step[0]
             worker = self._run_segmentation_2d(kwargs, i=i)
         else:
             worker = self._run_segmentation_2d(kwargs)

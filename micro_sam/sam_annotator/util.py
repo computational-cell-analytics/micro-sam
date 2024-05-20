@@ -151,7 +151,11 @@ def clear_annotations_slice(viewer: napari.Viewer, i: int, clear_segmentations=T
 
 
 def point_layer_to_prompts(
-    layer: napari.layers.Points, i=None, track_id=None, with_stop_annotation=True,
+    layer: napari.layers.Points,
+    i: Optional[int] = None,
+    track_id: Optional[int] = None,
+    with_stop_annotation: bool = True,
+    scale_factor: Optional[Tuple[float, ...]] = None
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     """Extract point prompts for SAM from a napari point layer.
 
@@ -161,6 +165,7 @@ def point_layer_to_prompts(
         track_id: Id of the current track (required for tracking data).
         with_stop_annotation: Whether a single negative point will be interpreted
             as stop annotation or just returned as normal prompt.
+        scale_factor:
 
     Returns:
         The point coordinates for the prompts.
@@ -176,9 +181,14 @@ def point_layer_to_prompts(
         this_points, this_labels = points, labels
     else:
         assert points.shape[1] == 3, f"{points.shape}"
-        # FIXME
-        # print(points[:, 0])
-        mask = np.isclose(np.round(points[:, 0]), i)
+        point_z_coords = points[:, 0]
+
+        # For some inexplicable reason point coords are in between slices
+        # if we have a scale factor.
+        if scale_factor is not None:
+            point_z_coords += 0.5
+
+        mask = np.isclose(point_z_coords, i)
         this_points = points[mask][:, 1:]
         this_labels = labels[mask]
     assert len(this_points) == len(this_labels)
@@ -200,7 +210,11 @@ def point_layer_to_prompts(
 
 
 def shape_layer_to_prompts(
-    layer: napari.layers.Shapes, shape: Tuple[int, int], i=None, track_id=None
+    layer: napari.layers.Shapes,
+    shape: Tuple[int, int],
+    i=None,
+    track_id=None,
+    scale_factor=None,
 ) -> Tuple[List[np.ndarray], List[Optional[np.ndarray]]]:
     """Extract prompts for SAM from a napari shape layer.
 
@@ -259,6 +273,8 @@ def shape_layer_to_prompts(
         return [], []
 
     if i is not None:
+        print("!!!", shape_data, "!!!")
+        # TODO need to take care of the half coordinates here as well
         if track_id is None:
             prompt_selection = [j for j, data in enumerate(shape_data) if (data[:, 0] == i).all()]
         else:
@@ -372,6 +388,12 @@ def segment_slices_with_prompts(
 
     slices = np.unique(np.concatenate([z_values, z_values_boxes])).astype("int")
     stop_lower, stop_upper = False, False
+
+    # TODO
+    bound_z = None
+    if scale_factor is not None:
+        bound_z = shape[0] - 1
+        slices = np.unique(np.minimum(slices, bound_z))
 
     if update_progress is None:
         def update_progress(*args):
