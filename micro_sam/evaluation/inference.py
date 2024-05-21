@@ -393,6 +393,8 @@ def _run_inference_with_iterative_prompting_for_image(
     prediction_paths,
     use_masks=False
 ) -> None:
+    verbose_embeddings = False
+
     prompt_generator = IterativePromptGenerator()
 
     gt_ids = np.unique(gt)[1:]
@@ -426,10 +428,17 @@ def _run_inference_with_iterative_prompting_for_image(
                 logits_masks = None
 
         batched_outputs = batched_inference(
-            predictor, image, batch_size,
-            boxes=boxes, points=points, point_labels=point_labels,
-            multimasking=multimasking, embedding_path=embedding_path,
-            return_instance_segmentation=False, logits_masks=logits_masks
+            predictor=predictor,
+            image=image,
+            batch_size=batch_size,
+            boxes=boxes,
+            points=points,
+            point_labels=point_labels,
+            multimasking=multimasking,
+            embedding_path=embedding_path,
+            return_instance_segmentation=False,
+            logits_masks=logits_masks,
+            verbose_embeddings=verbose_embeddings,
         )
 
         # switching off multimasking after first iter, as next iters (with multiple prompts) don't expect multimasking
@@ -484,7 +493,7 @@ def run_inference_with_iterative_prompting(
             around which points will not be sampled.
         batch_size: The batch size used for batched predictions.
         n_iterations: The number of iterations for iterative prompting.
-        use_masks: Whether to make use of logits from previous prompt-based segmentation
+        use_masks: Whether to make use of logits from previous prompt-based segmentation.
     """
     if len(image_paths) != len(gt_paths):
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
@@ -497,7 +506,9 @@ def run_inference_with_iterative_prompting(
         print("The iterative prompting will make use of logits masks from previous iterations.")
 
     for image_path, gt_path in tqdm(
-        zip(image_paths, gt_paths), total=len(image_paths), desc="Run inference with iterative prompting for all images"
+        zip(image_paths, gt_paths),
+        total=len(image_paths),
+        desc="Run inference with iterative prompting for all images",
     ):
         image_name = os.path.basename(image_path)
 

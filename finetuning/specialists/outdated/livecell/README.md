@@ -1,16 +1,14 @@
-# Finetuning Segment Anything for LiveCELL
+# Finetuning Segment Anything for LIVECell
 
-TODO: explain the set-up
-
-These experiments are implemented for a slurm cluster with access to GPUs (and you ideally need access to A100s or H100s with 80GB of memory, if you only use ViT-b then using a GPU with 32 GB or 40 GB should suffice.)
+These experiments are implemented for a slurm cluster with access to GPUs (and you ideally need access to A100s or H100s with 80GB of memory, if you only use ViT Base then using a GPU with 32 GB or 40 GB should suffice.)
 
 ## Training
 
-TODO: add training code and explain how to run it
+The relevant scripts are located in the top-level `finetuning` directory at: `finetuning/livecell_finetuning.py`.
 
 ## Evaluation
 
-To run the evaluation experiments for the Segment Anything Models on LiveCELL follow these steps:
+To run the evaluation experiments for the Segment Anything Models on LIVECell follow these steps:
 
 - Preparation:
     - Go to the `evaluation` directory.

@@ -31,6 +31,7 @@ def plot_3d():
     raw_slice[(z+2):] = 0
 
     v = napari.Viewer()
+    v.axes.visible = True
     v.add_image(raw)
     v.add_image(raw_slice)
     v.add_labels(seg_ilastik)
@@ -162,7 +163,7 @@ def check_tracking_results(raw, labels, curr_lineages, chosen_frames, save=False
     seg_default = load_tracking_segmentation("vit_l")
     seg_generalist = load_tracking_segmentation("vit_l_lm")
     seg_specialist = load_tracking_segmentation("vit_l_specialist")
-    
+
     # let's get the tracks only for the objects present per frame
     for idx in np.unique(labels)[1:]:
         lineage = curr_lineages[idx]
@@ -193,7 +194,7 @@ def check_tracking_results(raw, labels, curr_lineages, chosen_frames, save=False
         with h5py.File(
             "/media/anwai/ANWAI/results/micro-sam/tracking/DynamicNuclearNet_results_b007.h5", "a"
         ) as f:
-            f.create_dataset("raw", data=volume)
+            f.create_dataset("raw", data=raw)
             f.create_dataset("segmentation/default", data=seg_default)
             f.create_dataset("segmentation/generalist", data=seg_generalist)
             f.create_dataset("segmentation/specialist", data=seg_specialist)
@@ -217,6 +218,7 @@ def get_tracking_data(view=False, save=False):
         data_source[split_name],
         columns=["filename", "experiment", "pixel_size", "screening_passed", "time_step", "specimen"]
     )
+    print(meta)
 
     # let's convert the data to expected shape
     X = X.squeeze(-1)
@@ -236,8 +238,6 @@ def get_tracking_data(view=False, save=False):
     return raw, labels, curr_lineages, chosen_frames
 
 
-
-# TODO
 def plot_tracking():
     raw, labels, curr_lineages, chosen_frames = get_tracking_data()
     check_tracking_results(raw, labels, curr_lineages, chosen_frames)
@@ -247,9 +247,9 @@ def main():
     # create_data_2d_default()
     # create_data_2d_finetuned()
 
-    # plot_3d()
+    plot_3d()
     # plot_2d()
-    plot_tracking()
+    # plot_tracking()
 
 
 main()

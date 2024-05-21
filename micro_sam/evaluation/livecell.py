@@ -39,12 +39,17 @@ def _get_livecell_paths(input_folder, split="test", n_val_per_cell_type=None):
         assert os.path.exists(gt_dir), "The LIVECell Dataset is incomplete"
         image_paths, gt_paths = [], []
         for ctype in CELL_TYPES:
+            counter = 0
             for img_path in glob(os.path.join(img_dir, f"{ctype}*")):
+                if counter == n_val_per_cell_type:
+                    continue
+
                 image_paths.append(img_path)
                 img_name = os.path.basename(img_path)
                 gt_path = os.path.join(gt_dir, ctype, img_name)
                 assert os.path.exists(gt_path), gt_path
                 gt_paths.append(gt_path)
+                counter += 1
     else:
 
         with open(os.path.join(input_folder, "val.json")) as f:

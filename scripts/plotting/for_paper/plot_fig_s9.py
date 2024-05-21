@@ -27,6 +27,7 @@ def plot_lucchi():
     raw_slice[(z+2):] = 0
 
     v = napari.Viewer()
+    v.axes.visible = True
     v.add_image(raw)
     v.add_image(raw_slice)
     for name, seg in segmentations.items():
@@ -52,6 +53,7 @@ def plot_plantseg_ovules():
     raw_slice[(z+2):] = 0
 
     v = napari.Viewer()
+    v.axes.visible = True
     v.add_image(raw)
     v.add_image(raw_slice)
     for name, seg in segmentations.items():

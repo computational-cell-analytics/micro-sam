@@ -305,14 +305,19 @@ def clear(viewer: "napari.viewer.Viewer") -> None:
     """Widget for clearing the current annotations.
 
     Args:
-        viewer (napari.viewer.Viewer): _description_
+        viewer: The napari viewer.
     """
     vutil.clear_annotations(viewer)
 
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
 def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> None:
-    """Widget for clearing the current annotations in 3D."""
+    """Widget for clearing the current annotations in 3D.
+
+    Args:
+        viewer: The napari viewer.
+        all_slices: Choose whether to clear the annotations for all or only the current slice.
+    """
     if all_slices:
         vutil.clear_annotations(viewer)
     else:
@@ -322,7 +327,12 @@ def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> Non
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
 def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None:
-    """Widget for clearing all tracking annotations and state."""
+    """Widget for clearing all tracking annotations and state.
+
+    Args:
+        viewer: The napari viewer.
+        all_frames: Choose whether to clear the annotations for all or only the current frame.
+    """
     if all_frames:
         _reset_tracking_state(viewer)
         vutil.clear_annotations(viewer)
@@ -331,7 +341,7 @@ def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None
         vutil.clear_annotations_slice(viewer, i=i)
 
 
-def _commit_impl(viewer, layer):
+def _commit_impl(viewer, layer, preserve_committed):
     # Check if we have a z_range. If yes, use it to set a bounding box.
     state = AnnotatorState()
     if state.z_range is None:
@@ -358,6 +368,9 @@ def _commit_impl(viewer, layer):
     mask = elf.parallel.apply_operation(
         seg, 0, np.not_equal, out=mask, block_shape=util.get_block_shape(shape)
     )
+    if preserve_committed:
+        prev_seg = viewer.layers["committed_objects"].data[bb]
+        mask[prev_seg != 0] = 0
 
     # Write the current object to committed objects.
     seg[mask] += id_offset
@@ -463,16 +476,20 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
 def commit(
     viewer: "napari.viewer.Viewer",
     layer: str = "current_object",
+    preserve_committed: bool = True,
     commit_path: Optional[Path] = None,
 ) -> None:
     """Widget for committing the segmented objects from automatic or interactive segmentation.
 
     Args:
-        viewer (napari.viewer.Viewer): _description_
-        layer (str, optional): _description_. Defaults to "current_object".
-        commit_path (Optional[Path], optional): _description_. Defaults to None.
+        viewer: The napari viewer.
+        layer: Select the layer to commit. Can be either 'current_object' to commit interacitve segmentation results.
+            Or 'auto_segmentation' to commit automatic segmentation results.
+        preserve_committed: If active already committted objects are not over-written by new commits.
+        commit_path: Select a file path where the committed results and prompts will be saved.
+            This feature is still experimental.
     """
-    _, seg, mask, bb = _commit_impl(viewer, layer)
+    _, seg, mask, bb = _commit_impl(viewer, layer, preserve_committed)
 
     if commit_path is not None:
         _commit_to_file(commit_path, viewer, layer, seg, mask, bb)
@@ -495,17 +512,21 @@ def commit(
 def commit_track(
     viewer: "napari.viewer.Viewer",
     layer: str = "current_object",
+    preserve_committed: bool = True,
     commit_path: Optional[Path] = None,
 ) -> None:
-    """Widget for committing the segmented objects from interactive tracking.
+    """Widget for committing the objects from interactive tracking.
 
     Args:
-        viewer (napari.viewer.Viewer): _description_
-        layer (str, optional): _description_. Defaults to "current_object".
-        commit_path (Optional[Path], optional): _description_. Defaults to None.
+        viewer: The napari viewer.
+        layer: Select the layer to commit. Can be either 'current_object' to commit interacitve segmentation results.
+            Or 'auto_segmentation' to commit automatic segmentation results.
+        preserve_committed: If active already committted objects are not over-written by new commits.
+        commit_path: Select a file path where the committed results and prompts will be saved.
+            This feature is still experimental.
     """
     # Commit the segmentation layer.
-    id_offset, seg, mask, bb = _commit_impl(viewer, layer)
+    id_offset, seg, mask, bb = _commit_impl(viewer, layer, preserve_committed)
 
     # Update the lineages.
     state = AnnotatorState()
@@ -560,7 +581,7 @@ def settings_widget(
     """Widget to update global micro_sam settings.
 
     Args:
-        cache_directory (Optional[Path], optional): _description_. Defaults to util.get_cache_directory().
+        cache_directory: Select the path for the micro_sam cache directory. `$HOME/.cache/micro_sam`.
     """
     os.environ["MICROSAM_CACHEDIR"] = str(cache_directory)
     print(f"micro-sam cache directory set to: {cache_directory}")
@@ -662,15 +683,11 @@ def _validate_prompts(viewer: "napari.viewer.Viewer") -> bool:
 
 @magic_factory(call_button="Segment Object [S]")
 def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
-    """_summary_
+    """Segment object(s) for the current prompts.
 
     Args:
-        viewer (napari.viewer.Viewer): _description_
-        batched (bool, optional): _description_. Defaults to False.
-        call_button: run code
-
-    Returns:
-        _type_: _description_
+        viewer: The napari viewer.
+        batched: Choose if you want to segment multiple objects with point prompts.
     """
     if _validate_embeddings(viewer):
         return None
@@ -701,6 +718,11 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
 
 @magic_factory(call_button="Segment Slice [S]")
 def segment_slice(viewer: "napari.viewer.Viewer") -> None:
+    """Segment object for to the current prompts.
+
+    Args:
+        viewer: The napari viewer.
+    """
     if _validate_embeddings(viewer):
         return None
     if _validate_prompts(viewer):
@@ -735,13 +757,10 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
 
 @magic_factory(call_button="Segment Frame [S]")
 def segment_frame(viewer: "napari.viewer.Viewer") -> None:
-    """_summary_
+    """Segment object for the current prompts.
 
     Args:
-        viewer (napari.viewer.Viewer): _description_
-
-    Returns:
-        _type_: _description_
+        viewer: The napari viewer.
     """
     if _validate_embeddings(viewer):
         return None
@@ -872,11 +891,22 @@ class EmbeddingWidget(_WidgetBase):
             tile_shape=[self.tile_x, self.tile_y],
             halo=[self.halo_x, self.halo_y]
         )
+
+        # Set the default settings for this model in the autosegment widget if it is part of
+        # the currently used plugin.
         if "autosegment" in state.widgets:
             with_decoder = state.decoder is not None
             vutil._sync_autosegment_widget(
                 state.widgets["autosegment"], self.model_type, self.custom_weights, update_decoder=with_decoder
             )
+            # Load the AMG/AIS state if we have a 3d segmentation plugin.
+            if state.widgets["autosegment"].volumetric and with_decoder:
+                state.amg_state = vutil._load_is_state(state.embedding_path)
+            elif state.widgets["autosegment"].volumetric and not with_decoder:
+                state.amg_state = vutil._load_amg_state(state.embedding_path)
+
+        # Set the default settings for this model in the nd-segmentation widget if it is part of
+        # the currently used plugin.
         if "segment_nd" in state.widgets:
             vutil._sync_ndsegment_widget(state.widgets["segment_nd"], self.model_type, self.custom_weights)
 
@@ -947,7 +977,7 @@ class EmbeddingWidget(_WidgetBase):
         )
         setting_values.layout().addWidget(widget)
 
-        settings = _make_collapsible(setting_values, title="Settings")
+        settings = _make_collapsible(setting_values, title="Embedding Settings")
         return settings
 
     def _validate_inputs(self):
@@ -1154,7 +1184,7 @@ class SegmentNDWidget(_WidgetBase):
                 )
             setting_values.layout().addLayout(layout)
 
-        settings = _make_collapsible(setting_values, title="Settings")
+        settings = _make_collapsible(setting_values, title="Segmentation Settings")
         return settings
 
     def _run_tracking(self):
@@ -1300,9 +1330,9 @@ def _handle_amg_state(state, i, pbar_init, pbar_update):
                 save_key = f"state-{i}"
                 with h5py.File(cache_path, "a") as f:
                     g = f.create_group(save_key)
-                    g.create_dataset("foreground", data=state["foreground"], compression="gzip")
-                    g.create_dataset("boundary_distances", data=state["boundary_distances"], compression="gzip")
-                    g.create_dataset("center_distances", data=state["center_distances"], compression="gzip")
+                    g.create_dataset("foreground", data=amg_state_i["foreground"], compression="gzip")
+                    g.create_dataset("boundary_distances", data=amg_state_i["boundary_distances"], compression="gzip")
+                    g.create_dataset("center_distances", data=amg_state_i["center_distances"], compression="gzip")
 
     # Otherwise (2d segmentation) we just check if the amg is initialized or not.
     elif not state.amg.is_initialized:
@@ -1474,9 +1504,16 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _create_settings(self):
         setting_values = self._ais_settings() if self.with_decoder else self._amg_settings()
-        settings = _make_collapsible(setting_values, title="Settings")
-        settings.setToolTip(get_tooltip("segmentnd", "projection_dropdown"))
+        settings = _make_collapsible(setting_values, title="Automatic Segmentation Settings")
         return settings
+
+    def _empty_segmentation_warning(self):
+        msg = "The automatic segmentation result does not contain any objects."
+        msg += "Setting a smaller value for 'min_object_size' may help."
+        if not self.with_decoder:
+            msg += "Setting smaller values for 'pred_iou_thresh' and 'stability_score_thresh' may also help."
+        val_results = {"message_type": "error", "message": msg}
+        return _generate_message(val_results["message_type"], val_results["message"])
 
     def _run_segmentation_2d(self, kwargs, i=None):
         pbar, pbar_signals = _create_pbar_for_threadworker()
@@ -1497,6 +1534,10 @@ class AutoSegmentWidget(_WidgetBase):
             return seg
 
         def update_segmentation(seg):
+            is_empty = seg.max() == 0
+            if is_empty:
+                self._empty_segmentation_warning()
+
             if i is None:
                 self._viewer.layers["auto_segmentation"].data = seg
             else:
@@ -1523,9 +1564,13 @@ class AutoSegmentWidget(_WidgetBase):
         return True
 
     def _run_segmentation_3d(self, kwargs):
-        if not self._allow_segment_3d():
-            print("Volumetric segmentation with AMG is only supported if you have a GPU.")
-            return
+        allow_segment_3d = self._allow_segment_3d()
+        if not allow_segment_3d:
+            val_results = {
+                "message_type": "error",
+                "message": "Volumetric segmentation with AMG is only supported if you have a GPU."
+            }
+            return _generate_message(val_results["message_type"], val_results["message"])
 
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
@@ -1562,6 +1607,9 @@ class AutoSegmentWidget(_WidgetBase):
             return segmentation
 
         def update_segmentation(segmentation):
+            is_empty = segmentation.max() == 0
+            if is_empty:
+                self._empty_segmentation_warning()
             self._viewer.layers["auto_segmentation"].data = segmentation
             self._viewer.layers["auto_segmentation"].refresh()
 

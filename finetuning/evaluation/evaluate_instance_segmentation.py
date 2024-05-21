@@ -3,7 +3,8 @@ import os
 from micro_sam.evaluation.evaluation import run_evaluation
 from micro_sam.evaluation.inference import run_instance_segmentation_with_decoder
 
-from util import get_pred_paths, get_paths, get_default_arguments
+from util import get_paths  # comment this and create a custom function with the same name to run ais on your data
+from util import get_pred_paths, get_default_arguments
 
 
 def run_instance_segmentation_with_decoder_inference(dataset_name, model_type, checkpoint, experiment_folder):

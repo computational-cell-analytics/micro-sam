@@ -1,6 +1,6 @@
-# Segment Anything Finetuning for Specific Datasets
+# Segment Anything Finetuning for Specialist Models
 
-Code for finetuning segment anything data on specific microscopy datasets.
+Code for finetuning Segment Anything on specific microscopy datasets.
 
 ## Finetuning Scripts
 
@@ -17,3 +17,8 @@ Code for finetuning segment anything data on specific microscopy datasets.
 > For details on how to run the scripts from above: `python <DATASET>_finetuning.py -h`
 
 - `resource_efficient_finetuning`: The experiments for finetuning a custom dataset on limited resources.
+
+
+## Outdated Scripts
+The scripts located at `outdated/` are not in working purpose with the latest version of `micro-sam`.
+- It comprises of extensive experiments on "LIVECell" specialist, located at `outdated/livecell/`.

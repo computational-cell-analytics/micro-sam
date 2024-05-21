@@ -1,3 +1,5 @@
+**This is outdated and we need to update it to correctly describe the current annotator design.**
+
 # For Developers
 
 This software consists of four different python (sub-)modules:

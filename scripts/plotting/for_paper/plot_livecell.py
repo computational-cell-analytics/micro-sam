@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from plot_all_evaluation import EXPERIMENT_ROOT
 
 
-TOP_BAR_COLOR, BOTTOM_BAR_COLOR = "#F0746E", "#01B3B7"
+TOP_BAR_COLOR, BOTTOM_BAR_COLOR = "#F0746E", "#089099"
 
 MODEL_CHOICE = "vit_l"
 ALL_MODELS = ["vit_t", "vit_b", "vit_l", "vit_h"]
@@ -23,7 +23,7 @@ MODEL_NAME_MAP = {
 }
 FIG_ASPECT = (30, 15)
 
-plt.rcParams.update({'font.size': 24})
+plt.rcParams.update({'font.size': 30})
 
 
 def gather_livecell_results(model_type, experiment_name, benchmark_choice, result_type="default"):
@@ -60,13 +60,13 @@ def gather_livecell_results(model_type, experiment_name, benchmark_choice, resul
 
     ip_score = pd.concat([
         pd.DataFrame(
-            [{"iteration": idx, "name": "point", "result": ip}]
+            [{"iteration": idx, "name": "Point", "result": ip}]
         ) for idx, ip in enumerate(ip_score)
     ], ignore_index=True)
 
     ib_score = pd.concat([
         pd.DataFrame(
-            [{"iteration": idx, "name": "box", "result": ib}]
+            [{"iteration": idx, "name": "Box", "result": ib}]
         ) for idx, ib in enumerate(ib_score)
     ], ignore_index=True)
 
@@ -80,33 +80,33 @@ def gather_livecell_results(model_type, experiment_name, benchmark_choice, resul
     return amg_score, ais_score, ib_score, ip_score, cellpose_res
 
 
-def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None):
+def get_barplots(name, ax, ib_data, ip_data, amg, cellpose, ais=None, get_ylabel=True):
     sns.barplot(x="iteration", y="result", hue="name", data=ib_data, ax=ax, palette=[TOP_BAR_COLOR])
     if "error" in ib_data:
         ax.errorbar(
-            x=ib_data['iteration'], y=ib_data['result'], yerr=ib_data['error'], fmt='none', c='black', capsize=10
+            x=ib_data['iteration'], y=ib_data['result'], yerr=ib_data['error'], fmt='none', c='black', capsize=20
         )
-
-    # NOTE: this is the snippet which creates hatches on the iterative prompting starting with box.
-    # all_containers = ax.containers[-1]
-    # for k in range(len(all_containers)):
-    #     ax.patches[k].set_hatch('//')
-    #     ax.patches[k].set_edgecolor('k')
 
     sns.barplot(x="iteration", y="result", hue="name", data=ip_data, ax=ax, palette=[BOTTOM_BAR_COLOR])
     if "error" in ip_data:
         ax.errorbar(
-            x=ip_data['iteration'], y=ip_data['result'], yerr=ip_data['error'], fmt='none', c='black', capsize=10
+            x=ip_data['iteration'], y=ip_data['result'], yerr=ip_data['error'], fmt='none', c='black', capsize=20
         )
-    ax.set(xlabel="Iterations", ylabel="Segmentation Accuracy")
+    ax.set_xlabel("Iterations", labelpad=10, fontweight="bold")
+
+    if get_ylabel:
+        ax.set_ylabel("Mean Segmentation Accuracy", labelpad=10, fontweight="bold")
+    else:
+        ax.set_ylabel(None)
+
     ax.legend(title="Settings", bbox_to_anchor=(1, 1))
     ax.set_title(name, fontweight="bold")
 
     if amg is not None:
-        ax.axhline(y=amg, label="amg", color="#DC3977", lw=5)
+        ax.axhline(y=amg, label="AMG", color="#FCDE9C", lw=5)
     if ais is not None:
-        ax.axhline(y=ais, label="ais", color="#E19951", lw=5)
-    ax.axhline(y=cellpose, label="cellpose", color="#5454DA", lw=5)
+        ax.axhline(y=ais, label="AIS", color="#045275", lw=5)
+    ax.axhline(y=cellpose, label="CellPose", color="#DC3977", lw=5)
 
 
 def plot_for_livecell(benchmark_choice, results_with_logits, model_choice=MODEL_CHOICE):
@@ -121,7 +121,7 @@ def plot_for_livecell(benchmark_choice, results_with_logits, model_choice=MODEL_
     amg, ais, ib, ip, cellpose_res = gather_livecell_results(
         model_choice, COMPARE_WITH, benchmark_choice, result_type
     )
-    get_barplots("Finetuned SAM", ax[1], ib, ip, amg, cellpose_res, ais)
+    get_barplots("Finetuned SAM", ax[1], ib, ip, amg, cellpose_res, ais, get_ylabel=False)
 
     # here, we remove the legends for each subplot, and get one common legend for all
     all_lines, all_labels = [], []
@@ -133,7 +133,7 @@ def plot_for_livecell(benchmark_choice, results_with_logits, model_choice=MODEL_
                 all_labels.append(label)
         ax.get_legend().remove()
 
-    fig.legend(all_lines, all_labels, loc="upper left", bbox_to_anchor=(0.05, 0.95))
+    fig.legend(all_lines, all_labels, loc="upper left", bbox_to_anchor=(0.06, 0.94))
 
     ax.set_yticks(np.linspace(0.1, 0.8, 8))
 
@@ -195,7 +195,7 @@ def plot_all_livecell(benchmark_choice, model_type):
     amg_res = np.mean([res for res in amg_list if res is not None])
 
     get_barplots("Default SAM", ax[0], ib_vanilla_res, ip_vanilla_res, amg_vanilla_res, cellpose_res)
-    get_barplots("Finetuned SAM", ax[1], ib_res, ip_res, amg_res, cellpose_res, ais_res)
+    get_barplots("Finetuned SAM", ax[1], ib_res, ip_res, amg_res, cellpose_res, ais_res, get_ylabel=False)
 
     # here, we remove the legends for each subplot, and get one common legend for all
     all_lines, all_labels = [], []
@@ -213,7 +213,7 @@ def plot_all_livecell(benchmark_choice, model_type):
 
     plt.show()
     plt.tight_layout()
-    plt.subplots_adjust(top=0.865, right=0.95, left=0.075, bottom=0.05)
+    plt.subplots_adjust(top=0.9, bottom=0.1)
     fig.suptitle(MODEL_NAME_MAP[model_type], fontsize=36, x=0.515, y=0.97)
     _path = f"livecell_supplementary_{model_type}.svg"
     plt.savefig(_path)
@@ -222,7 +222,7 @@ def plot_all_livecell(benchmark_choice, model_type):
 
 
 def main():
-    # plot_for_livecell(benchmark_choice="livecell", results_with_logits=False)
+    plot_for_livecell(benchmark_choice="livecell", results_with_logits=False)
 
     for model in ALL_MODELS:
         plot_for_livecell(benchmark_choice="livecell", results_with_logits=True, model_choice=model)

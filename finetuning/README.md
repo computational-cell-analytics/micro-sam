@@ -1,6 +1,6 @@
 # Segment Anything Finetuning
 
-Code for finetuning segment anything data on microscopy data and evaluating the finetuned models.
+Code for finetuning Segment Anything data on microscopy data and evaluating the finetuned models.
 
 ## Example: LIVECell
 
@@ -15,7 +15,7 @@ $ python livecell_finetuning.py -i /path/to/livecell
                                 -s /path/to/save/checkpoints
                                 --export_path /path/to/save/exported/model.pth
 ```
-The arguments `-i`, `-m`, `-s` and `--export_path`specify where the input dataset (LIVECell) is stored, which Segment Anything model to finetune, where the checkpoints and logs for the finetuned models will be stored, and the exported model for making use of the annotator tool, respectively.
+The arguments `-i`, `-m`, `-s` and `--export_path` specify where the input dataset (LIVECell) is stored, which Segment Anything model to finetune, where the checkpoints and logs for the finetuned models will be stored, and the exported model for making use of the annotator tool, respectively.
 
 **Inference**
 
@@ -66,14 +66,17 @@ $ python livecell_evaluation.py -i /path/to/livecell -e /path/to/stored/experime
 This will create a folder `experiment/results` with csv tables with the results per cell type and averaged over all images.
 
 
-## Finetuning and Evaluation code
-
-TODO: hint the users to the `generalist/`, `specialist/` and `evaluation/` scripts with a bit of hints
+## Finetuning and Evaluation Scripts
 
 The subfolders contain the code for different finetuning and evaluation experiments for microscopy data:
-- `livecell`: TODO
-- `generalist`: TODO
-- `specialist`: TODO
-- `evaluation`: TODO
-
-Note: we still need to clean up most of this code and will add it later.
+- `livecell`: Experiments with the LIVECell dataset.
+- `generalist`: Experiments for generalist models with microscopy datasets.
+    - `training`:
+        - `light_microscopy`: The finetuning script for light microscopy datasets.
+        - `electron_microscopy/mito_nuc`: The finetuning script for organelle segmentation in electron microscopy datasets.
+- `specialist`: Experiments for specialist models with microscopy datasets.
+    - `resource-efficient`: The resource efficient experiments on Covid IF dataset.
+    - `training`:
+        - `light_microscopy`: The finetuning script(s) for multiple light microscopy datasets.
+        - `electron_microscopy`: The finetuning script(s) for multiple electron microscopy datasets.
+- `evaluation`: Scripts to evaluate the Segment Anything models. See `evaluation/README.md` for details.
