@@ -41,8 +41,30 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
     return train_loader, val_loader
 
 
+def count_parameters(model):
+    params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    params = params / 1e6
+    return f"The number of trainable parameters for the provided model is '{params} M'."
+
+
 def finetune_livecell(args):
-    """Code for finetuning SAM (using LoRA) on LIVECell"""
+    """Code for finetuning SAM (using LoRA) on LIVECell
+
+    Initial observations: There's no real memory advantage actually unless it's "truly" scaled up
+    # vit_b
+    # SAM: 93M (takes ~50GB)
+    # SAM-LoRA: 4.2M (takes ~49GB)
+
+    # vit_l
+    # SAM: 312M (takes ~63GB)
+    # SAM-LoRA: 4.4M (takes ~61GB)
+
+    # vit_h
+    # SAM: 641M (takes ~73GB)
+    # SAM-LoRA: 4.7M (takes ~67GB)
+
+    # Q: Would quantization lead to better results? (eg. QLoRA / DoRA)
+    """
     # override this (below) if you have some more complex set-up and need to specify the exact gpu
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -75,31 +97,11 @@ def finetune_livecell(args):
     )
     unetr.to(device)
 
-    def count_parameters(model):
-        params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        params = params / 1e6
-        return f"{params} M"
-
-    # vit_b
-    # SAM: 93M (takes ~50GB)
-    # SAM-LoRA: 4.2M (takes ~49GB)
-
-    # vit_l
-    # SAM: 312M (takes ~63GB)
-    # SAM-LoRA: 4.4M (takes ~61GB)
-
-    # vit_h
-    # SAM: 641M (takes ~73GB)
-    # SAM-LoRA: 4.7M (takes ~67GB)
-
-    # First observations: There's no real memory advantage actually unless it's "truly" scaled up
-    # Q: Would quantization lead to better results?
-
+    # let's check the total number of trainable parameters
     print(count_parameters(model))
 
     # let's get the parameters for SAM and the decoder from UNETR
-    joint_model_params = filter(lambda p: p.requires_grad, model.parameters())
-    # joint_model_params = model.parameters()
+    joint_model_params = model.parameters()
 
     joint_model_params = [params for params in joint_model_params]  # sam parameters
     for name, params in unetr.named_parameters():  # unetr's decoder parameters
