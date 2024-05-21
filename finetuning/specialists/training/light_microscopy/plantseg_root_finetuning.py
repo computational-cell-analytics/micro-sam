@@ -26,7 +26,7 @@ def get_dataloaders(patch_shape, data_path):
     """
     raw_transform = ResizeRawTrafo(patch_shape, do_rescaling=False)
     label_transform = ResizeLabelTrafo(patch_shape)
-    sampler = MinInstanceSampler(min_num_instances=10)
+    sampler = MinInstanceSampler(min_num_instances=10)  # ensures a minimum of 10 instances (inc. background)
     label_dtype = torch.float32
 
     train_loader = get_plantseg_loader(
@@ -52,7 +52,7 @@ def finetune_plantseg_root(args):
     model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
     patch_shape = (512, 512)  # the patch shape for training
-    n_objects_per_batch = 25  # this is the number of objects per batch that will be sampled
+    n_objects_per_batch = args.n_objects  # this is the number of objects per batch that will be sampled (default: 25)
     freeze_parts = args.freeze  # override this to freeze different parts of the model
 
     # get the trainable segment anything model
@@ -72,7 +72,8 @@ def finetune_plantseg_root(args):
         use_sam_stats=True,
         final_activation="Sigmoid",
         use_skip_connection=False,
-        resize_input=True
+        resize_input=True,
+        use_conv_transpose=True,
     )
     unetr.to(device)
 
@@ -136,7 +137,7 @@ def main():
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
-        help="The model type to use for fine-tuning. Either vit_b, vit_l or vit_h."
+        help="The model type to use for fine-tuning. Either vit_t, vit_b, vit_l or vit_h."
     )
     parser.add_argument(
         "--save_root", "-s",
@@ -157,6 +158,9 @@ def main():
     parser.add_argument(
         "--save_every_kth_epoch", type=int, default=None,
         help="To save every kth epoch while fine-tuning. Expects an integer value."
+    )
+    parser.add_argument(
+        "--n_objects", type=int, default=25, help="The number of instances (objects) per batch used for finetuning."
     )
     args = parser.parse_args()
     finetune_plantseg_root(args)

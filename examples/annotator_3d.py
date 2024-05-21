@@ -10,7 +10,7 @@ EMBEDDING_CACHE = os.path.join(get_cache_directory(), "embeddings")
 os.makedirs(EMBEDDING_CACHE, exist_ok=True)
 
 
-def em_3d_annotator(finetuned_model):
+def em_3d_annotator(use_finetuned_model):
     """Run the 3d annotator for an example EM volume."""
     # download the example data
     example_data = fetch_3d_example_data(DATA_CACHE)
@@ -18,28 +18,24 @@ def em_3d_annotator(finetuned_model):
     with open_file(example_data) as f:
         raw = f["*.png"][:]
 
-    if not finetuned_model:
+    if use_finetuned_model:
+        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-lucchi-vit_b_em_organelles.zarr")
+        model_type = "vit_b_em_organelles"
+        precompute_amg_state = True
+    else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-lucchi.zarr")
         model_type = "vit_h"
-    else:
-        assert finetuned_model in ("organelles", "boundaries")
-        embedding_path = os.path.join(EMBEDDING_CACHE, f"embeddings-lucchi-vit_b_em_{finetuned_model}.zarr")
-        model_type = f"vit_b_em_{finetuned_model}"
-        print(embedding_path)
+        precompute_amg_state = False
 
     # start the annotator, cache the embeddings
-    annotator_3d(raw, embedding_path, model_type=model_type)
+    annotator_3d(raw, embedding_path, model_type=model_type, precompute_amg_state=precompute_amg_state)
 
 
 def main():
-    # Whether to use the fine-tuned SAM model for mitochondria (organelles) or boundaries.
-    # valid choices are:
-    # - None / False (will use the vanilla model)
-    # - "organelles": will use the model for mitochondria and other organelles
-    # - "boundaries": will use the model for boundary based structures
-    finetuned_model = "boundaries"
+    # Whether to use the fine-tuned SAM model for mitochondria (organelles).
+    use_finetuned_model = True
 
-    em_3d_annotator(finetuned_model)
+    em_3d_annotator(use_finetuned_model)
 
 
 # The corresponding CLI call for em_3d_annotator:

@@ -1,6 +1,5 @@
 import imageio.v3 as imageio
 
-import micro_sam.util as util
 from micro_sam.sam_annotator import annotator_2d
 
 
@@ -17,16 +16,11 @@ def run_annotator_with_finetuned_model():
     checkpoint = "./finetuned_hela_model.pth"
     embedding_path = "./embeddings/embeddings-finetuned.zarr"
 
-    model_type = "vit_b"  # We finetune a vit_b in the example script.
     # Adapt this if you finetune a different model type, e.g. vit_h.
-
-    # Load the custom model.
-    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint)
+    model_type = "vit_b"  # We finetune a vit_b in the example script.
 
     # Run the 2d annotator with the custom model.
-    annotator_2d(
-        im, embedding_path=embedding_path, predictor=predictor, precompute_amg_state=True,
-    )
+    annotator_2d(im, model_type=model_type, embedding_path=embedding_path, checkpoint=checkpoint)
 
 
 if __name__ == "__main__":

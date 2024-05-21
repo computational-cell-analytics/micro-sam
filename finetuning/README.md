@@ -1,58 +1,82 @@
 # Segment Anything Finetuning
 
-Code for finetuning segment anything data on microscopy data and evaluating the finetuned models.
+Code for finetuning Segment Anything data on microscopy data and evaluating the finetuned models.
 
-## Example: LiveCELL
+## Example: LIVECell
 
 **Finetuning**
 
-Run the script `livecell_finetuning.py` for fine-tuning a model on LiveCELL.
+The script `livecell_finetuning.py` can be used for finetuning Segment Anything models on LIVECell. Run `python livecell_finetuning.py -h` for details on how to run the scripts.
+Here is an example run for finetuning:
+
+```bash
+$ python livecell_finetuning.py -i /path/to/livecell
+                                -m vit_b
+                                -s /path/to/save/checkpoints
+                                --export_path /path/to/save/exported/model.pth
+```
+The arguments `-i`, `-m`, `-s` and `--export_path` specify where the input dataset (LIVECell) is stored, which Segment Anything model to finetune, where the checkpoints and logs for the finetuned models will be stored, and the exported model for making use of the annotator tool, respectively.
 
 **Inference**
 
-The script `livecell_inference.py` can be used to run inference on the test set. It supports different arguments for inference with different configurations.
-For example run
-```
-python livecell_inference.py -c checkpoints/livecell_sam/best.pt -m vit_b -e experiment -i /scratch/projects/nim00007/data/LiveCELL --points --positive 1 --negative 0
-```
-for inference with 1 positive point prompt and no negative point prompt (the prompts are derived from ground-truth).
+The script `livecell_inference.py` can be used to run inference on the test set. It supports different arguments for inference with different configurations. Run `python livecell_inference.py -h` for details on how to run the scripts.
+Here is an example run for inference:
 
-The arguments `-c`, `-e` and `-i` specify where the checkpoint for the model is, where the predictions from the model and other experiment data will be saved, and where the input dataset (LiveCELL) is stored.
-
-To run the default set of experiments from our publication use the command
+```bash
+$ python livecell_inference.py -c /path/to/saved/checkpoints
+                               -i /path/to/livecell
+                               -e /path/to/store/experiment
+                               -m vit_b
+                               # choice of inference:
+                               #    - ('-p') precompute image embeddings
+                               #    - ('-ip') iterative prompting-based interactive instance segmentation 
+                               #        - default: starting with point
+                               #        - ('-b') starting with box
+                               #        - ('--use_masks') use logits from previous iteration's segmentation iteratively
+                               #    - ('-amg') automatic mask generation
+                               #    - ('-ais') automatic instance segmentation
 ```
-python livecell_inference.py -c checkpoints/livecell_sam/best.pt -m vit_b -e experiment -i /scratch/projects/nim00007/data/LiveCELL -d --prompt_folder /scratch/projects/nim00007/sam/experiments/prompts/livecell 
+The arguments `-c`, `-i`, `-e` and `m` specify where the checkpoint for the model is, where the input dataset (LiveCELL) is stored, where the predictions from the model and other experiment data will be saved, and the model name for the model checkpoint, respectively.
+
+To run the default set of experiments from our publication use the command:
+```bash
+$ python livecell_inference.py -c /path/to/saved/checkpoints -i /path/to/livecell -e /path/to/store/experiment -m vit_b -p  # precompute the embeddings
+$ python livecell_inference.py -c /path/to/saved/checkpoints -i /path/to/livecell -e /path/to/store/experiment -m vit_b -ip  # iterative prompting starting with point
+$ python livecell_inference.py -c /path/to/saved/checkpoints -i /path/to/livecell -e /path/to/store/experiment -m vit_b -ip -b  # iterative prompting starting with box
 ```
 
-Here `-d` automatically runs the evaluation for these settings:
-- `--points --positive 1 --negative 0` (using point prompts with a single positive point)
-- `--points --positive 2 --negative 4` (using point prompts with two positive points and four negative points)
-- `--points --positive 4 --negative 8` (using point prompts with four positive points and eight negative points)
-- `--box` (using box prompts)
-
-In addition `--prompt_folder` specifies a folder with precomputed prompts. Using pre-computed prompts significantly speeds up the experiments and enables running them in a reproducible manner. (Without it the prompts will be recalculated each time.)
+Here, `-ip` stands for iterative prompting-based interactive instance segmentation (i.e. starting with placing 1 positive point prompt OR a box to segment the object, and continuing prompt-based segmentation by placing additional points subjected to the model's prediction - where the model makes mistakes (to add a negative point prompt) and where the model missed to segment the object of interest (to add a positive point prompt))
 
 You can also evaluate the automatic instance segmentation functionality, by running
-```
-python livecell_inference.py -c checkpoints/livecell_sam/best.pt -m vit_b -e experiment -i /scratch/projects/nim00007/data/LiveCELL -a 
+```bash
+$ python livecell_inference.py -c /path/to/saved/checkpoints -i /path/to/livecell -e /path/to/store/experiment -m vit_b -amg  # automatic mask generation
+$ python livecell_inference.py -c /path/to/saved/checkpoints -i /path/to/livecell -e /path/to/store/experiment -m vit_b -ais  # automatic instance segmentation
 ```
 
 This will first perform a grid-search for the best parameters on a subset of the validation set and then run inference on the test set. This can take up to a day.
 
 **Evaluation**
 
-The script `livecell_evaluation.py` can then be used to evaluate the results from the inference runs.
-E.g. run the script like below to evaluate the previous predictions.
-```
-python livecell_evaluation.py -i /scratch/projects/nim00007/data/LiveCELL -e experiment
+The script `livecell_evaluation.py` can be used to evaluate the results from the inference runs on the test set. Run `python livecell_evaluation.py -h` for details on how to run the scripts.
+Here is an example run for evaluation:
+
+```bash
+$ python livecell_evaluation.py -i /path/to/livecell -e /path/to/stored/experiments
 ```
 This will create a folder `experiment/results` with csv tables with the results per cell type and averaged over all images.
 
 
-## Finetuning and evaluation code
+## Finetuning and Evaluation Scripts
 
 The subfolders contain the code for different finetuning and evaluation experiments for microscopy data:
-- `livecell`: TODO
-- `generalist`: TODO
-
-Note: we still need to clean up most of this code and will add it later.
+- `livecell`: Experiments with the LIVECell dataset.
+- `generalist`: Experiments for generalist models with microscopy datasets.
+    - `training`:
+        - `light_microscopy`: The finetuning script for light microscopy datasets.
+        - `electron_microscopy/mito_nuc`: The finetuning script for organelle segmentation in electron microscopy datasets.
+- `specialist`: Experiments for specialist models with microscopy datasets.
+    - `resource-efficient`: The resource efficient experiments on Covid IF dataset.
+    - `training`:
+        - `light_microscopy`: The finetuning script(s) for multiple light microscopy datasets.
+        - `electron_microscopy`: The finetuning script(s) for multiple electron microscopy datasets.
+- `evaluation`: Scripts to evaluate the Segment Anything models. See `evaluation/README.md` for details.

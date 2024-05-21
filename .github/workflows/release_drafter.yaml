@@ -1,0 +1,88 @@
+name: Release Drafter
+
+on:
+  push:
+    # branches to consider in the event; optional, defaults to all
+    branches:
+      - master
+  # # pull_request event is required only for autolabeler
+  # pull_request:
+  #   # Only following types are handled by the action, but one can default to all as well
+  #   types: all # [opened, reopened, synchronize]
+  # # pull_request_target event is required for autolabeler to support PRs from forks
+  # # pull_request_target:
+  # #   types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  update_release_draft:
+    permissions:
+      # write permission is required to create a github release
+      contents: write
+      # write permission is required for autolabeler
+      # otherwise, read permission is required at least
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+  
+      - name: Detect new version
+        id: check-version
+        #if: steps.check-parent-commit.outputs.sha
+        uses: salsify/action-detect-and-tag-new-version@v2.0.1
+        with:
+          create-tag: false
+          version-command: |
+            grep -Eo '^__version__ = \"(.*)\"$' micro_sam/__version__.py | cut -d\" -f2
+
+      - name: Push tag
+        id: tag-version
+        if: steps.check-version.outputs.previous-version != steps.check-version.outputs.current-version
+        uses: mathieudutour/github-tag-action@v6.1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          custom_tag: ${{ steps.check-version.outputs.current-version }}
+
+      # Drafts your next Release notes as Pull Requests are merged into "master"
+      - name: Publish the release notes
+        uses: release-drafter/release-drafter@v6.0.0
+        with:
+          config-name: release_config.yaml
+          publish: "${{ steps.tag-version.outputs.new_tag != '' }}"
+          tag: "${{ steps.tag-version.outputs.new_tag }}"
+        env:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+
+  deploy:
+    # This will upload a Python Package using Twine when a release is created
+    # For more information see: https://help.github.com/en/actions/language-and-framework-guides/using-python-with-github-actions#publishing-to-package-registries
+    #
+    # This job will run when you have tagged a commit, starting with "v*"
+    # or created a release in GitHub which includes a tag starting with "v*"
+    # and requires that you have put your twine API key in your
+    # github secrets (see readme for details)
+    needs: [update_release_draft]
+    runs-on: ubuntu-latest
+    if: contains(github.ref, 'tags')
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install build twine
+    - name: Build and publish
+      env:
+        TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}
+        TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+      run: |
+        python -m build
+        twine upload dist/*

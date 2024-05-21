@@ -1,59 +1,40 @@
-import os
-import pickle
-import warnings
-from glob import glob
-from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import napari
 import numpy as np
-
-from segment_anything import SamPredictor
+import torch
 
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
-from ._widgets import segment_slice_widget, segment_object_widget, amg_widget_3d
-from .util import _initialize_parser
+from . import _widgets as widgets
+from .util import _initialize_parser, _sync_embedding_widget, _load_amg_state, _load_is_state
 from .. import util
 
 
-def _load_amg_state(embedding_path):
-    if embedding_path is None or not os.path.exists(embedding_path):
-        return {"cache_folder": None}
-
-    cache_folder = os.path.join(embedding_path, "amg_state")
-    os.makedirs(cache_folder, exist_ok=True)
-    amg_state = {"cache_folder": cache_folder}
-
-    state_paths = glob(os.path.join(cache_folder, "*.pkl"))
-    for path in state_paths:
-        with open(path, "rb") as f:
-            state = pickle.load(f)
-        i = int(Path(path).stem.split("-")[-1])
-        amg_state[i] = state
-    return amg_state
-
-
 class Annotator3d(_AnnotatorBase):
-    def __init__(
-        self,
-        viewer: "napari.viewer.Viewer",
-        segmentation_result: Optional[np.ndarray] = None,
-    ) -> None:
-        super().__init__(
-            viewer=viewer,
-            ndim=3,
-            segment_widget=segment_slice_widget,
-            segment_nd_widget=segment_object_widget,
-            autosegment_widget=amg_widget_3d,
-            segmentation_result=segmentation_result,
-        )
+    def _get_widgets(self):
+        autosegment = widgets.AutoSegmentWidget(self._viewer, with_decoder=self._with_decoder, volumetric=True)
+        segment_nd = widgets.SegmentNDWidget(self._viewer, tracking=False)
+        return {
+            "segment": widgets.segment_slice(),
+            "segment_nd": segment_nd,
+            "autosegment": autosegment,
+            "commit": widgets.commit(),
+            "clear": widgets.clear_volume(),
+        }
 
-    def _update_image(self):
-        super()._update_image()
+    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
+        self._with_decoder = AnnotatorState().decoder is not None
+        super().__init__(viewer=viewer, ndim=3)
+
+    def _update_image(self, segmentation_result=None):
+        super()._update_image(segmentation_result=segmentation_result)
         # Load the amg state from the embedding path.
         state = AnnotatorState()
-        state.amg_state = _load_amg_state(state.embedding_path)
+        if self._with_decoder:
+            state.amg_state = _load_is_state(state.embedding_path)
+        else:
+            state.amg_state = _load_amg_state(state.embedding_path)
 
 
 def annotator_3d(
@@ -65,7 +46,10 @@ def annotator_3d(
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
     viewer: Optional["napari.viewer.Viewer"] = None,
-    predictor: Optional["SamPredictor"] = None,
+    precompute_amg_state: bool = False,
+    checkpoint_path: Optional[str] = None,
+    device: Optional[Union[str, torch.device]] = None,
+    prefer_decoder: bool = True,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the 3d annotation tool for a given image volume.
 
@@ -83,8 +67,13 @@ def annotator_3d(
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
         viewer: The viewer to which the SegmentAnything functionality should be added.
             This enables using a pre-initialized viewer.
-        predictor: The Segment Anything model. Passing this enables using fully custom models.
-            If you pass `predictor` then `model_type` will be ignored.
+        precompute_amg_state: Whether to precompute the state for automatic mask generation.
+            This will take more time when precomputing embeddings, but will then make
+            automatic mask generation much faster.
+        checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
+        device: The computational device to use for the SAM model.
+        prefer_decoder: Whether to use decoder based instance segmentation if
+            the model used has an additional decoder for instance segmentation.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -92,23 +81,30 @@ def annotator_3d(
 
     # Initialize the predictor state.
     state = AnnotatorState()
-    state.initialize_predictor(
-        image, model_type=model_type, save_path=embedding_path, predictor=predictor,
-        halo=halo, tile_shape=tile_shape
-    )
     state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
+    state.initialize_predictor(
+        image, model_type=model_type, save_path=embedding_path,
+        halo=halo, tile_shape=tile_shape, ndim=3, precompute_amg_state=precompute_amg_state,
+        checkpoint_path=checkpoint_path, device=device, prefer_decoder=prefer_decoder,
+    )
 
     if viewer is None:
         viewer = napari.Viewer()
 
     viewer.add_image(image, name="image")
-    annotator = Annotator3d(viewer, segmentation_result=segmentation_result)
+    annotator = Annotator3d(viewer)
 
     # Trigger layer update of the annotator so that layers have the correct shape.
-    annotator._update_image()
+    # And initialize the 'committed_objects' with the segmentation result if it was given.
+    annotator._update_image(segmentation_result=segmentation_result)
 
-    # Add the annotator widget to the viewer.
+    # Add the annotator widget to the viewer and sync widgets.
     viewer.window.add_dock_widget(annotator)
+    _sync_embedding_widget(
+        state.widgets["embeddings"], model_type,
+        save_path=embedding_path, checkpoint_path=checkpoint_path,
+        device=device, tile_shape=tile_shape, halo=halo
+    )
 
     if return_viewer:
         return viewer
@@ -127,11 +123,10 @@ def main():
     else:
         segmentation_result = util.load_image_data(args.segmentation_result, key=args.segmentation_key)
 
-    if args.embedding_path is None:
-        warnings.warn("You have not passed an embedding_path. Restarting the annotator may take a long time.")
-
     annotator_3d(
         image, embedding_path=args.embedding_path,
         segmentation_result=segmentation_result,
         model_type=args.model_type, tile_shape=args.tile_shape, halo=args.halo,
+        checkpoint_path=args.checkpoint, device=args.device,
+        precompute_amg_state=args.precompute_amg_state, prefer_decoder=args.prefer_decoder,
     )

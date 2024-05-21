@@ -1,14 +1,13 @@
 import os
-import pandas as pd
-from glob import glob
 
 from micro_sam.evaluation import inference
-from micro_sam.evaluation.evaluation import run_evaluation
+from micro_sam.evaluation.evaluation import run_evaluation_for_iterative_prompting
 
-from util import get_model, get_paths, get_pred_paths, get_default_arguments
+from util import get_paths  # comment this and create a custom function with the same name to run int. seg. on your data
+from util import get_model, get_default_arguments
 
 
-def run_interactive_prompting(dataset_name, exp_folder, predictor, start_with_box_prompt):
+def _run_iterative_prompting(dataset_name, exp_folder, predictor, start_with_box_prompt, use_masks):
     prediction_root = os.path.join(
         exp_folder, "start_with_box" if start_with_box_prompt else "start_with_point"
     )
@@ -20,34 +19,21 @@ def run_interactive_prompting(dataset_name, exp_folder, predictor, start_with_bo
         gt_paths=gt_paths,
         embedding_dir=embedding_folder,
         prediction_dir=prediction_root,
-        start_with_box_prompt=start_with_box_prompt
+        start_with_box_prompt=start_with_box_prompt,
+        use_masks=use_masks
     )
     return prediction_root
 
 
-def evaluate_interactive_prompting(dataset_name, prediction_root, start_with_box_prompt, exp_folder):
-    assert os.path.exists(prediction_root), prediction_root
+def _evaluate_iterative_prompting(dataset_name, prediction_root, start_with_box_prompt, exp_folder):
+    _, gt_paths = get_paths(dataset_name, split="test")
 
-    prediction_folders = sorted(glob(os.path.join(prediction_root, "iteration*")))
-    list_of_results = []
-    for pred_folder in prediction_folders:
-        print("Evaluating", pred_folder)
-        _, gt_paths = get_paths(dataset_name, split="test")
-        pred_paths = get_pred_paths(pred_folder)
-        res = run_evaluation(gt_paths, pred_paths, save_path=None)
-        list_of_results.append(res)
-        print(res)
-
-    df = pd.concat(list_of_results, ignore_index=True)
-
-    # Save the results in the experiment folder.
-    result_folder = os.path.join(exp_folder, "results")
-    os.makedirs(result_folder, exist_ok=True)
-    csv_path = os.path.join(
-        result_folder,
-        "iterative_prompts_start_box.csv" if start_with_box_prompt else "iterative_prompts_start_point.csv"
+    run_evaluation_for_iterative_prompting(
+        gt_paths=gt_paths,
+        prediction_root=prediction_root,
+        experiment_folder=exp_folder,
+        start_with_box_prompt=start_with_box_prompt,
     )
-    df.to_csv(csv_path)
 
 
 def main():
@@ -58,8 +44,10 @@ def main():
     # get the predictor to perform inference
     predictor = get_model(model_type=args.model, ckpt=args.checkpoint)
 
-    prediction_root = run_interactive_prompting(args.dataset, args.experiment_folder, predictor, start_with_box_prompt)
-    evaluate_interactive_prompting(args.dataset, prediction_root, start_with_box_prompt, args.experiment_folder)
+    prediction_root = _run_iterative_prompting(
+        args.dataset, args.experiment_folder, predictor, start_with_box_prompt, args.use_masks
+    )
+    _evaluate_iterative_prompting(args.dataset, prediction_root, start_with_box_prompt, args.experiment_folder)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ from glob import glob
 
 from torch_em.data import datasets
 
-from micro_sam.evaluation import get_predictor
+from micro_sam.util import get_sam_model
 from micro_sam.evaluation.livecell import _get_livecell_paths
 
 
@@ -14,6 +14,7 @@ ROOT = "/scratch/projects/nim00007/sam/data/"
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/new_models"
 
 VANILLA_MODELS = {
+    "vit_t": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/vit_t_mobile_sam.pth",
     "vit_b": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/sam_vit_b_01ec64.pth",
     "vit_l": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/sam_vit_l_0b3195.pth",
     "vit_h": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/sam_vit_h_4b8939.pth"
@@ -33,21 +34,22 @@ FILE_SPECS = {
 # good spot to track all datasets we use atm
 DATASETS = [
     # in-domain (LM)
-    "tissuenet", "deepbacs", "plantseg/root", "livecell", "neurips-cell-seg",
+    "tissuenet/one_chan", "tissuenet/multi_chan", "deepbacs", "plantseg/root", "livecell",
+    "neurips-cell-seg/all", "neurips-cell-seg/tuning", "neurips-cell-seg/self",
     # out-of-domain (LM)
-    "covid_if", "plantseg/ovules", "hpa", "lizard", "mouse-embryo", "ctc/hela_samples",
+    "covid_if", "plantseg/ovules", "hpa", "lizard", "mouse-embryo", "ctc/hela_samples", "dynamicnuclearnet", "pannuke",
     # organelles (EM)
     #   - in-domain
     "mitoem/rat", "mitoem/human", "platynereis/nuclei",
     #   - out-of-domain
     "mitolab/c_elegans", "mitolab/fly_brain", "mitolab/glycolytic_muscle", "mitolab/hela_cell",
-    "mitolab/lucchi_pp", "mitolab/salivary_gland", "mitolab/tem", "lucchi", "nuc-mm/mouse",
-    "nuc-mm/zebrafish", "uro_cell", "sponge_em", "platynereis/cilia",
+    "mitolab/lucchi_pp", "mitolab/salivary_gland", "mitolab/tem", "lucchi", "nuc_mm/mouse",
+    "nuc_mm/zebrafish", "uro_cell", "sponge_em", "platynereis/cilia", "vnc", "asem/mito", "asem/er",
     # boundaries - EM
     #   - in-domain
     "cremi", "platynereis/cells",
     #   - out-of-domain
-    "axondeepseg", "snemi", "isbi"
+    "axondeepseg", "snemi", "isbi",
 ]
 
 
@@ -81,15 +83,16 @@ def get_dataset_paths(dataset_name, split_choice):
 def get_model(model_type, ckpt):
     if ckpt is None:
         ckpt = VANILLA_MODELS[model_type]
-    predictor = get_predictor(ckpt, model_type)
+    predictor = get_sam_model(model_type=model_type, checkpoint_path=ckpt)
     return predictor
 
 
 def get_paths(dataset_name, split):
-    assert dataset_name in DATASETS
+    assert dataset_name in DATASETS, dataset_name
 
     if dataset_name == "livecell":
-        return _get_livecell_paths(input_folder=os.path.join(ROOT, "livecell"), split=split)
+        image_paths, gt_paths = _get_livecell_paths(input_folder=os.path.join(ROOT, "livecell"), split=split)
+        return sorted(image_paths), sorted(gt_paths)
 
     image_dir, gt_dir = get_dataset_paths(dataset_name, split)
     image_paths = sorted(glob(os.path.join(image_dir)))
@@ -218,8 +221,11 @@ def get_default_arguments():
     )
     parser.add_argument("-c", "--checkpoint", type=none_or_str, required=True, default=None)
     parser.add_argument("-e", "--experiment_folder", type=str, required=True)
-    parser.add_argument("-d", "--dataset", type=str, required=True)
+    parser.add_argument("-d", "--dataset", type=str, default=None)
     parser.add_argument("--box", action="store_true", help="If passed, starts with first prompt as box")
+    parser.add_argument(
+        "--use_masks", action="store_true", help="To use logits masks for iterative prompting."
+    )
     args = parser.parse_args()
     return args
 

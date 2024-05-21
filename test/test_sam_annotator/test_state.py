@@ -13,7 +13,7 @@ class TestState(unittest.TestCase):
         image = binary_blobs(512)
 
         state = AnnotatorState()
-        state.initialize_predictor(image, self.model_type)
+        state.initialize_predictor(image, self.model_type, ndim=2)
         state.image_shape = image.shape
         self.assertTrue(state.initialized_for_interactive_segmentation())
 
@@ -24,7 +24,7 @@ class TestState(unittest.TestCase):
         state.current_track_id = 1
         state.lineage = {1: {}}
         state.committed_lineages = []
-        state.tracking_widget = Container()
+        state.widgets = {"tracking": Container()}
         self.assertTrue(state.initialized_for_tracking())
 
 

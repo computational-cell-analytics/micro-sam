@@ -3,20 +3,29 @@ import os
 import shutil
 import subprocess
 from glob import glob
+from pathlib import Path
 from datetime import datetime
 
 
+ALL_SCRIPTS = [
+    "precompute_embeddings", "evaluate_amg", "iterative_prompting", "evaluate_instance_segmentation"
+]
+
+
 def write_batch_script(
-    env_name, out_path, inference_setup, checkpoint, model_type, experiment_folder, dataset_name, delay=None
+    env_name, out_path, inference_setup, checkpoint, model_type,
+    experiment_folder, dataset_name, delay=None, use_masks=False
 ):
     "Writing scripts with different fold-trainings for micro-sam evaluation"
     batch_script = f"""#!/bin/bash
-#SBATCH -c 8
+#SBATCH -c 16
 #SBATCH --mem 64G
-#SBATCH -t 2-00:00:00
+#SBATCH -t 4-00:00:00
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
 #SBATCH -A gzz0001
+#SBATCH --constraint=80gb
+#SBATCH --qos=96h
 #SBATCH --job-name={inference_setup}
 
 source ~/.bashrc
@@ -26,7 +35,8 @@ mamba activate {env_name} \n"""
         batch_script += f"sleep {delay} \n"
 
     # python script
-    python_script = f"python {inference_setup}.py "
+    inference_script_path = os.path.join(Path(__file__).parent, f"{inference_setup}.py")
+    python_script = f"python {inference_script_path} "
 
     _op = out_path[:-3] + f"_{inference_setup}.sh"
 
@@ -41,6 +51,10 @@ mamba activate {env_name} \n"""
 
     # IMPORTANT: choice of the dataset
     python_script += f"-d {dataset_name} "
+
+    # use logits for iterative prompting
+    if inference_setup == "iterative_prompting" and use_masks:
+        python_script += "--use_masks "
 
     # let's add the python script to the bash script
     batch_script += python_script
@@ -76,7 +90,7 @@ def get_checkpoint_path(experiment_set, dataset_name, model_type, region):
         checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/"
 
         if region == "organelles":
-            checkpoint += "with_cem/mito_nuc_em_generalist_sam/best.pt"
+            checkpoint += "mito_nuc_em_generalist_sam/best.pt"
         elif region == "boundaries":
             checkpoint += "boundaries_em_generalist_sam/best.pt"
         elif region == "lm":
@@ -85,9 +99,18 @@ def get_checkpoint_path(experiment_set, dataset_name, model_type, region):
             raise ValueError("Choose `region` from lm / organelles / boundaries")
 
     elif experiment_set == "specialist":
-        if dataset_name.split("/") > 1:
+        _split = dataset_name.split("/")
+        if len(_split) > 1:
             # it's the case for plantseg/root, we catch it and convert it to the expected format
-            dataset_name = f"{dataset_name[0]}_{dataset_name[1]}"
+            dataset_name = f"{_split[0]}_{_split[1]}"
+
+        # HACK:
+        if dataset_name.startswith("neurips-cell-seg"):
+            dataset_name = "neurips_cellseg"
+        if dataset_name.startswith("asem"):
+            dataset_name = "asem_er"
+        if dataset_name.startswith("tissuenet"):
+            dataset_name = "tissuenet"
 
         checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/{dataset_name}_sam/best.pt"
 
@@ -98,7 +121,7 @@ def get_checkpoint_path(experiment_set, dataset_name, model_type, region):
         raise ValueError("Choose from generalist / vanilla")
 
     if checkpoint is not None:
-        assert os.path.exists(checkpoint)
+        assert os.path.exists(checkpoint), checkpoint
 
     return checkpoint
 
@@ -114,32 +137,45 @@ def submit_slurm(args):
     region = args.roi  # use the organelles model or boundaries model
     make_delay = "10s"  # wait for precomputing the embeddings and later run inference scripts
 
-    if args.checkpoint_path is None and args.experiment_path is None:
+    if args.checkpoint_path is None:
         checkpoint = get_checkpoint_path(experiment_set, dataset_name, model_type, region)
-
-        modality = region if region == "lm" else "em"
-
-        experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/"
-        experiment_folder += f"{experiment_set}/{modality}/{dataset_name}/{model_type}/"
     else:
         checkpoint = args.checkpoint_path
+
+    if args.experiment_path is None:
+        modality = region if region == "lm" else "em"
+        experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/v3/"
+        experiment_folder += f"{experiment_set}/{modality}/{dataset_name}/{model_type}/"
+    else:
         experiment_folder = args.experiment_path
 
     # now let's run the experiments
-    if experiment_set == "vanilla":
-        all_setups = ["precompute_embeddings", "evaluate_amg", "iterative_prompting"]
+    if args.specific_experiment is None:
+        if experiment_set == "vanilla":
+            all_setups = ALL_SCRIPTS[:-1]
+        else:
+            all_setups = ALL_SCRIPTS
     else:
-        all_setups = ["precompute_embeddings", "evaluate_amg", "evaluate_instance_segmentation", "iterative_prompting"]
+        assert args.specific_experiment in ALL_SCRIPTS
+        all_setups = [args.specific_experiment]
+
+    # env name
+    if model_type == "vit_t":
+        env_name = "mobilesam"
+    else:
+        env_name = "sam"
+
     for current_setup in all_setups:
         write_batch_script(
-            env_name="sam",
+            env_name=env_name,
             out_path=get_batch_script_names(tmp_folder),
             inference_setup=current_setup,
             checkpoint=checkpoint,
             model_type=model_type,
             experiment_folder=experiment_folder,
             dataset_name=dataset_name,
-            delay=None if current_setup == "precompute_embeddings" else make_delay
+            delay=None if current_setup == "precompute_embeddings" else make_delay,
+            use_masks=args.use_masks
             )
 
     # the logic below automates the process of first running the precomputation of embeddings, and only then inference.
@@ -172,13 +208,17 @@ if __name__ == "__main__":
     # the parameters to use the default models
     parser.add_argument("-d", "--dataset_name", type=str, required=True)
     parser.add_argument("-m", "--model_type", type=str, required=True)
-    parser.add_argument("-e", "--experiment_set", type=str, required=True)
+    parser.add_argument("-e", "--experiment_set", type=str)
     # optional argument to specify for the experiment root folder automatically
     parser.add_argument("-r", "--roi", type=str)
+    parser.add_argument("--use_masks", action="store_true")
 
     # overwrite the checkpoint path and experiment root to use this flexibly
     parser.add_argument("--checkpoint_path", type=str, default=None)
     parser.add_argument("--experiment_path", type=str, default=None)
+
+    # ask for a specific experiment
+    parser.add_argument("-s", "--specific_experiment", type=str, default=None)
 
     args = parser.parse_args()
     main(args)

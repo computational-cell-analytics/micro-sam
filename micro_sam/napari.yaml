@@ -1,12 +1,17 @@
 name: micro-sam
 display_name: SegmentAnything for Microscopy
+# see https://napari.org/stable/plugins/manifest.html for valid categories
+categories: ["Segmentation", "Annotation"]
 contributions:
   commands:
-
     # Commands for sample data.
-    - id: micro-sam.sample_data_image_series
-      python_name: micro_sam.sample_data:sample_data_image_series
-      title: Load image series sample data from micro-sam plugin
+    # We don't provide the sample data for image series via napari for now,
+    # because the image series annotator cannot be called for image layers in napari (yet),
+    # but it has to be called with the path to the folder where the images are stored.
+    # So providing the sample data in napari would be confusing.
+    # - id: micro-sam.sample_data_image_series
+    #   python_name: micro_sam.sample_data:sample_data_image_series
+    #   title: Load image series sample data from micro-sam plugin
     - id: micro-sam.sample_data_wholeslide
       python_name: micro_sam.sample_data:sample_data_wholeslide
       title: Load WholeSlide sample data from micro-sam plugin
@@ -36,14 +41,20 @@ contributions:
     - id: micro-sam.annotator_tracking
       python_name: micro_sam.sam_annotator.annotator_tracking:AnnotatorTracking
       title: Start the tracking annotator
+    - id: micro-sam.image_series_annotator
+      python_name: micro_sam.sam_annotator.image_series_annotator:ImageSeriesAnnotator
+      title: Run the annotator for multiple images in a folder
+    - id: micro-sam.training
+      python_name: micro_sam.sam_annotator.training_ui:TrainingWidget
+      title: Finetune SAM model
     - id: micro-sam.settings
       python_name: micro_sam.sam_annotator._widgets:settings_widget
       title: Set cache directory
 
   sample_data:
-    - command: micro-sam.sample_data_image_series
-      display_name: Image series example data
-      key: micro-sam-image-series
+    # - command: micro-sam.sample_data_image_series
+    #   display_name: Image series example data
+    #   key: micro-sam-image-series
     - command: micro-sam.sample_data_wholeslide
       display_name: WholeSlide example data
       key: micro-sam-wholeslide
@@ -70,5 +81,9 @@ contributions:
       display_name: Annotator 3d
     - command: micro-sam.annotator_tracking
       display_name: Annotator Tracking
+    - command: micro-sam.image_series_annotator
+      display_name: Image Series Annotator
+    - command: micro-sam.training
+      display_name: Finetuning
     - command: micro-sam.settings
       display_name: Settings

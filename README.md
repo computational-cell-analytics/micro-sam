@@ -3,9 +3,9 @@
 [![codecov](https://codecov.io/gh/computational-cell-analytics/micro-sam/graph/badge.svg?token=7ETPP5CABP)](https://codecov.io/gh/computational-cell-analytics/micro-sam)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7919746.svg)](https://doi.org/10.5281/zenodo.7919746)
 
-# SegmentAnything for Microscopy
+# Segment Anything for Microscopy
 
-Tools for segmentation and tracking in microscopy build on top of [SegmentAnything](https://segment-anything.com/).
+Tools for segmentation and tracking in microscopy build on top of [Segment Anything](https://segment-anything.com/).
 Segment and track objects in microscopy images interactively with a few clicks!
 
 We implement napari applications for:
@@ -22,25 +22,20 @@ If you run into any problems or have questions regarding our tool please open an
 
 ## Installation and Usage
 
-You can install `micro_sam` via conda:
-```
-conda install -c conda-forge micro_sam napari pyqt
-```
-You can then start the `micro_sam` tools by running `$ micro_sam.annotator` in the command line.
+Please check [the documentation](https://computational-cell-analytics.github.io/micro-sam/) for details on how to install and use `micro_sam`. You can also watch [the quickstart video](https://youtu.be/gcv0fa84mCc) or [all video tutorials](https://youtube.com/playlist?list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO&si=qNbB8IFXqAX33r_Z).
 
-For an introduction in how to use the napari based annotation tools check out [the video tutorials](https://www.youtube.com/watch?v=ket7bDUP9tI&list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO&pp=gAQBiAQB).
-Please check out [the documentation](https://computational-cell-analytics.github.io/micro-sam/) for more details on the installation and usage of `micro_sam`.
 
 ## Contributing
 
 We welcome new contributions!
 
-If you are interested in contributing to micro-sam, please see the [contributing guide](doc/contributing.md) and [developer documentation](doc/development.md). The first step is to [discuss your idea in a new issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) with the current developers.
+If you are interested in contributing to micro-sam, please see the [contributing guide](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#contribution-guide). The first step is to [discuss your idea in a new issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) with the current developers.
+
 
 ## Citation
 
 If you are using this repository in your research please cite
-- Our [preprint](https://doi.org/10.1101/2023.08.21.554208)
+- our [preprint](https://doi.org/10.1101/2023.08.21.554208)
 - and the original [Segment Anything publication](https://arxiv.org/abs/2304.02643).
 - If you use a `vit-tiny` models please also cite [Mobile SAM](https://arxiv.org/abs/2306.14289).
 
@@ -57,6 +52,22 @@ Compared to these we support more applications (2d, 3d and tracking), and provid
 
 
 ## Release Overview
+
+**New in version 1.0.0**
+
+This release mainly fixes issues with the previous release and marks the napari user interface as stable.
+
+**New in version 0.5.0**
+
+This version includes a lot of new functionality and improvements. The most important changes are:
+- Re-implementation of the annotation tools. The tools are now implemented as napari plugin.
+- Using our improved functionality for automatic instance segmentation in the annotation tools, including automatic segmentation for 3D data.
+- New widgets to use the finetuning and image series annotation functionality from napari.
+- Improved finetuned models for light microscopy and electron microscopy data that are available via bioimage.io.
+
+**New in version 0.4.1**
+
+- Bugfix for the image series annotator. Before the automatic segmentation did not work correctly.
 
 **New in version 0.4.0**
 

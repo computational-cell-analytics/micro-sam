@@ -5,8 +5,6 @@ https://computational-cell-analytics.github.io/micro-sam/micro_sam.html
 """
 
 import os
-import pickle
-import warnings
 from abc import ABC
 from collections import OrderedDict
 from copy import deepcopy
@@ -25,11 +23,6 @@ from torchvision.ops.boxes import batched_nms, box_area
 
 from torch_em.model import UNETR
 from torch_em.util.segmentation import watershed_from_center_and_boundary_distances
-
-try:
-    from napari.utils import progress as tqdm
-except ImportError:
-    from tqdm import tqdm
 
 from . import util
 from ._vendored import batched_mask_to_box, mask_to_rle_pytorch
@@ -86,12 +79,22 @@ def mask_data_to_segmentation(
         segmentation[require_numpy(mask["segmentation"])] = this_seg_id
         seg_id = this_seg_id + 1
 
+    seg_ids, sizes = np.unique(segmentation, return_counts=True)
+
+    # In some cases objects may be smaller than peviously calculated,
+    # since they are covered by other objects. We ensure these also get
+    # filtered out here.
+    filter_ids = seg_ids[sizes < min_object_size]
+
+    # If we run segmentation with background we also map the largest segment
+    # (the most likely background object) to zero. This is often zero already,
+    # but it does not hurt to reset that to zero either.
     if with_background:
-        seg_ids, sizes = np.unique(segmentation, return_counts=True)
         bg_id = seg_ids[np.argmax(sizes)]
-        if bg_id != 0:
-            segmentation[segmentation == bg_id] = 0
-        vigra.analysis.relabelConsecutive(segmentation, out=segmentation)
+        filter_ids = np.concatenate([filter_ids, [bg_id]])
+
+    segmentation[np.isin(segmentation, filter_ids)] = 0
+    vigra.analysis.relabelConsecutive(segmentation, out=segmentation)
 
     return segmentation
 
@@ -312,6 +315,14 @@ class AMGBase(ABC):
         self._original_size = state["original_size"]
         self._is_initialized = True
 
+    def clear_state(self):
+        """Clear the state of the mask generator.
+        """
+        self._crop_list = None
+        self._crop_boxes = None
+        self._original_size = None
+        self._is_initialized = False
+
 
 class AutomaticMaskGenerator(AMGBase):
     """Generates an instance segmentation without prompts, using a point grid.
@@ -394,8 +405,8 @@ class AutomaticMaskGenerator(AMGBase):
         del masks
         return data
 
-    def _process_crop(self, image, crop_box, crop_layer_idx, verbose, precomputed_embeddings):
-        # crop the image and calculate embeddings
+    def _process_crop(self, image, crop_box, crop_layer_idx, precomputed_embeddings, pbar_init=None, pbar_update=None):
+        # Crop the image and calculate embeddings.
         x0, y0, x1, y1 = crop_box
         cropped_im = image[y0:y1, x0:x1, :]
         cropped_im_size = cropped_im.shape[:2]
@@ -403,22 +414,23 @@ class AutomaticMaskGenerator(AMGBase):
         if not precomputed_embeddings:
             self._predictor.set_image(cropped_im)
 
-        # get the points for this crop
+        # Get the points for this crop.
         points_scale = np.array(cropped_im_size)[None, ::-1]
         points_for_image = self.point_grids[crop_layer_idx] * points_scale
 
-        # generate masks for this crop in batches
+        # Generate masks for this crop in batches.
         data = amg_utils.MaskData()
         n_batches = len(points_for_image) // self._points_per_batch +\
             int(len(points_for_image) % self._points_per_batch != 0)
-        for (points,) in tqdm(
-            amg_utils.batch_iterator(self._points_per_batch, points_for_image),
-            disable=not verbose, total=n_batches,
-            desc="Predict masks for point grid prompts",
-        ):
+        if pbar_init is not None:
+            pbar_init(n_batches, "Predict masks for point grid prompts")
+
+        for (points,) in amg_utils.batch_iterator(self._points_per_batch, points_for_image):
             batch_data = self._process_batch(points, cropped_im_size, crop_box, self.original_size)
             data.cat(batch_data)
             del batch_data
+            if pbar_update is not None:
+                pbar_update(1)
 
         if not precomputed_embeddings:
             self._predictor.reset_image()
@@ -431,7 +443,9 @@ class AutomaticMaskGenerator(AMGBase):
         image: np.ndarray,
         image_embeddings: Optional[util.ImageEmbeddings] = None,
         i: Optional[int] = None,
-        verbose: bool = False
+        verbose: bool = False,
+        pbar_init: Optional[callable] = None,
+        pbar_update: Optional[callable] = None,
     ) -> None:
         """Initialize image embeddings and masks for an image.
 
@@ -442,6 +456,10 @@ class AutomaticMaskGenerator(AMGBase):
             i: Index for the image data. Required if `image` has three spatial dimensions
                 or a time dimension and two spatial dimensions.
             verbose: Whether to print computation progress.
+            pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
+                Can be used together with pbar_update to handle napari progress bar in other thread.
+                To enables using this function within a threadworker.
+            pbar_update: Callback to update an external progress bar.
         """
         original_size = image.shape[:2]
         self._original_size = original_size
@@ -450,9 +468,8 @@ class AutomaticMaskGenerator(AMGBase):
             original_size, self._crop_n_layers, self._crop_overlap_ratio
         )
 
-        # we can set fixed image embeddings if we only have a single crop box
-        # (which is the default setting)
-        # otherwise we have to recompute the embeddings for each crop and can't precompute
+        # We can set fixed image embeddings if we only have a single crop box (the default setting).
+        # Otherwise we have to recompute the embeddings for each crop and can't precompute.
         if len(crop_boxes) == 1:
             if image_embeddings is None:
                 image_embeddings = util.precompute_image_embeddings(self._predictor, image)
@@ -464,12 +481,17 @@ class AutomaticMaskGenerator(AMGBase):
         # we need to cast to the image representation that is compatible with SAM
         image = util._to_image(image)
 
+        _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
+
         crop_list = []
         for crop_box, layer_idx in zip(crop_boxes, layer_idxs):
             crop_data = self._process_crop(
-                image, crop_box, layer_idx, verbose=verbose, precomputed_embeddings=precomputed_embeddings
+                image, crop_box, layer_idx,
+                precomputed_embeddings=precomputed_embeddings,
+                pbar_init=pbar_init, pbar_update=pbar_update,
             )
             crop_list.append(crop_data)
+        pbar_close()
 
         self._is_initialized = True
         self._crop_list = crop_list
@@ -530,33 +552,27 @@ class AutomaticMaskGenerator(AMGBase):
         return masks
 
 
-def _compute_tiled_embeddings(predictor, image, image_embeddings, embedding_save_path, tile_shape, halo):
-    have_tiling_params = (tile_shape is not None) and (halo is not None)
-    if image_embeddings is None and have_tiling_params:
-        if embedding_save_path is None:
-            raise ValueError(
-                "You have passed neither pre-computed embeddings nor a path for saving embeddings."
-                "Embeddings with tiling can only be computed if a save path is given."
-            )
-        image_embeddings = util.precompute_image_embeddings(
-            predictor, image, tile_shape=tile_shape, halo=halo, save_path=embedding_save_path
-        )
-    elif image_embeddings is None and not have_tiling_params:
-        raise ValueError("You passed neither pre-computed embeddings nor tiling parameters (tile_shape and halo)")
-    else:
-        feats = image_embeddings["features"]
-        tile_shape_, halo_ = feats.attrs["tile_shape"], feats.attrs["halo"]
-        if have_tiling_params and (
-            (list(tile_shape) != list(tile_shape_)) or
-            (list(halo) != list(halo_))
-        ):
-            warnings.warn(
-                "You have passed both pre-computed embeddings and tiling parameters (tile_shape and halo) and"
-                "the values of the tiling parameters from the embeddings disagree with the ones that were passed."
-                "The tiling parameters you have passed wil be ignored."
-            )
+# Helper function for tiled embedding computation and checking consistent state.
+def _process_tiled_embeddings(predictor, image, image_embeddings, tile_shape, halo):
+    if image_embeddings is None:
+        if tile_shape is None or halo is None:
+            raise ValueError("To compute tiled embeddings the parameters tile_shape and halo have to be passed.")
+        image_embeddings = util.precompute_image_embeddings(predictor, image, tile_shape=tile_shape, halo=halo)
+
+    # Use tile shape and halo from the precomputed embeddings if not given.
+    # Otherwise check that they are consistent.
+    feats = image_embeddings["features"]
+    tile_shape_, halo_ = feats.attrs["tile_shape"], feats.attrs["halo"]
+    if tile_shape is None:
         tile_shape = tile_shape_
+    elif tile_shape != tile_shape_:
+        raise ValueError(
+            f"Inconsistent tile_shape parameter {tile_shape} with precomputed embeedings: {tile_shape_}."
+        )
+    if halo is None:
         halo = halo_
+    elif halo != halo_:
+        raise ValueError(f"Inconsistent halo parameter {halo} with precomputed embeedings: {halo_}.")
 
     return image_embeddings, tile_shape, halo
 
@@ -605,7 +621,8 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         tile_shape: Optional[Tuple[int, int]] = None,
         halo: Optional[Tuple[int, int]] = None,
         verbose: bool = False,
-        embedding_save_path: Optional[str] = None,
+        pbar_init: Optional[callable] = None,
+        pbar_update: Optional[callable] = None,
     ) -> None:
         """Initialize image embeddings and masks for an image.
 
@@ -618,27 +635,33 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
             tile_shape: The tile shape for embedding prediction.
             halo: The overlap of between tiles.
             verbose: Whether to print computation progress.
-            embedding_save_path: Where to save the image embeddings.
+            pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
+                Can be used together with pbar_update to handle napari progress bar in other thread.
+                To enables using this function within a threadworker.
+            pbar_update: Callback to update an external progress bar.
         """
         original_size = image.shape[:2]
         self._original_size = original_size
 
-        image_embeddings, tile_shape, halo = _compute_tiled_embeddings(
-            self._predictor, image, image_embeddings, embedding_save_path, tile_shape, halo
+        image_embeddings, tile_shape, halo = _process_tiled_embeddings(
+            self._predictor, image, image_embeddings, tile_shape, halo
         )
 
         tiling = blocking([0, 0], original_size, tile_shape)
         n_tiles = tiling.numberOfBlocks
 
-        # the crop box is always the full local tile
+        # The crop box is always the full local tile.
         tiles = [tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock for tile_id in range(n_tiles)]
         crop_boxes = [[tile.begin[1], tile.begin[0], tile.end[1], tile.end[0]] for tile in tiles]
 
-        # we need to cast to the image representation that is compatible with SAM
+        _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
+        pbar_init(n_tiles, "Compute masks for tile")
+
+        # We need to cast to the image representation that is compatible with SAM.
         image = util._to_image(image)
 
         mask_data = []
-        for tile_id in tqdm(range(n_tiles), total=n_tiles, desc="Compute masks for tile", disable=not verbose):
+        for tile_id in range(n_tiles):
             # set the pre-computed embeddings for this tile
             features = image_embeddings["features"][tile_id]
             tile_embeddings = {
@@ -650,34 +673,16 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
 
             # compute the mask data for this tile and append it
             this_mask_data = self._process_crop(
-                image, crop_box=crop_boxes[tile_id], crop_layer_idx=0, verbose=verbose, precomputed_embeddings=True
+                image, crop_box=crop_boxes[tile_id], crop_layer_idx=0, precomputed_embeddings=True
             )
             mask_data.append(this_mask_data)
+            pbar_update(1)
+        pbar_close()
 
         # set the initialized data
         self._is_initialized = True
         self._crop_list = mask_data
         self._crop_boxes = crop_boxes
-
-
-def get_amg(
-    predictor: SamPredictor,
-    is_tiled: bool,
-    **kwargs,
-) -> AMGBase:
-    """Get the automatic mask generator class.
-
-    Args:
-        predictor: The segment anything predictor.
-        is_tiled: Whether tiled embeddings are used.
-        kwargs: The keyword arguments for the amg class.
-
-    Returns:
-        The automatic mask generator.
-    """
-    amg = TiledAutomaticMaskGenerator(predictor, **kwargs) if is_tiled else\
-        AutomaticMaskGenerator(predictor, **kwargs)
-    return amg
 
 
 #
@@ -733,71 +738,90 @@ class DecoderAdapter(torch.nn.Module):
         return x
 
 
-def load_instance_segmentation_with_decoder_from_checkpoint(
-    checkpoint: Union[os.PathLike, str],
-    model_type: str,
-    device: Optional[Union[str, torch.device]] = None
-):
-    """Load `InstanceSegmentationWithDecoder` from a `training.JointSamTrainer` checkpoint.
+def get_unetr(
+    image_encoder: torch.nn.Module,
+    decoder_state: Optional[OrderedDict[str, torch.Tensor]] = None,
+    device: Optional[Union[str, torch.device]] = None,
+) -> torch.nn.Module:
+    """Get UNETR model for automatic instance segmentation.
 
     Args:
-        checkpoint: The path to the checkpoint.
-        model_type: The type of the model, i.e. which image encoder type is used.
-        device: The device to use (cpu or cuda).
-
+        image_encoder: The image encoder of the SAM model.
+            This is used as encoder by the UNETR too.
+        decoder_state: Optional decoder state to initialize the weights
+            of the UNETR decoder.
+        device: The device.
     Returns:
-        InstanceSegmentationWithDecoder
+        The UNETR model.
     """
     device = util.get_device(device)
 
-    # over-ride the unpickler with our custom one
-    custom_pickle = pickle
-    custom_pickle.Unpickler = util._CustomUnpickler
-
-    state = torch.load(checkpoint, map_location=device, pickle_module=custom_pickle)
-
-    # Get the predictor.
-    model_state = state["model_state"]
-    sam_prefix = "sam."
-    model_state = OrderedDict(
-        [(k[len(sam_prefix):] if k.startswith(sam_prefix) else k, v) for k, v in model_state.items()]
-    )
-
-    sam = util.sam_model_registry[model_type]()
-    sam.to(device)
-    sam.load_state_dict(model_state)
-    predictor = SamPredictor(sam)
-    predictor.model_type = model_type
-
-    # Get the decoder.
-    # NOTE: we hard-code the UNETR settings for now.
-    # Eventually we may need to finds a way to be more flexible.
     unetr = UNETR(
         backbone="sam",
-        encoder=predictor.model.image_encoder,
+        encoder=image_encoder,
         out_channels=3,
         use_sam_stats=True,
         final_activation="Sigmoid",
         use_skip_connection=False,
         resize_input=True,
     )
+    if decoder_state is not None:
+        unetr_state_dict = unetr.state_dict()
+        for k, v in unetr_state_dict.items():
+            if not k.startswith("encoder"):
+                unetr_state_dict[k] = decoder_state[k]
+        unetr.load_state_dict(unetr_state_dict)
 
-    encoder_state = []
-    encoder_prefix = "image_"
-    encoder_state = OrderedDict(
-        (k[len(encoder_prefix):], v) for k, v in model_state.items() if k.startswith(encoder_prefix)
-    )
-
-    decoder_state = state["decoder_state"]
-    unetr_state = OrderedDict(list(encoder_state.items()) + list(decoder_state.items()))
-    unetr.load_state_dict(unetr_state)
     unetr.to(device)
+    return unetr
 
-    decoder = DecoderAdapter(unetr)
 
-    # Instantiate the segmenter.
-    segmenter = InstanceSegmentationWithDecoder(predictor, decoder)
-    return segmenter
+def get_decoder(
+    image_encoder: torch.nn.Module,
+    decoder_state: OrderedDict[str, torch.Tensor],
+    device: Optional[Union[str, torch.device]] = None,
+) -> DecoderAdapter:
+    """Get decoder to predict outputs for automatic instance segmentation
+
+    Args:
+        image_encoder: The image encoder of the SAM model.
+        decoder_state: State to initialize the weights of the UNETR decoder.
+        device: The device.
+    Returns:
+        The decoder for instance segmentation.
+    """
+    unetr = get_unetr(image_encoder, decoder_state, device)
+    return DecoderAdapter(unetr)
+
+
+def get_predictor_and_decoder(
+    model_type: str,
+    checkpoint_path: Union[str, os.PathLike],
+    device: Optional[Union[str, torch.device]] = None,
+) -> Tuple[SamPredictor, DecoderAdapter]:
+    """Load the SAM model (predictor) and instance segmentation decoder.
+
+    This requires a checkpoint that contains the state for both predictor
+    and decoder.
+
+    Args:
+        model_type: The type of the image encoder used in the SAM model.
+        checkpoint_path: Path to the checkpoint from which to load the data.
+        device: The device.
+
+    Returns:
+        The SAM predictor.
+        The decoder for instance segmentation.
+    """
+    device = util.get_device(device)
+    predictor, state = util.get_sam_model(
+        model_type=model_type, checkpoint_path=checkpoint_path,
+        device=device, return_state=True
+    )
+    if "decoder_state" not in state:
+        raise ValueError(f"The checkpoint at {checkpoint_path} does not contain a decoder state")
+    decoder = get_decoder(predictor.model.image_encoder, state["decoder_state"], device)
+    return predictor, decoder
 
 
 class InstanceSegmentationWithDecoder:
@@ -844,6 +868,9 @@ class InstanceSegmentationWithDecoder:
         image: np.ndarray,
         image_embeddings: Optional[util.ImageEmbeddings] = None,
         i: Optional[int] = None,
+        verbose: bool = False,
+        pbar_init: Optional[callable] = None,
+        pbar_update: Optional[callable] = None,
     ) -> None:
         """Initialize image embeddings and decoder predictions for an image.
 
@@ -853,29 +880,34 @@ class InstanceSegmentationWithDecoder:
                 See `util.precompute_image_embeddings` for details.
             i: Index for the image data. Required if `image` has three spatial dimensions
                 or a time dimension and two spatial dimensions.
+            verbose: Whether to be verbose.
+            pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
+                Can be used together with pbar_update to handle napari progress bar in other thread.
+                To enables using this function within a threadworker.
+            pbar_update: Callback to update an external progress bar.
         """
+        _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
+        pbar_init(1, "Initialize instance segmentation with decoder")
+
         if image_embeddings is None:
             image_embeddings = util.precompute_image_embeddings(self._predictor, image)
 
-        # This could be made more versatile to also support other decoder inputs,
-        # e.g. the UNETR with skip connections.
-        if isinstance(image_embeddings["features"], torch.Tensor):
-            embeddings = image_embeddings["features"].to(self._predictor.device)
-        else:
-            embeddings = torch.from_numpy(image_embeddings["features"]).to(self._predictor.device)
+        # Get the image embeddings from the predictor.
+        self._predictor = util.set_precomputed(self._predictor, image_embeddings, i=i)
+        embeddings = self._predictor.features
+        input_shape = tuple(self._predictor.input_size)
+        original_shape = tuple(self._predictor.original_size)
 
-        input_shape = tuple(image_embeddings["input_size"])
-        original_shape = tuple(image_embeddings["original_size"])
-        output = self._decoder(
-            embeddings, input_shape, original_shape
-        ).cpu().numpy().squeeze(0)
-
+        # Run prediction with the UNETR decoder.
+        output = self._decoder(embeddings, input_shape, original_shape).cpu().numpy().squeeze(0)
         assert output.shape[0] == 3, f"{output.shape}"
+        pbar_update(1)
+        pbar_close()
 
+        # Set the state.
         self._foreground = output[0]
         self._center_distances = output[1]
         self._boundary_distances = output[2]
-
         self._is_initialized = True
 
     def _to_masks(self, segmentation, output_mode):
@@ -924,6 +956,7 @@ class InstanceSegmentationWithDecoder:
         center_distance_threshold: float = 0.5,
         boundary_distance_threshold: float = 0.5,
         foreground_threshold: float = 0.5,
+        foreground_smoothing: float = 1.0,
         distance_smoothing: float = 1.6,
         min_size: int = 0,
         output_mode: Optional[str] = "binary_mask",
@@ -935,6 +968,8 @@ class InstanceSegmentationWithDecoder:
                 used to find seeds (intersected with thresholded boundary distance predictions).
             boundary_distance_threshold: Boundary distance predictions below this value will be
                 used to find seeds (intersected with thresholded center distance predictions).
+            foreground_smoothing: Sigma value for smoothing the foreground predictions, to avoid
+                checkerboard artifacts in the prediction.
             foreground_threshold: Foreground predictions above this value will be used as foreground mask.
             distance_smoothing: Sigma value for smoothing the distance predictions.
             min_size: Minimal object size in the segmentation result.
@@ -946,9 +981,12 @@ class InstanceSegmentationWithDecoder:
         if not self.is_initialized:
             raise RuntimeError("InstanceSegmentationWithDecoder has not been initialized. Call initialize first.")
 
-        # TODO: expose as parameter?
-        # There are checkerboard artifacts in the prediction
-        foreground = vigra.filters.gaussianSmoothing(self._foreground, 1.0)
+        if foreground_smoothing > 0:
+            foreground = vigra.filters.gaussianSmoothing(self._foreground, foreground_smoothing)
+        else:
+            foreground = self._foreground
+        # Further optimization: parallel implementation using elf.parallel functionality.
+        # (Make sure to expose n_threads to avoid over-subscription in case of outer parallelization)
         segmentation = watershed_from_center_and_boundary_distances(
             self._center_distances, self._boundary_distances, foreground,
             center_distance_threshold=center_distance_threshold,
@@ -960,3 +998,137 @@ class InstanceSegmentationWithDecoder:
         if output_mode is not None:
             segmentation = self._to_masks(segmentation, output_mode)
         return segmentation
+
+    def get_state(self) -> Dict[str, Any]:
+        """Get the initialized state of the instance segmenter.
+
+        Returns:
+            Instance segmentation state.
+        """
+        if not self.is_initialized:
+            raise RuntimeError("The state has not been computed yet. Call initialize first.")
+
+        return {
+            "foreground": self._foreground,
+            "center_distances": self._center_distances,
+            "boundary_distances": self._boundary_distances,
+        }
+
+    def set_state(self, state: Dict[str, Any]) -> None:
+        """Set the state of the instance segmenter.
+
+        Args:
+            state: The instance segmentation state
+        """
+        self._foreground = state["foreground"]
+        self._center_distances = state["center_distances"]
+        self._boundary_distances = state["boundary_distances"]
+        self._is_initialized = True
+
+    def clear_state(self):
+        """Clear the state of the instance segmenter.
+        """
+        self._foreground = None
+        self._center_distances = None
+        self._boundary_distances = None
+        self._is_initialized = False
+
+
+class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
+    """Same as `InstanceSegmentationWithDecoder` but for tiled image embeddings.
+    """
+
+    @torch.no_grad()
+    def initialize(
+        self,
+        image: np.ndarray,
+        image_embeddings: Optional[util.ImageEmbeddings] = None,
+        i: Optional[int] = None,
+        tile_shape: Optional[Tuple[int, int]] = None,
+        halo: Optional[Tuple[int, int]] = None,
+        verbose: bool = False,
+        pbar_init: Optional[callable] = None,
+        pbar_update: Optional[callable] = None,
+    ) -> None:
+        """Initialize image embeddings and decoder predictions for an image.
+
+        Args:
+            image: The input image, volume or timeseries.
+            image_embeddings: Optional precomputed image embeddings.
+                See `util.precompute_image_embeddings` for details.
+            i: Index for the image data. Required if `image` has three spatial dimensions
+                or a time dimension and two spatial dimensions.
+            verbose: Dummy input to be compatible with other function signatures.
+            pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
+                Can be used together with pbar_update to handle napari progress bar in other thread.
+                To enables using this function within a threadworker.
+            pbar_update: Callback to update an external progress bar.
+        """
+        original_size = image.shape[:2]
+        image_embeddings, tile_shape, halo = _process_tiled_embeddings(
+            self._predictor, image, image_embeddings, tile_shape, halo
+        )
+        tiling = blocking([0, 0], original_size, tile_shape)
+
+        _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
+        pbar_init(tiling.numberOfBlocks, "Initialize tiled instance segmentation with decoder")
+
+        foreground = np.zeros(original_size, dtype="float32")
+        center_distances = np.zeros(original_size, dtype="float32")
+        boundary_distances = np.zeros(original_size, dtype="float32")
+
+        for tile_id in range(tiling.numberOfBlocks):
+
+            # Get the image embeddings from the predictor for this tile.
+            self._predictor = util.set_precomputed(self._predictor, image_embeddings, i=i, tile_id=tile_id)
+            embeddings = self._predictor.features
+            input_shape = tuple(self._predictor.input_size)
+            original_shape = tuple(self._predictor.original_size)
+
+            # Predict with the UNETR decoder for this tile.
+            output = self._decoder(embeddings, input_shape, original_shape).cpu().numpy().squeeze(0)
+            assert output.shape[0] == 3, f"{output.shape}"
+
+            # Set the predictions in the output for this tile.
+            block = tiling.getBlockWithHalo(tile_id, halo=list(halo))
+            local_bb = tuple(
+                slice(beg, end) for beg, end in zip(block.innerBlockLocal.begin, block.innerBlockLocal.end)
+            )
+            inner_bb = tuple(slice(beg, end) for beg, end in zip(block.innerBlock.begin, block.innerBlock.end))
+
+            foreground[inner_bb] = output[0][local_bb]
+            center_distances[inner_bb] = output[1][local_bb]
+            boundary_distances[inner_bb] = output[2][local_bb]
+        pbar_close()
+
+        # Set the state.
+        self._foreground = foreground
+        self._center_distances = center_distances
+        self._boundary_distances = boundary_distances
+        self._is_initialized = True
+
+
+def get_amg(
+    predictor: SamPredictor,
+    is_tiled: bool,
+    decoder: Optional[torch.nn.Module] = None,
+    **kwargs,
+) -> Union[AMGBase, InstanceSegmentationWithDecoder]:
+    """Get the automatic mask generator class.
+
+    Args:
+        predictor: The segment anything predictor.
+        is_tiled: Whether tiled embeddings are used.
+        decoder: Decoder to predict instacne segmmentation.
+        kwargs: The keyword arguments for the amg class.
+
+    Returns:
+        The automatic mask generator.
+    """
+    if decoder is None:
+        segmenter = TiledAutomaticMaskGenerator(predictor, **kwargs) if is_tiled else\
+            AutomaticMaskGenerator(predictor, **kwargs)
+    else:
+        segmenter = TiledInstanceSegmentationWithDecoder(predictor, decoder, **kwargs) if is_tiled else\
+            InstanceSegmentationWithDecoder(predictor, decoder, **kwargs)
+    return segmenter

@@ -3,16 +3,17 @@ and `micro_sam.evaluation.inference`.
 """
 
 import os
+from glob import glob
+from tqdm import tqdm
 from pathlib import Path
 from typing import List, Optional, Union
 
-import imageio.v3 as imageio
 import numpy as np
 import pandas as pd
+import imageio.v3 as imageio
 
-from elf.evaluation import mean_segmentation_accuracy
 from skimage.measure import label
-from tqdm import tqdm
+from elf.evaluation import mean_segmentation_accuracy
 
 
 def _run_evaluation(gt_paths, prediction_paths, verbose=True):
@@ -45,11 +46,9 @@ def run_evaluation(
     """Run evaluation for instance segmentation predictions.
 
     Args:
-        gt_folder: The folder with ground-truth images.
-        prediction_folder: The folder with the instance segmentations to evaluate.
+        gt_paths: The list of paths to ground-truth images.
+        prediction_paths: The list of paths with the instance segmentations to evaluate.
         save_path: Optional path for saving the results.
-        pattern: Optional pattern for selecting the images to evaluate via glob.
-            By default all images with ending .tif will be evaluated.
         verbose: Whether to print the progress.
 
     Returns:
@@ -75,4 +74,52 @@ def run_evaluation(
     return results
 
 
-# TODO function to evaluate full experiment and resave in one table
+def run_evaluation_for_iterative_prompting(
+    gt_paths: List[Union[os.PathLike, str]],
+    prediction_root: Union[os.PathLike, str],
+    experiment_folder: Union[os.PathLike, str],
+    start_with_box_prompt: bool = False,
+    overwrite_results: bool = False,
+) -> pd.DataFrame:
+    """Run evaluation for iterative prompt-based segmentation predictions.
+
+    Args:
+        gt_paths: The list of paths to ground-truth images.
+        prediction_root: The folder with the iterative prompt-based instance segmentations to evaluate.
+        experiment_folder: The folder where all the experiment results are stored.
+        start_with_box_prompt: Whether to evaluate on experiments with iterative prompting starting with box.
+
+    Returns:
+        A DataFrame that contains the evaluation results.
+    """
+    assert os.path.exists(prediction_root), prediction_root
+
+    # Save the results in the experiment folder
+    result_folder = os.path.join(experiment_folder, "results")
+    os.makedirs(result_folder, exist_ok=True)
+
+    csv_path = os.path.join(
+        result_folder,
+        "iterative_prompts_start_box.csv" if start_with_box_prompt else "iterative_prompts_start_point.csv"
+    )
+
+    # Overwrite the previously saved results
+    if overwrite_results and os.path.exists(csv_path):
+        os.remove(csv_path)
+
+    # If the results have been computed already, it's not needed to re-run it again.
+    if os.path.exists(csv_path):
+        print(pd.read_csv(csv_path))
+        return
+
+    list_of_results = []
+    prediction_folders = sorted(glob(os.path.join(prediction_root, "iteration*")))
+    for pred_folder in prediction_folders:
+        print("Evaluating", os.path.split(pred_folder)[-1])
+        pred_paths = sorted(glob(os.path.join(pred_folder, "*")))
+        result = run_evaluation(gt_paths=gt_paths, prediction_paths=pred_paths, save_path=None)
+        list_of_results.append(result)
+        print(result)
+
+    res_df = pd.concat(list_of_results, ignore_index=True)
+    res_df.to_csv(csv_path)
