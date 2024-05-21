@@ -44,7 +44,7 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
 def count_parameters(model):
     params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     params = params / 1e6
-    return f"The number of trainable parameters for the provided model is '{params} M'."
+    return f"The number of trainable parameters for the provided model is {round(params, 2)}M"
 
 
 def finetune_livecell(args):
