@@ -81,8 +81,8 @@ def get_trainable_sam_model(
                 if name.startswith(f"{freeze}"):
                     param.requires_grad = False
 
-    if get_lora:
-        sam = LoRA_Sam(sam, 4).sam
+    if get_lora:  # overwrites the SAM model by freezing the backbone and allow low rank adaption to attention layers
+        sam = LoRA_Sam(sam, rank=4).sam
 
     # convert to trainable sam
     trainable_sam = TrainableSAM(sam, device)

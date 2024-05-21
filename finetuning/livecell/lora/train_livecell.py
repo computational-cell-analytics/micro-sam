@@ -76,7 +76,9 @@ def finetune_livecell(args):
     unetr.to(device)
 
     def count_parameters(model):
-        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+        params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        params = params / 1e6
+        return f"{params} M"
 
     # vit_b
     # SAM: 93M (takes ~50GB)
@@ -90,8 +92,8 @@ def finetune_livecell(args):
     # SAM: 641M (takes ~73GB)
     # SAM-LoRA: 4.7M (takes ~67GB)
 
-    # There's no real memory advantage actually unless it's "truly" scaled up
-    # Need to investigate QLoRA
+    # First observations: There's no real memory advantage actually unless it's "truly" scaled up
+    # Q: Would quantization lead to better results?
 
     print(count_parameters(model))
 
@@ -147,7 +149,7 @@ def finetune_livecell(args):
 def main():
     parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LiveCELL dataset.")
     parser.add_argument(
-        "--input_path", "-i", default="/scratch/usr/nimanwai/data/livecell/",
+        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/livecell/",
         help="The filepath to the LiveCELL data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(
@@ -155,11 +157,11 @@ def main():
         help="The model type to use for fine-tuning. Either vit_h, vit_b or vit_l."
     )
     parser.add_argument(
-        "--save_root", "-s",
+        "--save_root", "-s", default=None,
         help="Where to save the checkpoint and logs. By default they will be saved where this script is run."
     )
     parser.add_argument(
-        "--iterations", type=int, default=int(1e5),
+        "--iterations", type=int, default=int(1e4),
         help="For how many iterations should the model be trained? By default 100k."
     )
     parser.add_argument(
