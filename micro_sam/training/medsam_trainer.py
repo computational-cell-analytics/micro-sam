@@ -28,6 +28,7 @@ class MedSAMTrainer(torch_em.trainer.DefaultTrainer):
     ):
         super().__init__(**kwargs)
         self.convert_inputs = convert_inputs
+        self._kwargs = kwargs
 
     def _seg_loss(self, masks, sampled_binary_y, get_metric=False):
         predicted_labels = torch.stack([
