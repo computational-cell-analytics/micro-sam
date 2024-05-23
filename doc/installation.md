@@ -19,11 +19,11 @@ You can follow the instructions [here](https://mamba.readthedocs.io/en/latest/in
 
 `micro_sam` can be installed in an existing environment via:
 ```bash
-$ mamba install -c conda-forge micro_sam
+$ mamba install -c pytorch -c conda-forge micro_sam
 ```
 or you can create a new environment (here called `micro-sam`) via:
 ```bash
-$ mamba create -c conda-forge -n micro-sam micro_sam
+$ mamba create -c pytorch -c conda-forge -n micro-sam micro_sam
 ```
 if you want to use the GPU you need to install PyTorch from the `pytorch` channel instead of `conda-forge`. For example:
 ```bash
