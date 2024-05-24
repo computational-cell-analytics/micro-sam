@@ -174,6 +174,8 @@ You can also train models on your own data, see <a href="#training-your-own-mode
 
 <p>You can find more information on the installation and how to troubleshoot it in <a href="#installation-questions">the FAQ section</a>.</p>
 
+<p>We do <strong>not</strong> recommend installing <code>micro-sam</code> with pip.</p>
+
 <h2 id="from-mamba">From mamba</h2>
 
 <p><a href="https://mamba.readthedocs.io/en/latest/">mamba</a> is a drop-in replacement for conda, but much faster.
@@ -185,14 +187,14 @@ You can follow the instructions <a href="https://mamba.readthedocs.io/en/latest/
 <p><code><a href="">micro_sam</a></code> can be installed in an existing environment via:</p>
 
 <div class="pdoc-code codehilite">
-<pre><span></span><code>$<span class="w"> </span>mamba<span class="w"> </span>install<span class="w"> </span>-c<span class="w"> </span>conda-forge<span class="w"> </span>micro_sam
+<pre><span></span><code>$<span class="w"> </span>mamba<span class="w"> </span>install<span class="w"> </span>-c<span class="w"> </span>pytorch<span class="w"> </span>-c<span class="w"> </span>conda-forge<span class="w"> </span>micro_sam
 </code></pre>
 </div>
 
 <p>or you can create a new environment (here called <code>micro-sam</code>) via:</p>
 
 <div class="pdoc-code codehilite">
-<pre><span></span><code>$<span class="w"> </span>mamba<span class="w"> </span>create<span class="w"> </span>-c<span class="w"> </span>conda-forge<span class="w"> </span>-n<span class="w"> </span>micro-sam<span class="w"> </span>micro_sam
+<pre><span></span><code>$<span class="w"> </span>mamba<span class="w"> </span>create<span class="w"> </span>-c<span class="w"> </span>pytorch<span class="w"> </span>-c<span class="w"> </span>conda-forge<span class="w"> </span>-n<span class="w"> </span>micro-sam<span class="w"> </span>micro_sam
 </code></pre>
 </div>
 
@@ -266,8 +268,8 @@ You can follow the instructions <a href="https://mamba.readthedocs.io/en/latest/
 <p>We also provide installers for Linux and Windows:</p>
 
 <ul>
-<li><a href="https://owncloud.gwdg.de/index.php/s/nrNBuHr9ncJqid6">Linux</a></li>
-<li><a href="https://owncloud.gwdg.de/index.php/s/kZmpAIBDmUSu4e9">Windows</a>
+<li><a href="https://owncloud.gwdg.de/index.php/s/nvLwlrHE4DkYcWl">Linux</a></li>
+<li><a href="https://owncloud.gwdg.de/index.php/s/feIs9069IrURmbt">Windows</a>
 <!---</li>
 <li><a href="https://owncloud.gwdg.de/index.php/s/7YupGgACw9SHy2P">Mac</a>
 --></li>
@@ -318,6 +320,10 @@ You can follow the instructions <a href="https://mamba.readthedocs.io/en/latest/
 
 <p>TODO detailed instruction
 --></p>
+
+<h3 id="easybuild-installation">Easybuild installation</h3>
+
+<p>There is also an easy-build recipe for <code><a href="">micro_sam</a></code> under development. You can find more information <a href="https://github.com/easybuilders/easybuild-easyconfigs/pull/20636">here</a>.</p>
 
 <h1 id="annotation-tools">Annotation Tools</h1>
 
@@ -752,11 +758,15 @@ You might encounter some slowness for $\leq$ 8GB RAM. The resources <code><a hre
 <h3 id="5-i-am-missing-a-few-packages-eg-modulenotfounderror-no-module-named-elfio-what-should-i-do">5. I am missing a few packages (eg. <code>ModuleNotFoundError: No module named 'elf.io</code>). What should I do?</h3>
 
 <p>With the latest release 1.0.0, the installation from mamba and source should take care of this and install all the relevant packages for you.
-So please reinstall <code><a href="">micro_sam</a></code>.</p>
+So please reinstall <code><a href="">micro_sam</a></code>, following <a href="#installation">the installation guide</a>.</p>
 
 <h3 id="6-can-i-install-micro_sam-using-pip">6. Can I install <code><a href="">micro_sam</a></code> using pip?</h3>
 
-<p>The installation is not supported via pip.</p>
+<p>We do <em>not</em> recommend installing <code>micro-sam</code> with pip. It has several dependencies that are only avaoiable from conda-forge, which will not install correctly via pip.</p>
+
+<p>Please see <a href="#installation">the installation guide</a> for the recommended way to install <code>micro-sam</code>.</p>
+
+<p>The PyPI page for <code>micro-sam</code> exists only so that the <a href="https://www.napari-hub.org/">napari-hub</a> can find it.</p>
 
 <h3 id="7-i-get-the-following-error-importerror-cannot-import-name-unetr-from-torch_emmodel">7. I get the following error: <code>importError: cannot import name 'UNETR' from 'torch_em.model'</code>.</h3>
 
