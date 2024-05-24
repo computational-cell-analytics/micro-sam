@@ -53,6 +53,10 @@ Compared to these we support more applications (2d, 3d and tracking), and provid
 
 ## Release Overview
 
+**New in version 1.0.1**
+
+Use stable URL for model downloads and fix issues in state precomputation for automatic segmentation.
+
 **New in version 1.0.0**
 
 This release mainly fixes issues with the previous release and marks the napari user interface as stable.
