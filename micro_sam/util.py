@@ -316,13 +316,13 @@ def get_sam_model(
     # URL from the model_type. If the model_type is invalid pooch will raise an error.
     if checkpoint_path is None:
         model_registry = models()
-        checkpoint_path = model_registry.fetch(model_type)
+        checkpoint_path = model_registry.fetch(model_type, progressbar=True)
         model_hash = model_registry.registry[model_type]
 
         # If we have a custom model then we may also have a decoder checkpoint.
         # Download it here, so that we can add it to the state.
         decoder_name = f"{model_type}_decoder"
-        decoder_path = model_registry.fetch(decoder_name) if decoder_name in model_registry.registry else None
+        decoder_path = model_registry.fetch(decoder_name, progressbar=True) if decoder_name in model_registry.registry else None
 
     # checkpoint_path has been passed, we use it instead of downloading a model.
     else:
