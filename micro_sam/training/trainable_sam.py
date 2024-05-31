@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Tuple, Union
 import torch
 from torch import nn
 from torch.nn import functional as F
-# from torch.nn.parameter import Parameter
 
 from segment_anything.modeling import Sam
 from segment_anything.utils.transforms import ResizeLongestSide
@@ -130,7 +129,7 @@ class TrainableSAM(nn.Module):
         return outputs
 
 
-class LoRA_qkv(nn.Module):
+class _LoRA_qkv(nn.Module):
     """Inspired from: https://github.com/JamesQFreeman/Sam_LoRA/
 
     In SAM, it is implemented as:
@@ -168,8 +167,6 @@ class LoRA_qkv(nn.Module):
         return qkv
 
 
-# TODO: the mask decoder has some attention blocks, need to decide if we perform lora on them as well.
-# reference: SAMed and Maceij-SAM performs these experiments.
 class LoRA_Sam(nn.Module):
     """Inspired from: https://github.com/JamesQFreeman/Sam_LoRA/
 
@@ -232,7 +229,7 @@ class LoRA_Sam(nn.Module):
             self.w_As.append(w_a_linear_v)
             self.w_Bs.append(w_b_linear_v)
 
-            blk.attn.qkv = LoRA_qkv(
+            blk.attn.qkv = _LoRA_qkv(
                 w_qkv_linear,
                 w_a_linear_q,
                 w_b_linear_q,

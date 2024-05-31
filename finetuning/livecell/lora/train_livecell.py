@@ -74,6 +74,7 @@ def finetune_livecell(args):
     patch_shape = (520, 704)  # the patch shape for training
     n_objects_per_batch = 25  # this is the number of objects per batch that will be sampled
     freeze_parts = args.freeze  # override this to freeze different parts of the model
+    rank = 4  # the rank
 
     # get the trainable segment anything model
     model = sam_training.get_trainable_sam_model(
@@ -81,7 +82,8 @@ def finetune_livecell(args):
         device=device,
         checkpoint_path=checkpoint_path,
         freeze=freeze_parts,
-        get_lora=True,
+        use_lora=True,
+        rank=rank,
     )
     model.to(device)
 
