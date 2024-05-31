@@ -7,7 +7,7 @@ There are three ways to install `micro_sam`:
 
 You can find more information on the installation and how to troubleshoot it in [the FAQ section](#installation-questions).
 
-We do *not* recommend installing `micro-sam` with pip.
+We do **not** recommend installing `micro-sam` with pip.
 
 ## From mamba
 
@@ -19,11 +19,11 @@ You can follow the instructions [here](https://mamba.readthedocs.io/en/latest/in
 
 `micro_sam` can be installed in an existing environment via:
 ```bash
-$ mamba install -c conda-forge micro_sam
+$ mamba install -c pytorch -c conda-forge micro_sam
 ```
 or you can create a new environment (here called `micro-sam`) via:
 ```bash
-$ mamba create -c conda-forge -n micro-sam micro_sam
+$ mamba create -c pytorch -c conda-forge -n micro-sam micro_sam
 ```
 if you want to use the GPU you need to install PyTorch from the `pytorch` channel instead of `conda-forge`. For example:
 ```bash
@@ -73,8 +73,8 @@ $ pip install -e .
 ## From installer
 
 We also provide installers for Linux and Windows:
-- [Linux](https://owncloud.gwdg.de/index.php/s/nrNBuHr9ncJqid6)
-- [Windows](https://owncloud.gwdg.de/index.php/s/kZmpAIBDmUSu4e9)
+- [Linux](https://owncloud.gwdg.de/index.php/s/nvLwlrHE4DkYcWl)
+- [Windows](https://owncloud.gwdg.de/index.php/s/feIs9069IrURmbt)
 <!---
 - [Mac](https://owncloud.gwdg.de/index.php/s/7YupGgACw9SHy2P)
 -->
@@ -113,3 +113,7 @@ https://www.makeuseof.com/how-to-disable-gatekeeper-mac/
 
 TODO detailed instruction
 -->
+
+### Easybuild installation
+
+There is also an easy-build recipe for `micro_sam` under development. You can find more information [here](https://github.com/easybuilders/easybuild-easyconfigs/pull/20636).
