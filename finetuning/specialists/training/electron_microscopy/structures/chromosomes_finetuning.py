@@ -4,6 +4,7 @@ import torch
 from torch.utils.data import random_split
 
 import torch_em
+from torch_em.data import MinInstanceSampler
 from torch_em.transform.label import PerObjectDistanceTransform
 
 import micro_sam.training as sam_training
@@ -53,7 +54,7 @@ def get_dataloader(patch_shape, batch_size, train_instance_segmentation):
             directed_distances=False,
             foreground=True,
             instances=True,
-            min_size=25
+            min_size=25,
         )
     else:
         label_transform = torch_em.transform.label.connected_components
@@ -68,7 +69,9 @@ def get_dataloader(patch_shape, batch_size, train_instance_segmentation):
         is_seg_dataset=True,
         label_transform=label_transform,
         raw_transform=sam_training.identity,
+        sampler=MinInstanceSampler(),
     )
+    dataset.max_sampling_attempts = 10000
 
     # Use 10% of the dataset - at least one image - for validation.
     n_val = min(1, int(0.1 * len(dataset)))
@@ -86,7 +89,7 @@ def run_training(checkpoint_name, model_type, train_instance_segmentation):
     """
     # All hyperparameters for training.
     batch_size = 1  # the training batch size
-    patch_shape = (1, 512, 512)  # the size of patches for training
+    patch_shape = (1, 768, 768)  # the size of patches for training
     n_objects_per_batch = 25  # the number of objects per batch that will be sampled
     device = torch.device("cuda")  # the device/GPU used for training
 
