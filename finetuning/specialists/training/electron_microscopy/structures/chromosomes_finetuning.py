@@ -43,7 +43,7 @@ def get_dataloader(patch_shape, batch_size, train_instance_segmentation):
     # Load images from multiple files in folder via pattern (here: all tif files)
     raw_key, label_key = "*.tif", "*.tif"
     # Alternative: if you have tif stacks you can just set raw_key and label_key to None
-    # raw_key, label_key= None, None
+    # raw_key, label_key = None, None
 
     if train_instance_segmentation:
         # Computes the distance transform for objects to perform end-to-end automatic instance segmentation.
