@@ -30,21 +30,37 @@ class MedSAMTrainer(torch_em.trainer.DefaultTrainer):
         self.convert_inputs = convert_inputs
         self._kwargs = kwargs
 
-    def _seg_loss(self, masks, sampled_binary_y, get_metric=False):
-        predicted_labels = torch.stack([
-            torch.stack(
-                [self._sigmoid(_val) for m in masks for _val in m.squeeze(1)],
-                dim=0
-            ).sum(dim=0).clip(0, 1)
-        ]).unsqueeze(1)
+    def _seg_loss(self, masks, y_one_hot, get_metric=False):
+        predicted_labels = torch.stack(
+            [torch.stack([torch.sigmoid(m) for m in mask]) for mask in masks]
+        )
 
-        loss = self.loss(predicted_labels, sampled_binary_y)
+        loss = self.loss(predicted_labels, y_one_hot)
 
         if get_metric:
-            metric = self.metric(predicted_labels, sampled_binary_y)
+            metric = self.metric(predicted_labels, y_one_hot)
             return loss, metric
         else:
             return loss
+
+    def _preprocess_batch(self, batched_inputs, y, sampled_ids):
+        assert len(y) == len(sampled_ids)
+
+        n_objects = min(len(ids) for ids in sampled_ids)
+
+        y = y.to(self.device)
+        # Compute the one hot targets for the seg-id.
+        y_one_hot = torch.stack([
+            torch.stack([target == seg_id for seg_id in ids[:n_objects]])
+            for target, ids in zip(y, sampled_ids)
+        ]).float()
+
+        # Also restrict the prompts to the number of objects.
+        batched_inputs = [
+            {k: (v[:n_objects] if k in ("point_coords", "point_labels", "boxes") else v) for k, v in inp.items()}
+            for inp in batched_inputs
+        ]
+        return batched_inputs, y_one_hot
 
     def _train_epoch_impl(self, progress, forward_context, backprop):
         self.model.train()
@@ -56,20 +72,22 @@ class MedSAMTrainer(torch_em.trainer.DefaultTrainer):
 
             with forward_context():
                 batched_inputs, sampled_ids = self.convert_inputs(x, y, n_pos=0, n_neg=0, get_boxes=True)
+                batched_inputs, y_one_hot = self._preprocess_batch(batched_inputs, y, sampled_ids)
 
-                batched_outputs = self.model(batched_inputs, multimask_output=False)
+                image_embeddings, batched_inputs = self.model.image_embeddings_oft(batched_inputs)
+
+                batched_outputs = self.model(
+                    batched_inputs, image_embeddings=image_embeddings, multimask_output=False
+                )
 
                 masks = [m["masks"] for m in batched_outputs]
-                sampled_binary_y = torch.stack(
-                    [torch.isin(y[i], torch.tensor(sampled_ids[i])) for i in range(len(y))]
-                ).to(torch.float32)
-                loss = self._seg_loss(masks, sampled_binary_y)
+                loss = self._seg_loss(masks, y_one_hot)
 
             backprop(loss)
 
             if self.logger is not None:
                 lr = [pm["lr"] for pm in self.optimizer.param_groups][0]
-                samples = sampled_binary_y if self._iteration % self.log_image_interval == 0 else None
+                samples = y_one_hot if self._iteration % self.log_image_interval == 0 else None
                 self.logger.log_train(self._iteration, loss, lr, x, y, samples)
 
             self._iteration += 1
@@ -91,7 +109,11 @@ class MedSAMTrainer(torch_em.trainer.DefaultTrainer):
                 with forward_context():
                     batched_inputs, sampled_ids = self.convert_inputs(x, y, n_pos=0, n_neg=0, get_boxes=True)
 
-                    batched_outputs = self.model(batched_inputs, multimask_output=False)
+                    image_embeddings, batched_inputs = self.model.image_embeddings_oft(batched_inputs)
+
+                    batched_outputs = self.model(
+                        batched_inputs, image_embeddings=image_embeddings, multimask_output=False
+                    )
 
                     masks = [m["masks"] for m in batched_outputs]
                     sampled_binary_y = torch.stack(
