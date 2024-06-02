@@ -3,7 +3,7 @@ import argparse
 
 import torch
 
-from torch_em.loss import DiceLoss
+from torch_em.loss.dice import BCEDiceLossWithLogits
 from torch_em.data.datasets.medical import get_btcv_loader
 
 import micro_sam.training as sam_training
@@ -21,6 +21,8 @@ def get_dataloaders(patch_shape, data_path):
     I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
     Important: the ID 0 is reseved for background, and the IDs must be consecutive
     """
+    raw_transform = sam_training.identity
+
     train_loader = get_btcv_loader(
         path=data_path,
         patch_shape=patch_shape,
@@ -28,6 +30,7 @@ def get_dataloaders(patch_shape, data_path):
         ndim=2,
         anatomy=None,
         organs=None,
+        raw_transform=raw_transform,
     )
     val_loader = get_btcv_loader(
         path=data_path,
@@ -36,6 +39,7 @@ def get_dataloaders(patch_shape, data_path):
         ndim=2,
         anatomy=None,
         organs=None,
+        raw_transform=raw_transform,
     )
     return train_loader, val_loader
 
@@ -49,6 +53,7 @@ def finetune_btcv(args):
     model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
     patch_shape = (1, 512, 512)  # the patch shape for training
+    n_objects_per_batch = args.n_objects  # this is the number of objects per batch that will be sampled (default: 25)
     freeze_parts = args.freeze  # override this to freeze different parts of the model
 
     # get the trainable segment anything model
@@ -61,14 +66,12 @@ def finetune_btcv(args):
     model.to(device)
 
     # all the stuff we need for training
-    optimizer = torch.optim.Adam(model.parameters(), lr=5e-5)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10, verbose=True)
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
-    convert_inputs = sam_training.ConvertToSamInputs(
-        transform=model.transform, box_distortion_factor=0.025
-    )
+    convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
 
     checkpoint_name = f"{args.model_type}/btcv_medsam"
 
@@ -82,13 +85,15 @@ def finetune_btcv(args):
         optimizer=optimizer,
         device=device,
         lr_scheduler=scheduler,
-        logger=sam_training.MedSAMLogger,
+        logger=sam_training.SamLogger,
         log_image_interval=100,
         mixed_precision=True,
         convert_inputs=convert_inputs,
+        n_objects_per_batch=n_objects_per_batch,
+        n_sub_iteration=1,
+        mask_prob=0,
         compile_model=False,
-        loss=DiceLoss(),
-        metric=DiceLoss(),
+        mask_loss=BCEDiceLossWithLogits(),
     )
     trainer.fit(args.iterations, save_every_kth_epoch=args.save_every_kth_epoch)
     if args.export_path is not None:
@@ -131,6 +136,9 @@ def main():
     parser.add_argument(
         "--save_every_kth_epoch", type=int, default=None,
         help="To save every kth epoch while fine-tuning. Expects an integer value."
+    )
+    parser.add_argument(
+        "--n_objects", type=int, default=25, help="The number of instances (objects) per batch used for finetuning."
     )
     args = parser.parse_args()
     finetune_btcv(args)
