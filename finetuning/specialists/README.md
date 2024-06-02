@@ -19,6 +19,12 @@ Code for finetuning Segment Anything on specific microscopy datasets.
 - `resource_efficient_finetuning`: The experiments for finetuning a custom dataset on limited resources.
 
 
+## Experimental Scripts
+
+- `training/histopathology/`: The finetuning scripts for histopathology datasets.
+    - `pannuke_finetuning.py`: Finetuning Segment Anything on PanNuke datasets.
+
+
 ## Outdated Scripts
 The scripts located at `outdated/` are not in working purpose with the latest version of `micro-sam`.
 - It comprises of extensive experiments on "LIVECell" specialist, located at `outdated/livecell/`.
