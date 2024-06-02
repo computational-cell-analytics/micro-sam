@@ -1,5 +1,6 @@
 import torch
 
+from torch_em.data import MinInstanceSampler
 from torch_em.util.debug import check_loader
 from torch_em.data.datasets import get_pannuke_loader
 from torch_em.transform.label import PerObjectDistanceTransform
@@ -22,17 +23,35 @@ def get_dataloaders(patch_shape, data_path):
         distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=25
     )
     raw_transform = sam_training.identity  # the current workflow avoids rescaling the inputs to [-1, 1]
+    sampler = MinInstanceSampler(min_num_instances=3)
 
-    # TODO: update the dataloaders to pannuke's expected inputs
     train_loader = get_pannuke_loader(
-        path=data_path, patch_shape=patch_shape, split="train", batch_size=2, num_workers=16,
-        download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform, label_dtype=torch.float32
+        path=data_path,
+        patch_shape=patch_shape,
+        batch_size=2,
+        folds=["fold_1"],
+        num_workers=16,
+        download=True,
+        shuffle=True,
+        label_transform=label_transform,
+        raw_transform=raw_transform,
+        label_dtype=torch.float32,
+        sampler=sampler,
+        ndim=2,
     )
     val_loader = get_pannuke_loader(
-        path=data_path, patch_shape=patch_shape, split="val", batch_size=1, num_workers=16,
-        download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform, label_dtype=torch.float32
+        path=data_path,
+        patch_shape=patch_shape,
+        batch_size=1,
+        folds=["fold_2"],
+        num_workers=16,
+        download=True,
+        shuffle=True,
+        label_transform=label_transform,
+        raw_transform=raw_transform,
+        label_dtype=torch.float32,
+        sampler=sampler,
+        ndim=2,
     )
 
     return train_loader, val_loader
@@ -42,8 +61,8 @@ def visualize_images(data_path):
     train_loader, val_loader = get_dataloaders(patch_shape=(1, 512, 512), data_path=data_path)
 
     # let's visualize train loader first
-    check_loader(train_loader, 8)
+    check_loader(train_loader, 8, plt=True, save_path="./fig.png")
 
 
 if __name__ == "__main__":
-    visualize_images()
+    visualize_images(data_path="/scratch/projects/nim00007/sam/data/pannuke")
