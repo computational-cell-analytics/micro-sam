@@ -49,8 +49,11 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         if mask_loss is None:
             # We have to use the Dice Loss with reduce channel set to None.
             # Hence we hard-code it here to avoid issues by passsing wrong options for the loss.
-            mask_loss = torch_em.loss.DiceLoss(reduce_channel=None)
-        super().__init__(loss=mask_loss, metric=mask_loss, **kwargs)
+            self.mask_loss = torch_em.loss.DiceLoss(reduce_channel=None)
+        else:
+            self.mask_loss = mask_loss
+
+        super().__init__(loss=self.mask_loss, metric=self.mask_loss, **kwargs)
         self.convert_inputs = convert_inputs
         self.mse_loss = mse_loss
         self.n_objects_per_batch = n_objects_per_batch
