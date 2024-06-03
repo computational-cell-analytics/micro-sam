@@ -425,6 +425,11 @@ def main():
         "otherwise they will be recomputed every time (which can take a long time)."
     )
     parser.add_argument(
+        "-s", "--segmentation_folder",
+        help="Optional filepath to a folder with initial segmentation results."
+        "The files in this folder need to have the same name as the corresponding image files."
+    )
+    parser.add_argument(
         "-m", "--model_type", default=util._DEFAULT_MODEL,
         help=f"The segment anything model that will be used, one of {available_models}."
     )
