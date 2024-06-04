@@ -8,7 +8,9 @@ class MedSAMTrainer(SamTrainer):
         self,
         **kwargs
     ):
-        super().__init__(**kwargs)
+        n_sub_iteration = 1
+        mask_prob = 0
+        super().__init__(n_sub_iteration=n_sub_iteration, mask_prob=mask_prob, **kwargs)
 
     def _get_prompt_and_multimasking_choices(self, current_iteration):
         n_pos, n_neg = 0, 0

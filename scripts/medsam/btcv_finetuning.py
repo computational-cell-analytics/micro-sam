@@ -90,8 +90,6 @@ def finetune_btcv(args):
         mixed_precision=True,
         convert_inputs=convert_inputs,
         n_objects_per_batch=n_objects_per_batch,
-        n_sub_iteration=1,
-        mask_prob=0,
         compile_model=False,
         mask_loss=BCEDiceLossWithLogits(),
     )

@@ -224,7 +224,6 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
             if num_subiter > 1:  # Update prompts for more than one sub-iterations
                 if i < (num_subiter - 1):   # We need not update the prompts for the last iteration.
-                    print(i)
                     # Determine the next prompts based on current predictions.
                     with torch.no_grad():
                         # Get the mask and logit predictions corresponding to the predicted object
