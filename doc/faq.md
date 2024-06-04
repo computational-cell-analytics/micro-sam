@@ -131,6 +131,10 @@ Editing (drawing / erasing) very large 2d images or 3d volumes is known to be sl
 This can happen for long running computations. You just need to wait a bit longer and the computation will finish.
 
 
+### 14. I have 3D RGB microscopy volumes. How does `micro_sam` handle these images?
+TODO
+
+
 ## Fine-tuning questions
 
 
