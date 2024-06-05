@@ -31,6 +31,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         mse_loss: The regression loss to compare the IoU predicted by the model with the true IoU.
         prompt_generator: The iterative prompt generator which takes care of the iterative prompting logic for training
         mask_prob: The probability of using the mask inputs in the iterative prompting (per `n_sub_iteration`)
+        mask_loss: The loss to compare the predicted masks and the targets.
         **kwargs: The keyword arguments of the DefaultTrainer super class.
     """
 
@@ -42,12 +43,17 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         mse_loss: torch.nn.Module = torch.nn.MSELoss(),
         prompt_generator: PromptGeneratorBase = IterativePromptGenerator(),
         mask_prob: float = 0.5,
+        mask_loss: Optional[torch.nn.Module] = None,
         **kwargs
     ):
-        # We have to use the Dice Loss with reduce channel set to None.
-        # Hence we hard-code it here to avoid issues by passsing wrong options for the loss.
-        dice_loss = torch_em.loss.DiceLoss(reduce_channel=None)
-        super().__init__(loss=dice_loss, metric=dice_loss, **kwargs)
+        if mask_loss is None:
+            # We have to use the Dice Loss with reduce channel set to None.
+            # Hence we hard-code it here to avoid issues by passsing wrong options for the loss.
+            self.mask_loss = torch_em.loss.DiceLoss(reduce_channel=None)
+        else:
+            self.mask_loss = mask_loss
+
+        super().__init__(loss=self.mask_loss, metric=self.mask_loss, **kwargs)
         self.convert_inputs = convert_inputs
         self.mse_loss = mse_loss
         self.n_objects_per_batch = n_objects_per_batch
@@ -216,12 +222,13 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             iou_regression_loss += net_iou_regression_loss
             mean_model_iou += net_mean_model_iou
 
-            # Determine the next prompts based on current predictions.
-            with torch.no_grad():
-                # Get the mask and logit predictions corresponding to the predicted object
-                # (per actual object) with the best IOU.
-                masks, logits = self._get_best_masks(batched_outputs, batched_iou_predictions)
-                batched_inputs = self._update_prompts(batched_inputs, y_one_hot, masks, logits)
+            if i < (num_subiter - 1):   # We need not update the prompts for the last iteration.
+                # Determine the next prompts based on current predictions.
+                with torch.no_grad():
+                    # Get the mask and logit predictions corresponding to the predicted object
+                    # (per actual object) with the best IOU.
+                    masks, logits = self._get_best_masks(batched_outputs, batched_iou_predictions)
+                    batched_inputs = self._update_prompts(batched_inputs, y_one_hot, masks, logits)
 
         loss = loss / num_subiter
         mask_loss = mask_loss / num_subiter
