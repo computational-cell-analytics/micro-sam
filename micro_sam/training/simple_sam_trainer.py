@@ -6,8 +6,8 @@ class SimpleSamTrainer(SamTrainer):
     """
     def __init__(
         self,
-        use_points: bool = True,
-        use_box: bool = True,
+        use_points: bool = False,
+        use_box: bool = False,
         **kwargs
     ):
         super().__init__(**kwargs)
