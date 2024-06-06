@@ -132,7 +132,7 @@ This can happen for long running computations. You just need to wait a bit longe
 
 
 ### 14. I have 3D RGB microscopy volumes. How does `micro_sam` handle these images?
-TODO
+`micro_sam` performs automatic segmentation in 3D volumes by first segmenting slices individually in 2D and merging the segmentations across 3D based on overlap of objects between slices. The expected shape of your 3D RGB volume should be `(Z * Y * X * 3)` (reason: Segment Anything is devised to consider 3-channel inputs, so while the user provides micro-sam with 1-channel inputs, we handle this by triplicating this to fit the requirement, or with 3-channel inputs, we use them in the expected RGB array structures as it is).
 
 
 ## Fine-tuning questions
