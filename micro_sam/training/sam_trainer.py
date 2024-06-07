@@ -283,7 +283,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         # number of objects across the batch.
         n_objects = min(len(ids) for ids in sampled_ids)
 
-        y = y.to(self.device)
+        y = y.to(self.device, non_blocking=True)
         # Compute the one hot targets for the seg-id.
         y_one_hot = torch.stack([
             torch.stack([target == seg_id for seg_id in ids[:n_objects]])
