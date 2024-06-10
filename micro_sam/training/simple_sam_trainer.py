@@ -42,7 +42,6 @@ class SimpleSamTrainer(SamTrainer):
             available_choices = [self._choose_one_positive_point(), self._choose_box()]
             return random.choice(available_choices)
         else:
-            # this condition supports using either "point" / "box" / "points + box"
             if self.use_points:
                 return self._choose_one_positive_point()
             else:
