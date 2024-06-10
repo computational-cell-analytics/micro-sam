@@ -23,7 +23,7 @@ class SimpleSamTrainer(SamTrainer):
         else:
             self.random_prompt_choice = False
 
-        assert (self.use_points + self.use_box) != 0, "Please choose either of the prompt-based segmentation."
+        assert (self.use_points + self.use_box) != 0, "Please choose atleast one of the prompt-based method."
 
     def _choose_one_positive_point(self):
         "samples only a single positive point per object"
