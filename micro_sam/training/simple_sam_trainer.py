@@ -1,5 +1,7 @@
 import random
 
+from torch_em.loss.dice import BCEDiceLossWithLogits
+
 from . import SamTrainer
 
 
@@ -8,20 +10,20 @@ class SimpleSamTrainer(SamTrainer):
     """
     def __init__(
         self,
-        use_points: bool = False,
-        use_box: bool = False,
+        use_points: bool = True,
+        use_box: bool = True,
         **kwargs
     ):
         super().__init__(**kwargs)
         self.use_points = use_points
         self.use_box = use_box
 
-        if not self.use_points and not self.use_box:  # if user doesn't specify, we randomly choose box / point prompts
+        if self.use_points and self.use_box:
             self.random_prompt_choice = True
         else:
             self.random_prompt_choice = False
 
-        assert (self.use_points + self.use_box) < 2, "Please choose either of the prompt-based segmentation."
+        assert (self.use_points + self.use_box) != 0, "Please choose either of the prompt-based segmentation."
 
     def _choose_one_positive_point(self):
         "samples only a single positive point per object"
@@ -38,10 +40,10 @@ class SimpleSamTrainer(SamTrainer):
 
     def _get_prompt_and_multimasking_choices(self, current_iteration):
 
-        if self.random_prompt_choice:
+        if self.random_prompt_choice:  # both "use_points" and "use_box" are True
             available_choices = [self._choose_one_positive_point(), self._choose_box()]
             return random.choice(available_choices)
-        else:
+        else:  # either of "use_points" or "use_box" are True
             if self.use_points:
                 return self._choose_one_positive_point()
             else:
@@ -49,3 +51,17 @@ class SimpleSamTrainer(SamTrainer):
 
     def _get_prompt_and_multimasking_choices_for_val(self, current_iteration):
         return self._get_prompt_and_multimasking_choices(current_iteration)
+
+
+class MedSAMTrainer(SimpleSamTrainer):
+    """Trainer class for replicating the trainer of MedSAM (https://arxiv.org/abs/2304.12306).
+    """
+    def __init__(self, **kwargs):
+        super().__init__(
+            n_sub_iteration=1,
+            mask_prob=0,
+            mask_loss=BCEDiceLossWithLogits(),
+            use_points=False,
+            use_box=True,
+            **kwargs
+        )
