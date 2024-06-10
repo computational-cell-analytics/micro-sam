@@ -81,7 +81,7 @@ def get_trainable_sam_model(
                     param.requires_grad = False
 
     # convert to trainable sam
-    trainable_sam = TrainableSAM(sam, device)
+    trainable_sam = TrainableSAM(sam)
     if return_state:
         return trainable_sam, state
     return trainable_sam
