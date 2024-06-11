@@ -1,7 +1,5 @@
 import random
 
-from torch_em.loss.dice import BCEDiceLossWithLogits
-
 from . import SamTrainer
 
 
@@ -14,7 +12,11 @@ class SimpleSamTrainer(SamTrainer):
         use_box: bool = True,
         **kwargs
     ):
-        super().__init__(**kwargs)
+        super().__init__(
+            n_sub_iteration=1,
+            mask_prob=0,
+            **kwargs
+        )
         self.use_points = use_points
         self.use_box = use_box
 
@@ -58,9 +60,6 @@ class MedSAMTrainer(SimpleSamTrainer):
     """
     def __init__(self, **kwargs):
         super().__init__(
-            n_sub_iteration=1,
-            mask_prob=0,
-            mask_loss=BCEDiceLossWithLogits(),
             use_points=False,
             use_box=True,
             **kwargs
