@@ -205,7 +205,7 @@ class ConvertToSamInputs:
 
 
 class ResizeRawTrafo:
-    def __init__(self, desired_shape, do_rescaling=True, padding="constant"):
+    def __init__(self, desired_shape, do_rescaling=False, padding="constant"):
         self.desired_shape = desired_shape
         self.padding = padding
         self.do_rescaling = do_rescaling
