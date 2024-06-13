@@ -65,7 +65,7 @@ def get_dataloader(patch_shape, batch_size, train_instance_segmentation):
         label_paths=segmentation_dir,
         label_key=label_key,
         patch_shape=patch_shape,
-        ndim=2,
+        ndim=3,
         is_seg_dataset=True,
         label_transform=label_transform,
         raw_transform=sam_training.identity,
@@ -89,7 +89,7 @@ def run_training(checkpoint_name, model_type, train_instance_segmentation):
     """
     # All hyperparameters for training.
     batch_size = 1  # the training batch size
-    patch_shape = (1, 768, 768)  # the size of patches for training
+    patch_shape = (1, 1, 512, 512)  # the size of patches for training
     n_objects_per_batch = 25  # the number of objects per batch that will be sampled
     device = torch.device("cuda")  # the device/GPU used for training
 
