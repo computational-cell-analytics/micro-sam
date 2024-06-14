@@ -12,7 +12,8 @@ from ..util import (
     get_centers_and_bounding_boxes, get_sam_model, get_device,
     segmentation_to_one_hot, _DEFAULT_MODEL,
 )
-from .trainable_sam import TrainableSAM, LoRA_Sam
+from .peft_sam import PEFT_Sam
+from .trainable_sam import TrainableSAM
 
 from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.transform.raw import normalize_percentile, normalize
@@ -87,7 +88,7 @@ def get_trainable_sam_model(
     if use_lora:  # overwrites the SAM model by freezing the backbone and allow low rank adaption to attention layers
         if rank is None:
             rank = 4  # HACK: in case the user does not pass the rank, we provide a random rank to them
-        sam = LoRA_Sam(sam, rank=rank).sam
+        sam = PEFT_Sam(sam, rank=rank).sam
 
     # convert to trainable sam
     trainable_sam = TrainableSAM(sam)
