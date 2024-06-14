@@ -95,25 +95,17 @@ class PEFT_Sam(nn.Module):
     Wraps the Segment Anything model's image encoder to different parameter efficient finetuning methods.
 
     Args:
-        sam_model: a vision transformer model.
-        rank: rank of LoRA.
-        lora_layer: which specific layers we apply LoRA to.
-
-    Examples::
-    ```python
-    >>> model = ViT('B_16_imagenet1k')
-    >>> peft_model = PEFT_ViT(model, rank=4)
-    >>> preds = lora_model(img)
-    >>> print(preds.shape)
-    torch.Size([1, 1000])
-    ```
+        model: The Segment Anything model.
+        rank: The rank for low-rank adaptation.
+        peft_module: Wrapper to operate on the image encoder blocks for the PEFT method.
+        attention_layers_to_update: Which specific layers we apply PEFT methods to.
     """
 
     def __init__(
         self,
         model: Sam,
         rank: int,
-        peft_module=LoRASurgery(),
+        peft_module: PEFTBase = LoRASurgery(),
         attention_layers_to_update: Union[List[int]] = None
     ):
         super(PEFT_Sam, self).__init__()
