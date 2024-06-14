@@ -25,7 +25,7 @@ def get_dataloaders(patch_shape, data_path):
     I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
     Important: the ID 0 is reseved for background, and the IDs must be consecutive
     """
-    raw_transform = ResizeRawTrafo(patch_shape)
+    raw_transform = ResizeRawTrafo(patch_shape, do_rescaling=True)
     label_transform = ResizeLabelTrafo(patch_shape)
     sampler = MinInstanceSampler()
     label_dtype = torch.float32

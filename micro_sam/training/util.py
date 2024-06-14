@@ -90,7 +90,7 @@ def get_trainable_sam_model(
         sam = LoRA_Sam(sam, rank=rank).sam
 
     # convert to trainable sam
-    trainable_sam = TrainableSAM(sam, device)
+    trainable_sam = TrainableSAM(sam)
 
     if return_state:
         return trainable_sam, state
@@ -215,7 +215,7 @@ class ConvertToSamInputs:
 
 
 class ResizeRawTrafo:
-    def __init__(self, desired_shape, do_rescaling=True, padding="constant"):
+    def __init__(self, desired_shape, do_rescaling=False, padding="constant"):
         self.desired_shape = desired_shape
         self.padding = padding
         self.do_rescaling = do_rescaling
