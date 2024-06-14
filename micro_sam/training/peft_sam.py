@@ -25,7 +25,9 @@ class PEFTBase(nn.Module):
             The attention block.
             The pair of values for the linear layer.
         """
-        raise NotImplementedError("Subclasses should implement this method.")
+        raise NotImplementedError(
+            "PEFTBase is just a class template. Use a child class that implements the specific PEFT method instead."
+        )
 
 
 class LoRASurgery(PEFTBase):
