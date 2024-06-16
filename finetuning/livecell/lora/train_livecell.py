@@ -72,7 +72,7 @@ def finetune_livecell(args):
     model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
     patch_shape = (520, 704)  # the patch shape for training
-    n_objects_per_batch = 25  # this is the number of objects per batch that will be sampled
+    n_objects_per_batch = 5  # this is the number of objects per batch that will be sampled
     freeze_parts = args.freeze  # override this to freeze different parts of the model
     rank = 4  # the rank
 
