@@ -1,3 +1,4 @@
+import math
 from typing import List, Union
 
 import torch.nn as nn
@@ -31,6 +32,14 @@ class LoRASurgery(nn.Module):
         self.w_b_linear_q = nn.Linear(rank, self.dim, bias=False)
         self.w_a_linear_v = nn.Linear(self.dim, rank, bias=False)
         self.w_b_linear_v = nn.Linear(rank, self.dim, bias=False)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.kaiming_uniform_(self.w_a_linear_q.weight, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.w_a_linear_v.weight, a=math.sqrt(5))
+        nn.init.zeros_(self.w_b_linear_q.weight)
+        nn.init.zeros_(self.w_b_linear_v.weight)
 
     def forward(self, x):
         qkv = self.qkv(x)  # B, N, N, 3 * org_C
