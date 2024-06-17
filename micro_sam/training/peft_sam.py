@@ -97,6 +97,8 @@ class PEFT_Sam(nn.Module):
             peft_block = self.peft_module(rank=rank, block=blk)
             self.peft_blocks.append(peft_block)
 
+        self.peft_blocks = nn.ModuleList(self.peft_blocks)
+
         self.sam = model
 
     def forward(self, batched_input, multimask_output):
