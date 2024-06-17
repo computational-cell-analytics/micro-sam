@@ -35,6 +35,8 @@ class LoRASurgery(nn.Module):
 
         self.reset_parameters()
 
+        block.attn.qkv = self
+
     def reset_parameters(self):
         nn.init.kaiming_uniform_(self.w_a_linear_q.weight, a=math.sqrt(5))
         nn.init.kaiming_uniform_(self.w_a_linear_v.weight, a=math.sqrt(5))
@@ -81,17 +83,19 @@ class PEFT_Sam(nn.Module):
             )
 
         self.peft_module = peft_module
+        self.peft_blocks = []
 
         # let's freeze all the pretrained image encoder layers first
         for param in model.image_encoder.parameters():
             param.requires_grad = False
 
         for t_layer_i, blk in enumerate(model.image_encoder.blocks):
-            # If we only want specific layers for PEFT instead of all
+            # If we only want specific layers with PEFT instead of all
             if t_layer_i not in self.peft_layers:
                 continue
 
-            blk.attn.qkv = self.peft_module(rank=rank, block=blk)
+            peft_block = self.peft_module(rank=rank, block=blk)
+            self.peft_blocks.append(peft_block)
 
         self.sam = model
 
