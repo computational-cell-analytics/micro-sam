@@ -207,7 +207,7 @@ class ConvertToSemanticSamInputs:
         """
         batched_inputs = []
 
-        for image in zip(x):
+        for image in x:
             batched_input = {"image": image, "original_size": image.shape[1:]}
             batched_inputs.append(batched_input)
 
