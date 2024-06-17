@@ -7,12 +7,13 @@ import torch
 
 from segment_anything.utils.transforms import ResizeLongestSide
 
+from .trainable_sam import TrainableSAM
 from ..prompt_generators import PointAndBoxPromptGenerator
+from ..prompt_based_segmentation import _compute_logits_from_mask
 from ..util import (
     get_centers_and_bounding_boxes, get_sam_model, get_device,
     segmentation_to_one_hot, _DEFAULT_MODEL,
 )
-from .trainable_sam import TrainableSAM
 
 from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.transform.raw import normalize_percentile, normalize
@@ -197,6 +198,21 @@ class ConvertToSamInputs:
             batched_inputs.append(batched_input)
 
         return batched_inputs, batched_sampled_cell_ids_list
+
+
+class ConvertToSemanticSamInputs:
+    """
+    """
+    def __call__(self, x, y):
+        """Convert the outputs of dataloader to the batched format of inputs expected by SAM.
+        """
+        batched_inputs = []
+
+        for image in zip(x):
+            batched_input = {"image": image, "original_size": image.shape[1:]}
+            batched_inputs.append(batched_input)
+
+        return batched_inputs
 
 
 #
