@@ -12,6 +12,7 @@ from ..util import (
     get_centers_and_bounding_boxes, get_sam_model, get_device,
     segmentation_to_one_hot, _DEFAULT_MODEL,
 )
+from .peft_sam import PEFT_Sam
 from .trainable_sam import TrainableSAM
 
 from torch_em.transform.label import PerObjectDistanceTransform
@@ -42,6 +43,8 @@ def get_trainable_sam_model(
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     freeze: Optional[List[str]] = None,
     return_state: bool = False,
+    use_lora: bool = False,
+    rank: Optional[int] = None,
 ) -> TrainableSAM:
     """Get the trainable sam model.
 
@@ -54,6 +57,8 @@ def get_trainable_sam_model(
         freeze: Specify parts of the model that should be frozen, namely: image_encoder, prompt_encoder and mask_decoder
             By default nothing is frozen and the full model is updated.
         return_state: Whether to return the full checkpoint state.
+        use_lora: Whether to use the low rank adaptation method for finetuning.
+        rank: The rank of the decomposition matrices for updating weights in each attention layer.
 
     Returns:
         The trainable segment anything model.
@@ -80,8 +85,14 @@ def get_trainable_sam_model(
                 if name.startswith(f"{freeze}"):
                     param.requires_grad = False
 
+    if use_lora:  # overwrites the SAM model by freezing the backbone and allow low rank adaption to attention layers
+        if rank is None:
+            rank = 4  # HACK: in case the user does not pass the rank, we provide a random rank to them
+        sam = PEFT_Sam(sam, rank=rank).sam
+
     # convert to trainable sam
     trainable_sam = TrainableSAM(sam)
+
     if return_state:
         return trainable_sam, state
     return trainable_sam
