@@ -72,6 +72,8 @@ def submit_slurm(args):
         "neurips_cellseg_specialist": "specialists/training/light_microscopy/neurips_cellseg_finetuning",
         "dynamicnuclearnet_specialist": "specialists/training/light_microscopy/dynamicnuclearnet_finetuning",
         "lm_generalist": "generalists/training/light_microscopy/train_lm_generalist",
+        "covid_if_generalist": f"{ROOT}/finetuning/specialists/lora/train_covid_if",
+        "mouse_embryo_generalist": f"{ROOT}/finetuning/specialists/lora/train_mouse_embryo",
         "cremi_specialist": "specialists/training/electron_microscopy/boundaries/cremi_finetuning",
         "asem_specialist": "specialists/training/electron_microscopy/organelles/asem_finetuning",
         "em_mito_nuc_generalist": "generalists/training/electron_microscopy/mito_nuc/train_mito_nuc_em_generalist",
