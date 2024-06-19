@@ -1,5 +1,8 @@
 import napari
 from elf.io import open_file
+import h5py
+import os
+import torch
 
 import micro_sam.sam_3d_wrapper as sam_3d
 import micro_sam.util as util
@@ -10,6 +13,9 @@ import micro_sam.util as util
 # )
 from micro_sam import multi_dimensional_segmentation as mds
 from micro_sam.visualization import compute_pca
+INPUT_PATH_CLUSTER = "/scratch-grete/projects/nim00007/data/mitochondria/cooper/mito_tomo/outer-membrane1/1_20230125_TOMO_HOI_WT_36859_J2_upSTEM750_BC3.6/upSTEM750_36859_J2_TS_SP_003_rec_2kb1dawbp_crop.h5"
+# EMBEDDINGS_PATH_CLUSTER = "/scratch-grete/projects/nim00007/data/mitochondria/cooper/mito_tomo/outer-membrane1/1_20230125_TOMO_HOI_WT_36859_J2_upSTEM750_BC3.6/embedding-mito-3d.zarr"
+EMBEDDINGS_PATH_CLUSTER = "/scratch-grete/usr/nimlufre/"
 INPUT_PATH_LOCAL = "/home/freckmann15/data/mitochondria/cooper/mito_tomo/outer-membrane1/1_20230125_TOMO_HOI_WT_36859_J2_upSTEM750_BC3.6/upSTEM750_36859_J2_TS_SP_003_rec_2kb1dawbp_crop.h5"
 EMBEDDINGS_PATH_LOCAL = "/home/freckmann15/data/mitochondria/cooper/mito_tomo/outer-membrane1/1_20230125_TOMO_HOI_WT_36859_J2_upSTEM750_BC3.6/"
 INPUT_PATH = "/scratch-grete/projects/nim00007/data/mitochondria/moebius/volume_em/training_blocks_v1/4007_cutout_1.h5"
@@ -119,7 +125,7 @@ def cell_segmentation(use_sam=False, use_mws=False) -> None:
 def cell_segmentation_3d() -> None:
     with open_file(TIMESERIES_PATH, mode="r") as f:
         timeseries = f["*.tif"][:50]
-
+    
     predictor = util.get_sam_model()
     image_embeddings = util.precompute_image_embeddings(predictor, timeseries, EMBEDDINGS_TRACKING_PATH)
 
@@ -132,27 +138,36 @@ def cell_segmentation_3d() -> None:
     
 
 def mito_segmentation_3d() -> None:
-    with open_file(INPUT_PATH_LOCAL, mode="r") as f:
+    with open_file(INPUT_PATH_CLUSTER, mode="r") as f:
         volume = f["raw"][:]
-    predictor, sam = util.get_sam_model(return_sam=True, model_type="vit_b")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model_type = "vit_b"
+    predictor, sam = util.get_sam_model(return_sam=True, model_type=model_type, device=device)
     #print(predictor)
     d_size = volume.shape
     predictor3d = sam_3d.Predictor3D(sam, d_size)
+    #predictor3d.model_type = model_type
+    predictor3d._hash = util.models().registry[model_type]
+
+    predictor3d.model_name = model_type
     #predictor.sam_model = sam3d
-    image_embeddings = util.precompute_image_embeddings(predictor3d, volume, EMBEDDINGS_PATH_LOCAL)
+    image_embeddings = util.precompute_image_embeddings(predictor3d, volume, EMBEDDINGS_PATH_CLUSTER)
     seg = util.segment_instances_from_embeddings_3d(predictor3d, image_embeddings)
     
+    prediction_filename = os.path.join(EMBEDDINGS_PATH_CLUSTER, f"prediction_{INPUT_PATH_CLUSTER}.h5")
+    with h5py.File(prediction_filename, "w") as prediction_file:
+        prediction_file.create_dataset("prediction", data=seg)
 
     # amg = AutomaticMaskGenerator(predictor)
     # amg.initialize(volume)  # Initialize the masks, this takes care of all expensive computations.
     # masks = amg.generate(pred_iou_thresh=0.8)  # Generate the masks. This is fast and enables testing parameters
-    seg_sam = mds.automatic_3d_segmentation(volume, sam)
+    #seg_sam = mds.automatic_3d_segmentation(volume, sam)
 
-    v = napari.Viewer()
-    v.add_image(volume)
-    v.add_labels(seg)
-    v.add_labels(seg_sam)
-    napari.run()
+    # v = napari.Viewer()
+    # v.add_image(volume)
+    # v.add_labels(seg)
+    # v.add_labels(seg_sam)
+    # napari.run()
     
 
 

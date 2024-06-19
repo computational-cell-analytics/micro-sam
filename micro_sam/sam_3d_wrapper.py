@@ -16,10 +16,12 @@ class Predictor3D(SamPredictor):
         #predictor: SamPredictor,
         sam_model: Sam,
         d_size,
+        model_type: str = "vit_b",
     ):
         super().__init__(sam_model)
-        
+        self.model_type = model_type
         self.d_size = d_size
+
         # predictor.model = Sam3DWrapper(predictor.model, self.d_size)
         # self.predictor = predictor
 
