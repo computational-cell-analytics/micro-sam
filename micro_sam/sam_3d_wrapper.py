@@ -1,43 +1,66 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from segment_anything import build_sam, SamPredictor
-from segment_anything import sam_model_registry
-from segment_anything.modeling import window_partition, window_unpartition
+from typing import Type
+#from segment_anything import build_sam, SamPredictor
+#from segment_anything import sam_model_registry
+from segment_anything.modeling.image_encoder import window_partition, window_unpartition
+from segment_anything.modeling.image_encoder import Block as SamBlock
+from segment_anything.modeling import Sam
+from segment_anything import SamPredictor
 
-class Sam3DWrapper(nn.Module):
-    def _get_adapter_3d():
-        pass
 
+class Predictor3D(SamPredictor):
     def __init__(
         self,
-        sam: nn.Module,
+        #predictor: SamPredictor,
+        sam_model: Sam,
+        d_size,
+    ):
+        super().__init__(sam_model)
+        
+        self.d_size = d_size
+        # predictor.model = Sam3DWrapper(predictor.model, self.d_size)
+        # self.predictor = predictor
+
+
+class Sam3DWrapper(nn.Module):
+    def __init__(
+        self,
+        sam_model: Sam,
+        d_size,
+    ):
+        super().__init__()
+        self.sam_model = sam_model
+        self.d_size = d_size
+        sam_model.image_encoder = ImageEncoderViT3DWrapper(image_encoder=self.sam_model.image_encoder, d_size=self.d_size)
+        self.sam_model = sam_model
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.sam_model(x, d_size=self.d_size)
+
+
+class ImageEncoderViT3DWrapper(nn.Module):
+    def __init__(
+        self,
+        image_encoder: nn.Module,
+        num_heads: int = 12,
+        embed_dim: int = 768,
         **kwargs
     ):
         super().__init__()
-        self.sam = sam
-        self.image_encoder = self.sam.model.image_encoder
+        self.image_encoder = image_encoder
         self.img_size = self.image_encoder.img_size
-        
-        # create adapter blocks
-        n_blocks = len(self.image_encoder.blocks)
-        
+
         # freeze sam blocks
         for k, v in self.image_encoder.named_parameters():
             if '.adapter_' not in k:
                 v.requires_grad = False
-        
-        # adapter blocks before self attention
-        adapter_list1 = []
-        # adapter blocks after self attention
-        adapter_list2 = []
-        for i in range(n_blocks):
-            adapter_list1.append(self._get_adapter_3d())
-            adapter_list2.append(self._get_adapter_3d())
-        
-        self.adapter_list1 = nn.ModuleList(adapter_list1)
-        self.adapter_list2 = nn.ModuleList(adapter_list2)
-        
+
+        # replace default blocks with 3d adapter blocks
+        for i, blk in enumerate(self.image_encoder.blocks):
+            self.image_encoder.blocks[i] = NDBlock(Block=blk, num_heads=num_heads, dim=embed_dim)
+
     def forward(self, x: torch.Tensor, d_size) -> torch.Tensor:
         x = self.image_encoder.patch_embed(x)
         if self.image_encoder.pos_embed is not None:
@@ -51,27 +74,45 @@ class Sam3DWrapper(nn.Module):
         return x
 
 
-class ND_Block(nn.Module):
+class NDBlock(nn.Module):
     def __init__(
-        self,
-        Block: nn.Module
-    ) -> None:
-        super.__init__()
+            self,
+            dim: int,
+            num_heads: int,
+            Block: nn.Module,
+            norm_layer: Type[nn.Module] = nn.LayerNorm,
+            **kwargs
+    ):
+        super().__init__()
         self.Block = Block
+        
+        self.adapter_channels = 384
+        self.adapter_linear_down = nn.Linear(dim, self.adapter_channels, bias=False)
+        self.adapter_linear_up = nn.Linear(self.adapter_channels, dim, bias=False)
+        self.adapter_conv = nn.Conv3d(self.adapter_channels, self.adapter_channels, kernel_size=(3, 1, 1), padding='same')
+        self.adapter_act = nn.GELU()
+        self.adapter_norm = norm_layer(dim)
+
+        self.adapter_linear_down_2 = nn.Linear(dim, self.adapter_channels, bias=False)
+        self.adapter_linear_up_2 = nn.Linear(self.adapter_channels, dim, bias=False)
+        self.adapter_conv_2 = nn.Conv3d(self.adapter_channels, self.adapter_channels, kernel_size=(3, 1, 1), padding='same')
+        self.adapter_act_2 = nn.GELU()
+        self.adapter_norm_2 = norm_layer(dim)
 
     def forward(self, x: torch.Tensor, d_size) -> torch.Tensor:
         b_size, hw_size = x.shape[0], x.shape[1]
         
         # 3D adapter
-        x = self.Block.adapter_norm(x)
-        x = self.Block.adapter_linear_down(x)
-        x = x.contiguous().view(int(b_size/d_size), d_size, hw_size, hw_size, self.Block.adapter_channels)
+        shortcut = x
+        x = self.adapter_norm(x)
+        x = self.adapter_linear_down(x)
+        x = x.contiguous().view(int(b_size/d_size), d_size, hw_size, hw_size, self.adapter_channels)
         x = torch.permute(x, (0, -1, 1, 2, 3))
-        x = self.Block.adapter_conv(x)
+        x = self.adapter_conv(x)
         x = torch.permute(x, (0, 2, 3, 4, 1))
-        x = x.contiguous().view(b_size, hw_size, hw_size, self.Block.adapter_channels)
-        x = self.Block.adapter_act(x)
-        x = self.Block.adapter_linear_up(x)
+        x = x.contiguous().view(b_size, hw_size, hw_size, self.adapter_channels)
+        x = self.adapter_act(x)
+        x = self.adapter_linear_up(x)
         x = shortcut + x
         # end 3D adapter
         
@@ -91,15 +132,15 @@ class ND_Block(nn.Module):
         
         # 3D adapter
         shortcut = x
-        x = self.Block.adapter_norm_2(x)
-        x = self.Block.adapter_linear_down_2(x)
+        x = self.adapter_norm_2(x)
+        x = self.adapter_linear_down_2(x)
         x = x.contiguous().view(int(b_size/d_size), d_size, hw_size, hw_size, self.Block.adapter_channels)
         x = torch.permute(x, (0, -1, 1, 2, 3))
-        x = self.Block.adapter_conv_2(x)
+        x = self.adapter_conv_2(x)
         x = torch.permute(x, (0, 2, 3, 4, 1))
         x = x.contiguous().view(b_size, hw_size, hw_size, self.Block.adapter_channels)
-        x = self.Block.adapter_act_2(x)
-        x = self.Block.adapter_linear_up_2(x)
+        x = self.adapter_act_2(x)
+        x = self.adapter_linear_up_2(x)
         x = shortcut + x
         # end 3D adapter
         
