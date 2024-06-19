@@ -45,6 +45,8 @@ def get_trainable_sam_model(
     return_state: bool = False,
     use_lora: bool = False,
     rank: Optional[int] = None,
+    flexible_load_checkpoint: bool = False,
+    **model_kwargs
 ) -> TrainableSAM:
     """Get the trainable sam model.
 
@@ -59,6 +61,7 @@ def get_trainable_sam_model(
         return_state: Whether to return the full checkpoint state.
         use_lora: Whether to use the low rank adaptation method for finetuning.
         rank: The rank of the decomposition matrices for updating weights in each attention layer.
+        flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
 
     Returns:
         The trainable segment anything model.
@@ -66,7 +69,15 @@ def get_trainable_sam_model(
     # set the device here so that the correct one is passed to TrainableSAM below
     device = get_device(device)
     _, sam, state = get_sam_model(
-        model_type=model_type, device=device, checkpoint_path=checkpoint_path, return_sam=True, return_state=True
+        model_type=model_type,
+        device=device,
+        checkpoint_path=checkpoint_path,
+        return_sam=True,
+        return_state=True,
+        use_lora=use_lora,
+        rank=rank,
+        flexible_load_checkpoint=flexible_load_checkpoint,
+        **model_kwargs
     )
 
     # freeze components of the model if freeze was passed
@@ -85,6 +96,7 @@ def get_trainable_sam_model(
                 if name.startswith(f"{freeze}"):
                     param.requires_grad = False
 
+    # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything
     if use_lora:  # overwrites the SAM model by freezing the backbone and allow low rank adaption to attention layers
         if rank is None:
             rank = 4  # HACK: in case the user does not pass the rank, we provide a random rank to them

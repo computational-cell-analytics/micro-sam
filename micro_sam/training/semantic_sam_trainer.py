@@ -11,10 +11,12 @@ class SemanticSamTrainer(DefaultTrainer):
     def __init__(
         self,
         convert_inputs,
+        num_classes: int = 1,
         **kwargs
     ):
         super().__init__(**kwargs)
         self.convert_inputs = convert_inputs
+        self.num_classes = num_classes
         self._kwargs = kwargs
 
     def _compute_loss(self, y, masks):
@@ -24,7 +26,7 @@ class SemanticSamTrainer(DefaultTrainer):
 
     def _get_model_outputs(self, batched_inputs):
         image_embeddings, batched_inputs = self.model.image_embeddings_oft(batched_inputs)
-        batched_outputs = self.model(batched_inputs, image_embeddings)
+        batched_outputs = self.model(batched_inputs, image_embeddings, multimask_output=(self.num_classes > 1))
         masks = torch.stack([output["masks"].squeeze(0) for output in batched_outputs])
         return masks
 
