@@ -1,4 +1,5 @@
 import os
+from glob import glob
 
 import torch
 from torch.utils.data import random_split
@@ -28,23 +29,26 @@ def get_dataloader(patch_shape, batch_size, train_instance_segmentation):
     """
     os.makedirs(DATA_FOLDER, exist_ok=True)
 
-    # Provide the image and segmentation data directories for training.
+    # Provide the image and segmentation files for training.
     image_dir = os.path.join(DATA_FOLDER, "images")
     segmentation_dir = os.path.join(DATA_FOLDER, "labels")
+
+    image_paths = glob(os.path.join(image_dir, "*.tif"))[0]
+    segmentation_paths = glob(os.path.join(segmentation_dir, "*.tif"))[0]
 
     # torch_em.default_segmentation_loader is a convenience function to build a torch dataloader
     # from image data and labels for training segmentation models.
     # It supports image data in various formats. Here, we load image data and labels from the two
     # folders with tif images (both inputs and respective segmentations are tif files), by specifying
     # `raw_key` and `label_key` as `*.tif`. This means all images in the respective folders that end with
-    # .tif will be loadded.
+    # .tif will be loaded.
     # The function supports many other file formats. For example, if you have tif stacks with multiple slices
     # instead of multiple tif images in a foldder, then you can pass raw_key=label_key=None.
 
-    # Load images from multiple files in folder via pattern (here: all tif files)
-    raw_key, label_key = "*.tif", "*.tif"
-    # Alternative: if you have tif stacks you can just set raw_key and label_key to None
-    # raw_key, label_key = None, None
+    # If you have tif stacks you can just set raw_key and label_key to None
+    raw_key, label_key = None, None
+    # Alternately: load images from multiple files in folder via pattern (here: all tif files)
+    # raw_key, label_key = "*.tif", "*.tif"
 
     if train_instance_segmentation:
         # Computes the distance transform for objects to perform end-to-end automatic instance segmentation.
@@ -60,12 +64,12 @@ def get_dataloader(patch_shape, batch_size, train_instance_segmentation):
         label_transform = torch_em.transform.label.connected_components
 
     dataset = torch_em.default_segmentation_dataset(
-        raw_paths=image_dir,
+        raw_paths=image_paths,
         raw_key=raw_key,
-        label_paths=segmentation_dir,
+        label_paths=segmentation_paths,
         label_key=label_key,
         patch_shape=patch_shape,
-        ndim=2,
+        ndim=3,
         is_seg_dataset=True,
         label_transform=label_transform,
         raw_transform=sam_training.identity,
