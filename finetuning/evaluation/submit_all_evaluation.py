@@ -7,7 +7,7 @@ from pathlib import Path
 from datetime import datetime
 
 # Replace with the path to the experiments folder
-ROOT = "/scratch/projects/nim00007/sam/experiments/"
+ROOT = "/scratch/usr/nimcarot/sam/experiments/lora"
 
 ALL_SCRIPTS = [
     "precompute_embeddings", "evaluate_amg", "iterative_prompting", "evaluate_instance_segmentation"
@@ -117,7 +117,7 @@ def get_checkpoint_path(experiment_set, dataset_name, model_type, region, lora=F
 
         if lora:
             assert rank is not None, "Provide the rank for LoRA finetuning."
-            checkpoint_name = f"{ROOT}/checkpoints/{model_type}/{dataset_name}_lora_rank_{rank}/best.pt"
+            checkpoint = f"{ROOT}/checkpoints/{model_type}/{dataset_name}_lora_rank_{rank}/best.pt"
         else:
             checkpoint = f"{ROOT}/checkpoints/{model_type}/{dataset_name}_sam/best.pt"
 

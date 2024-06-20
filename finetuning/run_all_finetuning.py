@@ -3,6 +3,8 @@ import shutil
 import subprocess
 from datetime import datetime
 
+ROOT = "~/micro-sam/finetuing/"
+
 N_OBJECTS = {
     "vit_t": 50,
     "vit_b": 40,
@@ -13,20 +15,19 @@ N_OBJECTS = {
 def write_batch_script(out_path, _name, env_name, model_type, save_root, use_lora=False, lora_rank=4):
     "Writing scripts with different micro-sam finetunings."
     batch_script = f"""#!/bin/bash
-#SBATCH -t 14-00:00:00
+#SBATCH -t 4-00:00:00
 #SBATCH --mem 64G
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
-#SBATCH -A gzz0001
+#SBATCH -A nim00007
 #SBATCH -c 16
-#SBATCH --qos=14d
+#SBATCH --qos=96h
 #SBATCH --constraint=80gb
 #SBATCH --job-name={os.path.split(_name)[-1]}
 
 source activate {env_name} \n"""
-
     # python script
     python_script = f"python {_name}.py "
 
@@ -70,7 +71,7 @@ def submit_slurm(args):
     tmp_folder = "./gpu_jobs"
 
     script_combinations = {
-        "livecell_specialist": "livecell/lora/train_livecell",
+        "livecell_specialist": f"{ROOT}livecell/lora/train_livecell",
         "deepbacs_specialist": "specialists/training/light_microscopy/deepbacs_finetuning",
         "tissuenet_specialist": "specialists/training/light_microscopy/tissuenet_finetuning",
         "plantseg_root_specialist": "specialists/training/light_microscopy/plantseg_root_finetuning",
