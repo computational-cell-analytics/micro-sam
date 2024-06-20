@@ -237,14 +237,12 @@ class ConvertToSemanticSamInputs:
 
             # downsize the labels
             gt_shape = (gt.shape[0], 256, 256)
-            downsized_gt.append(
-                resize(
-                    image=gt, output_shape=gt_shape, preserve_range=True, order=0, anti_aliasing=False
-                ).astype(gt.dtype)
-            )
 
-        downsized_gt = np.stack(downsized_gt)
-        downsized_gt = torch.from_numpy(downsized_gt)
+            per_gt = resize(image=gt, output_shape=gt_shape, preserve_range=True, order=0, anti_aliasing=False)
+            per_gt = torch.from_numpy(per_gt).to(gt.dtype)
+            downsized_gt.append(per_gt)
+
+        downsized_gt = torch.stack(downsized_gt)
 
         return batched_inputs, downsized_gt
 
