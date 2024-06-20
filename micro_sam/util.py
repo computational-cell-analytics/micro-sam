@@ -270,6 +270,8 @@ def get_sam_model(
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
     return_state: bool = False,
+    use_lora: bool = False,
+    rank: Optional[int] = None,
 ) -> SamPredictor:
     r"""Get the SegmentAnything Predictor.
 
@@ -302,6 +304,8 @@ def get_sam_model(
             then `model_type` must be given as "vit_b".
         return_sam: Return the sam model object as well as the predictor.
         return_state: Return the unpickled checkpoint state.
+        use_lora: Whether to use the low rank adaptation method for finetuning.
+        rank: The rank of the decomposition matrices for updating weights in each attention layer.
 
     Returns:
         The segment anything predictor.
@@ -347,6 +351,13 @@ def get_sam_model(
 
     state, model_state = _load_checkpoint(checkpoint_path)
     sam = sam_model_registry[abbreviated_model_type]()
+
+    if use_lora:  # overwrites the SAM model by freezing the backbone and allow low rank adaption to attention layers
+        from micro_sam.training.peft_sam import PEFT_Sam
+        if rank is None:
+            rank = 4  # HACK: in case the user does not pass the rank, we provide a random rank to them
+        sam = PEFT_Sam(sam, rank=rank).sam
+
     sam.load_state_dict(model_state)
     sam.to(device=device)
 

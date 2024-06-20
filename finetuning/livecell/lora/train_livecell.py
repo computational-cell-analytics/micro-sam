@@ -4,20 +4,18 @@ import argparse
 import torch
 
 from torch_em.model import UNETR
-from torch_em.data import MinInstanceSampler
 from torch_em.loss import DiceBasedDistanceLoss
-from torch_em.data.datasets import get_tissuenet_loader
+from torch_em.data.datasets import get_livecell_loader
+from torch_em.transform.label import PerObjectDistanceTransform
 
 import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
-from micro_sam.training.util import ResizeRawTrafo, ResizeLabelTrafo
 
 
-def get_dataloaders(patch_shape, data_path):
-    """This returns the tissuenet data loaders implemented in torch_em:
-    https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/tissuenet.py
-    It will not automatically download the tissuenet data.
-    See `torch_em.data.datasets.tissuenet.get_tissuenet_dataset` for details.
+def get_dataloaders(patch_shape, data_path, cell_type=None):
+    """This returns the livecell data loaders implemented in torch_em:
+    https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/livecell.py
+    It will automatically download the livecell data.
 
     Note: to replace this with another data loader you need to return a torch data loader
     that retuns `x, y` tensors, where `x` is the image data and `y` are the labels.
@@ -25,43 +23,67 @@ def get_dataloaders(patch_shape, data_path):
     I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
     Important: the ID 0 is reseved for background, and the IDs must be consecutive
     """
-    raw_transform = ResizeRawTrafo(patch_shape, do_rescaling=True)
-    label_transform = ResizeLabelTrafo(patch_shape)
-    sampler = MinInstanceSampler()
-    label_dtype = torch.float32
-
-    train_loader = get_tissuenet_loader(
-        path=data_path, split="train", patch_shape=patch_shape, batch_size=2, raw_channel="rgb",
-        label_channel="cell", download=True, label_dtype=label_dtype, raw_transform=raw_transform,
-        label_transform=label_transform, sampler=sampler, num_workers=16, shuffle=True
+    label_transform = PerObjectDistanceTransform(
+        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=25
     )
-    val_loader = get_tissuenet_loader(
-        path=data_path, split="val", patch_shape=patch_shape, batch_size=1, raw_channel="rgb",
-        label_channel="cell", download=True, label_dtype=label_dtype, raw_transform=raw_transform,
-        label_transform=label_transform, sampler=sampler, num_workers=16, shuffle=True, n_samples=1000
+    raw_transform = sam_training.identity  # the current workflow avoids rescaling the inputs to [-1, 1]
+    train_loader = get_livecell_loader(
+        path=data_path, patch_shape=patch_shape, split="train", batch_size=2, num_workers=16,
+        cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
+        raw_transform=raw_transform, label_dtype=torch.float32,
+    )
+    val_loader = get_livecell_loader(
+        path=data_path, patch_shape=patch_shape, split="val", batch_size=4, num_workers=16,
+        cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
+        raw_transform=raw_transform, label_dtype=torch.float32,
     )
 
     return train_loader, val_loader
 
 
-def finetune_tissuenet(args):
-    """Code for finetuning SAM on TissueNet"""
+def count_parameters(model):
+    params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    params = params / 1e6
+    return f"The number of trainable parameters for the provided model is {round(params, 2)}M"
+
+
+def finetune_livecell(args):
+    """Code for finetuning SAM (using LoRA) on LIVECell
+
+    Initial observations: There's no real memory advantage actually unless it's "truly" scaled up
+    # vit_b
+    # SAM: 93M (takes ~50GB)
+    # SAM-LoRA: 4.2M (takes ~49GB)
+
+    # vit_l
+    # SAM: 312M (takes ~63GB)
+    # SAM-LoRA: 4.4M (takes ~61GB)
+
+    # vit_h
+    # SAM: 641M (takes ~73GB)
+    # SAM-LoRA: 4.7M (takes ~67GB)
+
+    # Q: Would quantization lead to better results? (eg. QLoRA / DoRA)
+    """
     # override this (below) if you have some more complex set-up and need to specify the exact gpu
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # training settings:
     model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
-    patch_shape = (512, 512)  # the patch shape for training
-    n_objects_per_batch = args.n_objects  # this is the number of objects per batch that will be sampled (default: 25)
+    patch_shape = (520, 704)  # the patch shape for training
+    n_objects_per_batch = 5  # this is the number of objects per batch that will be sampled
     freeze_parts = args.freeze  # override this to freeze different parts of the model
+    rank = 4  # the rank
 
     # get the trainable segment anything model
     model = sam_training.get_trainable_sam_model(
         model_type=model_type,
         device=device,
         checkpoint_path=checkpoint_path,
-        freeze=freeze_parts
+        freeze=freeze_parts,
+        use_lora=True,
+        rank=rank,
     )
     model.to(device)
 
@@ -74,31 +96,29 @@ def finetune_tissuenet(args):
         final_activation="Sigmoid",
         use_skip_connection=False,
         resize_input=True,
-        use_conv_transpose=True,
     )
     unetr.to(device)
 
+    # let's check the total number of trainable parameters
+    print(count_parameters(model))
+
     # let's get the parameters for SAM and the decoder from UNETR
-    joint_model_params = [params for params in model.parameters()]  # sam parameters
+    joint_model_params = model.parameters()
+
+    joint_model_params = [params for params in joint_model_params]  # sam parameters
     for name, params in unetr.named_parameters():  # unetr's decoder parameters
         if not name.startswith("encoder"):
             joint_model_params.append(params)
 
-    # all the stuff we need for training
     optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10)
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
-    convert_inputs = sam_training.ConvertToSamInputs(
-        transform=model.transform, box_distortion_factor=0.025
-    )
+    convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
 
-    checkpoint_name = f"{args.model_type}/tissuenet_sam"
-
-    # the trainer which performs the joint training and validation (implemented using "torch_em")
     trainer = sam_training.JointSamTrainer(
-        name=checkpoint_name,
+        name="livecell_lora",
         save_root=args.save_root,
         train_loader=train_loader,
         val_loader=val_loader,
@@ -118,10 +138,10 @@ def finetune_tissuenet(args):
         instance_loss=DiceBasedDistanceLoss(mask_distances_in_bg=True),
         instance_metric=DiceBasedDistanceLoss(mask_distances_in_bg=True)
     )
-    trainer.fit(args.iterations, save_every_kth_epoch=args.save_every_kth_epoch)
+    trainer.fit(args.iterations)
     if args.export_path is not None:
         checkpoint_path = os.path.join(
-            "" if args.save_root is None else args.save_root, "checkpoints", checkpoint_name, "best.pt"
+            "" if args.save_root is None else args.save_root, "checkpoints", args.name, "best.pt"
         )
         export_custom_sam_model(
             checkpoint_path=checkpoint_path,
@@ -131,22 +151,22 @@ def finetune_tissuenet(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the TissueNet dataset.")
+    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LiveCELL dataset.")
     parser.add_argument(
-        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/tissuenet/",
-        help="The filepath to the TissueNet data. If the data does not exist yet it will be downloaded."
+        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/livecell/",
+        help="The filepath to the LiveCELL data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
-        help="The model type to use for fine-tuning. Either vit_t, vit_b, vit_l or vit_h."
+        help="The model type to use for fine-tuning. Either vit_h, vit_b or vit_l."
     )
     parser.add_argument(
-        "--save_root", "-s",
+        "--save_root", "-s", default=None,
         help="Where to save the checkpoint and logs. By default they will be saved where this script is run."
     )
     parser.add_argument(
-        "--iterations", type=int, default=int(25e4),
-        help="For how many iterations should the model be trained? By default 250k."
+        "--iterations", type=int, default=int(1e4),
+        help="For how many iterations should the model be trained? By default 100k."
     )
     parser.add_argument(
         "--export_path", "-e",
@@ -156,15 +176,8 @@ def main():
         "--freeze", type=str, nargs="+", default=None,
         help="Which parts of the model to freeze for finetuning."
     )
-    parser.add_argument(
-        "--save_every_kth_epoch", type=int, default=None,
-        help="To save every kth epoch while fine-tuning. Expects an integer value."
-    )
-    parser.add_argument(
-        "--n_objects", type=int, default=25, help="The number of instances (objects) per batch used for finetuning."
-    )
     args = parser.parse_args()
-    finetune_tissuenet(args)
+    finetune_livecell(args)
 
 
 if __name__ == "__main__":
