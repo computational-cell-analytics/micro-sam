@@ -3,6 +3,7 @@ import time
 import torch
 import torch.nn as nn
 
+from torch_em.loss import DiceLoss
 from torch_em.trainer import DefaultTrainer
 
 
@@ -15,7 +16,10 @@ class SemanticSamTrainer(DefaultTrainer):
         num_classes: int = 1,
         **kwargs
     ):
-        super().__init__(**kwargs)
+        loss = DiceLoss()
+        metric = DiceLoss()
+        super().__init__(loss=loss, metric=metric, **kwargs)
+
         self.convert_inputs = convert_inputs
         self.num_classes = num_classes
         self.compute_ce_loss = nn.BCELoss() if num_classes == 1 else nn.CrossEntropyLoss()
