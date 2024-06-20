@@ -6,7 +6,8 @@ from glob import glob
 from pathlib import Path
 from datetime import datetime
 
-ROOT = "/scratch/usr/nimcarot/sam/experiments/lora"
+# Replace with the path to the experiments folder
+ROOT = "/scratch/projects/nim00007/sam/experiments/"
 
 ALL_SCRIPTS = [
     "precompute_embeddings", "evaluate_amg", "iterative_prompting", "evaluate_instance_segmentation"
@@ -236,5 +237,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
     main(args)
 
-
-# python ~/micro-sam/finetuning/evaluation/submit_all_evaluation.py -d livecell -m vit_b -e specialist -r lm 
