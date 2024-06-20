@@ -1,7 +1,7 @@
 import time
 
 import torch
-from torch.nn import CrossEntropyLoss
+import torch.nn as nn
 
 from torch_em.trainer import DefaultTrainer
 
@@ -18,15 +18,15 @@ class SemanticSamTrainer(DefaultTrainer):
         super().__init__(**kwargs)
         self.convert_inputs = convert_inputs
         self.num_classes = num_classes
-        self.compute_ce_loss = CrossEntropyLoss()
+        self.compute_ce_loss = nn.BCELoss() if num_classes == 1 else nn.CrossEntropyLoss()
         self._kwargs = kwargs
 
-    def _compute_loss(self, y, gt_logits, masks, mask_logits):
+    def _compute_loss(self, y, downsized_gt, masks, mask_logits):
         # Compute dice loss for the predictions
         dice_loss = self.loss(masks, y.to(self.device, non_blocking=True))
 
         # Compute cross entropy loss for the logits
-        ce_loss = self.compute_ce_loss(mask_logits, gt_logits.to(self.device, non_blocking=True))
+        ce_loss = self.compute_ce_loss(mask_logits, downsized_gt.to(self.device, non_blocking=True))
 
         net_loss = dice_loss + ce_loss
         return net_loss
@@ -45,11 +45,11 @@ class SemanticSamTrainer(DefaultTrainer):
         for x, y in self.train_loader:
             self.optimizer.zero_grad()
 
-            batched_inputs, gt_logits = self.convert_inputs(x, y)
+            batched_inputs, downsized_gt = self.convert_inputs(x, y)
 
             with forward_context():
                 masks, mask_logits = self._get_model_outputs(batched_inputs)
-                net_loss = self._compute_loss(y, gt_logits, masks, mask_logits)
+                net_loss = self._compute_loss(y, downsized_gt, masks, mask_logits)
 
             backprop(net_loss)
 
@@ -72,11 +72,11 @@ class SemanticSamTrainer(DefaultTrainer):
 
         with torch.no_grad():
             for x, y in self.val_loader:
-                batched_inputs, gt_logits = self.convert_inputs(x, y)
+                batched_inputs, downsized_gt = self.convert_inputs(x, y)
 
                 with forward_context():
                     masks, mask_logits = self._get_model_outputs(batched_inputs)
-                    net_loss = self._compute_loss(y, gt_logits, masks, mask_logits)
+                    net_loss = self._compute_loss(y, downsized_gt, masks, mask_logits)
 
                 loss_val += net_loss.item()
                 metric_val += net_loss.item()

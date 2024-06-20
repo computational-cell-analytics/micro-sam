@@ -230,21 +230,23 @@ class ConvertToSemanticSamInputs:
     def __call__(self, x, y):
         """Convert the outputs of dataloader to the batched format of inputs expected by SAM.
         """
-        batched_inputs, gt_logits = [], []
+        batched_inputs, downsized_gt = [], []
         for image, gt in zip(x, y):
             batched_input = {"image": image, "original_size": image.shape[1:]}
             batched_inputs.append(batched_input)
 
             # downsize the labels
             gt_shape = (gt.shape[0], 256, 256)
-            gt_logits.append(
-                resize(image=gt, output_shape=gt_shape, preserve_range=True, order=0, anti_aliasing=False)
+            downsized_gt.append(
+                resize(
+                    image=gt, output_shape=gt_shape, preserve_range=True, order=0, anti_aliasing=False
+                ).astype(gt.dtype)
             )
 
-        gt_logits = np.stack(gt_logits)
-        gt_logits = torch.from_numpy(gt_logits)
+        downsized_gt = np.stack(downsized_gt)
+        downsized_gt = torch.from_numpy(downsized_gt)
 
-        return batched_inputs, gt_logits
+        return batched_inputs, downsized_gt
 
 
 #

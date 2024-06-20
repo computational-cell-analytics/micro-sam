@@ -355,7 +355,7 @@ def get_sam_model(
     state, model_state = _load_checkpoint(checkpoint_path)
 
     # Whether to update parameters necessary to initialize the model
-    if bool(model_kwargs):  # Checks whether model_kwargs have been provided or not
+    if model_kwargs:  # Checks whether model_kwargs have been provided or not
         if abbreviated_model_type == "vit_t":
             raise ValueError("'micro-sam' does not allow changing the model parameters for 'mobile-sam'.")
 
@@ -415,7 +415,7 @@ def _handle_checkpoint_loading(sam, model_state):
     reference_state.update(new_state_dict)
 
     if len(mismatched_layers) > 0:
-        print(f"The layers with size mismatch: {mismatched_layers}")
+        warnings.warn(f"The layers with size mismatch: {mismatched_layers}")
 
     for mlayer in mismatched_layers:
         if 'weight' in mlayer:
