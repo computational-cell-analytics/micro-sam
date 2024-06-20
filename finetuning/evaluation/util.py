@@ -80,10 +80,10 @@ def get_dataset_paths(dataset_name, split_choice):
     return raw_dir, labels_dir
 
 
-def get_model(model_type, ckpt):
+def get_model(model_type, ckpt, use_lora=False, rank=None):
     if ckpt is None:
         ckpt = VANILLA_MODELS[model_type]
-    predictor = get_sam_model(model_type=model_type, checkpoint_path=ckpt)
+    predictor = get_sam_model(model_type=model_type, checkpoint_path=ckpt, use_lora=use_lora, rank=rank)
     return predictor
 
 
@@ -226,6 +226,8 @@ def get_default_arguments():
     parser.add_argument(
         "--use_masks", action="store_true", help="To use logits masks for iterative prompting."
     )
+    parser.add_argument("--use_lora", action="store_true", help="Whether to use LoRA for finetuning.")
+    parser.add_argument("--lora_rank", type=int, default=4)
     args = parser.parse_args()
     return args
 

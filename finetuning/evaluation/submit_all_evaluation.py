@@ -7,7 +7,7 @@ from pathlib import Path
 from datetime import datetime
 
 # Replace with the path to the experiments folder
-ROOT = "/scratch/usr/nimcarot/sam/experiments/lora"
+ROOT = "/scratch/usr/nimcarot/sam/experiments/dummy_directory"
 
 ALL_SCRIPTS = [
     "precompute_embeddings", "evaluate_amg", "iterative_prompting", "evaluate_instance_segmentation"
@@ -30,6 +30,7 @@ def write_batch_script(
 #SBATCH --constraint=80gb
 #SBATCH --qos=96h
 #SBATCH --job-name={inference_setup}
+#SBATCH -x ggpu139
 
 source ~/.bashrc
 mamba activate {env_name} \n"""
@@ -58,6 +59,10 @@ mamba activate {env_name} \n"""
     # use logits for iterative prompting
     if inference_setup == "iterative_prompting" and use_masks:
         python_script += "--use_masks "
+    
+    if use_lora:
+        python_script += "--use_lora "
+        python_script += f"--lora_rank {lora_rank} "
 
     # let's add the python script to the bash script
     batch_script += python_script
@@ -72,7 +77,7 @@ mamba activate {env_name} \n"""
         new_path = out_path[:-3] + f"_{inference_setup}_box.sh"
         with open(new_path, "w") as f:
             f.write(batch_script)
-
+    print(batch_script)
 
 def get_batch_script_names(tmp_folder):
     tmp_folder = os.path.expanduser(tmp_folder)
@@ -145,7 +150,7 @@ def submit_slurm(args):
     make_delay = "10s"  # wait for precomputing the embeddings and later run inference scripts
 
     if args.checkpoint_path is None:
-        checkpoint = get_checkpoint_path(experiment_set, dataset_name, model_type, region)
+        checkpoint = get_checkpoint_path(experiment_set, dataset_name, model_type, region, lora=args.use_lora, rank=args.lora_rank)
     else:
         checkpoint = args.checkpoint_path
 
