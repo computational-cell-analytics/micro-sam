@@ -5,13 +5,14 @@ import torch
 from torch.utils.data import random_split
 
 import torch_em
-from torch_em.data import MinInstanceSampler
+from torch_em.data import MinForegroundSampler
 from torch_em.transform.label import PerObjectDistanceTransform
 
 import micro_sam.training as sam_training
 
 
-DATA_FOLDER = "data"  # overwrite to provide the path to your data directory
+# overwrite to provide the path to your data directory
+DATA_FOLDER = "/scratch/share/cidas/cca/data/cfci/c_elegans_chromosomes"
 
 
 def get_dataloader(patch_shape, batch_size, train_instance_segmentation):
@@ -30,11 +31,8 @@ def get_dataloader(patch_shape, batch_size, train_instance_segmentation):
     os.makedirs(DATA_FOLDER, exist_ok=True)
 
     # Provide the image and segmentation files for training.
-    image_dir = os.path.join(DATA_FOLDER, "images")
-    segmentation_dir = os.path.join(DATA_FOLDER, "labels")
-
-    image_paths = glob(os.path.join(image_dir, "*.tif"))[0]
-    segmentation_paths = glob(os.path.join(segmentation_dir, "*.tif"))[0]
+    image_paths = glob(os.path.join(DATA_FOLDER, "images", "*.tif"))[0]
+    segmentation_paths = glob(os.path.join(DATA_FOLDER, "labels", "*.tif"))[0]
 
     # torch_em.default_segmentation_loader is a convenience function to build a torch dataloader
     # from image data and labels for training segmentation models.
@@ -69,20 +67,21 @@ def get_dataloader(patch_shape, batch_size, train_instance_segmentation):
         label_paths=segmentation_paths,
         label_key=label_key,
         patch_shape=patch_shape,
-        ndim=3,
+        ndim=2,
         is_seg_dataset=True,
         label_transform=label_transform,
         raw_transform=sam_training.identity,
-        sampler=MinInstanceSampler(),
+        sampler=MinForegroundSampler(min_fraction=0.01),
+        n_samples=5000,
     )
     dataset.max_sampling_attempts = 10000
 
     # Use 10% of the dataset - at least one image - for validation.
-    n_val = min(1, int(0.1 * len(dataset)))
+    n_val = max(1, int(0.1 * len(dataset)))
     train_dataset, val_dataset = random_split(dataset, lengths=[len(dataset) - n_val, n_val])
 
-    train_loader = torch_em.get_data_loader(dataset=train_dataset, batch_size=batch_size, num_workers=8, shuffle=True)
-    val_loader = torch_em.get_data_loader(dataset=val_dataset, batch_size=batch_size, num_workers=8, shuffle=True)
+    train_loader = torch_em.get_data_loader(dataset=train_dataset, batch_size=batch_size, num_workers=32, shuffle=True)
+    val_loader = torch_em.get_data_loader(dataset=val_dataset, batch_size=batch_size, num_workers=32, shuffle=True)
 
     return train_loader, val_loader
 
@@ -94,7 +93,7 @@ def run_training(checkpoint_name, model_type, train_instance_segmentation):
     # All hyperparameters for training.
     batch_size = 1  # the training batch size
     patch_shape = (1, 768, 768)  # the size of patches for training
-    n_objects_per_batch = 25  # the number of objects per batch that will be sampled
+    n_objects_per_batch = 5  # the number of objects per batch that will be sampled
     device = torch.device("cuda")  # the device/GPU used for training
 
     # Get the dataloaders.
@@ -106,7 +105,8 @@ def run_training(checkpoint_name, model_type, train_instance_segmentation):
         model_type=model_type,
         train_loader=train_loader,
         val_loader=val_loader,
-        n_epochs=100,
+        n_epochs=25,
+        early_stopping=10,
         n_objects_per_batch=n_objects_per_batch,
         with_segmentation_decoder=train_instance_segmentation,
         device=device,
@@ -153,4 +153,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import warnings
+    warnings.filterwarnings(action="ignore")
     main()
