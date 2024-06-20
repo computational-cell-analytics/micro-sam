@@ -19,7 +19,7 @@ def write_batch_script(out_path, _name, env_name, model_type, save_root, use_lor
 #SBATCH --ntasks=1
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
-#SBATCH -A nim00007
+#SBATCH -A gzz0001
 #SBATCH -c 16
 #SBATCH --qos=14d
 #SBATCH --constraint=80gb
