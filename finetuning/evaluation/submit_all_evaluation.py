@@ -6,7 +6,8 @@ from glob import glob
 from pathlib import Path
 from datetime import datetime
 
-ROOT = "/scratch/usr/nimcarot/sam/experiments/lora"
+# Replace with the path to the experiments folder
+ROOT = "/scratch/projects/nim00007/sam/experiments/"
 
 ALL_SCRIPTS = [
     "precompute_embeddings", "evaluate_amg", "iterative_prompting", "evaluate_instance_segmentation"
@@ -58,9 +59,6 @@ mamba activate {env_name} \n"""
     if inference_setup == "iterative_prompting" and use_masks:
         python_script += "--use_masks "
 
-    # use lora if requested
-    if use_lora:
-        python_script += f"--use_lora --lora_rank {lora_rank}"
     # let's add the python script to the bash script
     batch_script += python_script
 
@@ -185,7 +183,7 @@ def submit_slurm(args):
             experiment_folder=experiment_folder,
             dataset_name=dataset_name,
             delay=None if current_setup == "precompute_embeddings" else make_delay,
-            use_masks=args.use_masks
+            use_masks=args.use_masks,
             use_lora=args.use_lora,
             lora_rank=args.lora_rank
             )
@@ -239,5 +237,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
     main(args)
 
-
-# python ~/micro-sam/finetuning/evaluation/submit_all_evaluation.py -d livecell -m vit_b -e specialist -r lm 

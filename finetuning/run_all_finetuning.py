@@ -3,22 +3,25 @@ import shutil
 import subprocess
 from datetime import datetime
 
-ROOT = "~/micro-sam"
-
-MODELS = ["vit_t", "vit_b", "vit_l", "vit_h"]
+N_OBJECTS = {
+    "vit_t": 50,
+    "vit_b": 40,
+    "vit_l": 30,
+    "vit_h": 25
+}
 
 def write_batch_script(out_path, _name, env_name, model_type, save_root, use_lora=False, lora_rank=4):
     "Writing scripts with different micro-sam finetunings."
     batch_script = f"""#!/bin/bash
-#SBATCH -t 4-00:00:00
+#SBATCH -t 14-00:00:00
 #SBATCH --mem 64G
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
-#SBATCH -A nim00007
+#SBATCH -A gzz0001
 #SBATCH -c 16
-#SBATCH --qos=96h
+#SBATCH --qos=14d
 #SBATCH --constraint=80gb
 #SBATCH --job-name={os.path.split(_name)[-1]}
 
@@ -35,6 +38,8 @@ source activate {env_name} \n"""
 
     if use_lora:
         python_script += f"--use_lora --lora_rank {lora_rank} "
+# choice of the number of objects
+    python_script += f"--n_objects {N_OBJECTS[model_type[:5]]} "
 
     # let's add the python script to the bash script
     batch_script += python_script
@@ -65,7 +70,7 @@ def submit_slurm(args):
     tmp_folder = "./gpu_jobs"
 
     script_combinations = {
-        "livecell_specialist": f"{ROOT}/finetuning/livecell/lora/train_livecell",
+        "livecell_specialist": "livecell/lora/train_livecell",
         "deepbacs_specialist": "specialists/training/light_microscopy/deepbacs_finetuning",
         "tissuenet_specialist": "specialists/training/light_microscopy/tissuenet_finetuning",
         "plantseg_root_specialist": "specialists/training/light_microscopy/plantseg_root_finetuning",
@@ -87,7 +92,7 @@ def submit_slurm(args):
         experiments = [args.experiment_name]
 
     if args.model_type is None:
-        models = MODELS
+        models = list(N_OBJECTS.keys())
     else:
         models = [args.model_type]
 
@@ -126,5 +131,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
     main(args)
 
-
-# python ~/micro-sam/finetuning/run_all_finetuning.py -e livecell_specialist -m vit_b -s /scratch/usr/nimcarot/lora/ --use_lora --lora_rank 4
