@@ -3,9 +3,8 @@ from math import ceil, floor
 from typing import List, Optional, Union
 
 import numpy as np
-import torch
 
-from skimage.transform import resize
+import torch
 
 from segment_anything.utils.transforms import ResizeLongestSide
 
@@ -230,21 +229,12 @@ class ConvertToSemanticSamInputs:
     def __call__(self, x, y):
         """Convert the outputs of dataloader to the batched format of inputs expected by SAM.
         """
-        batched_inputs, downsized_gt = [], []
+        batched_inputs = []
         for image, gt in zip(x, y):
             batched_input = {"image": image, "original_size": image.shape[1:]}
             batched_inputs.append(batched_input)
 
-            # downsize the labels
-            gt_shape = (gt.shape[0], 256, 256)
-
-            per_gt = resize(image=gt, output_shape=gt_shape, preserve_range=True, order=0, anti_aliasing=False)
-            per_gt = torch.from_numpy(per_gt).to(gt.dtype)
-            downsized_gt.append(per_gt)
-
-        downsized_gt = torch.stack(downsized_gt)
-
-        return batched_inputs, downsized_gt
+        return batched_inputs
 
 
 #

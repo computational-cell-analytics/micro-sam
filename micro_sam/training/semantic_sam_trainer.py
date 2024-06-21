@@ -25,12 +25,12 @@ class SemanticSamTrainer(DefaultTrainer):
         self.compute_ce_loss = nn.BCELoss() if num_classes == 1 else nn.CrossEntropyLoss()
         self._kwargs = kwargs
 
-    def _compute_loss(self, y, downsized_gt, masks, mask_logits):
+    def _compute_loss(self, y, masks):
         # Compute dice loss for the predictions
         dice_loss = self.loss(masks, y.to(self.device, non_blocking=True))
 
-        # Compute cross entropy loss for the logits
-        ce_loss = self.compute_ce_loss(mask_logits, downsized_gt.to(self.device, non_blocking=True))
+        # Compute cross entropy loss for the predictions
+        ce_loss = self.compute_ce_loss(masks, y.to(self.device, non_blocking=True))
 
         net_loss = dice_loss + ce_loss
         return net_loss
@@ -39,8 +39,7 @@ class SemanticSamTrainer(DefaultTrainer):
         image_embeddings, batched_inputs = self.model.image_embeddings_oft(batched_inputs)
         batched_outputs = self.model(batched_inputs, image_embeddings, multimask_output=(self.num_classes > 1))
         masks = torch.stack([output["masks"].squeeze(0) for output in batched_outputs])
-        mask_logits = torch.stack([output["low_res_masks"].squeeze(0) for output in batched_outputs])
-        return masks, mask_logits
+        return masks
 
     def _train_epoch_impl(self, progress, forward_context, backprop):
         self.model.train()
@@ -49,11 +48,11 @@ class SemanticSamTrainer(DefaultTrainer):
         for x, y in self.train_loader:
             self.optimizer.zero_grad()
 
-            batched_inputs, downsized_gt = self.convert_inputs(x, y)
+            batched_inputs = self.convert_inputs(x, y)
 
             with forward_context():
-                masks, mask_logits = self._get_model_outputs(batched_inputs)
-                net_loss = self._compute_loss(y, downsized_gt, masks, mask_logits)
+                masks = self._get_model_outputs(batched_inputs)
+                net_loss = self._compute_loss(y, masks)
 
             backprop(net_loss)
 
@@ -76,11 +75,11 @@ class SemanticSamTrainer(DefaultTrainer):
 
         with torch.no_grad():
             for x, y in self.val_loader:
-                batched_inputs, downsized_gt = self.convert_inputs(x, y)
+                batched_inputs = self.convert_inputs(x, y)
 
                 with forward_context():
-                    masks, mask_logits = self._get_model_outputs(batched_inputs)
-                    net_loss = self._compute_loss(y, downsized_gt, masks, mask_logits)
+                    masks = self._get_model_outputs(batched_inputs)
+                    net_loss = self._compute_loss(y, masks)
 
                 loss_val += net_loss.item()
                 metric_val += net_loss.item()
