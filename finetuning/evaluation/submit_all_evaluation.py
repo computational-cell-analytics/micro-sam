@@ -95,16 +95,17 @@ def get_batch_script_names(tmp_folder):
 def get_checkpoint_path(experiment_set, dataset_name, model_type, region, lora=False, rank=None):
     # let's set the experiment type - either using the generalist or just using vanilla model
     if experiment_set == "generalist":
-        checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/"
+        #checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/"
+        #if region == "organelles":
+        #    checkpoint += "mito_nuc_em_generalist_sam/best.pt"
+        #elif region == "boundaries":
+        #    checkpoint += "boundaries_em_generalist_sam/best.pt"
+        #elif region == "lm":
+        #    checkpoint += "lm_generalist_sam/best.pt"
+        #else:
+        #    raise ValueError("Choose `region` from lm / organelles / boundaries")
 
-        if region == "organelles":
-            checkpoint += "mito_nuc_em_generalist_sam/best.pt"
-        elif region == "boundaries":
-            checkpoint += "boundaries_em_generalist_sam/best.pt"
-        elif region == "lm":
-            checkpoint += "lm_generalist_sam/best.pt"
-        else:
-            raise ValueError("Choose `region` from lm / organelles / boundaries")
+        checkpoint = None
 
     elif experiment_set == "specialist":
         _split = dataset_name.split("/")
