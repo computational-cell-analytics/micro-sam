@@ -119,22 +119,6 @@ def finetune_livecell(args):
         resize_input=True,
     )
 
-    if checkpoint_path is not None:
-        import pickle
-        from micro_sam.util import _CustomUnpickler
-        custom_unpickle = pickle
-        custom_unpickle.Unpickler = _CustomUnpickler
-
-        decoder_state = torch.load(
-            checkpoint_path, map_location="cpu", pickle_module=custom_unpickle
-        )["decoder_state"]
-        unetr_state_dict = unetr.state_dict()
-        for k, v in unetr_state_dict.items():
-            if not k.startswith("encoder"):
-                unetr_state_dict[k] = decoder_state[k]
-        unetr.load_state_dict(unetr_state_dict)
-    unetr.to(device)
-
     # let's check the total number of trainable parameters
     print(count_parameters(model))
 
