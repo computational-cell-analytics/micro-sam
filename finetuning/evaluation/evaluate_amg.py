@@ -35,7 +35,7 @@ def eval_amg(dataset_name, prediction_folder, experiment_folder):
 def main():
     args = get_default_arguments()
 
-    prediction_folder = run_amg_inference(args.dataset, args.model, ckpt, args.experiment_folder, use_lora=args.use_lora, rank=args.lora_rank)
+    prediction_folder = run_amg_inference(args.dataset, args.model, args.checkpoint, args.experiment_folder, use_lora=args.use_lora, rank=args.lora_rank)
     eval_amg(args.dataset, prediction_folder, args.experiment_folder)
 
 

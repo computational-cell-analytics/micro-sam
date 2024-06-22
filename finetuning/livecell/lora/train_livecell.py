@@ -109,7 +109,7 @@ def finetune_livecell(args):
         if not name.startswith("encoder"):
             joint_model_params.append(params)
 
-    optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
+    optimizer = torch.optim.AdamW(joint_model_params, lr=5e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10)
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 

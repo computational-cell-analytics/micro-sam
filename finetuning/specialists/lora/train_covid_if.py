@@ -118,6 +118,21 @@ def finetune_livecell(args):
         use_skip_connection=False,
         resize_input=True,
     )
+
+    if checkpoint_path is not None:
+        import pickle
+        from micro_sam.util import _CustomUnpickler
+        custom_unpickle = pickle
+        custom_unpickle.Unpickler = _CustomUnpickler
+
+        decoder_state = torch.load(
+            checkpoint_path, map_location="cpu", pickle_module=custom_unpickle
+        )["decoder_state"]
+        unetr_state_dict = unetr.state_dict()
+        for k, v in unetr_state_dict.items():
+            if not k.startswith("encoder"):
+                unetr_state_dict[k] = decoder_state[k]
+        unetr.load_state_dict(unetr_state_dict)
     unetr.to(device)
 
     # let's check the total number of trainable parameters
@@ -131,7 +146,7 @@ def finetune_livecell(args):
         if not name.startswith("encoder"):
             joint_model_params.append(params)
 
-    optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
+    optimizer = torch.optim.AdamW(joint_model_params, lr=5e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10)
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 
