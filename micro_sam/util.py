@@ -357,11 +357,13 @@ def get_sam_model(
     # Whether to update parameters necessary to initialize the model
     if model_kwargs:  # Checks whether model_kwargs have been provided or not
         if abbreviated_model_type == "vit_t":
-            raise ValueError("'micro-sam' does not allow changing the model parameters for 'mobile-sam'.")
+            raise ValueError("'micro-sam' does not support changing the model parameters for 'mobile-sam'.")
 
-        from micro_sam.training.models.build_sam import sam_model_registry  # noqa
+        from .training.models import build_sam
+        sam = build_sam.sam_model_registry[abbreviated_model_type](**model_kwargs)
 
-    sam = sam_model_registry[abbreviated_model_type](**model_kwargs)
+    else:
+        sam = sam_model_registry[abbreviated_model_type]()
 
     # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything
     if use_lora:  # overwrites the SAM model by freezing the backbone and allow low rank adaption to attention layers
