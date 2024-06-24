@@ -69,8 +69,8 @@ def count_parameters(model):
     return f"The number of trainable parameters for the provided model is {round(params, 2)}M"
 
 
-def finetune_livecell(args):
-    """Code for finetuning SAM (using LoRA) on LIVECell
+def finetune_covid_if(args):
+    """Code for finetuning SAM (using LoRA) on Covid IF
 
     Initial observations: There's no real memory advantage actually unless it's "truly" scaled up
     # vit_b
@@ -130,7 +130,7 @@ def finetune_livecell(args):
         if not name.startswith("encoder"):
             joint_model_params.append(params)
 
-    optimizer = torch.optim.AdamW(joint_model_params, lr=5e-5)
+    optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10)
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 
@@ -166,7 +166,7 @@ def finetune_livecell(args):
     )
     trainer.fit(args.iterations)
     if args.export_path is not None:
-        checkpoint_path = os.path.join(
+        checkpoint_path = os.path.join(i
             "" if args.save_root is None else args.save_root, "checkpoints", args.name, "best.pt"
         )
         export_custom_sam_model(
@@ -177,10 +177,10 @@ def finetune_livecell(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LiveCELL dataset.")
+    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the CovidIF dataset.")
     parser.add_argument(
         "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/covid_if/",
-        help="The filepath to the LiveCELL data. If the data does not exist yet it will be downloaded."
+        help="The filepath to the CovidIF data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
@@ -209,7 +209,7 @@ def main():
         "--lora_rank", type=int, default=4, help="Pass the rank for LoRA."
     )
     args = parser.parse_args()
-    finetune_livecell(args)
+    finetune_covid_if(args)
 
 
 if __name__ == "__main__":
