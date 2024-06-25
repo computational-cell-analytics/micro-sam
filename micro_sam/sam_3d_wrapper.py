@@ -1,11 +1,7 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from typing import Type, Tuple
-#from segment_anything import build_sam, SamPredictor
-#from segment_anything import sam_model_registry
+from typing import Type
 from segment_anything.modeling.image_encoder import window_partition, window_unpartition
-from segment_anything.modeling.image_encoder import Block as SamBlock
 from segment_anything.modeling import Sam
 from segment_anything import SamPredictor
 
@@ -13,7 +9,6 @@ from segment_anything import SamPredictor
 class Predictor3D(SamPredictor):
     def __init__(
         self,
-        #predictor: SamPredictor,
         sam_model: Sam,
         d_size,
         model_type: str = "vit_b",
@@ -21,10 +16,7 @@ class Predictor3D(SamPredictor):
         super().__init__(sam_model)
         self.model_type = model_type
         self.d_size = d_size
-        self.model = Sam3DWrapper(sam_model, d_size) 
-
-        # predictor.model = Sam3DWrapper(predictor.model, self.d_size)
-        # self.predictor = predictor
+        self.model = Sam3DWrapper(sam_model, d_size)
 
 
 class Sam3DWrapper(nn.Module):
@@ -35,7 +27,7 @@ class Sam3DWrapper(nn.Module):
     ):
         """
         Initializes the Sam3DWrapper object.
-        
+
         Args:
             sam_model (Sam): The Sam model to be wrapped.
             d_size (int):  Factor controlling the 3D adapter reshaping.
@@ -45,86 +37,44 @@ class Sam3DWrapper(nn.Module):
 
         """
         super().__init__()
-        self.sam_model = sam_model
         self.d_size = d_size
-        sam_model.image_encoder = ImageEncoderViT3DWrapper(image_encoder=self.sam_model.image_encoder, d_size=self.d_size)
+        sam_model.image_encoder = ImageEncoderViT3DWrapper(
+            image_encoder=sam_model.image_encoder, d_size=self.d_size
+        )
         self.sam_model = sam_model
 
+    # FIXME handling of the image size here is wrong, this only works for square images
     def forward(self, batched_input, multimask_output, image_size) -> torch.Tensor:
         return self._forward_train(batched_input, multimask_output, image_size)
 
     def _forward_train(self, batched_input, multimask_output, image_size):
-        b_size, hw_size, d_size = batched_input.shape[0], batched_input.shape[-2], batched_input.shape[1] # [b, d, 3, h, w]
+        # dimensions: [b, d, 3, h, w]
+        hw_size = batched_input.shape[-2]
         batched_input = batched_input.contiguous().view(-1, 3, hw_size, hw_size)
 
-        input_images = self.preprocess(batched_input)
-        image_embeddings = self.image_encoder(input_images, d_size)
-        sparse_embeddings, dense_embeddings = self.prompt_encoder(
+        input_images = self.sam_model.preprocess(batched_input)
+        image_embeddings = self.sam_model.image_encoder(input_images)
+        sparse_embeddings, dense_embeddings = self.sam_model.prompt_encoder(
             points=None, boxes=None, masks=None
         )
-        low_res_masks, iou_predictions = self.mask_decoder(
+        low_res_masks, iou_predictions = self.sam_model.mask_decoder(
             image_embeddings=image_embeddings,
-            image_pe=self.prompt_encoder.get_dense_pe(),
+            image_pe=self.sam_model.prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
             multimask_output=multimask_output
         )
-        masks = self.postprocess_masks(
+        masks = self.sam_model.postprocess_masks(
             low_res_masks,
             input_size=(image_size, image_size),
             original_size=(image_size, image_size)
         )
         outputs = {
-            'masks': masks,
-            'iou_predictions': iou_predictions,
-            'low_res_logits': low_res_masks
+            "masks": masks,
+            "iou_predictions": iou_predictions,
+            "low_res_logits": low_res_masks
         }
-        # print(low_res_masks.shape)
         return outputs
-
-
-    def postprocess_masks(
-        self,
-        masks: torch.Tensor,
-        input_size: Tuple[int, ...],
-        original_size: Tuple[int, ...],
-    ) -> torch.Tensor:
-        """
-        Remove padding and upscale masks to the original image size.
-
-        Arguments:
-          masks (torch.Tensor): Batched masks from the mask_decoder,
-            in BxCxHxW format.
-          input_size (tuple(int, int)): The size of the image input to the
-            model, in (H, W) format. Used to remove padding.
-          original_size (tuple(int, int)): The original size of the image
-            before resizing for input to the model, in (H, W) format.
-
-        Returns:
-          (torch.Tensor): Batched masks in BxCxHxW format, where (H, W)
-            is given by original_size.
-        """
-        masks = F.interpolate(
-            masks,
-            (self.image_encoder.img_size, self.image_encoder.img_size),
-            mode="bilinear",
-            align_corners=False,
-        )
-        masks = masks[..., : input_size[0], : input_size[1]]
-        masks = F.interpolate(masks, original_size, mode="bilinear", align_corners=False)
-        return masks
-
-    def preprocess(self, x: torch.Tensor) -> torch.Tensor:
-        """Normalize pixel values and pad to a square input."""
-        # Normalize colors
-        x = (x - self.pixel_mean) / self.pixel_std
-
-        # Pad
-        h, w = x.shape[-2:]
-        padh = self.image_encoder.img_size - h
-        padw = self.image_encoder.img_size - w
-        x = F.pad(x, (0, padw, 0, padh))
-        return x
 
 
 class ImageEncoderViT3DWrapper(nn.Module):
@@ -168,23 +118,27 @@ class NDBlockWrapper(nn.Module):
     ):
         super().__init__()
         self.block = block
-        
+
         self.adapter_channels = adapter_channels
         self.adapter_linear_down = nn.Linear(dim, self.adapter_channels, bias=False)
         self.adapter_linear_up = nn.Linear(self.adapter_channels, dim, bias=False)
-        self.adapter_conv = nn.Conv3d(self.adapter_channels, self.adapter_channels, kernel_size=(3, 1, 1), padding='same')
+        self.adapter_conv = nn.Conv3d(
+            self.adapter_channels, self.adapter_channels, kernel_size=(3, 1, 1), padding="same"
+        )
         self.adapter_act = nn.GELU()
         self.adapter_norm = norm_layer(dim)
 
         self.adapter_linear_down_2 = nn.Linear(dim, self.adapter_channels, bias=False)
         self.adapter_linear_up_2 = nn.Linear(self.adapter_channels, dim, bias=False)
-        self.adapter_conv_2 = nn.Conv3d(self.adapter_channels, self.adapter_channels, kernel_size=(3, 1, 1), padding='same')
+        self.adapter_conv_2 = nn.Conv3d(
+            self.adapter_channels, self.adapter_channels, kernel_size=(3, 1, 1), padding="same"
+        )
         self.adapter_act_2 = nn.GELU()
         self.adapter_norm_2 = norm_layer(dim)
 
     def forward(self, x: torch.Tensor, d_size) -> torch.Tensor:
         b_size, hw_size = x.shape[0], x.shape[1]
-        
+
         # 3D adapter
         shortcut = x
         x = self.adapter_norm(x)
@@ -198,7 +152,7 @@ class NDBlockWrapper(nn.Module):
         x = self.adapter_linear_up(x)
         x = shortcut + x
         # end 3D adapter
-        
+
         shortcut = x
         x = self.block.norm1(x)
         # Window partition
@@ -212,7 +166,7 @@ class NDBlockWrapper(nn.Module):
             x = window_unpartition(x, self.block.window_size, pad_hw, (H, W))
 
         x = shortcut + x
-        
+
         # 3D adapter
         shortcut = x
         x = self.adapter_norm_2(x)
@@ -226,7 +180,7 @@ class NDBlockWrapper(nn.Module):
         x = self.adapter_linear_up_2(x)
         x = shortcut + x
         # end 3D adapter
-        
+
         x = x + self.block.mlp(self.block.norm2(x))
 
         return x
