@@ -270,6 +270,10 @@ def get_sam_model(
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
     return_state: bool = False,
+    use_lora: bool = False,
+    rank: Optional[int] = None,
+    flexible_load_checkpoint: bool = False,
+    **model_kwargs,
 ) -> SamPredictor:
     r"""Get the SegmentAnything Predictor.
 
@@ -302,6 +306,9 @@ def get_sam_model(
             then `model_type` must be given as "vit_b".
         return_sam: Return the sam model object as well as the predictor.
         return_state: Return the unpickled checkpoint state.
+        use_lora: Whether to use the low rank adaptation method for finetuning.
+        rank: The rank of the decomposition matrices for updating weights in each attention layer.
+        flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
 
     Returns:
         The segment anything predictor.
@@ -346,8 +353,31 @@ def get_sam_model(
         )
 
     state, model_state = _load_checkpoint(checkpoint_path)
-    sam = sam_model_registry[abbreviated_model_type]()
-    sam.load_state_dict(model_state)
+
+    # Whether to update parameters necessary to initialize the model
+    if model_kwargs:  # Checks whether model_kwargs have been provided or not
+        if abbreviated_model_type == "vit_t":
+            raise ValueError("'micro-sam' does not support changing the model parameters for 'mobile-sam'.")
+
+        from .training.models import build_sam
+        sam = build_sam.sam_model_registry[abbreviated_model_type](**model_kwargs)
+
+    else:
+        sam = sam_model_registry[abbreviated_model_type]()
+
+    # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything
+    if use_lora:  # overwrites the SAM model by freezing the backbone and allow low rank adaption to attention layers
+        from micro_sam.training.peft_sam import PEFT_Sam
+        if rank is None:
+            rank = 4  # HACK: in case the user does not pass the rank, we provide a random rank to them
+        sam = PEFT_Sam(sam, rank=rank).sam
+
+    # In case the model checkpoints have some issues when it is initialized with different parameters than default.
+    if flexible_load_checkpoint:
+        sam = _handle_checkpoint_loading(sam, model_state)
+    else:
+        sam.load_state_dict(model_state)
+
     sam.to(device=device)
 
     predictor = SamPredictor(sam)
@@ -366,6 +396,38 @@ def get_sam_model(
     if return_state:
         return predictor, state
     return predictor
+
+
+def _handle_checkpoint_loading(sam, model_state):
+    # Whether to handle the mismatch issues in a bit more elegant way.
+    # eg. while training for multi-class semantic segmentation in the mask encoder,
+    # parameters are updated - leading to "size mismatch" errors
+
+    new_state_dict = {}  # for loading matching parameters
+    mismatched_layers = []  # for tracking mismatching parameters
+
+    reference_state = sam.state_dict()
+
+    for k, v in model_state.items():
+        if reference_state[k].size() == v.size():
+            new_state_dict[k] = v
+        else:
+            mismatched_layers.append(k)
+
+    reference_state.update(new_state_dict)
+
+    if len(mismatched_layers) > 0:
+        warnings.warn(f"The layers with size mismatch: {mismatched_layers}")
+
+    for mlayer in mismatched_layers:
+        if 'weight' in mlayer:
+            torch.nn.init.kaiming_uniform_(reference_state[mlayer])
+        elif 'bias' in mlayer:
+            reference_state[mlayer].zero_()
+
+    sam.load_state_dict(reference_state)
+
+    return sam
 
 
 def export_custom_sam_model(
