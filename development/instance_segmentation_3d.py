@@ -3,6 +3,7 @@ from elf.io import open_file
 import h5py
 import os
 import torch
+import numpy as np
 
 import micro_sam.sam_3d_wrapper as sam_3d
 import micro_sam.util as util
@@ -23,146 +24,114 @@ EMBEDDINGS_PATH = "/scratch-grete/projects/nim00007/data/mitochondria/moebius/vo
 TIMESERIES_PATH = "../examples/data/DIC-C2DH-HeLa/train/01"
 EMBEDDINGS_TRACKING_PATH = "../examples/embeddings/embeddings-ctc.zarr"
 
-
-def nucleus_segmentation(use_sam=False, use_mws=False) -> None:
-    """Segment nuclei in 3d lightsheet data (one slice)."""
-    with open_file(INPUT_PATH) as f:
-        raw = f["raw"][:]
-
-    z = 32
-
-    predictor, sam = util.get_sam_model(return_sam=True, model_type="vit_b")
-    if use_sam:
-        print("Run SAM prediction ...")
-        seg_sam = segment_instances_sam(sam, raw[z])
-    else:
-        seg_sam = None
-
-    image_embeddings = util.precompute_image_embeddings(predictor, raw, EMBEDDINGS_PATH)
-    embedding_pca = compute_pca(image_embeddings["features"])[z]
-
-    if use_mws:
-        print("Run prediction from embeddings ...")
-        seg, initial_seg = segment_instances_from_embeddings(
-            predictor, image_embeddings=image_embeddings, return_initial_segmentation=True,
-            pred_iou_thresh=0.8, verbose=1, stability_score_thresh=0.9,
-            i=z,
-        )
-    else:
-        seg, initial_seg = None, None
-
-    v = napari.Viewer()
-    v.add_image(raw[z])
-    v.add_image(embedding_pca, scale=(12, 12), visible=False)
-    if seg_sam is not None:
-        v.add_labels(seg_sam)
-    if seg is not None:
-        v.add_labels(seg)
-    if initial_seg is not None:
-        v.add_labels(initial_seg, visible=False)
-    napari.run()
-
-
-def nucleus_segmentation_3d() -> None:
-    """Segment nuclei in 3d lightsheet data (3d segmentation)."""
-    with open_file(INPUT_PATH) as f:
-        raw = f["raw"][:]
-
-    predictor = util.get_sam_model(model_type="vit_b")
-    image_embeddings = util.precompute_image_embeddings(predictor, raw, EMBEDDINGS_PATH)
-    seg = segment_instances_from_embeddings_3d(predictor, image_embeddings)
-
-    v = napari.Viewer()
-    v.add_image(raw)
-    v.add_labels(seg)
-    napari.run()
-
-
-def cell_segmentation(use_sam=False, use_mws=False) -> None:
-    """Performs cell segmentation on the input timeseries."""
-    with open_file(TIMESERIES_PATH, mode="r") as f:
-        timeseries = f["*.tif"][:50]
-
-    frame = 11
-    predictor, sam = util.get_sam_model(return_sam=True)
-
-    image_embeddings = util.precompute_image_embeddings(predictor, timeseries, EMBEDDINGS_TRACKING_PATH)
-
-    embedding_pca = compute_pca(image_embeddings["features"][frame])
-
-    if use_mws:
-        print("Run embedding segmentation ...")
-        seg_mws, initial_seg = segment_instances_from_embeddings(
-            predictor, image_embeddings=image_embeddings, i=frame, return_initial_segmentation=True,
-            bias=0.0, distance_type="l2", verbose=2,
-        )
-    else:
-        seg_mws = None
-        initial_seg = None
-
-    if use_sam:
-        print("Run SAM prediction ...")
-        seg_sam = segment_instances_sam(sam, timeseries[frame])
-    else:
-        seg_sam = None
-
-    v = napari.Viewer()
-    v.add_image(timeseries[frame])
-    v.add_image(embedding_pca, scale=(8, 8), visible=False)
-
-    if seg_mws is not None:
-        v.add_labels(seg_mws)
-
-    if initial_seg is not None:
-        v.add_labels(initial_seg)
-
-    if seg_sam is not None:
-        v.add_labels(seg_sam)
-
-    napari.run()
-
-
-def cell_segmentation_3d() -> None:
-    with open_file(TIMESERIES_PATH, mode="r") as f:
-        timeseries = f["*.tif"][:50]
+# def cell_segmentation_3d() -> None:
+#     with open_file(TIMESERIES_PATH, mode="r") as f:
+#         timeseries = f["*.tif"][:50]
     
-    predictor = util.get_sam_model()
-    image_embeddings = util.precompute_image_embeddings(predictor, timeseries, EMBEDDINGS_TRACKING_PATH)
+#     predictor = util.get_sam_model()
+#     image_embeddings = util.precompute_image_embeddings(predictor, timeseries, EMBEDDINGS_TRACKING_PATH)
 
-    seg = segment_instances_from_embeddings_3d(predictor, image_embeddings)
+#     seg = segment_instances_from_embeddings_3d(predictor, image_embeddings)
 
-    v = napari.Viewer()
-    v.add_image(timeseries)
-    v.add_labels(seg)
-    napari.run()
-    
+#     v = napari.Viewer()
+#     v.add_image(timeseries)
+#     v.add_labels(seg)
+#     napari.run()
+
+
+# def _get_dataset_and_reshape(path: str, key: str = "raw", shape: tuple = (32, 256, 256)) -> np.ndarray:
+
+#     with h5py.File(path, "r") as f:
+#         # Check if the key exists in the file
+#         if key not in f:
+#             raise KeyError(f"Dataset with key '{key}' not found in file '{path}'.")
+
+#         # Load the dataset
+#         dataset = f[key][...]
+
+#     # Reshape the dataset
+#     if dataset.shape != shape:
+#         try:
+#             # Attempt to reshape the dataset to the desired shape
+#             dataset = dataset.reshape(shape)
+#         except ValueError:
+#             raise ValueError(f"Failed to reshape dataset with key '{key}' to shape {shape}.")
+
+#     return dataset
+def get_dataset_cutout(path: str, key: str = "raw", shape: tuple = (32, 256, 256),
+                       start_index: tuple = (0, 0, 0)) -> np.ndarray:
+    """
+    Loads a cutout from a dataset in an HDF5 file.
+
+    Args:
+        path (str): Path to the HDF5 file.
+        key (str, optional): Key of the dataset to load. Defaults to "raw".
+        shape (tuple, optional): Desired shape of the cutout. Defaults to (32, 256, 256).
+        start_index (tuple, optional): Starting index for the cutout within the dataset.
+            Defaults to None, which selects a random starting point within valid bounds.
+
+    Returns:
+        np.ndarray: The loaded cutout of the dataset with the specified shape.
+
+    Raises:
+        KeyError: If the specified key is not found in the HDF5 file.
+        ValueError: If the cutout shape exceeds the dataset dimensions or the starting index is invalid.
+    """
+
+    with h5py.File(path, "r") as f:
+
+        dataset = f[key]
+        dataset_shape = dataset.shape
+        print("original data shape", dataset_shape)
+
+        # Validate cutout shape
+        if any(s > d for s, d in zip(shape, dataset_shape)):
+            raise ValueError(f"Cutout shape {shape} exceeds dataset dimensions {dataset_shape}.")
+
+        # Generate random starting index if not provided
+        if start_index is None:
+            start_index = tuple(np.random.randint(0, dim - s + 1, size=len(shape)) for dim, s in zip(dataset_shape, shape))
+
+        # Calculate end index
+        end_index = tuple(min(i + s, dim) for i, s, dim in zip(start_index, shape, dataset_shape))
+
+        # Load the cutout
+        cutout = dataset[start_index[0]:end_index[0],
+                         start_index[1]:end_index[1],
+                         start_index[2]:end_index[2]]
+        print("cutout data shape", cutout.shape)
+
+    return cutout
+
 
 def mito_segmentation_3d() -> None:
-    with open_file(INPUT_PATH_CLUSTER, mode="r") as f:
-        volume = f["raw"][:]
+    patch_shape = (32, 256, 256)
+    start_index = (10, 32, 64)
+    data_slice = get_dataset_cutout(INPUT_PATH_LOCAL, shape=patch_shape)  #start_index=start_index
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model_type = "vit_b"
     predictor, sam = util.get_sam_model(return_sam=True, model_type=model_type, device=device)
-    #print(predictor)
-    d_size = volume.shape
+
+    d_size = 3
     predictor3d = sam_3d.Predictor3D(sam, d_size)
-    #predictor3d.model_type = model_type
-    predictor3d._hash = util.models().registry[model_type]
+    print(predictor3d)
+    #breakpoint()
+    predictor3d.model.forward(torch.from_numpy(data_slice), multimask_output=False, image_size=patch_shape)
+    # output = predictor3d.model([data_slice], multimask_output=False)#image_size=patch_shape
 
-    predictor3d.model_name = model_type
-    #predictor.sam_model = sam3d
-    image_embeddings = util.precompute_image_embeddings(predictor3d, volume, EMBEDDINGS_PATH_CLUSTER)
-    seg = util.segment_instances_from_embeddings_3d(predictor3d, image_embeddings)
+    # predictor3d._hash = util.models().registry[model_type]
+
+    # predictor3d.model_name = model_type
+
+    # image_embeddings = util.precompute_image_embeddings(predictor3d, volume, EMBEDDINGS_PATH_CLUSTER)
+    # seg = util.segment_instances_from_embeddings_3d(predictor3d, image_embeddings)
     
-    prediction_filename = os.path.join(EMBEDDINGS_PATH_CLUSTER, f"prediction_{INPUT_PATH_CLUSTER}.h5")
-    with h5py.File(prediction_filename, "w") as prediction_file:
-        prediction_file.create_dataset("prediction", data=seg)
+    # prediction_filename = os.path.join(EMBEDDINGS_PATH_CLUSTER, f"prediction_{INPUT_PATH_CLUSTER}.h5")
+    # with h5py.File(prediction_filename, "w") as prediction_file:
+    #     prediction_file.create_dataset("prediction", data=seg)
 
-    # amg = AutomaticMaskGenerator(predictor)
-    # amg.initialize(volume)  # Initialize the masks, this takes care of all expensive computations.
-    # masks = amg.generate(pred_iou_thresh=0.8)  # Generate the masks. This is fast and enables testing parameters
-    #seg_sam = mds.automatic_3d_segmentation(volume, sam)
-
+    # visualize
     # v = napari.Viewer()
     # v.add_image(volume)
     # v.add_labels(seg)
