@@ -7,9 +7,12 @@ from micro_sam.training.semantic_sam_trainer import SemanticSamTrainer
 
 
 # TODO refactor this into a proper convenience function
-def get_3d_sam_model(device, d_size):
+def get_3d_sam_model(device, d_size, n_classes):
     model_type = "vit_b"
-    predictor, sam = util.get_sam_model(return_sam=True, model_type=model_type, device=device)
+    predictor, sam = util.get_sam_model(
+        return_sam=True, model_type=model_type, device=device, num_multimask_outputs=n_classes,
+        flexible_load_checkpoint=True,
+    )
 
     predictor = micro_sam.sam_3d_wrapper.Predictor3D(sam, d_size)
     sam_3d = predictor.model
@@ -30,8 +33,9 @@ def predict_3d_model():
 
 
 class DummyDataset(torch.utils.data.Dataset):
-    def __init__(self, patch_shape):
+    def __init__(self, patch_shape, n_classes):
         self.patch_shape = patch_shape
+        self.n_classes = n_classes
 
     def __len__(self):
         return 5
@@ -39,13 +43,14 @@ class DummyDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         image_shape = (self.patch_shape[0], 3) + self.patch_shape[1:]
         x = np.random.rand(*image_shape).astype("float32")
-        y = (np.random.rand(*self.patch_shape) > 0.5).astype("float32")
+        label_shape = (self.n_classes,) + self.patch_shape
+        y = (np.random.rand(*label_shape) > 0.5).astype("float32")
         return x, y
 
 
-def get_loader(patch_shape):
-    ds = DummyDataset(patch_shape)
-    loader = torch.utils.data.DataLoader(ds, batch_size=1, shuffle=True, num_workers=4)
+def get_loader(patch_shape, n_classes, batch_size):
+    ds = DummyDataset(patch_shape, n_classes)
+    loader = torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=4)
     loader.shuffle = True
     return loader
 
@@ -61,8 +66,6 @@ class SemanticSamTrainer3D(SemanticSamTrainer):
         )
         # masks = torch.stack([output["masks"].squeeze(0) for output in batched_outputs])
         masks = batched_outputs["masks"]
-        # FIXME the batch / z order is wrong here
-        breakpoint()
         return masks
 
 
@@ -71,11 +74,14 @@ def train_3d_model():
     from micro_sam.training.util import ConvertToSemanticSamInputs
 
     d_size = 4
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    sam_3d = get_3d_sam_model(device, d_size)
+    n_classes = 5
+    batch_size = 2
 
-    train_loader = get_loader((d_size, 1024, 1024))
-    val_loader = get_loader((d_size, 1024, 1024))
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    sam_3d = get_3d_sam_model(device, d_size, n_classes=n_classes)
+
+    train_loader = get_loader((d_size, 1024, 1024), n_classes, batch_size)
+    val_loader = get_loader((d_size, 1024, 1024), n_classes, batch_size)
 
     optimizer = torch.optim.AdamW(sam_3d.parameters(), lr=5e-5)
 
@@ -83,7 +89,7 @@ def train_3d_model():
         name="test-sam",
         model=sam_3d,
         convert_inputs=ConvertToSemanticSamInputs(),
-        num_classes=1,
+        num_classes=n_classes,
         train_loader=train_loader,
         val_loader=val_loader,
         optimizer=optimizer,

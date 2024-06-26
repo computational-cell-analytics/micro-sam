@@ -23,7 +23,7 @@ class Sam3DWrapper(nn.Module):
     def __init__(
         self,
         sam_model: Sam,
-        d_size,
+        d_size: int,
     ):
         """
         Initializes the Sam3DWrapper object.
@@ -43,13 +43,18 @@ class Sam3DWrapper(nn.Module):
         )
         self.sam_model = sam_model
 
-    # FIXME handling of the image size here is wrong, this only works for square images
+    # FIXME
+    # - handling of the image size here is wrong, this only works for square images
+    # - this does not take care of resizing
+    # unclear how batches are handled
     def forward(self, batched_input, multimask_output, image_size) -> torch.Tensor:
         return self._forward_train(batched_input, multimask_output, image_size)
 
     def _forward_train(self, batched_input, multimask_output, image_size):
         # dimensions: [b, d, 3, h, w]
-        hw_size = batched_input.shape[-2]
+        shape = batched_input.shape
+        batch_size, d_size, hw_size = shape[0], shape[1], shape[-2]
+        assert d_size == self.d_size
         batched_input = batched_input.contiguous().view(-1, 3, hw_size, hw_size)
 
         input_images = self.sam_model.preprocess(batched_input)
@@ -69,6 +74,20 @@ class Sam3DWrapper(nn.Module):
             input_size=(image_size, image_size),
             original_size=(image_size, image_size)
         )
+
+        # Bring the masks and low-res masks into the correct shape:
+        # - disentangle batches and z-slices
+        # - rearrange output channels and z-slices
+
+        n_channels = masks.shape[1]
+        masks = masks.view(*(batch_size, d_size, n_channels, masks.shape[-2], masks.shape[-1]))
+        low_res_masks = low_res_masks.view(
+            *(batch_size, d_size, n_channels, low_res_masks.shape[-2], low_res_masks.shape[-1])
+        )
+
+        masks = masks.transpose(1, 2)
+        low_res_masks = low_res_masks.transpose(1, 2)
+
         outputs = {
             "masks": masks,
             "iou_predictions": iou_predictions,
