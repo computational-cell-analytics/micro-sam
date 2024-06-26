@@ -19,7 +19,7 @@ from functools import partial
 from segment_anything.modeling import Sam, ImageEncoderViT, PromptEncoder, MaskDecoder, TwoWayTransformer
 
 
-def build_sam_vit_h(checkpoint=None, num_multimask_outputs=3):
+def build_sam_vit_h(checkpoint=None, num_multimask_outputs=3, image_size=1024):
     return _build_sam(
         encoder_embed_dim=1280,
         encoder_depth=32,
@@ -27,13 +27,14 @@ def build_sam_vit_h(checkpoint=None, num_multimask_outputs=3):
         encoder_global_attn_indexes=[7, 15, 23, 31],
         checkpoint=checkpoint,
         num_multimask_outputs=num_multimask_outputs,
+        image_size=image_size,
     )
 
 
 build_sam = build_sam_vit_h
 
 
-def build_sam_vit_l(checkpoint=None, num_multimask_outputs=3):
+def build_sam_vit_l(checkpoint=None, num_multimask_outputs=3, image_size=1024):
     return _build_sam(
         encoder_embed_dim=1024,
         encoder_depth=24,
@@ -41,10 +42,11 @@ def build_sam_vit_l(checkpoint=None, num_multimask_outputs=3):
         encoder_global_attn_indexes=[5, 11, 17, 23],
         checkpoint=checkpoint,
         num_multimask_outputs=num_multimask_outputs,
+        image_size=image_size,
     )
 
 
-def build_sam_vit_b(checkpoint=None, num_multimask_outputs=3):
+def build_sam_vit_b(checkpoint=None, num_multimask_outputs=3, image_size=1024):
     return _build_sam(
         encoder_embed_dim=768,
         encoder_depth=12,
@@ -52,6 +54,7 @@ def build_sam_vit_b(checkpoint=None, num_multimask_outputs=3):
         encoder_global_attn_indexes=[2, 5, 8, 11],
         checkpoint=checkpoint,
         num_multimask_outputs=num_multimask_outputs,
+        image_size=image_size,
     )
 
 
@@ -70,9 +73,9 @@ def _build_sam(
     encoder_global_attn_indexes,
     checkpoint=None,
     num_multimask_outputs=3,
+    image_size=1024,
 ):
     prompt_embed_dim = 256
-    image_size = 1024
     vit_patch_size = 16
     image_embedding_size = image_size // vit_patch_size
     sam = Sam(

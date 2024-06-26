@@ -6,26 +6,16 @@ from segment_anything.modeling import Sam
 
 
 class Sam3DWrapper(nn.Module):
-    def __init__(
-        self,
-        sam_model: Sam,
-        d_size: int,
-    ):
+    def __init__(self, sam_model: Sam):
         """
         Initializes the Sam3DWrapper object.
 
         Args:
             sam_model (Sam): The Sam model to be wrapped.
-            d_size (int):  Factor controlling the 3D adapter reshaping.
-                d_size determines how the input features are grouped along a new dimension
-                for processing within the 3D adapter modules. A larger d_size creates fewer groups
-                with more features per group.
-
         """
         super().__init__()
-        self.d_size = d_size
         sam_model.image_encoder = ImageEncoderViT3DWrapper(
-            image_encoder=sam_model.image_encoder, d_size=self.d_size
+            image_encoder=sam_model.image_encoder
         )
         self.sam_model = sam_model
 
@@ -40,11 +30,10 @@ class Sam3DWrapper(nn.Module):
         # dimensions: [b, d, 3, h, w]
         shape = batched_input.shape
         batch_size, d_size, hw_size = shape[0], shape[1], shape[-2]
-        assert d_size == self.d_size
         batched_input = batched_input.contiguous().view(-1, 3, hw_size, hw_size)
 
         input_images = self.sam_model.preprocess(batched_input)
-        image_embeddings = self.sam_model.image_encoder(input_images)
+        image_embeddings = self.sam_model.image_encoder(input_images, d_size)
         sparse_embeddings, dense_embeddings = self.sam_model.prompt_encoder(
             points=None, boxes=None, masks=None
         )
@@ -86,26 +75,24 @@ class ImageEncoderViT3DWrapper(nn.Module):
     def __init__(
         self,
         image_encoder: nn.Module,
-        d_size: int,
         num_heads: int = 12,
         embed_dim: int = 768,
     ):
         super().__init__()
         self.image_encoder = image_encoder
-        self.d_size = d_size
         self.img_size = self.image_encoder.img_size
 
         # replace default blocks with 3d adapter blocks
         for i, blk in enumerate(self.image_encoder.blocks):
             self.image_encoder.blocks[i] = NDBlockWrapper(block=blk, num_heads=num_heads, dim=embed_dim)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, d_size: int) -> torch.Tensor:
         x = self.image_encoder.patch_embed(x)
         if self.image_encoder.pos_embed is not None:
             x = x + self.image_encoder.pos_embed
 
         for blk in self.image_encoder.blocks:
-            x = blk(x, self.d_size)
+            x = blk(x, d_size)
 
         x = self.image_encoder.neck(x.permute(0, 3, 1, 2))
 

@@ -7,14 +7,14 @@ from micro_sam.training.semantic_sam_trainer import SemanticSamTrainer
 
 
 # TODO refactor this into a proper convenience function
-def get_3d_sam_model(device, d_size, n_classes):
+def get_3d_sam_model(device, n_classes, image_size):
     model_type = "vit_b"
     predictor, sam = util.get_sam_model(
         return_sam=True, model_type=model_type, device=device, num_multimask_outputs=n_classes,
-        flexible_load_checkpoint=True,
+        flexible_load_checkpoint=True, image_size=image_size,
     )
 
-    sam_3d = micro_sam.sam_3d_wrapper.Sam3DWrapper(sam, d_size)
+    sam_3d = micro_sam.sam_3d_wrapper.Sam3DWrapper(sam)
     sam_3d.to(device)
     return sam_3d
 
@@ -75,12 +75,13 @@ def train_3d_model():
     d_size = 4
     n_classes = 5
     batch_size = 2
+    image_size = 512
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    sam_3d = get_3d_sam_model(device, d_size, n_classes=n_classes)
+    sam_3d = get_3d_sam_model(device, n_classes=n_classes, image_size=image_size)
 
-    train_loader = get_loader((d_size, 1024, 1024), n_classes, batch_size)
-    val_loader = get_loader((d_size, 1024, 1024), n_classes, batch_size)
+    train_loader = get_loader((d_size, image_size, image_size), n_classes, batch_size)
+    val_loader = get_loader((d_size, image_size, image_size), n_classes, batch_size)
 
     optimizer = torch.optim.AdamW(sam_3d.parameters(), lr=5e-5)
 
