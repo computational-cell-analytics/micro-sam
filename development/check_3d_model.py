@@ -1,22 +1,9 @@
 import numpy as np
 import torch
-import micro_sam.sam_3d_wrapper
 import micro_sam.util as util
 
-from micro_sam.training.semantic_sam_trainer import SemanticSamTrainer
-
-
-# TODO refactor this into a proper convenience function
-def get_3d_sam_model(device, n_classes, image_size):
-    model_type = "vit_b"
-    predictor, sam = util.get_sam_model(
-        return_sam=True, model_type=model_type, device=device, num_multimask_outputs=n_classes,
-        flexible_load_checkpoint=True, image_size=image_size,
-    )
-
-    sam_3d = micro_sam.sam_3d_wrapper.Sam3DWrapper(sam)
-    sam_3d.to(device)
-    return sam_3d
+from micro_sam.sam_3d_wrapper import get_3d_sam_model
+from micro_sam.training.semantic_sam_trainer import SemanticSamTrainer3D
 
 
 def predict_3d_model():
@@ -52,20 +39,6 @@ def get_loader(patch_shape, n_classes, batch_size):
     loader = torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=4)
     loader.shuffle = True
     return loader
-
-
-class SemanticSamTrainer3D(SemanticSamTrainer):
-    def _get_model_outputs(self, batched_inputs):
-        model_input = torch.stack([inp["image"] for inp in batched_inputs]).to(self.device)
-        image_size = batched_inputs[0]["original_size"][-1]
-        batched_outputs = self.model(
-            model_input,
-            multimask_output=(self.num_classes > 1),
-            image_size=image_size
-        )
-        # masks = torch.stack([output["masks"].squeeze(0) for output in batched_outputs])
-        masks = batched_outputs["masks"]
-        return masks
 
 
 # TODO: we are missing the resizing in the model, so currently this only supports 1024x1024
