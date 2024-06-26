@@ -3,20 +3,6 @@ import torch.nn as nn
 from typing import Type
 from segment_anything.modeling.image_encoder import window_partition, window_unpartition
 from segment_anything.modeling import Sam
-from segment_anything import SamPredictor
-
-
-class Predictor3D(SamPredictor):
-    def __init__(
-        self,
-        sam_model: Sam,
-        d_size,
-        model_type: str = "vit_b",
-    ):
-        super().__init__(sam_model)
-        self.model_type = model_type
-        self.d_size = d_size
-        self.model = Sam3DWrapper(sam_model, d_size)
 
 
 class Sam3DWrapper(nn.Module):

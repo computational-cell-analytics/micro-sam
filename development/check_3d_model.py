@@ -14,8 +14,7 @@ def get_3d_sam_model(device, d_size, n_classes):
         flexible_load_checkpoint=True,
     )
 
-    predictor = micro_sam.sam_3d_wrapper.Predictor3D(sam, d_size)
-    sam_3d = predictor.model
+    sam_3d = micro_sam.sam_3d_wrapper.Sam3DWrapper(sam, d_size)
     sam_3d.to(device)
     return sam_3d
 
