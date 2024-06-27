@@ -10,32 +10,56 @@ from torch_em.trainer import DefaultTrainer
 from torch_em.trainer.tensorboard_logger import TensorboardLogger, normalize_im
 
 
+class CustomDiceLoss(nn.Module):
+    def __init__(self, num_classes: int, softmax: bool = True) -> None:
+        super().__init__()
+        self.num_classes = num_classes
+        self.dice_loss = DiceLoss()
+        self.softmax = softmax
+
+    def _one_hot_encoder(self, input_tensor):
+        tensor_list = []
+        for i in range(self.num_classes):
+            temp_prob = input_tensor == i  # * torch.ones_like(input_tensor)
+            tensor_list.append(temp_prob)
+        output_tensor = torch.cat(tensor_list, dim=1)
+        return output_tensor.float()
+
+    def __call__(self, pred, target):
+        if self.softmax:
+            pred = torch.softmax(pred, dim=1)
+        target = self._one_hot_encoder(target)
+        loss = self.dice_loss(pred, target)
+        return loss
+
+
 class SemanticSamTrainer(DefaultTrainer):
     """
     """
     def __init__(
         self,
         convert_inputs,
-        num_classes: int = 1,
+        num_classes: int,
         **kwargs
     ):
-        loss = DiceLoss()
-        metric = DiceLoss()
+        assert num_classes > 1
+
+        loss = CustomDiceLoss(num_classes=num_classes)
+        metric = CustomDiceLoss(num_classes=num_classes)
         super().__init__(loss=loss, metric=metric, **kwargs)
 
         self.convert_inputs = convert_inputs
         self.num_classes = num_classes
-        self.compute_ce_loss = nn.BCELoss() if num_classes == 1 else nn.CrossEntropyLoss()
+        self.compute_ce_loss = nn.CrossEntropyLoss()
         self._kwargs = kwargs
 
     def _compute_loss(self, y, masks):
         target = y.to(self.device, non_blocking=True)
         # Compute dice loss for the predictions
         dice_loss = self.loss(masks, target)
-        breakpoint()
 
         # Compute cross entropy loss for the predictions
-        ce_loss = self.compute_ce_loss(masks, target)
+        ce_loss = self.compute_ce_loss(masks, target.squeeze(1).long())
 
         net_loss = dice_loss + ce_loss
         return net_loss
