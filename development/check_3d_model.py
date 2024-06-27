@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import micro_sam.util as util
 
 from micro_sam.sam_3d_wrapper import get_3d_sam_model
 from micro_sam.training.semantic_sam_trainer import SemanticSamTrainer3D
@@ -8,7 +9,7 @@ from micro_sam.training.semantic_sam_trainer import SemanticSamTrainer3D
 def predict_3d_model():
     d_size = 8
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    _, sam_3d = get_3d_sam_model(device, d_size)
+    sam_3d = get_3d_sam_model(device, d_size)
 
     input_ = 255 * np.random.rand(1, d_size, 3, 1024, 1024).astype("float32")
     with torch.no_grad():
