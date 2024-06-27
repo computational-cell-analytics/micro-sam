@@ -89,8 +89,7 @@ class SemanticSamTrainer(DefaultTrainer):
 
             if self.logger is not None:
                 lr = [pm["lr"] for pm in self.optimizer.param_groups][0]
-                predictions = torch.softmax(masks, dim=1)
-                self.logger.log_train(self._iteration, net_loss, lr, x, y, predictions, log_gradients=False)
+                self.logger.log_train(self._iteration, net_loss, lr, x, y, masks, log_gradients=False)
 
             if self._iteration >= self.max_iteration:
                 break
@@ -122,8 +121,7 @@ class SemanticSamTrainer(DefaultTrainer):
         print(f"The Average Validation Metric Score for the Current Epoch is {dice_metric}")
 
         if self.logger is not None:
-            predictions = torch.softmax(masks, dim=1)
-            self.logger.log_validation(self._iteration, metric_val, loss_val, x, y, predictions)
+            self.logger.log_validation(self._iteration, metric_val, loss_val, x, y, masks)
 
         return metric_val
 
@@ -142,7 +140,7 @@ class SemanticSamTrainer3D(SemanticSamTrainer):
         return masks
 
 
-class SemanticSamLogger3D(TensorboardLogger):
+class SemanticSamLogger(TensorboardLogger):
     def log_images(self, step, x, y, prediction, name, gradients=None):
 
         selection_image = np.s_[0] if x.ndim == 4 else np.s_[0, x.shape[2] // 2, :]
