@@ -64,7 +64,6 @@ def train_on_lucchi(args):
     sam_3d = get_3d_sam_model(
         device, n_classes=n_classes, image_size=patch_shape[1],
         model_type=model_type)
-    #get_dataloaders(patch_shape, input_path)
     train_loader = get_loader(
         input_path, split="train", patch_shape=patch_shape,
         n_classes=n_classes, batch_size=batch_size, num_workers=num_workers,
