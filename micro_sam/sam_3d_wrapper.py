@@ -6,7 +6,7 @@ import torch.nn as nn
 from segment_anything.modeling.image_encoder import window_partition, window_unpartition
 from segment_anything.modeling import Sam
 
-from .util import get_sam_model, _load_checkpoint, _handle_checkpoint_loading
+from .util import get_sam_model
 
 
 def get_3d_sam_model(
@@ -19,6 +19,7 @@ def get_3d_sam_model(
     _, sam = get_sam_model(
         model_type=model_type,
         device=device,
+        checkpoint_path=checkpoint_path,
         return_sam=True,
         flexible_load_checkpoint=True,
         num_multimask_outputs=n_classes,
@@ -27,11 +28,6 @@ def get_3d_sam_model(
 
     sam_3d = Sam3DWrapper(sam)
     sam_3d.to(device)
-
-    if checkpoint_path is not None:
-        _, model_state = _load_checkpoint(checkpoint_path)
-        sam_3d = _handle_checkpoint_loading(sam_3d, model_state)
-
     return sam_3d
 
 
