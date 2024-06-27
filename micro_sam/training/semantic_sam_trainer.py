@@ -29,11 +29,13 @@ class SemanticSamTrainer(DefaultTrainer):
         self._kwargs = kwargs
 
     def _compute_loss(self, y, masks):
+        target = y.to(self.device, non_blocking=True)
         # Compute dice loss for the predictions
-        dice_loss = self.loss(masks, y.to(self.device, non_blocking=True))
+        dice_loss = self.loss(masks, target)
+        breakpoint()
 
         # Compute cross entropy loss for the predictions
-        ce_loss = self.compute_ce_loss(masks, y.to(self.device, non_blocking=True))
+        ce_loss = self.compute_ce_loss(masks, target)
 
         net_loss = dice_loss + ce_loss
         return net_loss
@@ -63,7 +65,7 @@ class SemanticSamTrainer(DefaultTrainer):
 
             if self.logger is not None:
                 lr = [pm["lr"] for pm in self.optimizer.param_groups][0]
-                self.logger.log_train(self._iteration, net_loss, lr, x, y, masks, log_gradients=True)
+                self.logger.log_train(self._iteration, net_loss, lr, x, y, masks, log_gradients=False)
 
             if self._iteration >= self.max_iteration:
                 break
@@ -116,9 +118,10 @@ class SemanticSamTrainer3D(SemanticSamTrainer):
 class SemanticSamLogger3D(TensorboardLogger):
     def log_images(self, step, x, y, prediction, name, gradients=None):
 
+        selection_image = np.s_[0] if x.ndim == 4 else np.s_[0, x.shape[2] // 2, :]
         selection = np.s_[0] if x.ndim == 4 else np.s_[0, :, x.shape[2] // 2]
 
-        image = normalize_im(x[selection].cpu())
+        image = normalize_im(x[selection_image].cpu())
         self.tb.add_image(tag=f"{name}/input",
                           img_tensor=image,
                           global_step=step)
@@ -137,11 +140,11 @@ class SemanticSamLogger3D(TensorboardLogger):
         if self.have_embeddings:
             log_grads = False
 
-        if (step + 1) % self.log_image_interval == 0:
+        if step % self.log_image_interval == 0:
             gradients = prediction.grad if log_grads else None
             self.log_images(step, x, y, prediction, "train", gradients=gradients)
 
     def log_validation(self, step, metric, loss, x, y, prediction):
         self.tb.add_scalar(tag="validation/loss", scalar_value=loss, global_step=step)
         self.tb.add_scalar(tag="validation/metric", scalar_value=metric, global_step=step)
-        # self.log_images(step, x, y, prediction, "validation")
+        self.log_images(step, x, y, prediction, "validation")
