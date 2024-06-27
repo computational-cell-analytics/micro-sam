@@ -46,7 +46,7 @@ class SemanticSamTrainer(DefaultTrainer):
 
         loss = CustomDiceLoss(num_classes=num_classes)
         metric = CustomDiceLoss(num_classes=num_classes)
-        logger = SemanticSamLogger()
+        logger = SemanticSamLogger
         super().__init__(loss=loss, metric=metric, logger=logger, **kwargs)
 
         self.convert_inputs = convert_inputs
