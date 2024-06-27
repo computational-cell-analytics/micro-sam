@@ -14,21 +14,21 @@ import micro_sam.training as sam_training
 
 
 class LucchiSegmentationDataset(SegmentationDataset):
-    def __init__(self, patch_shape, num_classes, label_transform=None, **kwargs):
+    def __init__(self, patch_shape, label_transform=None, **kwargs):
         super().__init__(patch_shape=patch_shape, label_transform=label_transform, **kwargs)  # Call parent class constructor
-        self.num_classes = num_classes
 
     def __getitem__(self, index):
         raw, label = super().__getitem__(index)
-        # raw shape: (z, color channels, x, y) channels is fixed to 3
+        # raw shape: (z, color channels, y, x) channels is fixed to 3
         image_shape = (self.patch_shape[0], 1) + self.patch_shape[1:]
         raw = raw.unsqueeze(2)
         raw = raw.view(image_shape)
         raw = raw.squeeze(0)
-        raw = raw.repeat(1, 3, 1, 1)  
-        # label shape: (classes, z, x, y)
-        label_shape = (self.num_classes,) + self.patch_shape
-        label = label.view(label_shape)
+        raw = raw.repeat(1, 3, 1, 1)
+        print("raw shape", raw.shape)
+        # wanted label shape: (1, z, y, x)
+        label = (label != 0).to(torch.float)
+        print("label shape", label.shape)
         return raw, label
 
 
@@ -38,8 +38,7 @@ def get_loader(path, split, patch_shape, n_classes, batch_size, label_transform,
     raw_key, label_key = "raw", "labels"
     ds = LucchiSegmentationDataset(
         raw_path=data_path, label_path=data_path, raw_key=raw_key, 
-        label_key=label_key, patch_shape=patch_shape, 
-        num_classes=n_classes, label_transform=label_transform)
+        label_key=label_key, patch_shape=patch_shape, label_transform=label_transform)
     loader = torch.utils.data.DataLoader(
         ds, batch_size=batch_size, shuffle=True, 
         num_workers=num_workers)
@@ -59,7 +58,7 @@ def train_on_lucchi(args):
     save_root = args.save_root
     
     label_transform = torch_em.transform.label.BoundaryTransform(add_binary_target=True)
-    
+    label_transform = None
     device = "cuda" if torch.cuda.is_available() else "cpu"
     sam_3d = get_3d_sam_model(
         device, n_classes=n_classes, image_size=patch_shape[1],
