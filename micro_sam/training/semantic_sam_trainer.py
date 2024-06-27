@@ -66,7 +66,7 @@ class SemanticSamTrainer(DefaultTrainer):
 
     def _get_model_outputs(self, batched_inputs):
         image_embeddings, batched_inputs = self.model.image_embeddings_oft(batched_inputs)
-        batched_outputs = self.model(batched_inputs, image_embeddings, multimask_output=(self.num_classes > 1))
+        batched_outputs = self.model(batched_inputs, image_embeddings, multimask_output=True)
         masks = torch.stack([output["masks"].squeeze(0) for output in batched_outputs])
         return masks
 
@@ -116,8 +116,9 @@ class SemanticSamTrainer(DefaultTrainer):
 
         loss_val /= len(self.val_loader)
         metric_val /= len(self.val_loader)
+        dice_metric = 1 - (metric_val / self.num_classes)
         print()
-        print(f"The Average Validation Metric Score for the Current Epoch is {1 - metric_val}")
+        print(f"The Average Validation Metric Score for the Current Epoch is {dice_metric}")
 
         if self.logger is not None:
             self.logger.log_validation(self._iteration, metric_val, loss_val, x, y, masks)
@@ -150,6 +151,7 @@ class SemanticSamLogger3D(TensorboardLogger):
                           img_tensor=image,
                           global_step=step)
 
+        prediction = torch.softmax(prediction, dim=1)
         im, im_name = self.make_image(image, y, prediction, selection, gradients)
         im_name = f"{name}/{im_name}"
         self.tb.add_image(tag=im_name, img_tensor=im, global_step=step)
