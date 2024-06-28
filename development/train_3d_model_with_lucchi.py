@@ -26,10 +26,10 @@ class LucchiSegmentationDataset(SegmentationDataset):
         raw = raw.view(image_shape)
         raw = raw.squeeze(0)
         raw = raw.repeat(1, 3, 1, 1)
-        print("raw shape", raw.shape)
+        # print("raw shape", raw.shape)
         # wanted label shape: (1, z, y, x)
         label = (label != 0).to(torch.float)
-        print("label shape", label.shape)
+        # print("label shape", label.shape)
         return raw, label
 
 
@@ -75,7 +75,7 @@ def train_on_lucchi(args):
     optimizer = torch.optim.AdamW(sam_3d.parameters(), lr=5e-5)
     
     trainer = SemanticSamTrainer3D(
-        name="test-3d-sam",
+        name="3d-sam-lucchi",
         model=sam_3d,
         convert_inputs=ConvertToSemanticSamInputs(),
         num_classes=n_classes,
@@ -103,7 +103,7 @@ def main():
     )
     parser.add_argument("--patch_shape", type=int, nargs=3, default=(64, 256, 256), help="Patch shape for data loading (3D tuple)")
     parser.add_argument("--n_iterations", type=int, default=10, help="Number of training iterations")
-    parser.add_argument("--n_classes", type=int, default=2, help="Number of classes to predict")
+    parser.add_argument("--n_classes", type=int, default=1, help="Number of classes to predict")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
     parser.add_argument("--num_workers", type=int, default=4, help="num_workers")
     parser.add_argument(
