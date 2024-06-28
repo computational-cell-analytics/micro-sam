@@ -75,8 +75,6 @@ def get_trainable_sam_model(
         checkpoint_path=checkpoint_path,
         return_sam=True,
         return_state=True,
-        use_lora=use_lora,
-        rank=rank,
         flexible_load_checkpoint=flexible_load_checkpoint,
         **model_kwargs
     )
