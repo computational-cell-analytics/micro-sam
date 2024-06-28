@@ -13,10 +13,20 @@ def get_3d_sam_model(
     device,
     n_classes,
     image_size,
-    freeze_encoder,
+    lora_rank=None,
+    freeze_encoder=False,
     model_type="vit_b",
     checkpoint_path=None,
 ):
+    if lora_rank is None:
+        use_lora = False
+        rank = None
+        freeze_encoder_ = freeze_encoder
+    else:
+        use_lora = True
+        rank = lora_rank
+        freeze_encoder_ = False
+
     _, sam = get_sam_model(
         model_type=model_type,
         device=device,
@@ -25,9 +35,11 @@ def get_3d_sam_model(
         flexible_load_checkpoint=True,
         num_multimask_outputs=n_classes,
         image_size=image_size,
+        use_lora=use_lora,
+        rank=rank,
     )
 
-    sam_3d = Sam3DWrapper(sam, freeze_encoder=freeze_encoder)
+    sam_3d = Sam3DWrapper(sam, freeze_encoder=freeze_encoder_)
     sam_3d.to(device)
     return sam_3d
 
