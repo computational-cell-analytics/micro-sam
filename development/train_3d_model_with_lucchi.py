@@ -7,6 +7,7 @@ import torch
 from torch_em.data.datasets import get_lucchi_loader, get_lucchi_dataset
 from torch_em.segmentation import SegmentationDataset
 import torch_em
+from torch_em.util.debug import check_loader
 
 from micro_sam.sam_3d_wrapper import get_3d_sam_model
 from micro_sam.training.semantic_sam_trainer import SemanticSamTrainer3D
@@ -86,6 +87,7 @@ def train_on_lucchi(args):
         save_root=save_root,
         logger=None
     )
+    # check_loader(train_loader, n_samples=10)
     trainer.fit(n_iterations)
     
 
