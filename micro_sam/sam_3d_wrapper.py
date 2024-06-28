@@ -13,6 +13,7 @@ def get_3d_sam_model(
     device,
     n_classes,
     image_size,
+    freeze_encoder,
     model_type="vit_b",
     checkpoint_path=None,
 ):
@@ -26,13 +27,13 @@ def get_3d_sam_model(
         image_size=image_size,
     )
 
-    sam_3d = Sam3DWrapper(sam)
+    sam_3d = Sam3DWrapper(sam, freeze_encoder=freeze_encoder)
     sam_3d.to(device)
     return sam_3d
 
 
 class Sam3DWrapper(nn.Module):
-    def __init__(self, sam_model: Sam):
+    def __init__(self, sam_model: Sam, freeze_encoder: bool):
         """
         Initializes the Sam3DWrapper object.
 
@@ -44,6 +45,11 @@ class Sam3DWrapper(nn.Module):
             image_encoder=sam_model.image_encoder
         )
         self.sam_model = sam_model
+
+        self.freeze_encoder = freeze_encoder
+        if self.freeze_encoder:
+            for param in self.sam_model.image_encoder.parameters():
+                param.requires_grad = False
 
     # FIXME
     # - handling of the image size here is wrong, this only works for square images
