@@ -9,11 +9,23 @@ from segment_anything.modeling import Sam
 from .util import get_sam_model
 
 
-def get_3d_sam_model(device, n_classes, image_size, model_type="vit_b"):
-    predictor, sam = get_sam_model(
-        return_sam=True, model_type=model_type, device=device, num_multimask_outputs=n_classes,
-        flexible_load_checkpoint=True, image_size=image_size,
+def get_3d_sam_model(
+    device,
+    n_classes,
+    image_size,
+    model_type="vit_b",
+    checkpoint_path=None,
+):
+    _, sam = get_sam_model(
+        model_type=model_type,
+        device=device,
+        checkpoint_path=checkpoint_path,
+        return_sam=True,
+        flexible_load_checkpoint=True,
+        num_multimask_outputs=n_classes,
+        image_size=image_size,
     )
+
     sam_3d = Sam3DWrapper(sam)
     sam_3d.to(device)
     return sam_3d
