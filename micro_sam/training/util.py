@@ -13,7 +13,6 @@ from ..util import (
     get_centers_and_bounding_boxes, get_sam_model, get_device,
     segmentation_to_one_hot, _DEFAULT_MODEL,
 )
-from .peft_sam import PEFT_Sam
 from .trainable_sam import TrainableSAM
 
 from torch_em.transform.label import PerObjectDistanceTransform
