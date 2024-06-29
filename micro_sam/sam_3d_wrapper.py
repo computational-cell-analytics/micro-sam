@@ -71,9 +71,14 @@ class Sam3DWrapper(nn.Module):
         return self._forward_train(batched_input, multimask_output, image_size)
 
     def _forward_train(self, batched_input, multimask_output, image_size):
-        # dimensions: [b, d, 3, h, w]
+        # dimensions: [b, 3, d, h, w]
         shape = batched_input.shape
-        batch_size, d_size, hw_size = shape[0], shape[1], shape[-2]
+        assert shape[1] == 3
+        batch_size, d_size, hw_size = shape[0], shape[2], shape[-2]
+        # Transpose the axes, so that the depth axis is the first axis and the channel
+        # axis is the second axis. This is expected by the transformer!
+        batched_input = batched_input.transpose(1, 2)
+        assert batched_input.shape[1] == d_size
         batched_input = batched_input.contiguous().view(-1, 3, hw_size, hw_size)
 
         input_images = self.sam_model.preprocess(batched_input)

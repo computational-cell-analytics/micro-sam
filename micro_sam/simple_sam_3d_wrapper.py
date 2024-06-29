@@ -136,11 +136,10 @@ class SimpleSam3DWrapper(nn.Module):
     def _apply_image_encoder(self, x, D):
         encoder_features = []
         for d in range(D):
-            image = x[:, d]
+            image = x[:, :, d]
             feature = self.sam.image_encoder(image)
             encoder_features.append(feature)
-        encoder_features = torch.stack(encoder_features, 1)
-        encoder_features = encoder_features.transpose(1, 2)
+        encoder_features = torch.stack(encoder_features, 2)
         return encoder_features
 
     def forward(self, x, **kwargs):
