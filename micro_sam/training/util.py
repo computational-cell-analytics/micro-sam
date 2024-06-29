@@ -3,6 +3,7 @@ from math import ceil, floor
 from typing import List, Optional, Union
 
 import numpy as np
+
 import torch
 
 from segment_anything.utils.transforms import ResizeLongestSide
@@ -42,6 +43,10 @@ def get_trainable_sam_model(
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     freeze: Optional[List[str]] = None,
     return_state: bool = False,
+    use_lora: bool = False,
+    rank: Optional[int] = None,
+    flexible_load_checkpoint: bool = False,
+    **model_kwargs
 ) -> TrainableSAM:
     """Get the trainable sam model.
 
@@ -54,6 +59,9 @@ def get_trainable_sam_model(
         freeze: Specify parts of the model that should be frozen, namely: image_encoder, prompt_encoder and mask_decoder
             By default nothing is frozen and the full model is updated.
         return_state: Whether to return the full checkpoint state.
+        use_lora: Whether to use the low rank adaptation method for finetuning.
+        rank: The rank of the decomposition matrices for updating weights in each attention layer.
+        flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
 
     Returns:
         The trainable segment anything model.
@@ -61,7 +69,15 @@ def get_trainable_sam_model(
     # set the device here so that the correct one is passed to TrainableSAM below
     device = get_device(device)
     _, sam, state = get_sam_model(
-        model_type=model_type, device=device, checkpoint_path=checkpoint_path, return_sam=True, return_state=True
+        model_type=model_type,
+        device=device,
+        checkpoint_path=checkpoint_path,
+        return_sam=True,
+        return_state=True,
+        use_lora=use_lora,
+        rank=rank,
+        flexible_load_checkpoint=flexible_load_checkpoint,
+        **model_kwargs
     )
 
     # freeze components of the model if freeze was passed
@@ -70,18 +86,22 @@ def get_trainable_sam_model(
     #   (for e.g. encoder blocks to "image_encoder")
     if freeze is not None:
         for name, param in sam.named_parameters():
-            if isinstance(freeze, list):
-                # we would want to "freeze" all the components in the model if passed a list of parts
-                for l_item in freeze:
-                    if name.startswith(f"{l_item}"):
-                        param.requires_grad = False
-            else:
+            if not isinstance(freeze, list):
                 # we "freeze" only for one specific component when passed a "particular" part
-                if name.startswith(f"{freeze}"):
+                freeze = [freeze]
+
+            # we would want to "freeze" all the components in the model if passed a list of parts
+            for l_item in freeze:
+                # in case LoRA is switched on, we cannot freeze the image encoder
+                if use_lora and (l_item == "image_encoder"):
+                    raise ValueError("You cannot use LoRA & freeze the image encoder at the same time.")
+
+                if name.startswith(f"{l_item}"):
                     param.requires_grad = False
 
     # convert to trainable sam
-    trainable_sam = TrainableSAM(sam, device)
+    trainable_sam = TrainableSAM(sam)
+
     if return_state:
         return trainable_sam, state
     return trainable_sam
@@ -199,13 +219,27 @@ class ConvertToSamInputs:
         return batched_inputs, batched_sampled_cell_ids_list
 
 
+class ConvertToSemanticSamInputs:
+    """
+    """
+    def __call__(self, x, y):
+        """Convert the outputs of dataloader to the batched format of inputs expected by SAM.
+        """
+        batched_inputs = []
+        for image, gt in zip(x, y):
+            batched_input = {"image": image, "original_size": image.shape[1:]}
+            batched_inputs.append(batched_input)
+
+        return batched_inputs
+
+
 #
 # Raw and Label Transformations for the Generalist and Specialist finetuning
 #
 
 
 class ResizeRawTrafo:
-    def __init__(self, desired_shape, do_rescaling=True, padding="constant"):
+    def __init__(self, desired_shape, do_rescaling=False, padding="constant"):
         self.desired_shape = desired_shape
         self.padding = padding
         self.do_rescaling = do_rescaling
