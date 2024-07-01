@@ -123,17 +123,3 @@ class SemanticSamTrainer(DefaultTrainer):
             self.logger.log_validation(self._iteration, metric_val, loss_val, x, y, torch.softmax(masks, dim=1))
 
         return metric_val
-
-
-class SemanticSamTrainer3D(SemanticSamTrainer):
-    def _get_model_outputs(self, batched_inputs):
-        model_input = torch.stack([inp["image"] for inp in batched_inputs]).to(self.device)
-        image_size = batched_inputs[0]["original_size"][-1]
-        batched_outputs = self.model(
-            model_input,
-            multimask_output=True,
-            image_size=image_size
-        )
-        # masks = torch.stack([output["masks"].squeeze(0) for output in batched_outputs])
-        masks = batched_outputs["masks"]
-        return masks

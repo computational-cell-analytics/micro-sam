@@ -1,6 +1,6 @@
 import os
 from math import ceil, floor
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 
@@ -43,8 +43,8 @@ def get_trainable_sam_model(
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     freeze: Optional[List[str]] = None,
     return_state: bool = False,
-    use_lora: bool = False,
-    rank: Optional[int] = None,
+    lora_rank: Optional[int] = None,
+    lora_kwargs: Optional[Dict] = None,
     flexible_load_checkpoint: bool = False,
     **model_kwargs
 ) -> TrainableSAM:
@@ -59,9 +59,11 @@ def get_trainable_sam_model(
         freeze: Specify parts of the model that should be frozen, namely: image_encoder, prompt_encoder and mask_decoder
             By default nothing is frozen and the full model is updated.
         return_state: Whether to return the full checkpoint state.
-        use_lora: Whether to use the low rank adaptation method for finetuning.
-        rank: The rank of the decomposition matrices for updating weights in each attention layer.
+        lora_rank: The rank of the decomposition matrices for updating weights in each attention layer with lora.
+            If None then LoRA is not used.
+        lora_kwargs: Keyword arguments for th PEFT wrapper class.
         flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
+        model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
 
     Returns:
         The trainable segment anything model.
@@ -74,8 +76,7 @@ def get_trainable_sam_model(
         checkpoint_path=checkpoint_path,
         return_sam=True,
         return_state=True,
-        use_lora=use_lora,
-        rank=rank,
+        lora_rank=lora_rank,
         flexible_load_checkpoint=flexible_load_checkpoint,
         **model_kwargs
     )

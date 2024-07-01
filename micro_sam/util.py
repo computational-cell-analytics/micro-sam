@@ -24,6 +24,7 @@ from skimage.measure import regionprops
 from skimage.segmentation import relabel_sequential
 
 from .__version__ import __version__
+from . import models as custom_models
 
 try:
     # Avoid import warnigns from mobile_sam
@@ -132,18 +133,18 @@ def models():
         "vit_l_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1/files/vit_l.pt",
         "vit_b_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1/files/vit_b.pt",
         "vit_t_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1/files/vit_t.pt",
-        "vit_l_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l.pt",
+        "vit_l_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l.pt",  # noqa
         "vit_b_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b.pt",
-        "vit_t_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t.pt",
+        "vit_t_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t.pt",  # noqa
     }
 
     decoder_urls = {
-        "vit_l_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1/files/vit_l_decoder.pt",
-        "vit_b_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1/files/vit_b_decoder.pt",
-        "vit_t_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1/files/vit_t_decoder.pt",
-        "vit_l_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l_decoder.pt",
-        "vit_b_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b_decoder.pt",
-        "vit_t_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t_decoder.pt",
+        "vit_l_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1/files/vit_l_decoder.pt",  # noqa
+        "vit_b_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1/files/vit_b_decoder.pt",  # noqa
+        "vit_t_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1/files/vit_t_decoder.pt",  # noqa
+        "vit_l_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l_decoder.pt",  # noqa
+        "vit_b_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b_decoder.pt",  # noqa
+        "vit_t_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t_decoder.pt",  # noqa
     }
     urls = {**encoder_urls, **decoder_urls}
 
@@ -270,8 +271,8 @@ def get_sam_model(
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
     return_state: bool = False,
-    use_lora: bool = False,
-    rank: Optional[int] = None,
+    lora_rank: Optional[int] = None,
+    lora_kwargs: Optional[Dict] = None,
     flexible_load_checkpoint: bool = False,
     **model_kwargs,
 ) -> SamPredictor:
@@ -306,8 +307,9 @@ def get_sam_model(
             then `model_type` must be given as "vit_b".
         return_sam: Return the sam model object as well as the predictor.
         return_state: Return the unpickled checkpoint state.
-        use_lora: Whether to use the low rank adaptation method for finetuning.
-        rank: The rank of the decomposition matrices for updating weights in each attention layer.
+        lora_rank: The rank of the decomposition matrices for updating weights in each attention layer with lora.
+            If None then LoRA is not used.
+        lora_kwargs: Keyword arguments for th PEFT wrapper class.
         flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
 
     Returns:
@@ -329,7 +331,8 @@ def get_sam_model(
         # If we have a custom model then we may also have a decoder checkpoint.
         # Download it here, so that we can add it to the state.
         decoder_name = f"{model_type}_decoder"
-        decoder_path = model_registry.fetch(decoder_name, progressbar=True) if decoder_name in model_registry.registry else None
+        decoder_path = model_registry.fetch(
+            decoder_name, progressbar=True) if decoder_name in model_registry.registry else None
 
     # checkpoint_path has been passed, we use it instead of downloading a model.
     else:
@@ -358,19 +361,17 @@ def get_sam_model(
     if model_kwargs:  # Checks whether model_kwargs have been provided or not
         if abbreviated_model_type == "vit_t":
             raise ValueError("'micro-sam' does not support changing the model parameters for 'mobile-sam'.")
-
-        from .training.models import build_sam
-        sam = build_sam.sam_model_registry[abbreviated_model_type](**model_kwargs)
+        sam = custom_models.sam_model_registry[abbreviated_model_type](**model_kwargs)
 
     else:
         sam = sam_model_registry[abbreviated_model_type]()
 
-    # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything
-    if use_lora:  # overwrites the SAM model by freezing the backbone and allow low rank adaption to attention layers
-        from micro_sam.training.peft_sam import PEFT_Sam
-        if rank is None:
-            rank = 4  # HACK: in case the user does not pass the rank, we provide a random rank to them
-        sam = PEFT_Sam(sam, rank=rank).sam
+    # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything.
+    # Overwrites the SAM model by freezing the backbone and allow low rank adaption to attention layers.
+    if lora_rank is not None:
+        if abbreviated_model_type == "vit_t":
+            raise ValueError("Parameter efficient finetuning is not supported for 'mobile-sam'.")
+        sam = custom_models.peft_sam.PEFT_Sam(sam, rank=lora_rank, **({} if lora_kwargs is None else lora_kwargs)).sam
 
     # In case the model checkpoints have some issues when it is initialized with different parameters than default.
     if flexible_load_checkpoint:
