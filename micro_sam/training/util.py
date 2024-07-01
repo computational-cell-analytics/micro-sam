@@ -94,7 +94,7 @@ def get_trainable_sam_model(
             # we would want to "freeze" all the components in the model if passed a list of parts
             for l_item in freeze:
                 # in case LoRA is switched on, we cannot freeze the image encoder
-                if use_lora and (l_item == "image_encoder"):
+                if (lora_rank is not None) and (l_item == "image_encoder"):
                     raise ValueError("You cannot use LoRA & freeze the image encoder at the same time.")
 
                 if name.startswith(f"{l_item}"):
@@ -228,7 +228,7 @@ class ConvertToSemanticSamInputs:
         """
         batched_inputs = []
         for image, gt in zip(x, y):
-            batched_input = {"image": image, "original_size": image.shape[1:]}
+            batched_input = {"image": image, "original_size": image.shape[-2:]}
             batched_inputs.append(batched_input)
 
         return batched_inputs
