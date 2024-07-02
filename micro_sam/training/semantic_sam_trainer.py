@@ -62,8 +62,18 @@ class SemanticSamTrainer(DefaultTrainer):
         return net_loss
 
     def _get_model_outputs(self, batched_inputs):
-        image_embeddings, batched_inputs = self.model.image_embeddings_oft(batched_inputs)
-        batched_outputs = self.model(batched_inputs, image_embeddings, multimask_output=True)
+        # Precompute the image embeddings if the model exposes it as functionality.
+        if hasattr(self.model, "image_embeddings_oft"):
+            image_embeddings, batched_inputs = self.model.image_embeddings_oft(batched_inputs)
+            batched_outputs = self.model(batched_inputs, image_embeddings, multimask_output=True)
+        else:  # Otherwise we assume that the embeddings are computed internally as part of the forward pass.
+            # We need to take care of sending things to the device here.
+            batched_inputs = [
+                {"image": inp["image"].to(self.device, non_blocking=True), "original_size": inp["original_size"]}
+                for inp in batched_inputs
+            ]
+            batched_outputs = self.model(batched_inputs, multimask_output=True)
+
         masks = torch.stack([output["masks"].squeeze(0) for output in batched_outputs])
         return masks
 
@@ -123,17 +133,3 @@ class SemanticSamTrainer(DefaultTrainer):
             self.logger.log_validation(self._iteration, metric_val, loss_val, x, y, torch.softmax(masks, dim=1))
 
         return metric_val
-
-
-class SemanticSamTrainer3D(SemanticSamTrainer):
-    def _get_model_outputs(self, batched_inputs):
-        model_input = torch.stack([inp["image"] for inp in batched_inputs]).to(self.device)
-        image_size = batched_inputs[0]["original_size"][-1]
-        batched_outputs = self.model(
-            model_input,
-            multimask_output=True,
-            image_size=image_size
-        )
-        # masks = torch.stack([output["masks"].squeeze(0) for output in batched_outputs])
-        masks = batched_outputs["masks"]
-        return masks
