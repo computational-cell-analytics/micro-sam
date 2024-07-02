@@ -42,7 +42,7 @@ def main():
     start_with_box_prompt = args.box  # overwrite to start first iters' prompt with box instead of single point
 
     # get the predictor to perform inference
-    predictor = get_model(model_type=args.model, ckpt=args.checkpoint)
+    predictor = get_model(model_type=args.model, ckpt=args.checkpoint, use_lora=args.use_lora, rank=args.lora_rank)
 
     prediction_root = _run_iterative_prompting(
         args.dataset, args.experiment_folder, predictor, start_with_box_prompt, args.use_masks

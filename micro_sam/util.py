@@ -368,6 +368,7 @@ def get_sam_model(
     # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything
     if use_lora:  # overwrites the SAM model by freezing the backbone and allow low rank adaption to attention layers
         from micro_sam.training.peft_sam import PEFT_Sam
+        print(use_lora, rank)
         if rank is None:
             rank = 4  # HACK: in case the user does not pass the rank, we provide a random rank to them
         sam = PEFT_Sam(sam, rank=rank).sam

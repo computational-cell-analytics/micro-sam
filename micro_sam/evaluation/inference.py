@@ -547,11 +547,13 @@ def run_amg(
     test_image_paths: List[Union[str, os.PathLike]],
     iou_thresh_values: Optional[List[float]] = None,
     stability_score_values: Optional[List[float]] = None,
+    use_lora: bool = False,
+    rank: Optional[int] = None,
 ) -> str:
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
 
-    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint)
+    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint, use_lora=use_lora, rank=rank)
     amg = AutomaticMaskGenerator(predictor)
     amg_prefix = "amg"
 
@@ -588,11 +590,13 @@ def run_instance_segmentation_with_decoder(
     val_image_paths: List[Union[str, os.PathLike]],
     val_gt_paths: List[Union[str, os.PathLike]],
     test_image_paths: List[Union[str, os.PathLike]],
+    use_lora: bool = False,
+    rank: Optional[int] = None,
 ) -> str:
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
 
-    predictor, decoder = get_predictor_and_decoder(model_type=model_type, checkpoint_path=checkpoint)
+    predictor, decoder = get_predictor_and_decoder(model_type=model_type, checkpoint_path=checkpoint, use_lora=use_lora, rank=rank)
     segmenter = InstanceSegmentationWithDecoder(predictor, decoder)
     seg_prefix = "instance_segmentation_with_decoder"
 

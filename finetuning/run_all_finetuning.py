@@ -3,6 +3,7 @@ import shutil
 import subprocess
 from datetime import datetime
 
+ROOT = "~/micro-sam/finetuing/"
 
 N_OBJECTS = {
     "vit_t": 50,
@@ -11,11 +12,10 @@ N_OBJECTS = {
     "vit_h": 25
 }
 
-
-def write_batch_script(out_path, _name, env_name, model_type, save_root):
+def write_batch_script(out_path, _name, env_name, model_type, save_root, use_lora=False, lora_rank=4):
     "Writing scripts with different micro-sam finetunings."
     batch_script = f"""#!/bin/bash
-#SBATCH -t 14-00:00:00
+#SBATCH -t 4-00:00:00
 #SBATCH --mem 64G
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -23,12 +23,11 @@ def write_batch_script(out_path, _name, env_name, model_type, save_root):
 #SBATCH -G A100:1
 #SBATCH -A nim00007
 #SBATCH -c 16
-#SBATCH --qos=14d
+#SBATCH --qos=96h
 #SBATCH --constraint=80gb
 #SBATCH --job-name={os.path.split(_name)[-1]}
 
 source activate {env_name} \n"""
-
     # python script
     python_script = f"python {_name}.py "
 
@@ -38,7 +37,9 @@ source activate {env_name} \n"""
     # name of the model configuration
     python_script += f"-m {model_type} "
 
-    # choice of the number of objects
+    if use_lora:
+        python_script += f"--use_lora --lora_rank {lora_rank} "
+# choice of the number of objects
     python_script += f"--n_objects {N_OBJECTS[model_type[:5]]} "
 
     # let's add the python script to the bash script
@@ -70,13 +71,15 @@ def submit_slurm(args):
     tmp_folder = "./gpu_jobs"
 
     script_combinations = {
-        "livecell_specialist": "livecell_finetuning",
+        "livecell_specialist": f"{ROOT}livecell/lora/train_livecell",
         "deepbacs_specialist": "specialists/training/light_microscopy/deepbacs_finetuning",
         "tissuenet_specialist": "specialists/training/light_microscopy/tissuenet_finetuning",
         "plantseg_root_specialist": "specialists/training/light_microscopy/plantseg_root_finetuning",
         "neurips_cellseg_specialist": "specialists/training/light_microscopy/neurips_cellseg_finetuning",
         "dynamicnuclearnet_specialist": "specialists/training/light_microscopy/dynamicnuclearnet_finetuning",
         "lm_generalist": "generalists/training/light_microscopy/train_lm_generalist",
+        "covid_if_generalist": f"{ROOT}/finetuning/specialists/lora/train_covid_if",
+        "mouse_embryo_generalist": f"{ROOT}/finetuning/specialists/lora/train_mouse_embryo",
         "cremi_specialist": "specialists/training/electron_microscopy/boundaries/cremi_finetuning",
         "asem_specialist": "specialists/training/electron_microscopy/organelles/asem_finetuning",
         "em_mito_nuc_generalist": "generalists/training/electron_microscopy/mito_nuc/train_mito_nuc_em_generalist",
@@ -103,7 +106,9 @@ def submit_slurm(args):
                 _name=script_name,
                 env_name="mobilesam" if model_type == "vit_t" else "sam",
                 model_type=model_type,
-                save_root=args.save_root
+                save_root=args.save_root,
+                use_lora=args.use_lora,
+                lora_rank=args.lora_rank
             )
 
 
@@ -122,5 +127,8 @@ if __name__ == "__main__":
     parser.add_argument("-e", "--experiment_name", type=str, default=None)
     parser.add_argument("-s", "--save_root", type=str, default="/scratch/usr/nimanwai/micro-sam/")
     parser.add_argument("-m", "--model_type", type=str, default=None)
+    parser.add_argument("--use_lora", action="store_true", help="Whether to use LoRA for finetuning.")
+    parser.add_argument("--lora_rank", type=int, default=4, help="Pass the rank for LoRA")
     args = parser.parse_args()
     main(args)
+

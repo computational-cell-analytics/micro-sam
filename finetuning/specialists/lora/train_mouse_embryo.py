@@ -2,44 +2,59 @@ import os
 import argparse
 
 import torch
+import numpy as np
 
 from torch_em.model import UNETR
 from torch_em.loss import DiceBasedDistanceLoss
-from torch_em.data.datasets import get_livecell_loader
+from torch_em.data.datasets import get_mouse_embryo_loader
 from torch_em.transform.label import PerObjectDistanceTransform
+from torch_em.data import MinInstanceSampler
+from micro_sam.training.util import ResizeLabelTrafo, ResizeRawTrafo
 
 import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
 
 
-def get_dataloaders(patch_shape, data_path, cell_type=None):
-    """This returns the livecell data loaders implemented in torch_em:
-    https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/livecell.py
-    It will automatically download the livecell data.
+def get_dataloaders(patch_shape, data_path):
+    # 3. Mouse Embryo
+    # the logic used here is: I use the first 100 slices per volume from the training split for training
+    # and the next ~20/30 slices per volume from the training split for validation
+    # and we use the whole volume from the val set for testing
+    train_rois = [np.s_[0:100, :, :], np.s_[0:100, :, :], np.s_[0:100, :, :], np.s_[0:100, :, :]]
+    val_rois = [np.s_[100:, :, :], np.s_[100:, :, :], np.s_[100:, :, :], np.s_[100:, :, :]]
+    
+    raw_transform = ResizeRawTrafo((1,512,512))
+    label_transform = ResizeLabelTrafo((512,512))
 
-    Note: to replace this with another data loader you need to return a torch data loader
-    that retuns `x, y` tensors, where `x` is the image data and `y` are the labels.
-    The labels have to be in a label mask instance segmentation format.
-    I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
-    Important: the ID 0 is reseved for background, and the IDs must be consecutive
-    """
-    label_transform = PerObjectDistanceTransform(
-        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=25
+    train_loader = get_mouse_embryo_loader(
+        path=data_path,
+        name="membrane",
+        split="train",
+        patch_shape=(1, 512, 512),
+        batch_size=2,
+        download=True,
+        num_workers=16,
+        shuffle=True,
+        sampler=MinInstanceSampler(min_num_instances=3),
+        rois=train_rois,
+        raw_transform=raw_transform,
+        label_transform=label_transform 
     )
-    raw_transform = sam_training.identity  # the current workflow avoids rescaling the inputs to [-1, 1]
-    train_loader = get_livecell_loader(
-        path=data_path, patch_shape=patch_shape, split="train", batch_size=2, num_workers=16,
-        cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform, label_dtype=torch.float32,
-    )
-    val_loader = get_livecell_loader(
-        path=data_path, patch_shape=patch_shape, split="val", batch_size=4, num_workers=16,
-        cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform, label_dtype=torch.float32,
-    )
+    val_loader = get_mouse_embryo_loader(
+        path=data_path,
+        name="membrane",
+        split="train",
+        patch_shape=(1, 512, 512),
+        batch_size=1,
+        download=True,
+        num_workers=16,
+        sampler=MinInstanceSampler(min_num_instances=3),
+        rois=val_rois,
+        raw_transform=raw_transform,
+        label_transform=label_transform
+    ) 
 
     return train_loader, val_loader
-
 
 def count_parameters(model):
     params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -70,9 +85,9 @@ def finetune_livecell(args):
 
     # training settings:
     model_type = args.model_type
-    checkpoint_path = None  # override this to start training from a custom checkpoint
-    patch_shape = (520, 704)  # the patch shape for training
+    checkpoint_path = None  # override this to start training from a custom checkpoint  # the patch shape for training
     n_objects_per_batch = 5  # this is the number of objects per batch that will be sampled
+    patch_shape = (512,512)
     freeze_parts = args.freeze  # override this to freeze different parts of the model
     rank = args.lora_rank  # the rank
     # get the trainable segment anything model
@@ -109,14 +124,14 @@ def finetune_livecell(args):
         if not name.startswith("encoder"):
             joint_model_params.append(params)
 
-    optimizer = torch.optim.AdamW(joint_model_params, lr=5e-5)
+    optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10)
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
     convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
     name = (
-        f"{args.model_type}/livecell_"
+        f"{args.model_type}/mouse_embryo_"
         f"{f'lora_rank_{args.lora_rank}' if args.use_lora else 'sam'}"
     )
 
@@ -140,7 +155,8 @@ def finetune_livecell(args):
         mask_prob=0.5,  # (optional) overwrite to provide the probability of using mask inputs while training
         unetr=unetr,
         instance_loss=DiceBasedDistanceLoss(mask_distances_in_bg=True),
-        instance_metric=DiceBasedDistanceLoss(mask_distances_in_bg=True)
+        instance_metric=DiceBasedDistanceLoss(mask_distances_in_bg=True),
+        early_stopping=10
     )
     trainer.fit(args.iterations)
     if args.export_path is not None:
@@ -157,7 +173,7 @@ def finetune_livecell(args):
 def main():
     parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LiveCELL dataset.")
     parser.add_argument(
-        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/livecell/",
+        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/mouse_embryo/",
         help="The filepath to the LiveCELL data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(

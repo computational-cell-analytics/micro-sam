@@ -6,6 +6,8 @@ from glob import glob
 from pathlib import Path
 from datetime import datetime
 
+# Replace with the path to the experiments folder
+ROOT = "/scratch/usr/nimcarot/sam/experiments/dummy_directory"
 
 ALL_SCRIPTS = [
     "precompute_embeddings", "evaluate_amg", "iterative_prompting", "evaluate_instance_segmentation"
@@ -14,7 +16,8 @@ ALL_SCRIPTS = [
 
 def write_batch_script(
     env_name, out_path, inference_setup, checkpoint, model_type,
-    experiment_folder, dataset_name, delay=None, use_masks=False
+    experiment_folder, dataset_name, delay=None, use_masks=False,
+    use_lora=False, lora_rank=None
 ):
     "Writing scripts with different fold-trainings for micro-sam evaluation"
     batch_script = f"""#!/bin/bash
@@ -23,10 +26,11 @@ def write_batch_script(
 #SBATCH -t 4-00:00:00
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
-#SBATCH -A gzz0001
+#SBATCH -A nim00007
 #SBATCH --constraint=80gb
 #SBATCH --qos=96h
 #SBATCH --job-name={inference_setup}
+#SBATCH -x ggpu139
 
 source ~/.bashrc
 mamba activate {env_name} \n"""
@@ -55,6 +59,10 @@ mamba activate {env_name} \n"""
     # use logits for iterative prompting
     if inference_setup == "iterative_prompting" and use_masks:
         python_script += "--use_masks "
+    
+    if use_lora:
+        python_script += "--use_lora "
+        python_script += f"--lora_rank {lora_rank} "
 
     # let's add the python script to the bash script
     batch_script += python_script
@@ -69,7 +77,7 @@ mamba activate {env_name} \n"""
         new_path = out_path[:-3] + f"_{inference_setup}_box.sh"
         with open(new_path, "w") as f:
             f.write(batch_script)
-
+    print(batch_script)
 
 def get_batch_script_names(tmp_folder):
     tmp_folder = os.path.expanduser(tmp_folder)
@@ -84,19 +92,20 @@ def get_batch_script_names(tmp_folder):
     return batch_script
 
 
-def get_checkpoint_path(experiment_set, dataset_name, model_type, region):
+def get_checkpoint_path(experiment_set, dataset_name, model_type, region, lora=False, rank=None):
     # let's set the experiment type - either using the generalist or just using vanilla model
     if experiment_set == "generalist":
-        checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/"
+        #checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/"
+        #if region == "organelles":
+        #    checkpoint += "mito_nuc_em_generalist_sam/best.pt"
+        #elif region == "boundaries":
+        #    checkpoint += "boundaries_em_generalist_sam/best.pt"
+        #elif region == "lm":
+        #    checkpoint += "lm_generalist_sam/best.pt"
+        #else:
+        #    raise ValueError("Choose `region` from lm / organelles / boundaries")
 
-        if region == "organelles":
-            checkpoint += "mito_nuc_em_generalist_sam/best.pt"
-        elif region == "boundaries":
-            checkpoint += "boundaries_em_generalist_sam/best.pt"
-        elif region == "lm":
-            checkpoint += "lm_generalist_sam/best.pt"
-        else:
-            raise ValueError("Choose `region` from lm / organelles / boundaries")
+        checkpoint = None
 
     elif experiment_set == "specialist":
         _split = dataset_name.split("/")
@@ -112,7 +121,11 @@ def get_checkpoint_path(experiment_set, dataset_name, model_type, region):
         if dataset_name.startswith("tissuenet"):
             dataset_name = "tissuenet"
 
-        checkpoint = f"/scratch/usr/nimanwai/micro-sam/checkpoints/{model_type}/{dataset_name}_sam/best.pt"
+        if lora:
+            assert rank is not None, "Provide the rank for LoRA finetuning."
+            checkpoint = f"{ROOT}/checkpoints/{model_type}/{dataset_name}_lora_rank_{rank}/best.pt"
+        else:
+            checkpoint = f"{ROOT}/checkpoints/{model_type}/{dataset_name}_sam/best.pt"
 
     elif experiment_set == "vanilla":
         checkpoint = None
@@ -138,14 +151,15 @@ def submit_slurm(args):
     make_delay = "10s"  # wait for precomputing the embeddings and later run inference scripts
 
     if args.checkpoint_path is None:
-        checkpoint = get_checkpoint_path(experiment_set, dataset_name, model_type, region)
+        checkpoint = get_checkpoint_path(experiment_set, dataset_name, model_type, region, lora=args.use_lora, rank=args.lora_rank)
     else:
         checkpoint = args.checkpoint_path
 
     if args.experiment_path is None:
         modality = region if region == "lm" else "em"
-        experiment_folder = "/scratch/projects/nim00007/sam/experiments/new_models/v3/"
-        experiment_folder += f"{experiment_set}/{modality}/{dataset_name}/{model_type}/"
+        # get the correct naming if lora finetuning was used
+        experiment_name = f"{experiment_set}_lora_{args.lora_rank}" if args.use_lora else experiment_set
+        experiment_folder = f"{ROOT}/{experiment_name}/{modality}/{dataset_name}/{model_type}/"
     else:
         experiment_folder = args.experiment_path
 
@@ -175,7 +189,9 @@ def submit_slurm(args):
             experiment_folder=experiment_folder,
             dataset_name=dataset_name,
             delay=None if current_setup == "precompute_embeddings" else make_delay,
-            use_masks=args.use_masks
+            use_masks=args.use_masks,
+            use_lora=args.use_lora,
+            lora_rank=args.lora_rank
             )
 
     # the logic below automates the process of first running the precomputation of embeddings, and only then inference.
@@ -220,5 +236,10 @@ if __name__ == "__main__":
     # ask for a specific experiment
     parser.add_argument("-s", "--specific_experiment", type=str, default=None)
 
+    # LoRA specific arguments
+    parser.add_argument("--lora_rank", type=int, default=4)
+    parser.add_argument("--use_lora", action="store_true", help="Whether to use LoRA for finetuning.")
+
     args = parser.parse_args()
     main(args)
+

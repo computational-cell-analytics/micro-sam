@@ -5,14 +5,15 @@ import torch
 
 from torch_em.model import UNETR
 from torch_em.loss import DiceBasedDistanceLoss
-from torch_em.data.datasets import get_livecell_loader
+from torch_em.data.datasets import get_covid_if_loader
 from torch_em.transform.label import PerObjectDistanceTransform
+from torch_em.data import MinInstanceSampler
 
 import micro_sam.training as sam_training
 from micro_sam.util import export_custom_sam_model
 
 
-def get_dataloaders(patch_shape, data_path, cell_type=None):
+def get_dataloaders(patch_shape, data_path):
     """This returns the livecell data loaders implemented in torch_em:
     https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/livecell.py
     It will automatically download the livecell data.
@@ -23,19 +24,40 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
     I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
     Important: the ID 0 is reseved for background, and the IDs must be consecutive
     """
+    num_workers = 8 if torch.cuda.is_available() else 0
+
     label_transform = PerObjectDistanceTransform(
         distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=25
     )
     raw_transform = sam_training.identity  # the current workflow avoids rescaling the inputs to [-1, 1]
-    train_loader = get_livecell_loader(
-        path=data_path, patch_shape=patch_shape, split="train", batch_size=2, num_workers=16,
-        cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform, label_dtype=torch.float32,
+    sampler = MinInstanceSampler()
+
+    train_volumes = (None, 10)
+    val_volumes = (10, 13)
+
+    # let's estimate the total number of patches
+    train_loader = get_covid_if_loader(
+        path=data_path, patch_shape=patch_shape, batch_size=1, target="cells",
+        download=True, sampler=sampler, sample_range=train_volumes
     )
-    val_loader = get_livecell_loader(
-        path=data_path, patch_shape=patch_shape, split="val", batch_size=4, num_workers=16,
-        cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform, label_dtype=torch.float32,
+
+    print(
+        f"Found {len(train_loader)} samples for training.",
+        "Hence, we will use {0} samples for training.".format(50 if len(train_loader) < 50 else len(train_loader))
+    )
+
+    # now, let's get the training and validation dataloaders
+    
+    train_loader = get_covid_if_loader(
+        path=data_path, patch_shape=patch_shape, batch_size=1, target="cells", num_workers=num_workers, shuffle=True,
+        raw_transform=raw_transform, sampler=sampler, label_transform=label_transform, label_dtype=torch.float32,
+        sample_range=train_volumes, n_samples=50 if len(train_loader) < 50 else None,
+    )
+
+    val_loader = get_covid_if_loader(
+        path=data_path, patch_shape=patch_shape, batch_size=1, target="cells", download=True, num_workers=num_workers,
+        raw_transform=raw_transform, sampler=sampler, label_transform=label_transform, label_dtype=torch.float32,
+        sample_range=val_volumes, n_samples=5,
     )
 
     return train_loader, val_loader
@@ -47,8 +69,8 @@ def count_parameters(model):
     return f"The number of trainable parameters for the provided model is {round(params, 2)}M"
 
 
-def finetune_livecell(args):
-    """Code for finetuning SAM (using LoRA) on LIVECell
+def finetune_covid_if(args):
+    """Code for finetuning SAM (using LoRA) on Covid IF
 
     Initial observations: There's no real memory advantage actually unless it's "truly" scaled up
     # vit_b
@@ -70,9 +92,9 @@ def finetune_livecell(args):
 
     # training settings:
     model_type = args.model_type
-    checkpoint_path = None  # override this to start training from a custom checkpoint
-    patch_shape = (520, 704)  # the patch shape for training
+    checkpoint_path = None  # override this to start training from a custom checkpoint  # the patch shape for training
     n_objects_per_batch = 5  # this is the number of objects per batch that will be sampled
+    patch_shape = (512,512)
     freeze_parts = args.freeze  # override this to freeze different parts of the model
     rank = args.lora_rank  # the rank
     # get the trainable segment anything model
@@ -96,7 +118,6 @@ def finetune_livecell(args):
         use_skip_connection=False,
         resize_input=True,
     )
-    unetr.to(device)
 
     # let's check the total number of trainable parameters
     print(count_parameters(model))
@@ -109,14 +130,14 @@ def finetune_livecell(args):
         if not name.startswith("encoder"):
             joint_model_params.append(params)
 
-    optimizer = torch.optim.AdamW(joint_model_params, lr=5e-5)
+    optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10)
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)
     convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
     name = (
-        f"{args.model_type}/livecell_"
+        f"{args.model_type}/covid_if_"
         f"{f'lora_rank_{args.lora_rank}' if args.use_lora else 'sam'}"
     )
 
@@ -140,11 +161,12 @@ def finetune_livecell(args):
         mask_prob=0.5,  # (optional) overwrite to provide the probability of using mask inputs while training
         unetr=unetr,
         instance_loss=DiceBasedDistanceLoss(mask_distances_in_bg=True),
-        instance_metric=DiceBasedDistanceLoss(mask_distances_in_bg=True)
+        instance_metric=DiceBasedDistanceLoss(mask_distances_in_bg=True),
+        early_stopping=10
     )
     trainer.fit(args.iterations)
     if args.export_path is not None:
-        checkpoint_path = os.path.join(
+        checkpoint_path = os.path.join(i
             "" if args.save_root is None else args.save_root, "checkpoints", args.name, "best.pt"
         )
         export_custom_sam_model(
@@ -155,10 +177,10 @@ def finetune_livecell(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LiveCELL dataset.")
+    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the CovidIF dataset.")
     parser.add_argument(
-        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/livecell/",
-        help="The filepath to the LiveCELL data. If the data does not exist yet it will be downloaded."
+        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/covid_if/",
+        help="The filepath to the CovidIF data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
@@ -187,7 +209,7 @@ def main():
         "--lora_rank", type=int, default=4, help="Pass the rank for LoRA."
     )
     args = parser.parse_args()
-    finetune_livecell(args)
+    finetune_covid_if(args)
 
 
 if __name__ == "__main__":
