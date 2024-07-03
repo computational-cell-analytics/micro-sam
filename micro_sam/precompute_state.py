@@ -68,7 +68,7 @@ def cache_amg_state(
     if verbose:
         print("Precomputing the state for instance segmentation.")
 
-    amg.initialize(raw, image_embeddings=image_embeddings, verbose=verbose, i=i)
+    amg.initialize(raw if i is None else raw[i], image_embeddings=image_embeddings, verbose=verbose, i=i)
     amg_state = amg.get_state()
 
     # put all state onto the cpu so that the state can be deserialized without a gpu
