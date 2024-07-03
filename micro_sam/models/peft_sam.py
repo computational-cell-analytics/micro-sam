@@ -53,9 +53,9 @@ class LoRASurgery(nn.Module):
 
 
 class PEFT_Sam(nn.Module):
-    """Inspired from: https://github.com/JamesQFreeman/Sam_LoRA/
+    """Wraps the Segment Anything model's image encoder to different parameter efficient finetuning methods.
 
-    Wraps the Segment Anything model's image encoder to different parameter efficient finetuning methods.
+    Inspired by https://github.com/JamesQFreeman/Sam_LoRA/
 
     Args:
         model: The Segment Anything model.
@@ -71,16 +71,14 @@ class PEFT_Sam(nn.Module):
         peft_module: nn.Module = LoRASurgery,
         attention_layers_to_update: Union[List[int]] = None
     ):
-        super(PEFT_Sam, self).__init__()
+        super().__init__()
 
         assert rank > 0
 
         if attention_layers_to_update:
             self.peft_layers = attention_layers_to_update
         else:   # Applies PEFT to the image encoder by default
-            self.peft_layers = list(
-                range(len(model.image_encoder.blocks))
-            )
+            self.peft_layers = list(range(len(model.image_encoder.blocks)))
 
         self.peft_module = peft_module
         self.peft_blocks = []

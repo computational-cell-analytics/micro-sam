@@ -1,13 +1,10 @@
 import time
 
-import numpy as np
-
 import torch
 import torch.nn as nn
 
 from torch_em.loss import DiceLoss
 from torch_em.trainer import DefaultTrainer
-from torch_em.trainer.tensorboard_logger import TensorboardLogger, normalize_im
 
 
 class CustomDiceLoss(nn.Module):
@@ -46,8 +43,7 @@ class SemanticSamTrainer(DefaultTrainer):
 
         loss = CustomDiceLoss(num_classes=num_classes)
         metric = CustomDiceLoss(num_classes=num_classes)
-        logger = SemanticSamLogger
-        super().__init__(loss=loss, metric=metric, logger=logger, **kwargs)
+        super().__init__(loss=loss, metric=metric, **kwargs)
 
         self.convert_inputs = convert_inputs
         self.num_classes = num_classes
@@ -66,8 +62,18 @@ class SemanticSamTrainer(DefaultTrainer):
         return net_loss
 
     def _get_model_outputs(self, batched_inputs):
-        image_embeddings, batched_inputs = self.model.image_embeddings_oft(batched_inputs)
-        batched_outputs = self.model(batched_inputs, image_embeddings, multimask_output=True)
+        # Precompute the image embeddings if the model exposes it as functionality.
+        if hasattr(self.model, "image_embeddings_oft"):
+            image_embeddings, batched_inputs = self.model.image_embeddings_oft(batched_inputs)
+            batched_outputs = self.model(batched_inputs, image_embeddings, multimask_output=True)
+        else:  # Otherwise we assume that the embeddings are computed internally as part of the forward pass.
+            # We need to take care of sending things to the device here.
+            batched_inputs = [
+                {"image": inp["image"].to(self.device, non_blocking=True), "original_size": inp["original_size"]}
+                for inp in batched_inputs
+            ]
+            batched_outputs = self.model(batched_inputs, multimask_output=True)
+
         masks = torch.stack([output["masks"].squeeze(0) for output in batched_outputs])
         return masks
 
@@ -90,7 +96,9 @@ class SemanticSamTrainer(DefaultTrainer):
 
             if self.logger is not None:
                 lr = [pm["lr"] for pm in self.optimizer.param_groups][0]
-                self.logger.log_train(self._iteration, net_loss, lr, x, y, masks, log_gradients=False)
+                self.logger.log_train(
+                    self._iteration, net_loss, lr, x, y, torch.softmax(masks, dim=1), log_gradients=False
+                )
 
             if self._iteration >= self.max_iteration:
                 break
@@ -122,56 +130,6 @@ class SemanticSamTrainer(DefaultTrainer):
         print(f"The Average Validation Metric Score for the Current Epoch is {dice_metric}")
 
         if self.logger is not None:
-            self.logger.log_validation(self._iteration, metric_val, loss_val, x, y, masks)
+            self.logger.log_validation(self._iteration, metric_val, loss_val, x, y, torch.softmax(masks, dim=1))
 
         return metric_val
-
-
-class SemanticSamTrainer3D(SemanticSamTrainer):
-    def _get_model_outputs(self, batched_inputs):
-        model_input = torch.stack([inp["image"] for inp in batched_inputs]).to(self.device)
-        image_size = batched_inputs[0]["original_size"][-1]
-        batched_outputs = self.model(
-            model_input,
-            multimask_output=(self.num_classes > 1),
-            image_size=image_size
-        )
-        # masks = torch.stack([output["masks"].squeeze(0) for output in batched_outputs])
-        masks = batched_outputs["masks"]
-        return masks
-
-
-class SemanticSamLogger(TensorboardLogger):
-    def log_images(self, step, x, y, prediction, name, gradients=None):
-
-        selection_image = np.s_[0] if x.ndim == 4 else np.s_[0, x.shape[2] // 2, :]
-        selection = np.s_[0] if x.ndim == 4 else np.s_[0, :, x.shape[2] // 2]
-
-        image = normalize_im(x[selection_image].cpu())
-        self.tb.add_image(tag=f"{name}/input",
-                          img_tensor=image,
-                          global_step=step)
-
-        prediction = torch.softmax(prediction, dim=1)
-        im, im_name = self.make_image(image, y, prediction, selection, gradients)
-        im_name = f"{name}/{im_name}"
-        self.tb.add_image(tag=im_name, img_tensor=im, global_step=step)
-
-    def log_train(self, step, loss, lr, x, y, prediction, log_gradients=False):
-        self.tb.add_scalar(tag="train/loss", scalar_value=loss, global_step=step)
-        self.tb.add_scalar(tag="train/learning_rate", scalar_value=lr, global_step=step)
-
-        # the embedding visualisation function currently doesn't support gradients,
-        # so we can't log them even if log_gradients is true
-        log_grads = log_gradients
-        if self.have_embeddings:
-            log_grads = False
-
-        if step % self.log_image_interval == 0:
-            gradients = prediction.grad if log_grads else None
-            self.log_images(step, x, y, prediction, "train", gradients=gradients)
-
-    def log_validation(self, step, metric, loss, x, y, prediction):
-        self.tb.add_scalar(tag="validation/loss", scalar_value=loss, global_step=step)
-        self.tb.add_scalar(tag="validation/metric", scalar_value=metric, global_step=step)
-        self.log_images(step, x, y, prediction, "validation")

@@ -1,4 +1,4 @@
-from typing import Type
+from typing import Any, List, Dict, Type
 
 import torch
 import torch.nn as nn
@@ -6,10 +6,10 @@ import torch.nn as nn
 from segment_anything.modeling.image_encoder import window_partition, window_unpartition
 from segment_anything.modeling import Sam
 
-from .util import get_sam_model
+from ..util import get_sam_model
 
 
-def get_3d_sam_model(
+def get_sam_3d_model(
     device,
     n_classes,
     image_size,
@@ -18,15 +18,8 @@ def get_3d_sam_model(
     model_type="vit_b",
     checkpoint_path=None,
 ):
-    if lora_rank is None:
-        use_lora = False
-        rank = None
-        freeze_encoder_ = freeze_encoder
-    else:
-        use_lora = True
-        rank = lora_rank
-        freeze_encoder_ = False
-
+    # Make sure not to freeze the encoder when using LoRA.
+    freeze_encoder_ = freeze_encoder if lora_rank is None else False
     _, sam = get_sam_model(
         model_type=model_type,
         device=device,
@@ -35,8 +28,7 @@ def get_3d_sam_model(
         flexible_load_checkpoint=True,
         num_multimask_outputs=n_classes,
         image_size=image_size,
-        use_lora=use_lora,
-        rank=rank,
+        lora_rank=lora_rank,
     )
 
     sam_3d = Sam3DWrapper(sam, freeze_encoder=freeze_encoder_)
@@ -46,11 +38,10 @@ def get_3d_sam_model(
 
 class Sam3DWrapper(nn.Module):
     def __init__(self, sam_model: Sam, freeze_encoder: bool):
-        """
-        Initializes the Sam3DWrapper object.
+        """Initializes the Sam3DWrapper object.
 
         Args:
-            sam_model (Sam): The Sam model to be wrapped.
+            sam_model: The Sam model to be wrapped.
         """
         super().__init__()
         sam_model.image_encoder = ImageEncoderViT3DWrapper(
@@ -63,20 +54,42 @@ class Sam3DWrapper(nn.Module):
             for param in self.sam_model.image_encoder.parameters():
                 param.requires_grad = False
 
-    # FIXME
-    # - handling of the image size here is wrong, this only works for square images
-    # - this does not take care of resizing
-    # unclear how batches are handled
-    def forward(self, batched_input, multimask_output, image_size) -> torch.Tensor:
-        return self._forward_train(batched_input, multimask_output, image_size)
+    def forward(
+        self,
+        batched_input: List[Dict[str, Any]],
+        multimask_output: bool
+    ) -> List[Dict[str, torch.Tensor]]:
+        """Predict 3D masks for the current inputs.
 
-    def _forward_train(self, batched_input, multimask_output, image_size):
-        # dimensions: [b, d, 3, h, w]
-        shape = batched_input.shape
-        batch_size, d_size, hw_size = shape[0], shape[1], shape[-2]
-        batched_input = batched_input.contiguous().view(-1, 3, hw_size, hw_size)
+        Unlike original SAM this model only supports automatic segmentation and does not support prompts.
 
-        input_images = self.sam_model.preprocess(batched_input)
+        Args:
+            batched_input: A list over input images, each a dictionary with the following keys.L
+                'image': The image as a torch tensor in 3xDxHxW format. Already transformed for the input to the model.
+                'original_size': The original size of the image (HxW) before transformation.
+            multimask_output: Wheterh to predict with the multi- or single-mask head of the maks decoder.
+
+        Returns:
+            A list over input images, where each element is as dictionary with the following keys:
+                'masks': Mask prediction for this object.
+                'iou_predictions': IOU score prediction for this object.
+                'low_res_masks': Low resolution mask prediction for this object.
+        """
+        batched_images = torch.stack([inp["image"] for inp in batched_input], dim=0)
+        original_size = batched_input[0]["original_size"]
+        assert all(inp["original_size"] == original_size for inp in batched_input)
+
+        # dimensions: [b, 3, d, h, w]
+        shape = batched_images.shape
+        assert shape[1] == 3
+        batch_size, d_size, hw_size = shape[0], shape[2], shape[-2]
+        # Transpose the axes, so that the depth axis is the first axis and the channel
+        # axis is the second axis. This is expected by the transformer!
+        batched_images = batched_images.transpose(1, 2)
+        assert batched_images.shape[1] == d_size
+        batched_images = batched_images.contiguous().view(-1, 3, hw_size, hw_size)
+
+        input_images = self.sam_model.preprocess(batched_images)
         image_embeddings = self.sam_model.image_encoder(input_images, d_size)
         sparse_embeddings, dense_embeddings = self.sam_model.prompt_encoder(
             points=None, boxes=None, masks=None
@@ -90,8 +103,8 @@ class Sam3DWrapper(nn.Module):
         )
         masks = self.sam_model.postprocess_masks(
             low_res_masks,
-            input_size=(image_size, image_size),
-            original_size=(image_size, image_size)
+            input_size=batched_images.shape[-2:],
+            original_size=original_size,
         )
 
         # Bring the masks and low-res masks into the correct shape:
@@ -107,11 +120,12 @@ class Sam3DWrapper(nn.Module):
         masks = masks.transpose(1, 2)
         low_res_masks = low_res_masks.transpose(1, 2)
 
-        outputs = {
-            "masks": masks,
-            "iou_predictions": iou_predictions,
-            "low_res_logits": low_res_masks
-        }
+        # Make the output compatable with the SAM output.
+        outputs = [{
+            "masks": mask.unsqueeze(0),
+            "iou_predictions": iou_pred,
+            "low_res_logits": low_res_mask.unsqueeze(0)
+        } for mask, iou_pred, low_res_mask in zip(masks, iou_predictions, low_res_masks)]
         return outputs
 
 

@@ -1,12 +1,13 @@
 from contextlib import nullcontext
+from typing import Any, List, Dict
 
 import torch
 import torch.nn as nn
 
-from .util import get_sam_model
+from ..util import get_sam_model
 
 
-def get_simple_3d_sam_model(
+def get_simple_sam_3d_model(
     device,
     n_classes,
     image_size,
@@ -15,14 +16,6 @@ def get_simple_3d_sam_model(
     model_type="vit_b",
     checkpoint_path=None,
 ):
-    if lora_rank is None:
-        use_lora = False
-        rank = None
-        freeze_encoder_ = freeze_encoder
-    else:
-        use_lora = True
-        rank = lora_rank
-        freeze_encoder_ = False
 
     _, sam = get_sam_model(
         model_type=model_type,
@@ -31,10 +24,11 @@ def get_simple_3d_sam_model(
         return_sam=True,
         image_size=image_size,
         flexible_load_checkpoint=True,
-        use_lora=use_lora,
-        rank=rank,
+        lora_rank=lora_rank,
     )
 
+    # Make sure not to freeze the encoder when using LoRA.
+    freeze_encoder_ = freeze_encoder if lora_rank is None else False
     sam_3d = SimpleSam3DWrapper(sam, num_classes=n_classes, freeze_encoder=freeze_encoder_)
     sam_3d.to(device)
     return sam_3d
@@ -136,15 +130,33 @@ class SimpleSam3DWrapper(nn.Module):
     def _apply_image_encoder(self, x, D):
         encoder_features = []
         for d in range(D):
-            image = x[:, d]
+            image = x[:, :, d]
             feature = self.sam.image_encoder(image)
             encoder_features.append(feature)
-        encoder_features = torch.stack(encoder_features, 1)
-        encoder_features = encoder_features.transpose(1, 2)
+        encoder_features = torch.stack(encoder_features, 2)
         return encoder_features
 
-    def forward(self, x, **kwargs):
-        B, D, C, H, W = x.shape
+    def forward(
+        self,
+        batched_input: List[Dict[str, Any]],
+        multimask_output: bool
+    ) -> List[Dict[str, torch.Tensor]]:
+        """Predict 3D masks for the current inputs.
+
+        Unlike original SAM this model only supports automatic segmentation and does not support prompts.
+
+        Args:
+            batched_input: A list over input images, each a dictionary with the following keys.L
+                'image': The image as a torch tensor in 3xDxHxW format. Already transformed for the input to the model.
+            multimask_output: Wheterh to predict with the multi- or single-mask head of the maks decoder.
+
+        Returns:
+            A list over input images, where each element is as dictionary with the following keys:
+                'masks': Mask prediction for this object.
+        """
+        x = torch.stack([inp["image"] for inp in batched_input], dim=0)
+
+        B, C, D, H, W = x.shape
         assert C == 3
 
         with self.no_grad():
@@ -155,5 +167,5 @@ class SimpleSam3DWrapper(nn.Module):
             out = decoder(out)
         logits = self.out_conv(out)
 
-        outputs = {"masks": logits}
+        outputs = [{"masks": mask.unsqueeze(0)} for mask in logits]
         return outputs
