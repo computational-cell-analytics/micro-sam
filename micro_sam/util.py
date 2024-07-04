@@ -332,7 +332,8 @@ def get_sam_model(
         # Download it here, so that we can add it to the state.
         decoder_name = f"{model_type}_decoder"
         decoder_path = model_registry.fetch(
-            decoder_name, progressbar=True) if decoder_name in model_registry.registry else None
+            decoder_name, progressbar=True
+        ) if decoder_name in model_registry.registry else None
 
     # checkpoint_path has been passed, we use it instead of downloading a model.
     else:
