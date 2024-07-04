@@ -139,13 +139,12 @@ def predict(args):
             model = get_sam_3d_model(device, n_classes=args.n_classes, image_size=args.patch_shape[1],
                                      lora_rank=4,
                                      model_type=args.model_type,
-                                     checkpoint_path=cp_path
-                                     )
+                                     # checkpoint_path=args.checkpoint_path
+                                     ) 
             
-            # checkpoint = torch.load(cp_path, map_location=device)
-            # #print(checkpoint.keys())
-            # # # Load the state dictionary from the checkpoint
-            # model.load_state_dict(checkpoint['model_state'])
+            checkpoint = torch.load(cp_path, map_location=device)
+            # # Load the state dictionary from the checkpoint
+            model.load_state_dict(checkpoint['model'].state_dict())
             model.eval()
 
     data_paths = glob(os.path.join(args.input_path, "**/*test.h5"), recursive=True)

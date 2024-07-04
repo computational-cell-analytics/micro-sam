@@ -11,7 +11,11 @@ from torch_em.util.debug import check_loader
 from torch_em.transform.raw import normalize
 
 from micro_sam.models.sam_3d_wrapper import get_sam_3d_model
+<<<<<<< HEAD
 from micro_sam.training.semantic_sam_trainer import SemanticSamTrainer
+=======
+from micro_sam.training.semantic_sam_trainer import SemanticSamTrainer3D
+>>>>>>> f3d8d8d (problems)
 import micro_sam.training as sam_training
 
 
@@ -141,8 +145,13 @@ def train_on_lucchi(args):
     train_loader, val_loader = get_loaders(input_path=input_path, patch_shape=patch_shape)
     optimizer = torch.optim.AdamW(sam_3d.parameters(), lr=5e-5)
     
+<<<<<<< HEAD
     trainer = SemanticSamTrainer(
         name="3d-sam-lucchi-train",
+=======
+    trainer = SemanticSamTrainer3D(
+        name="3d-sam-lucchi-new",
+>>>>>>> f3d8d8d (problems)
         model=sam_3d,
         convert_inputs=ConvertToSemanticSamInputs(),
         num_classes=n_classes,
