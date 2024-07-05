@@ -11,11 +11,9 @@ from torch_em.util.debug import check_loader
 from torch_em.transform.raw import normalize
 
 from micro_sam.models.sam_3d_wrapper import get_sam_3d_model
-<<<<<<< HEAD
+
 from micro_sam.training.semantic_sam_trainer import SemanticSamTrainer
-=======
-from micro_sam.training.semantic_sam_trainer import SemanticSamTrainer3D
->>>>>>> f3d8d8d (problems)
+
 import micro_sam.training as sam_training
 
 
@@ -85,7 +83,20 @@ class LucchiSegmentationDataset(SegmentationDataset):
 
 
 def transform_labels(y):
-    return (y > 0).astype("float32")
+    #return (y > 0).astype("float32")
+    # use torch_em to get foreground and boundary channels
+    transform = torch_em.transform.label.BoundaryTransform(add_binary_target=True)
+    one_hot_channels = transform(y)
+    # Combine foreground and background using element-wise maximum
+    foreground = np.where(one_hot_channels[0] > 0, 1, 0)
+
+    # Combine foreground and boundaries with priority to boundaries (ensures boundaries are 2)
+    combined = np.where(one_hot_channels[1] > 0, 2, foreground)
+
+    # Set background to 0
+    combined[combined == 0] = 0
+
+    return combined
 
 
 def get_loaders(input_path, patch_shape):
@@ -99,18 +110,6 @@ def get_loaders(input_path, patch_shape):
         raw_transform=RawTrafoFor3dInputs(), label_transform=transform_labels
     )
     return train_loader, val_loader
-# def get_loader(path, split, patch_shape, n_classes, batch_size, label_transform, num_workers=1):
-#     assert split in ("train", "test")
-#     data_path = os.path.join(path, f"lucchi_{split}.h5")
-#     raw_key, label_key = "raw", "labels"
-#     ds = LucchiSegmentationDataset(
-#         raw_path=data_path, label_path=data_path, raw_key=raw_key, 
-#         label_key=label_key, patch_shape=patch_shape, label_transform=label_transform)
-#     loader = torch.utils.data.DataLoader(
-#         ds, batch_size=batch_size, shuffle=True, 
-#         num_workers=num_workers)
-#     loader.shuffle = True
-#     return loader
 
 
 def train_on_lucchi(args):
@@ -124,34 +123,18 @@ def train_on_lucchi(args):
     n_iterations = args.n_iterations
     save_root = args.save_root
     
-    # label_transform = torch_em.transform.label.BoundaryTransform(add_binary_target=True)
-    # label_transform = None
-    raw_data = np.random.rand(64, 256, 256)  # Shape (z, y, x)
-    raw_data2, label = next(iter(get_lucchi_loader(input_path, split="train", patch_shape=patch_shape, batch_size=1, download=True)))
 
-    # Create an instance of RawTrafoFor3dInputs
-    transformer = RawTrafoFor3dInputs()
-
-    # Apply transformations
-    processed_data = transformer(raw_data)
-    processed_data2 = transformer(raw_data2)
-    print("input (64,256,256)", processed_data.shape)
-    print("input", raw_data2.shape, processed_data2.shape)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     sam_3d = get_sam_3d_model(
         device, n_classes=n_classes, image_size=patch_shape[1],
         model_type=model_type, lora_rank=4)
     train_loader, val_loader = get_loaders(input_path=input_path, patch_shape=patch_shape)
-    optimizer = torch.optim.AdamW(sam_3d.parameters(), lr=5e-5)
+    optimizer = torch.optim.AdamW(sam_3d.parameters(), lr=args.learning_rate, betas=(0.9, 0.999), weight_decay=0.1)
     
-<<<<<<< HEAD
+
     trainer = SemanticSamTrainer(
-        name="3d-sam-lucchi-train",
-=======
-    trainer = SemanticSamTrainer3D(
-        name="3d-sam-lucchi-new",
->>>>>>> f3d8d8d (problems)
+        name="3d-sam-vith-masamhyp-lucchi",
         model=sam_3d,
         convert_inputs=ConvertToSemanticSamInputs(),
         num_classes=n_classes,
@@ -164,7 +147,7 @@ def train_on_lucchi(args):
         #logger=None
     )
     # check_loader(train_loader, n_samples=10)
-    trainer.fit(n_iterations)
+    trainer.fit(epochs=n_iterations)
     
 
 def main():
@@ -179,9 +162,10 @@ def main():
     )
     parser.add_argument("--patch_shape", type=int, nargs=3, default=(32, 512, 512), help="Patch shape for data loading (3D tuple)")
     parser.add_argument("--n_iterations", type=int, default=10, help="Number of training iterations")
-    parser.add_argument("--n_classes", type=int, default=2, help="Number of classes to predict")
-    parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
+    parser.add_argument("--n_classes", type=int, default=3, help="Number of classes to predict")
+    parser.add_argument("--batch_size", type=int, default=3, help="Batch size")
     parser.add_argument("--num_workers", type=int, default=4, help="num_workers")
+    parser.add_argument("--learning_rate", type=float, default=0.0008, help="base learning rate")
     parser.add_argument(
         "--save_root", "-s", default="/scratch-grete/usr/nimlufre/micro-sam3d",
         help="The filepath to where the logs and the checkpoints will be saved."
