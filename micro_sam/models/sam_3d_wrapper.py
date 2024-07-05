@@ -31,21 +31,32 @@ def get_sam_3d_model(
         lora_rank=lora_rank,
     )
 
-    sam_3d = Sam3DWrapper(sam, freeze_encoder=freeze_encoder_)
+    sam_3d = Sam3DWrapper(sam, freeze_encoder=freeze_encoder_, model_type=model_type)
     sam_3d.to(device)
     return sam_3d
 
 
 class Sam3DWrapper(nn.Module):
-    def __init__(self, sam_model: Sam, freeze_encoder: bool):
+    def __init__(self, sam_model: Sam, freeze_encoder: bool, model_type: str = "vit_b"):
         """Initializes the Sam3DWrapper object.
 
         Args:
             sam_model: The Sam model to be wrapped.
         """
         super().__init__()
+        if model_type == "vit_b":
+            embed_dim = 768
+            num_heads = 12
+        elif model_type == "vit_l":
+            embed_dim = 1024
+            num_heads = 16
+        elif model_type == "vit_h":
+            embed_dim = 1280
+            num_heads = 16
         sam_model.image_encoder = ImageEncoderViT3DWrapper(
-            image_encoder=sam_model.image_encoder
+            image_encoder=sam_model.image_encoder,
+            embed_dim=embed_dim,
+            num_heads=num_heads,
         )
         self.sam_model = sam_model
 
