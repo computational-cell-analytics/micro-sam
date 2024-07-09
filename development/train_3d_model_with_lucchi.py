@@ -124,7 +124,6 @@ def train_on_lucchi(args):
     save_root = args.save_root
     
 
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if args.without_lora:
         sam_3d = get_sam_3d_model(
@@ -135,7 +134,10 @@ def train_on_lucchi(args):
             device, n_classes=n_classes, image_size=patch_shape[1],
             model_type=model_type, lora_rank=4)
     train_loader, val_loader = get_loaders(input_path=input_path, patch_shape=patch_shape)
-    optimizer = torch.optim.AdamW(sam_3d.parameters(), lr=args.learning_rate, betas=(0.9, 0.999), weight_decay=0.1)
+    #optimizer = torch.optim.AdamW(sam_3d.parameters(), lr=args.learning_rate, betas=(0.9, 0.999), weight_decay=0.1)
+    optimizer = torch.optim.Adam(sam_3d.parameters(), lr=1e-5)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=15, verbose=True)
+    #masam no scheduler
     
 
     trainer = SemanticSamTrainer(
@@ -146,6 +148,7 @@ def train_on_lucchi(args):
         train_loader=train_loader,
         val_loader=val_loader,
         optimizer=optimizer,
+        lr_scheduler=scheduler,
         device=device,
         compile_model=False,
         save_root=save_root,
@@ -170,15 +173,15 @@ def main():
     
     parser.add_argument("--n_epochs", type=int, default=400, help="Number of training epochs")
     parser.add_argument("--n_classes", type=int, default=3, help="Number of classes to predict")
-    parser.add_argument("--batch_size", "-bs", type=int, default=3, help="Batch size")
+    parser.add_argument("--batch_size", "-bs", type=int, default=1, help="Batch size") # masam 3 
     parser.add_argument("--num_workers", type=int, default=4, help="num_workers")
-    parser.add_argument("--learning_rate", type=float, default=0.0008, help="base learning rate")
+    parser.add_argument("--learning_rate", type=float, default=1e-5, help="base learning rate") # MASAM 0.0008
     parser.add_argument(
         "--save_root", "-s", default="/scratch-grete/usr/nimlufre/micro-sam3d",
         help="The filepath to where the logs and the checkpoints will be saved."
     )
     parser.add_argument(
-        "--exp_name", default="vitb_3d_lora4",
+        "--exp_name", default="vitb_3d_lora4-microsam-hypam-lucchi",
         help="The filepath to where the logs and the checkpoints will be saved."
     )
 

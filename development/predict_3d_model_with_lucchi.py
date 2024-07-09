@@ -96,31 +96,32 @@ def run_semantic_segmentation_3d(
         assert os.path.exists(image_path), image_path
 
         # Perform segmentation only on the semantic class
-        for i, (semantic_class_name, _) in enumerate(semantic_class_map.items()):
-            if is_multiclass:
-                semantic_class_name = "all"
-                if i > 0:  # We only perform segmentation for multiclass once.
-                    continue
+        # for i, (semantic_class_name, _) in enumerate(semantic_class_map.items()):
+        #     if is_multiclass:
+        #         semantic_class_name = "all"
+        #         if i > 0:  # We only perform segmentation for multiclass once.
+        #             continue
 
+        semantic_class_name = "all" #since we only perform segmentation for multiclass
             # We skip the images that already have been segmented
-            image_name = os.path.splitext(image_name)[0] + ".tif"
-            prediction_path = os.path.join(prediction_dir, semantic_class_name, image_name)
-            if os.path.exists(prediction_path):
-                continue
+        image_name = os.path.splitext(image_name)[0] + ".tif"
+        prediction_path = os.path.join(prediction_dir, "all", image_name)
+        if os.path.exists(prediction_path):
+            continue
 
-            if image_key is None:
-                image = imageio.imread(image_path)
-            else:
-                with open_file(image_path, "r") as f:
-                    image = f[image_key][:]
+        if image_key is None:
+            image = imageio.imread(image_path)
+        else:
+            with open_file(image_path, "r") as f:
+                image = f[image_key][:]
 
-            # create the prediction folder
-            os.makedirs(os.path.join(prediction_dir, semantic_class_name), exist_ok=True)
+        # create the prediction folder
+        os.makedirs(os.path.join(prediction_dir, semantic_class_name), exist_ok=True)
 
-            _run_semantic_segmentation_for_image_3d(
-                model=model, image=image, prediction_path=prediction_path,
-                patch_shape=patch_shape, halo=halo,
-            )
+        _run_semantic_segmentation_for_image_3d(
+            model=model, image=image, prediction_path=prediction_path,
+            patch_shape=patch_shape, halo=halo,
+        )
 
 
 def transform_labels(y):
@@ -144,7 +145,9 @@ def predict(args):
             
             checkpoint = torch.load(cp_path, map_location=device)
             # # Load the state dictionary from the checkpoint
-            model.load_state_dict(checkpoint['model'].state_dict())
+            for k, v in checkpoint.items():
+                print("keys", k)
+            model.load_state_dict(checkpoint['model_state']) #.state_dict()
             model.eval()
 
     data_paths = glob(os.path.join(args.input_path, "**/*test.h5"), recursive=True)
@@ -169,7 +172,7 @@ def main():
     )
     parser.add_argument("--patch_shape", type=int, nargs=3, default=(32, 512, 512), help="Patch shape for data loading (3D tuple)")
     parser.add_argument("--n_iterations", type=int, default=10, help="Number of training iterations")
-    parser.add_argument("--n_classes", type=int, default=2, help="Number of classes to predict")
+    parser.add_argument("--n_classes", type=int, default=3, help="Number of classes to predict")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
     parser.add_argument("--num_workers", type=int, default=4, help="num_workers")
     parser.add_argument(
@@ -177,7 +180,7 @@ def main():
         help="The filepath to where the logs and the checkpoints will be saved."
     )
     parser.add_argument(
-        "--checkpoint_path", "-c", default="/scratch-grete/usr/nimlufre/micro-sam3d/checkpoints/3d-sam-lucchi-train/",
+        "--checkpoint_path", "-c", default="/scratch-grete/usr/nimlufre/micro-sam3d/checkpoints/3d-sam-vitb-masamhyp-lucchi",
         help="The filepath to where the logs and the checkpoints will be saved."
     )
 
