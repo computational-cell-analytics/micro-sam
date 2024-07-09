@@ -3,8 +3,14 @@ from glob import glob
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import imageio.v3 as imageio
+
 import torch
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import _LRScheduler
+from torch.utils.data import DataLoader, Dataset
+
 import torch_em
+from torch_em.data.datasets.util import split_kwargs
 
 from elf.io import open_file
 
@@ -13,16 +19,11 @@ try:
 except Exception:
     QObject = Any
 
-from torch.optim.lr_scheduler import _LRScheduler
-from torch.utils.data import DataLoader, Dataset
-from torch_em.data.datasets.util import split_kwargs
-
 from ..util import get_device
-from ..instance_segmentation import get_unetr
-
-from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit
 from . import sam_trainer as trainers
+from ..instance_segmentation import get_unetr
 from . import joint_sam_trainer as joint_trainers
+from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit
 
 
 FilePath = Union[str, os.PathLike]
@@ -146,6 +147,8 @@ def train_sam(
     scheduler_kwargs: Optional[Dict[str, Any]] = None,
     save_every_kth_epoch: Optional[int] = None,
     pbar_signals: Optional[QObject] = None,
+    optimizer_class: Optional[Optimizer] = torch.optim.Adam,
+    **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
 
@@ -188,8 +191,12 @@ def train_sam(
 
     # Get the trainable segment anything model.
     model, state = get_trainable_sam_model(
-        model_type=model_type, device=device, freeze=freeze,
-        checkpoint_path=checkpoint_path, return_state=True,
+        model_type=model_type,
+        device=device,
+        freeze=freeze,
+        checkpoint_path=checkpoint_path,
+        return_state=True,
+        **model_kwargs
     )
 
     # This class creates all the training data for a batch (inputs, prompts and labels).
@@ -211,10 +218,10 @@ def train_sam(
             if not param_name.startswith("encoder"):
                 joint_model_params.append(params)
 
-        optimizer = torch.optim.Adam(joint_model_params, lr=lr)
+        optimizer = optimizer_class(joint_model_params, lr=lr)
 
     else:
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        optimizer = optimizer_class(model.parameters(), lr=lr)
 
     if scheduler_kwargs is None:
         scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
