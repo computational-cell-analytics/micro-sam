@@ -4,11 +4,13 @@ import h5py
 from micro_sam.training import train_sam, default_sam_dataset
 from torch_em.data.sampler import MinInstanceSampler
 from torch_em.segmentation import get_data_loader
+from torch_em.transform.raw import normalize
 import torch
 import torch_em
 import os
 import argparse
 from skimage.measure import regionprops
+from torch_em.util.debug import check_loader
 
 
 def get_rois_coordinates_skimage(file, label_key, min_shape, euler_threshold=None, min_amount_pixels=None):
@@ -123,8 +125,8 @@ def split_data_paths_to_dict(data_paths, rois_list, train_ratio=0.8, val_ratio=0
             - rois_split: Dictionary containing "train", "val", and "test" keys with corresponding ROIs.
     """
 
-    if train_ratio + val_ratio + test_ratio != 1.0:
-        raise ValueError("Sum of train, validation, and test ratios must equal 1.0.")
+    if not np.isclose(train_ratio + val_ratio + test_ratio, 1.0, atol=0.01):
+        raise ValueError(f"Sum of train, validation, and test ratios must equal 1.0. But instead got:{train_ratio + val_ratio + test_ratio}")
     num_data = len(data_paths)
     if rois_list is not None:
         if len(rois_list) != num_data:
@@ -157,58 +159,99 @@ def get_data_paths(data_dir, data_format="*.h5"):
     return data_paths
 
 
+def raw_transform(image):
+    image = normalize(image)
+    image = image * 255
+    return image
+
+
+
 def train(args):
     n_workers = 4 if torch.cuda.is_available() else 1
     device = "cuda" if torch.cuda.is_available() else "cpu"
     data_dir = args.input_path
     with_rois = True if args.without_rois is False else False 
+    with_rois = False
     patch_shape = args.patch_shape
-    label_transform = torch_em.transform.label.BoundaryTransform(add_binary_target=True)
+    bs = args.batch_size
+    #label_transform = torch_em.transform.label.BoundaryTransform(add_binary_target=False)
+    label_transform = torch_em.transform.label.labels_to_binary
     ndim = 3
 
     if with_rois:
         data_paths, rois_dict = get_data_paths_and_rois(data_dir, min_shape=patch_shape, with_thresholds=True)
-        data, rois_dict = split_data_paths_to_dict(data_paths, rois_dict, train_ratio=.8, val_ratio=0.2, test_ratio=0)
+        data, rois_dict = split_data_paths_to_dict(data_paths, rois_dict, train_ratio=.7, val_ratio=0.2, test_ratio=0.1)
     else:
         data_paths = get_data_paths(data_dir)
-        data = split_data_paths_to_dict(data_paths, rois_list=None, train_ratio=.5, val_ratio=0.5, test_ratio=0)
+        data = split_data_paths_to_dict(data_paths, rois_list=None, train_ratio=0.7, val_ratio=0.2, test_ratio=0.1)
     #path = "/scratch-emmy/projects/nim00007/fruit-fly-data/cambridge_data/parker_s2_soma_roi_z472-600_y795-1372_x1122-1687_clahed.zarr"
     label_key = "labels/mitochondria" # "./annotations1.tif"
-
-    # train_ds = default_sam_dataset(
-    #     raw_paths=data["train"][0], raw_key="raw",
-    #     label_paths=data["train"][0], label_key=label_key,
-    #     patch_shape=args.patch_shape, with_segmentation_decoder=False,
-    #     sampler=MinInstanceSampler(3), 
-    #     #rois=rois_dict["train"],
-    #     n_samples=200,
-    # )
-    # train_loader = get_data_loader(train_ds, shuffle=True, batch_size=2)
-
-    # val_ds = default_sam_dataset(
-    #     raw_paths=data["val"][0], raw_key="raw",
-    #     label_paths=data["val"][0], label_key=label_key,
-    #     patch_shape=args.patch_shape, with_segmentation_decoder=False,
-    #     sampler=MinInstanceSampler(3), 
-    #     #rois=rois_dict["val"],
-    #     is_train=False, n_samples=25,
-    # )
-    # val_loader = get_data_loader(val_ds, shuffle=True, batch_size=1)
-    train_loader = torch_em.default_segmentation_loader(
+    train_ds = default_sam_dataset(
         raw_paths=data["train"], raw_key="raw",
-        label_paths=data["train"], label_key="labels/mitochondria",
-        patch_shape=patch_shape, ndim=ndim, batch_size=1,
-        label_transform=label_transform, num_workers=n_workers,
+        label_paths=data["train"], label_key=label_key,
+        patch_shape=args.patch_shape, with_segmentation_decoder=False,
+        sampler=MinInstanceSampler(2),
+        raw_transform=raw_transform,
+        #rois=np.s_[64:, :, :],
+        #n_samples=200,
     )
-    val_loader = torch_em.default_segmentation_loader(
-        raw_paths=data["train"], raw_key="raw",
-        label_paths=data["val"], label_key="labels/mitochondria",
-        patch_shape=patch_shape, ndim=ndim, batch_size=1,
-        label_transform=label_transform, num_workers=n_workers,
+    train_loader = get_data_loader(train_ds, shuffle=True, batch_size=2)
+
+    val_ds = default_sam_dataset(
+        raw_paths=data["val"], raw_key="raw",
+        label_paths=data["val"], label_key=label_key,
+        patch_shape=args.patch_shape, with_segmentation_decoder=False,
+        sampler=MinInstanceSampler(2),
+        raw_transform=raw_transform,
+        #rois=np.s_[64:, :, :],
+        is_train=False, 
+        #n_samples=25,
     )
+    val_loader = get_data_loader(val_ds, shuffle=True, batch_size=1)
+    # if with_rois:
+    #     train_loader = torch_em.default_segmentation_loader(
+    #         raw_paths=data["train"], raw_key="raw",
+    #         label_paths=data["train"], label_key="labels/mitochondria",
+    #         patch_shape=patch_shape, ndim=ndim, batch_size=bs,
+    #         label_transform=label_transform, raw_transform=raw_transform,
+    #         num_workers=n_workers,
+    #         rois=rois_dict["train"]
+    #         #rois=[np.s_[64:, :, :]] * len(data["train"])
+    #     )
+    #     val_loader = torch_em.default_segmentation_loader(
+    #         raw_paths=data["val"], raw_key="raw",
+    #         label_paths=data["val"], label_key="labels/mitochondria",
+    #         patch_shape=patch_shape, ndim=ndim, batch_size=bs,
+    #         label_transform=label_transform, raw_transform=raw_transform,
+    #         num_workers=n_workers,
+    #         rois=rois_dict["val"]
+    #         # rois=[np.s_[64:, :, :]] * len(data["val"])
+    #     )
+    # else:
+    #     train_loader = torch_em.default_segmentation_loader(
+    #         raw_paths=data["train"], raw_key="raw",
+    #         label_paths=data["train"], label_key=label_key,
+    #         patch_shape=patch_shape, ndim=ndim, batch_size=bs,
+    #         label_transform=label_transform, raw_transform=raw_transform,
+    #         num_workers=n_workers,
+    #     )
+    #     print("len data[val]", len(data["val"]))
+    #     val_loader = torch_em.default_segmentation_loader(
+    #         raw_paths=data["val"], raw_key="raw",
+    #         label_paths=data["val"], label_key=label_key,
+    #         patch_shape=patch_shape, ndim=ndim, batch_size=bs,
+    #         label_transform=label_transform, raw_transform=raw_transform,
+    #         num_workers=n_workers,
+    #     )
+    
+    
+    #check_loader(train_loader, n_samples=3)
+    # x,y =next(iter(train_loader))
+    # print("shapes of x and y", x.shape, y.shape)
+    # breakpoint()
 
     train_sam(
-        name="nucleus_model", model_type="vit_b",
+        name="mito_model", model_type="vit_b",
         train_loader=train_loader, val_loader=val_loader,
         n_epochs=50, n_objects_per_batch=10,
         with_segmentation_decoder=False,
@@ -217,7 +260,7 @@ def train(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LiveCELL dataset.")
+    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the Mitochondria dataset.")
     parser.add_argument(
         "--input_path", "-i", default="/scratch-grete/projects/nim00007/data/mitochondria/cooper/mito_tomo/",
         help="The filepath to the LiveCELL data. If the data does not exist yet it will be downloaded."
@@ -227,7 +270,7 @@ def main():
         help="The model type to use for fine-tuning. Either vit_t, vit_b, vit_l or vit_h."
     )
     parser.add_argument("--without_lora", action="store_true", help="Whether to use LoRA for finetuning SAM for semantic segmentation.") 
-    parser.add_argument("--patch_shape", type=int, nargs=3, default=(32, 512, 512), help="Patch shape for data loading (3D tuple)")
+    parser.add_argument("--patch_shape", type=int, nargs=3, default=(1, 512, 512), help="Patch shape for data loading (3D tuple)")
     
     parser.add_argument("--n_epochs", type=int, default=400, help="Number of training epochs")
     parser.add_argument("--n_classes", type=int, default=3, help="Number of classes to predict")
@@ -242,7 +285,7 @@ def main():
         "--exp_name", default="vitb_3d_lora4-microsam-hypam-lucchi",
         help="The filepath to where the logs and the checkpoints will be saved."
     )
-    parser.add_argument("--without_rois", type=bool, default=True, help="Train without Regions Of Interest (ROI)")
+    parser.add_argument("--without_rois", action="store_true", help="Train without Regions Of Interest (ROI)")
 
     args = parser.parse_args()
     train(args)

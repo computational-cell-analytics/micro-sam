@@ -1,6 +1,6 @@
 import os
 from glob import glob
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, Callable
 
 import imageio.v3 as imageio
 import torch
@@ -287,7 +287,7 @@ def _update_patch_shape(patch_shape, raw_paths, raw_key, with_channels):
         path = raw_paths[0]
     else:
         path = raw_paths
-    assert isinstance(raw_paths, (str, os.PathLike))
+    assert isinstance(path, (str, os.PathLike))
 
     # Check the underlying data dimensionality.
     if raw_key is None:  # If no key is given then we assume it's an image file.
@@ -319,10 +319,12 @@ def default_sam_dataset(
     label_key: Optional[str],
     patch_shape: Tuple[int],
     with_segmentation_decoder: bool,
+    raw_transform: Optional[Callable] = require_8bit,
     with_channels: bool = False,
     sampler=None,  # Type?
     n_samples: Optional[int] = None,
     is_train: bool = True,
+    min_size=25,
     **kwargs,
 ) -> Dataset:
     """Create a PyTorch Dataset for training a SAM model.
@@ -348,14 +350,15 @@ def default_sam_dataset(
     """
 
     # Set the data transformations.
-    raw_transform = require_8bit
+    raw_transform = raw_transform
     if with_segmentation_decoder:
         label_transform = torch_em.transform.label.PerObjectDistanceTransform(
             distances=True, boundary_distances=True, directed_distances=False,
-            foreground=True, instances=True, min_size=25,
+            foreground=True, instances=True, min_size=min_size,
         )
     else:
-        label_transform = torch_em.transform.label.connected_components
+        label_transform = torch_em.transform.label.MinSizeLabelTransform(min_size=min_size)
+        #torch_em.transform.label.connected_components
 
     # Set a default sampler if none was passed.
     if sampler is None:
