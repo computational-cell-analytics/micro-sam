@@ -147,7 +147,7 @@ def train_sam(
     scheduler_kwargs: Optional[Dict[str, Any]] = None,
     save_every_kth_epoch: Optional[int] = None,
     pbar_signals: Optional[QObject] = None,
-    optimizer_class: Optional[Optimizer] = torch.optim.Adam,
+    optimizer_class: Optional[Optimizer] = torch.optim.AdamW,
     **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
