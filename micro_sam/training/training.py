@@ -1,4 +1,5 @@
 import os
+import time
 from glob import glob
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -181,6 +182,8 @@ def train_sam(
         save_every_kth_epoch: Save checkpoints after every kth epoch separately.
         pbar_signals: Controls for napari progress bar.
     """
+    t_start = time.time()
+
     _check_loader(train_loader, with_segmentation_decoder)
     _check_loader(val_loader, with_segmentation_decoder)
 
@@ -280,6 +283,12 @@ def train_sam(
         trainer_fit_params["progress"] = progress_bar_wrapper
 
     trainer.fit(**trainer_fit_params)
+
+    t_run = time.time() - t_start
+    hours = int(t_run // 3600)
+    minutes = int(t_run // 60)
+    seconds = int(round(t_run % 60, 0))
+    print("Training took", t_run, f"seconds (= {hours:02}:{minutes:02}:{seconds:02} hours)")
 
 
 def _update_patch_shape(patch_shape, raw_paths, raw_key, with_channels):
