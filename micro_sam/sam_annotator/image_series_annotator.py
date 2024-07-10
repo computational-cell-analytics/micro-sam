@@ -1,4 +1,5 @@
 import os
+import time
 
 from glob import glob
 from pathlib import Path
@@ -28,6 +29,8 @@ def _precompute(
     tile_shape, halo, precompute_amg_state,
     checkpoint_path, device, ndim, prefer_decoder,
 ):
+    t_start = time.time()
+
     device = util.get_device(device)
     predictor, state = util.get_sam_model(
         model_type=model_type, checkpoint_path=checkpoint_path, device=device, return_state=True
@@ -53,6 +56,11 @@ def _precompute(
                 os.path.join(embedding_path, f"{Path(path).stem}.zarr") for path in images
             ]
         assert all(os.path.exists(emb_path) for emb_path in embedding_paths)
+
+    t_run = time.time() - t_start
+    minutes = int(t_run // 60)
+    seconds = int(round(t_run % 60, 0))
+    print("Precomputation took", t_run, f"seconds (= {minutes:02}:{seconds:02} minutes)")
 
     return predictor, decoder, embedding_paths
 
