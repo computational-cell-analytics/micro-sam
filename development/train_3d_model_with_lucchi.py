@@ -122,6 +122,7 @@ def train_on_lucchi(args):
     model_type = args.model_type
     n_epochs = args.n_epochs
     save_root = args.save_root
+    cp_path = args.checkpoint_path
     
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -133,6 +134,11 @@ def train_on_lucchi(args):
         sam_3d = get_sam_3d_model(
             device, n_classes=n_classes, image_size=patch_shape[1],
             model_type=model_type, lora_rank=4)
+    if cp_path is not None:
+        if os.path.exists(cp_path):
+            checkpoint = torch.load(cp_path, map_location=device)
+            # # Load the state dictionary from the checkpoint
+            sam_3d.load_state_dict(checkpoint['model_state']) #.state_dict()
     train_loader, val_loader = get_loaders(input_path=input_path, patch_shape=patch_shape)
     #optimizer = torch.optim.AdamW(sam_3d.parameters(), lr=args.learning_rate, betas=(0.9, 0.999), weight_decay=0.1)
     optimizer = torch.optim.Adam(sam_3d.parameters(), lr=1e-5)
@@ -179,6 +185,10 @@ def main():
     parser.add_argument(
         "--save_root", "-s", default="/scratch-grete/usr/nimlufre/micro-sam3d",
         help="The filepath to where the logs and the checkpoints will be saved."
+    )
+    parser.add_argument(
+        "--checkpoint_path", default=None,
+        help="The filepath to where the checkpoints are loaded from."
     )
     parser.add_argument(
         "--exp_name", default="vitb_3d_lora4-microsam-hypam-lucchi",
