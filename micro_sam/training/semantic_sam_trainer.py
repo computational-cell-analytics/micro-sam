@@ -51,6 +51,10 @@ class SemanticSamTrainer(DefaultTrainer):
         self.num_classes = num_classes
         self.compute_ce_loss = nn.CrossEntropyLoss()
         self.dice_weight = dice_weight
+
+        if self.dice_weight is not None:
+            assert self.dice_weight > 0 and self.dice_weight < 1, "The weight factor should lie between 0 and 1."
+
         self._kwargs = kwargs
 
     def _compute_loss(self, y, masks):
