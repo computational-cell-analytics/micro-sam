@@ -13,6 +13,7 @@ from ..util import (
     get_centers_and_bounding_boxes, get_sam_model, get_device,
     segmentation_to_one_hot, _DEFAULT_MODEL,
 )
+from .. import models as custom_models
 from .trainable_sam import TrainableSAM
 
 from torch_em.transform.label import PerObjectDistanceTransform
@@ -61,7 +62,7 @@ def get_trainable_sam_model(
         return_state: Whether to return the full checkpoint state.
         lora_rank: The rank of the decomposition matrices for updating weights in each attention layer with lora.
             If None then LoRA is not used.
-        lora_kwargs: Keyword arguments for th PEFT wrapper class.
+        lora_kwargs: Keyword arguments for the PEFT wrapper class.
         flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
         model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
 
@@ -76,10 +77,15 @@ def get_trainable_sam_model(
         checkpoint_path=checkpoint_path,
         return_sam=True,
         return_state=True,
-        lora_rank=lora_rank,
         flexible_load_checkpoint=flexible_load_checkpoint,
         **model_kwargs
     )
+
+    # NOTE: This is done exclusive to "get_sam_model" here to use PEFT's layer-specific initialization on top.
+    # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything.
+    # Overwrites the SAM model by freezing the backbone and allow low rank adaption to attention layers.
+    if lora_rank is not None:
+        sam = custom_models.peft_sam.PEFT_Sam(sam, rank=lora_rank, **({} if lora_kwargs is None else lora_kwargs)).sam
 
     # freeze components of the model if freeze was passed
     # ideally we would want to add components in such a way that:
