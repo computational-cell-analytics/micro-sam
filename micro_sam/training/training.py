@@ -290,11 +290,11 @@ def train_sam(
 
 
 def _update_patch_shape(patch_shape, raw_paths, raw_key, with_channels):
-    if not isinstance(raw_paths, (str, os.PathLike)):
-        path = raw_paths[0]
-    else:
+    if isinstance(raw_paths, (str, os.PathLike)):
         path = raw_paths
-    assert isinstance(raw_paths, (str, os.PathLike))
+    else:
+        path = raw_paths[0]
+    assert isinstance(path, (str, os.PathLike))
 
     # Check the underlying data dimensionality.
     if raw_key is None:  # If no key is given then we assume it's an image file.
@@ -330,6 +330,8 @@ def default_sam_dataset(
     sampler=None,  # Type?
     n_samples: Optional[int] = None,
     is_train: bool = True,
+    min_size: int = 25,
+    max_sampling_attempts: Optional[int] = None,
     **kwargs,
 ) -> Dataset:
     """Create a PyTorch Dataset for training a SAM model.
@@ -349,6 +351,8 @@ def default_sam_dataset(
         sampler: A sampler to reject batches according to a given criterion.
         n_samples: The number of samples for this dataset.
         is_train: Whether this dataset is used for training or validation.
+        min_size: Minimal object size. Smaller objects will be filtered.
+        max_sampling_attempts: Number of sampling attempts to make from a dataset.
 
     Returns:
         The dataset.
@@ -359,14 +363,16 @@ def default_sam_dataset(
     if with_segmentation_decoder:
         label_transform = torch_em.transform.label.PerObjectDistanceTransform(
             distances=True, boundary_distances=True, directed_distances=False,
-            foreground=True, instances=True, min_size=25,
+            foreground=True, instances=True, min_size=min_size,
         )
     else:
-        label_transform = torch_em.transform.label.connected_components
+        label_transform = torch_em.transform.label.MinSizeLabelTransform(
+            min_size=min_size
+        )
 
     # Set a default sampler if none was passed.
     if sampler is None:
-        sampler = torch_em.data.sampler.MinInstanceSampler(3)
+        sampler = torch_em.data.sampler.MinInstanceSampler(3, min_size=min_size)
 
     # Check the patch shape to add a singleton if required.
     patch_shape = _update_patch_shape(
@@ -389,6 +395,11 @@ def default_sam_dataset(
         sampler=sampler, n_samples=n_samples,
         **kwargs,
     )
+
+    # TODO
+    if max_sampling_attempts is not None:
+        pass
+
     return dataset
 
 
