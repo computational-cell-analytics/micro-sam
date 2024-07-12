@@ -100,13 +100,19 @@ def run_inference_for_livecell(path, checkpoint_path, model, device, result_path
 
         image = imageio.imread(os.path.join(test_image_dir, image_id))
 
+        if for_sam:
+            image = image.astype("float32")  # functional interpolate does not like uint
+            per_tile_pp = None
+        else:
+            per_tile_pp = standardize
+
         predictions = prediction.predict_with_halo(
             input_=image,
             model=model,
             gpu_ids=[device],
             block_shape=(512, 512),
             halo=(128, 128),
-            preprocess=None if for_sam else standardize,
+            preprocess=per_tile_pp,
             disable_tqdm=True,
         )
         predictions = predictions.squeeze()
@@ -130,6 +136,8 @@ def run_inference_for_livecell(path, checkpoint_path, model, device, result_path
         "SA50": np.mean(sa50_list),
         "SA75": np.mean(sa75_list)
     }
+
+    os.makedirs(result_path, exist_ok=True)
     res_path = os.path.join(result_path, "results.csv")
     df = pd.DataFrame.from_dict([res])
     df.to_csv(res_path)

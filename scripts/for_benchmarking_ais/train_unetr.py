@@ -35,9 +35,10 @@ def main(args):
 
     if args.phase == "predict":
         checkpoint_path = os.path.join(
-            args.save_root, "checkpoints", "livecell-unetr-sam" if for_sam else "livecell-unetr", "best.pt"
+            "./" if args.save_root is None else args.save_root,
+            "checkpoints", "livecell-unetr-sam" if for_sam else "livecell-unetr", "best.pt"
         )
-        result_path = "livecell-unetr-sam" if for_sam else "livecell-unetr"
+        result_path = "results/livecell-unetr-sam" if for_sam else "results/livecell-unetr"
         run_inference_for_livecell(
             path=args.input_path,
             checkpoint_path=checkpoint_path,

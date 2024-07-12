@@ -33,7 +33,7 @@ def main(args):
         checkpoint_path = os.path.join(
             "./" if args.save_root is None else args.save_root, "checkpoints", "livecell-unet", "best.pt"
         )
-        result_path = "livecell_unet/"
+        result_path = "results/livecell_unet/"
         run_inference_for_livecell(
             path=args.input_path,
             checkpoint_path=checkpoint_path,
