@@ -1,4 +1,5 @@
 import time
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -37,6 +38,7 @@ class SemanticSamTrainer(DefaultTrainer):
         self,
         convert_inputs,
         num_classes: int,
+        dice_weight: Optional[float] = None,
         **kwargs
     ):
         assert num_classes > 1
@@ -48,6 +50,11 @@ class SemanticSamTrainer(DefaultTrainer):
         self.convert_inputs = convert_inputs
         self.num_classes = num_classes
         self.compute_ce_loss = nn.CrossEntropyLoss()
+        self.dice_weight = dice_weight
+
+        if self.dice_weight is not None:
+            assert self.dice_weight > 0 and self.dice_weight < 1, "The weight factor should lie between 0 and 1."
+
         self._kwargs = kwargs
 
     def _compute_loss(self, y, masks):
@@ -58,7 +65,11 @@ class SemanticSamTrainer(DefaultTrainer):
         # Compute cross entropy loss for the predictions
         ce_loss = self.compute_ce_loss(masks, target.squeeze(1).long())
 
-        net_loss = dice_loss + ce_loss
+        if self.dice_weight is None:
+            net_loss = dice_loss + ce_loss
+        else:
+            net_loss = self.dice_weight * dice_loss + (1 - self.dice_weight) * ce_loss
+
         return net_loss
 
     def _get_model_outputs(self, batched_inputs):

@@ -3,8 +3,6 @@ import argparse
 
 import torch
 
-from torch_em.model import UNETR
-from torch_em.loss import DiceBasedDistanceLoss
 from torch_em.data.datasets import get_livecell_loader
 from torch_em.transform.label import PerObjectDistanceTransform
 
@@ -49,21 +47,6 @@ def count_parameters(model):
 
 def finetune_livecell(args):
     """Code for finetuning SAM (using LoRA) on LIVECell
-
-    Initial observations: There's no real memory advantage actually unless it's "truly" scaled up
-    # vit_b
-    # SAM: 93M (takes ~50GB)
-    # SAM-LoRA: 4.2M (takes ~49GB)
-
-    # vit_l
-    # SAM: 312M (takes ~63GB)
-    # SAM-LoRA: 4.4M (takes ~61GB)
-
-    # vit_h
-    # SAM: 641M (takes ~73GB)
-    # SAM-LoRA: 4.7M (takes ~67GB)
-
-    # Q: Would quantization lead to better results? (eg. QLoRA / DoRA)
     """
     # override this (below) if you have some more complex set-up and need to specify the exact gpu
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -72,89 +55,49 @@ def finetune_livecell(args):
     model_type = args.model_type
     checkpoint_path = None  # override this to start training from a custom checkpoint
     patch_shape = (520, 704)  # the patch shape for training
-    n_objects_per_batch = 5  # this is the number of objects per batch that will be sampled
+    n_objects_per_batch = args.n_objects  # this is the number of objects per batch that will be sampled
     freeze_parts = args.freeze  # override this to freeze different parts of the model
-    rank = 4  # the rank
+    lora_rank = 4  # the rank for low rank adaptation
+    checkpoint_name = f"{args.model_type}/livecell_sam"
 
-    # get the trainable segment anything model
-    model = sam_training.get_trainable_sam_model(
-        model_type=model_type,
-        device=device,
-        checkpoint_path=checkpoint_path,
-        freeze=freeze_parts,
-        use_lora=True,
-        rank=rank,
-    )
-    model.to(device)
-
-    # let's get the UNETR model for automatic instance segmentation pipeline
-    unetr = UNETR(
-        backbone="sam",
-        encoder=model.sam.image_encoder,
-        out_channels=3,
-        use_sam_stats=True,
-        final_activation="Sigmoid",
-        use_skip_connection=False,
-        resize_input=True,
-    )
-    unetr.to(device)
-
-    # let's check the total number of trainable parameters
-    print(count_parameters(model))
-
-    # let's get the parameters for SAM and the decoder from UNETR
-    joint_model_params = model.parameters()
-
-    joint_model_params = [params for params in joint_model_params]  # sam parameters
-    for name, params in unetr.named_parameters():  # unetr's decoder parameters
-        if not name.startswith("encoder"):
-            joint_model_params.append(params)
-
-    optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=10)
+    # all the stuff we need for training
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
+    scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10, "verbose": True}
+    optimizer_class = torch.optim.AdamW
 
-    # this class creates all the training data for a batch (inputs, prompts and labels)
-    convert_inputs = sam_training.ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
-
-    trainer = sam_training.JointSamTrainer(
-        name="livecell_lora",
-        save_root=args.save_root,
+    # Run training.
+    sam_training.train_sam(
+        name=checkpoint_name,
+        model_type=model_type,
         train_loader=train_loader,
         val_loader=val_loader,
-        model=model,
-        optimizer=optimizer,
-        device=device,
-        lr_scheduler=scheduler,
-        logger=sam_training.JointSamLogger,
-        log_image_interval=100,
-        mixed_precision=True,
-        convert_inputs=convert_inputs,
+        early_stopping=None,
         n_objects_per_batch=n_objects_per_batch,
-        n_sub_iteration=8,
-        compile_model=False,
-        mask_prob=0.5,  # (optional) overwrite to provide the probability of using mask inputs while training
-        unetr=unetr,
-        instance_loss=DiceBasedDistanceLoss(mask_distances_in_bg=True),
-        instance_metric=DiceBasedDistanceLoss(mask_distances_in_bg=True)
+        checkpoint_path=checkpoint_path,
+        freeze=freeze_parts,
+        device=device,
+        lr=1e-5,
+        n_iterations=args.iterations,
+        save_root=args.save_root,
+        scheduler_kwargs=scheduler_kwargs,
+        optimizer_class=optimizer_class,
+        lora_rank=lora_rank,
     )
-    trainer.fit(args.iterations)
+
     if args.export_path is not None:
         checkpoint_path = os.path.join(
-            "" if args.save_root is None else args.save_root, "checkpoints", args.name, "best.pt"
+            "" if args.save_root is None else args.save_root, "checkpoints", checkpoint_name, "best.pt"
         )
         export_custom_sam_model(
-            checkpoint_path=checkpoint_path,
-            model_type=model_type,
-            save_path=args.export_path,
+            checkpoint_path=checkpoint_path, model_type=model_type, save_path=args.export_path,
         )
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LiveCELL dataset.")
+    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LIVECell dataset.")
     parser.add_argument(
         "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/livecell/",
-        help="The filepath to the LiveCELL data. If the data does not exist yet it will be downloaded."
+        help="The filepath to the LIVECell data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
@@ -175,6 +118,9 @@ def main():
     parser.add_argument(
         "--freeze", type=str, nargs="+", default=None,
         help="Which parts of the model to freeze for finetuning."
+    )
+    parser.add_argument(
+        "--n_objects", type=int, default=25, help="The number of instances (objects) per batch used for finetuning."
     )
     args = parser.parse_args()
     finetune_livecell(args)
