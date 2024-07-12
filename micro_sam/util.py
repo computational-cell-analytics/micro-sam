@@ -1010,7 +1010,6 @@ def segmentation_to_one_hot(
     masks = segmentation.copy()
     if segmentation_ids is None:
         n_ids = int(segmentation.max())
-
     else:
         assert segmentation_ids[0] != 0, "No objects were found."
 

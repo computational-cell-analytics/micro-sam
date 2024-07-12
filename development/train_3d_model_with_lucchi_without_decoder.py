@@ -175,8 +175,10 @@ def train(args):
     patch_shape = args.patch_shape
     bs = args.batch_size
     #label_transform = torch_em.transform.label.BoundaryTransform(add_binary_target=False)
-    label_transform = torch_em.transform.label.labels_to_binary
-    ndim = 3
+    label_transform = torch_em.transform.label.MinSizeLabelTransform
+    ndim = 2
+    min_size = 50
+    max_sampling_attempts = 5000
 
     if with_rois:
         data_paths, rois_dict = get_data_paths_and_rois(data_dir, min_shape=patch_shape, with_thresholds=True)
@@ -190,61 +192,29 @@ def train(args):
         raw_paths=data["train"], raw_key="raw",
         label_paths=data["train"], label_key=label_key,
         patch_shape=args.patch_shape, with_segmentation_decoder=False,
-        sampler=MinInstanceSampler(2),
+        sampler=MinInstanceSampler(2, min_size=min_size),
+        min_size=min_size,
         raw_transform=raw_transform,
         #rois=np.s_[64:, :, :],
         #n_samples=200,
     )
+    train_ds.max_sampling_attempts = max_sampling_attempts
     train_loader = get_data_loader(train_ds, shuffle=True, batch_size=2)
 
     val_ds = default_sam_dataset(
         raw_paths=data["val"], raw_key="raw",
         label_paths=data["val"], label_key=label_key,
         patch_shape=args.patch_shape, with_segmentation_decoder=False,
-        sampler=MinInstanceSampler(2),
+        sampler=MinInstanceSampler(2, min_size=min_size),
+        min_size=min_size,
         raw_transform=raw_transform,
         #rois=np.s_[64:, :, :],
         is_train=False, 
         #n_samples=25,
     )
+    val_ds.max_sampling_attempts = max_sampling_attempts
     val_loader = get_data_loader(val_ds, shuffle=True, batch_size=1)
-    # if with_rois:
-    #     train_loader = torch_em.default_segmentation_loader(
-    #         raw_paths=data["train"], raw_key="raw",
-    #         label_paths=data["train"], label_key="labels/mitochondria",
-    #         patch_shape=patch_shape, ndim=ndim, batch_size=bs,
-    #         label_transform=label_transform, raw_transform=raw_transform,
-    #         num_workers=n_workers,
-    #         rois=rois_dict["train"]
-    #         #rois=[np.s_[64:, :, :]] * len(data["train"])
-    #     )
-    #     val_loader = torch_em.default_segmentation_loader(
-    #         raw_paths=data["val"], raw_key="raw",
-    #         label_paths=data["val"], label_key="labels/mitochondria",
-    #         patch_shape=patch_shape, ndim=ndim, batch_size=bs,
-    #         label_transform=label_transform, raw_transform=raw_transform,
-    #         num_workers=n_workers,
-    #         rois=rois_dict["val"]
-    #         # rois=[np.s_[64:, :, :]] * len(data["val"])
-    #     )
-    # else:
-    #     train_loader = torch_em.default_segmentation_loader(
-    #         raw_paths=data["train"], raw_key="raw",
-    #         label_paths=data["train"], label_key=label_key,
-    #         patch_shape=patch_shape, ndim=ndim, batch_size=bs,
-    #         label_transform=label_transform, raw_transform=raw_transform,
-    #         num_workers=n_workers,
-    #     )
-    #     print("len data[val]", len(data["val"]))
-    #     val_loader = torch_em.default_segmentation_loader(
-    #         raw_paths=data["val"], raw_key="raw",
-    #         label_paths=data["val"], label_key=label_key,
-    #         patch_shape=patch_shape, ndim=ndim, batch_size=bs,
-    #         label_transform=label_transform, raw_transform=raw_transform,
-    #         num_workers=n_workers,
-    #     )
-    
-    
+
     #check_loader(train_loader, n_samples=3)
     # x,y =next(iter(train_loader))
     # print("shapes of x and y", x.shape, y.shape)

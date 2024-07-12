@@ -75,10 +75,8 @@ class LucchiSegmentationDataset(SegmentationDataset):
         raw = raw.view(image_shape)
         raw = raw.squeeze(0)
         raw = raw.repeat(1, 3, 1, 1)
-        # print("raw shape", raw.shape)
         # wanted label shape: (1, z, y, x)
         label = (label != 0).to(torch.float)
-        # print("label shape", label.shape)
         return raw, label
 
 
