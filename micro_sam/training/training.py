@@ -1,6 +1,6 @@
 import os
 from glob import glob
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import imageio.v3 as imageio
 
@@ -327,7 +327,8 @@ def default_sam_dataset(
     patch_shape: Tuple[int],
     with_segmentation_decoder: bool,
     with_channels: bool = False,
-    sampler=None,  # Type?
+    sampler: Optional[Callable] = None,
+    raw_transform: Optional[Callable] = None,
     n_samples: Optional[int] = None,
     is_train: bool = True,
     min_size: int = 25,
@@ -349,6 +350,8 @@ def default_sam_dataset(
         with_segmentation_decoder: Whether to train with additional segmentation decoder.
         with_channels: Whether the image data has RGB channels.
         sampler: A sampler to reject batches according to a given criterion.
+        raw_transform: Transformation applied to the image data.
+            If not given the data will be cast to 8bit.
         n_samples: The number of samples for this dataset.
         is_train: Whether this dataset is used for training or validation.
         min_size: Minimal object size. Smaller objects will be filtered.
@@ -359,7 +362,9 @@ def default_sam_dataset(
     """
 
     # Set the data transformations.
-    raw_transform = require_8bit
+    if raw_transform is None:
+        raw_transform = require_8bit
+
     if with_segmentation_decoder:
         label_transform = torch_em.transform.label.PerObjectDistanceTransform(
             distances=True, boundary_distances=True, directed_distances=False,
@@ -396,9 +401,12 @@ def default_sam_dataset(
         **kwargs,
     )
 
-    # TODO
     if max_sampling_attempts is not None:
-        pass
+        if isinstance(dataset, torch_em.data.concat_dataset.ConcatDataset):
+            for ds in dataset.datasets:
+                ds.max_sampling_attempts = max_sampling_attempts
+        else:
+            dataset.max_sampling_attempts = max_sampling_attempts
 
     return dataset
 
