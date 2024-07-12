@@ -1,20 +1,15 @@
-from common import get_loaders, get_default_arguments
+import os
+
+from common import get_default_arguments, run_inference_for_livecell, run_training_for_livecell
 
 import torch
 
 from torch_em.model import UNet2d
-from torch_em.loss import DiceBasedDistanceLoss
-from torch_em import default_segmentation_trainer
 from torch_em.model.unetr import SingleDeconv2DBlock
 
 
-def run_training_for_livecell(path, save_root, iterations):
-    # all the necessary stuff for training
+def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    patch_shape = (512, 512)
-    train_loader, val_loader = get_loaders(path=path, patch_shape=patch_shape)
-    loss = DiceBasedDistanceLoss(mask_distances_in_bg=True)
-
     model = UNet2d(
         in_channels=1,
         out_channels=3,
@@ -24,31 +19,28 @@ def run_training_for_livecell(path, save_root, iterations):
     )
     model.to(device)
 
-    trainer = default_segmentation_trainer(
-        name="livecell-unet",
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        device=device,
-        learning_rate=1e-4,
-        loss=loss,
-        metric=loss,
-        log_image_interval=50,
-        save_root=save_root,
-        compile_model=False,
-        mixed_precision=True,
-        scheduler_kwargs={"mode": "min", "factor": 0.9, "patience": 5}
-    )
-
-    trainer.fit(int(iterations))
-
-
-def main(args):
     if args.phase == "train":
-        run_training_for_livecell(path=args.input_path, save_root=args.save_root, iterations=args.iterations)
+        run_training_for_livecell(
+            name="livecell-unet",
+            path=args.input_path,
+            save_root=args.save_root,
+            iterations=args.iterations,
+            model=model,
+            device=device,
+        )
 
-    else:
-        raise NotImplementedError
+    if args.phase == "predict":
+        checkpoint_path = os.path.join(
+            "./" if args.save_root is None else args.save_root, "checkpoints", "livecell-unet", "best.pt"
+        )
+        result_path = "livecell_unet/"
+        run_inference_for_livecell(
+            path=args.input_path,
+            checkpoint_path=checkpoint_path,
+            model=model,
+            device=device,
+            result_path=result_path,
+        )
 
 
 if __name__ == "__main__":
