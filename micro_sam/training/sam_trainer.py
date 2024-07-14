@@ -203,11 +203,18 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         loss, mask_loss, iou_regression_loss, mean_model_iou = 0.0, 0.0, 0.0, 0.0
 
         for i in range(0, num_subiter):
+            # Pass zero as "mask_inputs" for the first iteration when mask probability is 1
+            if i == 0 and self.mask_prob == 1:
+                for inp in batched_inputs:
+                    inp["mask_inputs"] = torch.zeros((y_one_hot.shape[1], 1, 256, 256))
+
             # We do multimasking only in the first sub-iteration as we then pass single prompt
             # after the first sub-iteration, we don't do multimasking because we get multiple prompts.
-            batched_outputs = self.model(batched_inputs,
-                                         image_embeddings=image_embeddings,
-                                         multimask_output=multimask_output if i == 0 else False)
+            batched_outputs = self.model(
+                batched_inputs=batched_inputs,
+                image_embeddings=image_embeddings,
+                multimask_output=multimask_output if i == 0 else False
+            )
 
             # Compute loss for tis sub-iteration.
             net_loss, net_mask_loss, net_iou_regression_loss = self._compute_loss(batched_outputs, y_one_hot)
