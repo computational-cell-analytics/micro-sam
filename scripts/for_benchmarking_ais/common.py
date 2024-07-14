@@ -91,7 +91,7 @@ def run_inference_for_livecell(path, checkpoint_path, model, device, result_path
     # the splits are provided with the livecell dataset to reproduce the results:
     # run the inference on the entire dataset as it is.
     test_image_dir = os.path.join(path, "images", "livecell_test_images")
-    all_test_labels = glob(os.path.join(path, "annotations", "livecell_test_images", "*", "*"))
+    all_test_labels = glob(os.path.join(path, "annotations", "livecell_test_images", "*", "*"))[:10]
 
     msa_list, sa50_list, sa75_list = [], [], []
     for label_path in tqdm(all_test_labels):
@@ -110,11 +110,13 @@ def run_inference_for_livecell(path, checkpoint_path, model, device, result_path
             input_=image,
             model=model,
             gpu_ids=[device],
-            block_shape=(512, 512),
-            halo=(128, 128),
+            block_shape=(384, 384),
+            halo=(64, 64),
             preprocess=per_tile_pp,
             disable_tqdm=True,
+            output=np.zeros(image.shape)
         )
+        breakpoint()
         predictions = predictions.squeeze()
 
         fg, cdist, bdist = predictions
