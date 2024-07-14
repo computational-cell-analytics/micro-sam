@@ -17,6 +17,7 @@ from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.data.datasets.light_microscopy import get_livecell_loader
 
 import micro_sam.training as sam_training
+from micro_sam.training.util import ConvertToSemanticSamInputs
 
 from elf.evaluation import mean_segmentation_accuracy
 
@@ -83,7 +84,9 @@ def run_training_for_livecell(name, path, save_root, iterations, model, device, 
 # INFERENCE SCRIPTS
 #
 
-def run_inference_for_livecell(path, checkpoint_path, model, device, result_path, for_sam=False):
+def run_inference_for_livecell(
+    path, checkpoint_path, model, device, result_path, for_sam=False, with_semantic_sam=False,
+):
     model.load_state_dict(torch.load(checkpoint_path, map_location="cpu")["model_state"])
     model.to(device)
     model.eval()
@@ -91,7 +94,16 @@ def run_inference_for_livecell(path, checkpoint_path, model, device, result_path
     # the splits are provided with the livecell dataset to reproduce the results:
     # run the inference on the entire dataset as it is.
     test_image_dir = os.path.join(path, "images", "livecell_test_images")
-    all_test_labels = glob(os.path.join(path, "annotations", "livecell_test_images", "*", "*"))[:10]
+    all_test_labels = glob(os.path.join(path, "annotations", "livecell_test_images", "*", "*"))
+
+    def prediction_fn(net, inp):
+        convert_inputs = ConvertToSemanticSamInputs()
+        batched_inputs = convert_inputs(inp, torch.zeros_like(inp))
+        image_embeddings, batched_inputs = net.image_embeddings_oft(batched_inputs)
+        batched_outputs = net(batched_inputs, image_embeddings, multimask_output=True)
+        masks = torch.stack([output["masks"] for output in batched_outputs]).squeeze()
+        masks = masks[None]
+        return masks
 
     msa_list, sa50_list, sa75_list = [], [], []
     for label_path in tqdm(all_test_labels):
@@ -114,9 +126,9 @@ def run_inference_for_livecell(path, checkpoint_path, model, device, result_path
             halo=(64, 64),
             preprocess=per_tile_pp,
             disable_tqdm=True,
-            output=np.zeros(image.shape)
+            output=np.zeros((3, *image.shape)) if with_semantic_sam else None,
+            prediction_function=prediction_fn if with_semantic_sam else None,
         )
-        breakpoint()
         predictions = predictions.squeeze()
 
         fg, cdist, bdist = predictions

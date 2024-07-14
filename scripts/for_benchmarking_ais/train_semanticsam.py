@@ -85,6 +85,7 @@ def main(args):
             device=device,
             result_path=result_path,
             for_sam=True,
+            with_semantic_sam=True,
         )
 
 
