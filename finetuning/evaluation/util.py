@@ -219,12 +219,15 @@ def get_default_arguments():
     parser.add_argument(
         "-m", "--model", type=str, required=True, help="Provide the model type to initialize the predictor"
     )
-    parser.add_argument("-c", "--checkpoint", type=none_or_str, required=True, default=None)
+    parser.add_argument("-c", "--checkpoint", type=none_or_str, default=None)
     parser.add_argument("-e", "--experiment_folder", type=str, required=True)
     parser.add_argument("-d", "--dataset", type=str, default=None)
     parser.add_argument("--box", action="store_true", help="If passed, starts with first prompt as box")
     parser.add_argument(
         "--use_masks", action="store_true", help="To use logits masks for iterative prompting."
+    )
+    parser.add_argument(
+        "--lora_rank", type=int, default=None, help="The rank of the LoRA if LoRA model is used for inference."
     )
     args = parser.parse_args()
     return args

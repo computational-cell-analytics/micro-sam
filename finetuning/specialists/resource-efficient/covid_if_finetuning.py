@@ -80,13 +80,13 @@ def finetune_covid_if(args):
     patch_shape = (512, 512)  # the patch shape for training
     n_objects_per_batch = args.n_objects  # the number of objects per batch that will be sampled
     freeze_parts = args.freeze  # override this to freeze different parts of the model
-    checkpoint_name = f"{args.model_type}/covid_if_sam"
-
+    checkpoint_name = f"{model_type}/{args.checkpoint_name}"
     # all stuff we need for training
     train_loader, val_loader = get_dataloaders(
         patch_shape=patch_shape, data_path=args.input_path, n_images=args.n_images
     )
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
+    optimizer_class = torch.optim.AdamW
 
     # Run training
     sam_training.train_sam(
@@ -99,12 +99,13 @@ def finetune_covid_if(args):
         checkpoint_path=checkpoint_path,
         freeze=freeze_parts,
         device=device,
-        lr=1e-5,
+        lr=args.lr,
         n_epochs=args.epochs,
         save_root=args.save_root,
         scheduler_kwargs=scheduler_kwargs,
         save_every_kth_epoch=args.save_every_kth_epoch,
-
+        optimizer_class=optimizer_class,
+        lora_rank=args.lora_rank
     )
 
 
@@ -147,6 +148,15 @@ def main():
     )
     parser.add_argument(
         "--n_images", type=int, default=None, help="The number of images used for finetuning."
+    )
+    parser.add_argument(
+        "--lora_rank", type=int, default=None, help="The rank of the LoRA model."
+    )
+    parser.add_argument(
+        "--lr", type=float, default=5e-5, help="The learning rate for the optimizer. Default is 5e-5."
+    )
+    parser.add_argument(
+        "--checkpoint_name", type=str, default="covid_if_sam",
     )
     args = parser.parse_args()
     finetune_covid_if(args)
