@@ -57,12 +57,13 @@ def finetune_livecell(args):
     patch_shape = (520, 704)  # the patch shape for training
     n_objects_per_batch = args.n_objects  # this is the number of objects per batch that will be sampled
     freeze_parts = args.freeze  # override this to freeze different parts of the model
-    lora_rank = 4  # the rank for low rank adaptation
-    checkpoint_name = f"{args.model_type}/livecell_sam"
+    lora_rank = args.lora_rank  # the rank for low rank adaptation
+    checkpoint_ending = f"{lora_rank}" if lora_rank is not None else "full_ft"
+    checkpoint_name = f"{args.model_type}/livecell_sam_{checkpoint_ending}"
 
     # all the stuff we need for training
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
-    scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10, "verbose": True}
+    scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
     optimizer_class = torch.optim.AdamW
 
     # Run training.
@@ -71,7 +72,7 @@ def finetune_livecell(args):
         model_type=model_type,
         train_loader=train_loader,
         val_loader=val_loader,
-        early_stopping=None,
+        early_stopping=10,
         n_objects_per_batch=n_objects_per_batch,
         checkpoint_path=checkpoint_path,
         freeze=freeze_parts,
@@ -121,6 +122,9 @@ def main():
     )
     parser.add_argument(
         "--n_objects", type=int, default=25, help="The number of instances (objects) per batch used for finetuning."
+    )
+    parser.add_argument(
+        "--lora_rank", type=int, default=None, help="The rank for low rank adaptation."
     )
     args = parser.parse_args()
     finetune_livecell(args)
