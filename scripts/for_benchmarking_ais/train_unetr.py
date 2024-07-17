@@ -1,6 +1,6 @@
 import os
 
-from common import get_default_arguments, run_training_for_livecell, run_inference_for_livecell
+from common import get_default_arguments, run_training, run_inference
 
 import torch
 
@@ -23,8 +23,8 @@ def main(args):
     model.to(device)
 
     if args.phase == "train":
-        run_training_for_livecell(
-            name="livecell-unetr-sam" if for_sam else "livecell-unetr",
+        run_training(
+            name=f"{args.dataset}-unetr-sam" if for_sam else f"{args.dataset}-unetr",
             path=args.input_path,
             save_root=args.save_root,
             iterations=args.iterations,
@@ -36,10 +36,10 @@ def main(args):
     if args.phase == "predict":
         checkpoint_path = os.path.join(
             "./" if args.save_root is None else args.save_root,
-            "checkpoints", "livecell-unetr-sam" if for_sam else "livecell-unetr", "best.pt"
+            "checkpoints", f"{args.dataset}-unetr-sam" if for_sam else f"{args.dataset}-unetr", "best.pt"
         )
-        result_path = "results/" + "livecell-unetr-sam" if for_sam else "livecell-unetr"
-        run_inference_for_livecell(
+        result_path = "results/" + f"{args.dataset}-unetr-sam" if for_sam else f"{args.dataset}-unetr"
+        run_inference(
             path=args.input_path,
             checkpoint_path=checkpoint_path,
             model=model,
