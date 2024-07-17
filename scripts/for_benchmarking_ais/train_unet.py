@@ -27,6 +27,7 @@ def main(args):
             iterations=args.iterations,
             model=model,
             device=device,
+            dataset=args.dataset,
         )
 
     if args.phase == "predict":
@@ -40,6 +41,7 @@ def main(args):
             model=model,
             device=device,
             result_path=result_path,
+            dataset=args.dataset,
         )
 
 
