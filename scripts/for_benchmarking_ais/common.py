@@ -63,20 +63,20 @@ def get_loaders(path, patch_shape, dataset, for_sam=False):
         # Let's get the number of samples extracted, to set the "n_samples" value
         # This is done to avoid the time taken to save checkpoints over fewer training images.
         _loader = get_covid_if_loader(
-            path=data_path, patch_shape=patch_shape, batch_size=2, sample_range=train_volumes
+            path=data_path, patch_shape=patch_shape, batch_size=1, sample_range=train_volumes
         )
 
         print(
-            f"Found {len(_loader)} samples for training. ",
-            "Hence, we will use {0} samples for training.".format(100 if len(_loader) < 50 else len(_loader))
+            f"Found {len(_loader)} samples for training.",
+            "Hence, we will use {0} samples for training.".format(50 if len(_loader) < 50 else len(_loader))
         )
 
         # Finally, let's get the dataloaders
         train_loader = get_covid_if_loader(
             path=data_path,
-            batch_size=2,
+            batch_size=1,
             sample_range=train_volumes,
-            n_samples=100 if len(_loader) < 50 else None,
+            n_samples=50 if len(_loader) < 50 else None,
             **kwargs
         )
         val_loader = get_covid_if_loader(

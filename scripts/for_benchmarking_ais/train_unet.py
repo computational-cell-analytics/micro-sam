@@ -9,6 +9,7 @@ from torch_em.model.unetr import SingleDeconv2DBlock
 
 
 def main(args):
+    dataset = args.dataset
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = UNet2d(
         in_channels=1,
@@ -21,27 +22,27 @@ def main(args):
 
     if args.phase == "train":
         run_training(
-            name=f"{args.dataset}-unet",
+            name=f"{dataset}-unet",
             path=args.input_path,
             save_root=args.save_root,
             iterations=args.iterations,
             model=model,
             device=device,
-            dataset=args.dataset,
+            dataset=dataset,
         )
 
     if args.phase == "predict":
         checkpoint_path = os.path.join(
-            "./" if args.save_root is None else args.save_root, "checkpoints", f"{args.dataset}-unet", "best.pt"
+            "./" if args.save_root is None else args.save_root, "checkpoints", f"{dataset}-unet", "best.pt"
         )
-        result_path = f"results/{args.dataset}_unet/"
+        result_path = f"results/{dataset}_unet/"
         run_inference(
             path=args.input_path,
             checkpoint_path=checkpoint_path,
             model=model,
             device=device,
             result_path=result_path,
-            dataset=args.dataset,
+            dataset=dataset,
         )
 
 

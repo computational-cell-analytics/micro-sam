@@ -8,6 +8,7 @@ from torch_em.model import UNETR
 
 
 def main(args):
+    dataset = args.dataset
     for_sam = args.sam
     device = "cuda" if torch.cuda.is_available() else "cpu"
     checkpoint_path = "/scratch-grete/share/cidas/cca/models/sam/sam_vit_l_0b3195.pth" if for_sam else None
@@ -24,21 +25,22 @@ def main(args):
 
     if args.phase == "train":
         run_training(
-            name=f"{args.dataset}-unetr-sam" if for_sam else f"{args.dataset}-unetr",
+            name=f"{dataset}-unetr-sam" if for_sam else f"{dataset}-unetr",
             path=args.input_path,
             save_root=args.save_root,
             iterations=args.iterations,
             model=model,
             device=device,
             for_sam=for_sam,
+            dataset=dataset,
         )
 
     if args.phase == "predict":
         checkpoint_path = os.path.join(
             "./" if args.save_root is None else args.save_root,
-            "checkpoints", f"{args.dataset}-unetr-sam" if for_sam else f"{args.dataset}-unetr", "best.pt"
+            "checkpoints", f"{dataset}-unetr-sam" if for_sam else f"{dataset}-unetr", "best.pt"
         )
-        result_path = "results/" + f"{args.dataset}-unetr-sam" if for_sam else f"{args.dataset}-unetr"
+        result_path = "results/" + f"{dataset}-unetr-sam" if for_sam else f"{dataset}-unetr"
         run_inference(
             path=args.input_path,
             checkpoint_path=checkpoint_path,
@@ -46,6 +48,7 @@ def main(args):
             device=device,
             result_path=result_path,
             for_sam=for_sam,
+            dataset=dataset,
         )
 
 
