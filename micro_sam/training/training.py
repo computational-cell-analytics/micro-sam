@@ -296,7 +296,6 @@ def _update_patch_shape(patch_shape, raw_paths, raw_key, with_channels):
         path = raw_paths[0]
     else:
         path = raw_paths
-    assert isinstance(raw_paths, (str, os.PathLike))
 
     # Check the underlying data dimensionality.
     if raw_key is None:  # If no key is given then we assume it's an image file.
