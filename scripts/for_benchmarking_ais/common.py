@@ -116,7 +116,7 @@ def run_training(name, path, save_root, iterations, model, device, dataset, for_
         train_loader=train_loader,
         val_loader=val_loader,
         device=device,
-        learning_rate=1e-4,
+        learning_rate=1e-5,
         loss=loss,
         metric=loss,
         log_image_interval=50,

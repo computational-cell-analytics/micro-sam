@@ -177,3 +177,6 @@ cython_debug/
 # Torch-em stuff
 checkpoints/
 logs/
+
+# "gpu_jobs" folder where slurm batch submission scripts are saved
+gpu_jobs/

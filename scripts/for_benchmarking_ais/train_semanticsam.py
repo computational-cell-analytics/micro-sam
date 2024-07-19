@@ -12,7 +12,7 @@ from common import get_default_arguments, get_loaders, run_inference
 
 def run_semantic_training(path, save_root, iterations, model, device, model_type, num_classes, dataset):
     # all the stuff we need for training
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=5, verbose=True)
 
     patch_shape = (512, 512)
@@ -70,6 +70,7 @@ def main(args):
             device=device,
             model_type=model_type,
             num_classes=num_classes,
+            dataset=args.dataset,
         )
 
     if args.phase == "predict":
@@ -86,6 +87,7 @@ def main(args):
             result_path=result_path,
             for_sam=True,
             with_semantic_sam=True,
+            dataset=args.dataset,
         )
 
 
