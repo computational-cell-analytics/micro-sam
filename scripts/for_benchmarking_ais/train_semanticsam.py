@@ -5,12 +5,15 @@ import torch
 from torch_em.loss import DiceBasedDistanceLoss
 
 import micro_sam.training as sam_training
+from micro_sam.training.trainable_sam import TrainableSAM
 from micro_sam.training.util import ConvertToSemanticSamInputs
+
+from segment_anything import sam_model_registry
 
 from common import get_default_arguments, get_loaders, run_inference
 
 
-def run_semantic_training(path, save_root, iterations, model, device, model_type, num_classes, dataset):
+def run_semantic_training(path, save_root, iterations, model, device, for_sam, num_classes, dataset):
     # all the stuff we need for training
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=5, verbose=True)
@@ -21,7 +24,7 @@ def run_semantic_training(path, save_root, iterations, model, device, model_type
     # this class creates all the training data for a batch (inputs, prompts and labels)
     convert_inputs = ConvertToSemanticSamInputs()
 
-    checkpoint_name = f"{model_type}/{dataset}_semanticsam"
+    checkpoint_name = f"{dataset}_semanticsam" + ("-sam" if for_sam else "-scratch")
 
     # the trainer which performs the semantic segmentation training and validation (implemented using "torch_em")
     trainer = sam_training.SemanticMapsSamTrainer(
@@ -51,14 +54,20 @@ def main(args):
     num_classes = 3
     checkpoint_path = None
 
-    # get the trainable segment anything model
-    model = sam_training.get_trainable_sam_model(
-        model_type=model_type,
-        device=device,
-        checkpoint_path=checkpoint_path,
-        flexible_load_checkpoint=True,
-        num_multimask_outputs=num_classes,
-    )
+    if args.sam:
+        # This model is always initializes with pretrained SAM weights.
+        model = sam_training.get_trainable_sam_model(
+            model_type=model_type,
+            device=device,
+            checkpoint_path=checkpoint_path,
+            flexible_load_checkpoint=True,
+            num_multimask_outputs=num_classes,
+        )
+    else:
+        # This model is initialized without the pretrained SAM weights.
+        sam = sam_model_registry[model_type]()
+        model = TrainableSAM(sam)
+
     model.to(device)
 
     if args.phase == "train":
@@ -68,7 +77,7 @@ def main(args):
             iterations=args.iterations,
             model=model,
             device=device,
-            model_type=model_type,
+            for_sam=args.sam,
             num_classes=num_classes,
             dataset=args.dataset,
         )

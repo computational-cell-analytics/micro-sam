@@ -123,7 +123,7 @@ def run_training(name, path, save_root, iterations, model, device, dataset, for_
         save_root=save_root,
         compile_model=False,
         mixed_precision=True,
-        scheduler_kwargs={"mode": "min", "factor": 0.9, "patience": 5}
+        scheduler_kwargs={"mode": "min", "factor": 0.9, "patience": 5, "verbose": True},
     )
 
     trainer.fit(int(iterations))
