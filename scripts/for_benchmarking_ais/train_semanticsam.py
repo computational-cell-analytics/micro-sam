@@ -16,7 +16,9 @@ from common import get_default_arguments, get_loaders, run_inference
 def run_semantic_training(path, save_root, iterations, model, device, for_sam, num_classes, dataset):
     # all the stuff we need for training
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=5, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", factor=0.9, verbose=True, patience=10 if dataset.startswith("covid_if") else 5,
+    )
 
     patch_shape = (512, 512)
     train_loader, val_loader = get_loaders(path=path, patch_shape=patch_shape, dataset=dataset, for_sam=True)
