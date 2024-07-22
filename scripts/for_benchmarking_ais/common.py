@@ -178,8 +178,8 @@ def run_inference(
                 labels = f["labels/cells/s0"][:]
 
         if for_sam:
-            image = image.astype("float32")  # functional interpolate does not like uint
-            per_tile_pp = None
+            image = image.astype("float32")  # functional interpolate cannot work with uint.
+            per_tile_pp = covid_if_raw_trafo if dataset.startswith("covid_if") else None
         else:
             per_tile_pp = standardize
 

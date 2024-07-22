@@ -50,11 +50,13 @@ def run_semantic_training(path, save_root, iterations, model, device, for_sam, n
 def main(args):
     # training settings:
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    for_sam = args.sam
+    dataset = args.dataset
     model_type = "vit_l"
     num_classes = 3
     checkpoint_path = None
 
-    if args.sam:
+    if for_sam:
         # This model is always initializes with pretrained SAM weights.
         model = sam_training.get_trainable_sam_model(
             model_type=model_type,
@@ -77,17 +79,17 @@ def main(args):
             iterations=args.iterations,
             model=model,
             device=device,
-            for_sam=args.sam,
+            for_sam=for_sam,
             num_classes=num_classes,
-            dataset=args.dataset,
+            dataset=dataset,
         )
 
     if args.phase == "predict":
         checkpoint_path = os.path.join(
             "./" if args.save_root is None else args.save_root,
-            "checkpoints", f"{model_type}/{args.dataset}_semanticsam", "best.pt"
+            "checkpoints", f"{dataset}_semanticsam-sam" if for_sam else f"{dataset}_semanticsam-scratch", "best.pt"
         )
-        result_path = f"results/{args.dataset}-semanticsam"
+        result_path = f"results/{dataset}-semanticsam"
         run_inference(
             path=args.input_path,
             checkpoint_path=checkpoint_path,
@@ -96,7 +98,7 @@ def main(args):
             result_path=result_path,
             for_sam=True,
             with_semantic_sam=True,
-            dataset=args.dataset,
+            dataset=dataset,
         )
 
 

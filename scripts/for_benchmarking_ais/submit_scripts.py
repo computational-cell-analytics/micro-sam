@@ -57,7 +57,7 @@ def _get_batch_script(tmp_folder):
 
 def _submit_to_slurm(tmp_folder):
     save_root = "/scratch/share/cidas/cca/models/micro-sam/ais_benchmarking/"
-    phase = "train"  # this can be updated to "predict" to run the evaluation.
+    phase = "predict"  # this can be updated to "train" / "predict" to run the respective scripts.
 
     scripts = ["train_unet", "train_unetr", "train_semanticsam"]
     datasets = ["livecell", "covid_if-1", "covid_if-2", "covid_if-5", "covid_if-10"]

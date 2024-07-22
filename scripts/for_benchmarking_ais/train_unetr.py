@@ -7,11 +7,14 @@ import torch
 from torch_em.model import UNETR
 
 
+SAM_PRETRAINED = "/scratch-grete/share/cidas/cca/models/sam/sam_vit_l_0b3195.pth"
+
+
 def main(args):
     dataset = args.dataset
     for_sam = args.sam
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    checkpoint_path = "/scratch-grete/share/cidas/cca/models/sam/sam_vit_l_0b3195.pth" if for_sam else None
+    checkpoint_path = SAM_PRETRAINED if for_sam and args.phase == "train" else None
 
     model = UNETR(
         encoder="vit_l",
@@ -36,14 +39,14 @@ def main(args):
         )
 
     if args.phase == "predict":
-        checkpoint_path = os.path.join(
+        ckpt_path = os.path.join(
             "./" if args.save_root is None else args.save_root,
             "checkpoints", f"{dataset}-unetr-sam" if for_sam else f"{dataset}-unetr", "best.pt"
         )
         result_path = "results/" + f"{dataset}-unetr-sam" if for_sam else f"{dataset}-unetr"
         run_inference(
             path=args.input_path,
-            checkpoint_path=checkpoint_path,
+            checkpoint_path=ckpt_path,
             model=model,
             device=device,
             result_path=result_path,
