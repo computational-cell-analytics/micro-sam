@@ -20,12 +20,11 @@ class JointSamTrainer(SamTrainer):
     for details on its implementation.
 
     Args:
-        unetr: The UNet-style model with vision transformer as the image encoder. Required to perform *AIS.
+        unetr: The UNet-style model with vision transformer as the image encoder.
+            Required to perform automatic instance segmentation.
         instance_loss: The loss to compare the predictions (for instance segmentation) and the targets.
         instance_metric: The metric to compare the predictions and the targets.
         kwargs: The keyword arguments of the `SamTrainer` (and `DefaultTrainer`) class.
-
-    NOTE: *AIS: Automatic Instance Segmentation
     """
     def __init__(
         self,
