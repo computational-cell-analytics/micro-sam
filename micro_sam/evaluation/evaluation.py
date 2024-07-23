@@ -88,6 +88,7 @@ def run_evaluation_for_iterative_prompting(
         prediction_root: The folder with the iterative prompt-based instance segmentations to evaluate.
         experiment_folder: The folder where all the experiment results are stored.
         start_with_box_prompt: Whether to evaluate on experiments with iterative prompting starting with box.
+        overwrite_results: Whether to overwrite the results to update them with the new evaluation run.
 
     Returns:
         A DataFrame that contains the evaluation results.

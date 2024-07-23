@@ -227,7 +227,8 @@ class ConvertToSamInputs:
 
 
 class ConvertToSemanticSamInputs:
-    """
+    """Convert outputs of data loader to the expected batched inputs of the SegmentAnything model
+    for semantic segmentation.
     """
     def __call__(self, x, y):
         """Convert the outputs of dataloader to the batched format of inputs expected by SAM.

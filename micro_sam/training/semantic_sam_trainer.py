@@ -9,6 +9,14 @@ from torch_em.trainer import DefaultTrainer
 
 
 class CustomDiceLoss(nn.Module):
+    """Loss for computing dice over one-hot labels.
+
+    Expects prediction and target with `num_classes` channels: the number of classes for semantic segmentation.
+
+    Args:
+        num_classes: The number of classes for semantic segmentation (including background class).
+        softmax: Whether to use softmax over the predictions.
+    """
     def __init__(self, num_classes: int, softmax: bool = True) -> None:
         super().__init__()
         self.num_classes = num_classes
@@ -32,7 +40,18 @@ class CustomDiceLoss(nn.Module):
 
 
 class SemanticSamTrainer(DefaultTrainer):
-    """
+    """Trainer class for training the Segment Anything model for semantic segmentation.
+
+    This class is derived from `torch_em.trainer.DefaultTrainer`.
+    Check out https://github.com/constantinpape/torch-em/blob/main/torch_em/trainer/default_trainer.py
+    for details on its usage and implementation.
+
+    Args:
+        convert_inputs: The class that converts outputs of the dataloader to the expected input format of SAM.
+            The class `micro_sam.training.util.ConvertToSemanticSamInputs` can be used here.
+        num_classes: The number of classes for semantic segmentation (including the background class).
+        dice_weight: The weighing for the dice loss in the combined dice-cross entropy loss function.
+        kwargs: The keyword arguments of the DefaultTrainer super class.
     """
     def __init__(
         self,
@@ -58,6 +77,8 @@ class SemanticSamTrainer(DefaultTrainer):
         self._kwargs = kwargs
 
     def _compute_loss(self, y, masks):
+        """Compute the combined (weighted) dice loss and cross-entropy loss between the prediction and target.
+        """
         target = y.to(self.device, non_blocking=True)
         # Compute dice loss for the predictions
         dice_loss = self.loss(masks, target)
@@ -73,6 +94,8 @@ class SemanticSamTrainer(DefaultTrainer):
         return net_loss
 
     def _get_model_outputs(self, batched_inputs):
+        """Get the predictions from the model.
+        """
         # Precompute the image embeddings if the model exposes it as functionality.
         if hasattr(self.model, "image_embeddings_oft"):
             image_embeddings, batched_inputs = self.model.image_embeddings_oft(batched_inputs)

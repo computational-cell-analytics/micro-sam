@@ -56,6 +56,7 @@ def mask_data_to_segmentation(
             object in the output will be mapped to zero (the background value).
         min_object_size: The minimal size of an object in pixels.
         max_object_size: The maximal size of an object in pixels.
+
     Returns:
         The instance segmentation.
     """

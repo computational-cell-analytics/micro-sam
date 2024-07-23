@@ -13,6 +13,20 @@ from torch_em.trainer.tensorboard_logger import normalize_im
 
 
 class JointSamTrainer(SamTrainer):
+    """Trainer class for jointly training the Segment Anything model with an additional convolutional decoder.
+
+    This class is inherited from `SamTrainer`.
+    Check out https://github.com/computational-cell-analytics/micro-sam/blob/master/micro_sam/training/sam_trainer.py
+    for details on its implementation.
+
+    Args:
+        unetr: The UNet-style model with vision transformer as the image encoder. Required to perform *AIS.
+        instance_loss: The loss to compare the predictions (for instance segmentation) and the targets.
+        instance_metric: The metric to compare the predictions and the targets.
+        kwargs: The keyword arguments of the `SamTrainer` (and `DefaultTrainer`) class.
+
+    NOTE: *AIS: Automatic Instance Segmentation
+    """
     def __init__(
         self,
         unetr: torch.nn.Module,
@@ -60,6 +74,9 @@ class JointSamTrainer(SamTrainer):
         return save_dict
 
     def _instance_iteration(self, x, y, metric_for_val=False):
+        """Perform the segmentation of distance maps and
+        compute the loss (and metric) between the prediction and target.
+        """
         outputs = self.unetr(x.to(self.device))
         loss = self.instance_loss(outputs, y.to(self.device))
         if metric_for_val:

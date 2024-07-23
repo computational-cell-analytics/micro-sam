@@ -422,7 +422,7 @@ def run_livecell_inference() -> None:
 
 
 def run_livecell_evaluation() -> None:
-    """Run LiveCELL evaluation with command line tool."""
+    """Run LIVECell evaluation with command line tool."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "-i", "--input", required=True, help="Provide the data directory for LIVECell Dataset"
