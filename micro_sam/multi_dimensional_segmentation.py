@@ -5,14 +5,17 @@ import os
 from typing import Optional, Union, Tuple
 
 import numpy as np
-import nifty
-import elf.tracking.tracking_utils as track_utils
-import elf.segmentation as seg_utils
 
-from segment_anything.predictor import SamPredictor
+import nifty
+
+import elf.segmentation as seg_utils
+import elf.tracking.tracking_utils as track_utils
+
 from scipy.ndimage import binary_closing
 from skimage.measure import label, regionprops
 from skimage.segmentation import relabel_sequential
+
+from segment_anything.predictor import SamPredictor
 
 try:
     from napari.utils import progress as tqdm
@@ -20,8 +23,8 @@ except ImportError:
     from tqdm import tqdm
 
 from . import util
-from .instance_segmentation import AMGBase, mask_data_to_segmentation
 from .prompt_based_segmentation import segment_from_mask
+from .instance_segmentation import AMGBase, mask_data_to_segmentation
 
 PROJECTION_MODES = ("box", "mask", "points", "points_and_mask", "single_point")
 

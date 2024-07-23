@@ -2,6 +2,7 @@ from typing import Optional, Tuple, Union
 
 import napari
 import numpy as np
+
 import torch
 
 from ._annotator import _AnnotatorBase

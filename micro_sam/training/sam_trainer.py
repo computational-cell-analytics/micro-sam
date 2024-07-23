@@ -5,10 +5,11 @@ import warnings
 from typing import Optional
 
 import numpy as np
-import torch
-import torch_em
 
+import torch
 from torchvision.utils import make_grid
+
+import torch_em
 from torch_em.trainer.logger_base import TorchEmLogger
 
 from ..prompt_generators import PromptGeneratorBase, IterativePromptGenerator

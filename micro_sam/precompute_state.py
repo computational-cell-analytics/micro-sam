@@ -3,16 +3,17 @@
 
 import os
 import pickle
-
-from functools import partial
 from glob import glob
 from pathlib import Path
+from functools import partial
 from typing import Optional, Tuple, Union, List
 
 import h5py
 import numpy as np
+
 import torch
 import torch.nn as nn
+
 from segment_anything.predictor import SamPredictor
 
 try:

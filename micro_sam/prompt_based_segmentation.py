@@ -6,15 +6,18 @@ import warnings
 from typing import Optional, Tuple
 
 import numpy as np
-import torch
-from nifty.tools import blocking
-from skimage.feature import peak_local_max
 from skimage.filters import gaussian
+from skimage.feature import peak_local_max
 from skimage.segmentation import find_boundaries
 from scipy.ndimage import distance_transform_edt
 
+import torch
+
+from nifty.tools import blocking
+
 from segment_anything.predictor import SamPredictor
 from segment_anything.utils.transforms import ResizeLongestSide
+
 from . import util
 
 
