@@ -15,10 +15,7 @@ class TrainableSAM(nn.Module):
     Args:
         sam: The SegmentAnything Model.
     """
-    def __init__(
-        self,
-        sam: Sam,
-    ) -> None:
+    def __init__(self, sam: Sam) -> None:
         super().__init__()
         self.sam = sam
         self.transform = ResizeLongestSide(sam.image_encoder.img_size)
@@ -62,10 +59,7 @@ class TrainableSAM(nn.Module):
 
     # batched inputs follow the same syntax as the input to sam.forward
     def forward(
-        self,
-        batched_inputs: List[Dict[str, Any]],
-        image_embeddings: torch.Tensor,
-        multimask_output: bool = False,
+        self, batched_inputs: List[Dict[str, Any]], image_embeddings: torch.Tensor, multimask_output: bool = False,
     ) -> List[Dict[str, Any]]:
         """Forward pass.
 

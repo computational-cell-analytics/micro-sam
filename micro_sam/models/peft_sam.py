@@ -18,6 +18,10 @@ class LoRASurgery(nn.Module):
     qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
     q, k, v = qkv.unbind(0)
     ```
+
+    Args:
+        rank: The rank of the decomposition matrices for updating weights in each attention layer.
+        block: The chosen attention blocks for implementing lora.
     """
     def __init__(
         self,

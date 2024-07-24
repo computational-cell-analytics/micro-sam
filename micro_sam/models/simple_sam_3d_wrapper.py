@@ -16,7 +16,6 @@ def get_simple_sam_3d_model(
     model_type="vit_b",
     checkpoint_path=None,
 ):
-
     _, sam = get_sam_model(
         model_type=model_type,
         device=device,
