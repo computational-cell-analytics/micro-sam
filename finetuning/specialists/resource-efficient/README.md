@@ -33,7 +33,7 @@ Fixed parameters:
 - training and validation batch size - `1`
 - minimum number of training "samples" for training on the provided images - min. **`50`** (oversample while min. 50 training samples not found) (this is done to avoid the exhaustive time constraints while training with only 1 training sample)
 - learning rate: `1e-5`
-- optimizer: `Adam`
+- optimizer: `AdamW`
 - lr scheduler: `ReduceLRonPlateau`
 - early stopping: `10`
 - patch shape: `(512, 512)`
