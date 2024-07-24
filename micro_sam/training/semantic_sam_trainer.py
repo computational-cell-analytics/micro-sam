@@ -43,9 +43,13 @@ class SemanticSamTrainer(DefaultTrainer):
     ):
         assert num_classes > 1
 
-        loss = CustomDiceLoss(num_classes=num_classes)
-        metric = CustomDiceLoss(num_classes=num_classes)
-        super().__init__(loss=loss, metric=metric, **kwargs)
+        if "loss" not in kwargs:
+            kwargs["loss"] = CustomDiceLoss(num_classes=num_classes)
+
+        if "metric" not in kwargs:
+            kwargs["metric"] = CustomDiceLoss(num_classes=num_classes)
+
+        super().__init__(**kwargs)
 
         self.convert_inputs = convert_inputs
         self.num_classes = num_classes
@@ -141,6 +145,18 @@ class SemanticSamTrainer(DefaultTrainer):
         print(f"The Average Validation Metric Score for the Current Epoch is {dice_metric}")
 
         if self.logger is not None:
-            self.logger.log_validation(self._iteration, metric_val, loss_val, x, y, torch.softmax(masks, dim=1))
+            self.logger.log_validation(
+                self._iteration, metric_val, loss_val, x, y, torch.softmax(masks, dim=1)
+            )
 
         return metric_val
+
+
+class SemanticMapsSamTrainer(SemanticSamTrainer):
+    def _compute_loss(self, y, masks):
+        target = y.to(self.device, non_blocking=True)
+
+        # Compute loss for the predictions
+        net_loss = self.loss(target, masks)
+
+        return net_loss
