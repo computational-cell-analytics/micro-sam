@@ -12,17 +12,14 @@ import imageio.v3 as imageio
 
 
 ALL_SCRIPTS = [
-    # "../../evaluation/precompute_embeddings",
-    # "../../evaluation/iterative_prompting",
+    "../../evaluation/precompute_embeddings",
+    "../../evaluation/iterative_prompting",
     "../../evaluation/evaluate_amg",
     "../../evaluation/evaluate_instance_segmentation"
 ]
 
-ROOT = "/scratch/usr/nimanwai/experiments/resource-efficient-finetuning/"  # for hlrn
-# ROOT = "/scratch/users/archit/experiments/"  # for scc
-
-DATA_DIR = "/scratch/projects/nim00007/sam/data/covid_if/"  # for hlrn
-# DATA_DIR = "/scratch/users/archit/data/covid-if"  # for scc
+DATA_DIR = "/scratch/projects/nim00007/sam/data/covid_if"
+ROOT = "/scratch/share/cidas/cca/experiments/resource-efficient-finetuning/"
 
 
 def process_covid_if(input_path):
@@ -64,22 +61,9 @@ def process_covid_if(input_path):
 
 
 def write_slurm_scripts(
-    inference_setup, env_name, checkpoint, model_type, experiment_folder, out_path
+    inference_setup, env_name, checkpoint, model_type, experiment_folder, out_path, lora,
 ):
-    on_scc = False
-    if on_scc:
-        batch_script = f"""#!/bin/bash
-#SBATCH -c 8
-#SBATCH --mem 16G
-#SBATCH -t 2-00:00:00
-#SBATCH -p gpu
-#SBATCH -G v100:1
-#SBATCH --job-name={Path(inference_setup).stem}
-
-source activate {env_name} \n"""
-
-    else:
-        batch_script = f"""#!/bin/bash
+    batch_script = f"""#!/bin/bash
 #SBATCH -c 8
 #SBATCH --mem 16G
 #SBATCH -t 2-00:00:00
@@ -91,6 +75,11 @@ source activate {env_name} \n"""
 
     # python script
     batch_script += f"python {inference_setup}.py -c {checkpoint} -m {model_type} -e {experiment_folder} -d covid_if "
+
+    # Whether the model was trained with LoRA
+    # NOTE: We use rank 4 for LoRA.
+    if lora:
+        batch_script += "--lora_rank 4"
 
     _op = out_path[:-3] + f"_{Path(inference_setup).stem}.sh"
 
@@ -109,13 +98,10 @@ source activate {env_name} \n"""
 def get_batch_script_names(tmp_folder):
     tmp_folder = os.path.expanduser(tmp_folder)
     os.makedirs(tmp_folder, exist_ok=True)
-
     script_name = "micro-sam-inference"
-
     dt = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
     tmp_name = script_name + dt
     batch_script = os.path.join(tmp_folder, f"{tmp_name}.sh")
-
     return batch_script
 
 
@@ -148,9 +134,9 @@ def run_slurm_scripts(model_type, checkpoint, experiment_folder, scripts=ALL_SCR
             job_id.append(re.findall(r'\d+', cmd_out.stdout)[0])
 
 
-def main(args):
+def main():
     # preprocess the data
-    process_covid_if(input_path=args.input_path)
+    process_covid_if(input_path=DATA_DIR)
 
     # results on vanilla models
     run_slurm_scripts(
@@ -161,8 +147,7 @@ def main(args):
     )
 
     # results on generalist models
-    # vit_b_lm_path = "/scratch/users/archit/micro-sam/vit_b/lm_generalist/best.pt"  # on scc
-    vit_b_lm_path = "/scratch/usr/nimanwai/micro-sam/checkpoints/vit_b/lm_generalist_sam/best.pt"  # on hlrn
+    vit_b_lm_path = "/scratch/usr/nimanwai/micro-sam/checkpoints/vit_b/lm_generalist_sam/best.pt"
     run_slurm_scripts(
         model_type="vit_b",
         checkpoint=vit_b_lm_path,
@@ -178,7 +163,7 @@ def main(args):
     ]
 
     for checkpoint_path in all_checkpoint_paths:
-        # NOTE: run this for vit_b
+        # NOTE: We run the inference only for `vit_b` models. Remove this to run for `vit_t` models as well.
         _searcher = checkpoint_path.find("vit_b")
         if _searcher == -1:
             continue
@@ -192,8 +177,4 @@ def main(args):
 
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-i", "--input_path", type=str, default=DATA_DIR)
-    args = parser.parse_args()
-    main(args)
+    main()

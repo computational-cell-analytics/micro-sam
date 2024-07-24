@@ -8,9 +8,9 @@ TLDR: Finetuning ViT Base (`vit_b`) is the best bet on most workstation / cluste
 
 ## Available Resource Combinations:
 - `medium` (CPU - SCC)
-- `gtx1080`: (GPU - SCC) 8GB
-- `rtx5000`: (GPU - SCC) 16GB
-- `v100`: (GPU - SCC) 32GB
+- `GTX1080`: (GPU - SCC) 8GB
+- `RTX5000`: (GPU - SCC) 16GB
+- `V100`: (GPU - SCC) 32GB
 
 ## Experimental Combinations:
 - `vit_t` / `vit_b` (ideally, fewer the parameters, the better for our use-case here)
@@ -37,25 +37,25 @@ Fixed parameters:
 - lr scheduler: `ReduceLRonPlateau`
 - early stopping: `10`
 - patch shape: `(512, 512)`
-- choice of models: `vit_t` / `vit_b`
+- choice of models: `vit_t` / `vit_b` / `vit_t_lm` / `vit_b_lm`
 
 ### GPU Resources
 
 (32GB CPU memory, 8 CPU cores)
 
-1. `gtx1080`:
+1. `GTX1080`:
     - `vit_t`: finetune all layers
         - `n_objects`: 5
     - `vit_b`: freeze `image_encoder`
         - `n_objects`: 10
 
-2. `rtx5000`:
+2. `RTX5000`:
     - `vit_t`: (finetune all layers)
         - `n_objects`: 20
     - `vit_b`: (finetune all layers)
         - `n_objects`: 10
 
-3. `v100`:
+3. `V100`:
     - `vit_t`: (finetune all layers)
         - `n_objects`: 45
     - `vit_b`: (finetune all layers)
@@ -91,7 +91,8 @@ All jobs are tested on `medium` partition.
 
 
 
- ## Results:
+<!-- NOTE: The commented results below are from "v2" version of `micro-sam`.-->
+ <!-- ## Results:
 
 | Resource | Finetuned Model        | Number of Images | Best Epoch | Train Time *(in s)* |
 |----------|------------------------|------------------|------------|------------|
@@ -134,4 +135,82 @@ All jobs are tested on `medium` partition.
 | cpu64g  | vit_b_lm (freeze None) | 1                 | 25         | 23291.25   |
 | cpu64g  | vit_b_lm (freeze None) | 2                 | 41         | 40262.73   |
 | cpu64g  | vit_b_lm (freeze None) | 5                 | 33         | 33137.21   |
-| cpu64g  | vit_b_lm (freeze None) | 10                | 37         | 47490.61   |
+| cpu64g  | vit_b_lm (freeze None) | 10                | 37         | 47490.61   | -->
+
+
+ ## Results:
+
+| Resource | Finetuned Model            | Number of Images | Best Epoch | Train Time *(in s)* |
+|----------|----------------------------|------------------|------------|----|
+| V100     | vit_b (Full Finetuning)    | 1                |            |    |
+| V100     | vit_b (Full Finetuning)    | 2                |            |    |
+| V100     | vit_b (Full Finetuning)    | 5                |            |    |
+| V100     | vit_b (Full Finetuning)    | 10               |            |    |
+| V100     | vit_b (LoRA)               | 1                |            |    |
+| V100     | vit_b (LoRA)               | 2                |            |    |
+| V100     | vit_b (LoRA)               | 5                |            |    |
+| V100     | vit_b (LoRA)               | 10               |            |    |
+| V100     | vit_b_lm (Full Finetuning)  | 1                |          |     |
+| V100     | vit_b_lm (Full Finetuning)  | 2                |          |     |
+| V100     | vit_b_lm (Full Finetuning)  | 5                |          |     |
+| V100     | vit_b_lm (Full Finetuning)  | 10               |          |     |
+| V100     | vit_b_lm (LoRA)            | 1                |          |     |
+| V100     | vit_b_lm (LoRA)            | 2                |          |     |
+| V100     | vit_b_lm (LoRA)            | 5                |          |     |
+| V100     | vit_b_lm (LoRA)            | 10               |          |     |
+| RTX5000  | vit_b (Full Finetuning)    | 1                |         |    |
+| RTX5000  | vit_b (Full Finetuning)    | 2                |         |    |
+| RTX5000  | vit_b (Full Finetuning)    | 5                |         |    |
+| RTX5000  | vit_b (Full Finetuning)    | 10               |         |    |
+| RTX5000  | vit_b (LoRA)    | 1                |         |    |
+| RTX5000  | vit_b (LoRA)    | 2                |         |    |
+| RTX5000  | vit_b (LoRA)    | 5                |         |    |
+| RTX5000  | vit_b (LoRA)    | 10               |         |    |
+| RTX5000  | vit_b_lm (Full Finetuning) | 1                |          |    |
+| RTX5000  | vit_b_lm (Full Finetuning) | 2                |          |    |
+| RTX5000  | vit_b_lm (Full Finetuning) | 5                |          |    |
+| RTX5000  | vit_b_lm (Full Finetuning) | 10               |          |    |
+| RTX5000  | vit_b_lm (LoRA) | 1                |         |    |
+| RTX5000  | vit_b_lm (LoRA) | 2                |         |    |
+| RTX5000  | vit_b_lm (LoRA) | 5                |         |    |
+| RTX5000  | vit_b_lm (LoRA) | 10               |         |    |
+| GTX1080  | vit_b (Freeze `image_encoder`)    | 1                |         |     |
+| GTX1080  | vit_b (Freeze `image_encoder`)    | 2                |         |     |
+| GTX1080  | vit_b (Freeze `image_encoder`)    | 5                |         |     |
+| GTX1080  | vit_b (Freeze `image_encoder`)    | 10               |         |     |
+| GTX1080  | vit_b_lm (Freeze `image_encoder`)    | 1                |         |    |
+| GTX1080  | vit_b_lm (Freeze `image_encoder`)    | 2                |         |    |
+| GTX1080  | vit_b_lm (Freeze `image_encoder`)    | 5                |         |    |
+| GTX1080  | vit_b_lm (Freeze `image_encoder`)    | 10               |         |    |
+| CPU (32G)  | vit_b (Full Finetuning)    | 1                 |          |    |
+| CPU (32G)  | vit_b (Full Finetuning)    | 2                 |          |    |
+| CPU (32G)  | vit_b (Full Finetuning)    | 5                 |          |    |
+| CPU (32G)  | vit_b (Full Finetuning)    | 10                |          |    |
+| CPU (32G)  | vit_b (LoRA)    | 1                 |         |   |
+| CPU (32G)  | vit_b (LoRA)    | 2                 |         |   |
+| CPU (32G)  | vit_b (LoRA)    | 5                 |         |   |
+| CPU (32G)  | vit_b (LoRA)    | 10                |         |   |
+| CPU (32G)  | vit_b_lm (Full Finetuning) | 1                 |       |   |
+| CPU (32G)  | vit_b_lm (Full Finetuning) | 2                 |       |   |
+| CPU (32G)  | vit_b_lm (Full Finetuning) | 5                 |       |   |
+| CPU (32G)  | vit_b_lm (Full Finetuning) | 10                |       |   |
+| CPU (32G)  | vit_b_lm (LoRA) | 1                 |         |   |
+| CPU (32G)  | vit_b_lm (LoRA) | 2                 |         |   |
+| CPU (32G)  | vit_b_lm (LoRA) | 5                 |         |   |
+| CPU (32G)  | vit_b_lm (LoRA) | 10                |         |   |
+| CPU (64G)  | vit_b (Full Finetuning)    | 1                 |      |   |
+| CPU (64G)  | vit_b (Full Finetuning)    | 2                 |      |   |
+| CPU (64G)  | vit_b (Full Finetuning)    | 5                 |      |   |
+| CPU (64G)  | vit_b (Full Finetuning)    | 10                |      |   |
+| CPU (64G)  | vit_b (LoRA)    | 1                 |         |   |
+| CPU (64G)  | vit_b (LoRA)    | 2                 |         |   |
+| CPU (64G)  | vit_b (LoRA)    | 5                 |         |   |
+| CPU (64G)  | vit_b (LoRA)    | 10                |         |   |
+| CPU (64G)  | vit_b_lm (Full Finetuning) | 1                 |      |    |
+| CPU (64G)  | vit_b_lm (Full Finetuning) | 2                 |      |    |
+| CPU (64G)  | vit_b_lm (Full Finetuning) | 5                 |      |    |
+| CPU (64G)  | vit_b_lm (Full Finetuning) | 10                |      |    |
+| CPU (64G)  | vit_b_lm (LoRA) | 1                 |         |   |
+| CPU (64G)  | vit_b_lm (LoRA) | 2                 |         |   |
+| CPU (64G)  | vit_b_lm (LoRA) | 5                 |         |   |
+| CPU (64G)  | vit_b_lm (LoRA) | 10                |         |   |
