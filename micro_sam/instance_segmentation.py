@@ -6,23 +6,24 @@ https://computational-cell-analytics.github.io/micro-sam/micro_sam.html
 
 import os
 from abc import ABC
-from collections import OrderedDict
 from copy import deepcopy
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-import numpy as np
-import torch
-import segment_anything.utils.amg as amg_utils
 import vigra
-
-from nifty.tools import blocking
-from segment_anything.predictor import SamPredictor
-
+import numpy as np
 from skimage.measure import regionprops
+
+import torch
 from torchvision.ops.boxes import batched_nms, box_area
 
 from torch_em.model import UNETR
 from torch_em.util.segmentation import watershed_from_center_and_boundary_distances
+
+from nifty.tools import blocking
+
+import segment_anything.utils.amg as amg_utils
+from segment_anything.predictor import SamPredictor
 
 from . import util
 from ._vendored import batched_mask_to_box, mask_to_rle_pytorch
@@ -56,6 +57,7 @@ def mask_data_to_segmentation(
             object in the output will be mapped to zero (the background value).
         min_object_size: The minimal size of an object in pixels.
         max_object_size: The maximal size of an object in pixels.
+
     Returns:
         The instance segmentation.
     """

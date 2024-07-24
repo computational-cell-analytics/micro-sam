@@ -2,23 +2,22 @@
 """
 
 import os
-from functools import partial
 from glob import glob
+from tqdm import tqdm
 from pathlib import Path
+from functools import partial
+from typing import Optional, Union
 
 import h5py
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import torch
-
+import matplotlib.pyplot as plt
 import skimage.draw as draw
-from scipy.ndimage import binary_dilation
 from skimage import exposure
+from scipy.ndimage import binary_dilation
 from skimage.segmentation import relabel_sequential, find_boundaries
 
-from tqdm import tqdm
-from typing import Optional, Union
+import torch
 
 from .. import util
 from ..prompt_generators import PointAndBoxPromptGenerator

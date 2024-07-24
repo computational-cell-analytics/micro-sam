@@ -3,8 +3,8 @@ from typing import Any, List, Dict, Type
 import torch
 import torch.nn as nn
 
-from segment_anything.modeling.image_encoder import window_partition, window_unpartition
 from segment_anything.modeling import Sam
+from segment_anything.modeling.image_encoder import window_partition, window_unpartition
 
 from ..util import get_sam_model
 
@@ -42,6 +42,7 @@ class Sam3DWrapper(nn.Module):
 
         Args:
             sam_model: The Sam model to be wrapped.
+            freeze_encoder: Whether to freeze the image encoder.
         """
         super().__init__()
         sam_model.image_encoder = ImageEncoderViT3DWrapper(
@@ -64,7 +65,7 @@ class Sam3DWrapper(nn.Module):
         Unlike original SAM this model only supports automatic segmentation and does not support prompts.
 
         Args:
-            batched_input: A list over input images, each a dictionary with the following keys.L
+            batched_input: A list over input images, each a dictionary with the following keys.
                 'image': The image as a torch tensor in 3xDxHxW format. Already transformed for the input to the model.
                 'original_size': The original size of the image (HxW) before transformation.
             multimask_output: Wheterh to predict with the multi- or single-mask head of the maks decoder.

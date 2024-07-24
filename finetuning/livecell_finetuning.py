@@ -40,7 +40,7 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
 
 
 def finetune_livecell(args):
-    """Example code for finetuning SAM on LiveCELL"""
+    """Example code for finetuning SAM on LIVECell"""
     # override this (below) if you have some more complex set-up and need to specify the exact gpu
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -84,10 +84,10 @@ def finetune_livecell(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LiveCELL dataset.")
+    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LIVECell dataset.")
     parser.add_argument(
         "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/livecell/",
-        help="The filepath to the LiveCELL data. If the data does not exist yet it will be downloaded."
+        help="The filepath to the LIVECell data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",

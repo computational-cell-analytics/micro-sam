@@ -5,10 +5,11 @@ import warnings
 from typing import Optional
 
 import numpy as np
-import torch
-import torch_em
 
+import torch
 from torchvision.utils import make_grid
+
+import torch_em
 from torch_em.trainer.logger_base import TorchEmLogger
 
 from ..prompt_generators import PromptGeneratorBase, IterativePromptGenerator
@@ -32,7 +33,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         prompt_generator: The iterative prompt generator which takes care of the iterative prompting logic for training
         mask_prob: The probability of using the mask inputs in the iterative prompting (per `n_sub_iteration`)
         mask_loss: The loss to compare the predicted masks and the targets.
-        **kwargs: The keyword arguments of the DefaultTrainer super class.
+        kwargs: The keyword arguments of the DefaultTrainer super class.
     """
 
     def __init__(
