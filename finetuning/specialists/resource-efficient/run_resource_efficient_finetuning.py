@@ -1,5 +1,6 @@
 import os
 import shutil
+import itertools
 import subprocess
 from datetime import datetime
 
@@ -7,7 +8,7 @@ from datetime import datetime
 def base_slurm_script(env_name, partition, cpu_mem, cpu_cores, gpu_name=None):
     assert partition in ["grete:shared", "gpu", "medium"]
     if gpu_name is not None:
-        assert gpu_name in ["gtx1080", "rtx5000", "v100", "V100"]
+        assert gpu_name in ["GTX1080", "RTX5000", "V100", "A100"]
 
     base_script = f"""#!/bin/bash
 #SBATCH -c {cpu_cores}
@@ -28,7 +29,7 @@ def base_slurm_script(env_name, partition, cpu_mem, cpu_cores, gpu_name=None):
 
 def write_batch_sript(
     env_name, partition, cpu_mem, cpu_cores, gpu_name, input_path, save_root,
-    model_type, n_objects, n_images, script_name, freeze, checkpoint_path
+    model_type, n_objects, n_images, script_name, freeze, lora,
 ):
     assert model_type in ["vit_t", "vit_b", "vit_t_lm", "vit_b_lm"]
 
@@ -45,12 +46,14 @@ def write_batch_sript(
 
     # add parameters to the python script
     python_script += f"-i {input_path} "  # path to the covid-if data
-    python_script += f"-m {model_type[:5]} "  # choice of vit
+    python_script += f"-m {model_type} "  # choice of vit
     python_script += f"--n_objects {n_objects} "  # number of objects per batch for finetuning
     python_script += f"--n_images {n_images} "  # number of images we train for
 
-    if checkpoint_path is not None:
-        python_script += f"-c {checkpoint_path} "
+    # Whether to use LoRA-based finetuning
+    # NOTE: We use rank as 4 for LoRA.
+    if lora is not None:
+        python_script += "--lora_rank 4 "
 
     if gpu_name is not None:
         resource_name = f"{gpu_name}"
@@ -83,13 +86,10 @@ def write_batch_sript(
 def get_batch_script_names(tmp_folder):
     tmp_folder = os.path.expanduser(tmp_folder)
     os.makedirs(tmp_folder, exist_ok=True)
-
     script_name = "micro-sam-finetuning"
-
     dt = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
     tmp_name = script_name + dt
     batch_script = os.path.join(tmp_folder, f"{tmp_name}.sh")
-
     return batch_script
 
 
@@ -98,7 +98,8 @@ def main(args):
     model_type = args.model_type
 
     all_n_images = [1, 2, 5, 10]
-    for n_images in all_n_images:
+    use_lora = [False, True]
+    for (n_images, lora) in itertools.product(all_n_images, use_lora):
         write_batch_sript(
             env_name="mobilesam" if model_type[:5] == "vit_t" else "sam",
             partition=args.partition,
@@ -112,7 +113,7 @@ def main(args):
             n_images=n_images,
             script_name=get_batch_script_names(tmp_folder),
             freeze=args.freeze,
-            checkpoint_path=args.checkpoint
+            lora=lora,
         )
 
 
@@ -129,7 +130,6 @@ if __name__ == "__main__":
     parser.add_argument("-m", "--model_type", type=str, required=True, help="Choice of image encoder in SAM")
     parser.add_argument("--n_objects", type=int, required=True, help="The number of objects (instances) per batch.")
     parser.add_argument("--freeze", type=str, default=None, help="Which parts of the model to freeze for finetuning.")
-    parser.add_argument("--checkpoint", type=str, default=None, help="Path to custom checkpoint.")
 
     parser.add_argument("--partition", type=str, required=True, help="Name of the partition for running the job.")
     parser.add_argument("--mem", type=str, required=True, help="Amount of cpu memory.")

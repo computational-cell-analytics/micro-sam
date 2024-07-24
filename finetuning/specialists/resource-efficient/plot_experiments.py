@@ -6,6 +6,7 @@ from natsort import natsorted
 import numpy as np
 import pandas as pd
 import seaborn as sns
+
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 from matplotlib.ticker import FuncFormatter
@@ -24,9 +25,9 @@ PALETTE = {
 RNAME_MAPPING = {
     "cpu_32G-mem_16-cores": "Intel Cascade Lake Xeon Platinum 9242 (32GB CPU RAM)",
     "cpu_64G-mem_16-cores": "Intel Cascade Lake Xeon Platinum 9242 (64GB CPU RAM)",
-    "rtx5000": "NVIDIA Quadro RTX5000 (16GB VRAM)",
-    "v100": "NVIDIA Tesla V100 (32GB VRAM)",
-    "gtx1080": "NVIDIA GeForce GTX 1080 (8GB VRAM)"
+    "RTX5000": "NVIDIA Quadro RTX5000 (16GB VRAM)",
+    "V100": "NVIDIA Tesla V100 (32GB VRAM)",
+    "GTX1080": "NVIDIA GeForce GTX 1080 (8GB VRAM)"
 }
 
 plt.rcParams.update({"font.size": 30})

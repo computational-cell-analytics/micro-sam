@@ -19,7 +19,6 @@ TLDR: Finetuning ViT Base (`vit_b`) is the best bet on most workstation / cluste
 - number of objects per batch (? - depends on the maximum number which we can fit on the respective resource)
 
 ## Inference:
-
 - Using default Segment Anything
 - Using `vit_<X>_lm` micro-sam (LM generalist)
 - Using finetuned Segment Anything `vit_<X>_covid-if` (training a `covid-if` specialist)
