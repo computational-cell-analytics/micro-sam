@@ -60,16 +60,19 @@ def write_batch_sript(
     else:
         resource_name = f"cpu_{cpu_mem}-mem_{cpu_cores}-cores"
 
+    # Updating the path where the model checkpoints and logs will be saved.
     updated_save_root = os.path.join(
         save_root,
         resource_name,
         model_type,
+        "lora-finetuning" if lora else "full-finetuning",
         "freeze-None" if freeze is None else f"freeze-{freeze}",
         f"{n_images}-images"
     )
     if save_root is not None:
         python_script += f"-s {updated_save_root} "  # path to save model checkpoints and logs
 
+    # Whether to freeze a certain part of the SAM model.
     if freeze is not None:
         python_script += f"--freeze {freeze} "
 
@@ -100,6 +103,10 @@ def main(args):
     all_n_images = [1, 2, 5, 10]
     use_lora = [False, True]
     for (n_images, lora) in itertools.product(all_n_images, use_lora):
+        # We cannot use LoRA and freeze the image encoder at the same time.
+        if lora and args.freeze == "image_encoder":
+            continue
+
         write_batch_sript(
             env_name="mobilesam" if model_type[:5] == "vit_t" else "sam",
             partition=args.partition,
