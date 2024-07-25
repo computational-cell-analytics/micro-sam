@@ -15,15 +15,18 @@ class TrainableSAM(nn.Module):
     Args:
         sam: The SegmentAnything Model.
         device: The device for training.
+        upsampled_masks: Whether to return the output masks in the original input shape.
     """
     def __init__(
         self,
         sam: Sam,
         device: Union[str, torch.device],
+        upsampled_masks: bool = True,
     ) -> None:
         super().__init__()
         self.sam = sam
         self.device = device
+        self.upsampled_masks = upsampled_masks
         self.transform = ResizeLongestSide(sam.image_encoder.img_size)
 
     def preprocess(self, x: torch.Tensor) -> Tuple[torch.Tensor, Tuple[int, int]]:
@@ -111,18 +114,16 @@ class TrainableSAM(nn.Module):
                 multimask_output=multimask_output,
             )
 
-            masks = self.sam.postprocess_masks(
-                low_res_masks,
-                input_size=image_record["input_size"],
-                original_size=image_record["original_size"],
-            )
+            curr_outputs = {"low_res_masks": low_res_masks, "iou_predictions": iou_predictions}
 
-            outputs.append(
-                {
-                    "low_res_masks": low_res_masks,
-                    "masks": masks,
-                    "iou_predictions": iou_predictions
-                }
-            )
+            if self.upsampled_masks:
+                masks = self.sam.postprocess_masks(
+                    low_res_masks,
+                    input_size=image_record["input_size"],
+                    original_size=image_record["original_size"],
+                )
+                curr_outputs["masks"] = masks
+
+            outputs.append(curr_outputs)
 
         return outputs

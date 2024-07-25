@@ -5,10 +5,11 @@ import warnings
 from typing import Optional
 
 import numpy as np
-import torch
-import torch_em
 
-from torchvision.utils import make_grid
+import torch
+from torch.nn import functional as F
+
+import torch_em
 from torch_em.trainer.logger_base import TorchEmLogger
 
 from ..prompt_generators import PromptGeneratorBase, IterativePromptGenerator
@@ -126,8 +127,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
         # Loop over the batch.
         for batch_output, targets in zip(batched_outputs, y_one_hot):
-
-            predicted_objects = torch.sigmoid(batch_output["masks"])
+            predicted_objects = torch.sigmoid(batch_output["low_res_masks"])
             # Compute the dice scores for the 1 or 3 predicted masks per true object (outer loop).
             # We swap the axes that go into the dice loss so that the object axis
             # corresponds to the channel axes. This ensures that the dice is computed
@@ -276,6 +276,22 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         # number of objects across the batch.
         n_objects = min(len(ids) for ids in sampled_ids)
 
+        original_instance_ids = list(torch.unique(y))
+        # Convert the labels to "low_res_mask" shape
+        # First step is to use the logic from `ResizeLongestSide` to resize the longest side.
+        target_length = self.model.transform.target_length
+        target_shape = self.model.transform.get_preprocess_shape(y.shape[2], y.shape[3], target_length)
+        y = F.interpolate(input=y, size=target_shape)
+        # Next, we pad the remaining region to (1024, 1024)
+        h, w = y.shape[-2:]
+        padh = self.model.sam.image_encoder.img_size - h
+        padw = self.model.sam.image_encoder.img_size - w
+        y = F.pad(input=y, pad=(0, padw, 0, padh))
+        # Finally, let's resize the labels to the desired shape (i.e. (256, 256))
+        y = F.interpolate(input=y, size=(256, 256))
+
+        assert list(torch.unique(y)) == original_instance_ids
+
         y = y.to(self.device)
         # Compute the one hot targets for the seg-id.
         y_one_hot = torch.stack([
@@ -300,7 +316,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             batched_inputs, y_one_hot,
             num_subiter=self.n_sub_iteration, multimask_output=multimask_output
         )
-        return loss, mask_loss, iou_regression_loss, model_iou, y_one_hot
+        return loss, mask_loss, iou_regression_loss, model_iou
 
     def _check_input_normalization(self, x, input_check_done):
         # The expected data range of the SAM model is 8bit (0-255).
@@ -335,16 +351,13 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             self.optimizer.zero_grad()
 
             with forward_context():
-                (loss, mask_loss, iou_regression_loss, model_iou,
-                 sampled_binary_y) = self._interactive_train_iteration(x, y)
+                (loss, mask_loss, iou_regression_loss, model_iou) = self._interactive_train_iteration(x, y)
 
             backprop(loss)
 
             if self.logger is not None:
                 lr = [pm["lr"] for pm in self.optimizer.param_groups][0]
-                samples = sampled_binary_y if self._iteration % self.log_image_interval == 0 else None
-                self.logger.log_train(self._iteration, loss, lr, x, y, samples,
-                                      mask_loss, iou_regression_loss, model_iou)
+                self.logger.log_train(self._iteration, loss, lr, x, y, mask_loss, iou_regression_loss, model_iou)
 
             self._iteration += 1
             n_iter += 1
@@ -374,7 +387,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         metric = mask_loss
         model_iou = torch.mean(torch.stack([m["iou_predictions"] for m in batched_outputs]))
 
-        return loss, mask_loss, iou_regression_loss, model_iou, y_one_hot, metric
+        return loss, mask_loss, iou_regression_loss, model_iou, metric
 
     def _validate_impl(self, forward_context):
         self.model.eval()
@@ -389,8 +402,8 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
                 input_check_done = self._check_input_normalization(x, input_check_done)
 
                 with forward_context():
-                    (loss, mask_loss, iou_regression_loss, model_iou,
-                     sampled_binary_y, metric) = self._interactive_val_iteration(x, y, val_iteration)
+                    (loss, mask_loss, iou_regression_loss,
+                     model_iou, metric) = self._interactive_val_iteration(x, y, val_iteration)
 
                 loss_val += loss.item()
                 metric_val += metric.item()
@@ -405,8 +418,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
         if self.logger is not None:
             self.logger.log_validation(
-                self._iteration, metric_val, loss_val, x, y,
-                sampled_binary_y, mask_loss, iou_regression_loss, model_iou_val
+                self._iteration, metric_val, loss_val, x, y, mask_loss, iou_regression_loss, model_iou_val
             )
 
         return metric_val
@@ -423,25 +435,23 @@ class SamLogger(TorchEmLogger):
         self.tb = torch.utils.tensorboard.SummaryWriter(self.log_dir)
         self.log_image_interval = trainer.log_image_interval
 
-    def add_image(self, x, y, samples, name, step):
+    def add_image(self, x, y, name, step):
         self.tb.add_image(tag=f"{name}/input", img_tensor=x[0], global_step=step)
         self.tb.add_image(tag=f"{name}/target", img_tensor=y[0], global_step=step)
-        sample_grid = make_grid([sample[0] for sample in samples], nrow=4, padding=4)
-        self.tb.add_image(tag=f"{name}/samples", img_tensor=sample_grid, global_step=step)
 
-    def log_train(self, step, loss, lr, x, y, samples, mask_loss, iou_regression_loss, model_iou):
+    def log_train(self, step, loss, lr, x, y, mask_loss, iou_regression_loss, model_iou):
         self.tb.add_scalar(tag="train/loss", scalar_value=loss, global_step=step)
         self.tb.add_scalar(tag="train/mask_loss", scalar_value=mask_loss, global_step=step)
         self.tb.add_scalar(tag="train/iou_loss", scalar_value=iou_regression_loss, global_step=step)
         self.tb.add_scalar(tag="train/model_iou", scalar_value=model_iou, global_step=step)
         self.tb.add_scalar(tag="train/learning_rate", scalar_value=lr, global_step=step)
         if step % self.log_image_interval == 0:
-            self.add_image(x, y, samples, "train", step)
+            self.add_image(x, y, "train", step)
 
-    def log_validation(self, step, metric, loss, x, y, samples, mask_loss, iou_regression_loss, model_iou):
+    def log_validation(self, step, metric, loss, x, y, mask_loss, iou_regression_loss, model_iou):
         self.tb.add_scalar(tag="validation/loss", scalar_value=loss, global_step=step)
         self.tb.add_scalar(tag="validation/mask_loss", scalar_value=mask_loss, global_step=step)
         self.tb.add_scalar(tag="validation/iou_loss", scalar_value=iou_regression_loss, global_step=step)
         self.tb.add_scalar(tag="validation/model_iou", scalar_value=model_iou, global_step=step)
         self.tb.add_scalar(tag="validation/metric", scalar_value=metric, global_step=step)
-        self.add_image(x, y, samples, "validation", step)
+        self.add_image(x, y, "validation", step)
