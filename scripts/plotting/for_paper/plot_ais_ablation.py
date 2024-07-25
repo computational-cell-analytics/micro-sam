@@ -77,7 +77,6 @@ def make_livecell_barplot():
 
     for i, bar in enumerate(bars.patches):
         if i == max_index:
-            # Add shadow close to the bar
             shadow = patches.FancyBboxPatch(
                 (bar.get_x() - 0.01, bar.get_y() - 0.01),
                 bar.get_width() + 0.02,
@@ -92,21 +91,22 @@ def make_livecell_barplot():
             plt.gca().add_patch(shadow)
 
     plt.xlabel("Choice of Model (Initialization)", fontweight="bold")
-    plt.ylabel("Segmentation Accuracy over IoU 50%", fontweight="bold")
-    plt.title("Automatic Instance Segmentation", fontweight="bold")
+    plt.ylabel("Mean Segmentation Accuracy", fontweight="bold")
+    plt.title("Automatic Instance Segmentation (LIVECell)")
     plt.ylim(0, max(scores) + 0.05)
 
     plt.gca().yaxis.labelpad = 30
     plt.gca().xaxis.labelpad = 20
 
     plt.tight_layout()
+    plt.savefig("s14_1.png")
     plt.savefig("s14_1.svg")
     plt.savefig("s14_1.pdf")
 
 
 def make_covid_if_lineplot():
     markers = {
-        'unet': 'o', 'unetr_scratch': 's', 'unetr_sam': 'D', 'semanticsam_scratch': '^', 'semanticsam_sam': 'v'
+        'unet': 'P', 'unetr_scratch': 'X', 'unetr_sam': 'o', 'semanticsam_scratch': '^', 'semanticsam_sam': 'd'
     }
     line_styles = {
         'unet': '-', 'unetr_scratch': '--', 'unetr_sam': '-.', 'semanticsam_scratch': ':', 'semanticsam_sam': '-'
@@ -126,15 +126,17 @@ def make_covid_if_lineplot():
     for model in models:
         sns.lineplot(
             data=df[df["Model"] == model], x='Key', y='Score', marker=markers[model],
-            linestyle=line_styles[model], markersize=15, linewidth=5, label=MODEL_NAME_MAPS[model], color=base_color,
+            linestyle=line_styles[model], markersize=15, linewidth=2.5, label=MODEL_NAME_MAPS[model], color=base_color,
         )
 
     plt.xlabel("Number of Images", fontweight="bold")
-    plt.ylabel("Segmentation Accuracy over IoU 50%", fontweight="bold")
-    plt.title("Automatic Instance Segmentation", fontweight="bold")
+    plt.ylabel("Mean Segmentation Accuracy", fontweight="bold")
+    plt.title("Automatic Instance Segmentation (Covid IF)")
 
     plt.gca().yaxis.labelpad = 30
     plt.gca().xaxis.labelpad = 20
+
+    plt.legend(loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=5)
 
     plt.tight_layout()
     plt.savefig("s14_2.png")
@@ -143,7 +145,7 @@ def make_covid_if_lineplot():
 
 
 def main():
-    # make_livecell_barplot()
+    make_livecell_barplot()
     make_covid_if_lineplot()
 
 
