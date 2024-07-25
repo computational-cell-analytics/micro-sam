@@ -21,7 +21,7 @@ class TestModelExport(unittest.TestCase):
     def tearDown(self):
         rmtree(self.tmp_folder)
 
-    @unittest.expectedFailue
+    @unittest.expectedFailure
     def test_model_export(self):
         from micro_sam.bioimageio import export_sam_model
         image, labels = synthetic_data(shape=(1024, 1022))
