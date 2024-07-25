@@ -21,7 +21,7 @@ class TrainableSAM(nn.Module):
         self,
         sam: Sam,
         device: Union[str, torch.device],
-        upsampled_masks: bool = True,
+        upsampled_masks: bool = False,
     ) -> None:
         super().__init__()
         self.sam = sam
