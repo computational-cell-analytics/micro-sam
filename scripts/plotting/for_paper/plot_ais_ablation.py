@@ -55,10 +55,10 @@ COVID_IF_AIS = {
 
 MODEL_NAME_MAPS = {
     "unet": "UNet",
-    "unetr_scratch": "UNETR\n(Scratch)",
-    "unetr_sam": "UNETR\n(SAM)",
-    "semanticsam_scratch": "SemSam\n(Scratch)",
-    "semanticsam_sam": "SemSam\n(SAM)"
+    "unetr_scratch": "UNETR\n$\it{(scratch)}$",
+    "unetr_sam": "UNETR\n$\it{(SAM)}$",
+    "semanticsam_scratch": "SemSam\n$\it{(scratch)}$",
+    "semanticsam_sam": "SemSam\n$\it{(SAM)}$"
 }
 
 
@@ -80,9 +80,9 @@ def make_livecell_barplot():
             shadow = patches.FancyBboxPatch(
                 (bar.get_x() - 0.01, bar.get_y() - 0.01),
                 bar.get_width() + 0.02,
-                bar.get_height() + 0.005,
-                boxstyle="round,pad=0.01",
-                linewidth=0,
+                bar.get_height() + 0.0025,
+                boxstyle="round,pad=0.011",
+                linewidth=2.5,
                 edgecolor=None,
                 facecolor=highlight_color,
                 alpha=0.3,
@@ -90,13 +90,16 @@ def make_livecell_barplot():
             )
             plt.gca().add_patch(shadow)
 
-    plt.xlabel("Choice of Model (Initialization)", fontweight="bold")
+    plt.xlabel(None)
     plt.ylabel("Mean Segmentation Accuracy", fontweight="bold")
     plt.title("Automatic Instance Segmentation (LIVECell)")
     plt.ylim(0, max(scores) + 0.05)
 
     plt.gca().yaxis.labelpad = 30
     plt.gca().xaxis.labelpad = 20
+
+    yticks = [i * 0.05 for i in range(1, int(max(scores) / 0.05) + 2)]
+    plt.yticks(yticks)
 
     plt.tight_layout()
     plt.savefig("s14_1.png")
