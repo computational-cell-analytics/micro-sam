@@ -119,7 +119,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         return iou
 
     def preprocess_one_hot_masks(self, y_one_hot):
-        """
+        """Converts the masks to match the "low_res_masks" shape.
         """
         # Convert the labels to "low_res_mask" shape
         # First step is to use the logic from `ResizeLongestSide` to resize the longest side.
@@ -143,11 +143,11 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         """
         mask_loss, iou_regression_loss = 0.0, 0.0
 
-        # TODO
-        y_one_hot = self.preprocess_one_hot_masks(y_one_hot)
-
         # Loop over the batch.
         for batch_output, targets in zip(batched_outputs, y_one_hot):
+            # Let's convert the inputs to the match the expected "low_res_masks" shape.
+            targets = self.preprocess_one_hot_masks(targets)
+
             predicted_objects = torch.sigmoid(batch_output["low_res_masks"])
             # Compute the dice scores for the 1 or 3 predicted masks per true object (outer loop).
             # We swap the axes that go into the dice loss so that the object axis
