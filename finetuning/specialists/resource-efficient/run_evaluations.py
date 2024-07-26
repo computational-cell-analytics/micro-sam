@@ -1,6 +1,7 @@
 import os
 import re
 import shutil
+import itertools
 import subprocess
 from glob import glob
 from tqdm import tqdm
@@ -23,6 +24,9 @@ ROOT = "/scratch/share/cidas/cca/experiments/resource-efficient-finetuning/"
 
 
 def process_covid_if(input_path):
+    if os.path.exists(os.path.join(input_path, "slices")):
+        return
+
     all_image_paths = sorted(glob(os.path.join(input_path, "*.h5")))
 
     # val images
@@ -105,54 +109,69 @@ def get_batch_script_names(tmp_folder):
     return batch_script
 
 
-def run_slurm_scripts(model_type, checkpoint, experiment_folder, scripts=ALL_SCRIPTS):
+def run_slurm_scripts(
+    model_type, checkpoint, experiment_folder, dry, scripts=ALL_SCRIPTS, has_lora=False, freeze_image_encoder=False
+):
     tmp_folder = "./gpu_jobs"
     shutil.rmtree(tmp_folder, ignore_errors=True)
 
-    for current_setup in scripts:
+    lora_combinations = [True, False]
+    for (current_setup, use_lora) in itertools.product(scripts, lora_combinations):
+        # for experiments such as vanilla and generalist models.
+        if not has_lora == use_lora:
+            continue
+
+        # for experiments such as GTX1080, where freezing the image encoder is the way and we do not use LoRA
+        if freeze_image_encoder and use_lora:
+            continue
+
         write_slurm_scripts(
             inference_setup=current_setup,
             env_name="mobilesam" if model_type == "vit_t" else "sam",
             checkpoint=checkpoint,
             model_type=model_type,
             experiment_folder=experiment_folder,
-            out_path=get_batch_script_names(tmp_folder)
+            out_path=get_batch_script_names(tmp_folder),
+            lora=use_lora,
         )
 
-    # the logic below automates the process of first running the precomputation of embeddings, and only then inference.
-    job_id = []
-    for i, my_script in enumerate(sorted(glob(tmp_folder + "/*"))):
-        cmd = ["sbatch", my_script]
+    if not dry:
+        # the logic below automates running the precomputation of embeddings first and then inference.
+        job_id = []
+        for i, my_script in enumerate(sorted(glob(tmp_folder + "/*"))):
+            cmd = ["sbatch", my_script]
 
-        if i > 0:
-            cmd.insert(1, f"--dependency=afterany:{job_id[0]}")
+            if i > 0:
+                cmd.insert(1, f"--dependency=afterany:{job_id[0]}")
 
-        cmd_out = subprocess.run(cmd, capture_output=True, text=True)
-        print(cmd_out.stdout if len(cmd_out.stdout) > 1 else cmd_out.stderr)
+            cmd_out = subprocess.run(cmd, capture_output=True, text=True)
+            print(cmd_out.stdout if len(cmd_out.stdout) > 1 else cmd_out.stderr)
 
-        if i == 0:
-            job_id.append(re.findall(r'\d+', cmd_out.stdout)[0])
+            if i == 0:
+                job_id.append(re.findall(r'\d+', cmd_out.stdout)[0])
 
 
-def main():
+def main(args):
     # preprocess the data
     process_covid_if(input_path=DATA_DIR)
 
     # results on vanilla models
-    run_slurm_scripts(
-        model_type="vit_b",
-        checkpoint=None,
-        experiment_folder=os.path.join(ROOT, "vanilla", "vit_b"),
-        scripts=ALL_SCRIPTS[:-1]
-    )
+    # run_slurm_scripts(
+    #     model_type="vit_b",
+    #     checkpoint=None,
+    #     experiment_folder=os.path.join(ROOT, "vanilla", "vit_b"),
+    #     scripts=ALL_SCRIPTS[:-1],
+    #     dry=args.dry,
+    # )
 
     # results on generalist models
-    vit_b_lm_path = "/scratch/usr/nimanwai/micro-sam/checkpoints/vit_b/lm_generalist_sam/best.pt"
-    run_slurm_scripts(
-        model_type="vit_b",
-        checkpoint=vit_b_lm_path,
-        experiment_folder=os.path.join(ROOT, "generalist", "vit_b")
-    )
+    # vit_b_lm_path = "/scratch/usr/nimanwai/micro-sam/checkpoints/vit_b/lm_generalist_sam/best.pt"
+    # run_slurm_scripts(
+    #     model_type="vit_b",
+    #     checkpoint=vit_b_lm_path,
+    #     experiment_folder=os.path.join(ROOT, "generalist", "vit_b"),
+    #     dry=args.dry,
+    # )
 
     # results on resource-efficient finetuned checkpoints
     all_checkpoint_paths = glob(os.path.join(ROOT, "**", "best.pt"), recursive=True)
@@ -165,16 +184,28 @@ def main():
     for checkpoint_path in all_checkpoint_paths:
         # NOTE: We run the inference only for `vit_b` models. Remove this to run for `vit_t` models as well.
         _searcher = checkpoint_path.find("vit_b")
-        if _searcher == -1:
+        if _searcher == -1:  # i.e. `vit_b` keyword was not found.
             continue
+
+        _searcher2 = checkpoint_path.find("freeze-image_encoder")
+        freeze_image_encoder = False
+        if _searcher2 != -1:
+            freeze_image_encoder = True
 
         experiment_folder = os.path.join("/", *checkpoint_path.split("/")[:-4])
         run_slurm_scripts(
             model_type=checkpoint_path.split("/")[-3],
             checkpoint=checkpoint_path,
-            experiment_folder=experiment_folder
+            experiment_folder=experiment_folder,
+            has_lora=True,
+            dry=args.dry,
+            freeze_image_encoder=freeze_image_encoder,
         )
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry", action="store_true")
+    args = parser.parse_args()
+    main(args)
