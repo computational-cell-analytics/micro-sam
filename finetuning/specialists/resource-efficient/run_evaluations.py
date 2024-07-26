@@ -83,7 +83,7 @@ source activate {env_name} \n"""
     # Whether the model was trained with LoRA
     # NOTE: We use rank 4 for LoRA.
     if lora:
-        batch_script += "--lora_rank 4"
+        batch_script += "--lora_rank 4 "
 
     _op = out_path[:-3] + f"_{Path(inference_setup).stem}.sh"
 
@@ -176,11 +176,6 @@ def main(args):
     # results on resource-efficient finetuned checkpoints
     all_checkpoint_paths = glob(os.path.join(ROOT, "**", "best.pt"), recursive=True)
 
-    # let's get all gpu jobs and run evaluation for them
-    all_checkpoint_paths = [
-        ckpt for ckpt in all_checkpoint_paths if ckpt.find("cpu") != -1
-    ]
-
     for checkpoint_path in all_checkpoint_paths:
         # NOTE: We run the inference only for `vit_b` models. Remove this to run for `vit_t` models as well.
         _searcher = checkpoint_path.find("vit_b")
@@ -192,12 +187,17 @@ def main(args):
         if _searcher2 != -1:
             freeze_image_encoder = True
 
+        _searcher3 = checkpoint_path.find("lora-finetuning")
+        has_lora = False
+        if _searcher3 != -1:
+            has_lora = True
+
         experiment_folder = os.path.join("/", *checkpoint_path.split("/")[:-4])
         run_slurm_scripts(
             model_type=checkpoint_path.split("/")[-3],
             checkpoint=checkpoint_path,
             experiment_folder=experiment_folder,
-            has_lora=True,
+            has_lora=has_lora,
             dry=args.dry,
             freeze_image_encoder=freeze_image_encoder,
         )

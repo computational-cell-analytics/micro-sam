@@ -13,7 +13,7 @@ from matplotlib.ticker import FuncFormatter
 from matplotlib.ticker import FormatStrFormatter
 
 
-ROOT = "/scratch/usr/nimanwai/experiments/resource-efficient-finetuning/"
+ROOT = "/scratch/share/cidas/cca/experiments/resource-efficient-finetuning/"
 
 PALETTE = {
     "AIS": "#045275",
@@ -74,10 +74,13 @@ def plot_all_experiments():
         else:
             resource_experiment_paths.append(experiment_path)
 
+    # TODO:
+    # check for lora experiments and add dotted lines for them in the line plots
+    # and also ensure them to have the same color as the previous color scheme
+
     # let's get the benchmark results
     all_benchmark_results, all_benchmark_box_results = {}, {}
     for be_path in sorted(benchmark_experiment_paths):
-
         experiment_name = os.path.split(be_path)[-1]
         all_res_paths = glob(os.path.join(be_path, "*", "results", "*"))
         all_model_paths = glob(os.path.join(be_path, "*"))
