@@ -61,10 +61,10 @@ MODEL_NAME_MAPS = {
 }
 
 COLORS = {
-    'unet': '#045275',
-    'unetr_scratch': '#7CCBA2',
-    'unetr_sam': '#90477F',
-    'semanticsam_scratch': '#FCDE9C',
+    'unet': '#FCDE9C',
+    'unetr_scratch': '#045275',
+    'unetr_sam': '#045275',
+    'semanticsam_scratch': '#F0746E',
     'semanticsam_sam': '#F0746E',
 }
 
@@ -78,7 +78,13 @@ def make_livecell_barplot():
     df = pd.DataFrame(data)
 
     plt.figure(figsize=(20, 15))
-    sns.barplot(x="Model", y="Score", data=df, hue='Model', legend=False, palette=list(COLORS.values()))
+    bars = sns.barplot(x="Model", y="Score", data=df, hue='Model', legend=False, palette=list(COLORS.values()))
+
+    for i, bar in enumerate(bars.patches):
+        if df["Model"][i] in [MODEL_NAME_MAPS["unetr_sam"], MODEL_NAME_MAPS["semanticsam_sam"]]:
+            bar.set_hatch("//")
+            bar.set_edgecolor('white')
+            bar.set_linewidth(5)
 
     plt.xlabel(None)
     plt.ylabel("Mean Segmentation Accuracy", fontweight="bold")
