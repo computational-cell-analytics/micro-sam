@@ -56,8 +56,8 @@ MODEL_NAME_MAPS = {
     "unet": "UNet",
     "unetr_scratch": "UNETR\n$\it{(scratch)}$",
     "unetr_sam": "UNETR\n$\it{(SAM)}$",
-    "semanticsam_scratch": "SemSam\n$\it{(scratch)}$",
-    "semanticsam_sam": "SemSam\n$\it{(SAM)}$"
+    "semanticsam_scratch": "SamDecoder\n$\it{(scratch)}$",
+    "semanticsam_sam": "SamDecoder\n$\it{(SAM)}$"
 }
 
 COLORS = {
@@ -131,7 +131,7 @@ def make_covid_if_lineplot():
     plt.gca().yaxis.labelpad = 30
     plt.gca().xaxis.labelpad = 20
 
-    plt.legend(loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=5)
+    plt.legend(loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=5, handletextpad=0.5, columnspacing=1)
 
     plt.tight_layout()
     plt.savefig("s14_2.png")
