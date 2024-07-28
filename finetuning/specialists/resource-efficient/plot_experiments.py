@@ -205,17 +205,24 @@ def plot_all_experiments():
 
             _colors = list(PALETTE.values())
             custom_handles = [
-                mlines.Line2D([0], [0], color=_colors[0], markersize=15, marker='o', linestyle='-', linewidth=5, label='AIS (FFT)'),
-                mlines.Line2D([0], [0], color=_colors[0], markersize=15, marker='o', linestyle='-', linewidth=5, label='AMG (FFT)'),
-                mlines.Line2D([0], [0], color=_colors[0], markersize=15, marker='o', linestyle='-', linewidth=5, label='Point (FFT)'),
-                mlines.Line2D([0], [0], color=_colors[0], markersize=15, marker='o', linestyle='-', linewidth=5, label='Box (FFT)'),
-                mlines.Line2D([0], [0], color=_colors[0], markersize=15, marker='o', linestyle='--', linewidth=5, label='AIS (LoRA)'),
-                mlines.Line2D([0], [0], color=_colors[0], markersize=15, marker='o', linestyle='--', linewidth=5, label='AMG (LoRA)'),
-                mlines.Line2D([0], [0], color=_colors[0], markersize=15, marker='o', linestyle='--', linewidth=5, label='Point (LoRA)'),
-                mlines.Line2D([0], [0], color=_colors[0], markersize=15, marker='o', linestyle='--', linewidth=5, label='Box (LoRA)'),
+                mlines.Line2D([], [], color=_colors[0], markersize=15, marker='o', linestyle='-', linewidth=5),
+                mlines.Line2D([], [], color=_colors[0], markersize=15, marker='o', linestyle='--', linewidth=5),
+                mlines.Line2D([], [], color=_colors[1], markersize=15, marker='o', linestyle='-', linewidth=5),
+                mlines.Line2D([], [], color=_colors[1], markersize=15, marker='o', linestyle='--', linewidth=5),
+                mlines.Line2D([], [], color=_colors[2], markersize=15, marker='o', linestyle='-', linewidth=5),
+                mlines.Line2D([], [], color=_colors[2], markersize=15, marker='o', linestyle='--', linewidth=5),
+                mlines.Line2D([], [], color=_colors[3], markersize=15, marker='o', linestyle='-', linewidth=5),
+                mlines.Line2D([], [], color=_colors[3], markersize=15, marker='o', linestyle='--', linewidth=5),
             ]
 
-            fig.legend(custom_handles, PALETTE.keys(), loc="lower center", ncols=4, bbox_to_anchor=(0.5, 0))
+            fig.legend(
+                handles=custom_handles,
+                labels=[
+                    'AIS (FFT)', 'AIS (LoRA)', 'AMG (FFT)', 'AMG (LoRA)',
+                    'Point (FFT)', 'Point (LoRA)', 'Box (FFT)', 'Box (LoRA)'
+                ],
+                loc="lower center", ncols=4, bbox_to_anchor=(0.5, 0)
+            )
 
             def format_y_tick_label(value, pos):
                 return "{:.2f}".format(value)
@@ -225,7 +232,7 @@ def plot_all_experiments():
             plt.text(x=-5.8, y=0.36, s="Segmentation Accuracy at IoU 50%", rotation=90, fontweight="bold")
             plt.text(x=-1.35, y=-0.075, s="Number of Images", fontweight="bold")
 
-            plt.subplots_adjust(wspace=0.1, hspace=0.15, bottom=0.12, top=0.88)
+            plt.subplots_adjust(wspace=0.1, hspace=0.15, bottom=0.15, top=0.88)
 
             if resource_name == "cpu_32G-mem_16-cores":
                 fig.suptitle("Resource Efficient Finetuning (CPU)", y=0.95, x=0.51)
