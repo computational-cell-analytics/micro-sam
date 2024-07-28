@@ -203,10 +203,17 @@ def plot_all_experiments():
                         all_labels.append(label)
                 ax.get_legend().remove()
 
-            custom_handles = []
-            for color in PALETTE.values():
-                line = mlines.Line2D([], [], color=color, markersize=15, marker='o', linestyle='-', linewidth=5)
-                custom_handles.append(line)
+            _colors = list(PALETTE.values())
+            custom_handles = [
+                mlines.Line2D([0], [0], color=_colors[0], markersize=15, marker='o', linestyle='-', linewidth=5, label='AIS (FFT)'),
+                mlines.Line2D([0], [0], color=_colors[0], markersize=15, marker='o', linestyle='-', linewidth=5, label='AMG (FFT)'),
+                mlines.Line2D([0], [0], color=_colors[0], markersize=15, marker='o', linestyle='-', linewidth=5, label='Point (FFT)'),
+                mlines.Line2D([0], [0], color=_colors[0], markersize=15, marker='o', linestyle='-', linewidth=5, label='Box (FFT)'),
+                mlines.Line2D([0], [0], color=_colors[0], markersize=15, marker='o', linestyle='--', linewidth=5, label='AIS (LoRA)'),
+                mlines.Line2D([0], [0], color=_colors[0], markersize=15, marker='o', linestyle='--', linewidth=5, label='AMG (LoRA)'),
+                mlines.Line2D([0], [0], color=_colors[0], markersize=15, marker='o', linestyle='--', linewidth=5, label='Point (LoRA)'),
+                mlines.Line2D([0], [0], color=_colors[0], markersize=15, marker='o', linestyle='--', linewidth=5, label='Box (LoRA)'),
+            ]
 
             fig.legend(custom_handles, PALETTE.keys(), loc="lower center", ncols=4, bbox_to_anchor=(0.5, 0))
 
