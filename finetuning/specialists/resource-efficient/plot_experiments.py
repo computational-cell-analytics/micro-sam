@@ -161,7 +161,7 @@ def plot_all_experiments():
                     this_box_res['name'].str.contains("lora") | this_box_res['name'].str.contains("initial")
                 ],
                 ax=ax[0, idx], palette=PALETTE, hue_order=PALETTE.keys(),
-                marker="o", markersize=15, linewidth=5
+                marker="o", markersize=15, linewidth=5, linestyle="--",
             )
             ax[0, idx].set_title(_title, fontweight="bold")
             ax[0, idx].set(xlabel=None, ylabel=None)
@@ -183,7 +183,7 @@ def plot_all_experiments():
                 x="x", y="results", hue="type",
                 data=this_res[this_res['name'].str.contains("lora") | this_res['name'].str.contains("initial")],
                 ax=ax[1, idx], palette=PALETTE, hue_order=PALETTE.keys(),
-                marker="o", markersize=15, linewidth=5
+                marker="o", markersize=15, linewidth=5, linestyle="--",
             )
             # ax[1, idx].set_title(_title, fontweight="bold")
             ax[1, idx].set(xlabel=None, ylabel=None)
