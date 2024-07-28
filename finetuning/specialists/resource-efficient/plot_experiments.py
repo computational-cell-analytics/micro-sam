@@ -74,10 +74,6 @@ def plot_all_experiments():
         else:
             resource_experiment_paths.append(experiment_path)
 
-    # TODO:
-    # check for lora experiments and add dotted lines for them in the line plots
-    # and also ensure them to have the same color as the previous color scheme
-
     # let's get the benchmark results
     all_benchmark_results, all_benchmark_box_results = {}, {}
     for be_path in sorted(benchmark_experiment_paths):
@@ -94,7 +90,7 @@ def plot_all_experiments():
             all_benchmark_box_results[this_name] = benchmark_box_df
 
     # now, let's get the resource efficient fine-tuning
-    for i, exp_path in enumerate(sorted(resource_experiment_paths)):
+    for i, exp_path in enumerate(sorted(resource_experiment_paths)[::-1]):
         fig, ax = plt.subplots(2, 2, figsize=(30, 20), sharey="row")
 
         resource_name = os.path.split(exp_path)[-1]
@@ -106,22 +102,51 @@ def plot_all_experiments():
                 continue
 
             print(f"Results for {resource_name} on {model_name}")
-            all_image_setting_paths = natsorted(glob(os.path.join(model_epath, "*", "*")))
-            all_res_list, all_box_res_list = [], []
+            all_image_setting_paths = natsorted(glob(os.path.join(model_epath, "*", "*", "*")))
+            all_res_list_full, all_box_res_list_full = [], []
+            all_res_list_lora, all_box_res_list_lora = [], []
             for image_epath in all_image_setting_paths:
-                image_setting = os.path.split(image_epath)[-1]
-                all_res_paths = sorted(glob(os.path.join(image_epath, "results", "*")))
-                per_image_df, per_image_box_df = _get_all_results(image_setting.split("-")[0], all_res_paths)
-                all_res_list.append(per_image_df)
-                all_box_res_list.append(per_image_box_df)
+                _splits = image_epath.split("/")
+                image_setting = _splits[-1]
+                ft_setting = _splits[-3]
 
-            this_res = pd.concat([all_benchmark_results[model_name], *all_res_list])
-            this_box_res = pd.concat([all_benchmark_box_results[model_name], *all_box_res_list])
+                all_res_paths = sorted(glob(os.path.join(image_epath, "results", "*")))
+                per_image_df, per_image_box_df = _get_all_results(
+                    image_setting.split("-")[0] + "-" + ft_setting.split("-")[0], all_res_paths
+                )
+
+                if ft_setting == "full-finetuning":
+                    all_res_list_full.append(per_image_df)
+                    all_box_res_list_full.append(per_image_box_df)
+                else:
+                    all_res_list_lora.append(per_image_df)
+                    all_box_res_list_lora.append(per_image_box_df)
+
+            this_res_full = pd.concat([all_benchmark_results[model_name], *all_res_list_full])
+            this_box_res_full = pd.concat([all_benchmark_box_results[model_name], *all_box_res_list_full])
+
+            this_res_lora = pd.concat([all_benchmark_results[model_name], *all_res_list_lora])
+            this_box_res_lora = pd.concat([all_benchmark_box_results[model_name], *all_box_res_list_lora])
+
+            this_res = pd.concat([this_res_full, this_res_lora])
+            this_box_res = pd.concat([this_box_res_full, this_box_res_lora])
+
+            replacement_map = {
+                '1-full': '1', '1-lora': '1',
+                '2-full': '2', '2-lora': '2',
+                '5-full': '5', '5-lora': '5',
+                '10-full': '10', '10-lora': '10'
+            }
+            this_res['x'] = this_res['name'].replace(replacement_map)
+            this_box_res['x'] = this_box_res['name'].replace(replacement_map)
 
             _title = "Generalist" if model_name.endswith("lm") else "Default"
 
             sns.lineplot(
-                x="name", y="results", hue="type", data=this_box_res,
+                x="x", y="results", hue="type",
+                data=this_box_res[
+                    this_box_res['name'].str.contains("full") | this_box_res['name'].str.contains("initial")
+                ],
                 ax=ax[0, idx], palette=PALETTE, hue_order=PALETTE.keys(),
                 marker="o", markersize=15, linewidth=5
             )
@@ -131,7 +156,32 @@ def plot_all_experiments():
             ax[0, idx].yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
 
             sns.lineplot(
-                x="name", y="results", hue="type", data=this_res,
+                x="x", y="results", hue="type",
+                data=this_box_res[
+                    this_box_res['name'].str.contains("lora") | this_box_res['name'].str.contains("initial")
+                ],
+                ax=ax[0, idx], palette=PALETTE, hue_order=PALETTE.keys(),
+                marker="o", markersize=15, linewidth=5
+            )
+            ax[0, idx].set_title(_title, fontweight="bold")
+            ax[0, idx].set(xlabel=None, ylabel=None)
+            ax[0, idx].set_yticks(np.linspace(0.8, 1, 5))
+            ax[0, idx].yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
+
+            sns.lineplot(
+                x="x", y="results", hue="type",
+                data=this_res[this_res['name'].str.contains("full") | this_res['name'].str.contains("initial")],
+                ax=ax[1, idx], palette=PALETTE, hue_order=PALETTE.keys(),
+                marker="o", markersize=15, linewidth=5
+            )
+            # ax[1, idx].set_title(_title, fontweight="bold")
+            ax[1, idx].set(xlabel=None, ylabel=None)
+            ax[1, idx].set_yticks(np.linspace(0.1, 0.6, 6))
+            ax[1, idx].yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
+
+            sns.lineplot(
+                x="x", y="results", hue="type",
+                data=this_res[this_res['name'].str.contains("lora") | this_res['name'].str.contains("initial")],
                 ax=ax[1, idx], palette=PALETTE, hue_order=PALETTE.keys(),
                 marker="o", markersize=15, linewidth=5
             )
