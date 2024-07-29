@@ -76,6 +76,7 @@ def annotator_2d(
         image, model_type=model_type, save_path=embedding_path,
         halo=halo, tile_shape=tile_shape, precompute_amg_state=precompute_amg_state,
         ndim=2, checkpoint_path=checkpoint_path, device=device, prefer_decoder=prefer_decoder,
+        skip_load=False,
     )
 
     if viewer is None:

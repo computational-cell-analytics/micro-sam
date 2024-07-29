@@ -956,7 +956,6 @@ class InstanceSegmentationWithDecoder:
         ]
         return masks
 
-    # TODO find good default values (empirically)
     def generate(
         self,
         center_distance_threshold: float = 0.5,
