@@ -71,8 +71,8 @@ def write_slurm_scripts(
 #SBATCH -c 8
 #SBATCH --mem 16G
 #SBATCH -t 2-00:00:00
-#SBATCH -p grete-h100:shared
-#SBATCH -G H100:1
+#SBATCH -p grete:shared
+#SBATCH -G A100:1
 #SBATCH -A gzz0001
 #SBATCH --job-name={Path(inference_setup).stem}
 
