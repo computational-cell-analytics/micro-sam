@@ -147,6 +147,7 @@ def train_sam(
     scheduler_kwargs: Optional[Dict[str, Any]] = None,
     save_every_kth_epoch: Optional[int] = None,
     pbar_signals: Optional[QObject] = None,
+    **kwargs,
 ) -> None:
     """Run training for a SAM model.
 
@@ -260,7 +261,7 @@ def train_sam(
             lr_scheduler=scheduler,
             logger=trainers.SamLogger,
             log_image_interval=100,
-            mixed_precision=True,
+            mixed_precision=False,
             convert_inputs=convert_inputs,
             n_objects_per_batch=n_objects_per_batch,
             n_sub_iteration=n_sub_iteration,

@@ -181,10 +181,15 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
     # Functionality for iterative prompting loss
     #
 
-    def _get_best_masks(self, batched_outputs, batched_iou_predictions):
+    def _get_best_masks(self, batched_outputs, batched_iou_predictions, input_size, original_size):
         # Batched mask and logit (low-res mask) predictions.
-        masks = torch.stack([m["masks"] for m in batched_outputs])
         logits = torch.stack([m["low_res_masks"] for m in batched_outputs])
+        # masks = torch.stack([m["masks"] for m in batched_outputs])
+
+        masks = torch.stack([
+            self.model.sam.postprocess_masks(log, input_size=input_size, original_size=original_size)
+            for log in logits
+        ])
 
         # Determine the best IOU across the multi-object prediction axis
         # and turn this into a mask we can use for indexing.
@@ -241,7 +246,10 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             with torch.no_grad():
                 # Get the mask and logit predictions corresponding to the predicted object
                 # (per actual object) with the best IOU.
-                masks, logits = self._get_best_masks(batched_outputs, batched_iou_predictions)
+                masks, logits = self._get_best_masks(
+                    batched_outputs, batched_iou_predictions,
+                    input_size=batched_inputs[0]["input_size"], original_size=batched_inputs[0]["original_size"]
+                )
                 batched_inputs = self._update_prompts(batched_inputs, y_one_hot, masks, logits)
 
         loss = loss / num_subiter
@@ -350,15 +358,25 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
         n_iter = 0
         t_per_iter = time.time()
+
+        import json
+        bench_iters = 5
+        tbs = []
+        tfs = []
+
         for x, y in self.train_loader:
             input_check_done = self._check_input_normalization(x, input_check_done)
 
             self.optimizer.zero_grad()
 
+            tf = time.time()
             with forward_context():
                 (loss, mask_loss, iou_regression_loss, model_iou) = self._interactive_train_iteration(x, y)
+            tf = time.time() - tf
 
+            tb = time.time()
             backprop(loss)
+            tb = time.time() - tb
 
             if self.logger is not None:
                 lr = [pm["lr"] for pm in self.optimizer.param_groups][0]
@@ -369,6 +387,16 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             if self._iteration >= self.max_iteration:
                 break
             progress.update(1)
+
+            tfs.append(tf)
+            tbs.append(tb)
+
+            if n_iter >= bench_iters:
+                with open("training_times.json", "w") as f:
+                    json.dump({
+                        "forward_pass": tfs, "backward_pass": tbs
+                    }, f)
+                quit()
 
         t_per_iter = (time.time() - t_per_iter) / n_iter
         return t_per_iter

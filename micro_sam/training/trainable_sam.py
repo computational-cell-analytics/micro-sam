@@ -20,11 +20,13 @@ class TrainableSAM(nn.Module):
         self,
         sam: Sam,
         device: Union[str, torch.device],
+        upsample_masks: bool = False,
     ) -> None:
         super().__init__()
         self.sam = sam
         self.device = device
         self.transform = ResizeLongestSide(sam.image_encoder.img_size)
+        self.upsample_masks = upsample_masks
 
     def preprocess(self, x: torch.Tensor) -> Tuple[torch.Tensor, Tuple[int, int]]:
         """Resize, normalize pixel values and pad to a square input.
@@ -111,18 +113,14 @@ class TrainableSAM(nn.Module):
                 multimask_output=multimask_output,
             )
 
-            masks = self.sam.postprocess_masks(
-                low_res_masks,
-                input_size=image_record["input_size"],
-                original_size=image_record["original_size"],
-            )
-
-            outputs.append(
-                {
-                    "low_res_masks": low_res_masks,
-                    "masks": masks,
-                    "iou_predictions": iou_predictions
-                }
-            )
+            this_output = {"low_res_masks": low_res_masks, "iou_predictions": iou_predictions}
+            if self.upsample_masks:
+                masks = self.sam.postprocess_masks(
+                    low_res_masks,
+                    input_size=image_record["input_size"],
+                    original_size=image_record["original_size"],
+                )
+                this_output["masks"] = masks
+            outputs.append(this_output)
 
         return outputs
