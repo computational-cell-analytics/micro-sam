@@ -21,12 +21,12 @@ PALETTE = {
 
 NAME_MAPS = {
     "vanilla": "Default",
-    "lora_1": "LoRA (Rank 1)",
-    "lora_2": "LoRA (Rank 2)",
-    "lora_4": "LoRA (Rank 4)",
-    "lora_8": "LoRA (Rank 8)",
-    "lora_16": "LoRA (Rank 16)",
-    "full_ft": "Full Finetuning",
+    "lora_1": "LoRA (Rank 1)",  # 15.13M
+    "lora_2": "LoRA (Rank 2)",  # 15.17M
+    "lora_4": "LoRA (Rank 4)",  # 15.24M
+    "lora_8": "LoRA (Rank 8)",  # 15.39M
+    "lora_16": "LoRA (Rank 16)",  # 15.68M
+    "full_ft": "Full Finetuning",  # 104.76M
 }
 
 plt.rcParams.update({"font.size": 30})
