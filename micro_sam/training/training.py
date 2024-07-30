@@ -141,6 +141,7 @@ def train_sam(
     device: Optional[Union[str, torch.device]] = None,
     lr: float = 1e-5,
     n_sub_iteration: int = 8,
+    box_distortion_factor: float = 0.05,
     save_root: Optional[Union[str, os.PathLike]] = None,
     mask_prob: float = 0.5,
     n_iterations: Optional[int] = None,
@@ -172,6 +173,7 @@ def train_sam(
         device: The device to use for training.
         lr: The learning rate.
         n_sub_iteration: The number of iterative prompts per training iteration.
+        box_distortion_factor: The strength of box distortions applied during training.
         save_root: Optional root directory for saving the checkpoints and logs.
             If not given the current working directory is used.
         mask_prob: The probability for using a mask as input in a given training sub-iteration.
@@ -197,7 +199,7 @@ def train_sam(
     )
 
     # This class creates all the training data for a batch (inputs, prompts and labels).
-    convert_inputs = ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
+    convert_inputs = ConvertToSamInputs(transform=model.transform, box_distortion_factor=box_distortion_factor)
 
     # Create the UNETR decoder (if train with it) and the optimizer.
     if with_segmentation_decoder:
