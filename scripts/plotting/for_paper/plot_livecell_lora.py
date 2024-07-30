@@ -21,12 +21,12 @@ PALETTE = {
 
 NAME_MAPS = {
     "vanilla": "Default",
-    "lora_1": "LoRA (Rank 1)",  # 15.13M
-    "lora_2": "LoRA (Rank 2)",  # 15.17M
-    "lora_4": "LoRA (Rank 4)",  # 15.24M
-    "lora_8": "LoRA (Rank 8)",  # 15.39M
-    "lora_16": "LoRA (Rank 16)",  # 15.68M
-    "full_ft": "Full Finetuning",  # 104.76M
+    "lora_1": "LoRA\n(Rank 1)",  # 15.13M
+    "lora_2": "LoRA\n(Rank 2)",  # 15.17M
+    "lora_4": "LoRA\n(Rank 4)",  # 15.24M
+    "lora_8": "LoRA\n(Rank 8)",  # 15.39M
+    "lora_16": "LoRA\n(Rank 16)",  # 15.68M
+    "full_ft": "Full\nFinetuning",  # 104.76M
 }
 
 plt.rcParams.update({"font.size": 30})
@@ -96,7 +96,7 @@ def _get_vanilla_and_finetuned_results():
 
 
 def _get_plots():
-    plt.figure(figsize=(30, 15))
+    plt.figure(figsize=(20, 15))
     res = _get_vanilla_and_finetuned_results()
     ax = sns.lineplot(
         data=pd.melt(res, "experiment"),
@@ -104,13 +104,16 @@ def _get_plots():
         palette=PALETTE, markersize=20, linewidth=3,
     )
 
-    ax.set_yticks(np.linspace(0.1, 1, 10)[:-1])
+    ax.set_yticks(np.linspace(0, 1, 11)[:-2])
 
     plt.ylabel("Mean Segmentation Accuracy", labelpad=10, fontweight="bold")
     plt.xlabel("Finetuning Strategy", labelpad=10, fontweight="bold")
     plt.legend(loc="lower center", ncol=7)
 
     plt.xticks(np.arange(7), [exp_name for exp_name in NAME_MAPS.values()])
+
+    plt.gca().yaxis.labelpad = 30
+    plt.gca().xaxis.labelpad = 20
 
     plt.title("")
     plt.tight_layout()
