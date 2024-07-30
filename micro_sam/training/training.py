@@ -1,5 +1,6 @@
 import os
 import time
+import warnings
 from glob import glob
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -419,6 +420,7 @@ def train_sam_for_configuration(
     val_loader: DataLoader,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     with_segmentation_decoder: bool = True,
+    model_type: Optional[str] = None,
     **kwargs,
 ) -> None:
     """Run training for a SAM model with the configuration for a given hardware resource.
@@ -435,6 +437,9 @@ def train_sam_for_configuration(
         checkpoint_path: Path to checkpoint for initializing the SAM model.
         with_segmentation_decoder: Whether to train additional UNETR decoder
             for automatic instance segmentation.
+        model_type: Over-ride the default model type.
+            This can be used to use one of the micro_sam models as starting point
+            instead of a default sam model.
         kwargs: Additional keyword parameterts that will be passed to `train_sam`.
     """
     if configuration in CONFIGURATIONS:
@@ -442,9 +447,16 @@ def train_sam_for_configuration(
     else:
         raise ValueError(f"Invalid configuration {configuration} expect one of {list(CONFIGURATIONS.keys())}")
 
+    if model_type is None:
+        model_type = train_kwargs.pop("model_type")
+    else:
+        expected_model_type = train_kwargs.pop("model_type")
+        if model_type[:5] != expected_model_type:
+            warnings.warn("You have specified a different model type.")
+
     train_kwargs.update(**kwargs)
     train_sam(
         name=name, train_loader=train_loader, val_loader=val_loader,
         checkpoint_path=checkpoint_path, with_segmentation_decoder=with_segmentation_decoder,
-        **train_kwargs
+        model_type=model_type, **train_kwargs
     )
