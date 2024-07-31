@@ -214,3 +214,26 @@ All jobs are tested on `medium` partition.
 | CPU (64G)  | vit_b_lm (LoRA)                | 2                 | 1          | 0:19:46    |
 | CPU (64G)  | vit_b_lm (LoRA)                | 5                 | 38         | 9:38:11    |
 | CPU (64G)  | vit_b_lm (LoRA)                | 10                | 15         | 5:42:34    |
+
+
+### Plots for the Best Setting:
+| Resource   | Model      | Finetuned Strategy | Best Epoch | Train Time |
+|------------|------------|--------------------|------------|------------|
+| CPU (32G)  | Default    | FFT                | 24         | 5:41:31    |
+| CPU (32G)  | Default    | LoRA               | 13         | 2:57:08    |
+| CPU (32G)  | Generalist | FFT                | 6          | 2:01:30    |
+| CPU (32G)  | Generalist | LoRA               | 7          | 1:58:57    |
+| CPU (64G)  | Default    | FFT                | 15         | 3:51:02    |
+| CPU (64G)  | Default    | LoRA               | 19         | 5:20:02    |
+| CPU (64G)  | Generalist | FFT                | 5          | 1:28:26    |
+| CPU (64G)  | Generalist | LoRA               | 15         | 5:42:34    |
+| GTX1080    | Default    | MD, PE             | 40         | 1:18:05    |
+| GTX1080    | Generalist | MD, PE             | 13         | 0:15:05    |
+| RTX5000  | Default      | FFT                | 43         | 0:46:55    |
+| RTX5000  | Default      | LoRA               | 16         | 0:17:37    |
+| RTX5000  | Generalist   | FFT                | 3          | 0:04:22    |
+| RTX5000  | Generalist   | LoRA               | 32         | 0:34:04    |
+| V100     | Default      | FFT                | 20         | 0:26:24    |
+| V100     | Default      | LoRA               | 42         | 0:51:10    |
+| V100     | Generalist   | FFT                | 2          | 0:03:48    |
+| V100     | Generalist   | LoRA               | 5          | 0:07:11    |
