@@ -253,6 +253,8 @@ def plot_all_experiments():
                 y = -0.075
             elif resource_name == "GTX1080":
                 y = -0.1
+            elif resource_name == "cpu_32G-mem_16-cores":
+                y = -0.03
             else:
                 y = 0
             plt.text(x=-1.35, y=y, s="Number of Images", fontweight="bold")
