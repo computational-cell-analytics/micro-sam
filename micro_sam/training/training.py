@@ -126,6 +126,12 @@ class _ProgressBarWrapper:
         self._signals.pbar_description.emit(desc)
 
 
+def _count_parameters(model_parameters):
+    params = sum(p.numel() for p in model_parameters if p.requires_grad)
+    params = params / 1e6
+    print(f"The number of trainable parameters for the provided model is {round(params, 2)}M")
+
+
 def train_sam(
     name: str,
     model_type: str,
