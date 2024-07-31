@@ -262,7 +262,7 @@ def plot_all_experiments():
 
             plt.subplots_adjust(wspace=0.1, hspace=0.15, bottom=bottom, top=0.88)
 
-            if resource_name == "cpu_32G-mem_16-cores":
+            if resource_name == "cpu_64G-mem_16-cores":
                 fig.suptitle("Resource Efficient Finetuning (CPU)", y=0.95, x=0.51)
                 save_path = "./5_b.png"
                 plt.savefig(save_path)
