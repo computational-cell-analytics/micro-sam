@@ -14,10 +14,10 @@ ROOT = "/scratch/projects/nim00007/sam/data/"
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/new_models"
 
 VANILLA_MODELS = {
-    "vit_t": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/vit_t_mobile_sam.pth",
-    "vit_b": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/sam_vit_b_01ec64.pth",
-    "vit_l": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/sam_vit_l_0b3195.pth",
-    "vit_h": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/sam_vit_h_4b8939.pth"
+    "vit_t": "/scratch-grete/projects/nim00007/sam/models/vanilla/vit_t_mobile_sam.pth",
+    "vit_b": "/scratch-grete/projects/nim00007/sam/models/vanilla/sam_vit_b_01ec64.pth",
+    "vit_l": "/scratch-grete/projects/nim00007/sam/models/vanilla/sam_vit_l_0b3195.pth",
+    "vit_h": "/scratch-grete/projects/nim00007/sam/models/vanilla/sam_vit_h_4b8939.pth"
 }
 
 
@@ -80,10 +80,13 @@ def get_dataset_paths(dataset_name, split_choice):
     return raw_dir, labels_dir
 
 
-def get_model(model_type, ckpt):
+def get_model(model_type, ckpt, lora_rank):
     if ckpt is None:
         ckpt = VANILLA_MODELS[model_type]
-    predictor = get_sam_model(model_type=model_type, checkpoint_path=ckpt)
+
+    predictor = get_sam_model(
+        model_type=model_type, checkpoint_path=ckpt, lora_rank=lora_rank,
+    )
     return predictor
 
 
@@ -226,6 +229,7 @@ def get_default_arguments():
     parser.add_argument(
         "--use_masks", action="store_true", help="To use logits masks for iterative prompting."
     )
+    parser.add_argument("--lora_rank", default=None, type=int, help="The rank for low rank adaptation method.")
     args = parser.parse_args()
     return args
 
