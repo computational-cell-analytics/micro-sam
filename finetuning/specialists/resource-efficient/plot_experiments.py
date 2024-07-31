@@ -13,7 +13,7 @@ from matplotlib.ticker import FuncFormatter
 from matplotlib.ticker import FormatStrFormatter
 
 
-ROOT = "/scratch/share/cidas/cca/experiments/resource-efficient-finetuning/"
+ROOT = "/media/anwai/ANWAI/micro-sam/resource-efficient-finetuning/"
 
 PALETTE = {
     "AIS": "#045275",
@@ -90,7 +90,7 @@ def plot_all_experiments():
             all_benchmark_box_results[this_name] = benchmark_box_df
 
     # now, let's get the resource efficient fine-tuning
-    for i, exp_path in enumerate(sorted(resource_experiment_paths)[::-1]):
+    for i, exp_path in enumerate(sorted(resource_experiment_paths)):
         fig, ax = plt.subplots(2, 2, figsize=(30, 20), sharey="row")
 
         resource_name = os.path.split(exp_path)[-1]
@@ -142,7 +142,11 @@ def plot_all_experiments():
 
             _title = "Generalist" if model_name.endswith("lm") else "Default"
 
-            sns.lineplot(
+            def _change_opacity_markers(lineplot):
+                for line in lineplot.lines:
+                    line.set_alpha(0.8)
+
+            lineplot = sns.lineplot(
                 x="x", y="results", hue="type",
                 data=this_box_res[
                     this_box_res['name'].str.contains("full") | this_box_res['name'].str.contains("initial")
@@ -150,12 +154,14 @@ def plot_all_experiments():
                 ax=ax[0, idx], palette=PALETTE, hue_order=PALETTE.keys(),
                 marker="o", markersize=15, linewidth=5
             )
+            _change_opacity_markers(lineplot)
+
             ax[0, idx].set_title(_title, fontweight="bold")
             ax[0, idx].set(xlabel=None, ylabel=None)
             ax[0, idx].set_yticks(np.linspace(0.8, 1, 5))
             ax[0, idx].yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
 
-            sns.lineplot(
+            lineplot = sns.lineplot(
                 x="x", y="results", hue="type",
                 data=this_box_res[
                     this_box_res['name'].str.contains("lora") | this_box_res['name'].str.contains("initial")
@@ -163,28 +169,33 @@ def plot_all_experiments():
                 ax=ax[0, idx], palette=PALETTE, hue_order=PALETTE.keys(),
                 marker="o", markersize=15, linewidth=5, linestyle=":",
             )
+            _change_opacity_markers(lineplot)
             ax[0, idx].set_title(_title, fontweight="bold")
             ax[0, idx].set(xlabel=None, ylabel=None)
             ax[0, idx].set_yticks(np.linspace(0.8, 1, 5))
             ax[0, idx].yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
 
-            sns.lineplot(
+            lineplot = sns.lineplot(
                 x="x", y="results", hue="type",
                 data=this_res[this_res['name'].str.contains("full") | this_res['name'].str.contains("initial")],
                 ax=ax[1, idx], palette=PALETTE, hue_order=PALETTE.keys(),
                 marker="o", markersize=15, linewidth=5
             )
+            _change_opacity_markers(lineplot)
+
             # ax[1, idx].set_title(_title, fontweight="bold")
             ax[1, idx].set(xlabel=None, ylabel=None)
             ax[1, idx].set_yticks(np.linspace(0.1, 0.6, 6))
             ax[1, idx].yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
 
-            sns.lineplot(
+            lineplot = sns.lineplot(
                 x="x", y="results", hue="type",
                 data=this_res[this_res['name'].str.contains("lora") | this_res['name'].str.contains("initial")],
                 ax=ax[1, idx], palette=PALETTE, hue_order=PALETTE.keys(),
                 marker="o", markersize=15, linewidth=5, linestyle=":",
             )
+            _change_opacity_markers(lineplot)
+
             # ax[1, idx].set_title(_title, fontweight="bold")
             ax[1, idx].set(xlabel=None, ylabel=None)
             ax[1, idx].set_yticks(np.linspace(0.1, 0.6, 6))
@@ -215,24 +226,39 @@ def plot_all_experiments():
                 mlines.Line2D([], [], color=_colors[3], markersize=15, marker='o', linestyle=':', linewidth=5),
             ]
 
-            fig.legend(
-                handles=custom_handles,
-                labels=[
-                    'AIS (FFT)', 'AIS (LoRA)', 'AMG (FFT)', 'AMG (LoRA)',
-                    'Point (FFT)', 'Point (LoRA)', 'Box (FFT)', 'Box (LoRA)'
-                ],
-                loc="lower center", ncols=4, bbox_to_anchor=(0.5, 0)
-            )
+            if resource_name == "GTX1080":
+                fig.legend(
+                    handles=custom_handles,
+                    labels=['AIS (MD, PE)', 'AMG (MD, PE)', 'Point (MD, PE)', 'Box (MD, PE)'],
+                    loc="lower center", ncols=4, bbox_to_anchor=(0.5, 0)
+                )
+                bottom = 0.12
+            else:
+                fig.legend(
+                    handles=custom_handles,
+                    labels=[
+                        'AIS (FFT)', 'AIS (LoRA)', 'AMG (FFT)', 'AMG (LoRA)',
+                        'Point (FFT)', 'Point (LoRA)', 'Box (FFT)', 'Box (LoRA)'
+                    ],
+                    loc="lower center", ncols=4, bbox_to_anchor=(0.5, 0)
+                )
+                bottom = 0.15
 
             def format_y_tick_label(value, pos):
                 return "{:.2f}".format(value)
 
             plt.gca().yaxis.set_major_formatter(FuncFormatter(format_y_tick_label))
 
+            if resource_name == "V100":
+                y = -0.075
+            elif resource_name == "GTX1080":
+                y = -0.1
+            else:
+                y = 0
+            plt.text(x=-1.35, y=y, s="Number of Images", fontweight="bold")
             plt.text(x=-5.8, y=0.36, s="Segmentation Accuracy at IoU 50%", rotation=90, fontweight="bold")
-            plt.text(x=-1.35, y=-0.075, s="Number of Images", fontweight="bold")
 
-            plt.subplots_adjust(wspace=0.1, hspace=0.15, bottom=0.15, top=0.88)
+            plt.subplots_adjust(wspace=0.1, hspace=0.15, bottom=bottom, top=0.88)
 
             if resource_name == "cpu_32G-mem_16-cores":
                 fig.suptitle("Resource Efficient Finetuning (CPU)", y=0.95, x=0.51)
