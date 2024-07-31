@@ -23,7 +23,7 @@ def base_slurm_script(env_name, partition, cpu_mem, cpu_cores, gpu_name=None):
     if partition.startswith("grete"):
         base_script += "#SBATCH -A gzz0001 \n"
 
-    base_script += "\n" + f"source activate {env_name}" + "\n"
+    base_script += "\n" + "source ~/.bashrc" + "\n" + "mamba activate {env_name}" + "\n"
 
     return base_script
 

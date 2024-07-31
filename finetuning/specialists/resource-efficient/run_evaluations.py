@@ -76,7 +76,8 @@ def write_slurm_scripts(
 #SBATCH -A gzz0001
 #SBATCH --job-name={Path(inference_setup).stem}
 
-source activate {env_name} \n"""
+source ~/.bashrc
+mamba activate {env_name} \n"""
 
     # python script
     batch_script += f"python {inference_setup}.py -c {checkpoint} -m {model_type} -e {experiment_folder} -d covid_if "
@@ -157,22 +158,22 @@ def main(args):
     process_covid_if(input_path=DATA_DIR)
 
     # results on vanilla models
-    # run_slurm_scripts(
-    #     model_type="vit_b",
-    #     checkpoint=None,
-    #     experiment_folder=os.path.join(ROOT, "vanilla", "vit_b"),
-    #     scripts=ALL_SCRIPTS[:-1],
-    #     dry=args.dry,
-    # )
+    run_slurm_scripts(
+        model_type="vit_b",
+        checkpoint=None,
+        experiment_folder=os.path.join(ROOT, "vanilla", "vit_b"),
+        scripts=ALL_SCRIPTS[:-1],
+        dry=args.dry,
+    )
 
     # results on generalist models
-    # vit_b_lm_path = "/scratch/usr/nimanwai/micro-sam/checkpoints/vit_b/lm_generalist_sam/best.pt"
-    # run_slurm_scripts(
-    #     model_type="vit_b",
-    #     checkpoint=vit_b_lm_path,
-    #     experiment_folder=os.path.join(ROOT, "generalist", "vit_b"),
-    #     dry=args.dry,
-    # )
+    vit_b_lm_path = "/scratch/usr/nimanwai/micro-sam/checkpoints/vit_b/lm_generalist_sam/best.pt"
+    run_slurm_scripts(
+        model_type="vit_b",
+        checkpoint=vit_b_lm_path,
+        experiment_folder=os.path.join(ROOT, "generalist", "vit_b"),
+        dry=args.dry,
+    )
 
     # results on resource-efficient finetuned checkpoints
     all_checkpoint_paths = glob(os.path.join(ROOT, "**", "best.pt"), recursive=True)
