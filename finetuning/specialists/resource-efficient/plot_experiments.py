@@ -215,18 +215,14 @@ def plot_all_experiments():
                 ax.get_legend().remove()
 
             _colors = list(PALETTE.values())
-            custom_handles = [
-                mlines.Line2D([], [], color=_colors[0], markersize=15, marker='o', linestyle='-', linewidth=5),
-                mlines.Line2D([], [], color=_colors[0], markersize=15, marker='o', linestyle=':', linewidth=5),
-                mlines.Line2D([], [], color=_colors[1], markersize=15, marker='o', linestyle='-', linewidth=5),
-                mlines.Line2D([], [], color=_colors[1], markersize=15, marker='o', linestyle=':', linewidth=5),
-                mlines.Line2D([], [], color=_colors[2], markersize=15, marker='o', linestyle='-', linewidth=5),
-                mlines.Line2D([], [], color=_colors[2], markersize=15, marker='o', linestyle=':', linewidth=5),
-                mlines.Line2D([], [], color=_colors[3], markersize=15, marker='o', linestyle='-', linewidth=5),
-                mlines.Line2D([], [], color=_colors[3], markersize=15, marker='o', linestyle=':', linewidth=5),
-            ]
 
             if resource_name == "GTX1080":
+                custom_handles = [
+                    mlines.Line2D([], [], color=_colors[0], markersize=15, marker='o', linestyle='-', linewidth=5),
+                    mlines.Line2D([], [], color=_colors[1], markersize=15, marker='o', linestyle='-', linewidth=5),
+                    mlines.Line2D([], [], color=_colors[2], markersize=15, marker='o', linestyle='-', linewidth=5),
+                    mlines.Line2D([], [], color=_colors[3], markersize=15, marker='o', linestyle='-', linewidth=5),
+                ]
                 fig.legend(
                     handles=custom_handles,
                     labels=['AIS (MD, PE)', 'AMG (MD, PE)', 'Point (MD, PE)', 'Box (MD, PE)'],
@@ -234,6 +230,16 @@ def plot_all_experiments():
                 )
                 bottom = 0.12
             else:
+                custom_handles = [
+                    mlines.Line2D([], [], color=_colors[0], markersize=15, marker='o', linestyle='-', linewidth=5),
+                    mlines.Line2D([], [], color=_colors[0], markersize=15, marker='o', linestyle=':', linewidth=5),
+                    mlines.Line2D([], [], color=_colors[1], markersize=15, marker='o', linestyle='-', linewidth=5),
+                    mlines.Line2D([], [], color=_colors[1], markersize=15, marker='o', linestyle=':', linewidth=5),
+                    mlines.Line2D([], [], color=_colors[2], markersize=15, marker='o', linestyle='-', linewidth=5),
+                    mlines.Line2D([], [], color=_colors[2], markersize=15, marker='o', linestyle=':', linewidth=5),
+                    mlines.Line2D([], [], color=_colors[3], markersize=15, marker='o', linestyle='-', linewidth=5),
+                    mlines.Line2D([], [], color=_colors[3], markersize=15, marker='o', linestyle=':', linewidth=5),
+                ]
                 fig.legend(
                     handles=custom_handles,
                     labels=[
