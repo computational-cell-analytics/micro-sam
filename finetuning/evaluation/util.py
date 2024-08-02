@@ -81,8 +81,6 @@ def get_dataset_paths(dataset_name, split_choice):
 
 
 def get_model(model_type, ckpt, lora_rank):
-    if ckpt is None:
-        ckpt = VANILLA_MODELS[model_type]
 
     predictor = get_sam_model(
         model_type=model_type, checkpoint_path=ckpt, lora_rank=lora_rank,
