@@ -4,10 +4,11 @@ Functionality for visualizing image embeddings.
 from typing import Tuple
 
 import numpy as np
+from skimage.transform import resize
+
+from nifty.tools import blocking
 
 from elf.segmentation.embeddings import embedding_pca
-from nifty.tools import blocking
-from skimage.transform import resize
 
 from .util import ImageEmbeddings
 

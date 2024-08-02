@@ -595,7 +595,9 @@ def run_instance_segmentation_with_decoder(
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
 
-    predictor, decoder = get_predictor_and_decoder(model_type=model_type, checkpoint_path=checkpoint, lora_rank=lora_rank)
+    predictor, decoder = get_predictor_and_decoder(
+        model_type=model_type, checkpoint_path=checkpoint, lora_rank=lora_rank,
+    )
     segmenter = InstanceSegmentationWithDecoder(predictor, decoder)
     seg_prefix = "instance_segmentation_with_decoder"
 

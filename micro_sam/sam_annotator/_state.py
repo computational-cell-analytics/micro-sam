@@ -3,18 +3,19 @@ The singleton is implemented following the metaclass design described here:
 https://itnext.io/deciding-the-best-singleton-approach-in-python-65c61e90cdc4
 """
 
-from dataclasses import dataclass, field
 from functools import partial
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-import numpy as np
-import torch.nn as nn
 import zarr
+import numpy as np
+from qtpy.QtWidgets import QWidget
+
+import torch.nn as nn
 
 import micro_sam.util as util
 from micro_sam.instance_segmentation import AMGBase, get_decoder
 from micro_sam.precompute_state import cache_amg_state, cache_is_state
-from qtpy.QtWidgets import QWidget
 
 from segment_anything import SamPredictor
 

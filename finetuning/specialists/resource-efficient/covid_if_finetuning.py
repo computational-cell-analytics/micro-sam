@@ -24,7 +24,7 @@ def get_dataloaders(patch_shape, data_path, n_images):
     Note: to replace this with another data loader you need to return a torch data loader
     that retuns `x, y` tensors, where `x` is the image data and `y` are the labels.
     The labels have to be in a label mask instance segmentation format.
-    I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
+    i.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
     Important: the ID 0 is reseved for background, and the IDs must be consecutive
     """
     num_workers = 8 if torch.cuda.is_available() else 0
@@ -104,8 +104,7 @@ def finetune_covid_if(args):
         save_root=args.save_root,
         scheduler_kwargs=scheduler_kwargs,
         save_every_kth_epoch=args.save_every_kth_epoch,
-        optimizer_class=optimizer_class,
-        lora_rank=args.lora_rank
+        lora_rank=args.lora_rank,
     )
 
 
@@ -150,13 +149,7 @@ def main():
         "--n_images", type=int, default=None, help="The number of images used for finetuning."
     )
     parser.add_argument(
-        "--lora_rank", type=int, default=None, help="The rank of the LoRA model."
-    )
-    parser.add_argument(
-        "--lr", type=float, default=5e-5, help="The learning rate for the optimizer. Default is 5e-5."
-    )
-    parser.add_argument(
-        "--checkpoint_name", type=str, default="covid_if_sam",
+        "--lora_rank", type=int, default=None, help="The rank used for low rank adaptation."
     )
     args = parser.parse_args()
     finetune_covid_if(args)

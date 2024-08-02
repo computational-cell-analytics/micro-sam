@@ -2,26 +2,28 @@
 Helper functions for downloading Segment Anything models and predicting image embeddings.
 """
 
-import hashlib
+
 import os
 import pickle
+import hashlib
 import warnings
-from collections import OrderedDict
 from pathlib import Path
+from collections import OrderedDict
 from typing import Any, Dict, Iterable, Optional, Tuple, Union
 
-import imageio.v3 as imageio
-import numpy as np
-import pooch
-import torch
-import vigra
-import xxhash
 import zarr
-
-from elf.io import open_file
-from nifty.tools import blocking
+import vigra
+import torch
+import pooch
+import xxhash
+import numpy as np
+import imageio.v3 as imageio
 from skimage.measure import regionprops
 from skimage.segmentation import relabel_sequential
+
+from elf.io import open_file
+
+from nifty.tools import blocking
 
 from .__version__ import __version__
 from . import models as custom_models

@@ -126,6 +126,12 @@ class _ProgressBarWrapper:
         self._signals.pbar_description.emit(desc)
 
 
+def _count_parameters(model_parameters):
+    params = sum(p.numel() for p in model_parameters if p.requires_grad)
+    params = params / 1e6
+    print(f"The number of trainable parameters for the provided model is {round(params, 2)}M")
+
+
 def train_sam(
     name: str,
     model_type: str,
@@ -179,12 +185,13 @@ def train_sam(
         mask_prob: The probability for using a mask as input in a given training sub-iteration.
         n_iterations: The number of iterations to use for training. This will over-ride n_epochs if given.
         scheduler_class: The learning rate scheduler to update the learning rate.
-            By default, ReduceLROnPlateau is used.
+            By default, torch.optim.lr_scheduler.ReduceLROnPlateau is used.
         scheduler_kwargs: The learning rate scheduler parameters.
             If passed None, the chosen default parameters are used in ReduceLROnPlateau.
         save_every_kth_epoch: Save checkpoints after every kth epoch separately.
         pbar_signals: Controls for napari progress bar.
-        lora_rank: The rank of the LoRA Training
+        optimizer_class: The optimizer class.
+            By default, torch.optim.AdamW is used.
     """
     _check_loader(train_loader, with_segmentation_decoder)
     _check_loader(val_loader, with_segmentation_decoder)

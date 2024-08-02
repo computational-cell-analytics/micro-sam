@@ -10,7 +10,7 @@ from micro_sam.util import get_sam_model
 def main():
     args = get_default_arguments()
 
-    predictor = get_sam_model(model_type=args.model, checkpoint_path=args.checkpoint, lora_rank=args.lora_rank)
+    predictor = get_model(model_type=args.model, ckpt=args.checkpoint, lora_rank=args.lora_rank)
     embedding_dir = os.path.join(args.experiment_folder, "embeddings")
     os.makedirs(embedding_dir, exist_ok=True)
 
