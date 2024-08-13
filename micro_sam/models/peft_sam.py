@@ -56,7 +56,7 @@ class LoRASurgery(nn.Module):
         return qkv
 
 
-class FacT_Surgery(nn.Module):
+class FacTSurgery(nn.Module):
     """Operates on the attention layers for performing factorized attention.
 
     (Inspired from: https://github.com/cchen-cc/MA-SAM/blob/main/MA-SAM/sam_fact_tt_image_encoder.py)
@@ -123,8 +123,9 @@ class PEFT_Sam(nn.Module):
 
         assert rank > 0
 
-        self.FacTu = nn.Linear(model.dim, rank, bias=False)
-        self.FacTv = nn.Linear(rank, model.dim, bias=False)
+        dim = model.image_encoder.blocks[0].attn.qkv.in_features
+        self.FacTu = nn.Linear(dim, rank, bias=False)
+        self.FacTv = nn.Linear(rank, dim, bias=False)
 
         if attention_layers_to_update:
             self.peft_layers = attention_layers_to_update
