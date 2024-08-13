@@ -56,6 +56,50 @@ class LoRASurgery(nn.Module):
         return qkv
 
 
+class FacT_Surgery(nn.Module):
+    """Operates on the attention layers for performing factorized attention.
+
+    (Inspired from: https://github.com/cchen-cc/MA-SAM/blob/main/MA-SAM/sam_fact_tt_image_encoder.py)
+
+    """
+
+    def __init__(
+            self,
+            rank: int,
+            block: nn.Module,
+            FacTu: nn.Module,
+            FacTv: nn.Module,
+    ):
+        super().__init__()
+        self.qkv_proj = block.attn.qkv
+        self.dim = self.qkv_proj.in_features 
+
+        self.q_FacTs = nn.Linear(rank, rank, bias=False)
+        self.v_FacTs = nn.Linear(rank, rank, bias=False)
+
+        self.dp_q = nn.Dropout(0.1)
+        self.dp_v = nn.Dropout(0.1)
+
+        self.FacTu = FacTu
+        self.FacTv = FacTv
+
+        block.attn.qkv = self
+
+
+    def forward(self, x):
+
+        qkv = self.qkv_proj(x)  # B,N,N,3*org_C
+        new_q = self.FacTv(self.dp_q(self.q_FacTs(self.FacTu(x))))  
+        new_v = self.FacTv(self.dp_v(self.v_FacTs(self.FacTu(x))))
+        # NOTE : Scaling Factor was set to 1 as it can be tuned via the learning rate
+        # Does it make sense to include it, in order to have similar learning rate as the original model?
+        qkv[:, :, :, : self.dim] += new_q
+        qkv[:, :, :, -self.dim:] += new_v
+        return qkv
+    
+
+
+
 class PEFT_Sam(nn.Module):
     """Wraps the Segment Anything model's image encoder to different parameter efficient finetuning methods.
 
@@ -79,6 +123,9 @@ class PEFT_Sam(nn.Module):
 
         assert rank > 0
 
+        self.FacTu = nn.Linear(model.dim, rank, bias=False)
+        self.FacTv = nn.Linear(rank, model.dim, bias=False)
+
         if attention_layers_to_update:
             self.peft_layers = attention_layers_to_update
         else:   # Applies PEFT to the image encoder by default
@@ -95,8 +142,11 @@ class PEFT_Sam(nn.Module):
             # If we only want specific layers with PEFT instead of all
             if t_layer_i not in self.peft_layers:
                 continue
+            if peft_module == LoRASurgery:
+                peft_block = self.peft_module(rank=rank, block=blk)
+            else:
+                peft_block = self.peft_module(rank=rank, block=blk, FacTu=self.FacTu, FacTv=self.FacTv)
 
-            peft_block = self.peft_module(rank=rank, block=blk)
             self.peft_blocks.append(peft_block)
 
         self.peft_blocks = nn.ModuleList(self.peft_blocks)
