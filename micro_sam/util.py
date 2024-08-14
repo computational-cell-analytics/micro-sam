@@ -273,8 +273,7 @@ def get_sam_model(
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
     return_state: bool = False,
-    lora_rank: Optional[int] = None,
-    lora_kwargs: Optional[Dict] = None,
+    peft_kwargs: Optional[Dict] = None,
     flexible_load_checkpoint: bool = False,
     **model_kwargs,
 ) -> SamPredictor:
@@ -371,10 +370,11 @@ def get_sam_model(
 
     # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything.
     # Overwrites the SAM model by freezing the backbone and allow low rank adaption to attention layers.
-    if lora_rank is not None:
+    if peft_kwargs is not None:
+        assert peft_kwargs["module"] in ["LoRASurgery", "FacTSurgery"], "Invalid PEFT module."
         if abbreviated_model_type == "vit_t":
             raise ValueError("Parameter efficient finetuning is not supported for 'mobile-sam'.")
-        sam = custom_models.peft_sam.PEFT_Sam(sam, rank=lora_rank, **({} if lora_kwargs is None else lora_kwargs)).sam
+        sam = custom_models.peft_sam.PEFT_Sam(sam, rank=peft_kwargs['rank'], peft_module=peft_kwargs['module']).sam
 
     # In case the model checkpoints have some issues when it is initialized with different parameters than default.
     if flexible_load_checkpoint:

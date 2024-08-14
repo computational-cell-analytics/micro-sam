@@ -154,7 +154,7 @@ def train_sam(
     save_every_kth_epoch: Optional[int] = None,
     pbar_signals: Optional[QObject] = None,
     optimizer_class: Optional[Optimizer] = torch.optim.AdamW,
-    lora_rank: Optional[int] = None,
+    peft_kwargs: Optional[Dict] = None,
     **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
@@ -204,7 +204,7 @@ def train_sam(
         freeze=freeze,
         checkpoint_path=checkpoint_path,
         return_state=True,
-        lora_rank=lora_rank,
+        peft_kwargs=peft_kwargs,
         **model_kwargs
     )
     # This class creates all the training data for a batch (inputs, prompts and labels).

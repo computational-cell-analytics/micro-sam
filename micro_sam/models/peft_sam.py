@@ -77,6 +77,7 @@ class FacTSurgery(nn.Module):
         self.q_FacTs = nn.Linear(rank, rank, bias=False)
         self.v_FacTs = nn.Linear(rank, rank, bias=False)
 
+        # NOTE : Dropout is not included in the original implementation
         self.dp_q = nn.Dropout(0.1)
         self.dp_v = nn.Dropout(0.1)
 
@@ -97,8 +98,6 @@ class FacTSurgery(nn.Module):
         qkv[:, :, :, -self.dim:] += new_v
         return qkv
     
-
-
 
 class PEFT_Sam(nn.Module):
     """Wraps the Segment Anything model's image encoder to different parameter efficient finetuning methods.

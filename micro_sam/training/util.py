@@ -44,8 +44,7 @@ def get_trainable_sam_model(
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     freeze: Optional[List[str]] = None,
     return_state: bool = False,
-    lora_rank: Optional[int] = None,
-    lora_kwargs: Optional[Dict] = None,
+    peft_kwargs: Optional[Dict] = None,
     flexible_load_checkpoint: bool = False,
     **model_kwargs
 ) -> TrainableSAM:
@@ -84,8 +83,9 @@ def get_trainable_sam_model(
     # NOTE: This is done exclusive to "get_sam_model" here to use PEFT's layer-specific initialization on top.
     # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything.
     # Overwrites the SAM model by freezing the backbone and allow low rank adaption to attention layers.
-    if lora_rank is not None:
-        sam = custom_models.peft_sam.PEFT_Sam(sam, rank=lora_rank, **({} if lora_kwargs is None else lora_kwargs)).sam
+    if peft_kwargs is not None:
+        assert peft_kwargs['module'] in ['LoRASurgery', 'FacTSurgery'], "Invalid PEFT module."
+        sam = custom_models.peft_sam.PEFT_Sam(sam, rank=peft_kwargs['rank'], peft_module=peft_kwargs['module']).sam
 
     # freeze components of the model if freeze was passed
     # ideally we would want to add components in such a way that:
