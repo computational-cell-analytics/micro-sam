@@ -132,9 +132,7 @@ def _run_grid_search(model_type, ckpt_root, val_loader, use_ais):
     ckpt_path = os.path.join(ckpt_root, "best.pt")
 
     if use_ais:
-        grid_search_values = grid_search.default_grid_search_values_instance_segmentation_with_decoder(
-            min_size_values=[50],
-        )
+        grid_search_values = grid_search.default_grid_search_values_instance_segmentation_with_decoder()
         predictor, decoder = get_predictor_and_decoder(model_type, ckpt_path)
         segmenter = get_amg(predictor, decoder=decoder, is_tiled=False)
 
@@ -162,7 +160,7 @@ def _run_grid_search(model_type, ckpt_root, val_loader, use_ais):
     gs_result = grid_search.evaluate_instance_segmentation_grid_search(data_root, list(grid_search_values.keys()))
 
     ckpt = torch.load(ckpt_path, weights_only=False)
-    ckpt["gird_search"] = gs_result
+    ckpt["grid_search"] = gs_result
     torch.save(ckpt, ckpt_path)
 
 
