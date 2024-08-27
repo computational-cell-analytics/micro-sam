@@ -20,7 +20,8 @@ from torch.utils.data import DataLoader, Dataset
 from torch_em.data.datasets.util import split_kwargs
 
 from ..util import get_device
-from ..instance_segmentation import get_unetr
+from ..instance_segmentation import get_unetr, get_predictor_and_decoder, get_amg
+from ..evaluation import instance_segmentation as grid_search
 
 from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit
 from . import sam_trainer as trainers
@@ -127,6 +128,42 @@ class _ProgressBarWrapper:
         self._signals.pbar_description.emit(desc)
 
 
+def _run_grid_search(model_type, ckpt_root, val_loader, use_ais):
+    ckpt_path = os.path.join(ckpt_root, "best.pt")
+
+    if use_ais:
+        grid_search_values = grid_search.default_grid_search_values_instance_segmentation_with_decoder()
+        predictor, decoder = get_predictor_and_decoder(model_type, ckpt_path)
+        segmenter = get_amg(predictor, decoder=decoder, is_tiled=False)
+
+    else:
+        # TODO
+        raise NotImplementedError
+
+    # Create images for the grid search from the val loader.
+    data_root = os.path.join(ckpt_root, "grid_search")
+    os.makedirs(data_root, exist_ok=True)
+    image_paths, gt_paths = [], []
+    for i, (x, y) in enumerate(val_loader):
+        im_path = os.path.join(data_root, f"im{i}.tif")
+        imageio.imwrite(im_path, x[0, 0].numpy())
+        image_paths.append(im_path)
+
+        gt_path = os.path.join(data_root, f"gt{i}.tif")
+        imageio.imwrite(gt_path, y[0, 0].numpy())
+        gt_paths.append(gt_path)
+
+    print("Start instance segmentation grid search.")
+    grid_search.run_instance_segmentation_grid_search(
+        segmenter, grid_search_values, image_paths, gt_paths, result_dir=data_root, embedding_dir=None,
+    )
+    gs_result = grid_search.evaluate_instance_segmentation_grid_search(data_root, list(grid_search_values.keys()))
+
+    ckpt = torch.load(ckpt_path, weights_only=False)
+    ckpt["grid_search"] = gs_result
+    torch.save(ckpt, ckpt_path)
+
+
 def train_sam(
     name: str,
     model_type: str,
@@ -148,6 +185,7 @@ def train_sam(
     scheduler_kwargs: Optional[Dict[str, Any]] = None,
     save_every_kth_epoch: Optional[int] = None,
     pbar_signals: Optional[QObject] = None,
+    grid_search_after_train: Optional[bool] = None,
 ) -> None:
     """Run training for a SAM model.
 
@@ -182,6 +220,8 @@ def train_sam(
             If passed None, the chosen default parameters are used in ReduceLROnPlateau.
         save_every_kth_epoch: Save checkpoints after every kth epoch separately.
         pbar_signals: Controls for napari progress bar.
+        grid_search_after_train: Perform a grid search after training to find the best
+            instance segmentation parameters. The grid search is done on the validation set.
     """
     t_start = time.time()
 
@@ -284,6 +324,14 @@ def train_sam(
         trainer_fit_params["progress"] = progress_bar_wrapper
 
     trainer.fit(**trainer_fit_params)
+
+    # By default we only do the grid-search for AMG if it's explicitly asked for,
+    # because it takes a lot of time.
+    if grid_search_after_train is None:
+        grid_search_after_train = with_segmentation_decoder
+    if grid_search_after_train:
+        ckpt_root = os.path.join("" if save_root is None else save_root, "checkpoints", name)
+        _run_grid_search(model_type, ckpt_root, val_loader, use_ais=with_segmentation_decoder)
 
     t_run = time.time() - t_start
     hours = int(t_run // 3600)
