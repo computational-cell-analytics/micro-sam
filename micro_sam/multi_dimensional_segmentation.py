@@ -501,6 +501,8 @@ def _parse_result(slice_segmentation, solver, graph):
             if degree_v == 0:  # The track stops here. Assign v to the track id and increase it.
                 track_assignment[v] = track_id
                 track_id += 1
+                # TODO double check how we handle lineages with only 1 track in micro-sam annotation.
+                # If they are also kept in the lineages field then we need to add them here as well.
 
     # Recolor the segmentation according to the track assignment.
 
