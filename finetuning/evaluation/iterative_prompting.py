@@ -5,7 +5,6 @@ from micro_sam.evaluation.evaluation import run_evaluation_for_iterative_prompti
 
 from util import get_paths  # comment this and create a custom function with the same name to run int. seg. on your data
 from util import get_model, get_default_arguments
-from micro_sam.util import get_sam_model
 
 
 def _run_iterative_prompting(dataset_name, exp_folder, predictor, start_with_box_prompt, use_masks):

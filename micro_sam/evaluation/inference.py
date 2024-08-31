@@ -591,7 +591,6 @@ def run_instance_segmentation_with_decoder(
     test_image_paths: List[Union[str, os.PathLike]],
     lora_rank: Optional[int] = None,
 ) -> str:
-    
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
 

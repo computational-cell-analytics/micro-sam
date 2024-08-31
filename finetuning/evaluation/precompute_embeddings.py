@@ -4,7 +4,6 @@ from micro_sam.evaluation import precompute_all_embeddings
 
 from util import get_paths  # comment this and create a custom function with the same name to execute on your data
 from util import get_model, get_default_arguments
-from micro_sam.util import get_sam_model
 
 
 def main():

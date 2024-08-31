@@ -80,13 +80,13 @@ def finetune_covid_if(args):
     patch_shape = (512, 512)  # the patch shape for training
     n_objects_per_batch = args.n_objects  # the number of objects per batch that will be sampled
     freeze_parts = args.freeze  # override this to freeze different parts of the model
-    checkpoint_name = f"{model_type}/{args.checkpoint_name}"
+    checkpoint_name = f"{args.model_type}/covid_if_sam"
+
     # all stuff we need for training
     train_loader, val_loader = get_dataloaders(
         patch_shape=patch_shape, data_path=args.input_path, n_images=args.n_images
     )
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
-    optimizer_class = torch.optim.AdamW
 
     # Run training
     sam_training.train_sam(
@@ -99,7 +99,7 @@ def finetune_covid_if(args):
         checkpoint_path=checkpoint_path,
         freeze=freeze_parts,
         device=device,
-        lr=args.lr,
+        lr=1e-5,
         n_epochs=args.epochs,
         save_root=args.save_root,
         scheduler_kwargs=scheduler_kwargs,

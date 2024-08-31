@@ -14,7 +14,7 @@ ALL_SCRIPTS = [
 
 def write_batch_script(
     env_name, out_path, inference_setup, checkpoint, model_type,
-    experiment_folder, dataset_name, delay=None, use_masks=False, lora_rank=NotImplementedError
+    experiment_folder, dataset_name, delay=None, use_masks=False
 ):
     "Writing scripts with different fold-trainings for micro-sam evaluation"
     batch_script = f"""#!/bin/bash
@@ -23,7 +23,7 @@ def write_batch_script(
 #SBATCH -t 4-00:00:00
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
-#SBATCH -A nim00007
+#SBATCH -A gzz0001
 #SBATCH --constraint=80gb
 #SBATCH --qos=96h
 #SBATCH --job-name={inference_setup}
@@ -55,13 +55,9 @@ mamba activate {env_name} \n"""
     # use logits for iterative prompting
     if inference_setup == "iterative_prompting" and use_masks:
         python_script += "--use_masks "
-    
-    if lora_rank is not None:
-        python_script += f"--lora_rank {lora_rank} "
 
     # let's add the python script to the bash script
     batch_script += python_script
-    print(batch_script)
 
     with open(_op, "w") as f:
         f.write(batch_script)
@@ -179,8 +175,7 @@ def submit_slurm(args):
             experiment_folder=experiment_folder,
             dataset_name=dataset_name,
             delay=None if current_setup == "precompute_embeddings" else make_delay,
-            use_masks=args.use_masks,
-            lora_rank=args.lora_rank
+            use_masks=args.use_masks
             )
 
     # the logic below automates the process of first running the precomputation of embeddings, and only then inference.
@@ -224,7 +219,6 @@ if __name__ == "__main__":
 
     # ask for a specific experiment
     parser.add_argument("-s", "--specific_experiment", type=str, default=None)
-    parser.add_argument("--lora_rank", type=int, default=None)
 
     args = parser.parse_args()
     main(args)
