@@ -80,10 +80,10 @@ def get_dataset_paths(dataset_name, split_choice):
     return raw_dir, labels_dir
 
 
-def get_model(model_type, ckpt, lora_rank):
+def get_model(model_type, ckpt, peft_kwargs):
 
     predictor = get_sam_model(
-        model_type=model_type, checkpoint_path=ckpt, lora_rank=lora_rank,
+        model_type=model_type, checkpoint_path=ckpt, peft_kwargs=peft_kwargs,
     )
     return predictor
 
@@ -227,7 +227,8 @@ def get_default_arguments():
     parser.add_argument(
         "--use_masks", action="store_true", help="To use logits masks for iterative prompting."
     )
-    parser.add_argument("--lora_rank", default=None, type=int, help="The rank for low rank adaptation method.")
+    parser.add_argument("--peft_rank", default=None, type=int, help="The rank for peft method.")
+    parser.add_argument("--peft_module", default=None, type=int, help="The module for peft method. (e.g. LoRA or FacT)")
     args = parser.parse_args()
     return args
 

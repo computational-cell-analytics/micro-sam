@@ -42,7 +42,8 @@ def main():
     start_with_box_prompt = args.box  # overwrite to start first iters' prompt with box instead of single point
 
     # get the predictor to perform inference
-    predictor = get_model(model_type=args.model, ckpt=args.checkpoint, lora_rank=args.lora_rank)
+    peft_kwargs = {"rank": args.peft_rank, "module": args.peft_module}
+    predictor = get_model(model_type=args.model, ckpt=args.checkpoint, peft_kwargs=peft_kwargs)
 
     prediction_root = _run_iterative_prompting(
         args.dataset, args.experiment_folder, predictor, start_with_box_prompt, args.use_masks

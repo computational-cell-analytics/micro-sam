@@ -7,7 +7,7 @@ from util import get_paths  # comment this and create a custom function with the
 from util import get_pred_paths, get_default_arguments, VANILLA_MODELS
 
 
-def run_amg_inference(dataset_name, model_type, checkpoint, experiment_folder, lora_rank):
+def run_amg_inference(dataset_name, model_type, checkpoint, experiment_folder, peft_kwargs):
     val_image_paths, val_gt_paths = get_paths(dataset_name, split="val")
     test_image_paths, _ = get_paths(dataset_name, split="test")
     prediction_folder = run_amg(
@@ -17,7 +17,7 @@ def run_amg_inference(dataset_name, model_type, checkpoint, experiment_folder, l
         val_image_paths=val_image_paths,
         val_gt_paths=val_gt_paths,
         test_image_paths=test_image_paths,
-        lora_rank=lora_rank,
+        peft_kwargs=peft_kwargs,
     )
     return prediction_folder
 
@@ -33,8 +33,8 @@ def eval_amg(dataset_name, prediction_folder, experiment_folder):
 
 def main():
     args = get_default_arguments()
-
-    prediction_folder = run_amg_inference(args.dataset, args.model, args.checkpoint, args.experiment_folder, args.lora_rank)
+    peft_kwargs = {"rank": args.peft_rank, "module": args.peft_module}
+    prediction_folder = run_amg_inference(args.dataset, args.model, args.checkpoint, args.experiment_folder, peft_kwargs)
     eval_amg(args.dataset, prediction_folder, args.experiment_folder)
 
 
