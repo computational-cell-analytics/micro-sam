@@ -100,7 +100,7 @@ def get_trainable_sam_model(
             # we would want to "freeze" all the components in the model if passed a list of parts
             for l_item in freeze:
                 # in case LoRA is switched on, we cannot freeze the image encoder
-                if (lora_rank is not None) and (l_item == "image_encoder"):
+                if (peft_kwargs['rank'] is not None) and (l_item == "image_encoder"):
                     raise ValueError("You cannot use LoRA & freeze the image encoder at the same time.")
 
                 if name.startswith(f"{l_item}"):
