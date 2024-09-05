@@ -370,11 +370,16 @@ def get_sam_model(
 
     # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything.
     # Overwrites the SAM model by freezing the backbone and allow low rank adaption to attention layers.
-    if peft_kwargs is not None:
-        assert peft_kwargs["module"] in ["LoRASurgery", "FacTSurgery"], "Invalid PEFT module."
+    if peft_kwargs is not None and isinstance(peft_kwargs, dict):
         if abbreviated_model_type == "vit_t":
-            raise ValueError("Parameter efficient finetuning is not supported for 'mobile-sam'.")
-        sam = custom_models.peft_sam.PEFT_Sam(sam, rank=peft_kwargs['rank'], peft_module=peft_kwargs['module']).sam
+            raise ValueError("'micro-sam' does not support parameter efficient finetuning for 'mobile-sam'.")
+
+        peft_module = peft_kwargs.get("peft_module")
+        if peft_module is not None:
+            from .models.peft_sam import LoRASurgery, FacTSurgery
+            assert peft_module in [LoRASurgery, FacTSurgery], "Invalid PEFT module."
+
+        sam = custom_models.peft_sam.PEFT_Sam(sam, **peft_kwargs).sam
 
     # In case the model checkpoints have some issues when it is initialized with different parameters than default.
     if flexible_load_checkpoint:

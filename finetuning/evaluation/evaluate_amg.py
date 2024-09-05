@@ -3,8 +3,10 @@ import os
 from micro_sam.evaluation.evaluation import run_evaluation
 from micro_sam.evaluation.inference import run_amg
 
-from util import get_paths  # comment this and create a custom function with the same name to run amg on your data
-from util import get_pred_paths, get_default_arguments, VANILLA_MODELS
+from util import (
+    get_paths,  # comment this line out and create a custom function with the same name to run amg on your data
+    get_pred_paths, get_default_arguments
+)
 
 
 def run_amg_inference(dataset_name, model_type, checkpoint, experiment_folder, peft_kwargs):
@@ -34,7 +36,9 @@ def eval_amg(dataset_name, prediction_folder, experiment_folder):
 def main():
     args = get_default_arguments()
     peft_kwargs = {"rank": args.peft_rank, "module": args.peft_module}
-    prediction_folder = run_amg_inference(args.dataset, args.model, args.checkpoint, args.experiment_folder, peft_kwargs)
+    prediction_folder = run_amg_inference(
+        args.dataset, args.model, args.checkpoint, args.experiment_folder, peft_kwargs
+    )
     eval_amg(args.dataset, prediction_folder, args.experiment_folder)
 
 

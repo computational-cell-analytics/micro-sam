@@ -5,7 +5,6 @@ from glob import glob
 
 from torch_em.data import datasets
 
-from micro_sam.util import get_sam_model
 from micro_sam.evaluation.livecell import _get_livecell_paths
 
 
@@ -78,14 +77,6 @@ def get_dataset_paths(dataset_name, split_choice):
     labels_dir = os.path.join(ROOT, *dataset_name, "labels", file_search_specs)
 
     return raw_dir, labels_dir
-
-
-def get_model(model_type, ckpt, peft_kwargs):
-
-    predictor = get_sam_model(
-        model_type=model_type, checkpoint_path=ckpt, peft_kwargs=peft_kwargs,
-    )
-    return predictor
 
 
 def get_paths(dataset_name, split):
@@ -228,7 +219,7 @@ def get_default_arguments():
         "--use_masks", action="store_true", help="To use logits masks for iterative prompting."
     )
     parser.add_argument("--peft_rank", default=None, type=int, help="The rank for peft method.")
-    parser.add_argument("--peft_module", default=None, type=int, help="The module for peft method. (e.g. LoRA or FacT)")
+    parser.add_argument("--peft_module", default=None, type=str, help="The module for peft method. (e.g. LoRA or FacT)")
     args = parser.parse_args()
     return args
 

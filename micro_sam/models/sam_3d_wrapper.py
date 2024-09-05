@@ -28,7 +28,7 @@ def get_sam_3d_model(
         flexible_load_checkpoint=True,
         num_multimask_outputs=n_classes,
         image_size=image_size,
-        lora_rank=lora_rank,
+        peft_kwargs={"rank": lora_rank},
     )
 
     sam_3d = Sam3DWrapper(sam, freeze_encoder=freeze_encoder_)

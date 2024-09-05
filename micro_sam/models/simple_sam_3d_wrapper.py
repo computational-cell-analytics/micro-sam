@@ -23,7 +23,7 @@ def get_simple_sam_3d_model(
         return_sam=True,
         image_size=image_size,
         flexible_load_checkpoint=True,
-        lora_rank=lora_rank,
+        peft_kwargs={"rank": lora_rank},
     )
 
     # Make sure not to freeze the encoder when using LoRA.
