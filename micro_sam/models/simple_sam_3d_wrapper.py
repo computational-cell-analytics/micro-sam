@@ -16,6 +16,10 @@ def get_simple_sam_3d_model(
     model_type="vit_b",
     checkpoint_path=None,
 ):
+    peft_kwargs = {}
+    if lora_rank is not None:
+        peft_kwargs["rank"] = lora_rank
+
     _, sam = get_sam_model(
         model_type=model_type,
         device=device,
@@ -23,7 +27,7 @@ def get_simple_sam_3d_model(
         return_sam=True,
         image_size=image_size,
         flexible_load_checkpoint=True,
-        peft_kwargs={"rank": lora_rank},
+        peft_kwargs=peft_kwargs,
     )
 
     # Make sure not to freeze the encoder when using LoRA.

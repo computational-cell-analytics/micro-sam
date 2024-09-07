@@ -18,8 +18,10 @@ def get_sam_3d_model(
     model_type="vit_b",
     checkpoint_path=None,
 ):
-    # Make sure not to freeze the encoder when using LoRA.
-    freeze_encoder_ = freeze_encoder if lora_rank is None else False
+    peft_kwargs = {}
+    if lora_rank is not None:
+        peft_kwargs["rank"] = lora_rank
+
     _, sam = get_sam_model(
         model_type=model_type,
         device=device,
@@ -28,9 +30,11 @@ def get_sam_3d_model(
         flexible_load_checkpoint=True,
         num_multimask_outputs=n_classes,
         image_size=image_size,
-        peft_kwargs={"rank": lora_rank},
+        peft_kwargs=peft_kwargs,
     )
 
+    # Make sure not to freeze the encoder when using LoRA.
+    freeze_encoder_ = freeze_encoder if lora_rank is None else False
     sam_3d = Sam3DWrapper(sam, freeze_encoder=freeze_encoder_)
     sam_3d.to(device)
     return sam_3d

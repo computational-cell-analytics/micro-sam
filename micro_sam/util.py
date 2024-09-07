@@ -370,7 +370,7 @@ def get_sam_model(
 
     # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything.
     # Overwrites the SAM model by freezing the backbone and allow low rank adaption to attention layers.
-    if peft_kwargs is not None and isinstance(peft_kwargs, dict):
+    if peft_kwargs and isinstance(peft_kwargs, dict):
         if abbreviated_model_type == "vit_t":
             raise ValueError("'micro-sam' does not support parameter efficient finetuning for 'mobile-sam'.")
 
