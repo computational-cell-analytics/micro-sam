@@ -83,9 +83,16 @@ def get_trainable_sam_model(
     # NOTE: This is done exclusive to "get_sam_model" here to use PEFT's layer-specific initialization on top.
     # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything.
     # Overwrites the SAM model by freezing the backbone and allow low rank adaption to attention layers.
-    if peft_kwargs is not None:
-        assert peft_kwargs['module'] in ['LoRASurgery', 'FacTSurgery'], "Invalid PEFT module."
-        sam = custom_models.peft_sam.PEFT_Sam(sam, rank=peft_kwargs['rank'], peft_module=peft_kwargs['module']).sam
+    if peft_kwargs and isinstance(peft_kwargs, dict):
+        if model_type[:5] == "vit_t":
+            raise ValueError("'micro-sam' does not support parameter efficient finetuning for 'mobile-sam'.")
+
+        peft_module = peft_kwargs.get("peft_module")
+        if peft_module is not None:
+            from micro_sam.models.peft_sam import LoRASurgery, FacTSurgery
+            assert peft_module in [LoRASurgery, FacTSurgery], "Invalid PEFT module."
+
+        sam = custom_models.peft_sam.PEFT_Sam(sam, **peft_kwargs).sam
 
     # freeze components of the model if freeze was passed
     # ideally we would want to add components in such a way that:
