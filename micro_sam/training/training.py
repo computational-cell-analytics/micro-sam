@@ -154,6 +154,7 @@ def train_sam(
     save_every_kth_epoch: Optional[int] = None,
     pbar_signals: Optional[QObject] = None,
     optimizer_class: Optional[Optimizer] = torch.optim.AdamW,
+    peft_kwargs: Optional[Dict] = None,
     **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
@@ -196,7 +197,6 @@ def train_sam(
     _check_loader(val_loader, with_segmentation_decoder)
 
     device = get_device(device)
-
     # Get the trainable segment anything model.
     model, state = get_trainable_sam_model(
         model_type=model_type,
@@ -204,9 +204,9 @@ def train_sam(
         freeze=freeze,
         checkpoint_path=checkpoint_path,
         return_state=True,
+        peft_kwargs=peft_kwargs,
         **model_kwargs
     )
-
     # This class creates all the training data for a batch (inputs, prompts and labels).
     convert_inputs = ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
 

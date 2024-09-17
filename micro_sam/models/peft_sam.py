@@ -1,5 +1,5 @@
 import math
-from typing import List, Union
+from typing import List, Union, Optional
 
 import torch.nn as nn
 
@@ -56,10 +56,63 @@ class LoRASurgery(nn.Module):
         return qkv
 
 
+class FacTSurgery(nn.Module):
+    """Operates on the attention layers for performing factorized attention.
+
+    (Inspired from: https://github.com/cchen-cc/MA-SAM/blob/main/MA-SAM/sam_fact_tt_image_encoder.py)
+
+    Args:
+        rank: The rank of the decomposition matrices for updating weights in each attention layer.
+        block: The chosen attention blocks for implementing fact.
+    """
+
+    def __init__(
+        self,
+        rank: int,
+        block: nn.Module,
+        dropout: Optional[float] = None,
+    ):
+        super().__init__()
+        self.qkv_proj = block.attn.qkv
+        self.dim = self.qkv_proj.in_features
+
+        self.q_FacTs = nn.Linear(rank, rank, bias=False)
+        self.v_FacTs = nn.Linear(rank, rank, bias=False)
+
+        self.dropout = dropout
+        if self.dropout is not None:
+            # NOTE : Dropout is not included in the original implementation
+            self.dp_q = nn.Dropout(self.dropout)
+            self.dp_v = nn.Dropout(self.dropout)
+
+        self.FacTu = nn.Linear(self.dim, rank, bias=False)
+        self.FacTv = nn.Linear(rank, self.dim, bias=False)
+
+        block.attn.qkv = self
+
+    def forward(self, x):
+        qkv = self.qkv_proj(x)  # B, N, N, 3 * org_C
+
+        new_q = self.q_FacTs(self.FacTu(x))
+        new_v = self.v_FacTs(self.FacTu(x))
+
+        if self.dropout is not None:
+            new_q = self.dp_q(new_q)
+            new_v = self.dp_v(new_v)
+
+        new_q = self.FacTv(new_q)
+        new_v = self.FacTv(new_v)
+
+        # NOTE : Scaling Factor was set to 1 as it can be tuned via the learning rate
+        # Does it make sense to include it, in order to have similar learning rate as the original model?
+        qkv[:, :, :, : self.dim] += new_q
+        qkv[:, :, :, -self.dim:] += new_v
+
+        return qkv
+
+
 class PEFT_Sam(nn.Module):
     """Wraps the Segment Anything model's image encoder to different parameter efficient finetuning methods.
-
-    Inspired by https://github.com/JamesQFreeman/Sam_LoRA/
 
     Args:
         model: The Segment Anything model.
