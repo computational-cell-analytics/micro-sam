@@ -1,7 +1,7 @@
 import unittest
 
-from micro_sam.models.peft_sam import FacTSurgery, LoRASurgery
 import torch
+
 import micro_sam.util as util
 
 
@@ -9,7 +9,7 @@ class TestPEFTSam(unittest.TestCase):
     model_type = "vit_b"
 
     def test_lora_sam(self):
-        from micro_sam.models.peft_sam import PEFT_Sam
+        from micro_sam.models.peft_sam import PEFT_Sam, LoRASurgery
 
         _, sam = util.get_sam_model(model_type=self.model_type, return_sam=True, device="cpu")
         peft_sam = PEFT_Sam(sam, rank=2, peft_module=LoRASurgery)
@@ -23,7 +23,7 @@ class TestPEFTSam(unittest.TestCase):
             self.assertEqual(masks.shape, expected_shape)
 
     def test_fact_sam(self):
-        from micro_sam.models.peft_sam import PEFT_Sam
+        from micro_sam.models.peft_sam import PEFT_Sam, FacTSurgery
 
         _, sam = util.get_sam_model(model_type=self.model_type, return_sam=True, device="cpu")
         peft_sam = PEFT_Sam(sam, rank=2, peft_module=FacTSurgery)
