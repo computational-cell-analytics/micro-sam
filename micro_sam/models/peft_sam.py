@@ -1,5 +1,5 @@
 import math
-from typing import List, Union
+from typing import List, Union, Optional
 
 import torch.nn as nn
 
@@ -70,6 +70,7 @@ class FacTSurgery(nn.Module):
         self,
         rank: int,
         block: nn.Module,
+        dropout: Optional[float] = None,
     ):
         super().__init__()
         self.qkv_proj = block.attn.qkv
@@ -78,9 +79,11 @@ class FacTSurgery(nn.Module):
         self.q_FacTs = nn.Linear(rank, rank, bias=False)
         self.v_FacTs = nn.Linear(rank, rank, bias=False)
 
-        # NOTE : Dropout is not included in the original implementation
-        self.dp_q = nn.Dropout(0.1)
-        self.dp_v = nn.Dropout(0.1)
+        self.dropout = dropout
+        if self.dropout is not None:
+            # NOTE : Dropout is not included in the original implementation
+            self.dp_q = nn.Dropout(self.dropout)
+            self.dp_v = nn.Dropout(self.dropout)
 
         self.FacTu = nn.Linear(self.dim, rank, bias=False)
         self.FacTv = nn.Linear(rank, self.dim, bias=False)
@@ -93,8 +96,9 @@ class FacTSurgery(nn.Module):
         new_q = self.q_FacTs(self.FacTu(x))
         new_v = self.v_FacTs(self.FacTu(x))
 
-        new_q = self.dp_q(new_q)
-        new_v = self.dp_v(new_v)
+        if self.dropout is not None:
+            new_q = self.dp_q(new_q)
+            new_v = self.dp_v(new_v)
 
         new_q = self.FacTv(new_q)
         new_v = self.FacTv(new_v)
