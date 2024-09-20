@@ -19,7 +19,6 @@ def get_sam_3d_model(
     model_type="vit_b",
     checkpoint_path=None,
 ):
-    peft_kwargs = {}
     if lora_rank is None:
         peft_kwargs = {}
     else:

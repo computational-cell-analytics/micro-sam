@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 
 from ..util import get_sam_model
+from .peft_sam import LoRASurgery
 
 
 def get_simple_sam_3d_model(
@@ -16,9 +17,10 @@ def get_simple_sam_3d_model(
     model_type="vit_b",
     checkpoint_path=None,
 ):
-    peft_kwargs = {}
-    if lora_rank is not None:
-        peft_kwargs["rank"] = lora_rank
+    if lora_rank is None:
+        peft_kwargs = {}
+    else:
+        peft_kwargs = {"rank": lora_rank, "peft_module": LoRASurgery}
 
     _, sam = get_sam_model(
         model_type=model_type,
