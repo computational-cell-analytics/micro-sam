@@ -72,7 +72,7 @@ def finetune_livecell(args):
         save_root=args.save_root,
         scheduler_kwargs=scheduler_kwargs,
         save_every_kth_epoch=args.save_every_kth_epoch,
-	lora_rank=args.lora_rank,
+        peft_kwargs={"rank": args.lora_rank} if args.lora_rank is not None else None,
     )
 
     if args.export_path is not None:
@@ -118,7 +118,7 @@ def main():
         "--n_objects", type=int, default=25, help="The number of instances (objects) per batch used for finetuning."
     )
     parser.add_argument(
-    	"--lora_rank", type=int, default=None, help="The rank for low rank adaptation of the attention layers."
+        "--lora_rank", type=int, default=None, help="The rank for low rank adaptation of the attention layers."
     )
     args = parser.parse_args()
     finetune_livecell(args)
@@ -126,4 +126,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
