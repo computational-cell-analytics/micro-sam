@@ -5,6 +5,7 @@ channels:
     - conda-forge
 dependencies:
     - imagecodecs
+    - nifty=1.2.1=*_4
     - magicgui
     - napari
     - pip
