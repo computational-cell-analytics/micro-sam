@@ -252,7 +252,7 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
 class IterativePromptGenerator(PromptGeneratorBase):
     """Generate point prompts from an instance segmentation iteratively.
     """
-    def _get_positive_points(self, pos_region, overlap_region):
+    def _get_positive_points(self, pos_region, overlap_region, is_multidimensional=False):
         positive_locations = [torch.where(pos_reg) for pos_reg in pos_region]
         # we may have objects without a positive region (= missing true foreground)
         # in this case we just sample a point where the model was already correct
@@ -263,9 +263,12 @@ class IterativePromptGenerator(PromptGeneratorBase):
         # we sample one location for each object in the batch
         sampled_indices = [np.random.choice(len(pos_loc[0])) for pos_loc in positive_locations]
         # get the corresponding coordinates (Note that we flip the axis order here due to the expected order of SAM)
-        pos_coordinates = [
-            [pos_loc[-1][idx], pos_loc[-2][idx]] for pos_loc, idx in zip(positive_locations, sampled_indices)
-        ]
+        pos_coordinates = []
+        for pos_loc, idx in zip(positive_locations, sampled_indices):
+            if is_multidimensional:
+                pos_coordinates.append([pos_loc[-1][idx], pos_loc[-2][idx], pos_loc[-3][idx]])
+            else:
+                pos_coordinates.append([pos_loc[-1][idx], pos_loc[-2][idx]])
 
         # make sure that we still have the correct batch size
         assert len(pos_coordinates) == pos_region.shape[0]
@@ -274,7 +277,7 @@ class IterativePromptGenerator(PromptGeneratorBase):
         return pos_coordinates, pos_labels
 
     # TODO get rid of this looped implementation and use proper batched computation instead
-    def _get_negative_points(self, negative_region_batched, true_object_batched):
+    def _get_negative_points(self, negative_region_batched, true_object_batched, is_multidimensional=False):
         device = negative_region_batched.device
 
         negative_coordinates, negative_labels = [], []
@@ -304,6 +307,8 @@ class IterativePromptGenerator(PromptGeneratorBase):
             neg_index = np.random.choice(len(tmp_neg_loc[1]))
             neg_coordinates = [tmp_neg_loc[1][neg_index], tmp_neg_loc[2][neg_index]]
             neg_coordinates = neg_coordinates[::-1]
+            if is_multidimensional:
+                neg_coordinates.append(tmp_neg_loc[0][neg_index])
             neg_labels = 0
 
             negative_coordinates.append(neg_coordinates)
@@ -336,8 +341,8 @@ class IterativePromptGenerator(PromptGeneratorBase):
         pos_region = (expected_diff == -1)
         overlap_region = torch.logical_and(prediction == 1, true_object == 1).to(torch.float32)
 
-        pos_coordinates, pos_labels = self._get_positive_points(pos_region, overlap_region)
-        neg_coordinates, neg_labels = self._get_negative_points(neg_region, true_object)
+        pos_coordinates, pos_labels = self._get_positive_points(pos_region, overlap_region, **kwargs)
+        neg_coordinates, neg_labels = self._get_negative_points(neg_region, true_object, **kwargs)
         assert len(pos_coordinates) == len(pos_labels) == len(neg_coordinates) == len(neg_labels)
 
         pos_coordinates = torch.tensor(pos_coordinates)[:, None]
