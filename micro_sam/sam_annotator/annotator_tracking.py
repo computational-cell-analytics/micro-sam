@@ -109,16 +109,16 @@ class AnnotatorTracking(_AnnotatorBase):
                 "state": self._track_state_labels,
                 "track_id": ["1"],  # we use string to avoid pandas warning
             },
-            border_color="label",
-            border_color_cycle=vutil.LABEL_COLOR_CYCLE,
+            edge_color="label",
+            edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
             symbol="o",
             face_color="state",
             face_color_cycle=STATE_COLOR_CYCLE,
-            border_width=0.4,
+            edge_width=0.4,
             size=12,
             ndim=self._ndim,
         )
-        self._point_prompt_layer.border_color_mode = "cycle"
+        self._point_prompt_layer.edge_color_mode = "cycle"
         self._point_prompt_layer.face_color_mode = "cycle"
 
         # Using the box layer to set divisions currently doesn't work.
@@ -132,9 +132,9 @@ class AnnotatorTracking(_AnnotatorBase):
             edge_color="green",
             property_choices={"track_id": ["1"]},
             # property_choces={"track_id": ["1"], "state": self._track_state_labels},
-            # border_color_cycle=STATE_COLOR_CYCLE,
+            # edge_color_cycle=STATE_COLOR_CYCLE,
         )
-        # self._box_prompt_layer.border_color_mode = "cycle"
+        # self._box_prompt_layer.edge_color_mode = "cycle"
 
         # Add the label layers for the current object, the automatic segmentation and the committed segmentation.
         dummy_data = np.zeros(self._shape, dtype="uint32")

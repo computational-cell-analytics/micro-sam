@@ -34,15 +34,15 @@ class TestPromptGenerators(unittest.TestCase):
                 data=coordinates,
                 name="prompts",
                 properties={"label": labels},
-                border_color="label",
-                border_color_cycle=["#00FF00", "#FF0000"],
+                edge_color="label",
+                edge_color_cycle=["#00FF00", "#FF0000"],
                 symbol="o",
                 face_color="transparent",
-                border_width=0.5,
+                edge_width=0.5,
                 size=5,
                 ndim=2
             )  # this function helps to view the (colored) background/foreground points
-            prompts.border_color_mode = "cycle"
+            prompts.edge_color_mode = "cycle"
 
         if deformed_mask is not None:
             v.add_labels(deformed_mask.astype("uint8"), name="deformed mask / prediction")
