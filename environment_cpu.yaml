@@ -4,10 +4,10 @@ channels:
     - conda-forge
 dependencies:
     - cpuonly
-    - nifty=1.2.1=*_4
+    - nifty =1.2.1=*_4
     - imagecodecs
     - magicgui
-    - napari
+    - napari <0.5
     - pip
     - pooch
     - pyqt
