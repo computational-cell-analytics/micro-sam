@@ -114,7 +114,7 @@ class AnnotatorTracking(_AnnotatorBase):
             symbol="o",
             face_color="state",
             face_color_cycle=STATE_COLOR_CYCLE,
-            border_width=0.4,
+            edge_width=0.4,
             size=12,
             ndim=self._ndim,
         )

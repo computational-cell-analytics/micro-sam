@@ -33,7 +33,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
             edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
             symbol="o",
             face_color="transparent",
-            border_width=0.5,
+            edge_width=0.5,
             size=12,
             ndim=self._ndim,
         )
