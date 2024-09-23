@@ -29,7 +29,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         self._point_prompt_layer = self._viewer.add_points(
             name="point_prompts",
             property_choices={"label": self._point_labels},
-            border_color="label",
+            edge_color="label",
             border_color_cycle=vutil.LABEL_COLOR_CYCLE,
             symbol="o",
             face_color="transparent",
