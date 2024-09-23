@@ -30,14 +30,14 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
             name="point_prompts",
             property_choices={"label": self._point_labels},
             edge_color="label",
-            border_color_cycle=vutil.LABEL_COLOR_CYCLE,
+            edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
             symbol="o",
             face_color="transparent",
             border_width=0.5,
             size=12,
             ndim=self._ndim,
         )
-        self._point_prompt_layer.border_color_mode = "cycle"
+        self._point_prompt_layer.edge_color_mode = "cycle"
 
         # Add the shape layer for box and other shape prompts.
         self._viewer.add_shapes(
