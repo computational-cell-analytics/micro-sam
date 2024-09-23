@@ -1,8 +1,4 @@
-id
-	parser = argparse.ArgumentParser()
-	parser.add_argument("name")
-	args = parser.parse_args()
-	main(args.name)mport unittest
+import unittest
 
 import numpy as np
 import torch
