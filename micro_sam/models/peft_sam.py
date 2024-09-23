@@ -64,6 +64,7 @@ class FacTSurgery(nn.Module):
     Args:
         rank: The rank of the decomposition matrices for updating weights in each attention layer.
         block: The chosen attention blocks for implementing fact.
+        dropout: The dropout rate for the factorized attention.
     """
 
     def __init__(
@@ -81,7 +82,6 @@ class FacTSurgery(nn.Module):
 
         self.dropout = dropout
         if self.dropout is not None:
-            # NOTE : Dropout is not included in the original implementation
             self.dp_q = nn.Dropout(self.dropout)
             self.dp_v = nn.Dropout(self.dropout)
 
@@ -91,7 +91,7 @@ class FacTSurgery(nn.Module):
         block.attn.qkv = self
 
     def forward(self, x):
-        qkv = self.qkv_proj(x)  # B, N, N, 3 * org_C
+        qkv = self.qkv_proj(x)
 
         new_q = self.q_FacTs(self.FacTu(x))
         new_v = self.v_FacTs(self.FacTu(x))
@@ -103,8 +103,6 @@ class FacTSurgery(nn.Module):
         new_q = self.FacTv(new_q)
         new_v = self.FacTv(new_v)
 
-        # NOTE : Scaling Factor was set to 1 as it can be tuned via the learning rate
-        # Does it make sense to include it, in order to have similar learning rate as the original model?
         qkv[:, :, :, : self.dim] += new_q
         qkv[:, :, :, -self.dim:] += new_v
 
@@ -126,7 +124,8 @@ class PEFT_Sam(nn.Module):
         model: Sam,
         rank: int,
         peft_module: nn.Module = LoRASurgery,
-        attention_layers_to_update: Union[List[int]] = None
+        dropout: Optional[float] = None,
+        attention_layers_to_update: Union[List[int]] = None,
     ):
         super().__init__()
 
@@ -148,8 +147,10 @@ class PEFT_Sam(nn.Module):
             # If we only want specific layers with PEFT instead of all
             if t_layer_i not in self.peft_layers:
                 continue
-
-            peft_block = self.peft_module(rank=rank, block=blk)
+            if peft_module == FacTSurgery:
+                peft_block = self.peft_module(rank=rank, block=blk, dropout=dropout)
+            else:
+                peft_block = self.peft_module(rank=rank, block=blk)
             self.peft_blocks.append(peft_block)
 
         self.peft_blocks = nn.ModuleList(self.peft_blocks)
