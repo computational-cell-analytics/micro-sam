@@ -6,12 +6,14 @@ https://computational-cell-analytics.github.io/micro-sam/micro_sam.html
 
 import os
 from abc import ABC
+from pathlib import Path
 from copy import deepcopy
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import vigra
 import numpy as np
+import imageio.v3 as imageio
 from skimage.measure import regionprops
 
 import torch
@@ -1145,6 +1147,7 @@ def get_amg(
 
 def automatic_instance_segmentation(
     input_path: Union[os.PathLike, str],
+    output_path: Union[os.PathLike, str],
     embedding_path: Optional[Union[os.PathLike, str]] = None,
     model_type: str = util._DEFAULT_MODEL,
     checkpoint_path: Optional[Union[os.PathLike, str]] = None,
@@ -1191,13 +1194,8 @@ def automatic_instance_segmentation(
     else:
         instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=0)
 
-    import napari
-    v = napari.Viewer()
-    v.add_image(image_data)
-    v.add_labels(instances)
-    napari.run()
-
-    breakpoint()
+    output_path = Path(output_path).with_suffix(".tif")
+    imageio.imwrite(output_path, instances, compression="zlib")
 
 
 def main():
@@ -1214,9 +1212,12 @@ def main():
         "or elf.io.open_file (e.g. hdf5, zarr, mrc). For the latter you also need to pass the 'key' parameter."
     )
     parser.add_argument(
+        "-o", "--output_path", required=True,
+        help="The filepath to store the instance segmentation. The current support stores segmentation in a 'tif' file."
+    )
+    parser.add_argument(
         "-e", "--embedding_path", default=None, type=str, help="The path where the embeddings will be saved."
     )
-
     parser.add_argument(
         "--pattern", help="Pattern / wildcard for selecting files in a folder. To select all files use '*'."
     )
@@ -1225,7 +1226,6 @@ def main():
         help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
         "for an image stack it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
     )
-
     parser.add_argument(
         "-m", "--model_type", default=util._DEFAULT_MODEL,
         help=f"The segment anything model that will be used, one of {available_models}."
