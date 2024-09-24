@@ -261,7 +261,10 @@ class IterativePromptGenerator(PromptGeneratorBase):
             for pos_loc, ovlp_reg in zip(positive_locations, overlap_region)
         ]
         # we sample one location for each object in the batch
-        sampled_indices = [np.random.choice(len(pos_loc[0])) for pos_loc in positive_locations]
+        try:
+            sampled_indices = [np.random.choice(len(pos_loc[0])) for pos_loc in positive_locations]
+        except ValueError:
+            breakpoint()
         # get the corresponding coordinates (Note that we flip the axis order here due to the expected order of SAM)
         pos_coordinates = []
         for pos_loc, idx in zip(positive_locations, sampled_indices):
