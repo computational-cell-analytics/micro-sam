@@ -365,6 +365,8 @@ def automatic_3d_segmentation(
     with_background: bool = True,
     gap_closing: Optional[int] = None,
     min_z_extent: Optional[int] = None,
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
     **kwargs,
 ) -> np.ndarray:
@@ -393,7 +395,9 @@ def automatic_3d_segmentation(
     segmentation = np.zeros(volume.shape, dtype="uint32")
 
     min_object_size = kwargs.pop("min_object_size", 0)
-    image_embeddings = util.precompute_image_embeddings(predictor, volume, save_path=embedding_path, ndim=3)
+    image_embeddings = util.precompute_image_embeddings(
+        predictor=predictor, input_=volume, save_path=embedding_path, ndim=3, tile_shape=tile_shape, halo=halo,
+    )
 
     for i in tqdm(range(segmentation.shape[0]), desc="Segment slices", disable=not verbose):
         segmentor.initialize(volume[i], image_embeddings=image_embeddings, verbose=False, i=i)
