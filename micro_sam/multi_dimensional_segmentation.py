@@ -356,7 +356,6 @@ def merge_instance_segmentation_3d(
     return segmentation
 
 
-# TODO: Enable tiling
 def automatic_3d_segmentation(
     volume: np.ndarray,
     predictor: SamPredictor,
@@ -385,6 +384,8 @@ def automatic_3d_segmentation(
             operation. The value is used to determine the number of iterations for the closing.
         min_z_extent: Require a minimal extent in z for the segmented objects.
             This can help to prevent segmentation artifacts.
+        tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
+        halo: Overlap of the tiles for tiled prediction.
         verbose: Verbosity flag.
         kwargs: Keyword arguments for the 'generate' method of the 'segmentor'.
 
