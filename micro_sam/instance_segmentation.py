@@ -1157,8 +1157,22 @@ def automatic_instance_segmentation(
     halo: Optional[Tuple[int, int]] = None,
     use_amg: bool = False,
     **generate_kwargs
-):
-    """
+) -> None:
+    """Run automatic segmentation for the input image.
+
+    Args:
+        input_path: input_path: The input image file(s). Can either be a single image file (e.g. tif or png),
+            or a container file (e.g. hdf5 or zarr).
+        output_path: The output path where the instance segmentations will be saved.
+        embedding_path: The path where the embeddings are cached already / will be saved.
+        model_type: The SegmentAnything model to use. Will use the standard vit_l model by default.
+        checkpoint_path: Path to a checkpoint for a custom model.
+        key: The key to the input file. This is needed for container files (eg. hdf5 or zarr)
+            or to load several images as 3d volume. Provide a glob patterm, eg. "*.tif", for this case.
+        ndim: The dimensionality of the data.
+        tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
+        halo: Overlap of the tiles for tiled prediction.
+        use_amg: Whether to use Automatic Mask Generation (AMG) as the automatic segmentation method.
     """
     predictor, state = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path, return_state=True)
 

@@ -44,7 +44,7 @@ except ImportError:
     from tqdm import tqdm
 
 # this is the default model used in micro_sam
-# currently set to the default vit_h
+# currently set to the default vit_l
 _DEFAULT_MODEL = "vit_l"
 
 # The valid model types. Each type corresponds to the architecture of the
