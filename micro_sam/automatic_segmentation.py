@@ -9,6 +9,7 @@ from . import util
 from .instance_segmentation import (
     get_amg, get_decoder, mask_data_to_segmentation, InstanceSegmentationWithDecoder, AMGBase
 )
+from .multi_dimensional_segmentation import automatic_3d_segmentation
 
 
 def automatic_instance_segmentation(
@@ -54,10 +55,8 @@ def automatic_instance_segmentation(
     else:
         image_data = util.load_image_data(input_path, key)
 
-    if ndim == 3:
-        assert image_data.ndim == 3, "The input image does not have three dimensions."
-        from .multi_dimensional_segmentation import automatic_3d_segmentation
-        segmentation = automatic_3d_segmentation(
+    if ndim == 3 or image_data.ndim == 3:
+        instances = automatic_3d_segmentation(
             volume=image_data,
             predictor=predictor,
             segmentor=segmenter,
@@ -66,27 +65,33 @@ def automatic_instance_segmentation(
             halo=halo,
             **generate_kwargs
         )
-
-    # Precompute the image embeddings.
-    image_embeddings = util.precompute_image_embeddings(
-        predictor=predictor, input_=image_data, save_path=embedding_path, ndim=ndim, tile_shape=tile_shape, halo=halo,
-    )
-
-    segmenter.initialize(image=image_data, image_embeddings=image_embeddings)
-    masks = segmenter.generate(**generate_kwargs)
-
-    if len(masks) == 0:  # instance segmentation can have no masks, hence we just save empty labels
-        if isinstance(segmenter, InstanceSegmentationWithDecoder):
-            this_shape = segmenter._foreground.shape
-        elif isinstance(segmenter, AMGBase):
-            this_shape = segmenter._original_size
-        else:
-            this_shape = image_data.shape[-2:]
-
-        instances = np.zeros(this_shape, dtype="uint32")
     else:
-        instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=0)
+        # Precompute the image embeddings.
+        image_embeddings = util.precompute_image_embeddings(
+            predictor=predictor,
+            input_=image_data,
+            save_path=embedding_path,
+            ndim=ndim,
+            tile_shape=tile_shape,
+            halo=halo,
+        )
 
+        segmenter.initialize(image=image_data, image_embeddings=image_embeddings)
+        masks = segmenter.generate(**generate_kwargs)
+
+        if len(masks) == 0:  # instance segmentation can have no masks, hence we just save empty labels
+            if isinstance(segmenter, InstanceSegmentationWithDecoder):
+                this_shape = segmenter._foreground.shape
+            elif isinstance(segmenter, AMGBase):
+                this_shape = segmenter._original_size
+            else:
+                this_shape = image_data.shape[-2:]
+
+            instances = np.zeros(this_shape, dtype="uint32")
+        else:
+            instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=0)
+
+    # Save the instance segmentation
     output_path = Path(output_path).with_suffix(".tif")
     imageio.imwrite(output_path, instances, compression="zlib")
 
@@ -143,14 +148,23 @@ def main():
 
     args, parameter_args = parser.parse_known_args()
 
+    def _convert_argval(value):
+        # The values for the parsed arguments need to be in the expected input structure as provided.
+        # i.e. integers and floats should be in their original types.
+        try:
+            return int(value)
+        except ValueError:
+            return float(value)
+
     # NOTE: the script below allows the possibility to catch additional parsed arguments which correspond to
     # the automatic segmentation post-processing parameters (eg. 'center_distance_threshold' in AIS)
     generate_kwargs = {
-        parameter_args[i].lstrip("--"): float(parameter_args[i + 1]) for i in range(0, len(parameter_args), 2)
+        parameter_args[i].lstrip("--"): _convert_argval(parameter_args[i + 1]) for i in range(0, len(parameter_args), 2)
     }
 
     automatic_instance_segmentation(
         input_path=args.input_path,
+        output_path=args.output_path,
         embedding_path=args.embedding_path,
         model_type=args.model_type,
         checkpoint_path=args.checkpoint,
