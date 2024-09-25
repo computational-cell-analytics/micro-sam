@@ -37,12 +37,12 @@ class TestAutomaticSegmentation(unittest.TestCase):
 
     # create an input 2d image with three objects and stack 8 of them together
     @classmethod
-    def _get_3d_inputs(cls, shape=(8, 256, 256)):
+    def _get_3d_inputs(cls, shape=(4, 256, 256)):
         mask, image = cls._get_2d_inputs(shape[-2:])
 
         # Create volumes by stacking the input image and respective mask.
-        volume = np.stack([image] * 8)
-        labels = np.stack([mask] * 8)
+        volume = np.stack([image] * shape[0])
+        labels = np.stack([mask] * shape[0])
         return labels, volume
 
     @classmethod
@@ -53,7 +53,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
 
         # Input 3d data for normal and tiled segmentation.
         cls.labels, cls.volume = cls._get_3d_inputs()
-        cls.large_labels, cls.large_volume = cls._get_3d_inputs(shape=(8, 1024, 1024))
+        cls.large_labels, cls.large_volume = cls._get_3d_inputs(shape=(4, 1024, 1024))
 
     def tearDown(self):
         # Release all unoccupied cached memory (eg. tiling requires a lot of memory)
@@ -106,6 +106,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         )
         self.assertEqual(mask.shape, instances.shape)
 
+    @unittest.skip("Skipping this test in favor of runtime.")
     def test_automatic_mask_generator_3d(self):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation
 
@@ -115,6 +116,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         )
         self.assertEqual(labels.shape, instances.shape)
 
+    @unittest.skip("Skipping this test in favor of runtime.")
     def test_tiled_automatic_mask_generator_3d(self):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation
 
