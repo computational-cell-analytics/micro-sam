@@ -800,7 +800,7 @@ def get_predictor_and_decoder(
     model_type: str,
     checkpoint_path: Union[str, os.PathLike],
     device: Optional[Union[str, torch.device]] = None,
-    peft_kwargs: Optional[Dict] = None, 
+    peft_kwargs: Optional[Dict] = None,
 ) -> Tuple[SamPredictor, DecoderAdapter]:
     """Load the SAM model (predictor) and instance segmentation decoder.
 
@@ -826,7 +826,9 @@ def get_predictor_and_decoder(
         peft_kwargs=peft_kwargs,
     )
     if "decoder_state" not in state:
-        raise ValueError(f"The checkpoint at {checkpoint_path} does not contain a decoder state")
+        raise ValueError(
+            f"The checkpoint at '{checkpoint_path}' or the chosen model '{model_type}' does not contain a decoder state"
+        )
     decoder = get_decoder(predictor.model.image_encoder, state["decoder_state"], device)
     return predictor, decoder
 
