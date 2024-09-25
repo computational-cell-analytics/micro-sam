@@ -10,7 +10,7 @@ import micro_sam.util as util
 class TestAutomaticSegmentation(unittest.TestCase):
     model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"
     model_type_ais = "vit_t_lm" if util.VIT_T_SUPPORT else "vit_b_lm"
-    tile_shape = (512, 512)
+    tile_shape = (384, 768)
     halo = (96, 96)
 
     # create an input 2d image with three objects
