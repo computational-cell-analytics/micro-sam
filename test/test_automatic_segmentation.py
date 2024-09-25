@@ -49,11 +49,11 @@ class TestAutomaticSegmentation(unittest.TestCase):
     def setUpClass(cls):
         # Input 2d data for normal and tiled segmentation.
         cls.mask, cls.image = cls._get_2d_inputs()
-        cls.large_mask, cls.large_image = cls._get_2d_inputs(shape=(1024, 1024))
+        cls.large_mask, cls.large_image = cls._get_2d_inputs(shape=(768, 768))
 
         # Input 3d data for normal and tiled segmentation.
         cls.labels, cls.volume = cls._get_3d_inputs()
-        cls.large_labels, cls.large_volume = cls._get_3d_inputs(shape=(4, 1024, 1024))
+        cls.large_labels, cls.large_volume = cls._get_3d_inputs(shape=(4, 768, 768))
 
     def tearDown(self):
         # Release all unoccupied cached memory (eg. tiling requires a lot of memory)
@@ -120,17 +120,17 @@ class TestAutomaticSegmentation(unittest.TestCase):
     def test_tiled_automatic_mask_generator_3d(self):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation
 
-        large_labels, large_volume = self.large_labels,  self.large_volume
+        labels, volume = self.large_labels,  self.large_volume
 
         instances = automatic_instance_segmentation(
-            input_path=large_volume,
+            input_path=volume,
             model_type=self.model_type,
             ndim=3,
             tile_shape=self.tile_shape,
             halo=self.halo,
             use_amg=True,
         )
-        self.assertEqual(large_labels.shape, instances.shape)
+        self.assertEqual(labels.shape, instances.shape)
 
     def test_instance_segmentation_with_decoder_3d(self):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation
@@ -144,11 +144,11 @@ class TestAutomaticSegmentation(unittest.TestCase):
     def test_tiled_instance_segmentation_with_decoder_3d(self):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation
 
-        large_labels, large_volume = self.large_labels,  self.large_volume
+        labels, volume = self.large_labels,  self.large_volume
         instances = automatic_instance_segmentation(
-            input_path=large_volume, model_type=self.model_type, ndim=3, tile_shape=self.tile_shape, halo=self.halo,
+            input_path=volume, model_type=self.model_type, ndim=3, tile_shape=self.tile_shape, halo=self.halo,
         )
-        self.assertEqual(large_labels.shape, instances.shape)
+        self.assertEqual(labels.shape, instances.shape)
 
 
 if __name__ == "__main__":
