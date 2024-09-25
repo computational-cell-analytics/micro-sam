@@ -13,7 +13,7 @@ from .multi_dimensional_segmentation import automatic_3d_segmentation
 
 
 def automatic_instance_segmentation(
-    input_path: Union[os.PathLike, str],
+    input_path: Union[Union[os.PathLike, str], np.ndarray],
     output_path: Optional[Union[os.PathLike, str]] = None,
     embedding_path: Optional[Union[os.PathLike, str]] = None,
     model_type: str = util._DEFAULT_MODEL,
