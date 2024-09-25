@@ -14,7 +14,7 @@ from .multi_dimensional_segmentation import automatic_3d_segmentation
 
 def automatic_instance_segmentation(
     input_path: Union[os.PathLike, str],
-    output_path: Union[os.PathLike, str],
+    output_path: Optional[Union[os.PathLike, str]] = None,
     embedding_path: Optional[Union[os.PathLike, str]] = None,
     model_type: str = util._DEFAULT_MODEL,
     checkpoint_path: Optional[Union[os.PathLike, str]] = None,
@@ -56,6 +56,9 @@ def automatic_instance_segmentation(
         image_data = util.load_image_data(input_path, key)
 
     if ndim == 3 or image_data.ndim == 3:
+        if image_data.ndim != 3:
+            raise ValueError(f"The inputs do not correspond to three dimensional inputs: '{image_data.ndim}'")
+
         instances = automatic_3d_segmentation(
             volume=image_data,
             predictor=predictor,
@@ -91,9 +94,12 @@ def automatic_instance_segmentation(
         else:
             instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=0)
 
-    # Save the instance segmentation
-    output_path = Path(output_path).with_suffix(".tif")
-    imageio.imwrite(output_path, instances, compression="zlib")
+    if output_path is not None:
+        # Save the instance segmentation
+        output_path = Path(output_path).with_suffix(".tif")
+        imageio.imwrite(output_path, instances, compression="zlib")
+
+    return instances
 
 
 def main():
