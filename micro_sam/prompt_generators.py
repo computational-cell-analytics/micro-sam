@@ -252,7 +252,7 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
 class IterativePromptGenerator(PromptGeneratorBase):
     """Generate point prompts from an instance segmentation iteratively.
     """
-    def _get_positive_points(self, pos_region, overlap_region, is_multidimensional=False):
+    def _get_positive_points(self, pos_region, overlap_region, is_3d):
         positive_locations = [torch.where(pos_reg) for pos_reg in pos_region]
         # we may have objects without a positive region (= missing true foreground)
         # in this case we just sample a positive point where the model was already correct
@@ -265,7 +265,7 @@ class IterativePromptGenerator(PromptGeneratorBase):
         # get the corresponding coordinates (NOTE: we flip the axis order here due to the expected order of SAM)
         pos_coordinates = []
         for pos_loc, idx in zip(positive_locations, sampled_indices):
-            if is_multidimensional:
+            if is_3d:
                 pos_coordinates.append([pos_loc[-1][idx], pos_loc[-2][idx], pos_loc[-3][idx]])
             else:
                 pos_coordinates.append([pos_loc[-1][idx], pos_loc[-2][idx]])
@@ -292,7 +292,7 @@ class IterativePromptGenerator(PromptGeneratorBase):
         background_mask = torch.abs(bbox_mask - true_object)
         return torch.where(background_mask)
 
-    def _get_negative_points(self, neg_region, true_object, is_multidimensional=False):
+    def _get_negative_points(self, neg_region, true_object, is_3d):
         # we have a valid negative region (i.e. a valid region where the model could not generate prediction)
         negative_locations = [torch.where(neg_reg) for neg_reg in neg_region]
         # we may have objects without a negative region (= no rectifications required)
@@ -312,7 +312,7 @@ class IterativePromptGenerator(PromptGeneratorBase):
         # get the corresponding coordinates (NOTE: we flip the axis order here due to the expected order of SAM)
         neg_coordinates = []
         for neg_loc, idx in zip(negative_locations, sampled_indices):
-            if is_multidimensional:
+            if is_3d:
                 neg_coordinates.append([neg_loc[-1][idx], neg_loc[-2][idx], neg_loc[-3][idx]])
             else:
                 neg_coordinates.append([neg_loc[-1][idx], neg_loc[-2][idx]])
@@ -332,15 +332,24 @@ class IterativePromptGenerator(PromptGeneratorBase):
         """Generate the prompts for each object iteratively in the segmentation.
 
         Args:
-            The groundtruth segmentation. Expects a float tensor of shape NUM_OBJECTS x 1 x H x W.
-            The predicted objects. Epects a float tensor of the same shape as the segmentation.
+            segmentation: The groundtruth segmentation.
+                Expects a float tensor of shape (NUM_OBJECTS x 1 x H x W) or (NUM_OBJECTS x 1 x Z x H x W).
+            prediction: The predicted objects. Epects a float tensor of the same shape as the segmentation.
 
         Returns:
             The updated point prompt coordinates.
             The updated point prompt labels.
         """
-        assert segmentation.shape == prediction.shape
         device = prediction.device
+        assert segmentation.shape == prediction.shape, \
+            "The segmentation and prediction tensors should have the same shape."
+
+        if segmentation.ndim == 5:  # masks in 3d must be tensors of shape NUM_OBJECTS x 1 x Z x H x W
+            is_3d = True
+        elif segmentation.ndim == 4:  # masks in 2d must be tensors of shape NUM_OBJECTS x 1 x H x W
+            is_3d = False
+        else:
+            raise ValueError("The segmentation and prediction tensors should have either '4' or '5' dimensions.")
 
         true_object = segmentation.to(device)
         expected_diff = (prediction - true_object)
@@ -348,8 +357,8 @@ class IterativePromptGenerator(PromptGeneratorBase):
         pos_region = (expected_diff == -1)
         overlap_region = torch.logical_and(prediction == 1, true_object == 1).to(torch.float32)
 
-        pos_coordinates, pos_labels = self._get_positive_points(pos_region, overlap_region, **kwargs)
-        neg_coordinates, neg_labels = self._get_negative_points(neg_region, true_object, **kwargs)
+        pos_coordinates, pos_labels = self._get_positive_points(pos_region, overlap_region, is_3d)
+        neg_coordinates, neg_labels = self._get_negative_points(neg_region, true_object, is_3d)
         assert len(pos_coordinates) == len(pos_labels) == len(neg_coordinates) == len(neg_labels)
 
         pos_coordinates = torch.tensor(pos_coordinates)[:, None]
