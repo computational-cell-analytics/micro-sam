@@ -261,10 +261,7 @@ class IterativePromptGenerator(PromptGeneratorBase):
             for pos_loc, ovlp_reg in zip(positive_locations, overlap_region)
         ]
         # we sample one location for each object in the batch
-        try:
-            sampled_indices = [np.random.choice(len(pos_loc[0])) for pos_loc in positive_locations]
-        except ValueError:
-            breakpoint()
+        sampled_indices = [np.random.choice(len(pos_loc[0])) for pos_loc in positive_locations]
         # get the corresponding coordinates (Note that we flip the axis order here due to the expected order of SAM)
         pos_coordinates = []
         for pos_loc, idx in zip(positive_locations, sampled_indices):
@@ -344,7 +341,10 @@ class IterativePromptGenerator(PromptGeneratorBase):
         pos_region = (expected_diff == -1)
         overlap_region = torch.logical_and(prediction == 1, true_object == 1).to(torch.float32)
 
-        pos_coordinates, pos_labels = self._get_positive_points(pos_region, overlap_region, **kwargs)
+        try:
+            pos_coordinates, pos_labels = self._get_positive_points(pos_region, overlap_region, **kwargs)
+        except ValueError:
+            breakpoint()
         neg_coordinates, neg_labels = self._get_negative_points(neg_region, true_object, **kwargs)
         assert len(pos_coordinates) == len(pos_labels) == len(neg_coordinates) == len(neg_labels)
 
