@@ -341,10 +341,7 @@ class IterativePromptGenerator(PromptGeneratorBase):
         pos_region = (expected_diff == -1)
         overlap_region = torch.logical_and(prediction == 1, true_object == 1).to(torch.float32)
 
-        try:
-            pos_coordinates, pos_labels = self._get_positive_points(pos_region, overlap_region, **kwargs)
-        except ValueError:
-            breakpoint()
+        pos_coordinates, pos_labels = self._get_positive_points(pos_region, overlap_region, **kwargs)
         neg_coordinates, neg_labels = self._get_negative_points(neg_region, true_object, **kwargs)
         assert len(pos_coordinates) == len(pos_labels) == len(neg_coordinates) == len(neg_labels)
 
