@@ -2,6 +2,7 @@ import os
 import time
 import warnings
 from glob import glob
+from tqdm import tqdm
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import imageio.v3 as imageio
@@ -30,8 +31,8 @@ from . import joint_sam_trainer as joint_trainers
 FilePath = Union[str, os.PathLike]
 
 
-def _check_loader(loader, with_segmentation_decoder):
-    x, y = next(iter(loader))
+def _check_loader(loader, with_segmentation_decoder, name=None):
+    x, _ = next(iter(loader))
 
     # Raw data: check that we have 1 or 3 channels.
     n_channels = x.shape[1]
@@ -55,8 +56,9 @@ def _check_loader(loader, with_segmentation_decoder):
         )
 
     # Target data: the check depends on whether we train with or without decoder.
+    # NOTE: Verification step to check whether all labels from dataloader are valid (i.e. have atleast one instance).
 
-    def check_instance_channel(instance_channel):
+    def _check_instance_channel(instance_channel):
         unique_vals = torch.unique(instance_channel)
         if (unique_vals < 0).any():
             raise ValueError(
@@ -71,38 +73,44 @@ def _check_loader(loader, with_segmentation_decoder):
                 "All values in the target channel with the instance segmentation must be integer."
             )
 
-    n_channels_y = y.shape[1]
-    if with_segmentation_decoder:
-        if n_channels_y != 4:
-            raise ValueError(
-                "Invalid number of channels in the target data from the data loader. "
-                "Expect 4 channel for training with an instance segmentation decoder, "
-                f"but got {n_channels_y} channels."
-            )
-        check_instance_channel(y[:, 0])
+    name = "" if name is None else f"'{name}'"
+    for x, y in tqdm(loader, desc=f"Verifying labels in {name} dataloader"):
+        n_channels_y = y.shape[1]
+        if with_segmentation_decoder:
+            if n_channels_y != 4:
+                raise ValueError(
+                    "Invalid number of channels in the target data from the data loader. "
+                    "Expect 4 channel for training with an instance segmentation decoder, "
+                    f"but got {n_channels_y} channels."
+                )
+            # Check instance channel per sample in a batch
+            for per_y_sample in y:
+                _check_instance_channel(per_y_sample[0])
 
-        targets_min, targets_max = y[:, 1:].min(), y[:, 1:].max()
-        if targets_min < 0 or targets_min > 1:
-            raise ValueError(
-                "Invalid value range in the target data from the value loader. "
-                "Expect the 3 last target channels (for normalized distances and foreground probabilities)"
-                f"to be in range [0.0, 1.0], but got min {targets_min}"
-            )
-        if targets_max < 0 or targets_max > 1:
-            raise ValueError(
-                "Invalid value range in the target data from the value loader. "
-                "Expect the 3 last target channels (for normalized distances and foreground probabilities)"
-                f"to be in range [0.0, 1.0], but got max {targets_max}"
-            )
+            targets_min, targets_max = y[:, 1:].min(), y[:, 1:].max()
+            if targets_min < 0 or targets_min > 1:
+                raise ValueError(
+                    "Invalid value range in the target data from the value loader. "
+                    "Expect the 3 last target channels (for normalized distances and foreground probabilities)"
+                    f"to be in range [0.0, 1.0], but got min {targets_min}"
+                )
+            if targets_max < 0 or targets_max > 1:
+                raise ValueError(
+                    "Invalid value range in the target data from the value loader. "
+                    "Expect the 3 last target channels (for normalized distances and foreground probabilities)"
+                    f"to be in range [0.0, 1.0], but got max {targets_max}"
+                )
 
-    else:
-        if n_channels_y != 1:
-            raise ValueError(
-                "Invalid number of channels in the target data from the data loader. "
-                "Expect 1 channel for training without an instance segmentation decoder,"
-                f"but got {n_channels_y} channels."
-            )
-        check_instance_channel(y)
+        else:
+            if n_channels_y != 1:
+                raise ValueError(
+                    "Invalid number of channels in the target data from the data loader. "
+                    "Expect 1 channel for training without an instance segmentation decoder,"
+                    f"but got {n_channels_y} channels."
+                )
+            # Check instance channel per sample in a batch
+            for per_y_sample in y:
+                _check_instance_channel(per_y_sample)
 
 
 # Make the progress bar callbacks compatible with a tqdm progress bar interface.
@@ -185,8 +193,8 @@ def train_sam(
     """
     t_start = time.time()
 
-    _check_loader(train_loader, with_segmentation_decoder)
-    _check_loader(val_loader, with_segmentation_decoder)
+    _check_loader(train_loader, with_segmentation_decoder, name="train")
+    _check_loader(val_loader, with_segmentation_decoder, name="validation")
 
     device = get_device(device)
 
