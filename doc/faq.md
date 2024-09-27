@@ -138,6 +138,8 @@ This can happen for long running computations. You just need to wait a bit longe
 ### 15. I am out of storage in my home directory, where the model checkpoints are cached by `micro-sam`. How do I pass model checkpoints stored in a desired directory to the annotator?
 In `micro-sam` CLIs for precomputation of image embeddings and annotators (Annotator 2d, Annotator 3d, Annotator Tracking, Image Series Annotator) accept the argument `-c` / `--checkpoint` to pass model checkpoints. Whereas if you are using `micro-sam` annotators in `napari`, you can provide the path to model checkpoints in the annotator widget (on right) under `Embedding Settings` drop-down in the `custom weights path` option.
 
+NOTE: It is important to choose the correct model when you opt for the above recommendation, else you will face parameter mismatch issues.
+
 
 ## Fine-tuning questions
 
