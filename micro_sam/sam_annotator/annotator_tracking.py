@@ -109,16 +109,16 @@ class AnnotatorTracking(_AnnotatorBase):
                 "state": self._track_state_labels,
                 "track_id": ["1"],  # we use string to avoid pandas warning
             },
-            edge_color="label",
-            edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
+            border_color="label",
+            border_color_cycle=vutil.LABEL_COLOR_CYCLE,
             symbol="o",
             face_color="state",
             face_color_cycle=STATE_COLOR_CYCLE,
-            edge_width=0.4,
+            border_width=0.4,
             size=12,
             ndim=self._ndim,
         )
-        self._point_prompt_layer.edge_color_mode = "cycle"
+        self._point_prompt_layer.border_color_mode = "cycle"
         self._point_prompt_layer.face_color_mode = "cycle"
 
         # Using the box layer to set divisions currently doesn't work.
