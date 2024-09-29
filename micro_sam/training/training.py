@@ -32,7 +32,7 @@ from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit
 FilePath = Union[str, os.PathLike]
 
 
-def _check_loader(loader, with_segmentation_decoder, name=None):
+def _check_loader(loader, with_segmentation_decoder, name=None, verify_n_labels_in_loader=None):
     x, _ = next(iter(loader))
 
     # Raw data: check that we have 1 or 3 channels.
@@ -74,8 +74,13 @@ def _check_loader(loader, with_segmentation_decoder, name=None):
                 "All values in the target channel with the instance segmentation must be integer."
             )
 
+    counter = 0
     name = "" if name is None else f"'{name}'"
-    for x, y in tqdm(loader, desc=f"Verifying labels in {name} dataloader"):
+    for x, y in tqdm(
+        loader,
+        desc=f"Verifying labels in {name} dataloader",
+        total=verify_n_labels_in_loader if verify_n_labels_in_loader is not None else None,
+    ):
         n_channels_y = y.shape[1]
         if with_segmentation_decoder:
             if n_channels_y != 4:
@@ -112,6 +117,10 @@ def _check_loader(loader, with_segmentation_decoder, name=None):
             # Check instance channel per sample in a batch
             for per_y_sample in y:
                 _check_instance_channel(per_y_sample)
+
+        counter += 1
+        if verify_n_labels_in_loader is not None and counter == verify_n_labels_in_loader:
+            break
 
 
 # Make the progress bar callbacks compatible with a tqdm progress bar interface.
@@ -165,6 +174,7 @@ def train_sam(
     pbar_signals: Optional[QObject] = None,
     optimizer_class: Optional[Optimizer] = torch.optim.AdamW,
     peft_kwargs: Optional[Dict] = None,
+    verify_n_labels_in_loader: Optional[int] = None,
     **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
@@ -202,11 +212,14 @@ def train_sam(
         pbar_signals: Controls for napari progress bar.
         optimizer_class: The optimizer class.
             By default, torch.optim.AdamW is used.
+        peft_kwargs: Keyword arguments for the PEFT wrapper class.
+        verify_n_labels_in_loader: The number of labels to verify out of the train and validation dataloaders.
+        model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
     """
     t_start = time.time()
 
-    _check_loader(train_loader, with_segmentation_decoder, name="train")
-    _check_loader(val_loader, with_segmentation_decoder, name="validation")
+    _check_loader(train_loader, with_segmentation_decoder, "train", verify_n_labels_in_loader)
+    _check_loader(val_loader, with_segmentation_decoder, "validation", verify_n_labels_in_loader)
 
     device = get_device(device)
     # Get the trainable segment anything model.
