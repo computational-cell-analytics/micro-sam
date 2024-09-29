@@ -119,7 +119,7 @@ def _check_loader(loader, with_segmentation_decoder, name=None, verify_n_labels_
                 _check_instance_channel(per_y_sample)
 
         counter += 1
-        if verify_n_labels_in_loader is not None and counter == verify_n_labels_in_loader:
+        if verify_n_labels_in_loader is not None and counter > verify_n_labels_in_loader:
             break
 
 
