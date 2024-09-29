@@ -65,7 +65,7 @@ def wholeslide_annotator(use_finetuned_model):
 
 def main():
     # Whether to use the fine-tuned SAM model for light microscopy data.
-    use_finetuned_model = False
+    use_finetuned_model = True
 
     # 2d annotator for livecell data
     livecell_annotator(use_finetuned_model)

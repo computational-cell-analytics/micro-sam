@@ -80,6 +80,7 @@ class AnnotatorState(metaclass=Singleton):
         prefer_decoder=True,
         pbar_init=None,
         pbar_update=None,
+        skip_load=True,
     ):
         assert ndim in (2, 3)
 
@@ -128,7 +129,7 @@ class AnnotatorState(metaclass=Singleton):
                 raise RuntimeError("Require a save path to precompute the amg state")
 
             cache_state = cache_amg_state if self.decoder is None else partial(
-                cache_is_state, decoder=self.decoder, skip_load=True,
+                cache_is_state, decoder=self.decoder, skip_load=skip_load,
             )
 
             if ndim == 2:

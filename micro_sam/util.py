@@ -44,7 +44,7 @@ except ImportError:
     from tqdm import tqdm
 
 # this is the default model used in micro_sam
-# currently set to the default vit_h
+# currently set to the default vit_l
 _DEFAULT_MODEL = "vit_l"
 
 # The valid model types. Each type corresponds to the architecture of the
@@ -396,7 +396,7 @@ def get_sam_model(
 
     # Add the decoder to the state if we have one and if the state is returned.
     if decoder_path is not None and return_state:
-        state["decoder_state"] = torch.load(decoder_path, map_location=device)
+        state["decoder_state"] = torch.load(decoder_path, map_location=device, weights_only=True)
 
     if return_sam and return_state:
         return predictor, sam, state
