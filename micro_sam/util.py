@@ -396,7 +396,7 @@ def get_sam_model(
 
     # Add the decoder to the state if we have one and if the state is returned.
     if decoder_path is not None and return_state:
-        state["decoder_state"] = torch.load(decoder_path, map_location=device, weights_only=True)
+        state["decoder_state"] = torch.load(decoder_path, map_location=device, weights_only=False)
 
     if return_sam and return_state:
         return predictor, sam, state

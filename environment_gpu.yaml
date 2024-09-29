@@ -7,7 +7,7 @@ dependencies:
     - imagecodecs
     - nifty =1.2.1=*_4
     - magicgui
-    - napari <0.5
+    - napari
     - pip
     - pooch
     - pyqt
