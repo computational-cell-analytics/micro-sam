@@ -263,12 +263,15 @@ class IterativePromptGenerator(PromptGeneratorBase):
         # we sample one positive location for each object in the batch
         sampled_indices = [np.random.choice(len(pos_loc[0])) for pos_loc in positive_locations]
         # get the corresponding coordinates (NOTE: we flip the axis order here due to the expected order of SAM)
-        pos_coordinates = []
-        for pos_loc, idx in zip(positive_locations, sampled_indices):
-            if is_3d:
-                pos_coordinates.append([pos_loc[-1][idx], pos_loc[-2][idx], pos_loc[-3][idx]])
-            else:
-                pos_coordinates.append([pos_loc[-1][idx], pos_loc[-2][idx]])
+        if is_3d:
+            pos_coordinates = [
+                [pos_loc[-1][idx], pos_loc[-2][idx], pos_loc[-3][idx]]
+                for pos_loc, idx in zip(positive_locations, sampled_indices)
+            ]
+        else:
+            pos_coordinates = [
+                [pos_loc[-1][idx], pos_loc[-2][idx]] for pos_loc, idx in zip(positive_locations, sampled_indices)
+            ]
 
         # make sure that we still have the correct batch size
         assert len(pos_coordinates) == pos_region.shape[0]
@@ -310,12 +313,15 @@ class IterativePromptGenerator(PromptGeneratorBase):
         # we sample one negative location for each object in the batch
         sampled_indices = [np.random.choice(len(neg_loc[0])) for neg_loc in negative_locations]
         # get the corresponding coordinates (NOTE: we flip the axis order here due to the expected order of SAM)
-        neg_coordinates = []
-        for neg_loc, idx in zip(negative_locations, sampled_indices):
-            if is_3d:
-                neg_coordinates.append([neg_loc[-1][idx], neg_loc[-2][idx], neg_loc[-3][idx]])
-            else:
-                neg_coordinates.append([neg_loc[-1][idx], neg_loc[-2][idx]])
+        if is_3d:
+            neg_coordinates = [
+                [neg_loc[-1][idx], neg_loc[-2][idx], neg_loc[-3][idx]]
+                for neg_loc, idx in zip(negative_locations, sampled_indices)
+            ]
+        else:
+            neg_coordinates = [
+                [neg_loc[-1][idx], neg_loc[-2][idx]] for neg_loc, idx in zip(negative_locations, sampled_indices)
+            ]
 
         # make sure that we still have the correct batch size
         assert len(neg_coordinates) == neg_region.shape[0]
