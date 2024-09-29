@@ -12,9 +12,10 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import vigra
 import numpy as np
-from skimage.measure import regionprops
-
 import torch
+
+from skimage.measure import label, regionprops
+from skimage.segmentation import relabel_sequential
 from torchvision.ops.boxes import batched_nms, box_area
 
 from torch_em.model import UNETR
@@ -47,6 +48,7 @@ def mask_data_to_segmentation(
     with_background: bool,
     min_object_size: int = 0,
     max_object_size: Optional[int] = None,
+    label_masks: bool = True,
 ) -> np.ndarray:
     """Convert the output of the automatic mask generation to an instance segmentation.
 
@@ -57,7 +59,11 @@ def mask_data_to_segmentation(
             object in the output will be mapped to zero (the background value).
         min_object_size: The minimal size of an object in pixels.
         max_object_size: The maximal size of an object in pixels.
+<<<<<<< HEAD
 
+=======
+        label_masks: Whether to apply connected components to the result before remving small objects.
+>>>>>>> master
     Returns:
         The instance segmentation.
     """
@@ -81,6 +87,8 @@ def mask_data_to_segmentation(
         segmentation[require_numpy(mask["segmentation"])] = this_seg_id
         seg_id = this_seg_id + 1
 
+    if label_masks:
+        segmentation = label(segmentation)
     seg_ids, sizes = np.unique(segmentation, return_counts=True)
 
     # In some cases objects may be smaller than peviously calculated,
@@ -96,7 +104,7 @@ def mask_data_to_segmentation(
         filter_ids = np.concatenate([filter_ids, [bg_id]])
 
     segmentation[np.isin(segmentation, filter_ids)] = 0
-    vigra.analysis.relabelConsecutive(segmentation, out=segmentation)
+    segmentation = relabel_sequential(segmentation)[0]
 
     return segmentation
 
@@ -959,7 +967,6 @@ class InstanceSegmentationWithDecoder:
         ]
         return masks
 
-    # TODO find good default values (empirically)
     def generate(
         self,
         center_distance_threshold: float = 0.5,
