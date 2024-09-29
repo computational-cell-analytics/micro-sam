@@ -104,7 +104,8 @@ class TestAutomaticSegmentation(unittest.TestCase):
 
         mask, image = self.large_mask, self.large_image
         instances = automatic_instance_segmentation(
-            input_path=image, model_type=self.model_type, ndim=2, tile_shape=self.tile_shape, halo=self.halo,
+            input_path=image, model_type=self.model_type_ais,
+            ndim=2, tile_shape=self.tile_shape, halo=self.halo,
         )
         self.assertEqual(mask.shape, instances.shape)
 
@@ -142,13 +143,12 @@ class TestAutomaticSegmentation(unittest.TestCase):
         )
         self.assertEqual(labels.shape, instances.shape)
 
-    @unittest.skip("Skipping long running tests by default.")
     def test_tiled_instance_segmentation_with_decoder_3d(self):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation
 
         labels, volume = self.large_labels, self.large_volume
         instances = automatic_instance_segmentation(
-            input_path=volume, model_type=self.model_type, ndim=3, tile_shape=self.tile_shape, halo=self.halo,
+            input_path=volume, model_type=self.model_type_ais, ndim=3, tile_shape=self.tile_shape, halo=self.halo,
         )
         self.assertEqual(labels.shape, instances.shape)
 
