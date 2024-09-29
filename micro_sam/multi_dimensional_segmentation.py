@@ -5,14 +5,17 @@ import os
 from typing import Optional, Union, Tuple
 
 import numpy as np
-import nifty
-import elf.tracking.tracking_utils as track_utils
-import elf.segmentation as seg_utils
 
-from segment_anything.predictor import SamPredictor
+import nifty
+
+import elf.segmentation as seg_utils
+import elf.tracking.tracking_utils as track_utils
+
 from scipy.ndimage import binary_closing
 from skimage.measure import label, regionprops
 from skimage.segmentation import relabel_sequential
+
+from segment_anything.predictor import SamPredictor
 
 try:
     from napari.utils import progress as tqdm
@@ -20,8 +23,8 @@ except ImportError:
     from tqdm import tqdm
 
 from . import util
-from .instance_segmentation import AMGBase, mask_data_to_segmentation
 from .prompt_based_segmentation import segment_from_mask
+from .instance_segmentation import AMGBase, mask_data_to_segmentation
 
 PROJECTION_MODES = ("box", "mask", "points", "points_and_mask", "single_point")
 
@@ -353,7 +356,6 @@ def merge_instance_segmentation_3d(
     return segmentation
 
 
-# TODO: Enable tiling
 def automatic_3d_segmentation(
     volume: np.ndarray,
     predictor: SamPredictor,
@@ -362,6 +364,8 @@ def automatic_3d_segmentation(
     with_background: bool = True,
     gap_closing: Optional[int] = None,
     min_z_extent: Optional[int] = None,
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
     **kwargs,
 ) -> np.ndarray:
@@ -380,6 +384,8 @@ def automatic_3d_segmentation(
             operation. The value is used to determine the number of iterations for the closing.
         min_z_extent: Require a minimal extent in z for the segmented objects.
             This can help to prevent segmentation artifacts.
+        tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
+        halo: Overlap of the tiles for tiled prediction.
         verbose: Verbosity flag.
         kwargs: Keyword arguments for the 'generate' method of the 'segmentor'.
 
@@ -390,7 +396,9 @@ def automatic_3d_segmentation(
     segmentation = np.zeros(volume.shape, dtype="uint32")
 
     min_object_size = kwargs.pop("min_object_size", 0)
-    image_embeddings = util.precompute_image_embeddings(predictor, volume, save_path=embedding_path, ndim=3)
+    image_embeddings = util.precompute_image_embeddings(
+        predictor=predictor, input_=volume, save_path=embedding_path, ndim=3, tile_shape=tile_shape, halo=halo,
+    )
 
     for i in tqdm(range(segmentation.shape[0]), desc="Segment slices", disable=not verbose):
         segmentor.initialize(volume[i], image_embeddings=image_embeddings, verbose=False, i=i)

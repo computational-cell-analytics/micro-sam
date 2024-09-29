@@ -1,11 +1,11 @@
 import napari
 import numpy as np
 
-from magicgui.widgets import Widget, Container, FunctionGui
 from qtpy import QtWidgets
+from magicgui.widgets import Widget, Container, FunctionGui
 
-from . import _widgets as widgets
 from . import util as vutil
+from . import _widgets as widgets
 from ._state import AnnotatorState
 
 

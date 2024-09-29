@@ -3,11 +3,17 @@ import time
 import warnings
 from glob import glob
 from tqdm import tqdm
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import imageio.v3 as imageio
+
 import torch
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import _LRScheduler
+from torch.utils.data import DataLoader, Dataset
+
 import torch_em
+from torch_em.data.datasets.util import split_kwargs
 
 from elf.io import open_file
 
@@ -16,16 +22,11 @@ try:
 except Exception:
     QObject = Any
 
-from torch.optim.lr_scheduler import _LRScheduler
-from torch.utils.data import DataLoader, Dataset
-from torch_em.data.datasets.util import split_kwargs
-
 from ..util import get_device
-from ..instance_segmentation import get_unetr
-
-from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit
 from . import sam_trainer as trainers
+from ..instance_segmentation import get_unetr
 from . import joint_sam_trainer as joint_trainers
+from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit
 
 
 FilePath = Union[str, os.PathLike]
@@ -135,6 +136,12 @@ class _ProgressBarWrapper:
         self._signals.pbar_description.emit(desc)
 
 
+def _count_parameters(model_parameters):
+    params = sum(p.numel() for p in model_parameters if p.requires_grad)
+    params = params / 1e6
+    print(f"The number of trainable parameters for the provided model is {round(params, 2)}M")
+
+
 def train_sam(
     name: str,
     model_type: str,
@@ -156,6 +163,9 @@ def train_sam(
     scheduler_kwargs: Optional[Dict[str, Any]] = None,
     save_every_kth_epoch: Optional[int] = None,
     pbar_signals: Optional[QObject] = None,
+    optimizer_class: Optional[Optimizer] = torch.optim.AdamW,
+    peft_kwargs: Optional[Dict] = None,
+    **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
 
@@ -185,11 +195,13 @@ def train_sam(
         mask_prob: The probability for using a mask as input in a given training sub-iteration.
         n_iterations: The number of iterations to use for training. This will over-ride n_epochs if given.
         scheduler_class: The learning rate scheduler to update the learning rate.
-            By default, ReduceLROnPlateau is used.
+            By default, torch.optim.lr_scheduler.ReduceLROnPlateau is used.
         scheduler_kwargs: The learning rate scheduler parameters.
             If passed None, the chosen default parameters are used in ReduceLROnPlateau.
         save_every_kth_epoch: Save checkpoints after every kth epoch separately.
         pbar_signals: Controls for napari progress bar.
+        optimizer_class: The optimizer class.
+            By default, torch.optim.AdamW is used.
     """
     t_start = time.time()
 
@@ -197,13 +209,16 @@ def train_sam(
     _check_loader(val_loader, with_segmentation_decoder, name="validation")
 
     device = get_device(device)
-
     # Get the trainable segment anything model.
     model, state = get_trainable_sam_model(
-        model_type=model_type, device=device, freeze=freeze,
-        checkpoint_path=checkpoint_path, return_state=True,
+        model_type=model_type,
+        device=device,
+        freeze=freeze,
+        checkpoint_path=checkpoint_path,
+        return_state=True,
+        peft_kwargs=peft_kwargs,
+        **model_kwargs
     )
-
     # This class creates all the training data for a batch (inputs, prompts and labels).
     convert_inputs = ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
 
@@ -223,10 +238,10 @@ def train_sam(
             if not param_name.startswith("encoder"):
                 joint_model_params.append(params)
 
-        optimizer = torch.optim.Adam(joint_model_params, lr=lr)
+        optimizer = optimizer_class(joint_model_params, lr=lr)
 
     else:
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        optimizer = optimizer_class(model.parameters(), lr=lr)
 
     if scheduler_kwargs is None:
         scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
@@ -301,10 +316,11 @@ def train_sam(
 
 
 def _update_patch_shape(patch_shape, raw_paths, raw_key, with_channels):
-    if not isinstance(raw_paths, (str, os.PathLike)):
-        path = raw_paths[0]
-    else:
+    if isinstance(raw_paths, (str, os.PathLike)):
         path = raw_paths
+    else:
+        path = raw_paths[0]
+    assert isinstance(path, (str, os.PathLike))
 
     # Check the underlying data dimensionality.
     if raw_key is None:  # If no key is given then we assume it's an image file.
@@ -337,9 +353,12 @@ def default_sam_dataset(
     patch_shape: Tuple[int],
     with_segmentation_decoder: bool,
     with_channels: bool = False,
-    sampler=None,  # Type?
+    sampler: Optional[Callable] = None,
+    raw_transform: Optional[Callable] = None,
     n_samples: Optional[int] = None,
     is_train: bool = True,
+    min_size: int = 25,
+    max_sampling_attempts: Optional[int] = None,
     **kwargs,
 ) -> Dataset:
     """Create a PyTorch Dataset for training a SAM model.
@@ -357,26 +376,34 @@ def default_sam_dataset(
         with_segmentation_decoder: Whether to train with additional segmentation decoder.
         with_channels: Whether the image data has RGB channels.
         sampler: A sampler to reject batches according to a given criterion.
+        raw_transform: Transformation applied to the image data.
+            If not given the data will be cast to 8bit.
         n_samples: The number of samples for this dataset.
         is_train: Whether this dataset is used for training or validation.
+        min_size: Minimal object size. Smaller objects will be filtered.
+        max_sampling_attempts: Number of sampling attempts to make from a dataset.
 
     Returns:
         The dataset.
     """
 
     # Set the data transformations.
-    raw_transform = require_8bit
+    if raw_transform is None:
+        raw_transform = require_8bit
+
     if with_segmentation_decoder:
         label_transform = torch_em.transform.label.PerObjectDistanceTransform(
             distances=True, boundary_distances=True, directed_distances=False,
-            foreground=True, instances=True, min_size=25,
+            foreground=True, instances=True, min_size=min_size,
         )
     else:
-        label_transform = torch_em.transform.label.connected_components
+        label_transform = torch_em.transform.label.MinSizeLabelTransform(
+            min_size=min_size
+        )
 
     # Set a default sampler if none was passed.
     if sampler is None:
-        sampler = torch_em.data.sampler.MinInstanceSampler(3)
+        sampler = torch_em.data.sampler.MinInstanceSampler(3, min_size=min_size)
 
     # Check the patch shape to add a singleton if required.
     patch_shape = _update_patch_shape(
@@ -399,6 +426,14 @@ def default_sam_dataset(
         sampler=sampler, n_samples=n_samples,
         **kwargs,
     )
+
+    if max_sampling_attempts is not None:
+        if isinstance(dataset, torch_em.data.concat_dataset.ConcatDataset):
+            for ds in dataset.datasets:
+                ds.max_sampling_attempts = max_sampling_attempts
+        else:
+            dataset.max_sampling_attempts = max_sampling_attempts
+
     return dataset
 
 

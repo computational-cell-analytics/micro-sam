@@ -1,11 +1,12 @@
 import os
 from typing import Optional, Union
 
-import torch
 import numpy as np
 
-import segment_anything.utils.amg as amg_utils
+import torch
+
 from segment_anything import SamPredictor
+import segment_anything.utils.amg as amg_utils
 from segment_anything.utils.transforms import ResizeLongestSide
 
 from . import util
