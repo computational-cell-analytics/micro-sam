@@ -7,9 +7,10 @@ from typing import List, Optional, Union, Tuple
 
 import numpy as np
 import imageio.v3 as imageio
-import napari
+
 import torch
 
+import napari
 from magicgui import magicgui
 from qtpy import QtWidgets
 

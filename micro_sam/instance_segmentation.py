@@ -6,25 +6,25 @@ https://computational-cell-analytics.github.io/micro-sam/micro_sam.html
 
 import os
 from abc import ABC
-from collections import OrderedDict
 from copy import deepcopy
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import vigra
 import numpy as np
 import torch
-import segment_anything.utils.amg as amg_utils
-import vigra
 
-from nifty.tools import blocking
-from segment_anything.predictor import SamPredictor
-
-from skimage.measure import regionprops
-from skimage.measure import label
+from skimage.measure import label, regionprops
 from skimage.segmentation import relabel_sequential
 from torchvision.ops.boxes import batched_nms, box_area
 
 from torch_em.model import UNETR
 from torch_em.util.segmentation import watershed_from_center_and_boundary_distances
+
+from nifty.tools import blocking
+
+import segment_anything.utils.amg as amg_utils
+from segment_anything.predictor import SamPredictor
 
 from . import util
 from ._vendored import batched_mask_to_box, mask_to_rle_pytorch
@@ -59,7 +59,11 @@ def mask_data_to_segmentation(
             object in the output will be mapped to zero (the background value).
         min_object_size: The minimal size of an object in pixels.
         max_object_size: The maximal size of an object in pixels.
+<<<<<<< HEAD
+
+=======
         label_masks: Whether to apply connected components to the result before remving small objects.
+>>>>>>> master
     Returns:
         The instance segmentation.
     """
@@ -804,6 +808,7 @@ def get_predictor_and_decoder(
     model_type: str,
     checkpoint_path: Union[str, os.PathLike],
     device: Optional[Union[str, torch.device]] = None,
+    peft_kwargs: Optional[Dict] = None,
 ) -> Tuple[SamPredictor, DecoderAdapter]:
     """Load the SAM model (predictor) and instance segmentation decoder.
 
@@ -814,6 +819,7 @@ def get_predictor_and_decoder(
         model_type: The type of the image encoder used in the SAM model.
         checkpoint_path: Path to the checkpoint from which to load the data.
         device: The device.
+        lora_rank: The rank for low rank adaptation of the attention layers.
 
     Returns:
         The SAM predictor.
@@ -821,11 +827,16 @@ def get_predictor_and_decoder(
     """
     device = util.get_device(device)
     predictor, state = util.get_sam_model(
-        model_type=model_type, checkpoint_path=checkpoint_path,
-        device=device, return_state=True
+        model_type=model_type,
+        checkpoint_path=checkpoint_path,
+        device=device,
+        return_state=True,
+        peft_kwargs=peft_kwargs,
     )
     if "decoder_state" not in state:
-        raise ValueError(f"The checkpoint at {checkpoint_path} does not contain a decoder state")
+        raise ValueError(
+            f"The checkpoint at '{checkpoint_path}' or the chosen model '{model_type}' does not contain a decoder state"
+        )
     decoder = get_decoder(predictor.model.image_encoder, state["decoder_state"], device)
     return predictor, decoder
 

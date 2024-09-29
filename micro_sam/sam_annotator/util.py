@@ -1,8 +1,7 @@
-import argparse
 import os
 import pickle
 import warnings
-
+import argparse
 from glob import glob
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -10,9 +9,8 @@ from typing import List, Optional, Tuple
 import h5py
 import napari
 import numpy as np
-
-from scipy.ndimage import shift
 from skimage import draw
+from scipy.ndimage import shift
 
 from .. import prompt_based_segmentation, util
 from .. import _model_settings as model_settings

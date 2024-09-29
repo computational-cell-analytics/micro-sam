@@ -1,19 +1,20 @@
 """Implements the widgets used in the annotation plugins.
 """
 
-import json
-import multiprocessing as mp
 import os
 import pickle
 from pathlib import Path
 from typing import Optional
+import multiprocessing as mp
 
-import elf.parallel
 import h5py
-import napari
-import numpy as np
+import json
 import zarr
 import z5py
+import napari
+import numpy as np
+
+import elf.parallel
 
 from qtpy import QtWidgets
 from qtpy.QtCore import QObject, Signal

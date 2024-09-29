@@ -5,7 +5,6 @@ from glob import glob
 
 from torch_em.data import datasets
 
-from micro_sam.util import get_sam_model
 from micro_sam.evaluation.livecell import _get_livecell_paths
 
 
@@ -14,10 +13,10 @@ ROOT = "/scratch/projects/nim00007/sam/data/"
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/new_models"
 
 VANILLA_MODELS = {
-    "vit_t": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/vit_t_mobile_sam.pth",
-    "vit_b": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/sam_vit_b_01ec64.pth",
-    "vit_l": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/sam_vit_l_0b3195.pth",
-    "vit_h": "/scratch-grete/projects/nim00007/sam/models/new_models/vanilla/sam_vit_h_4b8939.pth"
+    "vit_t": "/scratch-grete/projects/nim00007/sam/models/vanilla/vit_t_mobile_sam.pth",
+    "vit_b": "/scratch-grete/projects/nim00007/sam/models/vanilla/sam_vit_b_01ec64.pth",
+    "vit_l": "/scratch-grete/projects/nim00007/sam/models/vanilla/sam_vit_l_0b3195.pth",
+    "vit_h": "/scratch-grete/projects/nim00007/sam/models/vanilla/sam_vit_h_4b8939.pth"
 }
 
 
@@ -78,13 +77,6 @@ def get_dataset_paths(dataset_name, split_choice):
     labels_dir = os.path.join(ROOT, *dataset_name, "labels", file_search_specs)
 
     return raw_dir, labels_dir
-
-
-def get_model(model_type, ckpt):
-    if ckpt is None:
-        ckpt = VANILLA_MODELS[model_type]
-    predictor = get_sam_model(model_type=model_type, checkpoint_path=ckpt)
-    return predictor
 
 
 def get_paths(dataset_name, split):
@@ -219,13 +211,15 @@ def get_default_arguments():
     parser.add_argument(
         "-m", "--model", type=str, required=True, help="Provide the model type to initialize the predictor"
     )
-    parser.add_argument("-c", "--checkpoint", type=none_or_str, required=True, default=None)
+    parser.add_argument("-c", "--checkpoint", type=none_or_str, default=None)
     parser.add_argument("-e", "--experiment_folder", type=str, required=True)
     parser.add_argument("-d", "--dataset", type=str, default=None)
     parser.add_argument("--box", action="store_true", help="If passed, starts with first prompt as box")
     parser.add_argument(
         "--use_masks", action="store_true", help="To use logits masks for iterative prompting."
     )
+    parser.add_argument("--peft_rank", default=None, type=int, help="The rank for peft method.")
+    parser.add_argument("--peft_module", default=None, type=str, help="The module for peft method. (e.g. LoRA or FacT)")
     args = parser.parse_args()
     return args
 

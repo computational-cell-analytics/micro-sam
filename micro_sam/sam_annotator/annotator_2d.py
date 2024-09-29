@@ -2,6 +2,7 @@ from typing import Optional, Tuple, Union
 
 import napari
 import numpy as np
+
 import torch
 
 from . import _widgets as widgets
