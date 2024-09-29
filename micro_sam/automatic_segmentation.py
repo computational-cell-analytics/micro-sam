@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Union, Optional, Tuple
+from typing import Dict, Optional, Union, Tuple
 
 import numpy as np
 import imageio.v3 as imageio
@@ -23,8 +23,9 @@ def automatic_instance_segmentation(
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     use_amg: bool = False,
+    amg_kwargs: Optional[Dict] = None,
     **generate_kwargs
-) -> None:
+) -> np.ndarray:
     """Run automatic segmentation for the input image.
 
     Args:
@@ -40,14 +41,24 @@ def automatic_instance_segmentation(
         tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
         halo: Overlap of the tiles for tiled prediction.
         use_amg: Whether to use Automatic Mask Generation (AMG) as the automatic segmentation method.
+        amg_kwargs: optional keyword arguments for creating the AMG or AIS class.
+        generate_kwargs: optional keyword arguments for the generate function onf the AMG or AIS class.
+
+    Returns:
+        The segmentation result.
     """
     predictor, state = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path, return_state=True)
 
     if "decoder_state" in state and not use_amg:  # AIS
         decoder = get_decoder(predictor.model.image_encoder, state["decoder_state"])
-        segmenter = get_amg(predictor=predictor, decoder=decoder, is_tiled=tile_shape is not None)
+        segmenter = get_amg(
+            predictor=predictor, decoder=decoder, is_tiled=tile_shape is not None,
+            **({} if amg_kwargs is None else amg_kwargs)
+        )
     else:  # AMG
-        segmenter = get_amg(predictor=predictor, is_tiled=tile_shape is not None)
+        segmenter = get_amg(
+            predictor=predictor, is_tiled=tile_shape is not None, **({} if amg_kwargs is None else amg_kwargs)
+        )
 
     # Load the input image file.
     if isinstance(input_path, np.ndarray):
