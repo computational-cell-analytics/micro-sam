@@ -60,6 +60,7 @@ class FacTSurgery(nn.Module):
     Args:
         rank: The rank of the decomposition matrices for updating weights in each attention layer.
         block: The chosen attention blocks for implementing fact.
+        dropout: The dropout rate for dropout layers.
     """
     def __init__(
         self,
