@@ -59,7 +59,7 @@ def get_trainable_sam_model(
         freeze: Specify parts of the model that should be frozen, namely: image_encoder, prompt_encoder and mask_decoder
             By default nothing is frozen and the full model is updated.
         return_state: Whether to return the full checkpoint state.
-        left_kwargs: Keyword arguments for the PEFT wrapper class.
+        peft_kwargs: Keyword arguments for the PEFT wrapper class.
         flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
         model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
 
