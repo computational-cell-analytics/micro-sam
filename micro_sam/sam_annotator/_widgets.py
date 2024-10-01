@@ -351,7 +351,10 @@ def _commit_impl(viewer, layer, preserve_committed):
         z_min, z_max = state.z_range
         bb = np.s_[z_min:(z_max+1)]
 
-    seg = viewer.layers[layer].data[bb]
+    # Cast the dtype of the segmentation we work with correctly.
+    # Otherwise we run into type conversion errors later.
+    dtype = viewer.layers["committed_objects"].data.dtype
+    seg = viewer.layers[layer].data[bb].astype(dtype)
     shape = seg.shape
 
     # We parallelize these operatios because they take quite long for large volumes.
