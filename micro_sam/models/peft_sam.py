@@ -115,7 +115,12 @@ class SelectiveSurgery(nn.Module):
         suffix: Optional[List[str]] = None,
         infix: Optional[List[str]] = None,
     ):
-        """
+        """This function decides the parameter attributes to match for allowing gradient updates.
+
+        Args:
+            prefix: Matches the part of parameter name in front.
+            suffix: Matches the part of parameter name at the end.
+            infix: Matches parts of parameter name occuring in between. 
         """
         for k, v in self.block.named_parameters():
             if prefix is not None and k.startswith(tuple(prefix)):
