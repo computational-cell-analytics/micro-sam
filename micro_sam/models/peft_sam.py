@@ -134,7 +134,7 @@ class SelectiveSurgery(nn.Module):
 
 
 class AttentionSurgery(SelectiveSurgery):
-    """
+    """Child class for allowing gradient updates for parameters in attention layers.
     """
     def __init__(self, block: nn.Module):
         super().__init__(block=block)
@@ -143,7 +143,7 @@ class AttentionSurgery(SelectiveSurgery):
 
 
 class BiasSurgery(SelectiveSurgery):
-    """
+    """Child class for allowing gradient updates for bias parameters.
     """
     def __init__(self, block: nn.Module):
         super().__init__(block=block)
@@ -152,7 +152,7 @@ class BiasSurgery(SelectiveSurgery):
 
 
 class LayerNormSurgery(SelectiveSurgery):
-    """
+    """Child class for allowing gradient updates in normalization layers.
     """
     def __init__(self, block: nn.Module):
         super().__init__(block=block)
