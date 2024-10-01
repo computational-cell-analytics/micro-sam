@@ -61,8 +61,12 @@ class FacTSurgery(nn.Module):
         rank: The rank of the decomposition matrices for updating weights in each attention layer.
         block: The chosen attention blocks for implementing fact.
     """
-
-    def __init__(self, rank: int, block: nn.Module, dropout: Optional[float] = None):
+    def __init__(
+        self,
+        rank: int,
+        block: nn.Module,
+        dropout: Optional[float] = 0.1,
+    ):
         super().__init__()
         self.qkv_proj = block.attn.qkv
         self.dim = self.qkv_proj.in_features
@@ -95,7 +99,6 @@ class FacTSurgery(nn.Module):
         new_v = self.FacTv(new_v)
 
         # NOTE : Scaling Factor was set to 1 as it can be tuned via the learning rate
-        # Does it make sense to include it, in order to have similar learning rate as the original model?
         qkv[:, :, :, : self.dim] += new_q
         qkv[:, :, :, -self.dim:] += new_v
 
