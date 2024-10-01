@@ -27,7 +27,9 @@ from ._state import AnnotatorState
 from . import util as vutil
 from ._tooltips import get_tooltip
 from .. import instance_segmentation, util
-from ..multi_dimensional_segmentation import segment_mask_in_volume, merge_instance_segmentation_3d, PROJECTION_MODES
+from ..multi_dimensional_segmentation import (
+    segment_mask_in_volume, merge_instance_segmentation_3d, track_across_frames, PROJECTION_MODES
+)
 
 
 #
@@ -1413,7 +1415,7 @@ class AutoSegmentWidget(_WidgetBase):
         return self._add_boolean_param(
             "apply_to_volume", self.apply_to_volume, title="Apply to Volume",
             tooltip=get_tooltip("autosegment", "apply_to_volume")
-            )
+        )
 
     def _add_common_settings(self, settings):
         # Create the UI element for min object size.
@@ -1645,4 +1647,87 @@ class AutoSegmentWidget(_WidgetBase):
         else:
             worker = self._run_segmentation_2d(kwargs)
         _select_layer(self._viewer, "auto_segmentation")
+        return worker
+
+
+class AutoTrackWidget(AutoSegmentWidget):
+    def _create_tracking_switch(self):
+        self.apply_to_volume = False
+        return self._add_boolean_param(
+            "apply_to_volume", self.apply_to_volume, title="Track Timeseries",
+            tooltip=get_tooltip("autotrack", "run_tracking")
+        )
+
+    def _create_widget(self):
+        # Add the switch for segmenting the slice vs. tracking the timeseries.
+        self.layout().addWidget(self._create_tracking_switch())
+
+        # Add the nested settings widget.
+        self.settings = self._create_settings()
+        self.layout().addWidget(self.settings)
+
+        # Add the run button.
+        self.run_button = QtWidgets.QPushButton("Automatic Tracking")
+        self.run_button.clicked.connect(self.__call__)
+        self.run_button.setToolTip(get_tooltip("autotrack", "run_button"))
+        self.layout().addWidget(self.run_button)
+
+    def _run_segmentation_3d(self, kwargs):
+        allow_segment_3d = self._allow_segment_3d()
+        if not allow_segment_3d:
+            val_results = {
+                "message_type": "error",
+                "message": "Tracking with AMG is only supported if you have a GPU."
+            }
+            return _generate_message(val_results["message_type"], val_results["message"])
+
+        pbar, pbar_signals = _create_pbar_for_threadworker()
+
+        @thread_worker
+        def seg_impl():
+            segmentation = np.zeros_like(self._viewer.layers["auto_segmentation"].data)
+            offset = 0
+
+            def pbar_init(total, description):
+                pbar_signals.pbar_total.emit(total)
+                pbar_signals.pbar_description.emit(description)
+
+            pbar_init(segmentation.shape[0], "Run tracking")
+
+            # Further optimization: parallelize if state is precomputed for all slices
+            for i in range(segmentation.shape[0]):
+                seg = _instance_segmentation_impl(self.with_background, self.min_object_size, i=i, **kwargs)
+                seg_max = seg.max()
+                if seg_max == 0:
+                    continue
+                seg[seg != 0] += offset
+                offset = seg_max + offset
+                segmentation[i] = seg
+                pbar_signals.pbar_update.emit(1)
+
+            pbar_signals.pbar_reset.emit()
+            segmentation, lineage = track_across_frames(
+                segmentation,
+                verbose=True, pbar_init=pbar_init,
+                pbar_update=lambda update: pbar_signals.pbar_update.emit(1),
+            )
+            pbar_signals.pbar_stop.emit()
+            return (segmentation, lineage)
+
+        # TODO update the tracking result
+        def update_segmentation(result):
+            segmentation, lineage = result
+            is_empty = segmentation.max() == 0
+            if is_empty:
+                self._empty_segmentation_warning()
+
+            state = AnnotatorState()
+            state.lineage = lineage
+
+            self._viewer.layers["auto_segmentation"].data = segmentation
+            self._viewer.layers["auto_segmentation"].refresh()
+
+        worker = seg_impl()
+        worker.returned.connect(update_segmentation)
+        worker.start()
         return worker

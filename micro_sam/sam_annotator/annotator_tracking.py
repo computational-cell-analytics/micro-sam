@@ -152,10 +152,12 @@ class AnnotatorTracking(_AnnotatorBase):
             states=self._track_state_labels, track_ids=list(state.lineage.keys()),
         )
         segment_nd = widgets.SegmentNDWidget(self._viewer, tracking=True)
+        autotrack = widgets.AutoTrackWidget(self._viewer, with_decoder=self._with_decoder, volumetric=True)
         return {
             "tracking": self._tracking_widget,
             "segment": widgets.segment_frame(),
             "segment_nd": segment_nd,
+            "autosegment": autotrack,
             "commit": widgets.commit_track(),
             "clear": widgets.clear_track(),
         }
@@ -163,6 +165,7 @@ class AnnotatorTracking(_AnnotatorBase):
     def __init__(self, viewer: "napari.viewer.Viewer") -> None:
         # Initialize the state for tracking.
         self._init_track_state()
+        self._with_decoder = AnnotatorState().decoder is not None
         super().__init__(viewer=viewer, ndim=3)
         # Go to t=0.
         self._viewer.dims.current_step = (0, 0, 0) + tuple(sh // 2 for sh in self._shape[1:])
@@ -176,6 +179,11 @@ class AnnotatorTracking(_AnnotatorBase):
     def _update_image(self):
         super()._update_image()
         self._init_track_state()
+        state = AnnotatorState()
+        if self._with_decoder:
+            state.amg_state = vutil._load_is_state(state.embedding_path)
+        else:
+            state.amg_state = vutil._load_amg_state(state.embedding_path)
 
 
 def annotator_tracking(
@@ -187,6 +195,7 @@ def annotator_tracking(
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
     viewer: Optional["napari.viewer.Viewer"] = None,
+    precompute_amg_state: bool = False,
     checkpoint_path: Optional[str] = None,
     device: Optional[Union[str, torch.device]] = None,
 ) -> Optional["napari.viewer.Viewer"]:
@@ -203,6 +212,9 @@ def annotator_tracking(
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
         viewer: The viewer to which the SegmentAnything functionality should be added.
             This enables using a pre-initialized viewer.
+        precompute_amg_state: Whether to precompute the state for automatic mask generation.
+            This will take more time when precomputing embeddings, but will then make
+            automatic mask generation much faster.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
         device: The computational device to use for the SAM model.
 
@@ -210,13 +222,13 @@ def annotator_tracking(
         The napari viewer, only returned if `return_viewer=True`.
     """
 
-    # TODO update this to match the new annotator design
     # Initialize the predictor state.
     state = AnnotatorState()
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path,
-        halo=halo, tile_shape=tile_shape, prefer_decoder=False,
+        halo=halo, tile_shape=tile_shape, prefer_decoder=True,
         ndim=3, checkpoint_path=checkpoint_path, device=device,
+        precompute_amg_state=precompute_amg_state,
     )
     state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
 
