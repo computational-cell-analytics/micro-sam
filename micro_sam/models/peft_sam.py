@@ -124,7 +124,7 @@ class PEFT_Sam(nn.Module):
         model: Sam,
         rank: int,
         peft_module: nn.Module = LoRASurgery,
-        dropout: Optional[float] = None,
+        dropout: Optional[float] = 0.1,
         attention_layers_to_update: Union[List[int]] = None,
     ):
         super().__init__()
