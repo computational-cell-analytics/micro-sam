@@ -60,7 +60,7 @@ class FacTSurgery(nn.Module):
     Args:
         rank: The rank of the decomposition matrices for updating weights in each attention layer.
         block: The chosen attention blocks for implementing fact.
-        dropout: The dropout rate for dropout layers.
+        dropout: The dropout rate for the factorized attention.
     """
     def __init__(
         self,
@@ -77,7 +77,6 @@ class FacTSurgery(nn.Module):
 
         self.dropout = dropout
         if self.dropout is not None:
-            # NOTE : Dropout is not included in the original implementation
             self.dp_q = nn.Dropout(self.dropout)
             self.dp_v = nn.Dropout(self.dropout)
 
@@ -87,7 +86,7 @@ class FacTSurgery(nn.Module):
         block.attn.qkv = self
 
     def forward(self, x):
-        qkv = self.qkv_proj(x)  # B, N, N, 3 * org_C
+        qkv = self.qkv_proj(x)
 
         new_q = self.q_FacTs(self.FacTu(x))
         new_v = self.v_FacTs(self.FacTu(x))
@@ -184,7 +183,8 @@ class PEFT_Sam(nn.Module):
         model: Sam,
         rank: int,
         peft_module: nn.Module = LoRASurgery,
-        attention_layers_to_update: Union[List[int]] = None
+        attention_layers_to_update: Union[List[int]] = None,
+        **module_kwargs
     ):
         super().__init__()
 
@@ -211,7 +211,7 @@ class PEFT_Sam(nn.Module):
             if issubclass(self.peft_module, SelectiveSurgery):
                 peft_block = self.peft_module(block=blk)
             else:
-                peft_block = self.peft_module(rank=rank, block=blk)
+                peft_block = self.peft_module(rank=rank, block=blk, **module_kwargs)
 
             self.peft_blocks.append(peft_block)
 
