@@ -1,4 +1,6 @@
 import os
+import time
+
 from glob import glob
 from pathlib import Path
 from typing import List, Optional, Union, Tuple
@@ -28,6 +30,8 @@ def _precompute(
     tile_shape, halo, precompute_amg_state,
     checkpoint_path, device, ndim, prefer_decoder,
 ):
+    t_start = time.time()
+
     device = util.get_device(device)
     predictor, state = util.get_sam_model(
         model_type=model_type, checkpoint_path=checkpoint_path, device=device, return_state=True
@@ -53,6 +57,11 @@ def _precompute(
                 os.path.join(embedding_path, f"{Path(path).stem}.zarr") for path in images
             ]
         assert all(os.path.exists(emb_path) for emb_path in embedding_paths)
+
+    t_run = time.time() - t_start
+    minutes = int(t_run // 60)
+    seconds = int(round(t_run % 60, 0))
+    print("Precomputation took", t_run, f"seconds (= {minutes:02}:{seconds:02} minutes)")
 
     return predictor, decoder, embedding_paths
 
@@ -142,7 +151,7 @@ def image_series_annotator(
         image, model_type=model_type, save_path=image_embedding_path, halo=halo, tile_shape=tile_shape,
         predictor=predictor, decoder=decoder,
         ndim=3 if is_volumetric else 2, precompute_amg_state=precompute_amg_state,
-        checkpoint_path=checkpoint_path, device=device,
+        checkpoint_path=checkpoint_path, device=device, skip_load=False,
     )
     state.image_shape = _get_input_shape(image, is_volumetric)
 
@@ -229,6 +238,7 @@ def image_series_annotator(
             tile_shape=tile_shape, halo=halo,
             predictor=predictor, decoder=decoder,
             precompute_amg_state=precompute_amg_state, device=device,
+            skip_load=False,
         )
         state.image_shape = _get_input_shape(image, is_volumetric)
 
