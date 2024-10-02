@@ -157,6 +157,7 @@ def train_sam(
     pbar_signals: Optional[QObject] = None,
     optimizer_class: Optional[Optimizer] = torch.optim.AdamW,
     peft_kwargs: Optional[Dict] = None,
+    ignore_warnings: bool = True,
     **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
@@ -194,7 +195,12 @@ def train_sam(
         pbar_signals: Controls for napari progress bar.
         optimizer_class: The optimizer class.
             By default, torch.optim.AdamW is used.
+        peft_kwargs: Keyword arguments for the PEFT wrapper class.
+        ignore_warnings: Whether to ignore raised warnings.
     """
+    if ignore_warnings:
+        warnings.filterwarnings("ignore")
+
     t_start = time.time()
 
     _check_loader(train_loader, with_segmentation_decoder)
