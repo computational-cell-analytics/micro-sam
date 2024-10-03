@@ -156,4 +156,10 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
             assert segmentation_result.shape == self._shape
             self._viewer.layers["committed_objects"].data = segmentation_result
 
+        scale_factor = state.scale_factor
+        if scale_factor is not None:
+            self._viewer.layers["current_object"].scale = scale_factor
+            self._viewer.layers["auto_segmentation"].scale = scale_factor
+            self._viewer.layers["committed_objects"].scale = scale_factor
+
         vutil.clear_annotations(self._viewer, clear_segmentations=False)
