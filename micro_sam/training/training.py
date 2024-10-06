@@ -1,6 +1,7 @@
 import os
 import time
 import warnings
+from contextlib import contextmanager, nullcontext
 from glob import glob
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -134,6 +135,17 @@ def _count_parameters(model_parameters):
     print(f"The number of trainable parameters for the provided model is {round(params, 2)}M")
 
 
+@contextmanager
+def _filter_warnings(ignore_warnings):
+    if ignore_warnings:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            yield
+    else:
+        with nullcontext():
+            yield
+
+
 def train_sam(
     name: str,
     model_type: str,
@@ -157,6 +169,7 @@ def train_sam(
     pbar_signals: Optional[QObject] = None,
     optimizer_class: Optional[Optimizer] = torch.optim.AdamW,
     peft_kwargs: Optional[Dict] = None,
+    ignore_warnings: bool = True,
     **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
@@ -194,117 +207,121 @@ def train_sam(
         pbar_signals: Controls for napari progress bar.
         optimizer_class: The optimizer class.
             By default, torch.optim.AdamW is used.
+        peft_kwargs: Keyword arguments for the PEFT wrapper class.
+        ignore_warnings: Whether to ignore raised warnings.
     """
-    t_start = time.time()
+    with _filter_warnings(ignore_warnings):
 
-    _check_loader(train_loader, with_segmentation_decoder)
-    _check_loader(val_loader, with_segmentation_decoder)
+        t_start = time.time()
 
-    device = get_device(device)
-    # Get the trainable segment anything model.
-    model, state = get_trainable_sam_model(
-        model_type=model_type,
-        device=device,
-        freeze=freeze,
-        checkpoint_path=checkpoint_path,
-        return_state=True,
-        peft_kwargs=peft_kwargs,
-        **model_kwargs
-    )
-    # This class creates all the training data for a batch (inputs, prompts and labels).
-    convert_inputs = ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
+        _check_loader(train_loader, with_segmentation_decoder)
+        _check_loader(val_loader, with_segmentation_decoder)
 
-    # Create the UNETR decoder (if train with it) and the optimizer.
-    if with_segmentation_decoder:
-
-        # Get the UNETR.
-        unetr = get_unetr(
-            image_encoder=model.sam.image_encoder,
-            decoder_state=state.get("decoder_state", None),
+        device = get_device(device)
+        # Get the trainable segment anything model.
+        model, state = get_trainable_sam_model(
+            model_type=model_type,
             device=device,
+            freeze=freeze,
+            checkpoint_path=checkpoint_path,
+            return_state=True,
+            peft_kwargs=peft_kwargs,
+            **model_kwargs
         )
+        # This class creates all the training data for a batch (inputs, prompts and labels).
+        convert_inputs = ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
 
-        # Get the parameters for SAM and the decoder from UNETR.
-        joint_model_params = [params for params in model.parameters()]  # sam parameters
-        for param_name, params in unetr.named_parameters():  # unetr's decoder parameters
-            if not param_name.startswith("encoder"):
-                joint_model_params.append(params)
+        # Create the UNETR decoder (if train with it) and the optimizer.
+        if with_segmentation_decoder:
 
-        optimizer = optimizer_class(joint_model_params, lr=lr)
+            # Get the UNETR.
+            unetr = get_unetr(
+                image_encoder=model.sam.image_encoder,
+                decoder_state=state.get("decoder_state", None),
+                device=device,
+            )
 
-    else:
-        optimizer = optimizer_class(model.parameters(), lr=lr)
+            # Get the parameters for SAM and the decoder from UNETR.
+            joint_model_params = [params for params in model.parameters()]  # sam parameters
+            for param_name, params in unetr.named_parameters():  # unetr's decoder parameters
+                if not param_name.startswith("encoder"):
+                    joint_model_params.append(params)
 
-    if scheduler_kwargs is None:
-        scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
+            optimizer = optimizer_class(joint_model_params, lr=lr)
 
-    scheduler = scheduler_class(optimizer=optimizer, **scheduler_kwargs)
+        else:
+            optimizer = optimizer_class(model.parameters(), lr=lr)
 
-    # The trainer which performs training and validation.
-    if with_segmentation_decoder:
-        instance_seg_loss = torch_em.loss.DiceBasedDistanceLoss(mask_distances_in_bg=True)
-        trainer = joint_trainers.JointSamTrainer(
-            name=name,
-            save_root=save_root,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            model=model,
-            optimizer=optimizer,
-            device=device,
-            lr_scheduler=scheduler,
-            logger=joint_trainers.JointSamLogger,
-            log_image_interval=100,
-            mixed_precision=True,
-            convert_inputs=convert_inputs,
-            n_objects_per_batch=n_objects_per_batch,
-            n_sub_iteration=n_sub_iteration,
-            compile_model=False,
-            unetr=unetr,
-            instance_loss=instance_seg_loss,
-            instance_metric=instance_seg_loss,
-            early_stopping=early_stopping,
-            mask_prob=mask_prob,
-        )
-    else:
-        trainer = trainers.SamTrainer(
-            name=name,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            model=model,
-            optimizer=optimizer,
-            device=device,
-            lr_scheduler=scheduler,
-            logger=trainers.SamLogger,
-            log_image_interval=100,
-            mixed_precision=True,
-            convert_inputs=convert_inputs,
-            n_objects_per_batch=n_objects_per_batch,
-            n_sub_iteration=n_sub_iteration,
-            compile_model=False,
-            early_stopping=early_stopping,
-            mask_prob=mask_prob,
-            save_root=save_root,
-        )
+        if scheduler_kwargs is None:
+            scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
 
-    if n_iterations is None:
-        trainer_fit_params = {"epochs": n_epochs}
-    else:
-        trainer_fit_params = {"iterations": n_iterations}
+        scheduler = scheduler_class(optimizer=optimizer, **scheduler_kwargs)
 
-    if save_every_kth_epoch is not None:
-        trainer_fit_params["save_every_kth_epoch"] = save_every_kth_epoch
+        # The trainer which performs training and validation.
+        if with_segmentation_decoder:
+            instance_seg_loss = torch_em.loss.DiceBasedDistanceLoss(mask_distances_in_bg=True)
+            trainer = joint_trainers.JointSamTrainer(
+                name=name,
+                save_root=save_root,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                model=model,
+                optimizer=optimizer,
+                device=device,
+                lr_scheduler=scheduler,
+                logger=joint_trainers.JointSamLogger,
+                log_image_interval=100,
+                mixed_precision=True,
+                convert_inputs=convert_inputs,
+                n_objects_per_batch=n_objects_per_batch,
+                n_sub_iteration=n_sub_iteration,
+                compile_model=False,
+                unetr=unetr,
+                instance_loss=instance_seg_loss,
+                instance_metric=instance_seg_loss,
+                early_stopping=early_stopping,
+                mask_prob=mask_prob,
+            )
+        else:
+            trainer = trainers.SamTrainer(
+                name=name,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                model=model,
+                optimizer=optimizer,
+                device=device,
+                lr_scheduler=scheduler,
+                logger=trainers.SamLogger,
+                log_image_interval=100,
+                mixed_precision=True,
+                convert_inputs=convert_inputs,
+                n_objects_per_batch=n_objects_per_batch,
+                n_sub_iteration=n_sub_iteration,
+                compile_model=False,
+                early_stopping=early_stopping,
+                mask_prob=mask_prob,
+                save_root=save_root,
+            )
 
-    if pbar_signals is not None:
-        progress_bar_wrapper = _ProgressBarWrapper(pbar_signals)
-        trainer_fit_params["progress"] = progress_bar_wrapper
+        if n_iterations is None:
+            trainer_fit_params = {"epochs": n_epochs}
+        else:
+            trainer_fit_params = {"iterations": n_iterations}
 
-    trainer.fit(**trainer_fit_params)
+        if save_every_kth_epoch is not None:
+            trainer_fit_params["save_every_kth_epoch"] = save_every_kth_epoch
 
-    t_run = time.time() - t_start
-    hours = int(t_run // 3600)
-    minutes = int(t_run // 60)
-    seconds = int(round(t_run % 60, 0))
-    print("Training took", t_run, f"seconds (= {hours:02}:{minutes:02}:{seconds:02} hours)")
+        if pbar_signals is not None:
+            progress_bar_wrapper = _ProgressBarWrapper(pbar_signals)
+            trainer_fit_params["progress"] = progress_bar_wrapper
+
+        trainer.fit(**trainer_fit_params)
+
+        t_run = time.time() - t_start
+        hours = int(t_run // 3600)
+        minutes = int(t_run // 60)
+        seconds = int(round(t_run % 60, 0))
+        print("Training took", t_run, f"seconds (= {hours:02}:{minutes:02}:{seconds:02} hours)")
 
 
 def _update_patch_shape(patch_shape, raw_paths, raw_key, with_channels):
