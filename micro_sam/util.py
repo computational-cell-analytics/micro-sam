@@ -308,9 +308,7 @@ def get_sam_model(
             then `model_type` must be given as "vit_b".
         return_sam: Return the sam model object as well as the predictor.
         return_state: Return the unpickled checkpoint state.
-        lora_rank: The rank of the decomposition matrices for updating weights in each attention layer with lora.
-            If None then LoRA is not used.
-        lora_kwargs: Keyword arguments for th PEFT wrapper class.
+        peft_kwargs: Keyword arguments for th PEFT wrapper class.
         flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
 
     Returns:
@@ -369,15 +367,10 @@ def get_sam_model(
         sam = sam_model_registry[abbreviated_model_type]()
 
     # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything.
-    # Overwrites the SAM model by freezing the backbone and allow low rank adaption to attention layers.
+    # Overwrites the SAM model by freezing the backbone and allow PEFT.
     if peft_kwargs and isinstance(peft_kwargs, dict):
         if abbreviated_model_type == "vit_t":
             raise ValueError("'micro-sam' does not support parameter efficient finetuning for 'mobile-sam'.")
-
-        peft_module = peft_kwargs.get("peft_module")
-        if peft_module is not None:
-            from .models.peft_sam import LoRASurgery, FacTSurgery
-            assert peft_module in [LoRASurgery, FacTSurgery], "Invalid PEFT module."
 
         sam = custom_models.peft_sam.PEFT_Sam(sam, **peft_kwargs).sam
 
@@ -396,7 +389,7 @@ def get_sam_model(
 
     # Add the decoder to the state if we have one and if the state is returned.
     if decoder_path is not None and return_state:
-        state["decoder_state"] = torch.load(decoder_path, map_location=device, weights_only=True)
+        state["decoder_state"] = torch.load(decoder_path, map_location=device, weights_only=False)
 
     if return_sam and return_state:
         return predictor, sam, state

@@ -23,11 +23,7 @@ class LoRASurgery(nn.Module):
         rank: The rank of the decomposition matrices for updating weights in each attention layer.
         block: The chosen attention blocks for implementing lora.
     """
-    def __init__(
-        self,
-        rank: int,
-        block: nn.Module,
-    ):
+    def __init__(self, rank: int, block: nn.Module):
         super().__init__()
         self.qkv_proj = block.attn.qkv
         self.dim = self.qkv_proj.in_features
@@ -64,13 +60,13 @@ class FacTSurgery(nn.Module):
     Args:
         rank: The rank of the decomposition matrices for updating weights in each attention layer.
         block: The chosen attention blocks for implementing fact.
+        dropout: The dropout rate for the factorized attention.
     """
-
     def __init__(
         self,
         rank: int,
         block: nn.Module,
-        dropout: Optional[float] = None,
+        dropout: Optional[float] = 0.1,
     ):
         super().__init__()
         self.qkv_proj = block.attn.qkv
@@ -81,7 +77,6 @@ class FacTSurgery(nn.Module):
 
         self.dropout = dropout
         if self.dropout is not None:
-            # NOTE : Dropout is not included in the original implementation
             self.dp_q = nn.Dropout(self.dropout)
             self.dp_v = nn.Dropout(self.dropout)
 
@@ -91,7 +86,7 @@ class FacTSurgery(nn.Module):
         block.attn.qkv = self
 
     def forward(self, x):
-        qkv = self.qkv_proj(x)  # B, N, N, 3 * org_C
+        qkv = self.qkv_proj(x)
 
         new_q = self.q_FacTs(self.FacTu(x))
         new_v = self.v_FacTs(self.FacTu(x))
@@ -104,11 +99,73 @@ class FacTSurgery(nn.Module):
         new_v = self.FacTv(new_v)
 
         # NOTE : Scaling Factor was set to 1 as it can be tuned via the learning rate
-        # Does it make sense to include it, in order to have similar learning rate as the original model?
         qkv[:, :, :, : self.dim] += new_q
         qkv[:, :, :, -self.dim:] += new_v
 
         return qkv
+
+
+class SelectiveSurgery(nn.Module):
+    """Base class for selectively allowing gradient updates for certain parameters.
+    """
+    def __init__(self, block: nn.Module):
+        super().__init__()
+        self.block = block
+
+    def allow_gradient_update_for_parameters(
+        self,
+        prefix: Optional[List[str]] = None,
+        suffix: Optional[List[str]] = None,
+        infix: Optional[List[str]] = None,
+    ):
+        """This function decides the parameter attributes to match for allowing gradient updates.
+
+        Args:
+            prefix: Matches the part of parameter name in front.
+            suffix: Matches the part of parameter name at the end.
+            infix: Matches parts of parameter name occuring in between. 
+        """
+        for k, v in self.block.named_parameters():
+            if prefix is not None and k.startswith(tuple(prefix)):
+                v.requires_grad = True
+
+            if suffix is not None and k.endswith(tuple(suffix)):
+                v.requires_grad = True
+
+            if infix is not None:
+                for per_infix in infix:
+                    if k.find(per_infix) != -1:
+                        v.requires_grad = True
+
+    def forward(self, x):
+        return x
+
+
+class AttentionSurgery(SelectiveSurgery):
+    """Child class for allowing gradient updates for parameters in attention layers.
+    """
+    def __init__(self, block: nn.Module):
+        super().__init__(block=block)
+        # Allow gradient updates for the attention layers in the image encoder.
+        self.allow_gradient_update_for_parameters(prefix=["attn"])
+
+
+class BiasSurgery(SelectiveSurgery):
+    """Child class for allowing gradient updates for bias parameters.
+    """
+    def __init__(self, block: nn.Module):
+        super().__init__(block=block)
+        # Allow gradient updates for the bias parameters in the image encoder.
+        self.allow_gradient_update_for_parameters(suffix=["bias"])
+
+
+class LayerNormSurgery(SelectiveSurgery):
+    """Child class for allowing gradient updates in normalization layers.
+    """
+    def __init__(self, block: nn.Module):
+        super().__init__(block=block)
+        # Allow gradient updates for the LayerNorm parameters in the image encoder.
+        self.allow_gradient_update_for_parameters(infix=["norm1", "norm2"])
 
 
 class PEFT_Sam(nn.Module):
@@ -126,11 +183,13 @@ class PEFT_Sam(nn.Module):
         model: Sam,
         rank: int,
         peft_module: nn.Module = LoRASurgery,
-        attention_layers_to_update: Union[List[int]] = None
+        attention_layers_to_update: Union[List[int]] = None,
+        **module_kwargs
     ):
         super().__init__()
 
         assert rank > 0
+        assert issubclass(peft_module, Union[LoRASurgery, FacTSurgery, SelectiveSurgery]), "Invalid PEFT module."
 
         if attention_layers_to_update:
             self.peft_layers = attention_layers_to_update
@@ -149,7 +208,11 @@ class PEFT_Sam(nn.Module):
             if t_layer_i not in self.peft_layers:
                 continue
 
-            peft_block = self.peft_module(rank=rank, block=blk)
+            if issubclass(self.peft_module, SelectiveSurgery):
+                peft_block = self.peft_module(block=blk)
+            else:
+                peft_block = self.peft_module(rank=rank, block=blk, **module_kwargs)
+
             self.peft_blocks.append(peft_block)
 
         self.peft_blocks = nn.ModuleList(self.peft_blocks)

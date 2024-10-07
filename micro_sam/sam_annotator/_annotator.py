@@ -29,15 +29,15 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         self._point_prompt_layer = self._viewer.add_points(
             name="point_prompts",
             property_choices={"label": self._point_labels},
-            edge_color="label",
-            edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
+            border_color="label",
+            border_color_cycle=vutil.LABEL_COLOR_CYCLE,
             symbol="o",
             face_color="transparent",
-            edge_width=0.5,
+            border_width=0.5,
             size=12,
             ndim=self._ndim,
         )
-        self._point_prompt_layer.edge_color_mode = "cycle"
+        self._point_prompt_layer.border_color_mode = "cycle"
 
         # Add the shape layer for box and other shape prompts.
         self._viewer.add_shapes(
@@ -71,6 +71,20 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         @self._viewer.bind_key("s", overwrite=True)
         def _segment(viewer):
             self._widgets["segment"](viewer)
+
+        # Note: we also need to over-write the keybindings for specific layers.
+        # See https://github.com/napari/napari/issues/7302 for details.
+        # Here, we need to over-write the 's' keybinding for both of the prompt layers.
+        prompt_layer = self._viewer.layers["prompts"]
+        point_prompt_layer = self._viewer.layers["point_prompts"]
+
+        @prompt_layer.bind_key("s", overwrite=True)
+        def _segment_prompts(event):
+            self._widgets["segment"](self._viewer)
+
+        @point_prompt_layer.bind_key("s", overwrite=True)
+        def _segment_point_prompts(event):
+            self._widgets["segment"](self._viewer)
 
         @self._viewer.bind_key("c", overwrite=True)
         def _commit(viewer):
