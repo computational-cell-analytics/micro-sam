@@ -186,8 +186,8 @@ def train_sam(
     pbar_signals: Optional[QObject] = None,
     optimizer_class: Optional[Optimizer] = torch.optim.AdamW,
     peft_kwargs: Optional[Dict] = None,
-    verify_n_labels_in_loader: Optional[int] = None,
     ignore_warnings: bool = True,
+    verify_n_labels_in_loader: Optional[int] = 50,
     **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
@@ -227,6 +227,7 @@ def train_sam(
             By default, torch.optim.AdamW is used.
         peft_kwargs: Keyword arguments for the PEFT wrapper class.
         verify_n_labels_in_loader: The number of labels to verify out of the train and validation dataloaders.
+            By default, 50 batches of labels are verified from the dataloaders.
         model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
         ignore_warnings: Whether to ignore raised warnings.
     """
