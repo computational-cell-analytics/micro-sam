@@ -106,6 +106,66 @@ class FacTSurgery(nn.Module):
         return qkv
 
 
+class ScaleShiftLayer(nn.Module):
+    def __init__(self, layer, dim):
+        super().__init__()
+        self.layer = layer
+        self.scale = nn.Parameter(torch.normal(mean=1.0, std=0.2, size=(dim,)))
+        self.shift = nn.Parameter(torch.normal(mean=0.0, std=0.2, size=(dim,)))
+
+    def forward(self, x):
+        x = self.layer(x)
+
+        assert self.scale.shape == self.shift.shape
+        if x.shape[-1] == self.scale.shape[0]:
+            return x * self.scale + self.shift
+        elif x.shape[1] == self.scale.shape[0]:
+            return x * self.scale.view(1, -1, 1, 1) + self.shift.view(1, -1, 1, 1)
+        else:
+            raise ValueError('Input tensors do not match the shape of the scale factors.')
+
+
+class SSFSurgery(nn.Module):
+    """Operates on all layers in the transformer block for adding learnable scale and shift parameters.
+
+    Args:
+        rank: This parameter is not used in `SSFSurgery`. This is kept here for consistency.
+        block: The chosen attention blocks for implementing ssf.
+        dim: The input dimensions determining the shape of scale and shift parameters.
+    """
+    def __init__(self, rank: int, block: nn.Module, dim: Optional[int] = None):
+        super().__init__()
+        self.block = block
+
+        # If we get a transformer block (w. multiple sub-layers), we perform surgery on each layer.
+        if hasattr(block, "attn"):  # the minimum assumption is to verify the attention layers.
+            self.scale_shift_layers = nn.ModuleList(self.add_scale_shift_layers_to_block(block))
+        else:  # This is an individual layer after which we apply scale and shift.
+            if dim is None:
+                raise ValueError("'dim' must be provided for the scale and shift parameters.")
+            self.scale_shift_layers = nn.ModuleList([self.create_scale_shift_layer(layer=block, dim=dim)])
+
+    def add_scale_shift_layers_to_block(self, block):
+        peft_blocks = [
+            ScaleShiftLayer(block.attn.qkv, block.attn.qkv.in_features),
+            ScaleShiftLayer(block.attn.proj, block.attn.proj.in_features),
+            ScaleShiftLayer(block.mlp.lin1, block.mlp.lin1.in_features),
+            ScaleShiftLayer(block.mlp.lin2, block.mlp.lin2.in_features),
+            ScaleShiftLayer(block.norm1, block.norm1.normalized_shape[0]),
+            ScaleShiftLayer(block.norm2, block.norm2.normalized_shape[0]),
+        ]
+        return nn.ModuleList(peft_blocks)
+
+    def create_scale_shift_layer(self, layer, dim):
+        return ScaleShiftLayer(layer=layer, dim=dim)
+
+    def forward(self, x):
+        for layer in self.scale_shift_layers:
+            x = layer(x)
+
+        return self.block(x)
+
+
 class SelectiveSurgery(nn.Module):
     """Base class for selectively allowing gradient updates for certain parameters.
     """
@@ -169,28 +229,6 @@ class LayerNormSurgery(SelectiveSurgery):
         self.allow_gradient_update_for_parameters(infix=["norm1", "norm2"])
 
 
-class SSFSurgery(nn.Module):
-
-    def __init__(self, layer, dim):
-
-        super().__init__()
-        self.layer = layer
-        self.scale = nn.Parameter(torch.normal(mean=1.0, std=0.2, size=(dim,)))
-        self.shift = nn.Parameter(torch.normal(mean=0.0, std=0.2, size=(dim,)))
-        layer = self
-
-    def forward(self, x):
-        x = self.layer(x)
-
-        assert self.scale.shape == self.shift.shape
-        if x.shape[-1] == self.ssf_scale.shape[0]:
-            return x * self.scale + self.shift
-        elif x.shape[1] == self.scale.shape[0]:
-            return x * self.scale.view(1, -1, 1, 1) + self.shift.view(1, -1, 1, 1)
-        else:
-            raise ValueError('the input tensor shape does not match the shape of the scale factor.')
-
-
 class PEFT_Sam(nn.Module):
     """Wraps the Segment Anything model's image encoder to different parameter efficient finetuning methods.
 
@@ -205,7 +243,7 @@ class PEFT_Sam(nn.Module):
         self,
         model: Sam,
         rank: int,
-        peft_module: nn.Module = LoRASurgery,
+        peft_module: nn.Module = SSFSurgery,
         attention_layers_to_update: Union[List[int]] = None,
         **module_kwargs
     ):
@@ -227,10 +265,14 @@ class PEFT_Sam(nn.Module):
         for param in model.image_encoder.parameters():
             param.requires_grad = False
 
-        # if peft method is SSF, add SSF to the embedding layers
+        # Add scale and shift parameters to the patch embedding layers.
         if issubclass(self.peft_module, SSFSurgery):
-            self.peft_blocks.append(self.peft_module(model.image_encoder.patch_embed.proj,
-                                                     model.image_encoder.patch_embed.proj.out_channels))
+            self.peft_blocks.append(
+                self.peft_module(
+                    rank=rank, block=model.image_encoder.patch_embed.proj,
+                    dim=model.image_encoder.patch_embed.proj.out_channels
+                )
+            )
 
         for t_layer_i, blk in enumerate(model.image_encoder.blocks):
             # If we only want specific layers with PEFT instead of all
@@ -239,27 +281,12 @@ class PEFT_Sam(nn.Module):
 
             if issubclass(self.peft_module, SelectiveSurgery):
                 self.peft_blocks.append(self.peft_module(block=blk))
-            elif issubclass(self.peft_module, SSFSurgery):
-                self.peft_blocks.extend(self.add_scale_shift(blk))
             else:
                 self.peft_blocks.append(self.peft_module(rank=rank, block=blk, **module_kwargs))
 
         self.peft_blocks = nn.ModuleList(self.peft_blocks)
 
         self.sam = model
-
-    def add_scale_shift(self, blk):
-        """Add the scale an shift surgery after every operation (qkv, projection, mlp, norm)"""
-        peft_blocks = []
-
-        peft_blocks.append(SSFSurgery(blk.attn.qkv, blk.attn.qkv.in_features))
-        peft_blocks.append(SSFSurgery(blk.attn.proj, blk.attn.proj.in_features))
-        peft_blocks.append(SSFSurgery(blk.mlp.lin1, blk.mlp.lin1.in_features))
-        peft_blocks.append(SSFSurgery(blk.mlp.lin2, blk.mlp.lin2.in_features))
-        peft_blocks.append(SSFSurgery(blk.norm1, blk.norm1.normalized_shape[0]))
-        peft_blocks.append(SSFSurgery(blk.norm2, blk.norm2.normalized_shape[0]))
-
-        return peft_blocks
 
     def forward(self, batched_input, multimask_output):
         return self.sam(batched_input, multimask_output)

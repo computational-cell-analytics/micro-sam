@@ -129,12 +129,6 @@ class _ProgressBarWrapper:
         self._signals.pbar_description.emit(desc)
 
 
-def _count_parameters(model_parameters):
-    params = sum(p.numel() for p in model_parameters if p.requires_grad)
-    params = params / 1e6
-    print(f"The number of trainable parameters for the provided model is {round(params, 2)}M")
-
-
 @contextmanager
 def _filter_warnings(ignore_warnings):
     if ignore_warnings:
@@ -144,6 +138,12 @@ def _filter_warnings(ignore_warnings):
     else:
         with nullcontext():
             yield
+
+
+def _count_parameters(model_parameters):
+    params = sum(p.numel() for p in model_parameters if p.requires_grad)
+    params = params / 1e6
+    print(f"The number of trainable parameters for the provided model is {params} (~{round(params, 2)}M)")
 
 
 def train_sam(
@@ -228,6 +228,20 @@ def train_sam(
             peft_kwargs=peft_kwargs,
             **model_kwargs
         )
+
+        _count_parameters(model.parameters())
+
+        # full
+        # The number of trainable parameters for the provided model is 93.735472 (~93.74M)
+
+        # freeze image encoder
+        # The number of trainable parameters for the provided model is 4.06456 (~4.06M)
+
+        # peft: ssf
+        #
+
+        breakpoint()
+
         # This class creates all the training data for a batch (inputs, prompts and labels).
         convert_inputs = ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
 
