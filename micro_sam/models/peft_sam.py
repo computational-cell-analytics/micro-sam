@@ -1,6 +1,7 @@
 import math
 from typing import List, Union, Optional
 
+import torch
 import torch.nn as nn
 
 from segment_anything.modeling import Sam
@@ -123,7 +124,7 @@ class SelectiveSurgery(nn.Module):
         Args:
             prefix: Matches the part of parameter name in front.
             suffix: Matches the part of parameter name at the end.
-            infix: Matches parts of parameter name occuring in between. 
+            infix: Matches parts of parameter name occuring in between.
         """
         for k, v in self.block.named_parameters():
             if prefix is not None and k.startswith(tuple(prefix)):
@@ -168,6 +169,28 @@ class LayerNormSurgery(SelectiveSurgery):
         self.allow_gradient_update_for_parameters(infix=["norm1", "norm2"])
 
 
+class SSFSurgery(nn.Module):
+
+    def __init__(self, layer, dim):
+
+        super().__init__()
+        self.layer = layer
+        self.scale = nn.Parameter(torch.normal(mean=1.0, std=0.2, size=(dim,)))
+        self.shift = nn.Parameter(torch.normal(mean=0.0, std=0.2, size=(dim,)))
+        layer = self
+
+    def forward(self, x):
+        x = self.layer(x)
+
+        assert self.scale.shape == self.shift.shape
+        if x.shape[-1] == self.ssf_scale.shape[0]:
+            return x * self.scale + self.shift
+        elif x.shape[1] == self.scale.shape[0]:
+            return x * self.scale.view(1, -1, 1, 1) + self.shift.view(1, -1, 1, 1)
+        else:
+            raise ValueError('the input tensor shape does not match the shape of the scale factor.')
+
+
 class PEFT_Sam(nn.Module):
     """Wraps the Segment Anything model's image encoder to different parameter efficient finetuning methods.
 
@@ -189,7 +212,8 @@ class PEFT_Sam(nn.Module):
         super().__init__()
 
         assert rank > 0
-        assert issubclass(peft_module, Union[LoRASurgery, FacTSurgery, SelectiveSurgery]), "Invalid PEFT module."
+        assert issubclass(peft_module, Union[LoRASurgery, FacTSurgery, SelectiveSurgery, SSFSurgery]), (
+            "Invalid PEFT module")
 
         if attention_layers_to_update:
             self.peft_layers = attention_layers_to_update
@@ -203,21 +227,39 @@ class PEFT_Sam(nn.Module):
         for param in model.image_encoder.parameters():
             param.requires_grad = False
 
+        # if peft method is SSF, add SSF to the embedding layers
+        if issubclass(self.peft_module, SSFSurgery):
+            self.peft_blocks.append(self.peft_module(model.image_encoder.patch_embed.proj,
+                                                     model.image_encoder.patch_embed.proj.out_channels))
+
         for t_layer_i, blk in enumerate(model.image_encoder.blocks):
             # If we only want specific layers with PEFT instead of all
             if t_layer_i not in self.peft_layers:
                 continue
 
             if issubclass(self.peft_module, SelectiveSurgery):
-                peft_block = self.peft_module(block=blk)
+                self.peft_blocks.append(self.peft_module(block=blk))
+            elif issubclass(self.peft_module, SSFSurgery):
+                self.peft_blocks.extend(self.add_scale_shift(blk))
             else:
-                peft_block = self.peft_module(rank=rank, block=blk, **module_kwargs)
-
-            self.peft_blocks.append(peft_block)
+                self.peft_blocks.append(self.peft_module(rank=rank, block=blk, **module_kwargs))
 
         self.peft_blocks = nn.ModuleList(self.peft_blocks)
 
         self.sam = model
+
+    def add_scale_shift(self, blk):
+        """Add the scale an shift surgery after every operation (qkv, projection, mlp, norm)"""
+        peft_blocks = []
+
+        peft_blocks.append(SSFSurgery(blk.attn.qkv, blk.attn.qkv.in_features))
+        peft_blocks.append(SSFSurgery(blk.attn.proj, blk.attn.proj.in_features))
+        peft_blocks.append(SSFSurgery(blk.mlp.lin1, blk.mlp.lin1.in_features))
+        peft_blocks.append(SSFSurgery(blk.mlp.lin2, blk.mlp.lin2.in_features))
+        peft_blocks.append(SSFSurgery(blk.norm1, blk.norm1.normalized_shape[0]))
+        peft_blocks.append(SSFSurgery(blk.norm2, blk.norm2.normalized_shape[0]))
+
+        return peft_blocks
 
     def forward(self, batched_input, multimask_output):
         return self.sam(batched_input, multimask_output)
