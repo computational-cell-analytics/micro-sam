@@ -6,6 +6,7 @@ from typing import Union, Optional, List, Literal
 
 import numpy as np
 import imageio.v3 as imageio
+from skimage.measure import label as connected_components
 
 from nifty.tools import blocking
 
@@ -19,6 +20,7 @@ from . import run_evaluation
 from .inference import run_inference_with_iterative_prompting
 from .evaluation import run_evaluation_for_iterative_prompting
 from ..automatic_segmentation import automatic_instance_segmentation
+from .multi_dimensional_segmentation import segment_slices_from_ground_truth
 
 
 LM_2D_DATASETS = [
@@ -177,10 +179,10 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
 
     available_datasets = {
         # Light Microscopy datasets
-        "livecell": lambda: datasets.livecell._get_livecell_paths(path=path, split="test"),
-        "deepbacs": lambda: datasets.deepbacs._get_deepbacs_paths(path=path, split="test", bac_type="mixed"),
-        "plantseg_root": lambda: datasets.plantseg._get_plantseg_paths(data_path=os.path.join(path, "root_test")),
-        "plantseg_ovules": lambda: datasets.plantseg._get_plantseg_paths(data_path=os.path.join(path, "ovules_test")),
+        "livecell": lambda: datasets.livecell.get_livecell_paths(path=path, split="test"),
+        "deepbacs": lambda: datasets.deepbacs.get_deepbacs_paths(path=path, split="test", bac_type="mixed"),
+        "plantseg_root": lambda: datasets.plantseg.get_plantseg_paths(path=path, name="root", split="test"),
+        "plantseg_ovules": lambda: datasets.plantseg.get_plantseg_paths(path=path, name="ovules", split="test"),
 
         # Electron Microscopy datasets
         "lucchi": lambda: datasets.lucchi.get_lucchi_paths(path=path, split="test"),
@@ -227,6 +229,9 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
 
         skip_smaller_shape = (image.shape > tile_shape)
 
+        # Ensure ground truth has instance labels.
+        gt = connected_components(gt)
+
         if len(np.unique(gt)) == 1:  # There could be labels which does not have any annotated foreground.
             continue
 
@@ -241,7 +246,7 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
 
         # Extract the desired number of patches with higher number of instances.
         image_crops, gt_crops = [], []
-        for i, (per_n_instance, per_id) in enumerate(sorted(zip(n_instances, n_ids)), start=1):
+        for i, (per_n_instance, per_id) in enumerate(sorted(zip(n_instances, n_ids), reverse=True), start=1):
             crop_box = crop_boxes[per_id]
             crop_image, crop_gt = image[crop_box], gt[crop_box]
             # NOTE: We avoid using the crops which do not match the desired tile shape.
@@ -290,13 +295,13 @@ def _run_automatic_segmentation_per_dataset(
     It stores the evaluated automatic segmentation results (quantitative).
 
     Args:
-        image_paths:
-        gt_paths:
-        model_type:
-        output_folder,
-        ndim:
-        checkpoint_path:
-        auto_seg_kwargs:
+        image_paths: List of filepaths for the input image data.
+        gt_paths: List of filepaths for the corresponding label data.
+        model_type: The choice of model type for Segment Anything.
+        output_folder: Filepath to the folder where we store all the results.
+        ndim: The number of input dimensions.
+        checkpoint_path: The filepath for stored checkpoints.
+        auto_seg_kwargs: Additional arguments for automatic segmentation parameters.
     """
     result_path = os.path.join(output_folder, "results", "automatic_segmentation.csv")
     prediction_dir = os.path.join(output_folder, "automatic_instance_segmentation", "inference")
@@ -329,51 +334,73 @@ def _run_interactive_segmentation_per_dataset(
     gt_paths: List[Union[os.PathLike, str]],
     output_folder: Union[os.PathLike, str],
     model_type: str,
-    prompt_choice: Literal["box", "point"],
+    prompt_choice: Literal["box", "points"],
     device: Optional[Union[torch.device, str]] = None,
-    ndim: Optional[int] = None,  # TODO: extend iterative prompting backbone to 3d (cc: SAM)
-    checkpoint_path=None,
+    ndim: Optional[int] = None,
+    checkpoint_path: Optional[Union[os.PathLike, str]] = None,
 ):
     """Functionality to run interactive segmentation for multiple input files at once.
     It stores the evaluated interactive segmentation results.
 
     Args:
-        image_paths:
-        gt_paths:
-        model_type:
-        output_folder:
-        prompt_choice:
-        device:
-        ndim:
-        checkpoint_path:
+        image_paths: List of filepaths for the input image data.
+        gt_paths: List of filepaths for the corresponding label data.
+        model_type: The choice of model type for Segment Anything.
+        output_folder: Filepath to the folder where we store all the results.
+        ndim: The number of input dimensions.
+        checkpoint_path: The filepath for stored checkpoints.
+        auto_seg_kwargs: Additional arguments for automatic segmentation parameters.
     """
-    if ndim == 3:
-        raise NotImplementedError("Integration WIP")
-
-    # Get the Segment Anything predictor.
-    predictor = util.get_sam_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path)
-
     # Path where the interactive segmentation results will be stored.
     prediction_dir = os.path.join(output_folder, "interactive_segmentation", f"start_with_{prompt_choice}")
+    os.makedirs(prediction_dir, exist_ok=True)
 
-    # Run interactive instance segmentation
-    # (starting with box and points followed by iterative prompt-based correction)
-    run_inference_with_iterative_prompting(
-        predictor=predictor,
-        image_paths=image_paths,
-        gt_paths=gt_paths,
-        prediction_dir=prediction_dir,
-        start_with_box_prompt=(prompt_choice == "box"),
-        # TODO: add parameter for deform over box prompts (to simulate prompts in practice).
-    )
+    if ndim == 2:
+        # Get the Segment Anything predictor.
+        predictor = util.get_sam_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path)
 
-    # Evaluate the interactive instance segmentation.
-    run_evaluation_for_iterative_prompting(
-        gt_paths=gt_paths,
-        prediction_root=prediction_dir,
-        experiment_folder=output_folder,
-        start_with_box_prompt=(prompt_choice == "box"),
-    )
+        # Run interactive instance segmentation
+        # (starting with box and points followed by iterative prompt-based correction)
+        run_inference_with_iterative_prompting(
+            predictor=predictor,
+            image_paths=image_paths,
+            gt_paths=gt_paths,
+            prediction_dir=prediction_dir,
+            start_with_box_prompt=(prompt_choice == "box"),
+            # TODO: add parameter for deform over box prompts (to simulate prompts in practice).
+        )
+
+        # Evaluate the interactive instance segmentation.
+        run_evaluation_for_iterative_prompting(
+            gt_paths=gt_paths,
+            prediction_root=prediction_dir,
+            experiment_folder=output_folder,
+            start_with_box_prompt=(prompt_choice == "box"),
+        )
+
+    else:
+        for image_path, gt_path in tqdm(
+            zip(image_paths, gt_paths), total=len(image_paths),
+            desc="Run interactive segmentation in 3d"
+        ):
+            msa = segment_slices_from_ground_truth(
+                volume=imageio.imread(image_path),
+                ground_truth=imageio.imread(gt_path),
+                model_type=model_type,
+                checkpoint_path=checkpoint_path,
+                # save_path=os.path.join(prediction_dir, os.path.basename(image_path)),
+                device=device,
+                interactive_seg_mode=prompt_choice,
+                min_size=10,
+            )
+            print(msa)
+
+        prediction_paths = natsorted(glob(os.path.join(prediction_dir, "*")))
+        res = run_evaluation(
+            gt_paths=gt_paths, prediction_paths=prediction_paths,
+            save_path=os.path.join(output_folder, "results", f"interactive_segmentation_3d_with_{prompt_choice}.csv")
+        )
+        print(res)
 
 
 def run_benchmark_evaluations(
@@ -405,7 +432,7 @@ def run_benchmark_evaluations(
         #    (in case of volumetric data, choose 2d patches per slice).
         # b. for 3d datasets - 3d regions of interest with the most number of labels present.
         image_dir, gt_dir, ndim = _extract_slices_from_dataset(
-            path=os.path.join(input_folder, choice), dataset_choice=choice
+            path=os.path.join(input_folder, choice), dataset_choice=choice, crops_per_input=10,
         )
         image_paths, gt_paths = _get_image_label_paths(image_dir=image_dir, gt_dir=gt_dir)
 
@@ -424,7 +451,7 @@ def run_benchmark_evaluations(
 
         # b. interactive segmentation (in both 2d and 3d, wherever relevant)
         _run_interactive_segmentation_per_dataset(prompt_choice="box", **seg_kwargs)
-        _run_interactive_segmentation_per_dataset(prompt_choice="point", **seg_kwargs)
+        _run_interactive_segmentation_per_dataset(prompt_choice="points", **seg_kwargs)
 
 
 def main():
