@@ -471,8 +471,8 @@ def run_inference_with_iterative_prompting(
     predictor: SamPredictor,
     image_paths: List[Union[str, os.PathLike]],
     gt_paths: List[Union[str, os.PathLike]],
+    embedding_dir: Union[str, os.PathLike],
     prediction_dir: Union[str, os.PathLike],
-    embedding_dir: Optional[Union[str, os.PathLike]] = None,
     start_with_box_prompt: bool = True,
     dilation: int = 5,
     batch_size: int = 32,
@@ -486,8 +486,8 @@ def run_inference_with_iterative_prompting(
         predictor: The Segment Anything predictor.
         image_paths: The image file paths.
         gt_paths: The ground-truth segmentation file paths.
-        prediction_dir: The directory where the predictions from Segment Anything will be saved per iteration.
         embedding_dir: The directory where the image embeddings will be saved or are already saved.
+        prediction_dir: The directory where the predictions from Segment Anything will be saved per iteration.
         start_with_box_prompt: Whether to use the first prompt as bounding box or a single point
         dilation: The dilation factor for the radius around the ground-truth object
             around which points will not be sampled.
