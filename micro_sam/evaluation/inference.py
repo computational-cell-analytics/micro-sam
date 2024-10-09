@@ -471,24 +471,24 @@ def run_inference_with_iterative_prompting(
     predictor: SamPredictor,
     image_paths: List[Union[str, os.PathLike]],
     gt_paths: List[Union[str, os.PathLike]],
-    embedding_dir: Union[str, os.PathLike],
     prediction_dir: Union[str, os.PathLike],
     start_with_box_prompt: bool,
+    embedding_dir: Optional[Union[str, os.PathLike]] = None,
     dilation: int = 5,
     batch_size: int = 32,
     n_iterations: int = 8,
     use_masks: bool = False
 ) -> None:
-    """Run segment anything inference for multiple images using prompts iteratively
-        derived from model outputs and groundtruth
+    """Run Segment Anything inference for multiple images using prompts iteratively
+    derived from model outputs and ground-truth.
 
     Args:
-        predictor: The SegmentAnything predictor.
+        predictor: The Segment Anything predictor.
         image_paths: The image file paths.
         gt_paths: The ground-truth segmentation file paths.
-        embedding_dir: The directory where the image embeddings will be saved or are already saved.
-        prediction_dir: The directory where the predictions from SegmentAnything will be saved per iteration.
+        prediction_dir: The directory where the predictions from Segment Anything will be saved per iteration.
         start_with_box_prompt: Whether to use the first prompt as bounding box or a single point
+        embedding_dir: The directory where the image embeddings will be saved or are already saved.
         dilation: The dilation factor for the radius around the ground-truth object
             around which points will not be sampled.
         batch_size: The batch size used for batched predictions.
@@ -506,8 +506,7 @@ def run_inference_with_iterative_prompting(
         print("The iterative prompting will make use of logits masks from previous iterations.")
 
     for image_path, gt_path in tqdm(
-        zip(image_paths, gt_paths),
-        total=len(image_paths),
+        zip(image_paths, gt_paths), total=len(image_paths),
         desc="Run inference with iterative prompting for all images",
     ):
         image_name = os.path.basename(image_path)
@@ -524,7 +523,10 @@ def run_inference_with_iterative_prompting(
         gt = imageio.imread(gt_path).astype("uint32")
         gt = relabel_sequential(gt)[0]
 
-        embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
+        if embedding_dir is None:
+            embedding_path = None
+        else:
+            embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
 
         _run_inference_with_iterative_prompting_for_image(
             predictor, image, gt, start_with_box_prompt=start_with_box_prompt,

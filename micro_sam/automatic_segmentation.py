@@ -5,6 +5,8 @@ from typing import Dict, Optional, Union, Tuple
 import numpy as np
 import imageio.v3 as imageio
 
+import torch
+
 from . import util
 from .instance_segmentation import (
     get_amg, get_decoder, mask_data_to_segmentation, InstanceSegmentationWithDecoder, AMGBase
@@ -16,6 +18,7 @@ def automatic_instance_segmentation(
     input_path: Union[Union[os.PathLike, str], np.ndarray],
     output_path: Optional[Union[os.PathLike, str]] = None,
     embedding_path: Optional[Union[os.PathLike, str]] = None,
+    device: Optional[Union[torch.device, str]] = None,
     model_type: str = util._DEFAULT_MODEL,
     checkpoint_path: Optional[Union[os.PathLike, str]] = None,
     key: Optional[str] = None,
@@ -24,6 +27,7 @@ def automatic_instance_segmentation(
     halo: Optional[Tuple[int, int]] = None,
     use_amg: bool = False,
     amg_kwargs: Optional[Dict] = None,
+    verbose: bool = True,
     **generate_kwargs
 ) -> np.ndarray:
     """Run automatic segmentation for the input image.
@@ -47,7 +51,9 @@ def automatic_instance_segmentation(
     Returns:
         The segmentation result.
     """
-    predictor, state = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path, return_state=True)
+    predictor, state = util.get_sam_model(
+        model_type=model_type, device=device, checkpoint_path=checkpoint_path, return_state=True,
+    )
 
     if "decoder_state" in state and not use_amg:  # AIS
         decoder = get_decoder(predictor.model.image_encoder, state["decoder_state"])
@@ -77,6 +83,7 @@ def automatic_instance_segmentation(
             embedding_path=embedding_path,
             tile_shape=tile_shape,
             halo=halo,
+            verbose=verbose,
             **generate_kwargs
         )
     else:
@@ -88,6 +95,7 @@ def automatic_instance_segmentation(
             ndim=ndim,
             tile_shape=tile_shape,
             halo=halo,
+            verbose=verbose,
         )
 
         segmenter.initialize(image=image_data, image_embeddings=image_embeddings)
