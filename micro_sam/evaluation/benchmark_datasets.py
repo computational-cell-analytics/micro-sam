@@ -17,6 +17,7 @@ from torch_em.data import datasets
 from micro_sam import util
 
 from . import run_evaluation
+from ..instance_segmentation import get_amg, get_decoder
 from .inference import run_inference_with_iterative_prompting
 from .evaluation import run_evaluation_for_iterative_prompting
 from ..automatic_segmentation import automatic_instance_segmentation
@@ -227,7 +228,7 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
             image = util.load_image_data(image_path, DATASET_CONTAINER_KEYS[dataset_choice][0])
             gt = util.load_image_data(image_path, DATASET_CONTAINER_KEYS[dataset_choice][1])
 
-        skip_smaller_shape = (image.shape > tile_shape)
+        skip_smaller_shape = (np.array(image.shape) >= np.array(tile_shape)).all()
 
         # Ensure ground truth has instance labels.
         gt = connected_components(gt)
@@ -307,26 +308,35 @@ def _run_automatic_segmentation_per_dataset(
     prediction_dir = os.path.join(output_folder, "automatic_instance_segmentation", "inference")
     os.makedirs(prediction_dir, exist_ok=True)
 
+    predictor, state = util.get_sam_model(
+        model_type=model_type, device=device, checkpoint_path=checkpoint_path, return_state=True,
+    )
+
+    segmenter = get_amg(
+        predictor=predictor, is_tiled=False,
+        decoder=get_decoder(
+            image_encoder=predictor.model.image_encoder, decoder_state=state["decoder_state"], device=device
+        ) if "decoder_state" in state else None
+    )
+
     for image_path in tqdm(image_paths, desc="Run automatic segmentation"):
         output_path = os.path.join(prediction_dir, os.path.basename(image_path))
         if os.path.exists(output_path):
             continue
 
-        # Run Automatic Instance Segmentation (AIS)
+        # Run Automatic Segmentation (AMG and AIS)
         automatic_instance_segmentation(
+            predictor=predictor,
+            segmenter=segmenter,
             input_path=image_path,
             output_path=output_path,
-            model_type=model_type,
-            device=device,
-            checkpoint_path=checkpoint_path,
             ndim=ndim,
             verbose=False,
             **auto_seg_kwargs
         )
 
     prediction_paths = natsorted(glob(os.path.join(prediction_dir, "*")))
-    res = run_evaluation(gt_paths=gt_paths, prediction_paths=prediction_paths, save_path=result_path)
-    print(res)
+    run_evaluation(gt_paths=gt_paths, prediction_paths=prediction_paths, save_path=result_path)
 
 
 def _run_interactive_segmentation_per_dataset(
@@ -394,13 +404,13 @@ def _run_interactive_segmentation_per_dataset(
                 min_size=10,
             )
             print(msa)
+            # TODO: store this segmentation accurary scores into a csv.
 
         prediction_paths = natsorted(glob(os.path.join(prediction_dir, "*")))
-        res = run_evaluation(
+        run_evaluation(
             gt_paths=gt_paths, prediction_paths=prediction_paths,
             save_path=os.path.join(output_folder, "results", f"interactive_segmentation_3d_with_{prompt_choice}.csv")
         )
-        print(res)
 
 
 def run_benchmark_evaluations(

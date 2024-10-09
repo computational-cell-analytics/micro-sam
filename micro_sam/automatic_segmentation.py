@@ -1,11 +1,9 @@
 import os
 from pathlib import Path
-from typing import Dict, Optional, Union, Tuple
+from typing import Optional, Union, Tuple
 
 import numpy as np
 import imageio.v3 as imageio
-
-import torch
 
 from . import util
 from .instance_segmentation import (
@@ -15,57 +13,38 @@ from .multi_dimensional_segmentation import automatic_3d_segmentation
 
 
 def automatic_instance_segmentation(
+    predictor: util.SamPredictor,
+    segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
     input_path: Union[Union[os.PathLike, str], np.ndarray],
     output_path: Optional[Union[os.PathLike, str]] = None,
     embedding_path: Optional[Union[os.PathLike, str]] = None,
-    device: Optional[Union[torch.device, str]] = None,
-    model_type: str = util._DEFAULT_MODEL,
-    checkpoint_path: Optional[Union[os.PathLike, str]] = None,
     key: Optional[str] = None,
     ndim: Optional[int] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
-    use_amg: bool = False,
-    amg_kwargs: Optional[Dict] = None,
     verbose: bool = True,
     **generate_kwargs
 ) -> np.ndarray:
     """Run automatic segmentation for the input image.
 
     Args:
+        predictor: The SAM model.
+        segmenter: The instance segmentation class.
         input_path: input_path: The input image file(s). Can either be a single image file (e.g. tif or png),
             or a container file (e.g. hdf5 or zarr).
         output_path: The output path where the instance segmentations will be saved.
         embedding_path: The path where the embeddings are cached already / will be saved.
-        model_type: The SegmentAnything model to use. Will use the standard vit_l model by default.
-        checkpoint_path: Path to a checkpoint for a custom model.
         key: The key to the input file. This is needed for container files (eg. hdf5 or zarr)
             or to load several images as 3d volume. Provide a glob patterm, eg. "*.tif", for this case.
         ndim: The dimensionality of the data.
         tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
         halo: Overlap of the tiles for tiled prediction.
-        use_amg: Whether to use Automatic Mask Generation (AMG) as the automatic segmentation method.
-        amg_kwargs: optional keyword arguments for creating the AMG or AIS class.
-        generate_kwargs: optional keyword arguments for the generate function onf the AMG or AIS class.
+        verbose: Verbosity flag.
+        generate_kwargs: optional keyword arguments for the generate function of the AMG or AIS class.
 
     Returns:
         The segmentation result.
     """
-    predictor, state = util.get_sam_model(
-        model_type=model_type, device=device, checkpoint_path=checkpoint_path, return_state=True,
-    )
-
-    if "decoder_state" in state and not use_amg:  # AIS
-        decoder = get_decoder(predictor.model.image_encoder, state["decoder_state"])
-        segmenter = get_amg(
-            predictor=predictor, decoder=decoder, is_tiled=tile_shape is not None,
-            **({} if amg_kwargs is None else amg_kwargs)
-        )
-    else:  # AMG
-        segmenter = get_amg(
-            predictor=predictor, is_tiled=tile_shape is not None, **({} if amg_kwargs is None else amg_kwargs)
-        )
-
     # Load the input image file.
     if isinstance(input_path, np.ndarray):
         image_data = input_path
@@ -187,17 +166,28 @@ def main():
         parameter_args[i].lstrip("--"): _convert_argval(parameter_args[i + 1]) for i in range(0, len(parameter_args), 2)
     }
 
+    device = util._get_default_device
+    predictor, state = util.get_sam_model(
+        model_type=args.model_type, device=device, checkpoint_path=args.checkpoint, return_state=True,
+    )
+
+    segmenter = get_amg(
+        predictor=predictor, is_tiled=args.tile_shape is not None,
+        decoder=get_decoder(
+            image_encoder=predictor.model.image_encoder, decoder_state=state["decoder_state"], device=device
+        ) if "decoder_state" in state and not args.amg else None
+    )
+
     automatic_instance_segmentation(
+        predictor=predictor,
+        segmenter=segmenter,
         input_path=args.input_path,
         output_path=args.output_path,
         embedding_path=args.embedding_path,
-        model_type=args.model_type,
-        checkpoint_path=args.checkpoint,
         key=args.key,
         ndim=args.ndim,
         tile_shape=args.tile_shape,
         halo=args.halo,
-        use_amg=args.amg,
         **generate_kwargs,
     )
 
