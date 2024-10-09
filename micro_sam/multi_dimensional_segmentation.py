@@ -421,7 +421,12 @@ def automatic_3d_segmentation(
         segmentation[i] = seg
 
     segmentation = merge_instance_segmentation_3d(
-        segmentation, beta=0.5, with_background=with_background, gap_closing=gap_closing, min_z_extent=min_z_extent
+        segmentation,
+        beta=0.5,
+        with_background=with_background,
+        gap_closing=gap_closing,
+        min_z_extent=min_z_extent,
+        verbose=verbose,
     )
 
     return segmentation

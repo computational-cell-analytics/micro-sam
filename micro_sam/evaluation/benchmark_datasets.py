@@ -41,6 +41,10 @@ DATASET_RETURNS_FOLDER = {
     "deepbacs": "*.tif"
 }
 
+DATASET_CONTAINER_KEYS = {
+    "lucchi": ["raw", "labels"],
+}
+
 
 def _download_benchmark_datasets(path, dataset_choice):
     """Ensures whether all the datasets have been downloaded or not.
@@ -165,8 +169,8 @@ def _download_benchmark_datasets(path, dataset_choice):
     return dataset_choice
 
 
-def _extract_slices_from_dataset(path, dataset_choice):
-    if dataset_choice in LM_2D_DATASETS or EM_2D_DATASETS:
+def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
+    if dataset_choice in [*LM_2D_DATASETS, *EM_2D_DATASETS]:
         ndim, tile_shape = 2, (512, 512)
     else:
         ndim, tile_shape = 3, (32, 512, 512)
@@ -175,15 +179,31 @@ def _extract_slices_from_dataset(path, dataset_choice):
         # Light Microscopy datasets
         "livecell": lambda: datasets.livecell._get_livecell_paths(path=path, split="test"),
         "deepbacs": lambda: datasets.deepbacs._get_deepbacs_paths(path=path, split="test", bac_type="mixed"),
+        "plantseg_root": lambda: datasets.plantseg._get_plantseg_paths(data_path=os.path.join(path, "root_test")),
+        "plantseg_ovules": lambda: datasets.plantseg._get_plantseg_paths(data_path=os.path.join(path, "ovules_test")),
+
+        # Electron Microscopy datasets
+        "lucchi": lambda: datasets.lucchi.get_lucchi_paths(path=path, split="test"),
     }
 
-    image_paths, gt_paths = available_datasets[dataset_choice]()
-    if dataset_choice in DATASET_RETURNS_FOLDER:
-        image_paths = glob(os.path.join(image_paths, DATASET_RETURNS_FOLDER[dataset_choice]))
-        gt_paths = glob(os.path.join(gt_paths, DATASET_RETURNS_FOLDER[dataset_choice]))
+    if ndim == 2:
+        image_paths, gt_paths = available_datasets[dataset_choice]()
 
-    image_paths, gt_paths = natsorted(image_paths), natsorted(gt_paths)
-    assert len(image_paths) == len(gt_paths)
+        if dataset_choice in DATASET_RETURNS_FOLDER:
+            image_paths = glob(os.path.join(image_paths, DATASET_RETURNS_FOLDER[dataset_choice]))
+            gt_paths = glob(os.path.join(gt_paths, DATASET_RETURNS_FOLDER[dataset_choice]))
+
+        image_paths, gt_paths = natsorted(image_paths), natsorted(gt_paths)
+        assert len(image_paths) == len(gt_paths)
+
+        paths_set = zip(image_paths, gt_paths)
+
+    else:
+        image_paths = available_datasets[dataset_choice]()
+        if isinstance(image_paths, str):
+            paths_set = [image_paths]
+        else:
+            paths_set = natsorted(image_paths)
 
     # Directory where we store the extracted ROIs.
     save_image_dir = os.path.join(path, f"roi_{ndim}d", "inputs")
@@ -196,33 +216,37 @@ def _extract_slices_from_dataset(path, dataset_choice):
 
     # Logic to extract relevant patches for inference
     image_counter = 1
-    for image_path, gt_path in tqdm(
-        zip(image_paths, gt_paths), total=len(image_paths),
-        desc=f"Extracting patches for {dataset_choice}"
-    ):
-        image = imageio.imread(image_path)
-        gt = imageio.imread(gt_path)
+    for per_paths in tqdm(paths_set, total=len(paths_set), desc=f"Extracting patches for {dataset_choice}"):
+        if ndim == 2:
+            image_path, gt_path = per_paths
+            image, gt = util.load_image_data(image_path), util.load_image_data(gt_path)
+        else:
+            image_path = per_paths
+            image = util.load_image_data(image_path, DATASET_CONTAINER_KEYS[dataset_choice][0])
+            gt = util.load_image_data(image_path, DATASET_CONTAINER_KEYS[dataset_choice][1])
+
+        skip_smaller_shape = (image.shape > tile_shape)
 
         if len(np.unique(gt)) == 1:  # There could be labels which does not have any annotated foreground.
             continue
 
-        tiling = blocking([0, 0], gt.shape, tile_shape)
+        tiling = blocking([0] * ndim, gt.shape, tile_shape)
         n_tiles = tiling.numberOfBlocks
         tiles = [tiling.getBlock(tile_id) for tile_id in range(n_tiles)]
-        crop_boxes = [[tile.begin[1], tile.begin[0], tile.end[1], tile.end[0]] for tile in tiles]
-
-        n_ids = [idx for idx in range(len(crop_boxes))]
-        n_instances = [
-            len(np.unique(gt[crop_box[1]: crop_box[3], crop_box[0]: crop_box[2]])) for crop_box in crop_boxes
+        crop_boxes = [
+           tuple(slice(beg, end) for beg, end in zip(tile.begin, tile.end)) for tile in tiles
         ]
+        n_ids = [idx for idx in range(len(crop_boxes))]
+        n_instances = [len(np.unique(gt[crop])) for crop in crop_boxes]
 
         # Extract the desired number of patches with higher number of instances.
-        desired_tiles_per_image = 1
         image_crops, gt_crops = [], []
         for i, (per_n_instance, per_id) in enumerate(sorted(zip(n_instances, n_ids)), start=1):
             crop_box = crop_boxes[per_id]
-            x0, y0, x1, y1 = crop_box
-            crop_image, crop_gt = image[y0: y1, x0: x1], gt[y0: y1, x0: x1]
+            crop_image, crop_gt = image[crop_box], gt[crop_box]
+            # NOTE: We avoid using the crops which do not match the desired tile shape.
+            if skip_smaller_shape and crop_image.shape != tile_shape:
+                continue
 
             # NOTE: There could be a case where some later patches are invalid.
             if per_n_instance == 1:
@@ -232,7 +256,7 @@ def _extract_slices_from_dataset(path, dataset_choice):
             gt_crops.append(crop_gt)
 
             # NOTE: If the number of patches extracted have been fulfiled, we stop sampling patches.
-            if len(image_crops) > 0 and i >= desired_tiles_per_image:
+            if len(image_crops) > 0 and i >= crops_per_input:
                 break
 
         # Finally, let's store all the patches
