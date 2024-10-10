@@ -66,15 +66,14 @@ class TestAutomaticSegmentation(unittest.TestCase):
             torch.mps.empty_cache()
 
     # get the predictor and segmenter.
-    def _get_predictor_and_segmenter(self, ais=False, tile=None):
+    def _get_predictor_and_segmenter(self, ais=False, is_tiled=False):
         from micro_sam.instance_segmentation import get_amg, get_decoder
 
         predictor, state = util.get_sam_model(model_type=self.model_type, return_state=True)
 
         amg_kwargs = {}  # AMG Parameters can be overwritten here.
         segmenter = get_amg(
-            predictor=predictor,
-            is_tiled=tile is not None,
+            predictor=predictor, is_tiled=is_tiled,
             decoder=get_decoder(
                 image_encoder=predictor.model.image_encoder, decoder_state=state["decoder_state"]
             ) if "decoder_state" in state and ais else None,
@@ -86,7 +85,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation
 
         mask, image = self.mask, self.image
-        predictor, segmenter = self._get_predictor_and_segmenter(ais=False, tile=None)
+        predictor, segmenter = self._get_predictor_and_segmenter(ais=False, is_tiled=False)
         instances = automatic_instance_segmentation(
             predictor=predictor, segmenter=segmenter, input_path=image, ndim=2,
         )
@@ -96,7 +95,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation
 
         mask, image = self.large_mask, self.large_image
-        predictor, segmenter = self._get_predictor_and_segmenter(ais=False, tile=self.tile_shape)
+        predictor, segmenter = self._get_predictor_and_segmenter(ais=False, is_tiled=True)
         instances = automatic_instance_segmentation(
             predictor=predictor, segmenter=segmenter, input_path=image,
             ndim=2, tile_shape=self.tile_shape, halo=self.halo,
@@ -107,7 +106,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation
 
         mask, image = self.mask, self.image
-        predictor, segmenter = self._get_predictor_and_segmenter(ais=True, tile=None)
+        predictor, segmenter = self._get_predictor_and_segmenter(ais=True, is_tiled=False)
         instances = automatic_instance_segmentation(
             predictor=predictor, segmenter=segmenter, input_path=image, ndim=2,
         )
@@ -117,7 +116,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation
 
         mask, image = self.large_mask, self.large_image
-        predictor, segmenter = self._get_predictor_and_segmenter(ais=True, tile=self.tile_shape)
+        predictor, segmenter = self._get_predictor_and_segmenter(ais=True, is_tiled=True)
         instances = automatic_instance_segmentation(
             predictor=predictor, segmenter=segmenter, input_path=image,
             ndim=2, tile_shape=self.tile_shape, halo=self.halo,
@@ -129,7 +128,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation
 
         labels, volume = self.labels, self.volume
-        predictor, segmenter = self._get_predictor_and_segmenter(ais=False, tile=None)
+        predictor, segmenter = self._get_predictor_and_segmenter(ais=False, is_tiled=False)
         instances = automatic_instance_segmentation(
             predictor=predictor, segmenter=segmenter, input_path=volume, ndim=3,
         )
@@ -140,7 +139,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation
 
         labels, volume = self.large_labels, self.large_volume
-        predictor, segmenter = self._get_predictor_and_segmenter(ais=False, tile=self.tile_shape)
+        predictor, segmenter = self._get_predictor_and_segmenter(ais=False, is_tiled=True)
         instances = automatic_instance_segmentation(
             predictor=predictor, segmenter=segmenter, input_path=volume,
             ndim=3, tile_shape=self.tile_shape, halo=self.halo,
@@ -151,7 +150,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation
 
         labels, volume = self.labels, self.volume
-        predictor, segmenter = self._get_predictor_and_segmenter(ais=True, tile=None)
+        predictor, segmenter = self._get_predictor_and_segmenter(ais=True, is_tiled=False)
         instances = automatic_instance_segmentation(
             predictor=predictor, segmenter=segmenter, input_path=volume, ndim=3,
         )
@@ -161,7 +160,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation
 
         labels, volume = self.large_labels, self.large_volume
-        predictor, segmenter = self._get_predictor_and_segmenter(ais=True, tile=self.tile_shape)
+        predictor, segmenter = self._get_predictor_and_segmenter(ais=True, is_tiled=True)
         instances = automatic_instance_segmentation(
             predictor=predictor, segmenter=segmenter, input_path=volume,
             ndim=3, tile_shape=self.tile_shape, halo=self.halo,
