@@ -20,11 +20,11 @@ from micro_sam import util
 
 from . import run_evaluation
 from ..training.training import _filter_warnings
+from ..instance_segmentation import get_amg, get_decoder
 from .inference import run_inference_with_iterative_prompting
 from .evaluation import run_evaluation_for_iterative_prompting
 from ..automatic_segmentation import automatic_instance_segmentation
 from .multi_dimensional_segmentation import segment_slices_from_ground_truth
-from ..instance_segmentation import get_amg, get_decoder
 
 
 LM_2D_DATASETS = [
@@ -247,7 +247,7 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
 
     # Logic to extract relevant patches for inference
     image_counter = 1
-    for per_paths in tqdm(paths_set, total=len(paths_set), desc=f"Extracting patches for {dataset_choice}"):
+    for per_paths in tqdm(paths_set, desc=f"Extracting patches for {dataset_choice}"):
         if ndim == 2:
             image_path, gt_path = per_paths
             image, gt = util.load_image_data(image_path), util.load_image_data(gt_path)
@@ -267,7 +267,7 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
         # Let's extract and save all the crops.
         # NOTE: The first round of extraction is always to match the desired input dimensions.
         image_crops, gt_crops = _get_crops_for_input(image, gt, ndim, tile_shape, skip_smaller_shape, crops_per_input)
-        _save_image_label_crops(
+        image_counter = _save_image_label_crops(
             image_crops, gt_crops, dataset_choice, ndim, image_counter, save_image_dir[0], save_gt_dir[0]
         )
 
@@ -288,7 +288,7 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
                 curr_image_crops.extend(image_crops)
                 curr_gt_crops.extend(gt_crops)
 
-            _save_image_label_crops(
+            image_counter = _save_image_label_crops(
                 curr_image_crops, curr_gt_crops, dataset_choice, 2, image_counter, save_image_dir[1], save_gt_dir[1]
             )
 
@@ -338,6 +338,8 @@ def _save_image_label_crops(image_crops, gt_crops, dataset_choice, ndim, image_c
         imageio.imwrite(os.path.join(save_gt_dir, fname), gt_crop, compression="zlib")
         image_counter += 1
 
+    return image_counter
+
 
 def _get_image_label_paths(path, ndim):
     image_paths = natsorted(glob(os.path.join(path, f"roi_{ndim}d", "inputs", "*")))
@@ -377,7 +379,7 @@ def _run_automatic_segmentation_per_dataset(
     prediction_dir = os.path.join(output_folder, fname, "inference")
     if os.path.exists(prediction_dir):
         return
-    
+
     os.makedirs(prediction_dir, exist_ok=True)
 
     # Get the predictor (and the additional instance segmentation decoder, if available).
@@ -527,6 +529,45 @@ def _run_benchmark_evaluation_series(
     _run_interactive_segmentation_per_dataset(prompt_choice="points", **seg_kwargs)
 
 
+def _clear_cached_items(retain, path, output_folder, dataset_choice):
+    import shutil
+    from pathlib import Path
+
+    REMOVE_LIST = ["data", "crops", "auto", "int"]
+    if retain is None:
+        remove_list = REMOVE_LIST
+    else:
+        assert isinstance(retain, list)
+        remove_list = set(REMOVE_LIST) - set(retain)
+
+    paths = []
+    # Stage 1: Remove inputs.
+    if "data" in remove_list or "crops" in remove_list:
+        all_paths = glob(os.path.join(path, "*"))
+
+        # In case we want to remove both data and crops, we remove the data folder entirely.
+        if "data" in remove_list and "crops" in remove_list:
+            paths.extend(all_paths)
+            return
+
+        # Next, we verify whether the we only remove either of data or crops.
+        for curr_path in all_paths:
+            if os.path.basename(curr_path).startswith("roi") and "crops" in remove_list:
+                paths.append(curr_path)
+            elif "data" in remove_list:
+                paths.append(curr_path)
+
+    # Stage 2: Remove predictions
+    if "auto" in remove_list:
+        paths.extend(glob(os.path.join(output_folder, "amg_*")))
+        paths.extend(glob(os.path.join(output_folder, "ais_*")))
+
+    if "int" in remove_list:
+        paths.extend(glob(os.path.join(output_folder, "interactive_segmentation_*")))
+
+    [shutil.rmtree(_path) if Path(_path).is_dir() else os.remove(_path) for _path in paths]
+
+
 def run_benchmark_evaluations(
     input_folder: Union[os.PathLike, str],
     dataset_choice: str,
@@ -534,6 +575,7 @@ def run_benchmark_evaluations(
     output_folder: Optional[Union[str, os.PathLike]] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     run_amg: bool = False,
+    retain: Optional[List[str]] = None,
     ignore_warnings: bool = False,
 ):
     """Run evaluation for benchmarking Segment Anything models on microscopy datasets.
@@ -545,6 +587,9 @@ def run_benchmark_evaluations(
         output_folder: The path to directory where all outputs will be stored.
         checkpoint_path: The checkpoint path
         run_amg: Whether to run automatic segmentation in AMG mode.
+        retain: Whether to retain certain parts of the benchmark runs.
+            By default, removes everything besides quantitative results.
+            There is the choice to retain 'data', 'crops', 'auto', or 'int'.
         ignore_warnings: Whether to ignore warnings.
     """
     start = time.time()
@@ -557,28 +602,34 @@ def run_benchmark_evaluations(
 
         for choice in dataset_choice:
             output_folder = os.path.join(output_folder, choice)
-            os.makedirs(os.path.join(output_folder, "results"), exist_ok=True)
+            result_dir = os.path.join(output_folder, "results")
+            if os.path.exists(result_dir):
+                continue
+
+            os.makedirs(result_dir, exist_ok=True)
+
+            data_path = os.path.join(input_folder, choice)
 
             # Extrapolate desired set from the datasets:
             # a. for 2d datasets - 2d patches with the most number of labels present
             #    (in case of volumetric data, choose 2d patches per slice).
             # b. for 3d datasets - 3d regions of interest with the most number of labels present.
-            ndim = _extract_slices_from_dataset(
-                path=os.path.join(input_folder, choice), dataset_choice=choice, crops_per_input=10,
-            )
+            ndim = _extract_slices_from_dataset(path=data_path, dataset_choice=choice, crops_per_input=10)
 
             # Run inference and evaluation scripts on benchmark datasets.
-            image_paths, gt_paths = _get_image_label_paths(path=os.path.join(input_folder, choice), ndim=ndim)
+            image_paths, gt_paths = _get_image_label_paths(path=data_path, ndim=ndim)
             _run_benchmark_evaluation_series(
                 image_paths, gt_paths, model_type, output_folder, ndim, device, checkpoint_path, run_amg
             )
 
             # Run inference and evaluation scripts on '2d' crops for volumetric datasets
             if ndim == 3:
-                image_paths, gt_paths = _get_image_label_paths(path=os.path.join(input_folder, choice), ndim=2)
+                image_paths, gt_paths = _get_image_label_paths(path=data_path, ndim=2)
                 _run_benchmark_evaluation_series(
                     image_paths, gt_paths, model_type, output_folder, 2, device, checkpoint_path, run_amg
                 )
+
+            _clear_cached_items(retain=retain, path=data_path, output_folder=output_folder, dataset_choice=choice)
 
     diff = time.time() - start
     hours, rest = divmod(diff, 3600)
@@ -620,6 +671,14 @@ def main():
         "--amg", action="store_true",
         help="Whether to run automatic segmentation in AMG mode (i.e. the default auto-seg approach for SAM)."
     )
+    parser.add_argument(
+        "--retain", nargs="*", default=None,
+        help="By default, the functionality removes all besides quantitative results required for running benchmarks. "
+        "In case you would like to retain parts of the benchmark evaluation for visualization / reproducability, "
+        "you should choose one or multiple of 'data', 'crops', 'auto', 'int'. "
+        "where they are responsible for either retaining original inputs / extracted crops / "
+        "predictions of automatic segmentation / predictions of interactive segmentation, respectively."
+    )
     args = parser.parse_args()
 
     run_benchmark_evaluations(
@@ -629,6 +688,7 @@ def main():
         output_folder=args.output_folder,
         checkpoint_path=args.checkpoint_path,
         run_amg=args.amg,
+        retain=args.retain,
         ignore_warnings=True,
     )
 

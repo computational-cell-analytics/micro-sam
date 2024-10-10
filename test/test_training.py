@@ -125,7 +125,7 @@ class TestTraining(unittest.TestCase):
 
         self.assertEqual(len(pred_paths), len(label_paths))
         eval_res = evaluation.run_evaluation(label_paths, pred_paths, verbose=False)
-        result = eval_res["sa50"].values.item()
+        result = eval_res["SA50"].values.item()
         # We check against the expected segmentation accuracy.
         self.assertGreater(result, expected_sa)
 
