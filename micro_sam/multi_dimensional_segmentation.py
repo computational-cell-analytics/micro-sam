@@ -397,7 +397,13 @@ def automatic_3d_segmentation(
 
     min_object_size = kwargs.pop("min_object_size", 0)
     image_embeddings = util.precompute_image_embeddings(
-        predictor=predictor, input_=volume, save_path=embedding_path, ndim=3, tile_shape=tile_shape, halo=halo,
+        predictor=predictor,
+        input_=volume,
+        save_path=embedding_path,
+        ndim=3,
+        tile_shape=tile_shape,
+        halo=halo,
+        verbose=verbose,
     )
 
     for i in tqdm(range(segmentation.shape[0]), desc="Segment slices", disable=not verbose):
@@ -415,7 +421,12 @@ def automatic_3d_segmentation(
         segmentation[i] = seg
 
     segmentation = merge_instance_segmentation_3d(
-        segmentation, beta=0.5, with_background=with_background, gap_closing=gap_closing, min_z_extent=min_z_extent
+        segmentation,
+        beta=0.5,
+        with_background=with_background,
+        gap_closing=gap_closing,
+        min_z_extent=min_z_extent,
+        verbose=verbose,
     )
 
     return segmentation

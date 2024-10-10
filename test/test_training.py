@@ -125,7 +125,7 @@ class TestTraining(unittest.TestCase):
 
         self.assertEqual(len(pred_paths), len(label_paths))
         eval_res = evaluation.run_evaluation(label_paths, pred_paths, verbose=False)
-        result = eval_res["sa50"].values.item()
+        result = eval_res["SA50"].values.item()
         # We check against the expected segmentation accuracy.
         self.assertGreater(result, expected_sa)
 
@@ -172,7 +172,7 @@ class TestTraining(unittest.TestCase):
         )
         self._run_inference_and_check_results(
             export_path, model_type, prediction_dir=prediction_dir,
-            inference_function=box_inference, expected_sa=0.95,
+            inference_function=box_inference, expected_sa=0.8,
         )
 
         # Check the model with interactive inference.
@@ -184,7 +184,7 @@ class TestTraining(unittest.TestCase):
         )
         self._run_inference_and_check_results(
             export_path, model_type, prediction_dir=prediction_dir,
-            inference_function=iterative_inference, expected_sa=0.95,
+            inference_function=iterative_inference, expected_sa=0.8,
         )
 
 

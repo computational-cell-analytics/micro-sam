@@ -6,6 +6,8 @@ from math import floor
 from itertools import product
 from typing import Union, Tuple, Optional, List, Dict
 
+import imageio.v3 as imageio
+
 import torch
 
 from elf.evaluation import mean_segmentation_accuracy
@@ -58,8 +60,9 @@ def segment_slices_from_ground_truth(
     volume: np.ndarray,
     ground_truth: np.ndarray,
     model_type: str,
-    checkpoint_path: Union[str, os.PathLike],
-    embedding_path: Union[str, os.PathLike],
+    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
+    embedding_path: Optional[Union[str, os.PathLike]] = None,
+    save_path: Optional[Union[str, os.PathLike]] = None,
     iou_threshold: float = 0.8,
     projection: Union[str, dict] = "mask",
     box_extension: Union[float, int] = 0.025,
@@ -81,6 +84,7 @@ def segment_slices_from_ground_truth(
         model_type: Choice of segment anything model.
         checkpoint_path: Path to the model checkpoint.
         embedding_path: Path to cache the computed embeddings.
+        save_path: Path to store the segmentations.
         iou_threshold: The criterion to decide whether to link the objects in the consecutive slice's segmentation.
         projection: The projection (prompting) method to generate prompts for consecutive slices.
         box_extension: Extension factor for increasing the box size after projection.
@@ -97,7 +101,7 @@ def segment_slices_from_ground_truth(
 
     # Compute the image embeddings
     embeddings = util.precompute_image_embeddings(
-        predictor=predictor, input_=volume, save_path=embedding_path, ndim=3
+        predictor=predictor, input_=volume, save_path=embedding_path, ndim=3, verbose=verbose,
     )
 
     # Compute instance ids (without the background)
@@ -133,7 +137,7 @@ def segment_slices_from_ground_truth(
             _get_points, _get_box = False, True
         else:
             raise ValueError(
-                "The provided interactive prompting for the first slice isn't supported.",
+                f"The provided interactive prompting '{interactive_seg_mode}' for the first slice isn't supported."
                 "Please choose from 'box' / 'points'."
             )
 
@@ -145,14 +149,20 @@ def segment_slices_from_ground_truth(
             get_box_prompts=_get_box
         )
         _, box_coords = util.get_centers_and_bounding_boxes(this_slice_seg)
-        point_prompts, point_labels, box_prompts, _ = prompt_generator(this_slice_seg, [box_coords[1]])
+        point_prompts, point_labels, box_prompts, _ = prompt_generator(
+            segmentation=torch.from_numpy(this_slice_seg)[None, None].to(torch.float32),
+            bbox_coordinates=[box_coords[1]],
+        )
 
         # Prompt-based segmentation on middle slice of the current object
         output_slice = batched_inference(
-            predictor=predictor, image=volume[slice_choice], batch_size=1,
+            predictor=predictor,
+            image=volume[slice_choice],
+            batch_size=1,
             boxes=box_prompts.numpy() if isinstance(box_prompts, torch.Tensor) else box_prompts,
             points=point_prompts.numpy() if isinstance(point_prompts, torch.Tensor) else point_prompts,
-            point_labels=point_labels.numpy() if isinstance(point_labels, torch.Tensor) else point_labels
+            point_labels=point_labels.numpy() if isinstance(point_labels, torch.Tensor) else point_labels,
+            verbose_embeddings=verbose,
         )
         output_seg = np.zeros_like(ground_truth)
         output_seg[slice_choice][output_slice == 1] = 1
@@ -173,18 +183,25 @@ def segment_slices_from_ground_truth(
         # Store the entire segmented object
         final_segmentation[this_seg == 1] = label_id
 
+    # Save the volumetric segmentation
+    if save_path is not None:
+        imageio.imwrite(save_path, final_segmentation, compression="zlib")
+
     # Evaluate the volumetric segmentation
     if skipped_label_ids:
-        gt_copy = ground_truth.copy()
-        gt_copy[np.isin(gt_copy, skipped_label_ids)] = 0
-        msa = mean_segmentation_accuracy(final_segmentation, gt_copy)
+        curr_gt = ground_truth.copy()
+        curr_gt[np.isin(curr_gt, skipped_label_ids)] = 0
     else:
-        msa = mean_segmentation_accuracy(final_segmentation, ground_truth)
+        curr_gt = ground_truth
+
+    msa, sa = mean_segmentation_accuracy(final_segmentation, curr_gt, return_accuracies=True)
+    results = {"mSA": msa, "SA50": sa[0], "SA75": sa[5]}
+    results = pd.DataFrame.from_dict([results])
 
     if return_segmentation:
-        return msa, final_segmentation
+        return results, final_segmentation
     else:
-        return msa
+        return results
 
 
 def _get_best_parameters_from_grid_search_combinations(result_dir, best_params_path, grid_search_values):
@@ -266,7 +283,7 @@ def run_multi_dimensional_segmentation_grid_search(
 
     net_list = []
     for gs_kwargs in tqdm(gs_combinations):
-        msa = segment_slices_from_ground_truth(
+        results = segment_slices_from_ground_truth(
             volume=volume,
             ground_truth=ground_truth,
             model_type=model_type,
@@ -279,7 +296,7 @@ def run_multi_dimensional_segmentation_grid_search(
             **gs_kwargs
         )
 
-        result_dict = {"mSA": msa, **gs_kwargs}
+        result_dict = {**results, **gs_kwargs}
         tmp_df = pd.DataFrame([result_dict])
         net_list.append(tmp_df)
 
