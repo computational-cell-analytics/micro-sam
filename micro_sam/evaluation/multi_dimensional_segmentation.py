@@ -186,20 +186,22 @@ def segment_slices_from_ground_truth(
     # Save the volumetric segmentation
     if save_path is not None:
         imageio.imwrite(save_path, final_segmentation, compression="zlib")
-        return  # NOTE: Here, in case 'save_path' is provided, we do not return neither of score or segmentation.
 
     # Evaluate the volumetric segmentation
     if skipped_label_ids:
-        gt_copy = ground_truth.copy()
-        gt_copy[np.isin(gt_copy, skipped_label_ids)] = 0
-        msa = mean_segmentation_accuracy(final_segmentation, gt_copy)
+        curr_gt = ground_truth.copy()
+        curr_gt[np.isin(curr_gt, skipped_label_ids)] = 0
     else:
-        msa = mean_segmentation_accuracy(final_segmentation, ground_truth)
+        curr_gt = ground_truth
+
+    msa, sa = mean_segmentation_accuracy(final_segmentation, curr_gt, return_accuracies=True)
+    results = {"mSA": msa, "SA50": sa[0], "SA75": sa[5]}
+    results = pd.DataFrame.from_dict([results])
 
     if return_segmentation:
-        return msa, final_segmentation
+        return results, final_segmentation
     else:
-        return msa
+        return results
 
 
 def _get_best_parameters_from_grid_search_combinations(result_dir, best_params_path, grid_search_values):
@@ -281,7 +283,7 @@ def run_multi_dimensional_segmentation_grid_search(
 
     net_list = []
     for gs_kwargs in tqdm(gs_combinations):
-        msa = segment_slices_from_ground_truth(
+        results = segment_slices_from_ground_truth(
             volume=volume,
             ground_truth=ground_truth,
             model_type=model_type,
@@ -294,7 +296,7 @@ def run_multi_dimensional_segmentation_grid_search(
             **gs_kwargs
         )
 
-        result_dict = {"mSA": msa, **gs_kwargs}
+        result_dict = {**results, **gs_kwargs}
         tmp_df = pd.DataFrame([result_dict])
         net_list.append(tmp_df)
 
