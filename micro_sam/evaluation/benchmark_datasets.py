@@ -519,7 +519,7 @@ def _run_benchmark_evaluation_series(
     #    Next, we check if the user expects to run AMG as well (after the run for AIS).
 
     # i. Run automatic segmentation method supported with the SAM model (AMG or AIS).
-    _run_automatic_segmentation_per_dataset(run_amg=run_amg, **seg_kwargs)
+    _run_automatic_segmentation_per_dataset(run_amg=False, **seg_kwargs)
 
     # ii. Run automatic mask generation (AMG) (in case the first run is AIS).
     _run_automatic_segmentation_per_dataset(run_amg=run_amg, **seg_kwargs)
