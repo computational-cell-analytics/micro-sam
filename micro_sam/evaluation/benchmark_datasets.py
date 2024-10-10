@@ -203,11 +203,41 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
         # Light Microscopy datasets
         "livecell": lambda: datasets.livecell.get_livecell_paths(path=path, split="test"),
         "deepbacs": lambda: datasets.deepbacs.get_deepbacs_paths(path=path, split="test", bac_type="mixed"),
+        "tissuenet": lambda: datasets.tissuenet.get_tissuenet_paths(path=path, split="test"),
+        # TODO: check neurips cellseg split convention.
+        "neurips_cellseg": lambda: datasets.neurips_cell_seg.get_neurips_cellseg_paths(root=path, split="test"),
         "plantseg_root": lambda: datasets.plantseg.get_plantseg_paths(path=path, name="root", split="test"),
         "plantseg_ovules": lambda: datasets.plantseg.get_plantseg_paths(path=path, name="ovules", split="test"),
-
+        "covid_if": lambda: datasets.covid_if.get_covid_if_paths(path=path),
+        "hpa": lambda: datasets.hpa.get_hpa_segmentation_paths(path=path, split="test"),
+        "dynamicnuclearnet": lambda: datasets.dynamicnuclearnet.get_dynamicnuclearnet_paths(path=path, split="test"),
+        "pannuke": lambda: datasets.pannuke.get_pannuke_paths(path=path),
+        "lizard": lambda: datasets.lizard.get_lizard_paths(parth=path),
+        "orgasegment": lambda: datasets.orgasegment.get_orgasegment_paths(path=path, split="eval"),
+        "omnipose": lambda: datasets.omnipose.get_omnipose_paths(path=path, split="test"),
+        "gonuclear": lambda: datasets.gonuclear.get_gonuclear_paths(path-path),
+        "mouse_embryo": lambda: datasets.mouse_embryo.get_mouse_embryo_paths(path=path, name="nuclei", split="val"),
+        "embedseg_data": lambda: datasets.embedseg_data.get_embedseg_paths(path=path, name=..., split="test"),  # TODO
+        "cellseg_3d": lambda: datasets.cellseg_3d.get_cellseg_3d_paths(path=path),
+        "dic_hepg2": lambda: datasets.dic_hepg2.get_dic_hepg2_paths(path=path, split="test"),
         # Electron Microscopy datasets
+        "mitoem_rat": lambda: datasets.mitoem.get_mitoem_paths(path=path, splits="test", samples="rat"),
+        "mitem_human": lambda: datasets.mitoem.get_mitoem_paths(path=path, splits="test", samples="human"),
+        "platynereis_nuclei": lambda: datasets.platynereis.get_platynereis_paths(
+            path=path, sample_ids=None, name="nuclei", file_template=...,  # TODO
+        ),
+        "platynereis_cilia": lambda: datasets.platynereis.get_platynereis_paths(
+            path=path, sample_ids=None, name="cilia", file_template=...,  # TODO
+        ),
         "lucchi": lambda: datasets.lucchi.get_lucchi_paths(path=path, split="test"),
+        # TODO: split mitolab all
+        "mitolab": lambda: datasets.cem.get_benchmark_paths(path=path, dataset_id=...),
+        "nuc_mm_mouse": lambda: datasets.nuc_mm.get_nuc_mm_paths(path=path, sample="mouse", split="val"),
+        "nuc_mm_zebrafish": lambda: datasets.nuc_mm.get_nuc_mm_paths(path=path, sample="zebrafish", split="val"),
+        "uro_cell": lambda: datasets.uro_cell.get_uro_cell_paths(path=path, target="mito"),
+        "sponge_em": lambda: datasets.sponge_em.get_sponge_em_paths(path=path, sample_ids=None),
+        "vnc": lambda: datasets.vnc.get_vnc_mito_paths(path=path),
+        "asem_mito": lambda: datasets.asem.get_asem_paths(path=path, volume_ids=...)  # TODO
     }
 
     if ndim == 2:
