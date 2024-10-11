@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Optional, Union, Tuple
+from typing import Optional, Union, Tuple, Dict
 
 import numpy as np
 import imageio.v3 as imageio
@@ -10,6 +10,52 @@ from .instance_segmentation import (
     get_amg, get_decoder, mask_data_to_segmentation, InstanceSegmentationWithDecoder, AMGBase
 )
 from .multi_dimensional_segmentation import automatic_3d_segmentation
+
+
+def get_predictor_and_segmenter(
+    model_type: str,
+    checkpoint: Optional[Union[os.PathLike, str]] = None,
+    device: str = None,
+    amg: bool = False,
+    is_tiled: bool = False,
+    amg_kwargs: Dict = {}
+) -> Tuple[util.SamPredictor, Union[AMGBase, InstanceSegmentationWithDecoder]]:
+    """Get the Segment Anything model and class for automatic instance segmentation.
+
+    Args:
+        model_type: The Segment Anything model choice.
+        checkpoint: The filepath to the stored model checkpoints.
+        device: The torch device.
+        amg: Whether to perform automatic segmentation in AMG mode.
+        is_tiled: Whether to return segmenter for performing segmentation in tiling window style.
+
+    Returns:
+        The Segment Anything model.
+        The automatic instance segmentation class.
+    """
+    # Get the device
+    device = util.get_device(device=device)
+
+    # Get the predictor and state for Segment Anything models.
+    predictor, state = util.get_sam_model(
+        model_type=model_type, device=device, checkpoint_path=checkpoint, return_state=True,
+    )
+
+    # Get the segmenter for automatic segmentation.
+    assert isinstance(amg_kwargs, Dict), "Please ensure 'amg_kwargs' gets arguments in a dictionary."
+
+    segmenter = get_amg(
+        predictor=predictor,
+        is_tiled=is_tiled,
+        decoder=get_decoder(
+            image_encoder=predictor.model.image_encoder,
+            decoder_state=state["decoder_state"],
+            device=device
+        ) if "decoder_state" in state and not amg else None,
+        **amg_kwargs
+    )
+
+    return predictor, segmenter
 
 
 def automatic_instance_segmentation(
@@ -28,8 +74,8 @@ def automatic_instance_segmentation(
     """Run automatic segmentation for the input image.
 
     Args:
-        predictor: The SAM model.
-        segmenter: The instance segmentation class.
+        predictor: The Segment Anything model.
+        segmenter: The automatic instance segmentation class.
         input_path: input_path: The input image file(s). Can either be a single image file (e.g. tif or png),
             or a container file (e.g. hdf5 or zarr).
         output_path: The output path where the instance segmentations will be saved.
@@ -149,6 +195,11 @@ def main():
     parser.add_argument(
         "--amg", action="store_true", help="Whether to use automatic mask generation with the model."
     )
+    parser.add_argument(
+        "-d", "--device", default=None,
+        help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
+        "By default the most performant available device will be selected."
+    )
 
     args, parameter_args = parser.parse_known_args()
 
@@ -166,16 +217,8 @@ def main():
         parameter_args[i].lstrip("--"): _convert_argval(parameter_args[i + 1]) for i in range(0, len(parameter_args), 2)
     }
 
-    device = util._get_default_device
-    predictor, state = util.get_sam_model(
-        model_type=args.model_type, device=device, checkpoint_path=args.checkpoint, return_state=True,
-    )
-
-    segmenter = get_amg(
-        predictor=predictor, is_tiled=args.tile_shape is not None,
-        decoder=get_decoder(
-            image_encoder=predictor.model.image_encoder, decoder_state=state["decoder_state"], device=device
-        ) if "decoder_state" in state and not args.amg else None
+    predictor, segmenter = get_predictor_and_segmenter(
+        model_type=args.model_type, checkpoint=args.checkpoint, device=args.device,
     )
 
     automatic_instance_segmentation(
