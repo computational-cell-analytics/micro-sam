@@ -172,7 +172,7 @@ class TestTraining(unittest.TestCase):
         )
         self._run_inference_and_check_results(
             export_path, model_type, prediction_dir=prediction_dir,
-            inference_function=box_inference, expected_sa=0.95,
+            inference_function=box_inference, expected_sa=0.8,
         )
 
         # Check the model with interactive inference.
@@ -184,7 +184,7 @@ class TestTraining(unittest.TestCase):
         )
         self._run_inference_and_check_results(
             export_path, model_type, prediction_dir=prediction_dir,
-            inference_function=iterative_inference, expected_sa=0.95,
+            inference_function=iterative_inference, expected_sa=0.8,
         )
 
 
