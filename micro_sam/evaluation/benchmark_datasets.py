@@ -550,7 +550,7 @@ def _run_benchmark_evaluation_series(
     _run_interactive_segmentation_per_dataset(prompt_choice="points", **seg_kwargs)
 
 
-def _clear_cached_items(retain, path, output_folder, dataset_choice):
+def _clear_cached_items(retain, path, output_folder):
     import shutil
     from pathlib import Path
 
@@ -650,7 +650,7 @@ def run_benchmark_evaluations(
                     image_paths, gt_paths, model_type, output_folder, 2, device, checkpoint_path, run_amg
                 )
 
-            _clear_cached_items(retain=retain, path=data_path, output_folder=output_folder, dataset_choice=choice)
+            _clear_cached_items(retain=retain, path=data_path, output_folder=output_folder)
 
     diff = time.time() - start
     hours, rest = divmod(diff, 3600)
