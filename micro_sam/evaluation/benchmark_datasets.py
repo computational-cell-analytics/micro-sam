@@ -20,11 +20,10 @@ from micro_sam import util
 
 from . import run_evaluation
 from ..training.training import _filter_warnings
-from ..instance_segmentation import get_amg, get_decoder
 from .inference import run_inference_with_iterative_prompting
 from .evaluation import run_evaluation_for_iterative_prompting
-from ..automatic_segmentation import automatic_instance_segmentation
 from .multi_dimensional_segmentation import segment_slices_from_ground_truth
+from ..automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
 
 LM_2D_DATASETS = [
@@ -413,16 +412,8 @@ def _run_automatic_segmentation_per_dataset(
     os.makedirs(prediction_dir, exist_ok=True)
 
     # Get the predictor (and the additional instance segmentation decoder, if available).
-    predictor, state = util.get_sam_model(
-        model_type=model_type, device=device, checkpoint_path=checkpoint_path, return_state=True,
-    )
-
-    segmenter = get_amg(
-        predictor=predictor,
-        is_tiled=False,
-        decoder=get_decoder(
-            predictor.model.image_encoder, state["decoder_state"], device
-        ) if "decoder_state" in state and not run_amg else None
+    predictor, segmenter = get_predictor_and_segmenter(
+        model_type=model_type, checkpoint=checkpoint_path, device=device, amg=run_amg, is_tiled=False,
     )
 
     for image_path in tqdm(image_paths, desc=f"Run {experiment_name} in {ndim}d"):
