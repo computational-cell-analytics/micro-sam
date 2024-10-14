@@ -62,9 +62,7 @@ def run_evaluation(
     msas, sa50s, sa75s = _run_evaluation(gt_paths, prediction_paths, verbose=verbose)
 
     results = pd.DataFrame.from_dict({
-        "msa": [np.mean(msas)],
-        "sa50": [np.mean(sa50s)],
-        "sa75": [np.mean(sa75s)],
+        "mSA": [np.mean(msas)], "SA50": [np.mean(sa50s)], "SA75": [np.mean(sa75s)],
     })
 
     if save_path is not None:
@@ -110,7 +108,7 @@ def run_evaluation_for_iterative_prompting(
 
     # If the results have been computed already, it's not needed to re-run it again.
     if os.path.exists(csv_path):
-        print(pd.read_csv(csv_path))
+        print(f"Results with iterative prompting for interactive segmentation are already stored at '{csv_path}'.")
         return
 
     list_of_results = []
@@ -120,7 +118,6 @@ def run_evaluation_for_iterative_prompting(
         pred_paths = sorted(glob(os.path.join(pred_folder, "*")))
         result = run_evaluation(gt_paths=gt_paths, prediction_paths=pred_paths, save_path=None)
         list_of_results.append(result)
-        print(result)
 
     res_df = pd.concat(list_of_results, ignore_index=True)
     res_df.to_csv(csv_path)
