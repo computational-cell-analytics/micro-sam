@@ -7,7 +7,6 @@ import numpy as np
 import imageio.v3 as imageio
 from skimage.measure import label as connected_components
 
-import torch_em
 from torch_em.transform.raw import normalize
 
 import micro_sam.training as sam_training
@@ -41,24 +40,19 @@ def _get_data_loaders(path):
     train_image_paths, train_target_paths = image_paths[:100], target_paths[:100]
     val_image_paths, val_target_paths = image_paths[100:], target_paths[100:]
 
-    # Get the dataset.
-    label_transform = torch_em.transform.label.PerObjectDistanceTransform(
-        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=25,
-    )
+    # Get the dataloaders
     ds_kwargs = {
-        "is_seg_dataset": False, "patch_shape": (1024, 1024), "with_channels": True,
-        "raw_transform": _normalize_images, "label_transform": label_transform,
+        "raw_key": None, "label_key": None, "is_seg_dataset": False, "patch_shape": (512, 512),
+        "with_channels": True, "raw_transform": _normalize_images, "with_segmentation_decoder": True,
     }
-    train_ds = torch_em.default_segmentation_dataset(
-        raw_paths=train_image_paths, raw_key=None, label_paths=train_target_paths, label_key=None, **ds_kwargs
-    )
-    val_ds = torch_em.default_segmentation_dataset(
-        raw_paths=val_image_paths, raw_key=None, label_paths=val_target_paths, label_key=None, **ds_kwargs
-    )
-
-    # Get the dataloader
     loader_kwargs = {"batch_size": 1, "shuffle": True, "num_workers": 16}
-    return torch_em.get_data_loader(train_ds, **loader_kwargs), torch_em.get_data_loader(val_ds, **loader_kwargs)
+    train_loader = sam_training.default_sam_loader(
+        raw_paths=train_image_paths, label_paths=train_target_paths, **ds_kwargs, **loader_kwargs
+    )
+    val_loader = sam_training.default_sam_loader(
+        raw_paths=val_image_paths, label_paths=val_target_paths, **ds_kwargs, **loader_kwargs
+    )
+    return train_loader, val_loader
 
 
 def main():
@@ -68,7 +62,7 @@ def main():
     #     - ...
     # - models (...)
     # img<ID>.tif
-    path = "/media/anwai/ANWAI/data/image_sc/stellate_cells"
+    path = "/scratch/share/cidas/cca/data/image_sc/stellate_cells"
 
     train_loader, val_loader = _get_data_loaders(path)
 
@@ -83,8 +77,6 @@ def main():
         train_loader=train_loader,
         val_loader=val_loader,
     )
-
-    breakpoint()
 
 
 if __name__ == "__main__":
