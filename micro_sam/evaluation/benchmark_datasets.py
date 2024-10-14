@@ -136,12 +136,14 @@ def _download_benchmark_datasets(path, dataset_choice):
         "lucchi": lambda: datasets.lucchi.get_lucchi_data(
             path=os.path.join(path, "lucchi"), split="test", download=True,
         ),
-        # TODO: split mitolab to all 3d vs TEM (i.e. 2d)
-        "mitolab": lambda: [
+        "mitolab_3d": lambda: [
             datasets.cem.get_benchmark_data(
                 path=os.path.join(path, "mitolab"), dataset_id=dataset_id, download=True,
-            ) for dataset_id in datasets.cem.BENCHMARK_DATASETS.keys()
+            ) for dataset_id in range(1, 7)
         ],
+        "mitolab_tem": lambda: datasets.cem.get_benchmark_data(
+            path=os.path.join(path, "mitolab"), dataset_id=7, download=True
+        ),
         "nuc_mm_mouse": lambda: datasets.nuc_mm.get_nuc_mm_data(
             path=os.path.join(path, "nuc_mm"), sample="mouse", download=True,
         ),
@@ -203,7 +205,6 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
         "livecell": lambda: datasets.livecell.get_livecell_paths(path=path, split="test"),
         "deepbacs": lambda: datasets.deepbacs.get_deepbacs_paths(path=path, split="test", bac_type="mixed"),
         "tissuenet": lambda: datasets.tissuenet.get_tissuenet_paths(path=path, split="test"),
-        # TODO: check neurips cellseg split convention.
         "neurips_cellseg": lambda: datasets.neurips_cell_seg.get_neurips_cellseg_paths(root=path, split="test"),
         "plantseg_root": lambda: datasets.plantseg.get_plantseg_paths(path=path, name="root", split="test"),
         "plantseg_ovules": lambda: datasets.plantseg.get_plantseg_paths(path=path, name="ovules", split="test"),
@@ -216,27 +217,29 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
         "omnipose": lambda: datasets.omnipose.get_omnipose_paths(path=path, split="test"),
         "gonuclear": lambda: datasets.gonuclear.get_gonuclear_paths(path-path),
         "mouse_embryo": lambda: datasets.mouse_embryo.get_mouse_embryo_paths(path=path, name="nuclei", split="val"),
-        "embedseg_data": lambda: datasets.embedseg_data.get_embedseg_paths(path=path, name=..., split="test"),  # TODO
+        "embedseg_data": lambda: datasets.embedseg_data.get_embedseg_paths(
+            path=path, name=list(datasets.embedseg_data.URLS.keys())[0], split="test"
+        ),
         "cellseg_3d": lambda: datasets.cellseg_3d.get_cellseg_3d_paths(path=path),
         "dic_hepg2": lambda: datasets.dic_hepg2.get_dic_hepg2_paths(path=path, split="test"),
+
         # Electron Microscopy datasets
         "mitoem_rat": lambda: datasets.mitoem.get_mitoem_paths(path=path, splits="test", samples="rat"),
         "mitem_human": lambda: datasets.mitoem.get_mitoem_paths(path=path, splits="test", samples="human"),
-        "platynereis_nuclei": lambda: datasets.platynereis.get_platynereis_paths(
-            path=path, sample_ids=None, name="nuclei", file_template=...,  # TODO
-        ),
-        "platynereis_cilia": lambda: datasets.platynereis.get_platynereis_paths(
-            path=path, sample_ids=None, name="cilia", file_template=...,  # TODO
-        ),
+        "platynereis_nuclei": lambda: datasets.platynereis.get_platynereis_paths(path, sample_ids=None, name="nuclei"),
+        "platynereis_cilia": lambda: datasets.platynereis.get_platynereis_paths(path, sample_ids=None, name="cilia"),
         "lucchi": lambda: datasets.lucchi.get_lucchi_paths(path=path, split="test"),
-        # TODO: split mitolab all
-        "mitolab": lambda: datasets.cem.get_benchmark_paths(path=path, dataset_id=...),
+        "mitolab_3d": lambda: (
+            [rpath for i in range(1, 7) for rpath in datasets.cem.get_benchmark_paths(path=path, dataset_id=i)[0]],
+            [lpath for i in range(1, 7) for lpath in datasets.cem.get_benchmark_paths(path=path, dataset_id=i)[1]]
+        ),
+        "mitolab_tem": lambda: datasets.cem.get_benchmark_paths(path=path, dataset_id=7),
         "nuc_mm_mouse": lambda: datasets.nuc_mm.get_nuc_mm_paths(path=path, sample="mouse", split="val"),
         "nuc_mm_zebrafish": lambda: datasets.nuc_mm.get_nuc_mm_paths(path=path, sample="zebrafish", split="val"),
         "uro_cell": lambda: datasets.uro_cell.get_uro_cell_paths(path=path, target="mito"),
         "sponge_em": lambda: datasets.sponge_em.get_sponge_em_paths(path=path, sample_ids=None),
         "vnc": lambda: datasets.vnc.get_vnc_mito_paths(path=path),
-        "asem_mito": lambda: datasets.asem.get_asem_paths(path=path, volume_ids=...)  # TODO
+        "asem_mito": lambda: datasets.asem.get_asem_paths(path=path, volume_ids=datasets.asem.ORGANELLES["mito"])
     }
 
     if ndim == 2:
