@@ -389,7 +389,7 @@ def default_sam_dataset(
     is_train: bool = True,
     min_size: int = 25,
     max_sampling_attempts: Optional[int] = None,
-    is_seg_dataset: bool = True,
+    is_seg_dataset: Optional[bool] = None,
     **kwargs,
 ) -> Dataset:
     """Create a PyTorch Dataset for training a SAM model.
