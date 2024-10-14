@@ -191,12 +191,8 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
         center_coordinates = [None] * len(segmentation) if center_coordinates is None else center_coordinates
         for object_mask, bbox_coords, center_coords in zip(segmentation, bbox_coordinates, center_coordinates):
             coord_list, label_list = [], []
-            coord_list, label_list = self._sample_positive_points(
-                object_mask[0], center_coords, coord_list, label_list
-            )
-            coord_list, label_list = self._sample_negative_points(
-                object_mask[0], bbox_coords, coord_list, label_list
-            )
+            coord_list, label_list = self._sample_positive_points(object_mask[0], center_coords, coord_list, label_list)
+            coord_list, label_list = self._sample_negative_points(object_mask[0], bbox_coords, coord_list, label_list)
             coord_list, label_list = self._ensure_num_points(object_mask[0], coord_list, label_list)
 
             all_coords.append(coord_list)

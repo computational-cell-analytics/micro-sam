@@ -66,89 +66,92 @@ class TestAutomaticSegmentation(unittest.TestCase):
             torch.mps.empty_cache()
 
     def test_automatic_mask_generator_2d(self):
-        from micro_sam.automatic_segmentation import automatic_instance_segmentation
+        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         mask, image = self.mask, self.image
+        predictor, segmenter = get_predictor_and_segmenter(
+            model_type=self.model_type, amg=True, is_tiled=False, amg_kwargs={"points_per_side": 4}
+        )
         instances = automatic_instance_segmentation(
-            input_path=image, model_type=self.model_type, ndim=2, use_amg=True,
-            amg_kwargs={"points_per_side": 4}
+            predictor=predictor, segmenter=segmenter, input_path=image, ndim=2,
         )
         self.assertEqual(mask.shape, instances.shape)
 
     def test_tiled_automatic_mask_generator_2d(self):
-        from micro_sam.automatic_segmentation import automatic_instance_segmentation
+        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         mask, image = self.large_mask, self.large_image
+        predictor, segmenter = get_predictor_and_segmenter(
+            model_type=self.model_type, amg=True, is_tiled=True, amg_kwargs={"points_per_side": 4}
+        )
         instances = automatic_instance_segmentation(
-            input_path=image,
-            model_type=self.model_type,
-            ndim=2,
-            tile_shape=self.tile_shape,
-            halo=self.halo,
-            use_amg=True,
-            amg_kwargs={"points_per_side": 4}
+            predictor=predictor, segmenter=segmenter, input_path=image,
+            ndim=2, tile_shape=self.tile_shape, halo=self.halo,
         )
         self.assertEqual(mask.shape, instances.shape)
 
     def test_instance_segmentation_with_decoder_2d(self):
-        from micro_sam.automatic_segmentation import automatic_instance_segmentation
+        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         mask, image = self.mask, self.image
+        predictor, segmenter = get_predictor_and_segmenter(model_type=self.model_type, amg=False, is_tiled=False)
         instances = automatic_instance_segmentation(
-            input_path=image, model_type=self.model_type_ais, ndim=2
+            predictor=predictor, segmenter=segmenter, input_path=image, ndim=2,
         )
         self.assertEqual(mask.shape, instances.shape)
 
     def test_tiled_instance_segmentation_with_decoder_2d(self):
-        from micro_sam.automatic_segmentation import automatic_instance_segmentation
+        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         mask, image = self.large_mask, self.large_image
+        predictor, segmenter = get_predictor_and_segmenter(model_type=self.model_type, amg=False, is_tiled=True)
         instances = automatic_instance_segmentation(
-            input_path=image, model_type=self.model_type_ais,
+            predictor=predictor, segmenter=segmenter, input_path=image,
             ndim=2, tile_shape=self.tile_shape, halo=self.halo,
         )
         self.assertEqual(mask.shape, instances.shape)
 
     @unittest.skip("Skipping long running tests by default.")
     def test_automatic_mask_generator_3d(self):
-        from micro_sam.automatic_segmentation import automatic_instance_segmentation
+        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         labels, volume = self.labels, self.volume
+        predictor, segmenter = get_predictor_and_segmenter(model_type=self.model_type, amg=True, is_tiled=False)
         instances = automatic_instance_segmentation(
-            input_path=volume, model_type=self.model_type, ndim=3, use_amg=True
+            predictor=predictor, segmenter=segmenter, input_path=volume, ndim=3,
         )
         self.assertEqual(labels.shape, instances.shape)
 
     @unittest.skip("Skipping long running tests by default.")
     def test_tiled_automatic_mask_generator_3d(self):
-        from micro_sam.automatic_segmentation import automatic_instance_segmentation
+        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         labels, volume = self.large_labels, self.large_volume
+        predictor, segmenter = get_predictor_and_segmenter(model_type=self.model_type, amg=True, is_tiled=True)
         instances = automatic_instance_segmentation(
-            input_path=volume,
-            model_type=self.model_type,
-            ndim=3,
-            tile_shape=self.tile_shape,
-            halo=self.halo,
-            use_amg=True,
+            predictor=predictor, segmenter=segmenter, input_path=volume,
+            ndim=3, tile_shape=self.tile_shape, halo=self.halo,
         )
         self.assertEqual(labels.shape, instances.shape)
 
     def test_instance_segmentation_with_decoder_3d(self):
-        from micro_sam.automatic_segmentation import automatic_instance_segmentation
+        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         labels, volume = self.labels, self.volume
+        predictor, segmenter = get_predictor_and_segmenter(model_type=self.model_type, amg=False, is_tiled=False)
         instances = automatic_instance_segmentation(
-            input_path=volume, model_type=self.model_type_ais, ndim=3,
+            predictor=predictor, segmenter=segmenter, input_path=volume, ndim=3,
         )
         self.assertEqual(labels.shape, instances.shape)
 
     def test_tiled_instance_segmentation_with_decoder_3d(self):
-        from micro_sam.automatic_segmentation import automatic_instance_segmentation
+        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         labels, volume = self.large_labels, self.large_volume
+        predictor, segmenter = get_predictor_and_segmenter(model_type=self.model_type, amg=False, is_tiled=True)
         instances = automatic_instance_segmentation(
-            input_path=volume, model_type=self.model_type_ais, ndim=3, tile_shape=self.tile_shape, halo=self.halo,
+            predictor=predictor, segmenter=segmenter, input_path=volume,
+            ndim=3, tile_shape=self.tile_shape, halo=self.halo,
         )
         self.assertEqual(labels.shape, instances.shape)
 
