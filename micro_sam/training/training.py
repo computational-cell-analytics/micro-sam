@@ -240,7 +240,7 @@ def train_sam(
         # peft: ssf
         # The number of trainable parameters for the provided model is 4.267312 (~4.27M)
 
-        breakpoint()
+        # breakpoint()
 
         # This class creates all the training data for a batch (inputs, prompts and labels).
         convert_inputs = ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
