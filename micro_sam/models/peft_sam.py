@@ -231,7 +231,7 @@ class PEFT_Sam(nn.Module):
         self,
         model: Sam,
         rank: int,
-        peft_module: nn.Module = SSFSurgery,
+        peft_module: nn.Module = LoRASurgery,
         attention_layers_to_update: Union[List[int]] = None,
         **module_kwargs
     ):
@@ -255,11 +255,7 @@ class PEFT_Sam(nn.Module):
 
         # Add scale and shift parameters to the patch embedding layers.
         if issubclass(self.peft_module, SSFSurgery):
-            self.peft_blocks.append(
-                self.peft_module(
-                    rank=rank, block=model.image_encoder.patch_embed
-                )
-            )
+            self.peft_blocks.append(self.peft_module(rank=rank, block=model.image_encoder.patch_embed))
 
         for t_layer_i, blk in enumerate(model.image_encoder.blocks):
             # If we only want specific layers with PEFT instead of all
