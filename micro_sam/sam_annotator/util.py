@@ -118,6 +118,8 @@ def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:
     viewer.layers["point_prompts"].data = []
     viewer.layers["point_prompts"].refresh()
     if "prompts" in viewer.layers:
+        # Select all prompts and then remove them.
+        viewer.layers["prompts"].selected_data = set(range(len(viewer.layers["prompts"].data)))
         viewer.layers["prompts"].remove_selected()
         viewer.layers["prompts"].refresh()
     if not clear_segmentations:

@@ -164,7 +164,7 @@ def _precompute_state_for_file(
     # Precompute the image embeddings.
     output_path = Path(output_path).with_suffix(".zarr")
     embeddings = util.precompute_image_embeddings(
-        predictor, image_data, output_path, ndim=ndim, tile_shape=tile_shape, halo=halo,
+        predictor, image_data, output_path, ndim=ndim, tile_shape=tile_shape, halo=halo, verbose=False
     )
 
     # Precompute the state for automatic instance segmnetaiton (AMG or AIS).
