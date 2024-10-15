@@ -229,19 +229,6 @@ def train_sam(
             **model_kwargs
         )
 
-        _count_parameters(model.parameters())
-
-        # full
-        # The number of trainable parameters for the provided model is 93.735472 (~93.74M)
-
-        # freeze image encoder
-        # The number of trainable parameters for the provided model is 4.06456 (~4.06M)
-
-        # peft: ssf
-        #
-
-        breakpoint()
-
         # This class creates all the training data for a batch (inputs, prompts and labels).
         convert_inputs = ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
 

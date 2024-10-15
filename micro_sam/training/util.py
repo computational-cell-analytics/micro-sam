@@ -87,10 +87,6 @@ def get_trainable_sam_model(
 
         sam = custom_models.peft_sam.PEFT_Sam(sam, **peft_kwargs).sam
 
-    for k, v in sam.named_parameters():
-        if k.startswith("image_encoder") and v.requires_grad:
-            print(k)
-
     # freeze components of the model if freeze was passed
     # ideally we would want to add components in such a way that:
     # - we would be able to freeze the choice of encoder/decoder blocks, yet be able to add components to the network
