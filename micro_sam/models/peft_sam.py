@@ -112,10 +112,10 @@ class ScaleShiftLayer(nn.Module):
         self.layer = layer
         self.scale = nn.Parameter(torch.normal(mean=1.0, std=0.2, size=(dim,)))
         self.shift = nn.Parameter(torch.normal(mean=0.0, std=0.2, size=(dim,)))
+        layer = self
 
     def forward(self, x):
         x = self.layer(x)
-
         assert self.scale.shape == self.shift.shape
         if x.shape[-1] == self.scale.shape[0]:
             return x * self.scale + self.shift
@@ -133,37 +133,25 @@ class SSFSurgery(nn.Module):
         block: The chosen attention blocks for implementing ssf.
         dim: The input dimensions determining the shape of scale and shift parameters.
     """
-    def __init__(self, rank: int, block: nn.Module, dim: Optional[int] = None):
+    def __init__(self, rank: int, block: nn.Module):
         super().__init__()
         self.block = block
 
         # If we get a transformer block (w. multiple sub-layers), we perform surgery on each layer.
         if hasattr(block, "attn"):  # the minimum assumption is to verify the attention layers.
-            self.scale_shift_layers = nn.ModuleList(self.add_scale_shift_layers_to_block(block))
-        else:  # This is an individual layer after which we apply scale and shift.
-            if dim is None:
-                raise ValueError("'dim' must be provided for the scale and shift parameters.")
-            self.scale_shift_layers = nn.ModuleList([self.create_scale_shift_layer(layer=block, dim=dim)])
+            block.attn.qkv = ScaleShiftLayer(block.attn.qkv, block.attn.qkv.in_features*3)
+            block.attn.proj = ScaleShiftLayer(block.attn.proj, block.attn.proj.in_features)
+            block.mlp.lin1 = ScaleShiftLayer(block.mlp.lin1, block.mlp.lin1.out_features)
+            block.mlp.lin2 = ScaleShiftLayer(block.mlp.lin2, block.mlp.lin2.out_features)
+            block.norm1 = ScaleShiftLayer(block.norm1, block.norm1.normalized_shape[0])
+            block.norm2 = ScaleShiftLayer(block.norm2, block.norm2.normalized_shape[0])
 
-    def add_scale_shift_layers_to_block(self, block):
-        peft_blocks = [
-            ScaleShiftLayer(block.attn.qkv, block.attn.qkv.in_features),
-            ScaleShiftLayer(block.attn.proj, block.attn.proj.in_features),
-            ScaleShiftLayer(block.mlp.lin1, block.mlp.lin1.in_features),
-            ScaleShiftLayer(block.mlp.lin2, block.mlp.lin2.in_features),
-            ScaleShiftLayer(block.norm1, block.norm1.normalized_shape[0]),
-            ScaleShiftLayer(block.norm2, block.norm2.normalized_shape[0]),
-        ]
-        return nn.ModuleList(peft_blocks)
-
-    def create_scale_shift_layer(self, layer, dim):
-        return ScaleShiftLayer(layer=layer, dim=dim)
+        # If we get the embedding block, add one ScaleShiftLayer
+        elif hasattr(block, "patch_embed"):
+            block.proj = ScaleShiftLayer(block.proj, block.proj.out_channels)
 
     def forward(self, x):
-        for layer in self.scale_shift_layers:
-            x = layer(x)
-
-        return self.block(x)
+        return x
 
 
 class SelectiveSurgery(nn.Module):
@@ -269,8 +257,7 @@ class PEFT_Sam(nn.Module):
         if issubclass(self.peft_module, SSFSurgery):
             self.peft_blocks.append(
                 self.peft_module(
-                    rank=rank, block=model.image_encoder.patch_embed.proj,
-                    dim=model.image_encoder.patch_embed.proj.out_channels
+                    rank=rank, block=model.image_encoder.patch_embed
                 )
             )
 

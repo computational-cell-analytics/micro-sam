@@ -238,7 +238,7 @@ def train_sam(
         # The number of trainable parameters for the provided model is 4.06456 (~4.06M)
 
         # peft: ssf
-        #
+        # The number of trainable parameters for the provided model is 4.267312 (~4.27M)
 
         breakpoint()
 
