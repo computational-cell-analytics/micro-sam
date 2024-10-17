@@ -63,7 +63,7 @@ def _get_dataset_paths(path, dataset_name, view=False):
             )
 
         paths = dataset_paths[dname]()
-        print(f"'{dataset_name}' is download at {path}.")
+        print(f"'{dname}' is download at {path}.")
 
         if view:
             import napari
