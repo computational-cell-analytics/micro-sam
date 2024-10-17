@@ -26,6 +26,12 @@ where, `DATA_DIRECTORY` is the filepath where the datasets will be downloaded, a
 
 - ...
 
+> platynereis/membrane/train_data_membrane_02.n5 (Platynereis Cells)
+
+> embedseg/Mouse-Skull-Nuclei-CBG/train/images/X1.tif (EmbedSeg)
+
+> CellPose: chosen 15 images.
+
 ### Step 3: Run the `micro-sam` Annotators
 
 - ...
