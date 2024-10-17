@@ -146,26 +146,29 @@ class AdaptFormer(nn.Module):
     """Adds AdaptFormer Module in place of the MLP Layers
 
     Args:
-        rank: The rank here refers to the size of the up and down projection layers
-        block: The chosen encoder block for implementing AdaptFormer
+        rank: The rank is not used in this class but kept here for consistency.
+        block: The chosen encoder block for implementing AdaptFormer.
         alpha: A parameters that scales the Adapter path. Can be either learnable or some fixed value.
+        dropout: The dropout rate for the dropout layer between down and up projection layer.
+        projection_size: The size of the projection layer.
     """
-    def __init__(self, rank: int, block: nn.Module, alpha: str = '0.1'):
+    def __init__(self, rank: int, block: nn.Module, alpha: str = '0.1', dropout: float = 0.0, projection_size: int = 64):
         super().__init__()
 
         self.mlp_proj = block.mlp
         self.n_embd = block.mlp.lin1.in_features
+        self.dropout = dropout
 
         if alpha == 'learnable_scalar':
             self.alpha = nn.Parameter(torch.ones(1))
         else:
             self.alpha = float(alpha)
 
-        self.rank = rank
+        self.projection_size = projection_size
 
-        self.down_proj = nn.Linear(self.n_embd, self.rank)
+        self.down_proj = nn.Linear(self.n_embd, self.projection_size)
         self.non_linear_func = nn.ReLU()
-        self.up_proj = nn.Linear(self.rank, self.n_embd)
+        self.up_proj = nn.Linear(self.projection_size, self.n_embd)
 
         block.mlp = self
 
@@ -180,7 +183,7 @@ class AdaptFormer(nn.Module):
 
         down = self.down_proj(x)
         down = self.non_linear_func(down)
-        # down = nn.functional.dropout(down, p=self.dropout, training=self.training)
+        down = nn.functional.dropout(down, p=self.dropout, training=self.training)
         up = self.up_proj(down)
 
         up = up * self.alpha
