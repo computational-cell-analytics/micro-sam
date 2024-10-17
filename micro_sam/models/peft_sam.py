@@ -1,6 +1,7 @@
 import math
 from typing import List, Union, Optional
 
+import torch
 import torch.nn as nn
 
 from segment_anything.modeling import Sam
@@ -141,6 +142,54 @@ class SelectiveSurgery(nn.Module):
         return x
 
 
+class AdaptFormer(nn.Module):
+    """Adds AdaptFormer Module in place of the MLP Layers
+
+    Args:
+        rank: The rank here refers to the size of the up and down projection layers
+        block: The chosen encoder block for implementing AdaptFormer
+        alpha: A parameters that scales the Adapter path. Can be either learnable or some fixed value.
+    """
+    def __init__(self, rank: int, block: nn.Module, alpha: str = '0.1'):
+        super().__init__()
+
+        self.mlp_proj = block.mlp
+        self.n_embd = block.mlp.lin1.in_features
+
+        if alpha == 'learnable_scalar':
+            self.alpha = nn.Parameter(torch.ones(1))
+        else:
+            self.alpha = float(alpha)
+
+        self.rank = rank
+
+        self.down_proj = nn.Linear(self.n_embd, self.rank)
+        self.non_linear_func = nn.ReLU()
+        self.up_proj = nn.Linear(self.rank, self.n_embd)
+
+        block.mlp = self
+
+        nn.init.kaiming_uniform_(self.down_proj.weight, a=math.sqrt(5))
+        nn.init.zeros_(self.up_proj.weight)
+        nn.init.zeros_(self.down_proj.bias)
+        nn.init.zeros_(self.up_proj.bias)
+
+    def forward(self, x):
+        residual = x
+        mlp_output = self.mlp_proj(x)
+
+        down = self.down_proj(x)
+        down = self.non_linear_func(down)
+        # down = nn.functional.dropout(down, p=self.dropout, training=self.training)
+        up = self.up_proj(down)
+
+        up = up * self.alpha
+
+        output = up + residual + mlp_output
+
+        return output
+
+
 class AttentionSurgery(SelectiveSurgery):
     """Child class for allowing gradient updates for parameters in attention layers.
     """
@@ -189,7 +238,8 @@ class PEFT_Sam(nn.Module):
         super().__init__()
 
         assert rank > 0
-        assert issubclass(peft_module, Union[LoRASurgery, FacTSurgery, SelectiveSurgery]), "Invalid PEFT module."
+        assert issubclass(peft_module, Union[LoRASurgery, FacTSurgery, SelectiveSurgery, AdaptFormer]), (
+            "Invalid PEFT module")
 
         if attention_layers_to_update:
             self.peft_layers = attention_layers_to_update
