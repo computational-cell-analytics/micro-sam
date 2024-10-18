@@ -16,9 +16,9 @@ def get_predictor_and_segmenter(
     model_type: str,
     checkpoint: Optional[Union[os.PathLike, str]] = None,
     device: str = None,
-    amg: bool = False,
+    amg: Optional[bool] = None,
     is_tiled: bool = False,
-    amg_kwargs: Dict = {}
+    **kwargs,
 ) -> Tuple[util.SamPredictor, Union[AMGBase, InstanceSegmentationWithDecoder]]:
     """Get the Segment Anything model and class for automatic instance segmentation.
 
@@ -27,7 +27,10 @@ def get_predictor_and_segmenter(
         checkpoint: The filepath to the stored model checkpoints.
         device: The torch device.
         amg: Whether to perform automatic segmentation in AMG mode.
+            Otherwise AIS will be used, which requires a special segmentation decoder.
+            If not specified AIS will be used if it is available and otherwise AMG will be used.
         is_tiled: Whether to return segmenter for performing segmentation in tiling window style.
+        kwargs: Keyword arguments for the automatic instance segmentation class.
 
     Returns:
         The Segment Anything model.
@@ -41,20 +44,22 @@ def get_predictor_and_segmenter(
         model_type=model_type, device=device, checkpoint_path=checkpoint, return_state=True,
     )
 
-    # Get the segmenter for automatic segmentation.
-    assert isinstance(amg_kwargs, Dict), "Please ensure 'amg_kwargs' gets arguments in a dictionary."
+    if amg is None:
+        amg = "decoder_state" not in state
+    if amg:
+        decoder = None
+    else:
+        if "decoder_state" not in state:
+            raise RuntimeError("You have passed amg=False, but your model does not contain a segmentation decoder.")
+        decoder_state = state["decoder_state"]
+        decoder = get_decoder(image_encoder=predictor.model.image_encoder, decoder_state=decoder_state, device=device)
 
     segmenter = get_amg(
         predictor=predictor,
         is_tiled=is_tiled,
-        decoder=get_decoder(
-            image_encoder=predictor.model.image_encoder,
-            decoder_state=state["decoder_state"],
-            device=device
-        ) if "decoder_state" in state and not amg else None,
-        **amg_kwargs
+        decoder=decoder,
+        **kwargs
     )
-
     return predictor, segmenter
 
 
