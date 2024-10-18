@@ -246,6 +246,11 @@ class ConvertToSemanticSamInputs:
 #
 
 
+def normalize_to_8bit(raw):
+    raw = normalize(raw) * 255
+    return raw
+
+
 class ResizeRawTrafo:
     def __init__(self, desired_shape, do_rescaling=False, padding="constant"):
         self.desired_shape = desired_shape
