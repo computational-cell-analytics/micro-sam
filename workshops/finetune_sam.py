@@ -9,7 +9,7 @@ The functionalities shown here should work for your (microscopy) images too.
 """
 
 import os
-from typing import Union, Tuple, Literal, List
+from typing import Union, Tuple, Literal, Optional, List
 
 import imageio.v3 as imageio
 from matplotlib import pyplot as plt
@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader
 from torch_em.util.debug import check_loader
 from torch_em.util.util import get_random_colors
 
+from micro_sam import util
 import micro_sam.training as sam_training
 from micro_sam.training.util import normalize_to_8bit
 from micro_sam.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
@@ -179,13 +180,25 @@ def get_dataloaders(
 def run_finetuning(
     train_loader: DataLoader,
     val_loader: DataLoader,
-    save_root: Union[os.PathLike, str],
+    save_root: Optional[Union[os.PathLike, str]],
     train_instance_segmentation: bool,
     device: Union[torch.device, str],
     model_type: str,
     overwrite: bool,
 ) -> str:
-    """
+    """Run finetuning for the Segment Anything model on microscopy images.
+
+    Args:
+        train_loader: The PyTorch dataloader used for training.
+        val_loader: The PyTorch dataloader used for validation.
+        save_root: The filepath to the folder where the model checkpoints and tensorboard logs are stored.
+        train_instance_segmentation: Whether to finetune SAM with additional instance segmentation decoder.
+        device: The torch device.
+        model_type: The choice of Segment Anything model (connotated by the size of image encoder).
+        overwrite: Whether to overwrite the already finetuned model checkpoints.
+
+    Returns:
+        Filepath where the (best) model checkpoint is stored.
     """
     # All hyperparameters for training.
     n_objects_per_batch = 5  # the number of objects per batch that will be sampled
@@ -223,12 +236,15 @@ def run_finetuning(
 
 
 def run_instance_segmentation_with_decoder(
-    test_image_paths: List[str],
-    model_type: str,
-    checkpoint: Union[os.PathLike, str],
-    device: Union[torch.device, str],
+    test_image_paths: List[str], model_type: str, checkpoint: Union[os.PathLike, str], device: Union[torch.device, str],
 ):
-    """
+    """Run automatic instance segmentation (AIS).
+
+    Args:
+        test_image_paths: List of filepaths for the test image data.
+        model_type: The choice of Segment Anything model (connotated by the size of image encoder).
+        checkpoint: Filepath to the finetuned model checkpoints.
+        device: The torch device used for inference.
     """
     assert os.path.exists(checkpoint), "Please train the model first to run inference on the finetuned model."
 
@@ -277,9 +293,12 @@ def main():
     parser.add_argument(
         "--overwrite", action="store_true", help="Whether to overwrite the already finetuned model checkpoints."
     )
+    parser.add_argument(
+        "--device", type=str, default=None, help="The choice of device to run training and inference."
+    )
     args = parser.parse_args()
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"  # the device / GPU used for training and inference.
+    device = util.get_device(args.device)  # the device / GPU used for training and inference.
 
     # The model_type determines which base model is used to initialize the weights that are finetuned.
     # We use vit_b here because it can be trained faster. Note that vit_h usually yields higher quality results.
