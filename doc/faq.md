@@ -92,11 +92,11 @@ The Segment Anything model expects inputs of shape 1024 x 1024 pixels. Inputs th
 
 ### 5. Can I use `micro_sam` on a CPU?
 Most other processing steps are very fast even on a CPU, the automatic segmentation step for the default Segment Anything models (typically called as the "Segment Anything" feature or AMG - Automatic Mask Generation) however takes several minutes without a GPU (depending on the image size). For large volumes and time-series, segmenting an object interactively in 3d / tracking across time can take a couple of seconds with a CPU (it is very fast with a GPU).
-> HINT: All the  videos have been created on CPU resources.
+> HINT: All the tutorial videos have been created on CPU resources.
 
 
 ### 6. I generated some segmentations from another tool, can I use it as a starting point in `micro_sam`?
-You can save and load the results from the `committed_objects` layer to correct segmentations you obtained from another tool (e.g. CellPose) or save intermediate annotation results. The results can be saved via `File` -> `Save Selected Layers (s) ...` in the napari menu-bar on top (see the  videos for details). They can be loaded again by specifying the corresponding location via the `segmentation_result` parameter in the CLI or python script (2d and 3d segmentation).
+You can save and load the results from the `committed_objects` layer to correct segmentations you obtained from another tool (e.g. CellPose) or save intermediate annotation results. The results can be saved via `File` -> `Save Selected Layers (s) ...` in the napari menu-bar on top (see the tutorial videos for details). They can be loaded again by specifying the corresponding location via the `segmentation_result` parameter in the CLI or python script (2d and 3d segmentation).
 If you are using an annotation tool you can load the segmentation you want to edit as segmentation layer and rename it to `committed_objects`.
 
 
@@ -115,7 +115,7 @@ We want to remove these errors, so we would be very grateful if you can [open an
 
 
 ### 10. The objects are not segmented in my 3d data using the interactive annotation tool.
-The first thing to check is: a) make sure you are using the latest version of `micro_sam` (pull the latest commit from master if your installation is from source, or update the installation from conda / mamba using `mamba update micro_sam`), and b) try out the steps from the [3d annotation  video](https://youtu.be/nqpyNQSyu74) to verify if this shows the same behaviour (or the same errors) as you faced. For 3d images, it's important to pass the inputs in the python axis convention, ZYX.
+The first thing to check is: a) make sure you are using the latest version of `micro_sam` (pull the latest commit from master if your installation is from source, or update the installation from conda / mamba using `mamba update micro_sam`), and b) try out the steps from the [3d annotation tutorial video](https://youtu.be/nqpyNQSyu74) to verify if this shows the same behaviour (or the same errors) as you faced. For 3d images, it's important to pass the inputs in the python axis convention, ZYX.
 c) try using a different model and change the projection mode for 3d segmentation. This is also explained in the video.
 
 
