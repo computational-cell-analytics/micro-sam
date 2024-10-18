@@ -48,10 +48,9 @@ def _get_hpa_data_paths(path, download):
         data_dir = os.path.join(path, split)
         _download_sample_data(path, data_dir, download, url, checksum)
 
-    breakpoint()
-
-    raw_paths = natsorted(glob(os.path.join(data_dir, "*")))
-    label_paths = natsorted(glob(os.path.join(data_dir, "*")))
+    # NOTE: For visualization, we choose the train set.
+    raw_paths = natsorted(glob(os.path.join(data_dir, "train", "images", "*.tif")))
+    label_paths = natsorted(glob(os.path.join(data_dir, "train", "labels", "*.tif")))
 
     return raw_paths, label_paths
 

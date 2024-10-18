@@ -22,7 +22,7 @@ $ python download_datasets.py -i <DATA_DIRECTORY> -d <DATASET_NAME>
 ```
 where, `DATA_DIRECTORY` is the filepath to the directory where the datasets will be downloaded, and `DATASET_NAME` is the name of the dataset (run `python download_datasets.py -h` in the terminal for more details).
 
-> NOTE:
+> NOTE: We have chosen a) subset of the CellPose `cyto` dataset, b) one volume from the EmbedSeg `Mouse-Skull-Nuclei-CBG` dataset from the train split (namely, `X1.tif`), c) one volume from the Platynereis `Membrane` dataset from the train split (namely, `train_data_membrane_02.n5`) and d) the entire `HPA` dataset for the following tasks in `micro-sam`.
 
 ### Step 2: Download the Precomputed Embeddings
 
@@ -55,9 +55,15 @@ $ micro_sam.precompute_embeddings -i data/platynereis/membrane/train_data_membra
                                   -e embeddings/platynereis/vit_b/platynereis_train_data_membrane_02  # Filepath where computed embeddings will be cached.
 ```
 
-### Step 3: Run the `micro-sam` Annotators
+### Step 3: Run the `micro-sam` Annotators (WIP)
 
-Run the `micro-sam` annotators with the following scripts: (TODO recommend GUI)
+Run the `micro-sam` annotators with the following scripts:
+
+We recommend using the napari GUI for the interactive annotation. You can use the widget to specify all the essential parameters (eg. the choice of model, the filepath to the precomputed embeddings, etc).
+
+TODO: add more details here.
+
+There is another option to use `micro-sam`'s CLI to start our annotator tools.
 
 #### 2D Annotator (Cell Segmentation in Light Microscopy):
 
@@ -91,6 +97,6 @@ $ micro_sam.image_series_annotator -i ...
                                    -m vit_b  # You can provide name for any model of your choice (supported by 'micro-sam') (eg. 'vit_b_lm')
 ```
 
-### Step 4: Finetune Segment Anything on Microscopy Images
+### Step 4: Finetune Segment Anything on Microscopy Images (WIP)
 
 - We provide a notebook `finetune_sam.ipynb` / `finetune_sam.py` for finetuning Segment Anything Model for cell segmentation in confocal microscopy images.
