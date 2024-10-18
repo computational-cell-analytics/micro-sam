@@ -7,9 +7,10 @@ from typing import List, Optional, Union, Tuple
 
 import numpy as np
 import imageio.v3 as imageio
-import napari
+
 import torch
 
+import napari
 from magicgui import magicgui
 from qtpy import QtWidgets
 
@@ -79,68 +80,12 @@ def _get_input_shape(image, is_volumetric=False):
     return image_shape
 
 
-def image_series_annotator(
-    images: Union[List[Union[os.PathLike, str]], List[np.ndarray]],
-    output_folder: str,
-    model_type: str = util._DEFAULT_MODEL,
-    embedding_path: Optional[str] = None,
-    tile_shape: Optional[Tuple[int, int]] = None,
-    halo: Optional[Tuple[int, int]] = None,
-    viewer: Optional["napari.viewer.Viewer"] = None,
-    return_viewer: bool = False,
-    precompute_amg_state: bool = False,
-    checkpoint_path: Optional[str] = None,
-    is_volumetric: bool = False,
-    device: Optional[Union[str, torch.device]] = None,
-    prefer_decoder: bool = True,
-) -> Optional["napari.viewer.Viewer"]:
-    """Run the annotation tool for a series of images (supported for both 2d and 3d images).
-
-    Args:
-        images: List of the file paths or list of (set of) slices for the images to be annotated.
-        output_folder: The folder where the segmentation results are saved.
-        model_type: The Segment Anything model to use. For details on the available models check out
-            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
-        embedding_path: Filepath where to save the embeddings.
-        tile_shape: Shape of tiles for tiled embedding prediction.
-            If `None` then the whole image is passed to Segment Anything.
-        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
-        viewer: The viewer to which the SegmentAnything functionality should be added.
-            This enables using a pre-initialized viewer.
-        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
-        precompute_amg_state: Whether to precompute the state for automatic mask generation.
-            This will take more time when precomputing embeddings, but will then make
-            automatic mask generation much faster.
-        checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
-        is_volumetric: Whether to use the 3d annotator.
-        prefer_decoder: Whether to use decoder based instance segmentation if
-            the model used has an additional decoder for instance segmentation.
-
-    Returns:
-        The napari viewer, only returned if `return_viewer=True`.
-    """
-
-    os.makedirs(output_folder, exist_ok=True)
-    next_image_id = 0
-
-    # Precompute embeddings and amg state (if corresponding options set).
-    predictor, decoder, embedding_paths = _precompute(
-        images, model_type,
-        embedding_path, tile_shape, halo, precompute_amg_state,
-        checkpoint_path=checkpoint_path, device=device,
-        ndim=3 if is_volumetric else 2, prefer_decoder=prefer_decoder,
-    )
-
-    # Load the first image and intialize the viewer, annotator and state.
-    if isinstance(images[next_image_id], np.ndarray):
-        image = images[next_image_id]
-        have_inputs_as_arrays = True
-    else:
-        image = imageio.imread(images[next_image_id])
-        have_inputs_as_arrays = False
-
-    image_embedding_path = embedding_paths[next_image_id]
-
+def _initialize_annotator(
+    viewer, image, image_embedding_path,
+    model_type, halo, tile_shape, predictor, decoder, is_volumetric,
+    precompute_amg_state, checkpoint_path, device,
+    embedding_path,
+):
     if viewer is None:
         viewer = napari.Viewer()
     viewer.add_image(image, name="image")
@@ -172,16 +117,104 @@ def image_series_annotator(
         save_path=embedding_path, checkpoint_path=checkpoint_path,
         device=device, tile_shape=tile_shape, halo=halo
     )
+    return viewer, annotator
 
-    def _save_segmentation(image_path, current_idx, segmentation):
+
+def image_series_annotator(
+    images: Union[List[Union[os.PathLike, str]], List[np.ndarray]],
+    output_folder: str,
+    model_type: str = util._DEFAULT_MODEL,
+    embedding_path: Optional[str] = None,
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
+    viewer: Optional["napari.viewer.Viewer"] = None,
+    return_viewer: bool = False,
+    precompute_amg_state: bool = False,
+    checkpoint_path: Optional[str] = None,
+    is_volumetric: bool = False,
+    device: Optional[Union[str, torch.device]] = None,
+    prefer_decoder: bool = True,
+    skip_segmented: bool = True,
+) -> Optional["napari.viewer.Viewer"]:
+    """Run the annotation tool for a series of images (supported for both 2d and 3d images).
+
+    Args:
+        images: List of the file paths or list of (set of) slices for the images to be annotated.
+        output_folder: The folder where the segmentation results are saved.
+        model_type: The Segment Anything model to use. For details on the available models check out
+            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
+        embedding_path: Filepath where to save the embeddings.
+        tile_shape: Shape of tiles for tiled embedding prediction.
+            If `None` then the whole image is passed to Segment Anything.
+        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
+        viewer: The viewer to which the SegmentAnything functionality should be added.
+            This enables using a pre-initialized viewer.
+        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
+        precompute_amg_state: Whether to precompute the state for automatic mask generation.
+            This will take more time when precomputing embeddings, but will then make
+            automatic mask generation much faster.
+        checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
+        is_volumetric: Whether to use the 3d annotator.
+        prefer_decoder: Whether to use decoder based instance segmentation if
+            the model used has an additional decoder for instance segmentation.
+        skip_segmented: Whether to skip images that were already segmented.
+
+    Returns:
+        The napari viewer, only returned if `return_viewer=True`.
+    """
+    end_msg = "You have annotated the last image. Do you wish to close napari?"
+    os.makedirs(output_folder, exist_ok=True)
+
+    # Precompute embeddings and amg state (if corresponding options set).
+    predictor, decoder, embedding_paths = _precompute(
+        images, model_type,
+        embedding_path, tile_shape, halo, precompute_amg_state,
+        checkpoint_path=checkpoint_path, device=device,
+        ndim=3 if is_volumetric else 2, prefer_decoder=prefer_decoder,
+    )
+
+    next_image_id = 0
+    have_inputs_as_arrays = isinstance(images[next_image_id], np.ndarray)
+
+    def _get_save_path(image_path, current_idx):
         if have_inputs_as_arrays:
             fname = f"seg_{current_idx:05}.tif"
         else:
             fname = os.path.basename(image_path)
             fname = os.path.splitext(fname)[0] + ".tif"
+        return os.path.join(output_folder, fname)
 
-        out_path = os.path.join(output_folder, fname)
-        imageio.imwrite(out_path, segmentation)
+    # Check which image to load next if we skip segmented images.
+    image_embedding_path = None
+    if skip_segmented:
+        while True:
+            if next_image_id == len(images):
+                print(end_msg)
+                return
+
+            save_path = _get_save_path(images[next_image_id], next_image_id)
+            if not os.path.exists(save_path):
+                print("The first image to annotate is image number", next_image_id)
+                image = images[next_image_id]
+                if not have_inputs_as_arrays:
+                    image = imageio.imread(image)
+                image_embedding_path = embedding_paths[next_image_id]
+                break
+
+            next_image_id += 1
+
+    # Initialize the viewer and annotator for this image.
+    state = AnnotatorState()
+    viewer, annotator = _initialize_annotator(
+        viewer, image, image_embedding_path,
+        model_type, halo, tile_shape, predictor, decoder, is_volumetric,
+        precompute_amg_state, checkpoint_path, device,
+        embedding_path,
+    )
+
+    def _save_segmentation(image_path, current_idx, segmentation):
+        save_path = _get_save_path(image_path, next_image_id)
+        imageio.imwrite(save_path, segmentation, compression="zlib")
 
     # Add functionality for going to the next image.
     @magicgui(call_button="Next Image [N]")
@@ -202,14 +235,20 @@ def image_series_annotator(
         # Clear the segmentation already to avoid lagging removal.
         viewer.layers["committed_objects"].data = np.zeros_like(viewer.layers["committed_objects"].data)
 
-        # Load the next image.
+        # Go to the next images, if skipping images that are already segmented check if we have to load it.
         next_image_id += 1
+        if skip_segmented:
+            save_path = _get_save_path(images[next_image_id], next_image_id)
+            while os.path.exists(save_path):
+                next_image_id += 1
+                if next_image_id == len(images):
+                    break
+                save_path = _get_save_path(images[next_image_id], next_image_id)
+
+        # Load the next image.
         if next_image_id == len(images):
-            msg = "You have annotated the last image. Do you wish to close napari?"
-            print(msg)
-            abort = False
-            # inform the user via dialog
-            abort = widgets._generate_message("info", msg)
+            # Inform the user via dialog.
+            abort = widgets._generate_message("info", end_msg)
             if not abort:
                 viewer.close()
             return
@@ -458,6 +497,7 @@ def main():
     )
     parser.add_argument("--precompute_amg_state", action="store_true")
     parser.add_argument("--prefer_decoder", action="store_false")
+    parser.add_argument("--skip_segmented", action="store_false")
 
     args = parser.parse_args()
 
@@ -466,5 +506,5 @@ def main():
         embedding_path=args.embedding_path, model_type=args.model_type,
         tile_shape=args.tile_shape, halo=args.halo, precompute_amg_state=args.precompute_amg_state,
         checkpoint_path=args.checkpoint, device=args.device, is_volumetric=args.is_volumetric,
-        prefer_decoder=args.prefer_decoder,
+        prefer_decoder=args.prefer_decoder, skip_segmented=args.skip_segmented
     )

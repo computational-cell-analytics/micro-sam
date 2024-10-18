@@ -3,20 +3,20 @@
 
 import os
 from glob import glob
-from itertools import product
+from tqdm import tqdm
 from pathlib import Path
+from itertools import product
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-import imageio.v3 as imageio
 import numpy as np
 import pandas as pd
+import imageio.v3 as imageio
 
-from elf.evaluation import mean_segmentation_accuracy
 from elf.io import open_file
-from tqdm import tqdm
+from elf.evaluation import mean_segmentation_accuracy
 
-from ..instance_segmentation import AMGBase, InstanceSegmentationWithDecoder, mask_data_to_segmentation
 from .. import util
+from ..instance_segmentation import AMGBase, InstanceSegmentationWithDecoder, mask_data_to_segmentation
 
 
 def _get_range_of_search_values(input_vals, step):

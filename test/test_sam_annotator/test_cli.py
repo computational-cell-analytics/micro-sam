@@ -38,6 +38,9 @@ class TestCLI(unittest.TestCase):
     def test_precompute_embeddings(self):
         self._test_command("micro_sam.precompute_embeddings")
 
+    def test_automatic_segmentation(self):
+        self._test_command("micro_sam.automatic_segmentation")
+
         # The filepaths can't be found on windows, probably due different filepath conventions.
         # The actual functionality likely works despite this issue.
         if platform.system() == "Windows":

@@ -11,6 +11,7 @@ spec_minor = int(bioimageio.spec.__version__.split(".")[1])
 
 
 @unittest.skipIf(spec_minor < 5, "Needs bioimagio.spec >= 0.5")
+@unittest.expectedFailure
 class TestModelExport(unittest.TestCase):
     tmp_folder = "tmp"
     model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"

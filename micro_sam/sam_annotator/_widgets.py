@@ -1,26 +1,30 @@
 """Implements the widgets used in the annotation plugins.
 """
 
-import json
-import multiprocessing as mp
 import os
 import pickle
 from pathlib import Path
 from typing import Optional
+import multiprocessing as mp
 
-import elf.parallel
 import h5py
-import napari
-import numpy as np
+import json
 import zarr
 import z5py
+import napari
+import numpy as np
+
+import elf.parallel
 
 from qtpy import QtWidgets
 from qtpy.QtCore import QObject, Signal
 from superqt import QCollapsible
 from magicgui import magic_factory
 from magicgui.widgets import ComboBox, Container, create_widget
-from napari.qt.threading import thread_worker
+# We have disabled the thread workers for now because they result in a
+# massive slowdown in napari >= 0.5.
+# See also https://forum.image.sc/t/napari-thread-worker-leads-to-massive-slowdown/103786
+# from napari.qt.threading import thread_worker
 from napari.utils import progress
 
 from ._state import AnnotatorState
@@ -170,7 +174,7 @@ class _WidgetBase(QtWidgets.QWidget):
         layout.addWidget(label)
 
         path_textbox = QtWidgets.QLineEdit()
-        path_textbox.setText(value)
+        path_textbox.setText(str(value))
         if placeholder is not None:
             path_textbox.setPlaceholderText(placeholder)
         path_textbox.textChanged.connect(lambda val: setattr(self, name, val))
@@ -206,7 +210,7 @@ class _WidgetBase(QtWidgets.QWidget):
         if tooltip:
             directory.setToolTip(tooltip)
         if directory and Path(directory).is_dir():
-            textbox.setText(directory)
+            textbox.setText(str(directory))
         else:
             # Handle the case where the selected path is not a directory
             print("Invalid directory selected. Please try again.")
@@ -218,7 +222,7 @@ class _WidgetBase(QtWidgets.QWidget):
         if tooltip:
             file_path.setToolTip(tooltip)
         if file_path and Path(file_path).is_file():
-            textbox.setText(file_path)
+            textbox.setText(str(file_path))
         else:
             # Handle the case where the selected path is not a file
             print("Invalid file selected. Please try again.")
@@ -1087,7 +1091,7 @@ class EmbeddingWidget(_WidgetBase):
         # Set up progress bar and signals for using it within a threadworker.
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
-        @thread_worker()
+        # @thread_worker()
         def compute_image_embedding():
 
             def pbar_init(total, description):
@@ -1102,10 +1106,12 @@ class EmbeddingWidget(_WidgetBase):
             )
             pbar_signals.pbar_stop.emit()
 
-        worker = compute_image_embedding()
-        worker.returned.connect(self._update_model)
-        worker.start()
-        return worker
+        compute_image_embedding()
+        self._update_model()
+        # worker = compute_image_embedding()
+        # worker.returned.connect(self._update_model)
+        # worker.start()
+        # return worker
 
 
 #
@@ -1194,7 +1200,7 @@ class SegmentNDWidget(_WidgetBase):
         state = AnnotatorState()
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
-        @thread_worker
+        # @thread_worker
         def tracking_impl():
             shape = state.image_shape
 
@@ -1236,15 +1242,17 @@ class SegmentNDWidget(_WidgetBase):
             self._viewer.layers["current_object"].data[seg == 1] = state.current_track_id
             self._viewer.layers["current_object"].refresh()
 
-        worker = tracking_impl()
-        worker.returned.connect(update_segmentation)
-        worker.start()
-        return worker
+        ret_val = tracking_impl()
+        update_segmentation(ret_val)
+        # worker = tracking_impl()
+        # worker.returned.connect(update_segmentation)
+        # worker.start()
+        # return worker
 
     def _run_volumetric_segmentation(self):
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
-        @thread_worker
+        # @thread_worker
         def volumetric_segmentation_impl():
             state = AnnotatorState()
             shape = state.image_shape
@@ -1276,10 +1284,13 @@ class SegmentNDWidget(_WidgetBase):
             self._viewer.layers["current_object"].data = seg
             self._viewer.layers["current_object"].refresh()
 
-        worker = volumetric_segmentation_impl()
-        worker.returned.connect(update_segmentation)
-        worker.start()
-        return worker
+        seg = volumetric_segmentation_impl()
+        self._viewer.layers["current_object"].data = seg
+        self._viewer.layers["current_object"].refresh()
+        # worker = volumetric_segmentation_impl()
+        # worker.returned.connect(update_segmentation)
+        # worker.start()
+        # return worker
 
     def __call__(self):
         if _validate_embeddings(self._viewer):
@@ -1521,7 +1532,7 @@ class AutoSegmentWidget(_WidgetBase):
     def _run_segmentation_2d(self, kwargs, i=None):
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
-        @thread_worker
+        # @thread_worker
         def seg_impl():
             def pbar_init(total, description):
                 pbar_signals.pbar_total.emit(total)
@@ -1547,10 +1558,12 @@ class AutoSegmentWidget(_WidgetBase):
                 self._viewer.layers["auto_segmentation"].data[i] = seg
             self._viewer.layers["auto_segmentation"].refresh()
 
-        worker = seg_impl()
-        worker.returned.connect(update_segmentation)
-        worker.start()
-        return worker
+        seg = seg_impl()
+        update_segmentation(seg)
+        # worker = seg_impl()
+        # worker.returned.connect(update_segmentation)
+        # worker.start()
+        # return worker
 
     # We refuse to run 3D segmentation with the AMG unless we have a GPU or all embeddings
     # are precomputed. Otherwise this would take too long.
@@ -1577,7 +1590,7 @@ class AutoSegmentWidget(_WidgetBase):
 
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
-        @thread_worker
+        # @thread_worker
         def seg_impl():
             segmentation = np.zeros_like(self._viewer.layers["auto_segmentation"].data)
             offset = 0
@@ -1616,10 +1629,12 @@ class AutoSegmentWidget(_WidgetBase):
             self._viewer.layers["auto_segmentation"].data = segmentation
             self._viewer.layers["auto_segmentation"].refresh()
 
-        worker = seg_impl()
-        worker.returned.connect(update_segmentation)
-        worker.start()
-        return worker
+        seg = seg_impl()
+        update_segmentation(seg)
+        # worker = seg_impl()
+        # worker.returned.connect(update_segmentation)
+        # worker.start()
+        # return worker
 
     def __call__(self):
         if _validate_embeddings(self._viewer):

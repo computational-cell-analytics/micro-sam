@@ -6,9 +6,11 @@ We can remove these functions once the bugs affecting our code is fixed upstream
 The license type of the thrid party software project must be compatible with
 the software license the micro-sam project is distributed under.
 """
+
 from typing import Any, Dict, List
 
 import numpy as np
+
 import torch
 
 try:

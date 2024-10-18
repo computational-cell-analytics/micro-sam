@@ -16,13 +16,13 @@ import os
 from pathlib import Path
 from typing import Union
 
-import imageio.v3 as imageio
-import numpy as np
 import pooch
+import numpy as np
+import imageio.v3 as imageio
 
-from skimage.data import binary_blobs
 from skimage.measure import label
 from skimage.transform import resize
+from skimage.data import binary_blobs
 
 from .util import get_cache_directory
 

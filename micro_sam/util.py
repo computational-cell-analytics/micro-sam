@@ -2,28 +2,31 @@
 Helper functions for downloading Segment Anything models and predicting image embeddings.
 """
 
-import hashlib
+
 import os
 import pickle
+import hashlib
 import warnings
-from collections import OrderedDict
 from pathlib import Path
+from collections import OrderedDict
 from typing import Any, Dict, Iterable, Optional, Tuple, Union
 
-import imageio.v3 as imageio
-import numpy as np
-import pooch
-import torch
-import vigra
-import xxhash
 import zarr
-
-from elf.io import open_file
-from nifty.tools import blocking
+import vigra
+import torch
+import pooch
+import xxhash
+import numpy as np
+import imageio.v3 as imageio
 from skimage.measure import regionprops
 from skimage.segmentation import relabel_sequential
 
+from elf.io import open_file
+
+from nifty.tools import blocking
+
 from .__version__ import __version__
+from . import models as custom_models
 
 try:
     # Avoid import warnigns from mobile_sam
@@ -41,7 +44,7 @@ except ImportError:
     from tqdm import tqdm
 
 # this is the default model used in micro_sam
-# currently set to the default vit_h
+# currently set to the default vit_l
 _DEFAULT_MODEL = "vit_l"
 
 # The valid model types. Each type corresponds to the architecture of the
@@ -132,18 +135,18 @@ def models():
         "vit_l_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1/files/vit_l.pt",
         "vit_b_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1/files/vit_b.pt",
         "vit_t_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1/files/vit_t.pt",
-        "vit_l_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l.pt",
+        "vit_l_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l.pt",  # noqa
         "vit_b_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b.pt",
-        "vit_t_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t.pt",
+        "vit_t_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t.pt",  # noqa
     }
 
     decoder_urls = {
-        "vit_l_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1/files/vit_l_decoder.pt",
-        "vit_b_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1/files/vit_b_decoder.pt",
-        "vit_t_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1/files/vit_t_decoder.pt",
-        "vit_l_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l_decoder.pt",
-        "vit_b_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b_decoder.pt",
-        "vit_t_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t_decoder.pt",
+        "vit_l_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1/files/vit_l_decoder.pt",  # noqa
+        "vit_b_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1/files/vit_b_decoder.pt",  # noqa
+        "vit_t_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1/files/vit_t_decoder.pt",  # noqa
+        "vit_l_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l_decoder.pt",  # noqa
+        "vit_b_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b_decoder.pt",  # noqa
+        "vit_t_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t_decoder.pt",  # noqa
     }
     urls = {**encoder_urls, **decoder_urls}
 
@@ -270,6 +273,9 @@ def get_sam_model(
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
     return_state: bool = False,
+    peft_kwargs: Optional[Dict] = None,
+    flexible_load_checkpoint: bool = False,
+    **model_kwargs,
 ) -> SamPredictor:
     r"""Get the SegmentAnything Predictor.
 
@@ -302,6 +308,8 @@ def get_sam_model(
             then `model_type` must be given as "vit_b".
         return_sam: Return the sam model object as well as the predictor.
         return_state: Return the unpickled checkpoint state.
+        peft_kwargs: Keyword arguments for th PEFT wrapper class.
+        flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
 
     Returns:
         The segment anything predictor.
@@ -322,7 +330,9 @@ def get_sam_model(
         # If we have a custom model then we may also have a decoder checkpoint.
         # Download it here, so that we can add it to the state.
         decoder_name = f"{model_type}_decoder"
-        decoder_path = model_registry.fetch(decoder_name, progressbar=True) if decoder_name in model_registry.registry else None
+        decoder_path = model_registry.fetch(
+            decoder_name, progressbar=True
+        ) if decoder_name in model_registry.registry else None
 
     # checkpoint_path has been passed, we use it instead of downloading a model.
     else:
@@ -346,8 +356,30 @@ def get_sam_model(
         )
 
     state, model_state = _load_checkpoint(checkpoint_path)
-    sam = sam_model_registry[abbreviated_model_type]()
-    sam.load_state_dict(model_state)
+
+    # Whether to update parameters necessary to initialize the model
+    if model_kwargs:  # Checks whether model_kwargs have been provided or not
+        if abbreviated_model_type == "vit_t":
+            raise ValueError("'micro-sam' does not support changing the model parameters for 'mobile-sam'.")
+        sam = custom_models.sam_model_registry[abbreviated_model_type](**model_kwargs)
+
+    else:
+        sam = sam_model_registry[abbreviated_model_type]()
+
+    # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything.
+    # Overwrites the SAM model by freezing the backbone and allow PEFT.
+    if peft_kwargs and isinstance(peft_kwargs, dict):
+        if abbreviated_model_type == "vit_t":
+            raise ValueError("'micro-sam' does not support parameter efficient finetuning for 'mobile-sam'.")
+
+        sam = custom_models.peft_sam.PEFT_Sam(sam, **peft_kwargs).sam
+
+    # In case the model checkpoints have some issues when it is initialized with different parameters than default.
+    if flexible_load_checkpoint:
+        sam = _handle_checkpoint_loading(sam, model_state)
+    else:
+        sam.load_state_dict(model_state)
+
     sam.to(device=device)
 
     predictor = SamPredictor(sam)
@@ -357,7 +389,7 @@ def get_sam_model(
 
     # Add the decoder to the state if we have one and if the state is returned.
     if decoder_path is not None and return_state:
-        state["decoder_state"] = torch.load(decoder_path, map_location=device)
+        state["decoder_state"] = torch.load(decoder_path, map_location=device, weights_only=False)
 
     if return_sam and return_state:
         return predictor, sam, state
@@ -366,6 +398,39 @@ def get_sam_model(
     if return_state:
         return predictor, state
     return predictor
+
+
+def _handle_checkpoint_loading(sam, model_state):
+    # Whether to handle the mismatch issues in a bit more elegant way.
+    # eg. while training for multi-class semantic segmentation in the mask encoder,
+    # parameters are updated - leading to "size mismatch" errors
+
+    new_state_dict = {}  # for loading matching parameters
+    mismatched_layers = []  # for tracking mismatching parameters
+
+    reference_state = sam.state_dict()
+
+    for k, v in model_state.items():
+        if k in reference_state:  # This is done to get rid of unwanted layers from pretrained SAM.
+            if reference_state[k].size() == v.size():
+                new_state_dict[k] = v
+            else:
+                mismatched_layers.append(k)
+
+    reference_state.update(new_state_dict)
+
+    if len(mismatched_layers) > 0:
+        warnings.warn(f"The layers with size mismatch: {mismatched_layers}")
+
+    for mlayer in mismatched_layers:
+        if 'weight' in mlayer:
+            torch.nn.init.kaiming_uniform_(reference_state[mlayer])
+        elif 'bias' in mlayer:
+            reference_state[mlayer].zero_()
+
+    sam.load_state_dict(reference_state)
+
+    return sam
 
 
 def export_custom_sam_model(

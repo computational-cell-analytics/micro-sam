@@ -1,8 +1,9 @@
 import os
 from math import ceil, floor
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
+
 import torch
 
 from segment_anything.utils.transforms import ResizeLongestSide
@@ -12,6 +13,7 @@ from ..util import (
     get_centers_and_bounding_boxes, get_sam_model, get_device,
     segmentation_to_one_hot, _DEFAULT_MODEL,
 )
+from .. import models as custom_models
 from .trainable_sam import TrainableSAM
 
 from torch_em.transform.label import PerObjectDistanceTransform
@@ -42,6 +44,9 @@ def get_trainable_sam_model(
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     freeze: Optional[List[str]] = None,
     return_state: bool = False,
+    peft_kwargs: Optional[Dict] = None,
+    flexible_load_checkpoint: bool = False,
+    **model_kwargs
 ) -> TrainableSAM:
     """Get the trainable sam model.
 
@@ -54,6 +59,9 @@ def get_trainable_sam_model(
         freeze: Specify parts of the model that should be frozen, namely: image_encoder, prompt_encoder and mask_decoder
             By default nothing is frozen and the full model is updated.
         return_state: Whether to return the full checkpoint state.
+        peft_kwargs: Keyword arguments for the PEFT wrapper class.
+        flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
+        model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
 
     Returns:
         The trainable segment anything model.
@@ -61,8 +69,23 @@ def get_trainable_sam_model(
     # set the device here so that the correct one is passed to TrainableSAM below
     device = get_device(device)
     _, sam, state = get_sam_model(
-        model_type=model_type, device=device, checkpoint_path=checkpoint_path, return_sam=True, return_state=True
+        model_type=model_type,
+        device=device,
+        checkpoint_path=checkpoint_path,
+        return_sam=True,
+        return_state=True,
+        flexible_load_checkpoint=flexible_load_checkpoint,
+        **model_kwargs
     )
+
+    # NOTE: This is done exclusive to "get_sam_model" here to use PEFT's layer-specific initialization on top.
+    # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything.
+    # Overwrites the SAM model by freezing the backbone and allow PEFT methods.
+    if peft_kwargs and isinstance(peft_kwargs, dict):
+        if model_type[:5] == "vit_t":
+            raise ValueError("'micro-sam' does not support parameter efficient finetuning for 'mobile-sam'.")
+
+        sam = custom_models.peft_sam.PEFT_Sam(sam, **peft_kwargs).sam
 
     # freeze components of the model if freeze was passed
     # ideally we would want to add components in such a way that:
@@ -70,18 +93,22 @@ def get_trainable_sam_model(
     #   (for e.g. encoder blocks to "image_encoder")
     if freeze is not None:
         for name, param in sam.named_parameters():
-            if isinstance(freeze, list):
-                # we would want to "freeze" all the components in the model if passed a list of parts
-                for l_item in freeze:
-                    if name.startswith(f"{l_item}"):
-                        param.requires_grad = False
-            else:
+            if not isinstance(freeze, list):
                 # we "freeze" only for one specific component when passed a "particular" part
-                if name.startswith(f"{freeze}"):
+                freeze = [freeze]
+
+            # we would want to "freeze" all the components in the model if passed a list of parts
+            for l_item in freeze:
+                # in case PEFT is switched on, we cannot freeze the image encoder
+                if (peft_kwargs and peft_kwargs.get('rank') is not None) and (l_item == "image_encoder"):
+                    raise ValueError("You cannot use PEFT & freeze the image encoder at the same time.")
+
+                if name.startswith(f"{l_item}"):
                     param.requires_grad = False
 
     # convert to trainable sam
-    trainable_sam = TrainableSAM(sam, device)
+    trainable_sam = TrainableSAM(sam)
+
     if return_state:
         return trainable_sam, state
     return trainable_sam
@@ -199,13 +226,33 @@ class ConvertToSamInputs:
         return batched_inputs, batched_sampled_cell_ids_list
 
 
+class ConvertToSemanticSamInputs:
+    """Convert outputs of data loader to the expected batched inputs of the SegmentAnything model
+    for semantic segmentation.
+    """
+    def __call__(self, x, y):
+        """Convert the outputs of dataloader to the batched format of inputs expected by SAM.
+        """
+        batched_inputs = []
+        for image, gt in zip(x, y):
+            batched_input = {"image": image, "original_size": image.shape[-2:]}
+            batched_inputs.append(batched_input)
+
+        return batched_inputs
+
+
 #
 # Raw and Label Transformations for the Generalist and Specialist finetuning
 #
 
 
+def normalize_to_8bit(raw):
+    raw = normalize(raw) * 255
+    return raw
+
+
 class ResizeRawTrafo:
-    def __init__(self, desired_shape, do_rescaling=True, padding="constant"):
+    def __init__(self, desired_shape, do_rescaling=False, padding="constant"):
         self.desired_shape = desired_shape
         self.padding = padding
         self.do_rescaling = do_rescaling

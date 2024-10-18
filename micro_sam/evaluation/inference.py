@@ -473,21 +473,21 @@ def run_inference_with_iterative_prompting(
     gt_paths: List[Union[str, os.PathLike]],
     embedding_dir: Union[str, os.PathLike],
     prediction_dir: Union[str, os.PathLike],
-    start_with_box_prompt: bool,
+    start_with_box_prompt: bool = True,
     dilation: int = 5,
     batch_size: int = 32,
     n_iterations: int = 8,
     use_masks: bool = False
 ) -> None:
-    """Run segment anything inference for multiple images using prompts iteratively
-        derived from model outputs and groundtruth
+    """Run Segment Anything inference for multiple images using prompts iteratively
+    derived from model outputs and ground-truth.
 
     Args:
-        predictor: The SegmentAnything predictor.
+        predictor: The Segment Anything predictor.
         image_paths: The image file paths.
         gt_paths: The ground-truth segmentation file paths.
         embedding_dir: The directory where the image embeddings will be saved or are already saved.
-        prediction_dir: The directory where the predictions from SegmentAnything will be saved per iteration.
+        prediction_dir: The directory where the predictions from Segment Anything will be saved per iteration.
         start_with_box_prompt: Whether to use the first prompt as bounding box or a single point
         dilation: The dilation factor for the radius around the ground-truth object
             around which points will not be sampled.
@@ -506,8 +506,7 @@ def run_inference_with_iterative_prompting(
         print("The iterative prompting will make use of logits masks from previous iterations.")
 
     for image_path, gt_path in tqdm(
-        zip(image_paths, gt_paths),
-        total=len(image_paths),
+        zip(image_paths, gt_paths), total=len(image_paths),
         desc="Run inference with iterative prompting for all images",
     ):
         image_name = os.path.basename(image_path)
@@ -524,7 +523,10 @@ def run_inference_with_iterative_prompting(
         gt = imageio.imread(gt_path).astype("uint32")
         gt = relabel_sequential(gt)[0]
 
-        embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
+        if embedding_dir is None:
+            embedding_path = None
+        else:
+            embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
 
         _run_inference_with_iterative_prompting_for_image(
             predictor, image, gt, start_with_box_prompt=start_with_box_prompt,
@@ -547,11 +549,12 @@ def run_amg(
     test_image_paths: List[Union[str, os.PathLike]],
     iou_thresh_values: Optional[List[float]] = None,
     stability_score_values: Optional[List[float]] = None,
+    peft_kwargs: Optional[Dict] = None,
 ) -> str:
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
 
-    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint)
+    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint, peft_kwargs=peft_kwargs)
     amg = AutomaticMaskGenerator(predictor)
     amg_prefix = "amg"
 
@@ -588,11 +591,14 @@ def run_instance_segmentation_with_decoder(
     val_image_paths: List[Union[str, os.PathLike]],
     val_gt_paths: List[Union[str, os.PathLike]],
     test_image_paths: List[Union[str, os.PathLike]],
+    peft_kwargs: Optional[Dict] = None,
 ) -> str:
     embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
     os.makedirs(embedding_folder, exist_ok=True)
 
-    predictor, decoder = get_predictor_and_decoder(model_type=model_type, checkpoint_path=checkpoint)
+    predictor, decoder = get_predictor_and_decoder(
+        model_type=model_type, checkpoint_path=checkpoint, peft_kwargs=peft_kwargs,
+    )
     segmenter = InstanceSegmentationWithDecoder(predictor, decoder)
     seg_prefix = "instance_segmentation_with_decoder"
 

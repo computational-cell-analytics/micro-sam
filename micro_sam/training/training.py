@@ -2,11 +2,19 @@ import os
 import time
 import warnings
 from glob import glob
-from typing import Any, Dict, List, Optional, Tuple, Union
+from tqdm import tqdm
+from contextlib import contextmanager, nullcontext
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import imageio.v3 as imageio
+
 import torch
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import _LRScheduler
+from torch.utils.data import DataLoader, Dataset
+
 import torch_em
+from torch_em.data.datasets.util import split_kwargs
 
 from elf.io import open_file
 
@@ -15,23 +23,18 @@ try:
 except Exception:
     QObject = Any
 
-from torch.optim.lr_scheduler import _LRScheduler
-from torch.utils.data import DataLoader, Dataset
-from torch_em.data.datasets.util import split_kwargs
-
 from ..util import get_device
-from ..instance_segmentation import get_unetr
-
-from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit
 from . import sam_trainer as trainers
+from ..instance_segmentation import get_unetr
 from . import joint_sam_trainer as joint_trainers
+from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit
 
 
 FilePath = Union[str, os.PathLike]
 
 
-def _check_loader(loader, with_segmentation_decoder):
-    x, y = next(iter(loader))
+def _check_loader(loader, with_segmentation_decoder, name=None, verify_n_labels_in_loader=None):
+    x, _ = next(iter(loader))
 
     # Raw data: check that we have 1 or 3 channels.
     n_channels = x.shape[1]
@@ -55,8 +58,9 @@ def _check_loader(loader, with_segmentation_decoder):
         )
 
     # Target data: the check depends on whether we train with or without decoder.
+    # NOTE: Verification step to check whether all labels from dataloader are valid (i.e. have atleast one instance).
 
-    def check_instance_channel(instance_channel):
+    def _check_instance_channel(instance_channel):
         unique_vals = torch.unique(instance_channel)
         if (unique_vals < 0).any():
             raise ValueError(
@@ -71,38 +75,53 @@ def _check_loader(loader, with_segmentation_decoder):
                 "All values in the target channel with the instance segmentation must be integer."
             )
 
-    n_channels_y = y.shape[1]
-    if with_segmentation_decoder:
-        if n_channels_y != 4:
-            raise ValueError(
-                "Invalid number of channels in the target data from the data loader. "
-                "Expect 4 channel for training with an instance segmentation decoder, "
-                f"but got {n_channels_y} channels."
-            )
-        check_instance_channel(y[:, 0])
+    counter = 0
+    name = "" if name is None else f"'{name}'"
+    for x, y in tqdm(
+        loader,
+        desc=f"Verifying labels in {name} dataloader",
+        total=verify_n_labels_in_loader if verify_n_labels_in_loader is not None else None,
+    ):
+        n_channels_y = y.shape[1]
+        if with_segmentation_decoder:
+            if n_channels_y != 4:
+                raise ValueError(
+                    "Invalid number of channels in the target data from the data loader. "
+                    "Expect 4 channel for training with an instance segmentation decoder, "
+                    f"but got {n_channels_y} channels."
+                )
+            # Check instance channel per sample in a batch
+            for per_y_sample in y:
+                _check_instance_channel(per_y_sample[0])
 
-        targets_min, targets_max = y[:, 1:].min(), y[:, 1:].max()
-        if targets_min < 0 or targets_min > 1:
-            raise ValueError(
-                "Invalid value range in the target data from the value loader. "
-                "Expect the 3 last target channels (for normalized distances and foreground probabilities)"
-                f"to be in range [0.0, 1.0], but got min {targets_min}"
-            )
-        if targets_max < 0 or targets_max > 1:
-            raise ValueError(
-                "Invalid value range in the target data from the value loader. "
-                "Expect the 3 last target channels (for normalized distances and foreground probabilities)"
-                f"to be in range [0.0, 1.0], but got max {targets_max}"
-            )
+            targets_min, targets_max = y[:, 1:].min(), y[:, 1:].max()
+            if targets_min < 0 or targets_min > 1:
+                raise ValueError(
+                    "Invalid value range in the target data from the value loader. "
+                    "Expect the 3 last target channels (for normalized distances and foreground probabilities)"
+                    f"to be in range [0.0, 1.0], but got min {targets_min}"
+                )
+            if targets_max < 0 or targets_max > 1:
+                raise ValueError(
+                    "Invalid value range in the target data from the value loader. "
+                    "Expect the 3 last target channels (for normalized distances and foreground probabilities)"
+                    f"to be in range [0.0, 1.0], but got max {targets_max}"
+                )
 
-    else:
-        if n_channels_y != 1:
-            raise ValueError(
-                "Invalid number of channels in the target data from the data loader. "
-                "Expect 1 channel for training without an instance segmentation decoder,"
-                f"but got {n_channels_y} channels."
-            )
-        check_instance_channel(y)
+        else:
+            if n_channels_y != 1:
+                raise ValueError(
+                    "Invalid number of channels in the target data from the data loader. "
+                    "Expect 1 channel for training without an instance segmentation decoder,"
+                    f"but got {n_channels_y} channels."
+                )
+            # Check instance channel per sample in a batch
+            for per_y_sample in y:
+                _check_instance_channel(per_y_sample)
+
+        counter += 1
+        if verify_n_labels_in_loader is not None and counter > verify_n_labels_in_loader:
+            break
 
 
 # Make the progress bar callbacks compatible with a tqdm progress bar interface.
@@ -127,6 +146,23 @@ class _ProgressBarWrapper:
         self._signals.pbar_description.emit(desc)
 
 
+def _count_parameters(model_parameters):
+    params = sum(p.numel() for p in model_parameters if p.requires_grad)
+    params = params / 1e6
+    print(f"The number of trainable parameters for the provided model is {round(params, 2)}M")
+
+
+@contextmanager
+def _filter_warnings(ignore_warnings):
+    if ignore_warnings:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            yield
+    else:
+        with nullcontext():
+            yield
+
+
 def train_sam(
     name: str,
     model_type: str,
@@ -148,6 +184,11 @@ def train_sam(
     scheduler_kwargs: Optional[Dict[str, Any]] = None,
     save_every_kth_epoch: Optional[int] = None,
     pbar_signals: Optional[QObject] = None,
+    optimizer_class: Optional[Optimizer] = torch.optim.AdamW,
+    peft_kwargs: Optional[Dict] = None,
+    ignore_warnings: bool = True,
+    verify_n_labels_in_loader: Optional[int] = 50,
+    **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
 
@@ -177,126 +218,139 @@ def train_sam(
         mask_prob: The probability for using a mask as input in a given training sub-iteration.
         n_iterations: The number of iterations to use for training. This will over-ride n_epochs if given.
         scheduler_class: The learning rate scheduler to update the learning rate.
-            By default, ReduceLROnPlateau is used.
+            By default, torch.optim.lr_scheduler.ReduceLROnPlateau is used.
         scheduler_kwargs: The learning rate scheduler parameters.
             If passed None, the chosen default parameters are used in ReduceLROnPlateau.
         save_every_kth_epoch: Save checkpoints after every kth epoch separately.
         pbar_signals: Controls for napari progress bar.
+        optimizer_class: The optimizer class.
+            By default, torch.optim.AdamW is used.
+        peft_kwargs: Keyword arguments for the PEFT wrapper class.
+        verify_n_labels_in_loader: The number of labels to verify out of the train and validation dataloaders.
+            By default, 50 batches of labels are verified from the dataloaders.
+        model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
+        ignore_warnings: Whether to ignore raised warnings.
     """
-    t_start = time.time()
+    with _filter_warnings(ignore_warnings):
 
-    _check_loader(train_loader, with_segmentation_decoder)
-    _check_loader(val_loader, with_segmentation_decoder)
+        t_start = time.time()
 
-    device = get_device(device)
+        _check_loader(train_loader, with_segmentation_decoder, "train", verify_n_labels_in_loader)
+        _check_loader(val_loader, with_segmentation_decoder, "val", verify_n_labels_in_loader)
 
-    # Get the trainable segment anything model.
-    model, state = get_trainable_sam_model(
-        model_type=model_type, device=device, freeze=freeze,
-        checkpoint_path=checkpoint_path, return_state=True,
-    )
-
-    # This class creates all the training data for a batch (inputs, prompts and labels).
-    convert_inputs = ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
-
-    # Create the UNETR decoder (if train with it) and the optimizer.
-    if with_segmentation_decoder:
-
-        # Get the UNETR.
-        unetr = get_unetr(
-            image_encoder=model.sam.image_encoder,
-            decoder_state=state.get("decoder_state", None),
+        device = get_device(device)
+        # Get the trainable segment anything model.
+        model, state = get_trainable_sam_model(
+            model_type=model_type,
             device=device,
+            freeze=freeze,
+            checkpoint_path=checkpoint_path,
+            return_state=True,
+            peft_kwargs=peft_kwargs,
+            **model_kwargs
         )
+        # This class creates all the training data for a batch (inputs, prompts and labels).
+        convert_inputs = ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
 
-        # Get the parameters for SAM and the decoder from UNETR.
-        joint_model_params = [params for params in model.parameters()]  # sam parameters
-        for param_name, params in unetr.named_parameters():  # unetr's decoder parameters
-            if not param_name.startswith("encoder"):
-                joint_model_params.append(params)
+        # Create the UNETR decoder (if train with it) and the optimizer.
+        if with_segmentation_decoder:
 
-        optimizer = torch.optim.Adam(joint_model_params, lr=lr)
+            # Get the UNETR.
+            unetr = get_unetr(
+                image_encoder=model.sam.image_encoder,
+                decoder_state=state.get("decoder_state", None),
+                device=device,
+            )
 
-    else:
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+            # Get the parameters for SAM and the decoder from UNETR.
+            joint_model_params = [params for params in model.parameters()]  # sam parameters
+            for param_name, params in unetr.named_parameters():  # unetr's decoder parameters
+                if not param_name.startswith("encoder"):
+                    joint_model_params.append(params)
 
-    if scheduler_kwargs is None:
-        scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
+            optimizer = optimizer_class(joint_model_params, lr=lr)
 
-    scheduler = scheduler_class(optimizer=optimizer, **scheduler_kwargs)
+        else:
+            optimizer = optimizer_class(model.parameters(), lr=lr)
 
-    # The trainer which performs training and validation.
-    if with_segmentation_decoder:
-        instance_seg_loss = torch_em.loss.DiceBasedDistanceLoss(mask_distances_in_bg=True)
-        trainer = joint_trainers.JointSamTrainer(
-            name=name,
-            save_root=save_root,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            model=model,
-            optimizer=optimizer,
-            device=device,
-            lr_scheduler=scheduler,
-            logger=joint_trainers.JointSamLogger,
-            log_image_interval=100,
-            mixed_precision=True,
-            convert_inputs=convert_inputs,
-            n_objects_per_batch=n_objects_per_batch,
-            n_sub_iteration=n_sub_iteration,
-            compile_model=False,
-            unetr=unetr,
-            instance_loss=instance_seg_loss,
-            instance_metric=instance_seg_loss,
-            early_stopping=early_stopping,
-            mask_prob=mask_prob,
-        )
-    else:
-        trainer = trainers.SamTrainer(
-            name=name,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            model=model,
-            optimizer=optimizer,
-            device=device,
-            lr_scheduler=scheduler,
-            logger=trainers.SamLogger,
-            log_image_interval=100,
-            mixed_precision=True,
-            convert_inputs=convert_inputs,
-            n_objects_per_batch=n_objects_per_batch,
-            n_sub_iteration=n_sub_iteration,
-            compile_model=False,
-            early_stopping=early_stopping,
-            mask_prob=mask_prob,
-            save_root=save_root,
-        )
+        if scheduler_kwargs is None:
+            scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
 
-    if n_iterations is None:
-        trainer_fit_params = {"epochs": n_epochs}
-    else:
-        trainer_fit_params = {"iterations": n_iterations}
+        scheduler = scheduler_class(optimizer=optimizer, **scheduler_kwargs)
 
-    if save_every_kth_epoch is not None:
-        trainer_fit_params["save_every_kth_epoch"] = save_every_kth_epoch
+        # The trainer which performs training and validation.
+        if with_segmentation_decoder:
+            instance_seg_loss = torch_em.loss.DiceBasedDistanceLoss(mask_distances_in_bg=True)
+            trainer = joint_trainers.JointSamTrainer(
+                name=name,
+                save_root=save_root,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                model=model,
+                optimizer=optimizer,
+                device=device,
+                lr_scheduler=scheduler,
+                logger=joint_trainers.JointSamLogger,
+                log_image_interval=100,
+                mixed_precision=True,
+                convert_inputs=convert_inputs,
+                n_objects_per_batch=n_objects_per_batch,
+                n_sub_iteration=n_sub_iteration,
+                compile_model=False,
+                unetr=unetr,
+                instance_loss=instance_seg_loss,
+                instance_metric=instance_seg_loss,
+                early_stopping=early_stopping,
+                mask_prob=mask_prob,
+            )
+        else:
+            trainer = trainers.SamTrainer(
+                name=name,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                model=model,
+                optimizer=optimizer,
+                device=device,
+                lr_scheduler=scheduler,
+                logger=trainers.SamLogger,
+                log_image_interval=100,
+                mixed_precision=True,
+                convert_inputs=convert_inputs,
+                n_objects_per_batch=n_objects_per_batch,
+                n_sub_iteration=n_sub_iteration,
+                compile_model=False,
+                early_stopping=early_stopping,
+                mask_prob=mask_prob,
+                save_root=save_root,
+            )
 
-    if pbar_signals is not None:
-        progress_bar_wrapper = _ProgressBarWrapper(pbar_signals)
-        trainer_fit_params["progress"] = progress_bar_wrapper
+        if n_iterations is None:
+            trainer_fit_params = {"epochs": n_epochs}
+        else:
+            trainer_fit_params = {"iterations": n_iterations}
 
-    trainer.fit(**trainer_fit_params)
+        if save_every_kth_epoch is not None:
+            trainer_fit_params["save_every_kth_epoch"] = save_every_kth_epoch
 
-    t_run = time.time() - t_start
-    hours = int(t_run // 3600)
-    minutes = int(t_run // 60)
-    seconds = int(round(t_run % 60, 0))
-    print("Training took", t_run, f"seconds (= {hours:02}:{minutes:02}:{seconds:02} hours)")
+        if pbar_signals is not None:
+            progress_bar_wrapper = _ProgressBarWrapper(pbar_signals)
+            trainer_fit_params["progress"] = progress_bar_wrapper
+
+        trainer.fit(**trainer_fit_params)
+
+        t_run = time.time() - t_start
+        hours = int(t_run // 3600)
+        minutes = int(t_run // 60)
+        seconds = int(round(t_run % 60, 0))
+        print("Training took", t_run, f"seconds (= {hours:02}:{minutes:02}:{seconds:02} hours)")
 
 
 def _update_patch_shape(patch_shape, raw_paths, raw_key, with_channels):
-    if not isinstance(raw_paths, (str, os.PathLike)):
-        path = raw_paths[0]
-    else:
+    if isinstance(raw_paths, (str, os.PathLike)):
         path = raw_paths
+    else:
+        path = raw_paths[0]
+    assert isinstance(path, (str, os.PathLike))
 
     # Check the underlying data dimensionality.
     if raw_key is None:  # If no key is given then we assume it's an image file.
@@ -329,9 +383,13 @@ def default_sam_dataset(
     patch_shape: Tuple[int],
     with_segmentation_decoder: bool,
     with_channels: bool = False,
-    sampler=None,  # Type?
+    sampler: Optional[Callable] = None,
+    raw_transform: Optional[Callable] = None,
     n_samples: Optional[int] = None,
     is_train: bool = True,
+    min_size: int = 25,
+    max_sampling_attempts: Optional[int] = None,
+    is_seg_dataset: Optional[bool] = None,
     **kwargs,
 ) -> Dataset:
     """Create a PyTorch Dataset for training a SAM model.
@@ -349,26 +407,36 @@ def default_sam_dataset(
         with_segmentation_decoder: Whether to train with additional segmentation decoder.
         with_channels: Whether the image data has RGB channels.
         sampler: A sampler to reject batches according to a given criterion.
+        raw_transform: Transformation applied to the image data.
+            If not given the data will be cast to 8bit.
         n_samples: The number of samples for this dataset.
         is_train: Whether this dataset is used for training or validation.
+        min_size: Minimal object size. Smaller objects will be filtered.
+        max_sampling_attempts: Number of sampling attempts to make from a dataset.
+        is_seg_dataset: Whether the dataset is built 'from torch_em.data import SegmentationDataset'
+            or 'from torch_em.data import ImageCollectionDataset'
 
     Returns:
         The dataset.
     """
 
     # Set the data transformations.
-    raw_transform = require_8bit
+    if raw_transform is None:
+        raw_transform = require_8bit
+
     if with_segmentation_decoder:
         label_transform = torch_em.transform.label.PerObjectDistanceTransform(
             distances=True, boundary_distances=True, directed_distances=False,
-            foreground=True, instances=True, min_size=25,
+            foreground=True, instances=True, min_size=min_size,
         )
     else:
-        label_transform = torch_em.transform.label.connected_components
+        label_transform = torch_em.transform.label.MinSizeLabelTransform(
+            min_size=min_size
+        )
 
     # Set a default sampler if none was passed.
     if sampler is None:
-        sampler = torch_em.data.sampler.MinInstanceSampler(3)
+        sampler = torch_em.data.sampler.MinInstanceSampler(3, min_size=min_size)
 
     # Check the patch shape to add a singleton if required.
     patch_shape = _update_patch_shape(
@@ -378,8 +446,8 @@ def default_sam_dataset(
     # Set a minimum number of samples per epoch.
     if n_samples is None:
         loader = torch_em.default_segmentation_loader(
-            raw_paths, raw_key, label_paths, label_key,
-            batch_size=1, patch_shape=patch_shape, ndim=2
+            raw_paths, raw_key, label_paths, label_key, batch_size=1,
+            patch_shape=patch_shape, ndim=2, is_seg_dataset=is_seg_dataset,
         )
         n_samples = max(len(loader), 100 if is_train else 5)
 
@@ -389,8 +457,17 @@ def default_sam_dataset(
         raw_transform=raw_transform, label_transform=label_transform,
         with_channels=with_channels, ndim=2,
         sampler=sampler, n_samples=n_samples,
+        is_seg_dataset=is_seg_dataset,
         **kwargs,
     )
+
+    if max_sampling_attempts is not None:
+        if isinstance(dataset, torch_em.data.concat_dataset.ConcatDataset):
+            for ds in dataset.datasets:
+                ds.max_sampling_attempts = max_sampling_attempts
+        else:
+            dataset.max_sampling_attempts = max_sampling_attempts
+
     return dataset
 
 

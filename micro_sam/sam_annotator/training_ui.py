@@ -1,15 +1,17 @@
 import os
 import warnings
 
-import torch
-import torch_em
-from napari.qt.threading import thread_worker
 from qtpy import QtWidgets
+# from napari.qt.threading import thread_worker
+
+import torch
 from torch.utils.data import random_split
 
+import torch_em
+
 import micro_sam.util as util
-import micro_sam.sam_annotator._widgets as widgets
 from ._tooltips import get_tooltip
+import micro_sam.sam_annotator._widgets as widgets
 from micro_sam.training import default_sam_dataset, train_sam_for_configuration, CONFIGURATIONS
 
 
@@ -236,7 +238,7 @@ class TrainingWidget(widgets._WidgetBase):
         else:
             checkpoint_path = self.checkpoint
 
-        @thread_worker()
+        # @thread_worker()
         def run_training():
             train_loader, val_loader = self._get_loaders()
             train_sam_for_configuration(
@@ -294,7 +296,9 @@ class TrainingWidget(widgets._WidgetBase):
                 pbar_signals.pbar_stop.emit()
                 return export_checkpoint
 
-        worker = run_training()
-        worker.returned.connect(lambda path: print(f"Training has finished. The trained model is saved at {path}."))
-        worker.start()
-        return worker
+        path = run_training()
+        print(f"Training has finished. The trained model is saved at {path}.")
+        # worker = run_training()
+        # worker.returned.connect(lambda path: print(f"Training has finished. The trained model is saved at {path}."))
+        # worker.start()
+        # return worker
