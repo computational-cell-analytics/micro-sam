@@ -1,8 +1,12 @@
 import json
 import os
 import platform
+import warnings
 
-from mobile_sam.predictor import SamPredictor as MobileSamPredictor
+# Avoid import warnigns from mobile_sam
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    from mobile_sam.predictor import SamPredictor as MobileSamPredictor
 from segment_anything.predictor import SamPredictor
 import numpy as np
 import pytest
@@ -33,8 +37,11 @@ def test_embedding_widget(make_napari_viewer, tmp_path):
     my_widget.embeddings_save_path = tmp_path
 
     # Run image embedding widget.
-    worker = my_widget(skip_validate=True)
-    worker.await_workers()  # blocks until thread worker is finished the embedding
+    my_widget(skip_validate=True)
+
+    # Previous version when we used a thread-worker
+    # worker = my_widget(skip_validate=True)
+    # worker.await_workers()  # blocks until thread worker is finished the embedding
 
     # Check in-memory state for predictor and embeddings.
     assert isinstance(AnnotatorState().predictor, (SamPredictor, MobileSamPredictor))
