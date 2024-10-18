@@ -66,9 +66,20 @@ def _download_embeddings(embedding_dir, dataset_name):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-e", "--embedding_dir", type=str, default="./embeddings")
-    parser.add_argument("-d", "--dataset_name", type=str, default=None)
+    parser = argparse.ArgumentParser(
+        description="Download the precomputed image embeddings necessary for interactive annotation."
+    )
+    parser.add_argument(
+        "-e", "--embedding_dir", type=str, default="./embeddings",
+        help="The filepath to the folder where the precomputed image embeddings will be downloaded. "
+        "By default, the embeddings will be stored in your current working directory at './embeddings'."
+    )
+    parser.add_argument(
+        "-d", "--dataset_name", type=str, default=None,
+        help="The choice of volumetric dataset for which you would like to download the embeddings. "
+        "By default, it downloads all the precomputed embeddings. Optionally, you can choose to download either of the "
+        "volumetric datasets: 'lucchi', 'embedseg' or 'platynereis'."
+    )
     args = parser.parse_args()
 
     _download_embeddings(embedding_dir=args.embedding_dir, dataset_name=args.dataset_name)
