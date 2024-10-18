@@ -684,10 +684,10 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
         widget.model_dropdown.setCurrentIndex(index)
 
     if save_path is not None:
-        widget.embeddings_save_path_param.setText(save_path)
+        widget.embeddings_save_path_param.setText(str(save_path))
 
     if checkpoint_path is not None:
-        widget.custom_weights_param.setText(checkpoint_path)
+        widget.custom_weights_param.setText(str(checkpoint_path))
 
     if device is not None:
         widget.device = device

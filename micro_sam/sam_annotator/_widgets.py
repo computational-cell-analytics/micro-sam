@@ -174,7 +174,7 @@ class _WidgetBase(QtWidgets.QWidget):
         layout.addWidget(label)
 
         path_textbox = QtWidgets.QLineEdit()
-        path_textbox.setText(value)
+        path_textbox.setText(str(value))
         if placeholder is not None:
             path_textbox.setPlaceholderText(placeholder)
         path_textbox.textChanged.connect(lambda val: setattr(self, name, val))
@@ -210,7 +210,7 @@ class _WidgetBase(QtWidgets.QWidget):
         if tooltip:
             directory.setToolTip(tooltip)
         if directory and Path(directory).is_dir():
-            textbox.setText(directory)
+            textbox.setText(str(directory))
         else:
             # Handle the case where the selected path is not a directory
             print("Invalid directory selected. Please try again.")
@@ -222,7 +222,7 @@ class _WidgetBase(QtWidgets.QWidget):
         if tooltip:
             file_path.setToolTip(tooltip)
         if file_path and Path(file_path).is_file():
-            textbox.setText(file_path)
+            textbox.setText(str(file_path))
         else:
             # Handle the case where the selected path is not a file
             print("Invalid file selected. Please try again.")

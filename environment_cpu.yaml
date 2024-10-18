@@ -4,8 +4,8 @@ channels:
     - conda-forge
 dependencies:
     - cpuonly
-      # - nifty =1.2.1=*_4
-    - nifty
+    # This pin is necessary because later nifty versions have import errors on windows.
+    - nifty =1.2.1=*_4
     - imagecodecs
     - magicgui
     - napari
