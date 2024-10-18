@@ -87,7 +87,8 @@ def automatic_instance_segmentation(
         embedding_path: The path where the embeddings are cached already / will be saved.
         key: The key to the input file. This is needed for container files (eg. hdf5 or zarr)
             or to load several images as 3d volume. Provide a glob patterm, eg. "*.tif", for this case.
-        ndim: The dimensionality of the data.
+        ndim: The dimensionality of the data. By default the dimensionality of the data will be used.
+            If you have RGB data you have to specify this explicitly, e.g. pass ndim=2 for 2d segmentation of RGB.
         tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
         halo: Overlap of the tiles for tiled prediction.
         verbose: Verbosity flag.
@@ -102,21 +103,12 @@ def automatic_instance_segmentation(
     else:
         image_data = util.load_image_data(input_path, key)
 
-    if ndim == 3 or image_data.ndim == 3:
-        if image_data.ndim != 3:
-            raise ValueError(f"The inputs do not correspond to three dimensional inputs: '{image_data.ndim}'")
+    ndim = image_data.ndim if ndim is None else ndim
 
-        instances = automatic_3d_segmentation(
-            volume=image_data,
-            predictor=predictor,
-            segmentor=segmenter,
-            embedding_path=embedding_path,
-            tile_shape=tile_shape,
-            halo=halo,
-            verbose=verbose,
-            **generate_kwargs
-        )
-    else:
+    if ndim == 2:
+        if image_data.ndim != 2 or image_data.shape[-1] != 3:
+            raise ValueError(f"The inputs does not match the shape expectation of 2d inputs: {image_data.shape}")
+
         # Precompute the image embeddings.
         image_embeddings = util.precompute_image_embeddings(
             predictor=predictor,
@@ -142,6 +134,20 @@ def automatic_instance_segmentation(
             instances = np.zeros(this_shape, dtype="uint32")
         else:
             instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=0)
+    else:
+        if image_data.ndim != 3 or image_data.shape[-1] != 3:
+            raise ValueError(f"The inputs does not match the shape expectation of 3d inputs: {image_data.shape}")
+
+        instances = automatic_3d_segmentation(
+            volume=image_data,
+            predictor=predictor,
+            segmentor=segmenter,
+            embedding_path=embedding_path,
+            tile_shape=tile_shape,
+            halo=halo,
+            verbose=verbose,
+            **generate_kwargs
+        )
 
     if output_path is not None:
         # Save the instance segmentation
