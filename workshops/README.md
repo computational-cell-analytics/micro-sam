@@ -57,7 +57,7 @@ $ micro_sam.precompute_embeddings -i data/platynereis/membrane/train_data_membra
 
 ### Step 3: Run the `micro-sam` Annotators
 
-Run the `micro-sam` annotators with the following scripts:
+Run the `micro-sam` annotators with the following scripts: (TODO recommend GUI)
 
 #### 2D Annotator (Cell Segmentation in Light Microscopy):
 
