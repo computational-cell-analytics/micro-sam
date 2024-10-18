@@ -54,7 +54,8 @@ def _download_embeddings(embedding_dir, dataset_name):
 
         # Download the precomputed embeddings as zipfiles and unzip the embeddings per model.
         for url, checksum in zip(urls, checksums):
-            if all([p.startswith("vit_b") for p in os.listdir(data_embedding_dir)]):
+            fnames = os.listdir(data_embedding_dir)
+            if fnames and all([p.startswith("vit_b") for p in fnames]):
                 continue
 
             zip_path = os.path.join(data_embedding_dir, "embeddings.zip")
