@@ -30,6 +30,8 @@ jobs:
         uses: mamba-org/setup-micromamba@v1
         with:
           environment-file: environment_cpu.yaml
+          create-args: >-
+            python=${{ matrix.python-version }}
 
       # Setup Qt libraries for GUI testing on Linux
       - uses: tlambert03/setup-qt-libs@v1
