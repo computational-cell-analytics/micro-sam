@@ -6,7 +6,7 @@ from torch_em.data import datasets
 from torch_em.util.image import load_data
 
 
-def _download_sample_data(path, data_dir, download, url, checksum):
+def _download_sample_data(path, data_dir, url, checksum, download):
     if os.path.exists(data_dir):
         return
 
@@ -23,7 +23,7 @@ def _get_cellpose_sample_data_paths(path, download):
     url = "https://owncloud.gwdg.de/index.php/s/slIxlmsglaz0HBE/download"
     checksum = "4d1ce7afa6417d051b93d6db37675abc60afe68daf2a4a5db0c787d04583ce8a"
 
-    _download_sample_data(path, data_dir, download, url, checksum)
+    _download_sample_data(path, data_dir, url, checksum, download)
 
     raw_paths = natsorted(glob(os.path.join(data_dir, "*_img.png")))
     label_paths = natsorted(glob(os.path.join(data_dir, "*_masks.png")))
@@ -31,7 +31,7 @@ def _get_cellpose_sample_data_paths(path, download):
     return raw_paths, label_paths
 
 
-def _get_hpa_data_paths(path, download):
+def _get_hpa_data_paths(path, split, download):
     urls = [
         "https://owncloud.gwdg.de/index.php/s/zp1Fmm4zEtLuhy4/download",  # train
         "https://owncloud.gwdg.de/index.php/s/yV7LhGbGfvFGRBE/download",  # val
@@ -43,23 +43,26 @@ def _get_hpa_data_paths(path, download):
         "8963ff47cdef95cefabb8941f33a3916258d19d10f532a209bab849d07f9abfe",  # test
     ]
     splits = ["train", "val", "test"]
+    assert split in splits, f"'{split}' is not a valid split."
 
-    for url, checksum, split in zip(urls, checksums, splits):
-        data_dir = os.path.join(path, split)
-        _download_sample_data(path, data_dir, download, url, checksum)
+    for url, checksum, _split in zip(urls, checksums, splits):
+        data_dir = os.path.join(path, _split)
+        _download_sample_data(path, data_dir, url, checksum, download)
 
-    # NOTE: For visualization, we choose the train set.
-    raw_paths = natsorted(glob(os.path.join(data_dir, "train", "images", "*.tif")))
-    label_paths = natsorted(glob(os.path.join(data_dir, "train", "labels", "*.tif")))
+    raw_paths = natsorted(glob(os.path.join(path, split, "images", "*.tif")))
 
-    return raw_paths, label_paths
+    if split == "test":  # The 'test' split for HPA does not have labels.
+        return raw_paths, None
+    else:
+        label_paths = natsorted(glob(os.path.join(path, split, "labels", "*.tif")))
+        return raw_paths, label_paths
 
 
 def _get_dataset_paths(path, dataset_name, view=False):
     dataset_paths = {
         # 2d LM dataset for cell segmentation
         "cellpose": lambda: _get_cellpose_sample_data_paths(path=os.path.join(path, "cellpose"), download=True),
-        "hpa": lambda: _get_hpa_data_paths(path=os.path.join(path, "hpa"), download=True),
+        "hpa": lambda: _get_hpa_data_paths(path=os.path.join(path, "hpa"), download=True, split="train"),
         # 3d LM dataset for nuclei segmentation
         "embedseg": lambda: datasets.embedseg_data.get_embedseg_paths(
             path=os.path.join(path, "embedseg"), name="Mouse-Skull-Nuclei-CBG", split="train", download=True,
