@@ -9,6 +9,7 @@ dependencies:
     - imagecodecs
     - magicgui
     - napari >=0.5.0
+    - natsort
     - pip
     - pooch
     - pyqt
