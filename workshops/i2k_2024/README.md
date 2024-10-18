@@ -7,7 +7,7 @@ This document walks you through the preparation for the upcoming I2K workshops o
 ## Workshop Overview
 
 The workshop will be one hour and will be divided into three parts:
-1. Short introduction ([slides](TODO), 5-10 minutes)
+1. Short introduction ([slides](https://docs.google.com/presentation/d/1Bw0gQ9Xio0HozKVaJl9-mxJBmCsQPh-1/edit?usp=sharing&ouid=113044948772353505255&rtpof=true&sd=true), 5-10 minutes)
 2. Using the `micro_sam` napari plugin for interactive 2D and 3D segmentation (10-15 minutes)
 3. Using the plugin on your own or example data, finetuning a custom model or an advanced application (35-40 minutes)
 
@@ -20,12 +20,12 @@ Alternatively you can also work on model finetuning or an advanced application, 
 
 To prepare for the workshop please do the following:
 - Install the latest version of `micro_sam`, see [Installation](#installation) for details.
-- Download the pre-computed embeddings for the first 3D segmentation data, see [here](download-embeddings-for-3d-segmentation).
+- Download the pre-computed embeddings for the first 3D segmentation data, see [here](#download-embeddings-for-3d-segmentation).
 - Decide what you want to do in the 3rd part of the workshop and follow the respective preparation steps. You have the following options:
-    - High-throughput annotation of cells (or other structures) in 2D images, see [high-throughput annotation](high-throughput-image- annotation).
-    - 3D segmentation in light or electron mciroscopy, see [3D LM segmentation](3d-lm-segmentation) and [3D EM segmentation](3d-em-segmentation).
-    - Finetuning a SAM model, see [model finetuning](model-finetuning).
-    - Writing your own scripts using the `micro_sam` python library, see [scripting](scripting-with-micro_sam).
+    - High-throughput annotation of cells (or other structures) in 2D images, see [high-throughput annotation](#high-throughput-image-annotation).
+    - 3D segmentation in light or electron mciroscopy, see [3D LM segmentation](#3d-lm-segmentation) and [3D EM segmentation](#3d-em-segmentation).
+    - Finetuning a SAM model, see [model finetuning](#model-finetuning).
+    - Writing your own scripts using the `micro_sam` python library, see [scripting](#scripting-with-micro_sam).
 
 If you want to learn more about the `micro_sam` napari plugin or python library you can check out the [documentation](https://computational-cell-analytics.github.io/micro-sam/) or our [tutorial videos](https://youtube.com/playlist?list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO&si=3q-cIRD6KuoZFmAM).
 
@@ -35,6 +35,7 @@ Please make sure to install the latest version of `micro_sam` (version 1.1) befo
 You can create a new environment and install `micro_sam` like this:
 ```bash
 $ conda create -c conda-forge -n micro_sam python=3.11
+$ conda activate micro_sam
 $ conda install -c pytorch -c conda-forge "micro_sam>=1.1" "torch_em>=0.7.4"
 ```
 If you already have an installation of `micro_sam` please update it by running the last command in your respective environment. You can find more information on the installation [here](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation).
@@ -57,7 +58,7 @@ and download the embeddings:
 $ python download_embeddings.py -d lucchi -e embeddings
 ```
 
-### High-throughput image annotation
+### High-throughput Image Annotation
 
 TODO
 
