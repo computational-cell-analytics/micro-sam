@@ -1,17 +1,88 @@
-# Hands-On Analysis using `micro-sam`
+# I2K Workshop: Segment Anything for Microscopy 
 
-## Upcoming Workshops:
-1. I2K 2024 (Milan, Italy)
-2. Virtual I2K 2024 (Online)
+This document walks you through the preparation for the upcoming I2K workshops on "Segment Anything for Microscopy". We will give two workshops:
+1. In person at I2K 2024 (Milan, Italy)
+2. Online at Virtual I2K 2024
 
-## Introduction
+## Workshop Overview
 
-In this document, we walk you through different steps involved to participate in hands-on image annotation experiments our tool.
+The workshop will be one hour and will be divided into three parts:
+1. Short introduction ([slides](TODO), 5-10 minutes)
+2. Using the `micro_sam` napari plugin for interactive 2D and 3D segmentation (10-15 minutes)
+3. Using the plugin on your own or example data, finetuning a custom model or an advanced application (35-40 minutes)
 
-- Here is our [official documentation](https://computational-cell-analytics.github.io/micro-sam/) for detailed explanation of our tools, library and the finetuned models.
-- Here is the playlist for our [tutorial videos](https://youtube.com/playlist?list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO&si=3q-cIRD6KuoZFmAM) hosted on YouTube, elaborating in detail on the features of our tools.
+We will walk through how to use the `micro_sam` plugin for interactive segmentation in part 2, so that you can then try it out on your own data (or the example data that is most similar to your targeted application) in part 3.
+Alternatively you can also work on model finetuning or an advanced application, such as using our python library to build your own annotation scripts, in part 3.
 
-## Steps:
+**Please read the [Workshop Preparation](#workshop-preparation) section carefully and follow the relevant steps before the workshop, so that we can get started during the workshop right away.**
+
+## Workshop Preparation
+
+To prepare for the workshop please do the following:
+- Install the latest version of `micro_sam`, see [Installation](#installation) for details.
+- Download the pre-computed embeddings for the first 3D segmentation data, see [here](download-embeddings-for-3d-segmentation).
+- Decide what you want to do in the 3rd part of the workshop and follow the respective preparation steps. You have the following options:
+    - High-throughput annotation of cells (or other structures) in 2D images, see [high-throughput annotation](high-throughput-image- annotation).
+    - 3D segmentation in light or electron mciroscopy, see [3D LM segmentation](3d-lm-segmentation) and [3D EM segmentation](3d-em-segmentation).
+    - Finetuning a SAM model, see [model finetuning](model-finetuning).
+    - Writing your own scripts using the `micro_sam` python library, see [scripting](scripting-with-micro_sam).
+
+If you want to learn more about the `micro_sam` napari plugin or python library you can check out the [documentation](https://computational-cell-analytics.github.io/micro-sam/) or our [tutorial videos](https://youtube.com/playlist?list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO&si=3q-cIRD6KuoZFmAM).
+
+### Installation
+
+Please make sure to install the latest version of `micro_sam` (version 1.1) before the workshop using `conda` (or `mamba`).
+You can create a new environment and install `micro_sam` like this:
+```bash
+$ conda create -c conda-forge -n micro_sam python=3.11
+$ conda install -c pytorch -c conda-forge "micro_sam>=1.1" "torch_em>=0.7.4"
+```
+If you already have an installation of `micro_sam` please update it by running the last command in your respective environment. You can find more information on the installation [here](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation).
+
+### Download Embeddings for 3D EM Segmentation
+
+We provide a script to download the image embeddings for the 3D segmentation problem in part 2.
+The image embeddings are necessary to run interactive segmentation. Computing them on the CPU can take some time for volumetric data, but we support precomputing them and have done this for this dataset so that we can start with the interactive segmentation during the workshop right away.
+
+To run the script you first need to use `git` to download this repository:
+```bash
+$ git clone https://github.com/computational-cell-analytics/micro-sam
+```
+then go to this directory:
+```bash
+$ cd micro_sam/workshops/i2k_2024
+```
+and download the embeddings:
+```bash
+$ python download_embeddings.py -d lucchi -e embeddings
+```
+
+### High-throughput image annotation
+
+TODO
+
+### 3D LM Segmentation
+
+TODO
+
+### 3D EM Segmentation
+
+TODO
+
+### Model Finetuning
+
+TODO
+
+### Scripting with micro_sam
+
+TODO
+
+### Precompute Embeddings
+
+TODO
+
+
+<!---
 
 ### Step 1: Download the Datasets
 
@@ -100,3 +171,5 @@ $ micro_sam.image_series_annotator -i ...
 ### Step 4: Finetune Segment Anything on Microscopy Images (WIP)
 
 - We provide a notebook `finetune_sam.ipynb` / `finetune_sam.py` for finetuning Segment Anything Model for cell segmentation in confocal microscopy images.
+
+--->

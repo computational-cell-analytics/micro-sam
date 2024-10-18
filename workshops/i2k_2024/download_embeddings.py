@@ -61,7 +61,7 @@ def _download_embeddings(embedding_dir, dataset_name):
             download_source(path=zip_path, url=url, download=True, checksum=checksum)
             unzip(zip_path=zip_path, dst=data_embedding_dir)
 
-        print(f"The precompted embeddings for '{dname}' are downloaded at f{data_embedding_dir}")
+        print(f"The precompted embeddings for '{dname}' are downloaded at {data_embedding_dir}")
 
 
 def main():
