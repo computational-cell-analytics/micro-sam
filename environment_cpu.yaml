@@ -15,7 +15,7 @@ dependencies:
     - pyqt
     - python-xxhash
     - python-elf >=0.4.8
-    - pytorch
+    - pytorch <2.5
     - segment-anything
     - torchvision
     - torch_em >=0.7.0
