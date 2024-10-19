@@ -84,7 +84,7 @@ $ pip install -e .
 
 We also provide installers for Linux and Windows:
 - [Linux](https://owncloud.gwdg.de/index.php/s/Fyf57WZuiX1NyXs)
-- [Windows](ttps://owncloud.gwdg.de/index.php/s/ZWrY68hl7xE3kGP)
+- [Windows](https://owncloud.gwdg.de/index.php/s/ZWrY68hl7xE3kGP)
 <!---
 - [Mac](https://owncloud.gwdg.de/index.php/s/7YupGgACw9SHy2P)
 -->
