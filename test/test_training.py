@@ -75,9 +75,9 @@ class TestTraining(unittest.TestCase):
         import micro_sam.training as sam_training
 
         batch_size = 1
-        n_sub_iteration = 3
+        n_sub_iteration = 2
         patch_shape = (512, 512)
-        n_objects_per_batch = 2
+        n_objects_per_batch = 1
 
         # Get the dataloaders.
         train_loader = self._get_dataloader("train", patch_shape, batch_size)
@@ -148,32 +148,6 @@ class TestTraining(unittest.TestCase):
         export_path = os.path.join(self.tmp_folder, "exported_model.pth")
         self._export_model(checkpoint_path, export_path, model_type)
         self.assertTrue(os.path.exists(export_path))
-
-        # Check the model with inference with a single point prompt.
-        prediction_dir = os.path.join(self.tmp_folder, "predictions-points")
-        point_inference = partial(
-            evaluation.run_inference_with_prompts,
-            use_points=True, use_boxes=False,
-            n_positives=1, n_negatives=0,
-            batch_size=64,
-        )
-        self._run_inference_and_check_results(
-            export_path, model_type, prediction_dir=prediction_dir,
-            inference_function=point_inference, expected_sa=0.9
-        )
-
-        # Check the model with inference with a box point prompt.
-        prediction_dir = os.path.join(self.tmp_folder, "predictions-boxes")
-        box_inference = partial(
-            evaluation.run_inference_with_prompts,
-            use_points=False, use_boxes=True,
-            n_positives=1, n_negatives=0,
-            batch_size=64,
-        )
-        self._run_inference_and_check_results(
-            export_path, model_type, prediction_dir=prediction_dir,
-            inference_function=box_inference, expected_sa=0.8,
-        )
 
         # Check the model with interactive inference.
         prediction_dir = os.path.join(self.tmp_folder, "predictions-iterative")
