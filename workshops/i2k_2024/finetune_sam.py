@@ -45,8 +45,7 @@ def download_dataset(
         List of filepaths for the image data.
         List of filepaths for the label data.
     """
-    data_path = os.path.join(path, "hpa")
-    image_paths, label_paths = _get_hpa_data_paths(path=data_path, split=split, download=download)
+    image_paths, label_paths = _get_hpa_data_paths(path=path, split=split, download=download)
     return image_paths, label_paths
 
 

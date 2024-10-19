@@ -6,77 +6,85 @@ from torch_em.data import datasets
 from torch_em.util.image import load_data
 
 
-def _download_sample_data(path, data_dir, url, checksum, download):
+def _download_sample_data(data_dir, url, checksum, download):
     if os.path.exists(data_dir):
         return
 
-    os.makedirs(path, exist_ok=True)
+    os.makedirs(data_dir, exist_ok=True)
 
-    zip_path = os.path.join(path, "data.zip")
+    zip_path = os.path.join(data_dir, "data.zip")
     datasets.util.download_source(path=zip_path, url=url, download=download, checksum=checksum)
-    datasets.util.unzip(zip_path=zip_path, dst=path)
+    datasets.util.unzip(zip_path=zip_path, dst=data_dir)
 
 
-def _get_cellpose_sample_data_paths(path, download):
-    data_dir = os.path.join(path, "cellpose", "cyto", "test")
+def _get_cells_sample_data_paths(path, download):
+    data_dir = os.path.join(path, "cells")
 
-    url = "https://owncloud.gwdg.de/index.php/s/slIxlmsglaz0HBE/download"
-    checksum = "4d1ce7afa6417d051b93d6db37675abc60afe68daf2a4a5db0c787d04583ce8a"
+    url = "https://owncloud.gwdg.de/index.php/s/c96cyWc1PpLAPOn/download"
+    checksum = "5d6cb5bc67a2b48c862c200d2df3afdfe6703f9c21bc33a3dd13d2422a396897"
 
-    _download_sample_data(path, data_dir, url, checksum, download)
+    _download_sample_data(data_dir, url, checksum, download)
 
-    raw_paths = natsorted(glob(os.path.join(data_dir, "*_img.png")))
-    label_paths = natsorted(glob(os.path.join(data_dir, "*_masks.png")))
+    raw_paths = natsorted(glob(os.path.join(data_dir, "images", "*.png")))
+    label_paths = natsorted(glob(os.path.join(data_dir, "masks", "*.png")))
 
     return raw_paths, label_paths
 
 
 def _get_hpa_data_paths(path, split, download):
-    urls = [
-        "https://owncloud.gwdg.de/index.php/s/zp1Fmm4zEtLuhy4/download",  # train
-        "https://owncloud.gwdg.de/index.php/s/yV7LhGbGfvFGRBE/download",  # val
-        "https://owncloud.gwdg.de/index.php/s/8tLY5jPmpw37beM/download",  # test
-    ]
-    checksums = [
-        "6e5f3ec6b0d505511bea752adaf35529f6b9bb9e7729ad3bdd90ffe5b2d302ab",  # train
-        "4d7a4188cc3d3877b3cf1fbad5f714ced9af4e389801e2136623eac2fde78e9c",  # val
-        "8963ff47cdef95cefabb8941f33a3916258d19d10f532a209bab849d07f9abfe",  # test
-    ]
     splits = ["train", "val", "test"]
     assert split in splits, f"'{split}' is not a valid split."
 
-    for url, checksum, _split in zip(urls, checksums, splits):
-        data_dir = os.path.join(path, _split)
-        _download_sample_data(path, data_dir, url, checksum, download)
+    data_dir = os.path.join(path, "hpa")
+    url = "https://owncloud.gwdg.de/index.php/s/IrzUcaMxQKVRLTs/download"
+    checksum = "f2c41be1761cdd96635ee30bee9dcbdeda4ebe3ab3467ad410c28417d46cdaad"
 
-    raw_paths = natsorted(glob(os.path.join(path, split, "images", "*.tif")))
+    _download_sample_data(data_dir, url, checksum, download)
+
+    raw_paths = natsorted(glob(os.path.join(data_dir, split, "images", "*.tif")))
 
     if split == "test":  # The 'test' split for HPA does not have labels.
         return raw_paths, None
     else:
-        label_paths = natsorted(glob(os.path.join(path, split, "labels", "*.tif")))
+        label_paths = natsorted(glob(os.path.join(data_dir, split, "labels", "*.tif")))
         return raw_paths, label_paths
+
+
+def _get_nuclei_3d_data_paths(path, download):
+    data_dir = os.path.join(path, "nuclei_3d")
+    url = "https://owncloud.gwdg.de/index.php/s/QdibduvClGmruIV/download"
+    checksum = "551d2c55e0e5614ae21c03e75e7a0afb765b312cb569dd4c32d1d634d8798c91"
+    _download_sample_data(data_dir, url, checksum, download=download)
+    raw_paths = [os.path.join(data_dir, "images", "X1.tif")]
+    label_paths = [os.path.join(data_dir, "masks", "Y1.tif")]
+    return raw_paths, label_paths
+
+
+def _get_volume_em_data_paths(path, download):
+    data_dir = os.path.join(path, "volume_em")
+    url = "https://owncloud.gwdg.de/index.php/s/5CzsV6bsqX0kvSv/download"
+    checksum = "e820e2a89ffb5d466fb4646945b8697269501cce18376f47b946c7773ede4653"
+    _download_sample_data(data_dir, url, checksum, download=download)
+    raw_paths = [os.path.join(data_dir, "images", "train_data_membrane_02.tif")]
+    label_paths = [os.path.join(data_dir, "masks", "train_data_membrane_02_labels.tif")]
+    return raw_paths, label_paths
 
 
 def _get_dataset_paths(path, dataset_name, view=False):
     dataset_paths = {
         # 2d LM dataset for cell segmentation
-        "cellpose": lambda: _get_cellpose_sample_data_paths(path=os.path.join(path, "cellpose"), download=True),
-        "hpa": lambda: _get_hpa_data_paths(path=os.path.join(path, "hpa"), download=True, split="train"),
+        "cells": lambda: _get_cells_sample_data_paths(path=path, download=True),
+        "hpa": lambda: _get_hpa_data_paths(path=path, download=True, split="train"),
         # 3d LM dataset for nuclei segmentation
-        "embedseg": lambda: datasets.embedseg_data.get_embedseg_paths(
-            path=os.path.join(path, "embedseg"), name="Mouse-Skull-Nuclei-CBG", split="train", download=True,
-        ),
+        "nuclei_3d": lambda: _get_nuclei_3d_data_paths(path=path, download=True),
         # 3d EM dataset for membrane segmentation
-        "platynereis": lambda: datasets.platynereis.get_platynereis_paths(
-            path=os.path.join(path, "platynereis"), sample_ids=None, name="cells", download=True,
-        ),
+        "volume_em": lambda: _get_volume_em_data_paths(path=path, download=True),
     }
 
     dataset_keys = {
-        "cellpose": [None, None],
-        "embedseg": [None, None],
-        "platynereis": ["volumes/raw/s1", "volumes/labels/segmentation/s1"]
+        "cells": [None, None],
+        "nuclei_3d": [None, None],
+        "volume_em": [None, None]
     }
 
     if dataset_name is None:  # Download all datasets.
@@ -126,7 +134,7 @@ def main():
     parser.add_argument(
         "-d", "--dataset_name", type=str, default=None,
         help="The choice of dataset you would like to download. By default, it downloads all the datasets. "
-        "Optionally, you can choose to download either of 'cellpose', 'hpa', 'embedseg' or 'platynereis'."
+        "Optionally, you can choose to download either of 'cells', 'hpa', 'nuclei_3d' or 'volume_em'."
     )
     parser.add_argument(
         "-v", "--view", action="store_true", help="Whether to view the downloaded data."
