@@ -12,10 +12,11 @@ dependencies:
     - natsort
     - pip
     - pooch
+    - protobuf <5
     - pyqt
     - python-xxhash
     - python-elf >=0.4.8
-    - pytorch >=2.4,<2.5
+    - pytorch >=2.4
     - segment-anything
     - torchvision
     - torch_em >=0.7.0
