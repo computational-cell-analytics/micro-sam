@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="generator" content="pdoc 14.2.0"/>
+    <meta name="generator" content="pdoc 14.4.0"/>
     <title>micro_sam API documentation</title>
 
     <style>/*! * Bootstrap Reboot v5.0.0 (https://getbootstrap.com/) * Copyright 2011-2021 The Bootstrap Authors * Copyright 2011-2021 Twitter, Inc. * Licensed under MIT (https://github.com/twbs/bootstrap/blob/main/LICENSE) * Forked from Normalize.css, licensed MIT (https://github.com/necolas/normalize.css/blob/master/LICENSE.md) */*,::after,::before{box-sizing:border-box}@media (prefers-reduced-motion:no-preference){:root{scroll-behavior:smooth}}body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans","Liberation Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";font-size:1rem;font-weight:400;line-height:1.5;color:#212529;background-color:#fff;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}hr{margin:1rem 0;color:inherit;background-color:currentColor;border:0;opacity:.25}hr:not([size]){height:1px}h1,h2,h3,h4,h5,h6{margin-top:0;margin-bottom:.5rem;font-weight:500;line-height:1.2}h1{font-size:calc(1.375rem + 1.5vw)}@media (min-width:1200px){h1{font-size:2.5rem}}h2{font-size:calc(1.325rem + .9vw)}@media (min-width:1200px){h2{font-size:2rem}}h3{font-size:calc(1.3rem + .6vw)}@media (min-width:1200px){h3{font-size:1.75rem}}h4{font-size:calc(1.275rem + .3vw)}@media (min-width:1200px){h4{font-size:1.5rem}}h5{font-size:1.25rem}h6{font-size:1rem}p{margin-top:0;margin-bottom:1rem}abbr[data-bs-original-title],abbr[title]{-webkit-text-decoration:underline dotted;text-decoration:underline dotted;cursor:help;-webkit-text-decoration-skip-ink:none;text-decoration-skip-ink:none}address{margin-bottom:1rem;font-style:normal;line-height:inherit}ol,ul{padding-left:2rem}dl,ol,ul{margin-top:0;margin-bottom:1rem}ol ol,ol ul,ul ol,ul ul{margin-bottom:0}dt{font-weight:700}dd{margin-bottom:.5rem;margin-left:0}blockquote{margin:0 0 1rem}b,strong{font-weight:bolder}small{font-size:.875em}mark{padding:.2em;background-color:#fcf8e3}sub,sup{position:relative;font-size:.75em;line-height:0;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}a{color:#0d6efd;text-decoration:underline}a:hover{color:#0a58ca}a:not([href]):not([class]),a:not([href]):not([class]):hover{color:inherit;text-decoration:none}code,kbd,pre,samp{font-family:SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:1em;direction:ltr;unicode-bidi:bidi-override}pre{display:block;margin-top:0;margin-bottom:1rem;overflow:auto;font-size:.875em}pre code{font-size:inherit;color:inherit;word-break:normal}code{font-size:.875em;color:#d63384;word-wrap:break-word}a>code{color:inherit}kbd{padding:.2rem .4rem;font-size:.875em;color:#fff;background-color:#212529;border-radius:.2rem}kbd kbd{padding:0;font-size:1em;font-weight:700}figure{margin:0 0 1rem}img,svg{vertical-align:middle}table{caption-side:bottom;border-collapse:collapse}caption{padding-top:.5rem;padding-bottom:.5rem;color:#6c757d;text-align:left}th{text-align:inherit;text-align:-webkit-match-parent}tbody,td,tfoot,th,thead,tr{border-color:inherit;border-style:solid;border-width:0}label{display:inline-block}button{border-radius:0}button:focus:not(:focus-visible){outline:0}button,input,optgroup,select,textarea{margin:0;font-family:inherit;font-size:inherit;line-height:inherit}button,select{text-transform:none}[role=button]{cursor:pointer}select{word-wrap:normal}select:disabled{opacity:1}[list]::-webkit-calendar-picker-indicator{display:none}[type=button],[type=reset],[type=submit],button{-webkit-appearance:button}[type=button]:not(:disabled),[type=reset]:not(:disabled),[type=submit]:not(:disabled),button:not(:disabled){cursor:pointer}::-moz-focus-inner{padding:0;border-style:none}textarea{resize:vertical}fieldset{min-width:0;padding:0;margin:0;border:0}legend{float:left;width:100%;padding:0;margin-bottom:.5rem;font-size:calc(1.275rem + .3vw);line-height:inherit}@media (min-width:1200px){legend{font-size:1.5rem}}legend+*{clear:left}::-webkit-datetime-edit-day-field,::-webkit-datetime-edit-fields-wrapper,::-webkit-datetime-edit-hour-field,::-webkit-datetime-edit-minute,::-webkit-datetime-edit-month-field,::-webkit-datetime-edit-text,::-webkit-datetime-edit-year-field{padding:0}::-webkit-inner-spin-button{height:auto}[type=search]{outline-offset:-2px;-webkit-appearance:textfield}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-color-swatch-wrapper{padding:0}::file-selector-button{font:inherit}::-webkit-file-upload-button{font:inherit;-webkit-appearance:button}output{display:inline-block}iframe{border:0}summary{display:list-item;cursor:pointer}progress{vertical-align:baseline}[hidden]{display:none!important}</style>
@@ -74,10 +74,12 @@
 
             <h2>Submodules</h2>
             <ul>
+                    <li><a href="micro_sam/automatic_segmentation.html">automatic_segmentation</a></li>
                     <li><a href="micro_sam/bioimageio.html">bioimageio</a></li>
                     <li><a href="micro_sam/evaluation.html">evaluation</a></li>
                     <li><a href="micro_sam/inference.html">inference</a></li>
                     <li><a href="micro_sam/instance_segmentation.html">instance_segmentation</a></li>
+                    <li><a href="micro_sam/models.html">models</a></li>
                     <li><a href="micro_sam/multi_dimensional_segmentation.html">multi_dimensional_segmentation</a></li>
                     <li><a href="micro_sam/precompute_state.html">precompute_state</a></li>
                     <li><a href="micro_sam/prompt_based_segmentation.html">prompt_based_segmentation</a></li>
@@ -133,12 +135,21 @@ We are still working on improving and extending its functionality. The current r
 
 <p>You can install <code><a href="">micro_sam</a></code> via mamba:</p>
 
-<pre><code>$ mamba install -c conda-forge micro_sam
+<div class="pdoc-code codehilite">
+<pre><span></span><code>$<span class="w"> </span>mamba<span class="w"> </span>install<span class="w"> </span>-c<span class="w"> </span>conda-forge<span class="w"> </span>micro_sam
 </code></pre>
+</div>
 
 <p>We also provide installers for Windows and Linux. For more details on the available installation options, check out <a href="#installation">the installation section</a>.</p>
 
-<p>After installing <code><a href="">micro_sam</a></code> you can start napari and select the annotation tool you want to use from <code>Plugins -&gt; SegmentAnything for Microscopy</code>. Check out the <a href="https://youtu.be/gcv0fa84mCc">quickstart tutorial video</a> for a short introduction and <a href="#annotation-tools">the annotation tool section</a> for details.</p>
+<p>After installing <code><a href="">micro_sam</a></code>, you can start napari from within your environment using</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code>$<span class="w"> </span>napari
+</code></pre>
+</div>
+
+<p>After starting napari, you can select the annotation tool you want to use from <code>Plugins -&gt; SegmentAnything for Microscopy</code>. Check out the <a href="https://youtu.be/gcv0fa84mCc">quickstart tutorial video</a> for a short introduction and <a href="#annotation-tools">the annotation tool section</a> for details.</p>
 
 <p>The <code><a href="">micro_sam</a></code> python library can be imported via</p>
 
@@ -205,6 +216,13 @@ You can follow the instructions <a href="https://mamba.readthedocs.io/en/latest/
 </code></pre>
 </div>
 
+<p>NOTE: If you create a new enviroment (eg. here called <code>micro-sam</code>), you must activate the environment using</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code>$<span class="w"> </span>mamba<span class="w"> </span>activate<span class="w"> </span>micro-sam
+</code></pre>
+</div>
+
 <p>You may need to change this command to install the correct CUDA version for your system, see <a href="https://pytorch.org/">https://pytorch.org/</a> for details.</p>
 
 <h2 id="from-source">From source</h2>
@@ -268,8 +286,8 @@ You can follow the instructions <a href="https://mamba.readthedocs.io/en/latest/
 <p>We also provide installers for Linux and Windows:</p>
 
 <ul>
-<li><a href="https://owncloud.gwdg.de/index.php/s/nvLwlrHE4DkYcWl">Linux</a></li>
-<li><a href="https://owncloud.gwdg.de/index.php/s/feIs9069IrURmbt">Windows</a>
+<li><a href="https://owncloud.gwdg.de/index.php/s/Fyf57WZuiX1NyXs">Linux</a></li>
+<li><a href="https://owncloud.gwdg.de/index.php/s/ZWrY68hl7xE3kGP">Windows</a>
 <!---</li>
 <li><a href="https://owncloud.gwdg.de/index.php/s/7YupGgACw9SHy2P">Mac</a>
 --></li>
@@ -346,12 +364,20 @@ The <code><a href="">micro_sam</a></code> tools mainly use the <a href="https://
 
 <p>You can find additional information on the annotation tools <a href="#usage-question">in the FAQ section</a>.</p>
 
+<p>HINT: If you would like to start napari to use <code>micro-sam</code> from the plugin menu, you must start it by activating the environment where <code>micro-sam</code> has been installed using:</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code>$<span class="w"> </span>mamba<span class="w"> </span>activate<span class="w"> </span>&lt;ENVIRONMENT_NAME&gt;
+$<span class="w"> </span>napari
+</code></pre>
+</div>
+
 <h2 id="annotator-2d">Annotator 2D</h2>
 
 <p>The 2d annotator can be started by</p>
 
 <ul>
-<li>clicking <code>Annotator 2d</code> in the plugin menu.</li>
+<li>clicking <code>Annotator 2d</code> in the plugin menu after starting <code>napari</code>.</li>
 <li>running <code>$ micro_sam.annotator_2d</code> in the command line.</li>
 <li>calling <code><a href="micro_sam/sam_annotator/annotator_2d.html">micro_sam.sam_annotator.annotator_2d</a></code> in a python script. Check out <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py">examples/annotator_2d.py</a> for details.</li>
 </ul>
@@ -390,7 +416,7 @@ When <code>commit_path</code> is given the results will automatically be saved t
 <p>The 3d annotator can be started by</p>
 
 <ul>
-<li>clicking <code>Annotator 3d</code> in the plugin menu.</li>
+<li>clicking <code>Annotator 3d</code> in the plugin menu after starting <code>napari</code>.</li>
 <li>running <code>$ micro_sam.annotator_3d</code> in the command line.</li>
 <li>calling <code><a href="micro_sam/sam_annotator/annotator_3d.html">micro_sam.sam_annotator.annotator_3d</a></code> in a python script. Check out <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_3d.py">examples/annotator_3d.py</a> for details.</li>
 </ul>
@@ -421,7 +447,7 @@ When <code>commit_path</code> is given the results will automatically be saved t
 <p>The tracking annotator can be started by</p>
 
 <ul>
-<li>clicking <code>Annotator Tracking</code> in the plugin menu.</li>
+<li>clicking <code>Annotator Tracking</code> in the plugin menu after starting <code>napari</code>.</li>
 <li>running <code>$ micro_sam.annotator_tracking</code> in the command line.</li>
 <li>calling <code><a href="micro_sam/sam_annotator/annotator_tracking.html">micro_sam.sam_annotator.annotator_tracking</a></code> in a python script. Check out <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_tracking.py">examples/annotator_tracking.py</a> for details. </li>
 </ul>
@@ -452,7 +478,7 @@ When <code>commit_path</code> is given the results will automatically be saved t
 <p>The image series annotation tool enables running the <a href="#annotator-2d">2d annotator</a> or <a href="#annotator-3d">3d annotator</a> for multiple images that are saved in a folder. This makes it convenient to annotate many images without having to restart the tool for every image. It can be started by</p>
 
 <ul>
-<li>clicking <code>Image Series Annotator</code> in the plugin menu.</li>
+<li>clicking <code>Image Series Annotator</code> in the plugin menu after starting <code>napari</code>.</li>
 <li>running <code>$ micro_sam.image_series_annotator</code> in the command line.</li>
 <li>calling <code><a href="micro_sam/sam_annotator/image_series_annotator.html">micro_sam.sam_annotator.image_series_annotator</a></code> in a python script. Check out <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/image_series_annotator.py">examples/image_series_annotator.py</a> for details. </li>
 </ul>
@@ -471,7 +497,7 @@ Once you click <code>Annotate Images</code> the images from the folder you have 
 
 <h2 id="finetuning-ui">Finetuning UI</h2>
 
-<p>We also provide a graphical inferface for fine-tuning models on your own data. It can be started by clicking <code>Finetuning</code> in the plugin menu.</p>
+<p>We also provide a graphical inferface for fine-tuning models on your own data. It can be started by clicking <code>Finetuning</code> in the plugin menu after starting <code>napari</code>.</p>
 
 <p><strong>Note:</strong> if you know a bit of python programming we recommend to use a script for model finetuning instead. This will give you more options to configure the training. See <a href="#training-your-own-model">these instructions</a> for details.</p>
 
@@ -868,6 +894,16 @@ c) try using a different model and change the projection mode for 3d segmentatio
 
 <p>This can happen for long running computations. You just need to wait a bit longer and the computation will finish.</p>
 
+<h3 id="14-i-have-3d-rgb-microscopy-volumes-how-does-micro_sam-handle-these-images">14. I have 3D RGB microscopy volumes. How does <code><a href="">micro_sam</a></code> handle these images?</h3>
+
+<p><code><a href="">micro_sam</a></code> performs automatic segmentation in 3D volumes by first segmenting slices individually in 2D and merging the segmentations across 3D based on overlap of objects between slices. The expected shape of your 3D RGB volume should be <code>(Z * Y * X * 3)</code> (reason: Segment Anything is devised to consider 3-channel inputs, so while the user provides micro-sam with 1-channel inputs, we handle this by triplicating this to fit the requirement, or with 3-channel inputs, we use them in the expected RGB array structures as it is).</p>
+
+<h3 id="15-i-want-to-use-a-model-stored-in-a-different-directory-than-the-micro_sam-cache-how-can-i-do-this">15. I want to use a model stored in a different directory than the <code><a href="">micro_sam</a></code> cache. How can I do this?</h3>
+
+<p>The <code>micro-sam</code> CLIs for precomputation of image embeddings and annotators (Annotator 2d, Annotator 3d, Annotator Tracking, Image Series Annotator) accept the argument <code>-c</code> / <code>--checkpoint</code> to pass model checkpoints. If you start a <code>micro-sam</code> annotator from the <code>napari</code> plugin menu, you can provide the path to model checkpoints in the annotator widget (on right) under <code>Embedding Settings</code> drop-down in the <code>custom weights path</code> option.</p>
+
+<p>NOTE: It is important to choose the correct model type when you opt for the above recommendation, using the <code>-m / --model_type</code> argument or selecting it from the <code>Model</code> dropdown in <code>Embedding Settings</code> respectively. Otherwise you will face parameter mismatch issues.</p>
+
 <h2 id="fine-tuning-questions">Fine-tuning questions</h2>
 
 <h3 id="1-i-have-a-microscopy-dataset-i-would-like-to-fine-tune-segment-anything-for-is-it-possible-using-micro_sam">1. I have a microscopy dataset I would like to fine-tune Segment Anything for. Is it possible using <code><a href="">micro_sam</a></code>?</h3>
@@ -875,14 +911,14 @@ c) try using a different model and change the projection mode for 3d segmentatio
 <p>Yes, you can fine-tune Segment Anything on your own dataset. Here's how you can do it:</p>
 
 <ul>
-<li>Check out the <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/micro-sam-finetuning.ipynb">tutorial notebook</a> on how to fine-tune Segment Anything with our <code><a href="micro_sam/training.html">micro_sam.training</a></code> library.</li>
+<li>Check out the <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb">tutorial notebook</a> on how to fine-tune Segment Anything with our <code><a href="micro_sam/training.html">micro_sam.training</a></code> library.</li>
 <li>Or check the <a href="https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/finetuning">examples</a> for additional scripts that demonstrate finetuning.</li>
 <li>If you are not familiar with coding in python at all then you can also use the <a href="finetuning-ui">graphical interface for finetuning</a>. But we recommend using a script for more flexibility and reproducibility.</li>
 </ul>
 
 <h3 id="2-i-would-like-to-fine-tune-segment-anything-on-open-source-cloud-services-eg-kaggle-notebooks-is-it-possible">2. I would like to fine-tune Segment Anything on open-source cloud services (e.g. Kaggle Notebooks), is it possible?</h3>
 
-<p>Yes, you can fine-tune Segment Anything on your custom datasets on Kaggle (and <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#using-micro_sam-on-band">BAND</a>). Check out our <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/micro-sam-finetuning.ipynb">tutorial notebook</a> for this.</p>
+<p>Yes, you can fine-tune Segment Anything on your custom datasets on Kaggle (and <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#using-micro_sam-on-band">BAND</a>). Check out our <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb">tutorial notebook</a> for this.</p>
 
 <p><!---
 TODO: we should improve this explanation and add a small image that visualizes the labels.
