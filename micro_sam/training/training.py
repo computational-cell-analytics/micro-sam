@@ -489,9 +489,13 @@ def default_sam_loader(**kwargs) -> DataLoader:
     Returns:
         The DataLoader.
     """
-    ds_kwargs, loader_kwargs = split_kwargs(torch_em.default_segmentation_dataset, **kwargs)
-    print(ds_kwargs)
-    print(loader_kwargs)
+    sam_ds_kwargs, extra_kwargs = split_kwargs(default_sam_dataset, **kwargs)
+
+    # There might be additional parameters supported by `torch_em.default_segmentation_dataset`,
+    # which the users can provide to get their desired segmentation dataset.
+    extra_ds_kwargs, loader_kwargs = split_kwargs(torch_em.default_segmentation_dataset, **extra_kwargs)
+    ds_kwargs = {**sam_ds_kwargs, **extra_ds_kwargs}
+
     ds = default_sam_dataset(**ds_kwargs)
     return torch_em.segmentation.get_data_loader(ds, **loader_kwargs)
 
