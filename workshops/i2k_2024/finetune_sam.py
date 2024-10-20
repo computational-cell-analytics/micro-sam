@@ -1,7 +1,7 @@
-"""Finetuning Segment Anything using µsam.
+"""Finetuning Segment Anything using 'µsam'.
 
 This python script shows how to use Segment Anything for Microscopy to fine-tune a Segment Anything Model (SAM)
-on an open-source data with multiple channels.
+on open-source microscopy images with multiple channels.
 
 We use confocal microscopy images from the HPA Kaggle Challenge for protein identification
 (from Ouyang et al. - https://doi.org/10.1038/s41592-019-0658-6) in this script for the cell segmentation task.
@@ -50,7 +50,7 @@ def download_dataset(
 
 
 def verify_inputs(image_paths: List[str], label_paths: List[str]):
-    """Verify the downloaded inputs and preprocess them.
+    """Verify the downloaded inputs and understand the inputs' data structure.
 
     Args:
         image_paths: List of filepaths for the image data.
@@ -74,6 +74,9 @@ def verify_inputs(image_paths: List[str], label_paths: List[str]):
 
 def preprocess_inputs(image_paths: List[str]):
     """Preprocess the input images.
+
+    NOTE: For this part, we choose to keep `microtubules`, `proten` and `nuclei` channels as the first,
+    second and third channels respectively for finetuning Segment Anything.
 
     Args:
         image_paths: List of filepaths for the image data.
@@ -124,6 +127,18 @@ def get_dataloaders(
 ) -> Tuple[DataLoader, DataLoader]:
     """Get the HPA dataloaders for cell segmentation.
 
+    NOTE: `micro_sam.training.default_sam_loader` is a convenience function to build a torch dataloader
+    from the image data and labels for training segmentation models.
+    This is wrapped around the `torch_em.default_segmentation_loader`.
+    It suppoirts image data in various formats. Here, we load image data and corresponding labels by providing
+    filepaths to the respective tif files that were downloaded and preprocessed using the functionality above.
+
+    For more information, here is the documentation:
+    https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/README.md
+
+    Here is a detailed notebook on finetuning Segment Anything:
+    https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb
+
     Args:
         train_image_paths: List of filepaths for the training image data.
         train_label_paths: List of filepaths for the training label data.
@@ -140,7 +155,11 @@ def get_dataloaders(
     raw_key, label_key = None, None
 
     batch_size = 1  # the training batch size
-    patch_shape = (512, 512)  # the size of patches for training
+    patch_shape = (1024, 1024)  # the size of patches for training
+
+    # The dataloader internally takes care of adding label transforms: i.e. used to convert the ground-truth
+    # labels to the desired instances for finetuning Segment Anythhing, or, to learn the foreground and distances
+    # to the object centers and object boundaries for automatic segmentation.
 
     train_loader = sam_training.default_sam_loader(
         raw_paths=train_image_paths,
@@ -156,6 +175,7 @@ def get_dataloaders(
         raw_transform=normalize_to_8bit,
         n_samples=100,
     )
+
     val_loader = sam_training.default_sam_loader(
         raw_paths=val_image_paths,
         raw_key=raw_key,
@@ -171,6 +191,7 @@ def get_dataloaders(
     )
 
     if view:
+        # Let's check how our samples look from the dataloader.
         check_loader(train_loader, 4, plt=True)
 
     return train_loader, val_loader
@@ -248,19 +269,23 @@ def run_instance_segmentation_with_decoder(
     assert os.path.exists(checkpoint), "Please train the model first to run inference on the finetuned model."
 
     # Get the 'predictor' and 'segmenter' to perform automatic instance segmentation.
-    predictor, segmenter = get_predictor_and_segmenter(model_type=model_type, checkpoint=checkpoint, device=device)
+    predictor, segmenter = get_predictor_and_segmenter(
+        model_type=model_type, checkpoint=checkpoint, device=device, is_tiled=True
+    )
 
     for image_path in test_image_paths:
         image = imageio.imread(image_path)
         image = normalize_to_8bit(image)
 
         # Predicting the instances.
-        prediction = automatic_instance_segmentation(predictor=predictor, segmenter=segmenter, input_path=image, ndim=2)
+        prediction = automatic_instance_segmentation(
+            predictor=predictor, segmenter=segmenter, input_path=image, ndim=2, tile_shape=(768, 768), halo=(128, 128)
+        )
 
         # Visualize the predictions
         fig, ax = plt.subplots(1, 2, figsize=(10, 10))
 
-        ax[0].imshow(image, cmap="gray")
+        ax[0].imshow(image)
         ax[0].axis("off")
         ax[0].set_title("Input Image")
 
@@ -270,6 +295,8 @@ def run_instance_segmentation_with_decoder(
 
         plt.show()
         plt.close()
+
+        break  # comment this out in case you want to run inference for all images.
 
 
 def main():
@@ -315,6 +342,8 @@ def main():
     verify_inputs(image_paths=train_image_paths, label_paths=train_label_paths)
 
     # Step 3: Preprocess input images.
+    # NOTE: Segment Anything accepts inputs of either 1 channel or 3 channels. To finetune SAM on your data,
+    # it is necessary to select either 1 channel or 3 channels out of the 4 channels available in the data.
     preprocess_inputs(image_paths=train_image_paths)
     preprocess_inputs(image_paths=val_image_paths)
     preprocess_inputs(image_paths=test_image_paths)
