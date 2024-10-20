@@ -56,7 +56,7 @@ $ git clone https://github.com/computational-cell-analytics/micro-sam
 then go to this directory:
 
 ```bash
-$ cd micro_sam/workshops/i2k_2024
+$ cd micro-sam/workshops/i2k_2024
 ```
 
 and download the precomputed embeddings:
