@@ -43,7 +43,7 @@ def _download_embeddings(embedding_dir, dataset_name):
     for dname in dataset_names:
         if dname not in URLS:
             raise ValueError(
-                f"'{dname}' does not have precomputed embeddings to download. Please choose from {list(URLS.keys())}"
+                f"'{dname}' does not have precomputed embeddings to download. Please choose from {list(URLS.keys())}."
             )
 
         urls = URLS[dname]
