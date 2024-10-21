@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Dict, Optional, Union, Tuple
+from typing import Optional, Union, Tuple, Dict
 
 import numpy as np
 import imageio.v3 as imageio
@@ -12,74 +12,103 @@ from .instance_segmentation import (
 from .multi_dimensional_segmentation import automatic_3d_segmentation
 
 
+def get_predictor_and_segmenter(
+    model_type: str,
+    checkpoint: Optional[Union[os.PathLike, str]] = None,
+    device: str = None,
+    amg: Optional[bool] = None,
+    is_tiled: bool = False,
+    **kwargs,
+) -> Tuple[util.SamPredictor, Union[AMGBase, InstanceSegmentationWithDecoder]]:
+    """Get the Segment Anything model and class for automatic instance segmentation.
+
+    Args:
+        model_type: The Segment Anything model choice.
+        checkpoint: The filepath to the stored model checkpoints.
+        device: The torch device.
+        amg: Whether to perform automatic segmentation in AMG mode.
+            Otherwise AIS will be used, which requires a special segmentation decoder.
+            If not specified AIS will be used if it is available and otherwise AMG will be used.
+        is_tiled: Whether to return segmenter for performing segmentation in tiling window style.
+        kwargs: Keyword arguments for the automatic instance segmentation class.
+
+    Returns:
+        The Segment Anything model.
+        The automatic instance segmentation class.
+    """
+    # Get the device
+    device = util.get_device(device=device)
+
+    # Get the predictor and state for Segment Anything models.
+    predictor, state = util.get_sam_model(
+        model_type=model_type, device=device, checkpoint_path=checkpoint, return_state=True,
+    )
+
+    if amg is None:
+        amg = "decoder_state" not in state
+    if amg:
+        decoder = None
+    else:
+        if "decoder_state" not in state:
+            raise RuntimeError("You have passed amg=False, but your model does not contain a segmentation decoder.")
+        decoder_state = state["decoder_state"]
+        decoder = get_decoder(image_encoder=predictor.model.image_encoder, decoder_state=decoder_state, device=device)
+
+    segmenter = get_amg(
+        predictor=predictor,
+        is_tiled=is_tiled,
+        decoder=decoder,
+        **kwargs
+    )
+    return predictor, segmenter
+
+
 def automatic_instance_segmentation(
+    predictor: util.SamPredictor,
+    segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
     input_path: Union[Union[os.PathLike, str], np.ndarray],
     output_path: Optional[Union[os.PathLike, str]] = None,
     embedding_path: Optional[Union[os.PathLike, str]] = None,
-    model_type: str = util._DEFAULT_MODEL,
-    checkpoint_path: Optional[Union[os.PathLike, str]] = None,
     key: Optional[str] = None,
     ndim: Optional[int] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
-    use_amg: bool = False,
-    amg_kwargs: Optional[Dict] = None,
+    verbose: bool = True,
     **generate_kwargs
 ) -> np.ndarray:
     """Run automatic segmentation for the input image.
 
     Args:
+        predictor: The Segment Anything model.
+        segmenter: The automatic instance segmentation class.
         input_path: input_path: The input image file(s). Can either be a single image file (e.g. tif or png),
             or a container file (e.g. hdf5 or zarr).
         output_path: The output path where the instance segmentations will be saved.
         embedding_path: The path where the embeddings are cached already / will be saved.
-        model_type: The SegmentAnything model to use. Will use the standard vit_l model by default.
-        checkpoint_path: Path to a checkpoint for a custom model.
         key: The key to the input file. This is needed for container files (eg. hdf5 or zarr)
             or to load several images as 3d volume. Provide a glob patterm, eg. "*.tif", for this case.
-        ndim: The dimensionality of the data.
+        ndim: The dimensionality of the data. By default the dimensionality of the data will be used.
+            If you have RGB data you have to specify this explicitly, e.g. pass ndim=2 for 2d segmentation of RGB.
         tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
         halo: Overlap of the tiles for tiled prediction.
-        use_amg: Whether to use Automatic Mask Generation (AMG) as the automatic segmentation method.
-        amg_kwargs: optional keyword arguments for creating the AMG or AIS class.
-        generate_kwargs: optional keyword arguments for the generate function onf the AMG or AIS class.
+        verbose: Verbosity flag.
+        generate_kwargs: optional keyword arguments for the generate function of the AMG or AIS class.
 
     Returns:
         The segmentation result.
     """
-    predictor, state = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path, return_state=True)
-
-    if "decoder_state" in state and not use_amg:  # AIS
-        decoder = get_decoder(predictor.model.image_encoder, state["decoder_state"])
-        segmenter = get_amg(
-            predictor=predictor, decoder=decoder, is_tiled=tile_shape is not None,
-            **({} if amg_kwargs is None else amg_kwargs)
-        )
-    else:  # AMG
-        segmenter = get_amg(
-            predictor=predictor, is_tiled=tile_shape is not None, **({} if amg_kwargs is None else amg_kwargs)
-        )
-
     # Load the input image file.
     if isinstance(input_path, np.ndarray):
         image_data = input_path
     else:
         image_data = util.load_image_data(input_path, key)
 
-    if ndim == 3 or image_data.ndim == 3:
-        if image_data.ndim != 3:
-            raise ValueError(f"The inputs do not correspond to three dimensional inputs: '{image_data.ndim}'")
+    ndim = image_data.ndim if ndim is None else ndim
 
-        instances = automatic_3d_segmentation(
-            volume=image_data,
-            predictor=predictor,
-            segmentor=segmenter,
-            embedding_path=embedding_path,
-            tile_shape=tile_shape,
-            halo=halo,
-            **generate_kwargs
-        )
-    else:
+    if ndim == 2:
+        if (image_data.ndim != 2) and (image_data.ndim != 3 and image_data.shape[-1] != 3):
+            raise ValueError(f"The inputs does not match the shape expectation of 2d inputs: {image_data.shape}")
+
         # Precompute the image embeddings.
         image_embeddings = util.precompute_image_embeddings(
             predictor=predictor,
@@ -88,6 +117,7 @@ def automatic_instance_segmentation(
             ndim=ndim,
             tile_shape=tile_shape,
             halo=halo,
+            verbose=verbose,
         )
 
         segmenter.initialize(image=image_data, image_embeddings=image_embeddings)
@@ -104,6 +134,20 @@ def automatic_instance_segmentation(
             instances = np.zeros(this_shape, dtype="uint32")
         else:
             instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=0)
+    else:
+        if (image_data.ndim != 3) and (image_data.ndim != 4 and image_data.shape[-1] != 3):
+            raise ValueError(f"The inputs does not match the shape expectation of 3d inputs: {image_data.shape}")
+
+        instances = automatic_3d_segmentation(
+            volume=image_data,
+            predictor=predictor,
+            segmentor=segmenter,
+            embedding_path=embedding_path,
+            tile_shape=tile_shape,
+            halo=halo,
+            verbose=verbose,
+            **generate_kwargs
+        )
 
     if output_path is not None:
         # Save the instance segmentation
@@ -162,6 +206,11 @@ def main():
     parser.add_argument(
         "--amg", action="store_true", help="Whether to use automatic mask generation with the model."
     )
+    parser.add_argument(
+        "-d", "--device", default=None,
+        help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
+        "By default the most performant available device will be selected."
+    )
 
     args, parameter_args = parser.parse_known_args()
 
@@ -179,17 +228,20 @@ def main():
         parameter_args[i].lstrip("--"): _convert_argval(parameter_args[i + 1]) for i in range(0, len(parameter_args), 2)
     }
 
+    predictor, segmenter = get_predictor_and_segmenter(
+        model_type=args.model_type, checkpoint=args.checkpoint, device=args.device,
+    )
+
     automatic_instance_segmentation(
+        predictor=predictor,
+        segmenter=segmenter,
         input_path=args.input_path,
         output_path=args.output_path,
         embedding_path=args.embedding_path,
-        model_type=args.model_type,
-        checkpoint_path=args.checkpoint,
         key=args.key,
         ndim=args.ndim,
         tile_shape=args.tile_shape,
         halo=args.halo,
-        use_amg=args.amg,
         **generate_kwargs,
     )
 

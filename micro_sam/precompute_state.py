@@ -154,7 +154,7 @@ def cache_is_state(
 
 
 def _precompute_state_for_file(
-    predictor, input_path, output_path, key, ndim, tile_shape, halo, precompute_amg_state, decoder,
+    predictor, input_path, output_path, key, ndim, tile_shape, halo, precompute_amg_state, decoder, verbose
 ):
     if isinstance(input_path, np.ndarray):
         image_data = input_path
@@ -164,7 +164,7 @@ def _precompute_state_for_file(
     # Precompute the image embeddings.
     output_path = Path(output_path).with_suffix(".zarr")
     embeddings = util.precompute_image_embeddings(
-        predictor, image_data, output_path, ndim=ndim, tile_shape=tile_shape, halo=halo,
+        predictor, image_data, output_path, ndim=ndim, tile_shape=tile_shape, halo=halo, verbose=verbose
     )
 
     # Precompute the state for automatic instance segmnetaiton (AMG or AIS).
@@ -183,10 +183,10 @@ def _precompute_state_for_file(
             ndim = image_data.ndim
 
         if ndim == 2:
-            cache_function(raw=image_data, verbose=True)
+            cache_function(raw=image_data, verbose=verbose)
         else:
             n = image_data.shape[0]
-            for i in tqdm(range(n), total=n, desc="Precompute instance segmentation state"):
+            for i in tqdm(range(n), total=n, desc="Precompute instance segmentation state", disable=not verbose):
                 cache_function(raw=image_data, i=i, verbose=False)
 
 
@@ -213,6 +213,7 @@ def _precompute_state_for_files(
             predictor, file_path, out_path,
             key=key, ndim=ndim, tile_shape=tile_shape, halo=halo,
             precompute_amg_state=precompute_amg_state, decoder=decoder,
+            verbose=False,
         )
 
 
@@ -262,7 +263,7 @@ def precompute_state(
             predictor, input_path, output_path, key,
             ndim=ndim, tile_shape=tile_shape, halo=halo,
             precompute_amg_state=precompute_amg_state,
-            decoder=decoder,
+            decoder=decoder, verbose=True,
         )
     else:
         input_files = glob(os.path.join(input_path, pattern))

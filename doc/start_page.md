@@ -22,12 +22,17 @@ If you run into any problems or have questions please [open an issue](https://gi
 ## Quickstart
 
 You can install `micro_sam` via mamba:
-```
+```bash
 $ mamba install -c conda-forge micro_sam
 ```
 We also provide installers for Windows and Linux. For more details on the available installation options, check out [the installation section](#installation).
 
-After installing `micro_sam` you can start napari and select the annotation tool you want to use from `Plugins -> SegmentAnything for Microscopy`. Check out the [quickstart tutorial video](https://youtu.be/gcv0fa84mCc) for a short introduction and [the annotation tool section](#annotation-tools) for details.
+After installing `micro_sam`, you can start napari from within your environment using
+
+```bash
+$ napari
+```
+After starting napari, you can select the annotation tool you want to use from `Plugins -> SegmentAnything for Microscopy`. Check out the [quickstart tutorial video](https://youtu.be/gcv0fa84mCc) for a short introduction and [the annotation tool section](#annotation-tools) for details.
 
 The `micro_sam` python library can be imported via
 
