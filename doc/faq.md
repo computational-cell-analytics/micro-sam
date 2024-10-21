@@ -71,8 +71,6 @@ We recommend transferring the model checkpoints to the system-level cache direct
 > mv vit_b_decoder.pt /home/anwai/.cache/micro_sam/models/vit_b_lm_decoder
 ```
 
-
-
 ## Usage questions
 
 <!---
