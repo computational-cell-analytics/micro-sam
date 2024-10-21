@@ -37,9 +37,9 @@ If you want to learn more about the `micro_sam` napari plugin or python library 
 Please make sure to install the latest version of `micro_sam` before the workshop using `conda` (or `mamba`).
 You can create a new environment and install it like this:
 ```bash
-$ conda create -c conda-forge -n micro_sam python=3.11 natsort
-$ conda activate micro_sam
-$ conda install -c pytorch -c conda-forge "micro_sam>=1.1" "pytorch>=2.4" "protobuf<5" cpuonly
+conda create -c conda-forge -n micro_sam python=3.11 natsort
+conda activate micro_sam
+conda install -c pytorch -c conda-forge "micro_sam>=1.1" "pytorch>=2.4" "protobuf<5" cpuonly
 ```
 If you already have an installation of `micro_sam` please update it by running the last command in your respective environment. You can find more information about the installation [here](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation).
 
@@ -51,18 +51,18 @@ The image embeddings are necessary to run interactive segmentation. Computing th
 To run the script you first need to use `git` to download this repository:
 
 ```bash
-$ git clone https://github.com/computational-cell-analytics/micro-sam
+git clone https://github.com/computational-cell-analytics/micro-sam
 ```
 then go to this directory:
 
 ```bash
-$ cd micro-sam/workshops/i2k_2024
+cd micro-sam/workshops/i2k_2024
 ```
 
 and download the precomputed embeddings:
 
 ```bash
-$ python download_embeddings.py -e embeddings -d lucchi
+python download_embeddings.py -e embeddings -d lucchi
 ```
 
 ### High-throughput Image Annotation
@@ -73,13 +73,13 @@ This annotation mode is well suited for generating annotations for 2D cell segme
 We have prepared an example dataset for the workshop that you can use. It consists of 15 images from the [CellPose](https://www.cellpose.org/) dataset. You can download the data with the script `download_dataset.py`:
 
 ```bash
-$ python download_datasets.py -i data -d cells
+python download_datasets.py -i data -d cells
 ```
 
 This will download the data to the folder `data/cells` with images stored in the subfolder `images` and segmentation masks in `masks`. After this you can start the image series annotation tool, either via the napari plugin (we will show this in the workshop) or via the command line:
 
 ```bash
-$ micro_sam.image_series_annotator -i data/cells/images -o annotations/cells -e embeddings/cells/vit_b_lm -m vit_b_lm
+micro_sam.image_series_annotator -i data/cells/images -o annotations/cells -e embeddings/cells/vit_b_lm -m vit_b_lm
 ```
 
 Note: You can use `micro_sam` with different models: the original models from Segment Anything and models finetuned for different microscopy segmentation tasks by us.
@@ -93,17 +93,17 @@ You can use the [3D annotation tool](https://computational-cell-analytics.github
 
 You can download the data with the script `download_dataset.py`:
 ```bash
-$ python download_datasets.py -i data -d nuclei_3d
+python download_datasets.py -i data -d nuclei_3d
 ```
 
 After this please download the precomputed embeddings:
 ```bash
-$ python download_embeddings.py -e embeddings -d nuclei_3d
+python download_embeddings.py -e embeddings -d nuclei_3d
 ```
 
 You can then start the 3d annotation tool, either via the napari plugin (we will show this in the workshop) or the command line: 
 ```bash
-$ micro_sam.annotator_3d -i data/nuclei_3d/images/X1.tif -e embeddings/nuclei_3d/vit_b_lm/embedseg_Mouse-Skull-Nuclei-CBG_train_X1.zarr -m vit_b_lm
+micro_sam.annotator_3d -i data/nuclei_3d/images/X1.tif -e embeddings/nuclei_3d/vit_b_lm/embedseg_Mouse-Skull-Nuclei-CBG_train_X1.zarr -m vit_b_lm
 ```
 
 Note: You can use `micro_sam` with different models: the original models from Segment Anything and models finetuned for different microscopy segmentation tasks by us.
@@ -119,19 +119,19 @@ We have prepared an example dataset for the workshop that you can use. It consis
 You can download the data with the script `download_dataset.py`:
 
 ```bash
-$ python download_datasets.py -i data -d volume_em
+python download_datasets.py -i data -d volume_em
 ```
 
 After this please download the precomputed embeddings:
 
 ```bash
-$ python download_embeddings.py -e embeddings -d volume_em
+python download_embeddings.py -e embeddings -d volume_em
 ```
 
 You can then start the 3d annotation tool, either via the napari plugin (we will show this in the workshop) or the command line:
 
 ```bash
-$ micro_sam.annotator_3d -i data/volume_em/images/train_data_membrane_02.tif -e embeddings/volume_em/vit_b/platynereis_membrane_train_data_membrane_02.zarr -m vit_b
+micro_sam.annotator_3d -i data/volume_em/images/train_data_membrane_02.tif -e embeddings/volume_em/vit_b/platynereis_membrane_train_data_membrane_02.zarr -m vit_b
 ```
 
 Note: You can use `micro_sam` with different models: the original models from Segment Anything and models finetuned for different microscopy segmentation tasks by us.
@@ -146,7 +146,7 @@ We provide an example notebook `finetune_sam.ipynb` and script `finetune_sam.py`
 
 You can download the sample data by running:
 ```bash
-$ python download_datasets.py -i data -d hpa
+python download_datasets.py -i data -d hpa
 ```
 
 Note: You need a GPU in order to finetune the model (finetuning on the CPU is possible but takes too long for the workshop).
@@ -168,9 +168,9 @@ You can use the command line to precompute embeddings for volumetric segmentatio
 Here is the example script for pre-computing the embeddings on the [3D nucleus segmentation data](#3d-lm-segmentation).
 
 ```bash
-$ micro_sam.precompute_embeddings -i data/nuclei_3d/images/X1.tif  # Filepath where inputs are stored.
-                                  -m vit_b  # You can provide name for a model of your choice (supported by 'micro-sam') (eg. 'vit_b_lm').
-                                  -e embeddings/vit_b/nuclei_3d_X1  # Filepath where computed embeddings will be stored.
+micro_sam.precompute_embeddings -i data/nuclei_3d/images/X1.tif  # Filepath where inputs are stored.
+                                -m vit_b  # You can provide name for a model of your choice (supported by 'micro-sam') (eg. 'vit_b_lm').
+                                -e embeddings/vit_b/nuclei_3d_X1  # Filepath where computed embeddings will be stored.
 ```
 
 You need to adapt the path to the data, choose the model you want to use (`vit_b`, `vit_b_lm`, `vit_b_em_organelles`) and adapt the path where the embeddings should be saved.
