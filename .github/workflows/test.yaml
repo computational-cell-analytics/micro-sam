@@ -20,7 +20,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.11", "3.12"]
+        # 3.12 currently not supported due to issues with nifty.
+        # python-version: ["3.11", "3.12"]
+        python-version: ["3.11"]
 
     steps:
       - name: Checkout
@@ -30,6 +32,8 @@ jobs:
         uses: mamba-org/setup-micromamba@v1
         with:
           environment-file: environment_cpu.yaml
+          create-args: >-
+            python=${{ matrix.python-version }}
 
       # Setup Qt libraries for GUI testing on Linux
       - uses: tlambert03/setup-qt-libs@v1

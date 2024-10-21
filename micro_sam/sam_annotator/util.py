@@ -119,6 +119,8 @@ def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:
     viewer.layers["point_prompts"].refresh()
     if "prompts" in viewer.layers:
         # Select all prompts and then remove them.
+        # This is how it worked before napari 0.5.
+        # viewer.layers["prompts"].data = []
         viewer.layers["prompts"].selected_data = set(range(len(viewer.layers["prompts"].data)))
         viewer.layers["prompts"].remove_selected()
         viewer.layers["prompts"].refresh()
@@ -682,10 +684,10 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
         widget.model_dropdown.setCurrentIndex(index)
 
     if save_path is not None:
-        widget.embeddings_save_path_param.setText(save_path)
+        widget.embeddings_save_path_param.setText(str(save_path))
 
     if checkpoint_path is not None:
-        widget.custom_weights_param.setText(checkpoint_path)
+        widget.custom_weights_param.setText(str(checkpoint_path))
 
     if device is not None:
         widget.device = device

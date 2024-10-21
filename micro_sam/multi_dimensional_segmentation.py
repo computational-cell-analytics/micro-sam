@@ -325,7 +325,7 @@ def merge_instance_segmentation_3d(
     uv_ids = np.array([[edge["source"], edge["target"]] for edge in edges])
     overlaps = np.array([edge["score"] for edge in edges])
 
-    n_nodes = int(slice_segmentation[-1].max() + 1)
+    n_nodes = int(slice_segmentation.max() + 1)
     graph = nifty.graph.undirectedGraph(n_nodes)
     graph.insertEdges(uv_ids)
 
