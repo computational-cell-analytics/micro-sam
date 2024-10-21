@@ -5,8 +5,7 @@ from torch_em.data.datasets.util import download_source, unzip
 
 URLS = {
     "lucchi": {
-        "vit_b": "https://owncloud.gwdg.de/index.php/s/kQMA1B8L9LOvYrl/download",
-        "vit_b_em_organelles": "https://owncloud.gwdg.de/index.php/s/U8xs6moRg0cQhkS/download",
+        "vit_b_em_organelles": "https://owncloud.gwdg.de/index.php/s/a2ljJVsignmItHh/download",
     },
     "nuclei_3d": {
         "vit_b": "https://owncloud.gwdg.de/index.php/s/EF9ZdMzYjDjl8fd/download",
@@ -20,8 +19,7 @@ URLS = {
 
 CHECKSUMS = {
     "lucchi": {
-        "vit_b": "e0d064765f1758a1a0823b2c02d399caa5cae0d8ac5a1e2ed96548a647717433",
-        "vit_b_em_organelles": "e0b5ab781c42e6f68b746fc056c918d56559ccaeedb4e4f2848b1e5e8f1bec58",
+        "vit_b_em_organelles": "8621591469a783c50a0fddbab1a0ff1bbfeb360f196069712960f70b1c03a9d3",
     },
     "nuclei_3d": {
         "vit_b": "82f5351486e484dda5a3a327381458515c89da5dda8a48a0b1ab96ef10d23f02",
