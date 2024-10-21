@@ -383,7 +383,7 @@ def run_instance_segmentation_grid_search_and_inference(
         test_image_paths: The input images for inference.
         embedding_dir: Folder to cache the image embeddings.
         prediction_dir: Folder to save the predictions.
-        experiment_dir: Folder for caching best 
+        experiment_dir: Folder for caching best grid search parameters in 'results'.
         result_dir: Folder to cache the evaluation results per image.
         fixed_generate_kwargs: Fixed keyword arguments for the `generate` method of the segmenter.
         verbose_gs: Whether to run the gridsearch for individual images in a verbose mode.
