@@ -1,9 +1,9 @@
 import os
 
-from torch_em.data.datasets.util import download_source, unzip
+from torch_em.data.datasets.util import download_source, unzip, download_source_gdrive
 
 
-URLS = {
+URLS_OWNCLOUD = {
     "lucchi": {
         "vit_b_em_organelles": "https://owncloud.gwdg.de/index.php/s/a2ljJVsignmItHh/download",
     },
@@ -16,6 +16,21 @@ URLS = {
         "vit_b_em_organelles": "https://owncloud.gwdg.de/index.php/s/i9DrXe6YFL8jvgP/download",
     },
 }
+
+URLS_DRIVE = {
+    "lucchi": {
+        "vit_b_em_organelles": "https://drive.google.com/uc?export=download&id=1Ls1lq3eLgmiSMmPmqJdBJAmRSA57w_Ga",
+    },
+    "nuclei_3d": {
+        "vit_b": "https://drive.google.com/uc?export=download&id=1aFkANRAqbkop2M3Df9zcZIct7Bab0jpA",
+        "vit_b_lm": "https://drive.google.com/uc?export=download&id=129JvneG3th9fFXxH4iQFAFIY7_VGlupu",
+    },
+    "volume_em": {
+        "vit_b": "https://drive.google.com/uc?export=download&id=1_4zhezz5PEX1kudPaEfxI8JfTd1AOSCd",
+        "vit_b_em_organelles": "https://drive.google.com/uc?export=download&id=1K_Az5ti-P215sHvI2dCoUKHpTFX17KK8",
+    },
+}
+
 
 CHECKSUMS = {
     "lucchi": {
@@ -32,19 +47,27 @@ CHECKSUMS = {
 }
 
 
-def _download_embeddings(embedding_dir, dataset_name):
+def _download_embeddings(embedding_dir, dataset_name, downloader="owncloud"):
+    if downloader == "drive":
+        chosen_urls = URLS_DRIVE
+    elif downloader == "owncloud":
+        chosen_urls = URLS_OWNCLOUD
+    else:
+        raise ValueError(f"'{downloader}' is not a valid way to download.")
+
     if dataset_name is None:  # Download embeddings for all datasets.
-        dataset_names = list(URLS.keys())
+        dataset_names = list(chosen_urls.keys())
     else:  # Download embeddings for specific dataset.
         dataset_names = [dataset_name]
 
     for dname in dataset_names:
-        if dname not in URLS:
+        if dname not in chosen_urls:
             raise ValueError(
-                f"'{dname}' does not have precomputed embeddings to download. Please choose from {list(URLS.keys())}."
+                f"'{dname}' does not have precomputed embeddings to download. "
+                f"Please choose from {list(chosen_urls.keys())}."
             )
 
-        urls = URLS[dname]
+        urls = chosen_urls[dname]
         checksums = CHECKSUMS[dname]
 
         data_embedding_dir = os.path.join(embedding_dir, dname)
@@ -58,7 +81,12 @@ def _download_embeddings(embedding_dir, dataset_name):
 
             checksum = checksums[name]
             zip_path = os.path.join(data_embedding_dir, "embeddings.zip")
-            download_source(path=zip_path, url=url, download=True, checksum=checksum)
+
+            if downloader == "owncloud":
+                download_source(path=zip_path, url=url, download=True, checksum=checksum)
+            else:
+                download_source_gdrive(path=zip_path, url=url, download=True, checksum=checksum)
+
             unzip(zip_path=zip_path, dst=data_embedding_dir)
 
         print(f"The precompted embeddings for '{dname}' are downloaded at {data_embedding_dir}")
@@ -80,9 +108,14 @@ def main():
         "By default, it downloads all the precomputed embeddings. Optionally, you can choose to download either of the "
         "volumetric datasets: 'lucchi', 'nuclei_3d' or 'volume_em'."
     )
+    parser.add_argument(
+        "--downloader", type=str, default="owncloud",
+        help="The source of urls for downloading embeddings. The available choices are 'owncloud' or 'drive'. "
+        "For downloading from drive, you need to install 'gdown' using 'conda install gdown==4.6.3'."
+    )
     args = parser.parse_args()
 
-    _download_embeddings(embedding_dir=args.embedding_dir, dataset_name=args.dataset_name)
+    _download_embeddings(embedding_dir=args.embedding_dir, dataset_name=args.dataset_name, downloader=args.downloader)
 
 
 if __name__ == "__main__":
