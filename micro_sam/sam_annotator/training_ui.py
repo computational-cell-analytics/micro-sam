@@ -54,42 +54,42 @@ class TrainingWidget(widgets._WidgetBase):
     def _create_options(self):
         self.raw_path = None
         _, layout = self._add_path_param(
-            "Path to images", self.raw_path, "both", placeholder="/path/to/images",
+            "raw_path", self.raw_path, "both", placeholder="/path/to/images", title="Path to images",
             tooltip=get_tooltip("training", "raw_path")
         )
         self.layout().addLayout(layout)
 
         self.raw_key = None
         _, layout = self._add_string_param(
-            "Image data key", self.raw_key, placeholder="e.g. \"*.tif\"",
+            "raw_key", self.raw_key, placeholder="e.g. \"*.tif\"", title="Image data key",
             tooltip=get_tooltip("training", "raw_key")
         )
         self.layout().addLayout(layout)
 
         self.label_path = None
         _, layout = self._add_path_param(
-            "Path to labels", self.label_path, "both", placeholder="/path/to/labels",
+            "label_path", self.label_path, "both", placeholder="/path/to/labels", title="Path to labels",
             tooltip=get_tooltip("training", "label_path")
         )
         self.layout().addLayout(layout)
 
         self.label_key = None
         _, layout = self._add_string_param(
-            "Label data key", self.label_key, placeholder="e.g. \"*.tif\"",
+            "label_key", self.label_key, placeholder="e.g. \"*.tif\"", title="Label data key",
             tooltip=get_tooltip("training", "label_key")
         )
         self.layout().addLayout(layout)
 
         self.configuration = _find_best_configuration()
         self.setting_dropdown, layout = self._add_choice_param(
-            "Configuration", self.configuration, list(CONFIGURATIONS.keys()),
+            "configuration", self.configuration, list(CONFIGURATIONS.keys()), title="Configuration",
             tooltip=get_tooltip("training", "configuration")
         )
         self.layout().addLayout(layout)
 
         self.with_segmentation_decoder = True
         self.layout().addWidget(self._add_boolean_param(
-            "With segmentation decoder", self.with_segmentation_decoder,
+            "with_segmentation_decoder", self.with_segmentation_decoder, title="With segmentation decoder",
             tooltip=get_tooltip("training", "segmentation_decoder")
         ))
 
@@ -102,13 +102,13 @@ class TrainingWidget(widgets._WidgetBase):
         self.device = "auto"
         device_options = ["auto"] + util._available_devices()
         self.device_dropdown, layout = self._add_choice_param(
-            "Device", self.device, device_options, tooltip=get_tooltip("training", "device")
+            "device", self.device, device_options, title="Device", tooltip=get_tooltip("training", "device")
         )
         setting_values.layout().addLayout(layout)
 
         self.patch_x, self.patch_y = 512, 512
         self.patch_x_param, self.patch_y_param, layout = self._add_shape_param(
-            ("Patch size x", "Patch size y"), (self.patch_x, self.patch_y), min_val=0, max_val=2048,
+            ("patch_x", "patch_y"), (self.patch_x, self.patch_y), min_val=0, max_val=2048,
             tooltip=get_tooltip("training", "patch")
         )
         setting_values.layout().addLayout(layout)
@@ -116,15 +116,15 @@ class TrainingWidget(widgets._WidgetBase):
         # Paths for validation data.
         self.raw_path_val = None
         _, layout = self._add_path_param(
-            "Path to validation images", self.raw_path_val, "both", placeholder="/path/to/images",
-            tooltip=get_tooltip("training", "raw_path_val")
+            "raw_path_val", self.raw_path_val, "both", placeholder="/path/to/images",
+            title="Path to validation images", tooltip=get_tooltip("training", "raw_path_val")
         )
         setting_values.layout().addLayout(layout)
 
         self.label_path_val = None
         _, layout = self._add_path_param(
-            "Path to validation labels", self.label_path_val, "both", placeholder="/path/to/images",
-            tooltip=get_tooltip("training", "label_path_val")
+            "label_path_val", self.label_path_val, "both", placeholder="/path/to/images",
+            title="Path to validation labels", tooltip=get_tooltip("training", "label_path_val")
         )
         setting_values.layout().addLayout(layout)
 
@@ -132,32 +132,32 @@ class TrainingWidget(widgets._WidgetBase):
         # on top of which the finetuning is run.
         self.name = "sam_model"
         self.name_param, layout = self._add_string_param(
-            "Model name", self.name, tooltip=get_tooltip("training", "name")
+            "name", self.name, title="Model name", tooltip=get_tooltip("training", "name")
         )
         setting_values.layout().addLayout(layout)
 
         self.initial_model = None
         self.initial_model_param, layout = self._add_string_param(
-            "Initial model", self.initial_model, tooltip=get_tooltip("training", "initial_model")
+            "initial_model", self.initial_model, title="Initial model", tooltip=get_tooltip("training", "initial_model")
         )
         setting_values.layout().addLayout(layout)
 
         self.checkpoint = None
         self.checkpoint_param, layout = self._add_string_param(
-            "Checkpoint", self.name, tooltip=get_tooltip("training", "checkpoint")
+            "checkpoint", self.name, title="Checkpoint", tooltip=get_tooltip("training", "checkpoint")
         )
         setting_values.layout().addLayout(layout)
 
         self.output_path = None
         self.output_path_param, layout = self._add_string_param(
-            "Output Path", self.output_path, tooltip=get_tooltip("training", "output_path")
+            "output_path", self.output_path, title="Output Path", tooltip=get_tooltip("training", "output_path")
         )
         setting_values.layout().addLayout(layout)
 
         self.n_epochs = 100
         self.n_epochs_param, layout = self._add_int_param(
-            "Number of epochs", self.n_epochs, tooltip=get_tooltip("training", "n_epochs"),
-            min_val=1, max_val=1000,
+            "n_epochs", self.n_epochs, title="Number of epochs", min_val=1, max_val=1000,
+            tooltip=get_tooltip("training", "n_epochs"),
         )
         setting_values.layout().addLayout(layout)
 
