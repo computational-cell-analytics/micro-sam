@@ -109,7 +109,7 @@ class TrainingWidget(widgets._WidgetBase):
         self.patch_x, self.patch_y = 512, 512
         self.patch_x_param, self.patch_y_param, layout = self._add_shape_param(
             ("patch_x", "patch_y"), (self.patch_x, self.patch_y), min_val=0, max_val=2048,
-            tooltip=get_tooltip("training", "patch")
+            tooltip=get_tooltip("training", "patch"), title=("Patch size x", "Patch size y")
         )
         setting_values.layout().addLayout(layout)
 
