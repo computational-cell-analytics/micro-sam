@@ -25,7 +25,6 @@ To prepare for the workshop, please do the following:
     - High-throughput annotation of cells (or other structures) in 2D images, see [high-throughput annotation](#high-throughput-image-annotation).
     - 3D segmentation in light or electron microscopy, see [3D LM segmentation](#3d-lm-segmentation) and [3D EM segmentation](#3d-em-segmentation).
     - Finetuning SAM on custom data, see [model finetuning](#model-finetuning).
-    - Writing your own scripts using the `micro_sam` python library, see [scripting](#scripting-with-micro_sam).
 
 You can do all of this on your laptop with a CPU, except for model finetuning, which requires a GPU.
 We have prepared a notebook that runs on cloud resources with a GPU for this.
