@@ -145,20 +145,20 @@ class _WidgetBase(QtWidgets.QWidget):
         layout.addWidget(dropdown)
         return dropdown, layout
 
-    def _add_shape_param(self, names, values, min_val, max_val, step=1, tooltip=None):
+    def _add_shape_param(self, names, values, min_val, max_val, step=1, title=None, tooltip=None):
         layout = QtWidgets.QHBoxLayout()
 
         x_layout = QtWidgets.QVBoxLayout()
         x_param, _ = self._add_int_param(
             names[0], values[0], min_val=min_val, max_val=max_val, layout=x_layout, step=step,
-            tooltip=tooltip
+            title=title[0] if title is not None else title, tooltip=tooltip
         )
         layout.addLayout(x_layout)
 
         y_layout = QtWidgets.QVBoxLayout()
         y_param, _ = self._add_int_param(
             names[1], values[1], min_val=min_val, max_val=max_val, layout=y_layout, step=step,
-            tooltip=tooltip
+            title=title[1] if title is not None else title, tooltip=tooltip
         )
         layout.addLayout(y_layout)
 
