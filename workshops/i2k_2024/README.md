@@ -20,7 +20,7 @@ Alternatively you can also work on model finetuning or an advanced application, 
 
 To prepare for the workshop, please do the following:
 - Install the latest version of `micro_sam`, see [Installation](#installation) for details.
-- Download the pre-computed embeddings for the first 3D segmentation data, see [here](#download-embeddings-for-3d-segmentation).
+- Download the models and pre-computed embeddings for the common 3D segmentation, see [here](#download-embeddings-for-3d-segmentation).
 - Decide what you want to do in the 3rd part of the workshop and follow the respective preparation steps. You have the following options:
     - High-throughput annotation of cells (or other structures) in 2D images, see [high-throughput annotation](#high-throughput-image-annotation).
     - 3D segmentation in light or electron microscopy, see [3D LM segmentation](#3d-lm-segmentation) and [3D EM segmentation](#3d-em-segmentation).
@@ -43,24 +43,25 @@ conda install -c pytorch -c conda-forge "micro_sam>=1.1" "pytorch>=2.4" "protobu
 ```
 If you already have an installation of `micro_sam` please update it by running the last command in your respective environment. You can find more information about the installation [here](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation).
 
+
 ### Download Embeddings for 3D EM Segmentation
 
-We provide a script to download the image embeddings for the 3D segmentation problem in part 2.
-The image embeddings are necessary to run interactive segmentation. Computing them on the CPU can take some time for volumetric data, but we support precomputing them and have done this for this data already.
-
-To run the script you first need to use `git` to download this repository:
-
+We provide a script to download the models used in the workshop. To run the script you first need to use `git` to download this repository:
 ```bash
 git clone https://github.com/computational-cell-analytics/micro-sam
 ```
 then go to this directory:
-
 ```bash
 cd micro-sam/workshops/i2k_2024
 ```
+and run the script:
+```bash
+python download_models.py
+```
 
-and download the precomputed embeddings:
-
+We also provide a script to download the image embeddings for the 3D segmentation problem in part 2.
+The image embeddings are necessary to run interactive segmentation. Computing them on the CPU can take some time for volumetric data, but we support precomputing them and have done this for this data already.
+You can download them by running the script:
 ```bash
 python download_embeddings.py -e embeddings -d lucchi
 ```
@@ -154,13 +155,13 @@ We have prepared the notebook so that it can be run on [kaggle](ttps://www.kaggl
 
 **If you want to bring your own data for training please store it in a similar format to the example data. You have to bring both images and annotations (= instance segmentation masks) for training. If you want to use kaggle please also upload your data so that you can retrieve it within the notebook.**
 
-### Scripting with micro_sam
+### Advanced applications: scripting with `micro_sam`
 
-You can also use the [micro_sam python library](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#using-the-python-library) to implement your own functionality.
+If you want to develop applications based on `micro_sam` you can use
+the [micro_sam python library](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#using-the-python-library) to implement your own functionality.
 For example, you could implement a script to segment cells based on prompts derived from a nucleus segmentation via [batched inference](https://computational-cell-analytics.github.io/micro-sam/micro_sam/inference.html#batched_inference).
 Or a script to automatically segment data with a finetuned model using [automatic segmentation](https://computational-cell-analytics.github.io/micro-sam/micro_sam/automatic_segmentation.html).
 
-Feel free to contact us before the workshop if you have an idea for what you want to implement and would like to know if this is feasible and how to get started.
 
 ### Precompute Embeddings
 
