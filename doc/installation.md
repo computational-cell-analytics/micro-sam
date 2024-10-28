@@ -22,13 +22,23 @@ You can follow the instructions [here](https://mamba.readthedocs.io/en/latest/in
 $ mamba install -c pytorch -c conda-forge micro_sam
 ```
 or you can create a new environment (here called `micro-sam`) via:
+
 ```bash
 $ mamba create -c pytorch -c conda-forge -n micro-sam micro_sam
 ```
+
 if you want to use the GPU you need to install PyTorch from the `pytorch` channel instead of `conda-forge`. For example:
+
 ```bash
 $ mamba create -c pytorch -c nvidia -c conda-forge -n micro-sam micro_sam pytorch pytorch-cuda=12.1
 ```
+
+NOTE: If you create a new enviroment (eg. here called `micro-sam`), you must activate the environment using
+
+```bash
+$ mamba activate micro-sam
+```
+
 You may need to change this command to install the correct CUDA version for your system, see [https://pytorch.org/](https://pytorch.org/) for details.
 
 
@@ -73,8 +83,8 @@ $ pip install -e .
 ## From installer
 
 We also provide installers for Linux and Windows:
-- [Linux](https://owncloud.gwdg.de/index.php/s/nvLwlrHE4DkYcWl)
-- [Windows](https://owncloud.gwdg.de/index.php/s/feIs9069IrURmbt)
+- [Linux](https://owncloud.gwdg.de/index.php/s/Fyf57WZuiX1NyXs)
+- [Windows](https://owncloud.gwdg.de/index.php/s/ZWrY68hl7xE3kGP)
 <!---
 - [Mac](https://owncloud.gwdg.de/index.php/s/7YupGgACw9SHy2P)
 -->

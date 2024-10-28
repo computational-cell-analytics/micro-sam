@@ -4,6 +4,7 @@ import numpy as np
 from collections import OrderedDict
 
 import torch
+from torch.utils.tensorboard import SummaryWriter
 from torchvision.utils import make_grid
 
 from .sam_trainer import SamTrainer
@@ -181,7 +182,7 @@ class JointSamLogger(TorchEmLogger):
             os.path.join(save_root, "logs", trainer.name)
         os.makedirs(self.log_dir, exist_ok=True)
 
-        self.tb = torch.utils.tensorboard.SummaryWriter(self.log_dir)
+        self.tb = SummaryWriter(self.log_dir)
         self.log_image_interval = trainer.log_image_interval
 
     def add_image(self, x, y, samples, name, step):

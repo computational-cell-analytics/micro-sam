@@ -550,9 +550,13 @@ def run_amg(
     iou_thresh_values: Optional[List[float]] = None,
     stability_score_values: Optional[List[float]] = None,
     peft_kwargs: Optional[Dict] = None,
+    cache_embeddings: bool = False
 ) -> str:
-    embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
-    os.makedirs(embedding_folder, exist_ok=True)
+    if cache_embeddings:
+        embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
+        os.makedirs(embedding_folder, exist_ok=True)
+    else:
+        embedding_folder = None
 
     predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint, peft_kwargs=peft_kwargs)
     amg = AutomaticMaskGenerator(predictor)
@@ -572,9 +576,15 @@ def run_amg(
     )
 
     instance_segmentation.run_instance_segmentation_grid_search_and_inference(
-        amg, grid_search_values,
-        val_image_paths, val_gt_paths, test_image_paths,
-        embedding_folder, prediction_folder, gs_result_folder,
+        segmenter=amg,
+        grid_search_values=grid_search_values,
+        val_image_paths=val_image_paths,
+        val_gt_paths=val_gt_paths,
+        test_image_paths=test_image_paths,
+        embedding_dir=embedding_folder,
+        prediction_dir=prediction_folder,
+        result_dir=gs_result_folder,
+        experiment_folder=experiment_folder,
     )
     return prediction_folder
 
@@ -592,9 +602,13 @@ def run_instance_segmentation_with_decoder(
     val_gt_paths: List[Union[str, os.PathLike]],
     test_image_paths: List[Union[str, os.PathLike]],
     peft_kwargs: Optional[Dict] = None,
+    cache_embeddings: bool = False,
 ) -> str:
-    embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
-    os.makedirs(embedding_folder, exist_ok=True)
+    if cache_embeddings:
+        embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
+        os.makedirs(embedding_folder, exist_ok=True)
+    else:
+        embedding_folder = None
 
     predictor, decoder = get_predictor_and_decoder(
         model_type=model_type, checkpoint_path=checkpoint, peft_kwargs=peft_kwargs,
@@ -616,6 +630,6 @@ def run_instance_segmentation_with_decoder(
         segmenter, grid_search_values,
         val_image_paths, val_gt_paths, test_image_paths,
         embedding_dir=embedding_folder, prediction_dir=prediction_folder,
-        result_dir=gs_result_folder,
+        result_dir=gs_result_folder, experiment_folder=experiment_folder,
     )
     return prediction_folder
