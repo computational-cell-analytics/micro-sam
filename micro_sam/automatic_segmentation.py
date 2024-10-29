@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Optional, Union, Tuple, Dict
+from typing import Optional, Union, Tuple
 
 import numpy as np
 import imageio.v3 as imageio
@@ -229,7 +229,10 @@ def main():
     }
 
     predictor, segmenter = get_predictor_and_segmenter(
-        model_type=args.model_type, checkpoint=args.checkpoint, device=args.device,
+        model_type=args.model_type,
+        checkpoint=args.checkpoint,
+        device=args.device,
+        is_tiled=args.tile_shape is not None,
     )
 
     automatic_instance_segmentation(
