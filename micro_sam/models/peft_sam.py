@@ -47,8 +47,8 @@ class LoRASurgery(nn.Module):
 
     def forward(self, x):
         qkv = self.qkv_proj(x)  # B, N, N, 3 * org_C
-        new_q = self.alpha / self.rank * self.w_b_linear_q(self.w_a_linear_q(x))
-        new_v = self.alpha / self.rank * self.w_b_linear_v(self.w_a_linear_v(x))
+        new_q = self.alpha * self.w_b_linear_q(self.w_a_linear_q(x))
+        new_v = self.alpha * self.w_b_linear_v(self.w_a_linear_v(x))
         qkv[:, :, :, :self.dim] += new_q
         qkv[:, :, :, -self.dim:] += new_v
         return qkv
