@@ -82,7 +82,7 @@ class TestPEFTSam(unittest.TestCase):
         from micro_sam.models.peft_sam import PEFT_Sam, AdaptFormer
 
         _, sam = util.get_sam_model(model_type=self.model_type, return_sam=True, device="cpu")
-        peft_sam = PEFT_Sam(sam, rank=2, peft_module=AdaptFormer, alpha='2.0')
+        peft_sam = PEFT_Sam(sam, rank=2, peft_module=AdaptFormer, projection_size=64, alpha=2.0, dropout=0.5)
 
         shape = (3, 1024, 1024)
         expected_shape = (1, 3, 1024, 1024)
