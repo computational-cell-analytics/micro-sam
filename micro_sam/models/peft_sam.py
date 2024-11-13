@@ -152,25 +152,35 @@ class AdaptFormer(nn.Module):
         dropout: The dropout rate for the dropout layer between down and up projection layer.
         projection_size: The size of the projection layer.
     """
-    def __init__(self, rank: int, block: nn.Module, alpha: str = '0.1', dropout: float = 0.0, projection_size: int = 64):
+    def __init__(
+        self,
+        rank: int,
+        block: nn.Module,
+        alpha: Optional[Union[str, float]] = 0.1,
+        dropout: Optional[float] = 0.1,
+        projection_size: int = 64
+    ):
         super().__init__()
 
         self.mlp_proj = block.mlp
         self.n_embd = block.mlp.lin1.in_features
-        self.dropout = dropout
 
         if alpha == 'learnable_scalar':
             self.alpha = nn.Parameter(torch.ones(1))
         else:
-            self.alpha = float(alpha)
+            self.alpha = alpha
 
         self.projection_size = projection_size
+        self.dropout = dropout
 
         self.down_proj = nn.Linear(self.n_embd, self.projection_size)
         self.non_linear_func = nn.ReLU()
         self.up_proj = nn.Linear(self.projection_size, self.n_embd)
 
         block.mlp = self
+
+        if self.dropout is not None:
+            self.dp = nn.Dropout(self.dropout)
 
         nn.init.kaiming_uniform_(self.down_proj.weight, a=math.sqrt(5))
         nn.init.zeros_(self.up_proj.weight)
@@ -183,11 +193,12 @@ class AdaptFormer(nn.Module):
 
         down = self.down_proj(x)
         down = self.non_linear_func(down)
-        down = nn.functional.dropout(down, p=self.dropout, training=self.training)
+
+        if self.dropout is not None:
+            down = self.dp(down)
+
         up = self.up_proj(down)
-
         up = up * self.alpha
-
         output = up + residual + mlp_output
 
         return output
