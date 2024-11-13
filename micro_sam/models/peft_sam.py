@@ -157,7 +157,7 @@ class AdaptFormer(nn.Module):
         rank: int,
         block: nn.Module,
         alpha: Optional[Union[str, float]] = 0.1,
-        dropout: Optional[float] = 0.1,
+        dropout: float = 0.1,
         projection_size: int = 64
     ):
         super().__init__()
@@ -179,8 +179,8 @@ class AdaptFormer(nn.Module):
 
         block.mlp = self
 
-        if self.dropout is not None:
-            self.dp = nn.Dropout(self.dropout)
+        if self.dropout < 1:
+            self.dropout_layer = nn.Dropout(self.dropout)
 
         nn.init.kaiming_uniform_(self.down_proj.weight, a=math.sqrt(5))
         nn.init.zeros_(self.up_proj.weight)
@@ -194,8 +194,8 @@ class AdaptFormer(nn.Module):
         down = self.down_proj(x)
         down = self.non_linear_func(down)
 
-        if self.dropout is not None:
-            down = self.dp(down)
+        if self.dropout < 1:
+            down = self.dropout_layer(down)
 
         up = self.up_proj(down)
         up = up * self.alpha
