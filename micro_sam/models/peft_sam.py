@@ -23,11 +23,11 @@ class LoRASurgery(nn.Module):
         rank: The rank of the decomposition matrices for updating weights in each attention layer.
         block: The chosen attention blocks for implementing lora.
     """
-    def __init__(self, rank: int, block: nn.Module, alpha: float = 1):
+    def __init__(self, rank: int, block: nn.Module):
         super().__init__()
         self.qkv_proj = block.attn.qkv
         self.dim = self.qkv_proj.in_features
-        self.alpha = alpha
+        self.alpha = 1  # From our experiments, 'alpha' as 1 gives the best performance.
         self.rank = rank
 
         self.w_a_linear_q = nn.Linear(self.dim, self.rank, bias=False)
