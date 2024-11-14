@@ -215,7 +215,7 @@ class AMGBase(ABC):
 
         # recalculate boxes and remove any new duplicates
         masks = torch.cat(new_masks, dim=0)
-        boxes = batched_mask_to_box(masks.to(bool))  # Casting this to boolean as we work with one-hot labels.
+        boxes = batched_mask_to_box(masks.to(torch.bool))  # Casting this to boolean as we work with one-hot labels.
         keep_by_nms = batched_nms(
             boxes.float(),
             torch.as_tensor(scores, dtype=torch.float),
