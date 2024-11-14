@@ -55,11 +55,9 @@ def get_predictor_and_segmenter(
         decoder = get_decoder(image_encoder=predictor.model.image_encoder, decoder_state=decoder_state, device=device)
 
     segmenter = get_amg(
-        predictor=predictor,
-        is_tiled=is_tiled,
-        decoder=decoder,
-        **kwargs
+        predictor=predictor, is_tiled=is_tiled, decoder=decoder, **kwargs
     )
+
     return predictor, segmenter
 
 
@@ -232,6 +230,7 @@ def main():
         model_type=args.model_type,
         checkpoint=args.checkpoint,
         device=args.device,
+        amg=args.amg,
         is_tiled=args.tile_shape is not None,
     )
 
