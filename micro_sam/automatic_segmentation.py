@@ -205,7 +205,6 @@ def main():
         "--mode", type=str, default=None,
         help="The choice of automatic segmentation with the Segment Anything models. Either 'amg' or 'ais'."
     )
-    # mode, default none, can be ais or amg
     parser.add_argument(
         "-d", "--device", default=None,
         help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
