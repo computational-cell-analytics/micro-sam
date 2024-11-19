@@ -46,17 +46,16 @@ def get_predictor_and_segmenter(
 
     if amg is None:
         amg = "decoder_state" not in state
+
     if amg:
         decoder = None
     else:
         if "decoder_state" not in state:
-            raise RuntimeError("You have passed amg=False, but your model does not contain a segmentation decoder.")
+            raise RuntimeError("You have passed 'amg=False', but your model does not contain a segmentation decoder.")
         decoder_state = state["decoder_state"]
         decoder = get_decoder(image_encoder=predictor.model.image_encoder, decoder_state=decoder_state, device=device)
 
-    segmenter = get_amg(
-        predictor=predictor, is_tiled=is_tiled, decoder=decoder, **kwargs
-    )
+    segmenter = get_amg(predictor=predictor, is_tiled=is_tiled, decoder=decoder, **kwargs)
 
     return predictor, segmenter
 
@@ -123,8 +122,10 @@ def automatic_instance_segmentation(
 
         if len(masks) == 0:  # instance segmentation can have no masks, hence we just save empty labels
             if isinstance(segmenter, InstanceSegmentationWithDecoder):
+                print("AIS")
                 this_shape = segmenter._foreground.shape
             elif isinstance(segmenter, AMGBase):
+                print("AMG")
                 this_shape = segmenter._original_size
             else:
                 this_shape = image_data.shape[-2:]
@@ -132,6 +133,7 @@ def automatic_instance_segmentation(
             instances = np.zeros(this_shape, dtype="uint32")
         else:
             instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=0)
+
     else:
         if (image_data.ndim != 3) and (image_data.ndim != 4 and image_data.shape[-1] != 3):
             raise ValueError(f"The inputs does not match the shape expectation of 3d inputs: {image_data.shape}")
@@ -230,7 +232,7 @@ def main():
         model_type=args.model_type,
         checkpoint=args.checkpoint,
         device=args.device,
-        amg=args.amg,
+        amg=args.amg if args.amg else None,
         is_tiled=args.tile_shape is not None,
     )
 
