@@ -189,7 +189,7 @@ def main():
     )
     parser.add_argument(
         "-c", "--checkpoint", default=None,
-        help="Checkpoint from which the SAM model will be loaded loaded."
+        help="Checkpoint from which the SAM model will be loaded."
     )
     parser.add_argument(
         "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction.", default=None
