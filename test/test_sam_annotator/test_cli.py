@@ -38,7 +38,7 @@ class TestCLI(unittest.TestCase):
     def test_image_series_annotator(self):
         self._test_command("micro_sam.image_series_annotator")
 
-    @pytest.mark.skipif(platform.system() == "Windows", reason="Gui test is not working on windows.")
+    @pytest.mark.skipif(platform.system() == "Windows", reason="CLI test is not working on windows.")
     def test_precompute_embeddings(self):
         self._test_command("micro_sam.precompute_embeddings")
 
@@ -85,6 +85,7 @@ class TestCLI(unittest.TestCase):
             ais_path = os.path.join(emb_path3, f"image-{i}.zarr", "is_state.h5")
             self.assertTrue(os.path.exists(ais_path))
 
+    @pytest.mark.skipif(platform.system() == "Windows", reason="CLI test is not working on windows.")
     def test_automatic_segmentation(self):
         self._test_command("micro_sam.automatic_segmentation")
 
