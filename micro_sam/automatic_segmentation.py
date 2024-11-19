@@ -122,10 +122,8 @@ def automatic_instance_segmentation(
 
         if len(masks) == 0:  # instance segmentation can have no masks, hence we just save empty labels
             if isinstance(segmenter, InstanceSegmentationWithDecoder):
-                print("AIS")
                 this_shape = segmenter._foreground.shape
             elif isinstance(segmenter, AMGBase):
-                print("AMG")
                 this_shape = segmenter._original_size
             else:
                 this_shape = image_data.shape[-2:]
