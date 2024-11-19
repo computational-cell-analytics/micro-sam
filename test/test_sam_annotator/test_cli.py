@@ -42,10 +42,12 @@ class TestCLI(unittest.TestCase):
     def test_precompute_embeddings(self):
         self._test_command("micro_sam.precompute_embeddings")
 
-        # Create 1 image as testdata.
-        im_path = os.path.join(self.tmp_folder, "image.tif")
-        image_data = binary_blobs(512).astype("uint8") * 255
-        imageio.imwrite(im_path, image_data)
+        # Create 2 images as testdata.
+        n_images = 2
+        for i in range(n_images):
+            im_path = os.path.join(self.tmp_folder, f"image-{i}.tif")
+            image_data = binary_blobs(512).astype("uint8") * 255
+            imageio.imwrite(im_path, image_data)
 
         # Test precomputation with a single image.
         emb_path1 = os.path.join(self.tmp_folder, "embedddings1.zarr")
@@ -86,12 +88,10 @@ class TestCLI(unittest.TestCase):
     def test_automatic_segmentation(self):
         self._test_command("micro_sam.automatic_segmentation")
 
-        # Create 2 images as testdata.
-        n_images = 2
-        for i in range(n_images):
-            im_path = os.path.join(self.tmp_folder, f"image-{i}.tif")
-            image_data = binary_blobs(512).astype("uint8") * 255
-            imageio.imwrite(im_path, image_data)
+        # Create 1 image as testdata.
+        im_path = os.path.join(self.tmp_folder, "image.tif")
+        image_data = binary_blobs(512).astype("uint8") * 255
+        imageio.imwrite(im_path, image_data)
 
         out_path = "output.tif"
 
