@@ -202,8 +202,10 @@ def main():
         help="The number of spatial dimensions in the data. Please specify this if your data has a channel dimension."
     )
     parser.add_argument(
-        "--amg", action="store_true", help="Whether to use automatic mask generation with the model."
+        "--mode", type=str, default=None,
+        help="The choice of automatic segmentation with the Segment Anything models. Either 'amg' or 'ais'."
     )
+    # mode, default none, can be ais or amg
     parser.add_argument(
         "-d", "--device", default=None,
         help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
@@ -226,11 +228,19 @@ def main():
         parameter_args[i].lstrip("--"): _convert_argval(parameter_args[i + 1]) for i in range(0, len(parameter_args), 2)
     }
 
+    amg = None
+    if args.mode is None:
+        amg = None
+    else:
+        assert args.mode in ["ais", "amg"], \
+            f"'{args.mode}' is not a valid automatic segmentation mode. Please choose either 'amg' or 'ais'."
+        amg = (args.mode == "amg")
+
     predictor, segmenter = get_predictor_and_segmenter(
         model_type=args.model_type,
         checkpoint=args.checkpoint,
         device=args.device,
-        amg=args.amg if args.amg else None,
+        amg=amg,
         is_tiled=args.tile_shape is not None,
     )
 

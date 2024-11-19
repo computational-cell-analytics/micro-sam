@@ -98,22 +98,32 @@ class TestCLI(unittest.TestCase):
 
         # Test AMG with default model in default mode.
         run(
-            ["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path, "-m", self.default_model_type]
+            ["micro_sam.automatic_segmentation", "-i", im_path, "-o",
+             out_path, "-m", self.default_model_type]
         )
 
         # Test AMG with default model exclusively in AMG mode.
         run(
-            ["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path, "-m", self.default_model_type, "--amg"]
+            ["micro_sam.automatic_segmentation", "-i", im_path, "-o",
+             out_path, "-m", self.default_model_type, "--mode", "amg"]
         )
 
         # Test AIS with 'micro-sam' model in default mode.
         run(
-            ["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path, "-m", self.model_type]
+            ["micro_sam.automatic_segmentation", "-i", im_path, "-o",
+             out_path, "-m", self.model_type]
         )
 
         # Test AIS with 'micro-sam' model exclusively in AMG mode.
         run(
-            ["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path, "-m", self.model_type, "--amg"]
+            ["micro_sam.automatic_segmentation", "-i", im_path, "-o",
+             out_path, "-m", self.model_type, "--mode", "amg"]
+        )
+
+        # Test AIS with 'micro-sam' model exclusively in AIS mode.
+        run(
+            ["micro_sam.automatic_segmentation", "-i", im_path, "-o",
+             out_path, "-m", self.model_type, "--mode", "ais"]
         )
 
 
