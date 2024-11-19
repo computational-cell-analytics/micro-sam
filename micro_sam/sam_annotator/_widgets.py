@@ -940,8 +940,9 @@ class EmbeddingWidget(_WidgetBase):
         self.device = "auto"
         device_options = ["auto"] + util._available_devices()
 
-        self.device_dropdown, layout = self._add_choice_param("device", self.device, device_options,
-                                                              tooltip=get_tooltip("embedding", "device"))
+        self.device_dropdown, layout = self._add_choice_param(
+            "device", self.device, device_options, tooltip=get_tooltip("embedding", "device")
+        )
         setting_values.layout().addLayout(layout)
 
         # Create UI for the save path.
@@ -1062,6 +1063,16 @@ class EmbeddingWidget(_WidgetBase):
         # Otherwise we either don't have an embedding path or it is empty. We can proceed in both cases.
         return False
 
+    def _validate_existing_embeddings(self, state):
+        if state.image_embeddings is None:
+            return False
+        else:
+            val_results = {
+                "message_type": "info",
+                "message": "Embeddings have already been precomputed. Press OK to recompute the embeddings."
+            }
+            return _generate_message(val_results["message_type"], val_results["message"])
+
     def __call__(self, skip_validate=False):
         # Validate user inputs.
         if not skip_validate and self._validate_inputs():
@@ -1071,8 +1082,11 @@ class EmbeddingWidget(_WidgetBase):
         image = self.image_selection.get_value()
 
         # Update the image embeddings:
-        # Reset the state.
         state = AnnotatorState()
+        if self._validate_existing_embeddings(state):
+            return
+
+        # Reset the state.
         state.reset_state()
 
         # Get image dimensions.
