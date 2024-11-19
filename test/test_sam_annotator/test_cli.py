@@ -5,7 +5,7 @@ from subprocess import run
 from shutil import which, rmtree
 
 import zarr
-# import pytest
+import pytest
 import imageio.v3 as imageio
 from skimage.data import binary_blobs
 
@@ -38,7 +38,7 @@ class TestCLI(unittest.TestCase):
     def test_image_series_annotator(self):
         self._test_command("micro_sam.image_series_annotator")
 
-    # @pytest.mark.skipif(platform.system() == "Windows", reason="Gui test is not working on windows.")
+    @pytest.mark.skipif(platform.system() == "Windows", reason="Gui test is not working on windows.")
     def test_precompute_embeddings(self):
         self._test_command("micro_sam.precompute_embeddings")
 
@@ -94,6 +94,8 @@ class TestCLI(unittest.TestCase):
             im_path = os.path.join(self.tmp_folder, f"image-{i}.tif")
             image_data = binary_blobs(512).astype("uint8") * 255
             imageio.imwrite(im_path, image_data)
+
+        print(image_data.shape)
 
         out_path = "output.tif"
 
