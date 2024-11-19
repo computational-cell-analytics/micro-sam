@@ -95,8 +95,6 @@ class TestCLI(unittest.TestCase):
             image_data = binary_blobs(512).astype("uint8") * 255
             imageio.imwrite(im_path, image_data)
 
-        print(image_data.shape)
-
         out_path = "output.tif"
 
         # Test AMG with default model in default mode.
