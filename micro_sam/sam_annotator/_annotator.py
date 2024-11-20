@@ -153,6 +153,10 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
     def _update_image(self, segmentation_result=None):
         state = AnnotatorState()
 
+        # Whether embeddings already exist and avoid clearing objects in layers.
+        if state._embeddings_are_same:
+            return
+
         # Update the image shape if it has changed.
         if state.image_shape != self._shape:
             if len(state.image_shape) != self._ndim:
