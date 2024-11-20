@@ -59,7 +59,7 @@ def mask_data_to_segmentation(
             object in the output will be mapped to zero (the background value).
         min_object_size: The minimal size of an object in pixels.
         max_object_size: The maximal size of an object in pixels.
-        label_masks: Whether to apply connected components to the result before remving small objects.
+        label_masks: Whether to apply connected components to the result before removing small objects.
 
     Returns:
         The instance segmentation.
@@ -85,7 +85,8 @@ def mask_data_to_segmentation(
         seg_id = this_seg_id + 1
 
     if label_masks:
-        segmentation = label(segmentation)
+        segmentation = label(segmentation).astype(segmentation.dtype)
+
     seg_ids, sizes = np.unique(segmentation, return_counts=True)
 
     # In some cases objects may be smaller than peviously calculated,
