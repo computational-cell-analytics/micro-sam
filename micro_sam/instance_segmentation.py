@@ -59,7 +59,7 @@ def mask_data_to_segmentation(
             object in the output will be mapped to zero (the background value).
         min_object_size: The minimal size of an object in pixels.
         max_object_size: The maximal size of an object in pixels.
-        label_masks: Whether to apply connected components to the result before remving small objects.
+        label_masks: Whether to apply connected components to the result before removing small objects.
 
     Returns:
         The instance segmentation.
@@ -85,7 +85,8 @@ def mask_data_to_segmentation(
         seg_id = this_seg_id + 1
 
     if label_masks:
-        segmentation = label(segmentation)
+        segmentation = label(segmentation).astype(segmentation.dtype)
+
     seg_ids, sizes = np.unique(segmentation, return_counts=True)
 
     # In some cases objects may be smaller than peviously calculated,
@@ -1122,10 +1123,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
 
 
 def get_amg(
-    predictor: SamPredictor,
-    is_tiled: bool,
-    decoder: Optional[torch.nn.Module] = None,
-    **kwargs,
+    predictor: SamPredictor, is_tiled: bool, decoder: Optional[torch.nn.Module] = None, **kwargs,
 ) -> Union[AMGBase, InstanceSegmentationWithDecoder]:
     """Get the automatic mask generator class.
 
@@ -1139,9 +1137,10 @@ def get_amg(
         The automatic mask generator.
     """
     if decoder is None:
-        segmenter = TiledAutomaticMaskGenerator(predictor, **kwargs) if is_tiled else\
-            AutomaticMaskGenerator(predictor, **kwargs)
+        segmenter_class = TiledAutomaticMaskGenerator if is_tiled else AutomaticMaskGenerator
+        segmenter = segmenter_class(predictor, **kwargs)
     else:
-        segmenter = TiledInstanceSegmentationWithDecoder(predictor, decoder, **kwargs) if is_tiled else\
-            InstanceSegmentationWithDecoder(predictor, decoder, **kwargs)
+        segmenter_class = TiledInstanceSegmentationWithDecoder if is_tiled else InstanceSegmentationWithDecoder
+        segmenter = segmenter_class(predictor, decoder, **kwargs)
+
     return segmenter
