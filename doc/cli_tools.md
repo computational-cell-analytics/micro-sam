@@ -10,11 +10,15 @@ The supported CLIs can be used by
 - Running `$ micro_sam.image_series_annotator` for starting the image series annotator.
 - Running `$ micro_sam.automatic_segmentation` for automatic instance segmentation.
     - We support all post-processing parameters for automatic instance segmentation (for both AMG and AIS).
+        - The automatic segmentation mode can be controlled by: `--mode <MODE_NAME>`, where the available choice for `MODE_NAME` is `amg` / `ais`.
+        - AMG is supported by both default Segment Anything models and `micro-sam` models / finetuned models.
+        - AIS is supported by `micro-sam` models (or finetuned models; subjected to they are trained with the additional instance segmentation decoder)
     - If these parameters are not provided by the user, `micro-sam` makes use of the best post-processing parameters (depending on the choice of model). 
     - The post-processing parameters can be changed by parsing the parameters via the CLI using `--<PARAMETER_NAME> <VALUE>.` For example, one can update the parameter values (eg. `pred_iou_thresh`, `stability_iou_thresh`, etc. - supported by AMG) using
-    ```bash
-    $ micro_sam.automatic_segmentation ... --pred_iou_thresh 0.6 --stability_iou_thresh 0.6 ...
-    ```
+        ```bash
+        $ micro_sam.automatic_segmentation ... --pred_iou_thresh 0.6 --stability_iou_thresh 0.6 ...
+        ```
+        - Remember to specify the automatic segmentation mode using `--mode <MODE_NAME>` when using additional post-processing parameters.
     - You can check details for supported parameters and their respective default values at `micro_sam/instance_segmentation.py` under the `generate` method for `AutomaticMaskGenerator` and `InstanceSegmentationWithDecoder` class.
 
 NOTE: For all CLIs above, you can find more details by adding the argument `-h` to the CLI script (eg. `$ micro_sam.annotator_2d -h`).
