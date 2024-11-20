@@ -5,9 +5,12 @@ from typing import Optional, Union, Tuple
 import numpy as np
 import imageio.v3 as imageio
 
+from torch_em.data.datasets.util import split_kwargs
+
 from . import util
 from .instance_segmentation import (
-    get_amg, get_decoder, mask_data_to_segmentation, InstanceSegmentationWithDecoder, AMGBase
+    get_amg, get_decoder, mask_data_to_segmentation, InstanceSegmentationWithDecoder,
+    AMGBase, AutomaticMaskGenerator, TiledAutomaticMaskGenerator
 )
 from .multi_dimensional_segmentation import automatic_3d_segmentation
 
@@ -30,7 +33,7 @@ def get_predictor_and_segmenter(
             Otherwise AIS will be used, which requires a special segmentation decoder.
             If not specified AIS will be used if it is available and otherwise AMG will be used.
         is_tiled: Whether to return segmenter for performing segmentation in tiling window style.
-        kwargs: Keyword arguments for the automatic instance segmentation class.
+        kwargs: Keyword arguments for the automatic mask generation class.
 
     Returns:
         The Segment Anything model.
@@ -223,14 +226,22 @@ def main():
 
     # NOTE: the script below allows the possibility to catch additional parsed arguments which correspond to
     # the automatic segmentation post-processing parameters (eg. 'center_distance_threshold' in AIS)
-    generate_kwargs = {
+    extra_kwargs = {
         parameter_args[i].lstrip("--"): _convert_argval(parameter_args[i + 1]) for i in range(0, len(parameter_args), 2)
     }
 
+    # Separate extra arguments as per where they should be passed in the automatic segmentation class.
+    # This is done to ensure the extra arguments are allocated to the desired location.
+    # eg. for AMG, 'points_per_side' is expected by '__init__',
+    # and 'stability_score_thresh' is expected in 'generate' method.
+    amg_class = AutomaticMaskGenerator if args.tile_shape is None else TiledAutomaticMaskGenerator
+    amg_kwargs, generate_kwargs = split_kwargs(amg_class, **extra_kwargs)
+
+    # Validate for the expected automatic segmentation mode.
+    # By default, it is set to 'None', i.e. searches for the decoder state to prioritize AIS for finetuned models.
+    # Otherwise, runs AMG for all models in any case.
     amg = None
-    if args.mode is None:
-        amg = None
-    else:
+    if args.mode is not None:
         assert args.mode in ["ais", "amg"], \
             f"'{args.mode}' is not a valid automatic segmentation mode. Please choose either 'amg' or 'ais'."
         amg = (args.mode == "amg")
@@ -241,6 +252,7 @@ def main():
         device=args.device,
         amg=amg,
         is_tiled=args.tile_shape is not None,
+        **amg_kwargs,
     )
 
     automatic_instance_segmentation(

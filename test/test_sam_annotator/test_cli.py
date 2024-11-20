@@ -94,37 +94,36 @@ class TestCLI(unittest.TestCase):
         image_data = binary_blobs(512).astype("uint8") * 255
         imageio.imwrite(im_path, image_data)
 
+        # Path to save automatic segmentation outputs.
         out_path = "output.tif"
 
         # Test AMG with default model in default mode.
-        run(
-            ["micro_sam.automatic_segmentation", "-i", im_path, "-o",
-             out_path, "-m", self.default_model_type]
-        )
+        run(["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path,
+             "-m", self.default_model_type, "--points_per_side", "4"])
+        self.assertTrue(os.path.exists(out_path))
+        os.remove(out_path)
 
         # Test AMG with default model exclusively in AMG mode.
-        run(
-            ["micro_sam.automatic_segmentation", "-i", im_path, "-o",
-             out_path, "-m", self.default_model_type, "--mode", "amg"]
-        )
+        run(["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path,
+             "-m", self.default_model_type, "--mode", "amg", "--points_per_side", "4"])
+        self.assertTrue(os.path.exists(out_path))
+        os.remove(out_path)
 
         # Test AIS with 'micro-sam' model in default mode.
-        run(
-            ["micro_sam.automatic_segmentation", "-i", im_path, "-o",
-             out_path, "-m", self.model_type]
-        )
+        run(["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path, "-m", self.model_type])
+        self.assertTrue(os.path.exists(out_path))
+        os.remove(out_path)
 
         # Test AIS with 'micro-sam' model exclusively in AMG mode.
-        run(
-            ["micro_sam.automatic_segmentation", "-i", im_path, "-o",
-             out_path, "-m", self.model_type, "--mode", "amg"]
-        )
+        run(["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path,
+             "-m", self.model_type, "--mode", "amg", "--points_per_side", "4"])
+        self.assertTrue(os.path.exists(out_path))
+        os.remove(out_path)
 
         # Test AIS with 'micro-sam' model exclusively in AIS mode.
-        run(
-            ["micro_sam.automatic_segmentation", "-i", im_path, "-o",
-             out_path, "-m", self.model_type, "--mode", "ais"]
-        )
+        run(["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path, "-m", self.model_type, "--mode", "ais"])
+        self.assertTrue(os.path.exists(out_path))
+        os.remove(out_path)
 
 
 if __name__ == "__main__":
