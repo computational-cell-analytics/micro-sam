@@ -976,13 +976,13 @@ class EmbeddingWidget(_WidgetBase):
         )
         setting_values.layout().addLayout(layout)
 
-        # Create UI for prefering the decoder.
-        self.prefer_decoder = True
-        widget = self._add_boolean_param(
-            "prefer_decoder", self.prefer_decoder, title="Prefer Segmentation Decoder",
-            tooltip=get_tooltip("embedding", "prefer_decoder")
+        # Create UI for the choice of automatic segmentation mode.
+        self.automatic_segmentation_mode = "amg"
+        auto_seg_options = ["amg", "ais"]
+        self.automatic_segmentation_mode_dropdown, layout = self._add_choice_param(
+            "automatic_segmentation_mode", self.automatic_segmentation_mode, auto_seg_options
         )
-        setting_values.layout().addWidget(widget)
+        setting_values.layout().addLayout(layout)
 
         settings = _make_collapsible(setting_values, title="Embedding Settings")
         return settings
@@ -1101,7 +1101,7 @@ class EmbeddingWidget(_WidgetBase):
             state.initialize_predictor(
                 image_data, model_type=self.model_type, save_path=save_path, ndim=ndim,
                 device=self.device, checkpoint_path=self.custom_weights, tile_shape=tile_shape, halo=halo,
-                prefer_decoder=self.prefer_decoder, pbar_init=pbar_init,
+                prefer_decoder=(self.automatic_segmentation_mode == "ais"), pbar_init=pbar_init,
                 pbar_update=lambda update: pbar_signals.pbar_update.emit(update),
             )
             pbar_signals.pbar_stop.emit()
