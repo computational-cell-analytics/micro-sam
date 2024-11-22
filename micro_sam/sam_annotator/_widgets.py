@@ -977,10 +977,11 @@ class EmbeddingWidget(_WidgetBase):
         setting_values.layout().addLayout(layout)
 
         # Create UI for the choice of automatic segmentation mode.
-        self.automatic_segmentation_mode = "amg"
-        auto_seg_options = ["amg", "ais"]
+        self.automatic_segmentation_mode = "auto"
+        auto_seg_options = ["auto", "amg", "ais"]
         self.automatic_segmentation_mode_dropdown, layout = self._add_choice_param(
-            "automatic_segmentation_mode", self.automatic_segmentation_mode, auto_seg_options
+            "automatic_segmentation_mode", self.automatic_segmentation_mode, auto_seg_options,
+            title="automatic segmentation mode", tooltip=get_tooltip("embedding", "automatic_segmentation_mode")
         )
         setting_values.layout().addLayout(layout)
 
@@ -1098,10 +1099,16 @@ class EmbeddingWidget(_WidgetBase):
                 pbar_signals.pbar_total.emit(total)
                 pbar_signals.pbar_description.emit(description)
 
+            # Whether to prefer decoder.
+            # With 'amg', it is set to 'False', else it is 'True' for the default 'auto' and 'ais' mode.
+            prefer_decoder = True
+            if self.automatic_segmentation_mode in "amg":
+                prefer_decoder = False
+
             state.initialize_predictor(
                 image_data, model_type=self.model_type, save_path=save_path, ndim=ndim,
                 device=self.device, checkpoint_path=self.custom_weights, tile_shape=tile_shape, halo=halo,
-                prefer_decoder=(self.automatic_segmentation_mode == "ais"), pbar_init=pbar_init,
+                prefer_decoder=prefer_decoder, pbar_init=pbar_init,
                 pbar_update=lambda update: pbar_signals.pbar_update.emit(update),
             )
             pbar_signals.pbar_stop.emit()
