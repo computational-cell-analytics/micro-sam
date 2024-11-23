@@ -158,6 +158,10 @@ The `micro-sam` CLIs for precomputation of image embeddings and annotators (Anno
 NOTE: It is important to choose the correct model type when you opt for the above recommendation, using the `-m / --model_type` argument or selecting it from the `Model` dropdown in `Embedding Settings` respectively. Otherwise you will face parameter mismatch issues.
 
 
+### 16. Some parameters in the annotator / finetuning widget are unclear to me.
+`micro-sam` has tooltips for menu options across all widgets (i.e. an information window will appear if you hover over name of the menu), which briefly describe the utility of the specific menu option.
+
+
 ## Fine-tuning questions
 
 
