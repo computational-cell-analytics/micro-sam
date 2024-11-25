@@ -53,6 +53,23 @@ The PyPI page for `micro-sam` exists only so that the [napari-hub](https://www.n
 ### 7. I get the following error: `importError: cannot import name 'UNETR' from 'torch_em.model'`.
 It's possible that you have an older version of `torch-em` installed. Similar errors could often be raised from other libraries, the reasons being: a) Outdated packages installed, or b) Some non-existent module being called. If the source of such error is from `micro_sam`, then `a)` is most likely the reason . We recommend installing the latest version following the [installation instructions](https://github.com/constantinpape/torch-em?tab=readme-ov-file#installation).
 
+### 8. My system does not support internet connection. Where should I put the model checkpoints for the `micro-sam` models?
+We recommend transferring the model checkpoints to the system-level cache directory (you can find yours by running the following in terminal: `python -c "from micro_sam import util; print(util.microsam_cachedir())`). Once you have identified the cache directory, you need to create an additional `models` directory inside the `micro-sam` cache directory (if not present already) and move the model checkpoints there. At last, you **must** rename the transferred checkpoints as per the respective [key values](https://github.com/computational-cell-analytics/micro-sam/blob/master/micro_sam/util.py#L87) in the url dictionaries located in the `micro_sam.util.models` function (below mentioned is an example for Linux users).
+
+```bash
+# Download and transfer the model checkpoints for 'vit_b_lm' and `vit_b_lm_decoder`.
+# Next, verify the cache directory.
+> python -c "from micro_sam import util; print(util.microsam_cachedir())"
+/home/anwai/.cache/micro_sam
+
+# Create 'models' folder in the cache directory
+> mkdir /home/anwai/.cache/micro_sam/models
+
+# Move the checkpoints to the models directory and rename them
+# The following steps transfer and rename the checkpoints to the desired filenames.
+> mv vit_b.pt /home/anwai/.cache/micro_sam/models/vit_b_lm
+> mv vit_b_decoder.pt /home/anwai/.cache/micro_sam/models/vit_b_lm_decoder
+```
 
 ## Usage questions
 
@@ -139,6 +156,10 @@ This can happen for long running computations. You just need to wait a bit longe
 The `micro-sam` CLIs for precomputation of image embeddings and annotators (Annotator 2d, Annotator 3d, Annotator Tracking, Image Series Annotator) accept the argument `-c` / `--checkpoint` to pass model checkpoints. If you start a `micro-sam` annotator from the `napari` plugin menu, you can provide the path to model checkpoints in the annotator widget (on right) under `Embedding Settings` drop-down in the `custom weights path` option.
 
 NOTE: It is important to choose the correct model type when you opt for the above recommendation, using the `-m / --model_type` argument or selecting it from the `Model` dropdown in `Embedding Settings` respectively. Otherwise you will face parameter mismatch issues.
+
+
+### 16. Some parameters in the annotator / finetuning widget are unclear to me.
+`micro-sam` has tooltips for menu options across all widgets (i.e. an information window will appear if you hover over name of the menu), which briefly describe the utility of the specific menu option.
 
 
 ## Fine-tuning questions
