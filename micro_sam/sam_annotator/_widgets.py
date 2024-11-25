@@ -325,7 +325,7 @@ def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> Non
     if all_slices:
         vutil.clear_annotations(viewer)
     else:
-        i = int(viewer.cursor.position[0])
+        i = viewer.dims.current_step[0]
         vutil.clear_annotations_slice(viewer, i=i)
 
 
@@ -341,7 +341,7 @@ def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None
         _reset_tracking_state(viewer)
         vutil.clear_annotations(viewer)
     else:
-        i = int(viewer.cursor.position[0])
+        i = viewer.dims.current_step[0]
         vutil.clear_annotations_slice(viewer, i=i)
 
 
@@ -707,16 +707,19 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
     boxes, masks = vutil.shape_layer_to_prompts(viewer.layers["prompts"], shape)
     points, labels = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], with_stop_annotation=False)
 
-    predictor = AnnotatorState().predictor
-    image_embeddings = AnnotatorState().image_embeddings
+    state = AnnotatorState()
+    predictor = state.predictor
+    image_embeddings = state.image_embeddings
     seg = vutil.prompt_segmentation(
         predictor, points, labels, boxes, masks, shape, image_embeddings=image_embeddings,
         multiple_box_prompts=True, batched=batched, previous_segmentation=viewer.layers["current_object"].data,
+        scale_factor=state.scale_factor
     )
 
-    # no prompts were given or prompts were invalid, skip segmentation
-    if seg is None:
-        print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
+    # No prompts were given or prompts were invalid, skip segmentation.
+    if isinstance(seg, str):
+        msg = f"Interactive segmentation failed due to the following reason:\n {seg}"
+        _generate_message("error", msg)
         return
 
     viewer.layers["current_object"].data = seg
@@ -736,26 +739,32 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
         return None
 
     shape = viewer.layers["current_object"].data.shape[1:]
-    position = viewer.cursor.position
-    z = int(position[0])
+    z = viewer.dims.current_step[0]
 
-    point_prompts = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], z)
-    # this is a stop prompt, we do nothing
+    state = AnnotatorState()
+    scale_factor = state.scale_factor
+
+    point_prompts = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], i=z, scale_factor=scale_factor)
+    # This is a stop prompt, we do nothing.
     if not point_prompts:
         return
 
+    # TODO
     boxes, masks = vutil.shape_layer_to_prompts(viewer.layers["prompts"], shape, i=z)
     points, labels = point_prompts
 
-    state = AnnotatorState()
+    # Set the correct slice if we have a scale factor.
+    if scale_factor is not None:
+        z = int(z / scale_factor[0])
     seg = vutil.prompt_segmentation(
         state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
-        image_embeddings=state.image_embeddings, i=z,
+        image_embeddings=state.image_embeddings, i=z, scale_factor=scale_factor,
     )
 
-    # no prompts were given or prompts were invalid, skip segmentation
-    if seg is None:
-        print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
+    # No prompts were given or prompts were invalid, skip segmentation.
+    if isinstance(seg, str):
+        msg = f"Interactive segmentation failed due to the following reason:\n {seg}"
+        _generate_message("error", msg)
         return
 
     viewer.layers["current_object"].data[z] = seg
@@ -773,10 +782,10 @@ def segment_frame(viewer: "napari.viewer.Viewer") -> None:
         return None
     if _validate_prompts(viewer):
         return None
+
     state = AnnotatorState()
     shape = state.image_shape[1:]
-    position = viewer.cursor.position
-    t = int(position[0])
+    t = viewer.dims.current_step[0]
 
     point_prompts = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], i=t, track_id=state.current_track_id)
     # this is a stop prompt, we do nothing
@@ -788,18 +797,20 @@ def segment_frame(viewer: "napari.viewer.Viewer") -> None:
 
     seg = vutil.prompt_segmentation(
         state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
-        image_embeddings=state.image_embeddings, i=t
+        image_embeddings=state.image_embeddings, i=t, scale_factor=state.scale_factor,
     )
 
-    # no prompts were given or prompts were invalid, skip segmentation
-    if seg is None:
-        print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
+    # No prompts were given or prompts were invalid, skip segmentation.
+    if isinstance(seg, str):
+        msg = f"Interactive segmentation failed due to the following reason:\n {seg}"
+        _generate_message("error", msg)
         return
 
-    # clear the old segmentation for this track_id
+    # Clear the old segmentation for this track_id.
     old_mask = viewer.layers["current_object"].data[t] == state.current_track_id
     viewer.layers["current_object"].data[t][old_mask] = 0
-    # set the new segmentation
+
+    # Set the new segmentation.
     new_mask = seg.squeeze() == 1
     viewer.layers["current_object"].data[t][new_mask] = state.current_track_id
     viewer.layers["current_object"].refresh()
@@ -842,6 +853,41 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
         else:
             halo = (max_val, max_val)
     return tile_shape, halo
+
+
+class _LevelSelector(QtWidgets.QDialog):
+    selected_level = Signal(int)
+
+    def __init__(self, image):
+        super().__init__()
+        self.setWindowTitle("Select Level")
+        layout = QtWidgets.QVBoxLayout()
+
+        shapes = [data.shape for data in image.data]
+
+        message = "You have selected a multiscale image with scale levels:\n"
+        for level, shape in enumerate(shapes):
+            message += f"{level}: Shape: {' X '.join(map(str, shape))}\n"
+        message += "Please select the level to use for embedding computation."
+        layout.addWidget(QtWidgets.QLabel(message))
+
+        n_levels = len(shapes)
+        levels = [str(i) for i in range(n_levels)]
+
+        self.combo_box = QtWidgets.QComboBox(self)
+        self.combo_box.addItems(levels)
+        layout.addWidget(self.combo_box)
+
+        # Create a button to close the window.
+        close_button = QtWidgets.QPushButton("Close")
+        close_button.clicked.connect(self.button_clicked)
+        layout.addWidget(close_button)
+
+        self.setLayout(layout)
+
+    def button_clicked(self, button):
+        self.selected_level.emit(int(self.combo_box.currentText()))
+        self.accept()
 
 
 class EmbeddingWidget(_WidgetBase):
@@ -1075,18 +1121,42 @@ class EmbeddingWidget(_WidgetBase):
         state = AnnotatorState()
         state.reset_state()
 
+        # Check if we have a multiscale image.
+        if image.multiscale:
+            level = None
+
+            def _handle_selection(selected_level):
+                nonlocal level
+                level = selected_level
+
+            selector = _LevelSelector(image)
+            selector.selected_level.connect(_handle_selection)
+            selector.exec_()
+
+            image_data = image.data[level]
+
+            # Set the scale factor of this image w.r.t. the full scale.
+            if level > 0:
+                scale_factor = tuple(
+                    float(fsh) / sh for fsh, sh in zip(image.data[0].shape, image_data.shape)
+                )
+                state.scale_factor = scale_factor
+                print(scale_factor)
+
+        else:
+            image_data = image.data
+
         # Get image dimensions.
         if image.rgb:
-            ndim = image.data.ndim - 1
-            state.image_shape = image.data.shape[:-1]
+            ndim = image_data.ndim - 1
+            state.image_shape = image_data.shape[:-1]
         else:
-            ndim = image.data.ndim
-            state.image_shape = image.data.shape
+            ndim = image_data.ndim
+            state.image_shape = image_data.shape
 
         # Process tile_shape and halo, set other data.
         tile_shape, halo = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
         save_path = None if self.embeddings_save_path == "" else self.embeddings_save_path
-        image_data = image.data
 
         # Set up progress bar and signals for using it within a threadworker.
         pbar, pbar_signals = _create_pbar_for_threadworker()
@@ -1212,6 +1282,7 @@ class SegmentNDWidget(_WidgetBase):
                 state.predictor, self._viewer.layers["point_prompts"], self._viewer.layers["prompts"],
                 state.image_embeddings, shape, track_id=state.current_track_id,
                 update_progress=lambda update: pbar_signals.pbar_update.emit(update),
+                scale_factor=state.scale_factor
             )
 
             # Step 2: Track the object starting from the lowest annotated slice.
@@ -1265,6 +1336,7 @@ class SegmentNDWidget(_WidgetBase):
                 state.predictor, self._viewer.layers["point_prompts"], self._viewer.layers["prompts"],
                 state.image_embeddings, shape,
                 update_progress=lambda update: pbar_signals.pbar_update.emit(update),
+                scale_factor=state.scale_factor,
             )
 
             # Step 2: Segment the rest of the volume based on projecting prompts.
@@ -1424,7 +1496,7 @@ class AutoSegmentWidget(_WidgetBase):
         return self._add_boolean_param(
             "apply_to_volume", self.apply_to_volume, title="Apply to Volume",
             tooltip=get_tooltip("autosegment", "apply_to_volume")
-            )
+        )
 
     def _add_common_settings(self, settings):
         # Create the UI element for min object size.
@@ -1655,7 +1727,7 @@ class AutoSegmentWidget(_WidgetBase):
         if self.volumetric and self.apply_to_volume:
             worker = self._run_segmentation_3d(kwargs)
         elif self.volumetric and not self.apply_to_volume:
-            i = int(self._viewer.cursor.position[0])
+            i = self._viewer.dims.current_step[0]
             worker = self._run_segmentation_2d(kwargs, i=i)
         else:
             worker = self._run_segmentation_2d(kwargs)
