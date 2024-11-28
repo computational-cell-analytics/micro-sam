@@ -28,7 +28,7 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
     train_loader = get_livecell_loader(
         path=data_path, patch_shape=patch_shape, split="train", batch_size=2, num_workers=16,
         cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform, label_dtype=torch.float32
+        raw_transform=raw_transform, label_dtype=torch.float32, n_samples=100,
     )
     val_loader = get_livecell_loader(
         path=data_path, patch_shape=patch_shape, split="val", batch_size=1, num_workers=16,
