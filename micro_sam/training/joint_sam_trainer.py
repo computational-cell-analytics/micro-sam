@@ -100,16 +100,16 @@ class JointSamTrainer(SamTrainer):
 
             self.optimizer.zero_grad()
 
-            with forward_context():
+            with forward_context() and torch.amp.autocast("cuda"):
                 # 1. train for the interactive segmentation
                 (loss, mask_loss, iou_regression_loss, model_iou,
-                 sampled_binary_y) = self._interactive_train_iteration(x, labels_instances)
+                    sampled_binary_y) = self._interactive_train_iteration(x, labels_instances)
 
             backprop(loss)
 
             self.optimizer.zero_grad()
 
-            with forward_context():
+            with forward_context() and torch.amp.autocast("cuda"):
                 # 2. train for the automatic instance segmentation
                 unetr_loss = self._instance_iteration(x, labels_for_unetr)
 

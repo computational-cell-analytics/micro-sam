@@ -268,10 +268,20 @@ def train_sam(
                 if not param_name.startswith("encoder"):
                     joint_model_params.append(params)
 
-            optimizer = optimizer_class(joint_model_params, lr=lr)
-
+            model_params = joint_model_params
         else:
-            optimizer = optimizer_class(model.parameters(), lr=lr)
+            model_params = model.parameters()
+
+        optimizer = optimizer_class(model_params, lr=lr)
+
+        if "quantize" in peft_kwargs:
+            import bitsandbytes as bnb
+            optimizer = bnb.optim.AdamW8bit(
+                model_params,
+                lr=lr,
+                betas=(0.9, 0.999),
+                eps=1e-8
+            )
 
         if scheduler_kwargs is None:
             scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
@@ -292,7 +302,7 @@ def train_sam(
                 lr_scheduler=scheduler,
                 logger=joint_trainers.JointSamLogger,
                 log_image_interval=100,
-                mixed_precision=True,
+                mixed_precision=False,
                 convert_inputs=convert_inputs,
                 n_objects_per_batch=n_objects_per_batch,
                 n_sub_iteration=n_sub_iteration,
@@ -314,7 +324,7 @@ def train_sam(
                 lr_scheduler=scheduler,
                 logger=trainers.SamLogger,
                 log_image_interval=100,
-                mixed_precision=True,
+                mixed_precision=False,
                 convert_inputs=convert_inputs,
                 n_objects_per_batch=n_objects_per_batch,
                 n_sub_iteration=n_sub_iteration,
