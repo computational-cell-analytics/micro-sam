@@ -1087,6 +1087,9 @@ class EmbeddingWidget(_WidgetBase):
             ndim = image.data.ndim
             state.image_shape = image.data.shape
 
+        # Set layer scale
+        state.image_scale = tuple(image.scale)
+
         # Process tile_shape and halo, set other data.
         tile_shape, halo = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
         save_path = None if self.embeddings_save_path == "" else self.embeddings_save_path
