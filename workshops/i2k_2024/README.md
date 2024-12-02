@@ -20,12 +20,11 @@ Alternatively you can also work on model finetuning or an advanced application, 
 
 To prepare for the workshop, please do the following:
 - Install the latest version of `micro_sam`, see [Installation](#installation) for details.
-- Download the pre-computed embeddings for the first 3D segmentation data, see [here](#download-embeddings-for-3d-segmentation).
+- Download the models and pre-computed embeddings for the common 3D segmentation, see [here](#download-embeddings-for-3d-segmentation).
 - Decide what you want to do in the 3rd part of the workshop and follow the respective preparation steps. You have the following options:
     - High-throughput annotation of cells (or other structures) in 2D images, see [high-throughput annotation](#high-throughput-image-annotation).
     - 3D segmentation in light or electron microscopy, see [3D LM segmentation](#3d-lm-segmentation) and [3D EM segmentation](#3d-em-segmentation).
     - Finetuning SAM on custom data, see [model finetuning](#model-finetuning).
-    - Writing your own scripts using the `micro_sam` python library, see [scripting](#scripting-with-micro_sam).
 
 You can do all of this on your laptop with a CPU, except for model finetuning, which requires a GPU.
 We have prepared a notebook that runs on cloud resources with a GPU for this.
@@ -37,32 +36,38 @@ If you want to learn more about the `micro_sam` napari plugin or python library 
 Please make sure to install the latest version of `micro_sam` before the workshop using `conda` (or `mamba`).
 You can create a new environment and install it like this:
 ```bash
-$ conda create -c conda-forge -n micro_sam python=3.11 natsort
-$ conda activate micro_sam
-$ conda install -c pytorch -c conda-forge "micro_sam>=1.1" "pytorch>=2.4" "protobuf<5" cpuonly
+conda create -c conda-forge -n micro_sam python=3.11 natsort
+conda activate micro_sam
+conda install -c pytorch -c conda-forge "micro_sam>=1.1" "pytorch>=2.4" "protobuf<5" cpuonly
 ```
 If you already have an installation of `micro_sam` please update it by running the last command in your respective environment. You can find more information about the installation [here](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation).
 
+
 ### Download Embeddings for 3D EM Segmentation
 
-We provide a script to download the image embeddings for the 3D segmentation problem in part 2.
-The image embeddings are necessary to run interactive segmentation. Computing them on the CPU can take some time for volumetric data, but we support precomputing them and have done this for this data already.
-
+<<<<<<< HEAD
 To run the script you first need to use `git` to download this repository:
 
+=======
+We provide a script to download the models used in the workshop. To run the script you first need to use `git` to download this repository:
+>>>>>>> a2c2a7df18c3b452091b582f41ecc4df7916cf74
 ```bash
-$ git clone https://github.com/computational-cell-analytics/micro-sam
+git clone https://github.com/computational-cell-analytics/micro-sam
 ```
 then go to this directory:
 
 ```bash
-$ cd micro_sam/workshops/i2k_2024
+cd micro-sam/workshops/i2k_2024
 ```
-
-and download the precomputed embeddings:
-
+and run the script:
 ```bash
-$ python download_embeddings.py -e embeddings -d lucchi
+python download_models.py
+```
+We also provide a script to download the image embeddings for the 3D segmentation problem in part 2.
+The image embeddings are necessary to run interactive segmentation. Computing them on the CPU can take some time for volumetric data, but we support precomputing them and have done this for this data already.
+You can download them by running the script:
+```bash
+python download_embeddings.py -e embeddings -d lucchi
 ```
 
 ### High-throughput Image Annotation
@@ -73,7 +78,7 @@ This annotation mode is well suited for generating annotations for 2D cell segme
 We have prepared an example dataset for the workshop that you can use. It consists of 15 images from the [CellPose](https://www.cellpose.org/) dataset. You can download the data with the script `download_dataset.py`:
 
 ```bash
-$ python download_datasets.py -i data -d cells
+python download_datasets.py -i data -d cells
 ```
 
 This will download the data to the folder `data/cells` with images stored in the subfolder `images` and segmentation masks in `masks`. After this you can start the image series annotation tool, either via the napari plugin (we will show this in the workshop) or via the command line:
@@ -93,12 +98,12 @@ You can use the [3D annotation tool](https://computational-cell-analytics.github
 
 You can download the data with the script `download_dataset.py`:
 ```bash
-$ python download_datasets.py -i data -d nuclei_3d
+python download_datasets.py -i data -d nuclei_3d
 ```
 
 After this please download the precomputed embeddings:
 ```bash
-$ python download_embeddings.py -e embeddings -d nuclei_3d
+python download_embeddings.py -e embeddings -d nuclei_3d
 ```
 
 You can then start the 3d annotation tool, either via the napari plugin (we will show this in the workshop) or the command line: 
@@ -119,19 +124,19 @@ We have prepared an example dataset for the workshop that you can use. It consis
 You can download the data with the script `download_dataset.py`:
 
 ```bash
-$ python download_datasets.py -i data -d volume_em
+python download_datasets.py -i data -d volume_em
 ```
 
 After this please download the precomputed embeddings:
 
 ```bash
-$ python download_embeddings.py -e embeddings -d volume_em
+python download_embeddings.py -e embeddings -d volume_em
 ```
 
 You can then start the 3d annotation tool, either via the napari plugin (we will show this in the workshop) or the command line:
 
 ```bash
-$ micro_sam.annotator_3d -i data/volume_em/images/train_data_membrane_02.tif -e embeddings/volume_em/vit_b/platynereis_membrane_train_data_membrane_02.zarr -m vit_b
+micro_sam.annotator_3d -i data/volume_em/images/train_data_membrane_02.tif -e embeddings/volume_em/vit_b/platynereis_membrane_train_data_membrane_02.zarr -m vit_b
 ```
 
 Note: You can use `micro_sam` with different models: the original models from Segment Anything and models finetuned for different microscopy segmentation tasks by us.
@@ -146,7 +151,7 @@ We provide an example notebook `finetune_sam.ipynb` and script `finetune_sam.py`
 
 You can download the sample data by running:
 ```bash
-$ python download_datasets.py -i data -d hpa
+python download_datasets.py -i data -d hpa
 ```
 
 Note: You need a GPU in order to finetune the model (finetuning on the CPU is possible but takes too long for the workshop).
@@ -154,13 +159,13 @@ We have prepared the notebook so that it can be run on [kaggle](ttps://www.kaggl
 
 **If you want to bring your own data for training please store it in a similar format to the example data. You have to bring both images and annotations (= instance segmentation masks) for training. If you want to use kaggle please also upload your data so that you can retrieve it within the notebook.**
 
-### Scripting with micro_sam
+### Advanced applications: scripting with `micro_sam`
 
-You can also use the [micro_sam python library](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#using-the-python-library) to implement your own functionality.
+If you want to develop applications based on `micro_sam` you can use
+the [micro_sam python library](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#using-the-python-library) to implement your own functionality.
 For example, you could implement a script to segment cells based on prompts derived from a nucleus segmentation via [batched inference](https://computational-cell-analytics.github.io/micro-sam/micro_sam/inference.html#batched_inference).
 Or a script to automatically segment data with a finetuned model using [automatic segmentation](https://computational-cell-analytics.github.io/micro-sam/micro_sam/automatic_segmentation.html).
 
-Feel free to contact us before the workshop if you have an idea for what you want to implement and would like to know if this is feasible and how to get started.
 
 ### Precompute Embeddings
 
@@ -168,9 +173,9 @@ You can use the command line to precompute embeddings for volumetric segmentatio
 Here is the example script for pre-computing the embeddings on the [3D nucleus segmentation data](#3d-lm-segmentation).
 
 ```bash
-$ micro_sam.precompute_embeddings -i data/nuclei_3d/images/X1.tif  # Filepath where inputs are stored.
-                                  -m vit_b  # You can provide name for a model of your choice (supported by 'micro-sam') (eg. 'vit_b_lm').
-                                  -e embeddings/vit_b/nuclei_3d_X1  # Filepath where computed embeddings will be stored.
+micro_sam.precompute_embeddings -i data/nuclei_3d/images/X1.tif  # Filepath where inputs are stored.
+                                -m vit_b  # You can provide name for a model of your choice (supported by 'micro-sam') (eg. 'vit_b_lm').
+                                -e embeddings/vit_b/nuclei_3d_X1  # Filepath where computed embeddings will be stored.
 ```
 
 You need to adapt the path to the data, choose the model you want to use (`vit_b`, `vit_b_lm`, `vit_b_em_organelles`) and adapt the path where the embeddings should be saved.

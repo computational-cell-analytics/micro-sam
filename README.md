@@ -53,6 +53,19 @@ Compared to these we support more applications (2d, 3d and tracking), and provid
 
 ## Release Overview
 
+**New in version 1.1.1**
+
+Fixing minor issues with 1.1.0 and enabling pytorch 2.5 support.
+
+**New in version 1.1.0**
+
+This version introduces several improvements:
+
+- Bugfixes and several minor improvements
+- Compatibility with napari >=0.5
+- Automatic instance segmentation CLI
+- Initial support for parameter efficient fine-tuning and automatic semantic segmentation in 2d and 3d (not available in napari plugin, part of the python library)
+
 **New in version 1.0.1**
 
 Use stable URL for model downloads and fix issues in state precomputation for automatic segmentation.

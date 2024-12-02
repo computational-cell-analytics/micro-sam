@@ -59,7 +59,7 @@ tooltips = {
     "patch": "Select the size of image patches used for training.",
     "raw_key": "Define the key that holds to the image data. Use a pattern, e.g. \"*.tif\" select multiple files or an internal path for hdf5, zarr or similar formats.",  # noqa
     "raw_path": "Specify the path to the image data for training. Can either point to a directory or single file.",
-    "raw_path_val": "Specify the path to the image data for training. Can either point to a directory or single file.",
+    "raw_path_val": "Specify the path to the image data for validation. Can either point to a directory or single file.",  # noqa
     "segmentation_decoder": "Choose whether to train with additional segmentation decoder or not.",
     "output_path": "Specify the path where you want to save the trained model after the training process.",
     "n_epochs": "Define the number of training epochs for your model.",

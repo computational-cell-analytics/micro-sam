@@ -78,6 +78,7 @@ def run_evaluation_for_iterative_prompting(
     experiment_folder: Union[os.PathLike, str],
     start_with_box_prompt: bool = False,
     overwrite_results: bool = False,
+    use_masks: bool = False,
 ) -> pd.DataFrame:
     """Run evaluation for iterative prompt-based segmentation predictions.
 
@@ -87,6 +88,7 @@ def run_evaluation_for_iterative_prompting(
         experiment_folder: The folder where all the experiment results are stored.
         start_with_box_prompt: Whether to evaluate on experiments with iterative prompting starting with box.
         overwrite_results: Whether to overwrite the results to update them with the new evaluation run.
+        use_masks: Whether to use masks for iterative prompting.
 
     Returns:
         A DataFrame that contains the evaluation results.
@@ -94,7 +96,9 @@ def run_evaluation_for_iterative_prompting(
     assert os.path.exists(prediction_root), prediction_root
 
     # Save the results in the experiment folder
-    result_folder = os.path.join(experiment_folder, "results")
+    result_folder = os.path.join(
+        experiment_folder, "results", "iterative_prompting_" + ("with" if use_masks else "without") + "_mask"
+    )
     os.makedirs(result_folder, exist_ok=True)
 
     csv_path = os.path.join(
