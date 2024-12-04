@@ -28,11 +28,13 @@ class LoRASurgery(nn.Module):
         super().__init__()
         self.qkv_proj = block.attn.qkv
         self.dim = self.qkv_proj.in_features
+        self.alpha = 1  # From our experiments, 'alpha' as 1 gives the best performance.
+        self.rank = rank
 
-        self.w_a_linear_q = nn.Linear(self.dim, rank, bias=False)
-        self.w_b_linear_q = nn.Linear(rank, self.dim, bias=False)
-        self.w_a_linear_v = nn.Linear(self.dim, rank, bias=False)
-        self.w_b_linear_v = nn.Linear(rank, self.dim, bias=False)
+        self.w_a_linear_q = nn.Linear(self.dim, self.rank, bias=False)
+        self.w_b_linear_q = nn.Linear(self.rank, self.dim, bias=False)
+        self.w_a_linear_v = nn.Linear(self.dim, self.rank, bias=False)
+        self.w_b_linear_v = nn.Linear(self.rank, self.dim, bias=False)
 
         self.reset_parameters()
 
@@ -46,8 +48,8 @@ class LoRASurgery(nn.Module):
 
     def forward(self, x):
         qkv = self.qkv_proj(x)  # B, N, N, 3 * org_C
-        new_q = self.w_b_linear_q(self.w_a_linear_q(x))
-        new_v = self.w_b_linear_v(self.w_a_linear_v(x))
+        new_q = self.alpha * self.w_b_linear_q(self.w_a_linear_q(x))
+        new_v = self.alpha * self.w_b_linear_v(self.w_a_linear_v(x))
         qkv[:, :, :, :self.dim] += new_q
         qkv[:, :, :, -self.dim:] += new_v
         return qkv

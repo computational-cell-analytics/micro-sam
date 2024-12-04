@@ -145,20 +145,20 @@ class _WidgetBase(QtWidgets.QWidget):
         layout.addWidget(dropdown)
         return dropdown, layout
 
-    def _add_shape_param(self, names, values, min_val, max_val, step=1, tooltip=None):
+    def _add_shape_param(self, names, values, min_val, max_val, step=1, title=None, tooltip=None):
         layout = QtWidgets.QHBoxLayout()
 
         x_layout = QtWidgets.QVBoxLayout()
         x_param, _ = self._add_int_param(
             names[0], values[0], min_val=min_val, max_val=max_val, layout=x_layout, step=step,
-            tooltip=tooltip
+            title=title[0] if title is not None else title, tooltip=tooltip
         )
         layout.addLayout(x_layout)
 
         y_layout = QtWidgets.QVBoxLayout()
         y_param, _ = self._add_int_param(
             names[1], values[1], min_val=min_val, max_val=max_val, layout=y_layout, step=step,
-            tooltip=tooltip
+            title=title[1] if title is not None else title, tooltip=tooltip
         )
         layout.addLayout(y_layout)
 
@@ -325,7 +325,7 @@ def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> Non
     if all_slices:
         vutil.clear_annotations(viewer)
     else:
-        i = int(viewer.cursor.position[0])
+        i = int(viewer.dims.point[0])
         vutil.clear_annotations_slice(viewer, i=i)
 
 
@@ -341,7 +341,7 @@ def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None
         _reset_tracking_state(viewer)
         vutil.clear_annotations(viewer)
     else:
-        i = int(viewer.cursor.position[0])
+        i = int(viewer.dims.point[0])
         vutil.clear_annotations_slice(viewer, i=i)
 
 
@@ -736,7 +736,9 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
         return None
 
     shape = viewer.layers["current_object"].data.shape[1:]
-    position = viewer.cursor.position
+
+    position_world = viewer.dims.point
+    position = viewer.layers["point_prompts"].world_to_data(position_world)
     z = int(position[0])
 
     point_prompts = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], z)
@@ -775,7 +777,7 @@ def segment_frame(viewer: "napari.viewer.Viewer") -> None:
         return None
     state = AnnotatorState()
     shape = state.image_shape[1:]
-    position = viewer.cursor.position
+    position = viewer.dims.point
     t = int(position[0])
 
     point_prompts = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], i=t, track_id=state.current_track_id)
@@ -868,7 +870,9 @@ class EmbeddingWidget(_WidgetBase):
     def _initialize_image(self):
         state = AnnotatorState()
         image_shape = self.image_selection.get_value().data.shape
+        image_scale = tuple(self.image_selection.get_value().scale)
         state.image_shape = image_shape
+        state.image_scale = image_scale
 
     def _create_image_section(self):
         image_section = QtWidgets.QVBoxLayout()
@@ -1082,6 +1086,9 @@ class EmbeddingWidget(_WidgetBase):
         else:
             ndim = image.data.ndim
             state.image_shape = image.data.shape
+
+        # Set layer scale
+        state.image_scale = tuple(image.scale)
 
         # Process tile_shape and halo, set other data.
         tile_shape, halo = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
@@ -1655,7 +1662,7 @@ class AutoSegmentWidget(_WidgetBase):
         if self.volumetric and self.apply_to_volume:
             worker = self._run_segmentation_3d(kwargs)
         elif self.volumetric and not self.apply_to_volume:
-            i = int(self._viewer.cursor.position[0])
+            i = int(self._viewer.dims.point[0])
             worker = self._run_segmentation_2d(kwargs, i=i)
         else:
             worker = self._run_segmentation_2d(kwargs)

@@ -1,18 +1,20 @@
 import os
 import platform
 import unittest
-from shutil import which, rmtree
 from subprocess import run
+from shutil import which, rmtree
 
-import imageio.v3 as imageio
-import micro_sam.util as util
-import pytest
 import zarr
+import pytest
+import imageio.v3 as imageio
 from skimage.data import binary_blobs
+
+import micro_sam.util as util
 
 
 class TestCLI(unittest.TestCase):
     model_type = "vit_t_lm" if util.VIT_T_SUPPORT else "vit_b_lm"
+    default_model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"
     tmp_folder = "tmp-files"
 
     def setUp(self):
@@ -36,7 +38,7 @@ class TestCLI(unittest.TestCase):
     def test_image_series_annotator(self):
         self._test_command("micro_sam.image_series_annotator")
 
-    @pytest.mark.skipif(platform.system() == "Windows", reason="Gui test is not working on windows.")
+    @pytest.mark.skipif(platform.system() == "Windows", reason="CLI test is not working on windows.")
     def test_precompute_embeddings(self):
         self._test_command("micro_sam.precompute_embeddings")
 
@@ -83,8 +85,45 @@ class TestCLI(unittest.TestCase):
             ais_path = os.path.join(emb_path3, f"image-{i}.zarr", "is_state.h5")
             self.assertTrue(os.path.exists(ais_path))
 
+    @pytest.mark.skipif(platform.system() == "Windows", reason="CLI test is not working on windows.")
     def test_automatic_segmentation(self):
         self._test_command("micro_sam.automatic_segmentation")
+
+        # Create 1 image as testdata.
+        im_path = os.path.join(self.tmp_folder, "image.tif")
+        image_data = binary_blobs(512).astype("uint8") * 255
+        imageio.imwrite(im_path, image_data)
+
+        # Path to save automatic segmentation outputs.
+        out_path = "output.tif"
+
+        # Test AMG with default model in default mode.
+        run(["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path,
+             "-m", self.default_model_type, "--points_per_side", "4"])
+        self.assertTrue(os.path.exists(out_path))
+        os.remove(out_path)
+
+        # Test AMG with default model exclusively in AMG mode.
+        run(["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path,
+             "-m", self.default_model_type, "--mode", "amg", "--points_per_side", "4"])
+        self.assertTrue(os.path.exists(out_path))
+        os.remove(out_path)
+
+        # Test AIS with 'micro-sam' model in default mode.
+        run(["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path, "-m", self.model_type])
+        self.assertTrue(os.path.exists(out_path))
+        os.remove(out_path)
+
+        # Test AIS with 'micro-sam' model exclusively in AMG mode.
+        run(["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path,
+             "-m", self.model_type, "--mode", "amg", "--points_per_side", "4"])
+        self.assertTrue(os.path.exists(out_path))
+        os.remove(out_path)
+
+        # Test AIS with 'micro-sam' model exclusively in AIS mode.
+        run(["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path, "-m", self.model_type, "--mode", "ais"])
+        self.assertTrue(os.path.exists(out_path))
+        os.remove(out_path)
 
 
 if __name__ == "__main__":
