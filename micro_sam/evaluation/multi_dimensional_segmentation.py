@@ -111,8 +111,12 @@ def segment_slices_from_ground_truth(
     # Create an empty volume to store incoming segmentations
     final_segmentation = np.zeros_like(ground_truth)
 
+    _segmentation_completed = False
+    if save_path is not None and os.path.exists(save_path):
+        _segmentation_completed = True  # We avoid rerunning the segmentation if it is completed.
+
     skipped_label_ids = []
-    for label_id in label_ids:
+    for label_id in tqdm(label_ids, desc="Segmenting per object in the volume"):
         # Binary label volume per instance (also referred to as object)
         this_seg = (ground_truth == label_id).astype("int")
 
@@ -125,6 +129,9 @@ def segment_slices_from_ground_truth(
         this_slice_seg = this_seg[slice_choice]
         if min_size > 0 and this_slice_seg.sum() < min_size:
             skipped_label_ids.append(label_id)
+            continue
+
+        if _segmentation_completed:
             continue
 
         if verbose:
@@ -185,7 +192,10 @@ def segment_slices_from_ground_truth(
 
     # Save the volumetric segmentation
     if save_path is not None:
-        imageio.imwrite(save_path, final_segmentation, compression="zlib")
+        if _segmentation_completed:
+            final_segmentation = imageio.imread(save_path)
+        else:
+            imageio.imwrite(save_path, final_segmentation, compression="zlib")
 
     # Evaluate the volumetric segmentation
     if skipped_label_ids:
