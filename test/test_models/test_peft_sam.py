@@ -83,6 +83,21 @@ class TestPEFTSam(unittest.TestCase):
 
         _, sam = util.get_sam_model(model_type=self.model_type, return_sam=True, device="cpu")
         peft_sam = PEFT_Sam(sam, rank=2, peft_module=SSFSurgery)
+        
+        shape = (3, 1024, 1024)
+        expected_shape = (1, 3, 1024, 1024)
+        with torch.no_grad():
+            batched_input = [{"image": torch.rand(*shape), "original_size": shape[1:]}]
+            output = peft_sam(batched_input, multimask_output=True)
+            masks = output[0]["masks"]
+            self.assertEqual(masks.shape, expected_shape)
+
+    def test_adaptformer_peft_sam(self):
+        from micro_sam.models.peft_sam import PEFT_Sam, AdaptFormer
+
+        _, sam = util.get_sam_model(model_type=self.model_type, return_sam=True, device="cpu")
+        peft_sam = PEFT_Sam(sam, rank=2, peft_module=AdaptFormer, projection_size=64, alpha=2.0, dropout=0.5)
+
 
         shape = (3, 1024, 1024)
         expected_shape = (1, 3, 1024, 1024)
