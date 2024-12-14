@@ -45,17 +45,11 @@ If you already have an installation of `micro_sam` please update it by running t
 
 ### Download Embeddings for 3D EM Segmentation
 
-<<<<<<< HEAD
-To run the script you first need to use `git` to download this repository:
-
-=======
 We provide a script to download the models used in the workshop. To run the script you first need to use `git` to download this repository:
->>>>>>> a2c2a7df18c3b452091b582f41ecc4df7916cf74
 ```bash
 git clone https://github.com/computational-cell-analytics/micro-sam
 ```
 then go to this directory:
-
 ```bash
 cd micro-sam/workshops/i2k_2024
 ```
@@ -63,6 +57,7 @@ and run the script:
 ```bash
 python download_models.py
 ```
+
 We also provide a script to download the image embeddings for the 3D segmentation problem in part 2.
 The image embeddings are necessary to run interactive segmentation. Computing them on the CPU can take some time for volumetric data, but we support precomputing them and have done this for this data already.
 You can download them by running the script:
@@ -84,7 +79,7 @@ python download_datasets.py -i data -d cells
 This will download the data to the folder `data/cells` with images stored in the subfolder `images` and segmentation masks in `masks`. After this you can start the image series annotation tool, either via the napari plugin (we will show this in the workshop) or via the command line:
 
 ```bash
-$ micro_sam.image_series_annotator -i data/cells/images -o annotations/cells -e embeddings/cells/vit_b_lm -m vit_b_lm
+micro_sam.image_series_annotator -i data/cells/images -o annotations/cells -e embeddings/cells/vit_b_lm -m vit_b_lm
 ```
 
 Note: You can use `micro_sam` with different models: the original models from Segment Anything and models finetuned for different microscopy segmentation tasks by us.
@@ -108,7 +103,7 @@ python download_embeddings.py -e embeddings -d nuclei_3d
 
 You can then start the 3d annotation tool, either via the napari plugin (we will show this in the workshop) or the command line: 
 ```bash
-$ micro_sam.annotator_3d -i data/nuclei_3d/images/X1.tif -e embeddings/nuclei_3d/vit_b_lm/embedseg_Mouse-Skull-Nuclei-CBG_train_X1.zarr -m vit_b_lm
+micro_sam.annotator_3d -i data/nuclei_3d/images/X1.tif -e embeddings/nuclei_3d/vit_b_lm/embedseg_Mouse-Skull-Nuclei-CBG_train_X1.zarr -m vit_b_lm
 ```
 
 Note: You can use `micro_sam` with different models: the original models from Segment Anything and models finetuned for different microscopy segmentation tasks by us.
