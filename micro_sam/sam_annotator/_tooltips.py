@@ -9,7 +9,7 @@ tooltips = {
     "halo": "Enter overlap values for computing tiled embeddings. Enter only x-value for quadratic size.\n Only active when tiling is used.",  # noqa
     "image": "Select the napari image layer.",
     "model": "Select the segment anything model.",
-    "prefer_decoder": "Choose if the segmentation decoder is used for automatic segmentation. Only if it is available for the selected model..",  # noqa
+    "automatic_segmentation_mode": "Select the automatic segmentation mode.",
     "run_button": "Compute embeddings or load embeddings if embedding_save_path is specified.",
     "tiling": "Enter tile size for computing tiled embeddings. Enter only x-value for quadratic size or both for non-quadratic.",  # noqa
   },
