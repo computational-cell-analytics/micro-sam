@@ -178,7 +178,7 @@ def point_layer_to_prompts(
         this_points, this_labels = points, labels
     else:
         assert points.shape[1] == 3, f"{points.shape}"
-        mask = points[:, 0] == i
+        mask = np.round(points[:, 0]) == i
         this_points = points[mask][:, 1:]
         this_labels = labels[mask]
     assert len(this_points) == len(this_labels)
@@ -355,7 +355,7 @@ def segment_slices_with_prompts(
     image_shape = shape[1:]
     seg = np.zeros(shape, dtype="uint32")
 
-    z_values = point_prompts.data[:, 0]
+    z_values = np.round(point_prompts.data[:, 0])
     z_values_boxes = np.concatenate([box[:1, 0] for box in box_prompts.data]) if box_prompts.data else\
         np.zeros(0, dtype="int")
 
