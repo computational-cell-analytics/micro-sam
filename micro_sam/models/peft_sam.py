@@ -108,6 +108,54 @@ class FacTSurgery(nn.Module):
         return qkv
 
 
+class ScaleShiftLayer(nn.Module):
+    def __init__(self, layer, dim):
+        super().__init__()
+        self.layer = layer
+        self.scale = nn.Parameter(torch.normal(mean=1.0, std=0.2, size=(dim,)))
+        self.shift = nn.Parameter(torch.normal(mean=0.0, std=0.2, size=(dim,)))
+        layer = self
+
+    def forward(self, x):
+        x = self.layer(x)
+        assert self.scale.shape == self.shift.shape
+        if x.shape[-1] == self.scale.shape[0]:
+            return x * self.scale + self.shift
+        elif x.shape[1] == self.scale.shape[0]:
+            return x * self.scale.view(1, -1, 1, 1) + self.shift.view(1, -1, 1, 1)
+        else:
+            raise ValueError('Input tensors do not match the shape of the scale factors.')
+
+
+class SSFSurgery(nn.Module):
+    """Operates on all layers in the transformer block for adding learnable scale and shift parameters.
+
+    Args:
+        rank: This parameter is not used in `SSFSurgery`. This is kept here for consistency.
+        block: The chosen attention blocks for implementing ssf.
+        dim: The input dimensions determining the shape of scale and shift parameters.
+    """
+    def __init__(self, rank: int, block: nn.Module):
+        super().__init__()
+        self.block = block
+
+        # If we get a transformer block (w. multiple sub-layers), we perform surgery on each layer.
+        if hasattr(block, "attn"):  # the minimum assumption is to verify the attention layers.
+            block.attn.qkv = ScaleShiftLayer(block.attn.qkv, block.attn.qkv.in_features*3)
+            block.attn.proj = ScaleShiftLayer(block.attn.proj, block.attn.proj.in_features)
+            block.mlp.lin1 = ScaleShiftLayer(block.mlp.lin1, block.mlp.lin1.out_features)
+            block.mlp.lin2 = ScaleShiftLayer(block.mlp.lin2, block.mlp.lin2.out_features)
+            block.norm1 = ScaleShiftLayer(block.norm1, block.norm1.normalized_shape[0])
+            block.norm2 = ScaleShiftLayer(block.norm2, block.norm2.normalized_shape[0])
+
+        # If we get the embedding block, add one ScaleShiftLayer
+        elif hasattr(block, "patch_embed"):
+            block.proj = ScaleShiftLayer(block.proj, block.proj.out_channels)
+
+    def forward(self, x):
+        return x
+
+
 class SelectiveSurgery(nn.Module):
     """Base class for selectively allowing gradient updates for certain parameters.
     """
@@ -254,8 +302,10 @@ class PEFT_Sam(nn.Module):
         super().__init__()
 
         assert rank > 0
-        assert issubclass(peft_module, Union[LoRASurgery, FacTSurgery, SelectiveSurgery, AdaptFormer]), (
-            "Invalid PEFT module")
+
+        assert issubclass(peft_module, Union[LoRASurgery, FacTSurgery, SelectiveSurgery, SSFSurgery, AdaptFormer]), (
+            "Invalid PEFT module"
+        )
 
         if attention_layers_to_update:
             self.peft_layers = attention_layers_to_update
@@ -269,17 +319,19 @@ class PEFT_Sam(nn.Module):
         for param in model.image_encoder.parameters():
             param.requires_grad = False
 
+        # Add scale and shift parameters to the patch embedding layers.
+        if issubclass(self.peft_module, SSFSurgery):
+            self.peft_blocks.append(self.peft_module(rank=rank, block=model.image_encoder.patch_embed))
+
         for t_layer_i, blk in enumerate(model.image_encoder.blocks):
             # If we only want specific layers with PEFT instead of all
             if t_layer_i not in self.peft_layers:
                 continue
 
             if issubclass(self.peft_module, SelectiveSurgery):
-                peft_block = self.peft_module(block=blk)
+                self.peft_blocks.append(self.peft_module(block=blk))
             else:
-                peft_block = self.peft_module(rank=rank, block=blk, **module_kwargs)
-
-            self.peft_blocks.append(peft_block)
+                self.peft_blocks.append(self.peft_module(rank=rank, block=blk, **module_kwargs))
 
         self.peft_blocks = nn.ModuleList(self.peft_blocks)
 
