@@ -87,8 +87,7 @@ class AnnotatorState(metaclass=Singleton):
         # Initialize the model if necessary.
         if predictor is None:
             self.predictor, state = util.get_sam_model(
-                device=device, model_type=model_type,
-                checkpoint_path=checkpoint_path, return_state=True
+                device=device, model_type=model_type, checkpoint_path=checkpoint_path, return_state=True
             )
             if prefer_decoder and "decoder_state" in state:
                 self.decoder = get_decoder(
