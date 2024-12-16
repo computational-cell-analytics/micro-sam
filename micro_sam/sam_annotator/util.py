@@ -153,7 +153,11 @@ def clear_annotations_slice(viewer: napari.Viewer, i: int, clear_segmentations=T
 
 
 def point_layer_to_prompts(
-    layer: napari.layers.Points, i=None, track_id=None, with_stop_annotation=True,
+    layer: napari.layers.Points,
+    i: Optional[int] = None,
+    track_id: Optional[int] = None,
+    with_stop_annotation: bool = True,
+    scale_factor: Optional[Tuple[float, ...]] = None
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     """Extract point prompts for SAM from a napari point layer.
 
@@ -163,6 +167,7 @@ def point_layer_to_prompts(
         track_id: Id of the current track (required for tracking data).
         with_stop_annotation: Whether a single negative point will be interpreted
             as stop annotation or just returned as normal prompt.
+        scale_factor:
 
     Returns:
         The point coordinates for the prompts.
@@ -178,7 +183,14 @@ def point_layer_to_prompts(
         this_points, this_labels = points, labels
     else:
         assert points.shape[1] == 3, f"{points.shape}"
-        mask = points[:, 0] == i
+        point_z_coords = points[:, 0]
+
+        # For some inexplicable reason point coords are in between slices
+        # if we have a scale factor.
+        if scale_factor is not None:
+            point_z_coords += 0.5
+
+        mask = np.isclose(point_z_coords, i)
         this_points = points[mask][:, 1:]
         this_labels = labels[mask]
     assert len(this_points) == len(this_labels)
@@ -200,7 +212,11 @@ def point_layer_to_prompts(
 
 
 def shape_layer_to_prompts(
-    layer: napari.layers.Shapes, shape: Tuple[int, int], i=None, track_id=None
+    layer: napari.layers.Shapes,
+    shape: Tuple[int, int],
+    i=None,
+    track_id=None,
+    scale_factor=None,
 ) -> Tuple[List[np.ndarray], List[Optional[np.ndarray]]]:
     """Extract prompts for SAM from a napari shape layer.
 
@@ -259,6 +275,8 @@ def shape_layer_to_prompts(
         return [], []
 
     if i is not None:
+        print("!!!", shape_data, "!!!")
+        # TODO need to take care of the half coordinates here as well
         if track_id is None:
             prompt_selection = [j for j, data in enumerate(shape_data) if (data[:, 0] == i).all()]
         else:
@@ -348,7 +366,8 @@ def prompt_layers_to_state(
 
 
 def segment_slices_with_prompts(
-    predictor, point_prompts, box_prompts, image_embeddings, shape, track_id=None, update_progress=None,
+    predictor, point_prompts, box_prompts, image_embeddings, shape,
+    track_id=None, update_progress=None, scale_factor=None,
 ):
     """@private"""
     assert len(shape) == 3
@@ -371,6 +390,12 @@ def segment_slices_with_prompts(
 
     slices = np.unique(np.concatenate([z_values, z_values_boxes])).astype("int")
     stop_lower, stop_upper = False, False
+
+    # TODO
+    bound_z = None
+    if scale_factor is not None:
+        bound_z = shape[0] - 1
+        slices = np.unique(np.minimum(slices, bound_z))
 
     if update_progress is None:
         def update_progress(*args):
@@ -404,7 +429,7 @@ def segment_slices_with_prompts(
 
         seg_i = prompt_segmentation(
             predictor, points, labels, boxes, masks, image_shape, multiple_box_prompts=False,
-            image_embeddings=image_embeddings, i=i
+            image_embeddings=image_embeddings, i=i, scale_factor=scale_factor
         )
         if seg_i is None:
             print(f"The prompts at slice or frame {i} are invalid and the segmentation was skipped.")
@@ -490,19 +515,43 @@ def _batched_interactive_segmentation(predictor, points, labels, boxes, image_em
     return seg
 
 
+def _scale_points(points, scale_factor):
+    if scale_factor is None or len(points) == 0:
+        return points
+    # Only use the 2d scale factor if we're in 3d.
+    scale_factor_ = scale_factor if len(scale_factor) == 2 else scale_factor[1:]
+    return points / np.array(scale_factor_)[None]
+
+
+def _scale_boxes(boxes, scale_factor):
+    if scale_factor is None or len(boxes) == 0:
+        return boxes
+    # Only use the 2d scale factor if we're in 3d.
+    scale_factor_ = scale_factor if len(scale_factor) == 2 else scale_factor[1:]
+    scaled_boxes = [
+        np.concatenate(
+            [box[:2] / np.array(scale_factor_), box[2:] / np.array(scale_factor_)], axis=0
+        ) for box in boxes
+    ]
+    return scaled_boxes
+
+
 def prompt_segmentation(
     predictor, points, labels, boxes, masks, shape, multiple_box_prompts,
     image_embeddings=None, i=None, box_extension=0, batched=None,
-    previous_segmentation=None,
+    previous_segmentation=None, scale_factor=None,
 ):
     """@private"""
     assert len(points) == len(labels)
     have_points = len(points) > 0
     have_boxes = len(boxes) > 0
 
+    points = _scale_points(points, scale_factor)
+    boxes = _scale_boxes(boxes, scale_factor)
+
     # No prompts were given, return None.
     if not have_points and not have_boxes:
-        return
+        return "You haven't provided any prompts."
 
     # Batched interactive segmentation.
     elif batched:
@@ -514,10 +563,12 @@ def prompt_segmentation(
     # Box and point prompts were given.
     elif have_points and have_boxes:
         if len(boxes) > 1:
-            print("You have provided point prompts and more than one box prompt.")
-            print("This setting is currently not supported.")
-            print("When providing both points and prompts you can only segment one object at a time.")
-            return
+            msg = "You have provided point prompts and more than one box prompt.\n"
+            msg += "This setting is currently not supported.\n"
+            msg += "When providing both points and prompts you can only segment one object at a time."
+            return msg
+
+        # We don't have to scale the masks, because it gets resized internally anyways.
         mask = masks[0]
         if mask is None:
             seg = prompt_based_segmentation.segment_from_box_and_points(
@@ -539,9 +590,9 @@ def prompt_segmentation(
         seg = np.zeros(shape, dtype="uint32")
 
         if len(boxes) > 1 and not multiple_box_prompts:
-            print("You have provided more than one box annotation. This is not yet supported in the 3d annotator.")
-            print("You can only segment one object at a time in 3d.")
-            return
+            msg = "You have provided more than one box annotation. This is not yet supported in the 3d annotator.\n"
+            msg += "You can only segment one object at a time in 3d."
+            return msg
 
         # Batch this?
         for seg_id, (box, mask) in enumerate(zip(boxes, masks), 1):
