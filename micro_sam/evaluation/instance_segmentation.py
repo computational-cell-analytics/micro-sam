@@ -309,9 +309,7 @@ def run_instance_segmentation_inference(
 
 
 def evaluate_instance_segmentation_grid_search(
-    result_dir: Union[str, os.PathLike],
-    grid_search_parameters: List[str],
-    criterion: str = "mSA"
+    result_dir: Union[str, os.PathLike], grid_search_parameters: List[str], criterion: str = "mSA"
 ) -> Tuple[Dict[str, Any], float]:
     """Evaluate gridsearch results.
 
@@ -324,7 +322,6 @@ def evaluate_instance_segmentation_grid_search(
         The best parameter setting.
         The evaluation score for the best setting.
     """
-
     # Load all the grid search results.
     gs_files = glob(os.path.join(result_dir, "*.csv"))
     gs_result = pd.concat([pd.read_csv(gs_file) for gs_file in gs_files])
