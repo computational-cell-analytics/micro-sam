@@ -139,8 +139,9 @@ def segment_mask_in_volume(
             if threshold is not None:
                 iou = util.compute_iou(seg_prev, seg_z)
                 if iou < threshold:
-                    msg = f"Segmentation stopped at slice {z} due to IOU {iou} < {threshold}."
-                    print(msg)
+                    if verbose:
+                        msg = f"Segmentation stopped at slice {z} due to IOU {iou} < {threshold}."
+                        print(msg)
                     break
 
             segmentation[z] = seg_z
