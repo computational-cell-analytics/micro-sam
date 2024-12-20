@@ -12,7 +12,9 @@ dependencies:
     - pyqt
     - python-xxhash
     - python-elf >=0.4.8
-    - pytorch >=2.4 "libtorch=*=cpu*"
+    # This does not work for me.
+    # - "pytorch=*=cpu"
+    - pytorch-cpu
     - segment-anything
     - torchvision
     - torch_em >=0.7.0
