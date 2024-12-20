@@ -23,6 +23,10 @@ jobs:
         # 3.12 currently not supported due to issues with nifty.
         # python-version: ["3.11", "3.12"]
         python-version: ["3.11"]
+        environment-file:
+            ubuntu-latest: environment_cpu.yaml
+            macos-latest: environment_cpu.yaml
+            windows-latest: environment_cpu_win.yaml
 
     steps:
       - name: Checkout
@@ -31,7 +35,7 @@ jobs:
       - name: Setup micromamba
         uses: mamba-org/setup-micromamba@v1
         with:
-          environment-file: environment_cpu.yaml
+          environment-file: ${{ matrix.environment-file }}
           create-args: >-
             python=${{ matrix.python-version }}
 

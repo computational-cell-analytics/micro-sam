@@ -1,18 +1,22 @@
 name: sam
 channels:
+    - pytorch
     - conda-forge
 dependencies:
-    - nifty >=1.2.1
+    - cpuonly
+    # This pin is necessary because later nifty versions have import errors on windows.
+    - nifty =1.2.1=*_4
     - imagecodecs
     - magicgui
     - napari >=0.5.0
     - natsort
     - pip
     - pooch
+    - protobuf <5
     - pyqt
     - python-xxhash
     - python-elf >=0.4.8
-    - pytorch >=2.4 "libtorch=*=cpu*"
+    - pytorch >=2.4
     - segment-anything
     - torchvision
     - torch_em >=0.7.0
