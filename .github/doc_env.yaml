@@ -1,5 +1,4 @@
 channels:
-    - pytorch
     - conda-forge
 name:
     sam
