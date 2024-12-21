@@ -1,77 +1,87 @@
 # Installation
 
 There are three ways to install `micro_sam`:
-- [From mamba](#from-mamba) is the recommended way if you want to use all functionality.
+- [From conda](#from-conda) is the recommended way if you want to use all functionality.
 - [From source](#from-source) for setting up a development environment to use the latest version and to change and contribute to our software.
-- [From installer](#from-installer) to install it without having to use mamba (supported platforms: Windows and Linux, supports only CPU). 
+- [From installer](#from-installer) to install it without having to use conda (supported platforms: Windows and Linux, supports only CPU). 
 
 You can find more information on the installation and how to troubleshoot it in [the FAQ section](#installation-questions).
 
-We do **not** recommend installing `micro-sam` with pip.
+We do **not support** installing `micro_sam` with pip.
 
-## From mamba
+## From conda
 
-[mamba](https://mamba.readthedocs.io/en/latest/) is a drop-in replacement for conda, but much faster.
-The steps below may also work with `conda`, but we recommend using `mamba`, especially if the installation does not work with `conda`.
-You can follow the instructions [here](https://mamba.readthedocs.io/en/latest/installation/mamba-installation.html) to install `mamba`.
+`conda` is a python package manager. If you don't have it installed yet you can follow the instructions [here](https://conda-forge.org/download/) to set it up on your system.
+Please make sure that you are using an up-to-date version of conda to install `micro_sam`.
+You can also use [mamba](https://mamba.readthedocs.io/en/latest/), which is a drop-in replacement for conda, to install it. In this case, just replace the `conda` command below with `mamba`.
 
-**IMPORTANT**: Make sure to avoid installing anything in the base environment.
+**IMPORTANT**: Do not install `micro_sam` in the base conda environment.
+
+**Installation on Linux and Mac OS:**
 
 `micro_sam` can be installed in an existing environment via:
 ```bash
-$ mamba install -c pytorch -c conda-forge micro_sam
+conda install -c conda-forge micro_sam
 ```
-or you can create a new environment (here called `micro-sam`) via:
-
+or you can create a new environment with it (here called `micro-sam`) via:
 ```bash
-$ mamba create -c pytorch -c conda-forge -n micro-sam micro_sam
+conda create -c conda-forge -n micro-sam micro_sam
 ```
-
-if you want to use the GPU you need to install PyTorch from the `pytorch` channel instead of `conda-forge`. For example:
-
+and then activate it via
 ```bash
-$ mamba create -c pytorch -c nvidia -c conda-forge -n micro-sam micro_sam pytorch pytorch-cuda=12.1
+conda activate micro-sam
 ```
 
-NOTE: If you create a new enviroment (eg. here called `micro-sam`), you must activate the environment using
-
+This will also install `pytorch` from the `conda-forge` channel. If you have a recent enough operating system, it will automatically install the best suitable `pytorch` version on your system.
+This means it will install the CPU version if you don't have a nVidia GPU, and will install a GPU version if you have.
+However, if you have an older operating system, or a CUDA version older than 12, than it may not install the correct version. In this case you will have to specify you're CUDA version, for example for CUDA 11, like this:
 ```bash
-$ mamba activate micro-sam
+conda install -c conda-forge micro_sam "libtorch=*=cuda11*"
 ```
 
-You may need to change this command to install the correct CUDA version for your system, see [https://pytorch.org/](https://pytorch.org/) for details.
+**Installation on Windows:**
 
+`pytorch` is currently not available on conda-forge for windows. Thus, you have to install it from the `pytorch` conda channel. In addition, you have to specify two specific dependencies to avoid incompatibilities.
+This can be done with the following commands:
+```bash
+conda install -c pytorch -c conda-forge micro_sam "nifty=1.2.1=*_4" "protobuf<5"
+```
+to install `micro_sam` in an existing environment and
+```bash
+conda create -c conda-forge -n micro-sam micro_sam "nifty=1.2.1=*_4" "protobuf<5"
+```
 
 ## From source
 
 To install `micro_sam` from source, we recommend to first set up an environment with the necessary requirements:
-- [environment_gpu.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/master/environment_gpu.yaml): sets up an environment with GPU support.
-- [environment_cpu.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/master/environment_cpu.yaml): sets up an environment with CPU support.
+- [environment.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/master/environment.yaml): to set up an environment on Linux or Mac OS.
+- [environment_cpu_win.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/master/environment_cpu_win.yaml): to set up an environment on windows with CPU support.
+- [environment_gpu_win.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/master/environment_gpu_win.yaml): to set up an environment on windows with GPU support.
 
 To create one of these environments and install `micro_sam` into it follow these steps
 
 1. Clone the repository:
 
 ```bash
-$ git clone https://github.com/computational-cell-analytics/micro-sam
+git clone https://github.com/computational-cell-analytics/micro-sam
 ```
 
 2. Enter it:
 
 ```bash
-$ cd micro-sam
+cd micro-sam
 ```
 
-3. Create the GPU or CPU environment:
+3. Create the respective environment:
 
 ```bash
-$ mamba env create -f <ENV_FILE>.yaml
+conda env create -f <ENV_FILE>.yaml
 ```
 
 4. Activate the environment:
 
 ```bash
-$ mamba activate sam
+conda activate sam
 ```
 
 5. Install `micro_sam`:
@@ -89,7 +99,7 @@ We also provide installers for Linux and Windows:
 - [Mac](https://owncloud.gwdg.de/index.php/s/7YupGgACw9SHy2P)
 -->
 
-The installers will not enable you to use a GPU, so if you have one then please consider installing `micro_sam` via [mamba](#from-mamba) instead. They will also not enable using the python library.
+The installers will not enable you to use a GPU, so if you have one then please consider installing `micro_sam` via [conda](#from-conda) instead. They will also not enable using the python library.
 
 ### Linux Installer:
 

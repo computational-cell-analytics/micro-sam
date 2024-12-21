@@ -247,7 +247,7 @@ def run_instance_segmentation_grid_search(
 def run_instance_segmentation_inference(
     segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
     image_paths: List[Union[str, os.PathLike]],
-    embedding_dir: Union[str, os.PathLike],
+    embedding_dir: Optional[Union[str, os.PathLike]],
     prediction_dir: Union[str, os.PathLike],
     generate_kwargs: Optional[Dict[str, Any]] = None,
 ) -> None:
@@ -278,12 +278,18 @@ def run_instance_segmentation_inference(
         assert os.path.exists(image_path), image_path
         image = imageio.imread(image_path)
 
-        embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
+        if embedding_dir is None:
+            embedding_path = None
+        else:
+            assert predictor is not None
+            embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
+
         image_embeddings = util.precompute_image_embeddings(
             predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings
         )
 
         segmenter.initialize(image, image_embeddings)
+
         masks = segmenter.generate(**generate_kwargs)
 
         if len(masks) == 0:  # the instance segmentation can have no masks, hence we just save empty labels
@@ -303,9 +309,7 @@ def run_instance_segmentation_inference(
 
 
 def evaluate_instance_segmentation_grid_search(
-    result_dir: Union[str, os.PathLike],
-    grid_search_parameters: List[str],
-    criterion: str = "mSA"
+    result_dir: Union[str, os.PathLike], grid_search_parameters: List[str], criterion: str = "mSA"
 ) -> Tuple[Dict[str, Any], float]:
     """Evaluate gridsearch results.
 
@@ -318,7 +322,6 @@ def evaluate_instance_segmentation_grid_search(
         The best parameter setting.
         The evaluation score for the best setting.
     """
-
     # Load all the grid search results.
     gs_files = glob(os.path.join(result_dir, "*.csv"))
     gs_result = pd.concat([pd.read_csv(gs_file) for gs_file in gs_files])
@@ -362,8 +365,9 @@ def run_instance_segmentation_grid_search_and_inference(
     val_image_paths: List[Union[str, os.PathLike]],
     val_gt_paths: List[Union[str, os.PathLike]],
     test_image_paths: List[Union[str, os.PathLike]],
-    embedding_dir: Union[str, os.PathLike],
+    embedding_dir: Optional[Union[str, os.PathLike]],
     prediction_dir: Union[str, os.PathLike],
+    experiment_folder: Union[str, os.PathLike],
     result_dir: Union[str, os.PathLike],
     fixed_generate_kwargs: Optional[Dict[str, Any]] = None,
     verbose_gs: bool = True,
@@ -381,6 +385,7 @@ def run_instance_segmentation_grid_search_and_inference(
         test_image_paths: The input images for inference.
         embedding_dir: Folder to cache the image embeddings.
         prediction_dir: Folder to save the predictions.
+        experiment_folder: Folder for caching best grid search parameters in 'results'.
         result_dir: Folder to cache the evaluation results per image.
         fixed_generate_kwargs: Fixed keyword arguments for the `generate` method of the segmenter.
         verbose_gs: Whether to run the gridsearch for individual images in a verbose mode.
@@ -396,7 +401,7 @@ def run_instance_segmentation_grid_search_and_inference(
     print("Best grid-search result:", best_msa, "with parmeters:\n", best_param_str)
     print()
 
-    save_grid_search_best_params(best_kwargs, best_msa, Path(embedding_dir).parent)
+    save_grid_search_best_params(best_kwargs, best_msa, experiment_folder)
 
     generate_kwargs = {} if fixed_generate_kwargs is None else fixed_generate_kwargs
     generate_kwargs.update(best_kwargs)

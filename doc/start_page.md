@@ -21,9 +21,9 @@ If you run into any problems or have questions please [open an issue](https://gi
 
 ## Quickstart
 
-You can install `micro_sam` via mamba:
+You can install `micro_sam` via conda:
 ```bash
-$ mamba install -c conda-forge micro_sam
+conda install -c conda-forge micro_sam
 ```
 We also provide installers for Windows and Linux. For more details on the available installation options, check out [the installation section](#installation).
 
