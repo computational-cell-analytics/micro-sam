@@ -188,27 +188,24 @@ def train_sam(
     peft_kwargs: Optional[Dict] = None,
     ignore_warnings: bool = True,
     verify_n_labels_in_loader: Optional[int] = 50,
+    mixed_precision: bool = True,
     **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
 
     Args:
-        name: The name of the model to be trained.
-            The checkpoint and logs wil have this name.
+        name: The name of the model to be trained. The checkpoint and logs will have this name.
         model_type: The type of the SAM model.
         train_loader: The dataloader for training.
         val_loader: The dataloader for validation.
         n_epochs: The number of epochs to train for.
-        early_stopping: Enable early stopping after this number of epochs
-            without improvement.
+        early_stopping: Enable early stopping after this number of epochs without improvement.
         n_objects_per_batch: The number of objects per batch used to compute
             the loss for interative segmentation. If None all objects will be used,
             if given objects will be randomly sub-sampled.
         checkpoint_path: Path to checkpoint for initializing the SAM model.
-        with_segmentation_decoder: Whether to train additional UNETR decoder
-            for automatic instance segmentation.
-        freeze: Specify parts of the model that should be frozen, namely:
-            image_encoder, prompt_encoder and mask_decoder
+        with_segmentation_decoder: Whether to train additional UNETR decoder for automatic instance segmentation.
+        freeze: Specify parts of the model that should be frozen, namely: image_encoder, prompt_encoder and mask_decoder
             By default nothing is frozen and the full model is updated.
         device: The device to use for training.
         lr: The learning rate.
@@ -226,10 +223,11 @@ def train_sam(
         optimizer_class: The optimizer class.
             By default, torch.optim.AdamW is used.
         peft_kwargs: Keyword arguments for the PEFT wrapper class.
+        ignore_warnings: Whether to ignore raised warnings.
         verify_n_labels_in_loader: The number of labels to verify out of the train and validation dataloaders.
             By default, 50 batches of labels are verified from the dataloaders.
+        mixed_precision: Whether to train the model with mixed precision.
         model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
-        ignore_warnings: Whether to ignore raised warnings.
     """
     with _filter_warnings(ignore_warnings):
 
@@ -273,16 +271,11 @@ def train_sam(
         else:
             model_params = model.parameters()
 
-        optimizer = optimizer_class(model_params, lr=lr)
-
-        if "quantize" in peft_kwargs:
+        if peft_kwargs and "quantize" in peft_kwargs:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.AdamW8bit(
-                model_params,
-                lr=lr,
-                betas=(0.9, 0.999),
-                eps=1e-8
-            )
+            optimizer_class = bnb.optim.AdamW8bit
+
+        optimizer = optimizer_class(model_params, lr=lr)
 
         if scheduler_kwargs is None:
             scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
@@ -303,7 +296,7 @@ def train_sam(
                 lr_scheduler=scheduler,
                 logger=joint_trainers.JointSamLogger,
                 log_image_interval=100,
-                mixed_precision=False,
+                mixed_precision=mixed_precision,
                 convert_inputs=convert_inputs,
                 n_objects_per_batch=n_objects_per_batch,
                 n_sub_iteration=n_sub_iteration,
@@ -325,7 +318,7 @@ def train_sam(
                 lr_scheduler=scheduler,
                 logger=trainers.SamLogger,
                 log_image_interval=100,
-                mixed_precision=False,
+                mixed_precision=mixed_precision,
                 convert_inputs=convert_inputs,
                 n_objects_per_batch=n_objects_per_batch,
                 n_sub_iteration=n_sub_iteration,

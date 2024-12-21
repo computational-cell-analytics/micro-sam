@@ -50,8 +50,16 @@ class LoRASurgery(nn.Module):
         qkv = self.qkv_proj(x)  # B, N, N, 3 * org_C
         new_q = self.alpha * self.w_b_linear_q(self.w_a_linear_q(x))
         new_v = self.alpha * self.w_b_linear_v(self.w_a_linear_v(x))
-        qkv[:, :, :, :self.dim] += new_q
-        qkv[:, :, :, -self.dim:] += new_v
+
+        # HACK
+        qkv = torch.cat(
+            [
+                qkv[:, :, :, :self.dim] + new_q,  # replacing new q values
+                qkv[:, :, :, self.dim:-self.dim],  # leaving the middle part as identical
+                qkv[:, :, :, -self.dim:] + new_v  # replacing new v values
+            ], dim=-1
+        )
+
         return qkv
 
 

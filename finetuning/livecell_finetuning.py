@@ -28,12 +28,12 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
     train_loader = get_livecell_loader(
         path=data_path, patch_shape=patch_shape, split="train", batch_size=2, num_workers=16,
         cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform, label_dtype=torch.float32, n_samples=100,
+        raw_transform=raw_transform, label_dtype=torch.float32,
     )
     val_loader = get_livecell_loader(
         path=data_path, patch_shape=patch_shape, split="val", batch_size=1, num_workers=16,
         cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform, label_dtype=torch.float32
+        raw_transform=raw_transform, label_dtype=torch.float32,
     )
 
     return train_loader, val_loader
@@ -56,6 +56,11 @@ def finetune_livecell(args):
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10, "verbose": True}
 
+    # NOTE: memory req. for all vit_b models (compared on A100 80GB)
+    # QLoRA: ~60GB
+    # LoRA: ~59GB
+    # FFT: ~63GB
+
     # Run training.
     sam_training.train_sam(
         name=checkpoint_name,
@@ -72,7 +77,8 @@ def finetune_livecell(args):
         save_root=args.save_root,
         scheduler_kwargs=scheduler_kwargs,
         save_every_kth_epoch=args.save_every_kth_epoch,
-        peft_kwargs={"rank": args.lora_rank, "quantize": True} if args.lora_rank is not None else None,
+        peft_kwargs={"rank": args.lora_rank} if args.lora_rank is not None else None,
+        mixed_precision=False,
     )
 
     if args.export_path is not None:
@@ -87,7 +93,7 @@ def finetune_livecell(args):
 def main():
     parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LIVECell dataset.")
     parser.add_argument(
-        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/livecell/",
+        "--input_path", "-i", default="/mnt/vast-nhr/projects/cidas/cca/data/livecell/",
         help="The filepath to the LIVECell data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(
