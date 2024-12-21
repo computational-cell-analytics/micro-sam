@@ -85,24 +85,7 @@ def get_trainable_sam_model(
         if model_type[:5] == "vit_t":
             raise ValueError("'micro-sam' does not support parameter efficient finetuning for 'mobile-sam'.")
 
-        # Extract the argument to ensure whether we quantize the model or not.
-        _quantize = peft_kwargs.pop("quantize", None)
-
         sam = custom_models.peft_sam.PEFT_Sam(sam, **peft_kwargs).sam
-
-        # Whether to quantize the linear layers to 4 bit precision.
-        # NOTE: This is currently supported for CUDA-supported devices only.
-        if _quantize:
-            import bitsandbytes as bnb
-            for name, module in sam.image_encoder.named_modules():
-                if isinstance(module, torch.nn.Linear):
-                    *parent_path, layer_name = name.split(".")
-                    parent_module = sam.image_encoder
-
-                    for sub_module in parent_path:
-                        parent_module = getattr(parent_module, sub_module)
-
-                    setattr(parent_module, layer_name, bnb.nn.Linear4bit(module.in_features, module.out_features))
 
     # freeze components of the model if freeze was passed
     # ideally we would want to add components in such a way that:

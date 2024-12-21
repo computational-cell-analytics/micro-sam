@@ -297,6 +297,7 @@ class PEFT_Sam(nn.Module):
         rank: The rank for low-rank adaptation.
         peft_module: Wrapper to operate on the image encoder blocks for the PEFT method.
         attention_layers_to_update: Which specific layers we apply PEFT methods to.
+        quantize: Whether to quantize the model for lower precision training.
     """
 
     def __init__(
@@ -305,12 +306,12 @@ class PEFT_Sam(nn.Module):
         rank: int,
         peft_module: nn.Module = LoRASurgery,
         attention_layers_to_update: Union[List[int]] = None,
+        quantize: bool = False,
         **module_kwargs
     ):
         super().__init__()
 
         assert rank > 0
-
         assert issubclass(peft_module, Union[LoRASurgery, FacTSurgery, SelectiveSurgery, SSFSurgery, AdaptFormer]), (
             "Invalid PEFT module"
         )
@@ -323,7 +324,21 @@ class PEFT_Sam(nn.Module):
         self.peft_module = peft_module
         self.peft_blocks = []
 
-        # let's freeze all the pretrained image encoder layers first
+        # Whether to quantize the linear layers to 4 bit precision.
+        # NOTE: This is currently supported for CUDA-supported devices only.
+        if quantize:
+            import bitsandbytes as bnb
+            for name, module in model.image_encoder.named_modules():
+                if isinstance(module, torch.nn.Linear):
+                    *parent_path, layer_name = name.split(".")
+                    parent_module = model.image_encoder
+
+                    for sub_module in parent_path:
+                        parent_module = getattr(parent_module, sub_module)
+
+                    setattr(parent_module, layer_name, bnb.nn.Linear4bit(module.in_features, module.out_features))
+
+        # Let's freeze all the pretrained image encoder layers first
         for param in model.image_encoder.parameters():
             param.requires_grad = False
 
