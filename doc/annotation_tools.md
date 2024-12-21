@@ -22,8 +22,8 @@ You can find additional information on the annotation tools [in the FAQ section]
 HINT: If you would like to start napari to use `micro-sam` from the plugin menu, you must start it by activating the environment where `micro-sam` has been installed using:
 
 ```bash
-$ mamba activate <ENVIRONMENT_NAME>
-$ napari
+conda activate <ENVIRONMENT_NAME>
+napari
 ```
 
 
