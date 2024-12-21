@@ -37,10 +37,10 @@ We use [conda](https://docs.conda.io/en/latest/) to [manage our environments](ht
 
 Now you can create the environment, install user and developer dependencies, and micro-sam as an editable installation:
 ```bash
-$ mamba env create environment_gpu.yaml
-$ mamba activate sam
-$ python -m pip install requirements-dev.txt
-$ python -m pip install -e .
+conda env create environment.yaml
+conda activate sam
+python -m pip install requirements-dev.txt
+python -m pip install -e .
 ```
 
 ### Make your changes
