@@ -22,7 +22,7 @@ class LoRASurgery(nn.Module):
 
     Args:
         rank: The rank of the decomposition matrices for updating weights in each attention layer.
-        block: The chosen attention blocks for implementing lora.
+        block: The chosen attention blocks for implementing LoRA.
     """
     def __init__(self, rank: int, block: nn.Module):
         super().__init__()
@@ -50,8 +50,6 @@ class LoRASurgery(nn.Module):
         qkv = self.qkv_proj(x)  # B, N, N, 3 * org_C
         new_q = self.alpha * self.w_b_linear_q(self.w_a_linear_q(x))
         new_v = self.alpha * self.w_b_linear_v(self.w_a_linear_v(x))
-
-        # HACK
         qkv = torch.cat(
             [
                 qkv[:, :, :, :self.dim] + new_q,  # replacing new q values

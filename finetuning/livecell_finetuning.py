@@ -77,7 +77,7 @@ def finetune_livecell(args):
         save_root=args.save_root,
         scheduler_kwargs=scheduler_kwargs,
         save_every_kth_epoch=args.save_every_kth_epoch,
-        peft_kwargs={"rank": args.lora_rank} if args.lora_rank is not None else None,
+        peft_kwargs={"rank": args.lora_rank, "quantize": True} if args.lora_rank is not None else None,
         mixed_precision=False,
     )
 
