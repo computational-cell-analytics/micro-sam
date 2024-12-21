@@ -55,6 +55,13 @@ Compared to these we support more applications (2d, 3d and tracking), and provid
 
 ## Release Overview
 
+**New in version 1.2.0**
+The main changes in this version are:
+
+- Installation using only conda-forge dependencies and simplified installation instructions (on Linux and Mac OS).
+- Fix annotation in napari widgets with scale factors.
+- Support for several parameter-efficient training methods.
+
 **New in version 1.1.1**
 
 Fixing minor issues with 1.1.0 and enabling pytorch 2.5 support.
