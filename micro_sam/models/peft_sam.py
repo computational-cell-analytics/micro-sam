@@ -8,8 +8,9 @@ from segment_anything.modeling import Sam
 
 try:
     import bitsandbytes as bnb
-except Exception:
-    bnb = None
+    _have_bnb = True
+except ImportError:
+    _have_bnb = False
 
 
 class LoRASurgery(nn.Module):
@@ -330,8 +331,9 @@ class PEFT_Sam(nn.Module):
         # Whether to quantize the linear layers to 4 bit precision.
         # NOTE: This is currently supported for CUDA-supported devices only.
         if quantize:
-            assert bnb is not None, "Please install 'bitsandbytes'."
-            import bitsandbytes as bnb
+            if not _have_bnb:
+                raise ModuleNotFoundError("Please install 'bitsandbytes'.")
+
             for name, module in model.image_encoder.named_modules():
                 if isinstance(module, torch.nn.Linear):
                     *parent_path, layer_name = name.split(".")
