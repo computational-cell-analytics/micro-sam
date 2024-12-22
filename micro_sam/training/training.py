@@ -188,7 +188,6 @@ def train_sam(
     peft_kwargs: Optional[Dict] = None,
     ignore_warnings: bool = True,
     verify_n_labels_in_loader: Optional[int] = 50,
-    mixed_precision: bool = True,
     **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
@@ -226,7 +225,6 @@ def train_sam(
         ignore_warnings: Whether to ignore raised warnings.
         verify_n_labels_in_loader: The number of labels to verify out of the train and validation dataloaders.
             By default, 50 batches of labels are verified from the dataloaders.
-        mixed_precision: Whether to train the model with mixed precision.
         model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
     """
     with _filter_warnings(ignore_warnings):
@@ -292,7 +290,7 @@ def train_sam(
                 lr_scheduler=scheduler,
                 logger=joint_trainers.JointSamLogger,
                 log_image_interval=100,
-                mixed_precision=mixed_precision,
+                mixed_precision=True,
                 convert_inputs=convert_inputs,
                 n_objects_per_batch=n_objects_per_batch,
                 n_sub_iteration=n_sub_iteration,
@@ -314,7 +312,7 @@ def train_sam(
                 lr_scheduler=scheduler,
                 logger=trainers.SamLogger,
                 log_image_interval=100,
-                mixed_precision=mixed_precision,
+                mixed_precision=True,
                 convert_inputs=convert_inputs,
                 n_objects_per_batch=n_objects_per_batch,
                 n_sub_iteration=n_sub_iteration,
