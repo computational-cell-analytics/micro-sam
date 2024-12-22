@@ -6,6 +6,11 @@ import torch.nn as nn
 
 from segment_anything.modeling import Sam
 
+try:
+    import bitsandbytes as bnb
+except Exception:
+    bnb = None
+
 
 class LoRASurgery(nn.Module):
     """Operates on the attention layers for performing low-rank adaptation.
@@ -325,6 +330,7 @@ class PEFT_Sam(nn.Module):
         # Whether to quantize the linear layers to 4 bit precision.
         # NOTE: This is currently supported for CUDA-supported devices only.
         if quantize:
+            assert bnb is not None, "Please install 'bitsandbytes'."
             import bitsandbytes as bnb
             for name, module in model.image_encoder.named_modules():
                 if isinstance(module, torch.nn.Linear):
