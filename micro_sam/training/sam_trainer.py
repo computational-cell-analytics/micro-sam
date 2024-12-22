@@ -218,10 +218,10 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             with torch.no_grad():
                 net_mean_model_iou = torch.mean(batched_iou_predictions)
 
-            loss += net_loss
-            mask_loss += net_mask_loss
-            iou_regression_loss += net_iou_regression_loss
-            mean_model_iou += net_mean_model_iou
+            loss = loss + net_loss
+            mask_loss = mask_loss + net_mask_loss
+            iou_regression_loss = iou_regression_loss + net_iou_regression_loss
+            mean_model_iou = mean_model_iou + net_mean_model_iou
 
             if i < (num_subiter - 1):   # We need not update the prompts for the last iteration.
                 # Determine the next prompts based on current predictions.
