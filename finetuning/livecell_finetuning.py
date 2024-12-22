@@ -28,12 +28,12 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
     train_loader = get_livecell_loader(
         path=data_path, patch_shape=patch_shape, split="train", batch_size=2, num_workers=16,
         cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform, label_dtype=torch.float32,
+        raw_transform=raw_transform, label_dtype=torch.float32
     )
     val_loader = get_livecell_loader(
         path=data_path, patch_shape=patch_shape, split="val", batch_size=1, num_workers=16,
         cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform, label_dtype=torch.float32,
+        raw_transform=raw_transform, label_dtype=torch.float32
     )
 
     return train_loader, val_loader
@@ -78,7 +78,6 @@ def finetune_livecell(args):
         scheduler_kwargs=scheduler_kwargs,
         save_every_kth_epoch=args.save_every_kth_epoch,
         peft_kwargs={"rank": args.lora_rank, "quantize": True} if args.lora_rank is not None else None,
-        mixed_precision=False,
     )
 
     if args.export_path is not None:

@@ -271,10 +271,6 @@ def train_sam(
         else:
             model_params = model.parameters()
 
-        if peft_kwargs and "quantize" in peft_kwargs:
-            import bitsandbytes as bnb
-            optimizer_class = bnb.optim.AdamW8bit
-
         optimizer = optimizer_class(model_params, lr=lr)
 
         if scheduler_kwargs is None:
