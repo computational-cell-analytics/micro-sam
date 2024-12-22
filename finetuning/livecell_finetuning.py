@@ -58,7 +58,7 @@ def finetune_livecell(args):
 
     # NOTE: memory req. for all vit_b models (compared on A100 80GB)
     # vit_b
-    # freeze_encoder: ~ GB
+    # freeze_encoder: ~ 33.89 GB
     # QLoRA: ~48.54 GB
     # LoRA: ~48.62 GB
     # FFT: ~49.56 GB
