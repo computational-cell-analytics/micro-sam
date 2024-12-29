@@ -56,6 +56,7 @@ Compared to these we support more applications (2d, 3d and tracking), and provid
 ## Release Overview
 
 **New in version 1.2.0**
+
 The main changes in this version are:
 
 - Installation using only conda-forge dependencies and simplified installation instructions (on Linux and Mac OS).
