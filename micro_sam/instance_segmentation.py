@@ -1,5 +1,4 @@
-"""
-Automated instance segmentation functionality.
+"""Automated instance segmentation functionality.
 The classes implemented here extend the automatic instance segmentation from Segment Anything:
 https://computational-cell-analytics.github.io/micro-sam/micro_sam.html
 """
@@ -12,10 +11,10 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import vigra
 import numpy as np
-import torch
-
 from skimage.measure import label, regionprops
 from skimage.segmentation import relabel_sequential
+
+import torch
 from torchvision.ops.boxes import batched_nms, box_area
 
 from torch_em.model import UNETR
@@ -375,9 +374,7 @@ class AutomaticMaskGenerator(AMGBase):
 
         if points_per_side is not None:
             self.point_grids = amg_utils.build_all_layer_point_grids(
-                points_per_side,
-                crop_n_layers,
-                crop_n_points_downscale_factor,
+                points_per_side, crop_n_layers, crop_n_points_downscale_factor,
             )
         elif point_grids is not None:
             self.point_grids = point_grids
@@ -404,8 +401,8 @@ class AutomaticMaskGenerator(AMGBase):
         in_points = torch.as_tensor(transformed_points, device=self._predictor.device, dtype=torch.float)
         in_labels = torch.ones(in_points.shape[0], dtype=torch.int, device=in_points.device)
         masks, iou_preds, _ = self._predictor.predict_torch(
-            in_points[:, None, :],
-            in_labels[:, None],
+            point_coords=in_points[:, None, :],
+            point_labels=in_labels[:, None],
             multimask_output=True,
             return_logits=True,
         )
@@ -701,8 +698,7 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
 class DecoderAdapter(torch.nn.Module):
     """Adapter to contain the UNETR decoder in a single module.
 
-    To apply the decoder on top of pre-computed embeddings for
-    the segmentation functionality.
+    To apply the decoder on top of pre-computed embeddings for the segmentation functionality.
     See also: https://github.com/constantinpape/torch-em/blob/main/torch_em/model/unetr.py
     """
     def __init__(self, unetr):
@@ -756,9 +752,9 @@ def get_unetr(
     Args:
         image_encoder: The image encoder of the SAM model.
             This is used as encoder by the UNETR too.
-        decoder_state: Optional decoder state to initialize the weights
-            of the UNETR decoder.
+        decoder_state: Optional decoder state to initialize the weights of the UNETR decoder.
         device: The device.
+
     Returns:
         The UNETR model.
     """
@@ -795,6 +791,7 @@ def get_decoder(
         image_encoder: The image encoder of the SAM model.
         decoder_state: State to initialize the weights of the UNETR decoder.
         device: The device.
+
     Returns:
         The decoder for instance segmentation.
     """
@@ -817,7 +814,7 @@ def get_predictor_and_decoder(
         model_type: The type of the image encoder used in the SAM model.
         checkpoint_path: Path to the checkpoint from which to load the data.
         device: The device.
-        lora_rank: The rank for low rank adaptation of the attention layers.
+        peft_kwargs: Keyword arguments for th PEFT wrapper class.
 
     Returns:
         The SAM predictor.

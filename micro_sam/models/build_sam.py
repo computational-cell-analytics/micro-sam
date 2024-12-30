@@ -12,7 +12,6 @@
 # - downstream applications (eg. updating the "num_multimask_outputs" for multi-class semantic segmentation)
 #
 
-
 import torch
 
 from functools import partial

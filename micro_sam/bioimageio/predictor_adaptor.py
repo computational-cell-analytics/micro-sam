@@ -55,6 +55,9 @@ class PredictorAdaptor(nn.Module):
             embeddings: precomputed image embeddings B x 256 x 64 x 64
 
         Returns:
+            The segmentation masks.
+            The scores for prediction quality.
+            The computed image embeddings.
         """
         batch_size = image.shape[0]
         if batch_size != 1:

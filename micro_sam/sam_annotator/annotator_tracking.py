@@ -7,12 +7,13 @@ import torch
 
 from magicgui.widgets import ComboBox, Container
 
-from ._annotator import _AnnotatorBase
-from ._state import AnnotatorState
-from . import util as vutil
-from ._tooltips import get_tooltip
-from . import _widgets as widgets
 from .. import util
+from . import util as vutil
+from . import _widgets as widgets
+from ._tooltips import get_tooltip
+from ._state import AnnotatorState
+from ._annotator import _AnnotatorBase
+
 
 # Cyan (track) and Magenta (division)
 STATE_COLOR_CYCLE = ["#00FFFF", "#FF00FF", ]
@@ -25,8 +26,9 @@ def create_tracking_menu(points_layer, box_layer, states, track_ids):
     state = AnnotatorState()
 
     state_menu = ComboBox(label="track_state", choices=states, tooltip=get_tooltip("annotator_tracking", "track_state"))
-    track_id_menu = ComboBox(label="track_id", choices=list(map(str, track_ids)),
-                             tooltip=get_tooltip("annotator_tracking", "track_id"))
+    track_id_menu = ComboBox(
+        label="track_id", choices=list(map(str, track_ids)), tooltip=get_tooltip("annotator_tracking", "track_id")
+    )
     tracking_widget = Container(widgets=[state_menu, track_id_menu])
 
     def update_state(event):
@@ -194,7 +196,7 @@ def annotator_tracking(
     """Start the tracking annotation tool fora given timeseries.
 
     Args:
-        raw: The image data.
+        image: The image data.
         embedding_path: Filepath for saving the precomputed embeddings.
         model_type: The Segment Anything model to use. For details on the available models check out
             https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.

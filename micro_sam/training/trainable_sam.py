@@ -15,6 +15,7 @@ class TrainableSAM(nn.Module):
     Args:
         sam: The SegmentAnything Model.
     """
+
     def __init__(self, sam: Sam) -> None:
         super().__init__()
         self.sam = sam
@@ -55,6 +56,7 @@ class TrainableSAM(nn.Module):
             batched_inputs[i]["input_size"] = input_size
         # Compute the image embeddings.
         image_embeddings = self.sam.image_encoder(input_images)
+
         return image_embeddings, batched_inputs
 
     # batched inputs follow the same syntax as the input to sam.forward
@@ -67,9 +69,6 @@ class TrainableSAM(nn.Module):
             batched_inputs: The batched input images and prompts.
             image_embeddings: The precompute image embeddings. If not passed then they will be computed.
             multimask_output: Whether to predict mutiple or just a single mask.
-
-        Returns:
-            The predicted segmentation masks and iou values.
         """
         outputs = []
         for image_record, curr_embedding in zip(batched_inputs, image_embeddings):
@@ -91,11 +90,7 @@ class TrainableSAM(nn.Module):
             else:
                 masks = None
 
-            sparse_embeddings, dense_embeddings = self.sam.prompt_encoder(
-                points=points,
-                boxes=boxes,
-                masks=masks,
-            )
+            sparse_embeddings, dense_embeddings = self.sam.prompt_encoder(points=points, boxes=boxes, masks=masks)
 
             low_res_masks, iou_predictions = self.sam.mask_decoder(
                 image_embeddings=curr_embedding.unsqueeze(0),
@@ -106,17 +101,11 @@ class TrainableSAM(nn.Module):
             )
 
             masks = self.sam.postprocess_masks(
-                low_res_masks,
-                input_size=image_record["input_size"],
-                original_size=image_record["original_size"],
+                masks=low_res_masks, input_size=image_record["input_size"], original_size=image_record["original_size"],
             )
 
             outputs.append(
-                {
-                    "low_res_masks": low_res_masks,
-                    "masks": masks,
-                    "iou_predictions": iou_predictions
-                }
+                {"low_res_masks": low_res_masks, "masks": masks, "iou_predictions": iou_predictions}
             )
 
         return outputs

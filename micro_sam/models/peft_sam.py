@@ -101,7 +101,7 @@ class FacTSurgery(nn.Module):
         new_q = self.FacTv(new_q)
         new_v = self.FacTv(new_v)
 
-        # NOTE : Scaling Factor was set to 1 as it can be tuned via the learning rate
+        # NOTE : Scaling Factor is set to 1 as it can be tuned via the learning rate.
         qkv[:, :, :, : self.dim] += new_q
         qkv[:, :, :, -self.dim:] += new_v
 

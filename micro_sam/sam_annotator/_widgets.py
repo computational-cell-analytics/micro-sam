@@ -582,9 +582,7 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
     call_button="Update settings",
     cache_directory={"mode": "d"},  # choose a directory
 )
-def settings_widget(
-    cache_directory: Optional[Path] = util.get_cache_directory(),
-) -> None:
+def settings_widget(cache_directory: Optional[Path] = util.get_cache_directory()) -> None:
     """Widget to update global micro_sam settings.
 
     Args:

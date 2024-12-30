@@ -5,15 +5,14 @@ import os
 from typing import Optional, Union, Tuple
 
 import numpy as np
+from scipy.ndimage import binary_closing
+from skimage.measure import label, regionprops
+from skimage.segmentation import relabel_sequential
 
 import nifty
 
 import elf.segmentation as seg_utils
 import elf.tracking.tracking_utils as track_utils
-
-from scipy.ndimage import binary_closing
-from skimage.measure import label, regionprops
-from skimage.segmentation import relabel_sequential
 
 from segment_anything.predictor import SamPredictor
 
@@ -25,6 +24,7 @@ except ImportError:
 from . import util
 from .prompt_based_segmentation import segment_from_mask
 from .instance_segmentation import AMGBase, mask_data_to_segmentation
+
 
 PROJECTION_MODES = ("box", "mask", "points", "points_and_mask", "single_point")
 

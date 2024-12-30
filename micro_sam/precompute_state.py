@@ -249,9 +249,8 @@ def precompute_state(
         precompute_amg_state: Whether to precompute the state for automatic instance segmentation
             in addition to the image embeddings.
     """
-    predictor, state = util.get_sam_model(
-        model_type=model_type, checkpoint_path=checkpoint_path, return_state=True,
-    )
+    predictor, state = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path, return_state=True)
+
     if "decoder_state" in state:
         decoder = instance_segmentation.get_decoder(predictor.model.image_encoder, state["decoder_state"])
     else:
@@ -291,7 +290,6 @@ def main():
     parser.add_argument(
         "-e", "--embedding_path", required=True, help="The path where the embeddings will be saved."
     )
-
     parser.add_argument(
         "--pattern", help="Pattern / wildcard for selecting files in a folder. To select all files use '*'."
     )
@@ -300,7 +298,6 @@ def main():
         help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
         "for an image stack it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
     )
-
     parser.add_argument(
         "-m", "--model_type", default=util._DEFAULT_MODEL,
         help=f"The segment anything model that will be used, one of {available_models}."
