@@ -18,6 +18,7 @@ from .trainable_sam import TrainableSAM
 
 from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.transform.raw import normalize_percentile, normalize
+from torch_em.data.datasets.light_microscopy.neurips_cell_seg import to_rgb
 
 
 def identity(x):
@@ -258,19 +259,20 @@ class ResizeRawTrafo:
         self.do_rescaling = do_rescaling
 
     def __call__(self, raw):
+        raw = to_rgb(raw)  # Ensure all images are in 3-channels: triplicate one channel to three channels.
+
         if self.do_rescaling:
+            # NOTE: Below is done for TissueNet: to work with the valid channels.
             raw = normalize_percentile(raw, axis=(1, 2))
-            raw = np.mean(raw, axis=0)
             raw = normalize(raw)
             raw = raw * 255
 
-        tmp_ddim = (self.desired_shape[0] - raw.shape[0], self.desired_shape[1] - raw.shape[1])
-        ddim = (tmp_ddim[0] / 2, tmp_ddim[1] / 2)
-        raw = np.pad(
-            raw,
-            pad_width=((ceil(ddim[0]), floor(ddim[0])), (ceil(ddim[1]), floor(ddim[1]))),
-            mode=self.padding
-        )
+        # Pad the inputs to the desired shape.
+        tmp_ddim = [desired - curr for desired, curr in zip(self.desired_shape, raw.shape)]
+        ddim = [(per_dim / 2) for per_dim in tmp_ddim]
+        pad_width = [(ceil(d), floor(d)) for d in ddim]
+        raw = np.pad(raw, pad_width=pad_width, mode=self.padding)
+
         assert raw.shape == self.desired_shape
         return raw
 
