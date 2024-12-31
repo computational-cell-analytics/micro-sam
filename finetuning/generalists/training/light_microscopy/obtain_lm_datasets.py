@@ -51,6 +51,17 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
         )
         return label_transform
 
+    def get_livecell_datasets():
+        "Datasets for cell segmentation in phase contrast microscopy images."
+        all_livecell_datasets = [
+            datasets.get_livecell_dataset(
+                path=os.path.join(input_path, "livecell"), split=split_choice, patch_shape=patch_shape,
+                sampler=sampler, label_dtype=label_dtype, raw_transform=_identity, download=True, cell_types=[ctype],
+                label_transform=_get_label_transform(), n_samples=200 if split_choice == "train" else None,
+            ) for ctype in datasets.livecell.CELL_TYPES
+        ]
+        return all_livecell_datasets
+
     def get_embedseg_datasets():
         "Datasets for cell and nuclei segmentation in fluorescence microscopy images."
         names = [
@@ -114,11 +125,6 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
         return all_ctc_datasets
 
     _datasets = [
-        # cell segmentation in phase contrast microscopy images.
-        datasets.get_livecell_dataset(
-            path=os.path.join(input_path, "livecell"), split=split_choice, patch_shape=patch_shape, download=True,
-            sampler=sampler, label_dtype=label_dtype, raw_transform=_identity, label_transform=_get_label_transform(),
-        ),
         # cell segmentation in tissue microscopy images.
         datasets.get_tissuenet_dataset(
             path=os.path.join(input_path, "tissuenet"), split=split_choice, download=True, patch_shape=patch_shape,
@@ -176,6 +182,9 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
             raw_transform=_identity, label_transform=_get_label_transform(), label_dtype=label_dtype, sampler=sampler,
         ),
     ]
+
+    # Add LIVECell dataset: cell segmentation for phase contrast microscopy images.
+    _datasets.extend(get_livecell_datasets())
 
     # Add EmbedSeg datasets: cell and nuclei segmentation for fluorescence microscopy images.
     _datasets.extend(get_embedseg_datasets())
