@@ -202,7 +202,11 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
 def get_generalist_lm_loaders(input_path, patch_shape):
     """This returns the concatenated light microscopy datasets implemented in `torch_em`:
     https://github.com/constantinpape/torch-em/tree/main/torch_em/data/datasets/light_microscopy.
-    It will automatically download all the datasets.
+    It will automatically download all the datasets, except:
+    - TissueNet (see `torch_em/data/datasets/light_microscopy/tissuenet.py` for details)
+    - DynamicNuclearNet (see `torch_em/data/datasets/light_microscopy/dynamicnuclearnet.py` for details)
+    - CellPose (see `torch_em/data/datasets/light_microscopy/cellpose.py` for details)
+    - YeaZ (see `torch_em/data/datasets/light_microscopy/yeaz.py` for details)
 
     NOTE: To remove / replace the datasets with another dataset, you need to add the datasets (for train and val splits)
     in `get_concat_lm_dataset`. The labels have to be in a label mask instance segmentation format,
