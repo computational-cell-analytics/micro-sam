@@ -73,6 +73,12 @@ class Sam3DWrapper(nn.Module):
                 'image': The image as a torch tensor in 3xDxHxW format. Already transformed for the input to the model.
                 'original_size': The original size of the image (HxW) before transformation.
             multimask_output: Wheterh to predict with the multi- or single-mask head of the maks decoder.
+
+        Returns:
+            A list over input images, where each element is as dictionary with the following keys:
+                'masks': Mask prediction for this object.
+                'iou_predictions': IOU score prediction for this object.
+                'low_res_masks': Low resolution mask prediction for this object.
         """
         batched_images = torch.stack([inp["image"] for inp in batched_input], dim=0)
         original_size = batched_input[0]["original_size"]

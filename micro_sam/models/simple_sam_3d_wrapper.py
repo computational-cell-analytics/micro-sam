@@ -154,6 +154,10 @@ class SimpleSam3DWrapper(nn.Module):
             batched_input: A list over input images, each a dictionary with the following keys.L
                 'image': The image as a torch tensor in 3xDxHxW format. Already transformed for the input to the model.
             multimask_output: Wheterh to predict with the multi- or single-mask head of the maks decoder.
+
+        Returns:
+            A list over input images, where each element is as dictionary with the following keys:
+                'masks': Mask prediction for this object.
         """
         x = torch.stack([inp["image"] for inp in batched_input], dim=0)
 

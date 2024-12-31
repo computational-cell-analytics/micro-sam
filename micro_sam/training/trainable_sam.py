@@ -69,6 +69,9 @@ class TrainableSAM(nn.Module):
             batched_inputs: The batched input images and prompts.
             image_embeddings: The precompute image embeddings. If not passed then they will be computed.
             multimask_output: Whether to predict mutiple or just a single mask.
+
+        Returns:
+            The predicted segmentation masks and iou values.
         """
         outputs = []
         for image_record, curr_embedding in zip(batched_inputs, image_embeddings):
