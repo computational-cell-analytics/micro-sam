@@ -238,8 +238,6 @@ def train_sam(
         _check_loader(train_loader, with_segmentation_decoder, "train", verify_n_labels_in_loader)
         _check_loader(val_loader, with_segmentation_decoder, "val", verify_n_labels_in_loader)
 
-        breakpoint()
-
         device = get_device(device)
         # Get the trainable segment anything model.
         model, state = get_trainable_sam_model(
