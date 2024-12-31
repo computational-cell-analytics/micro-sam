@@ -57,7 +57,7 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
             datasets.get_livecell_dataset(
                 path=os.path.join(input_path, "livecell"), split=split_choice, patch_shape=patch_shape,
                 sampler=sampler, label_dtype=label_dtype, raw_transform=_identity, download=True, cell_types=[ctype],
-                label_transform=_get_label_transform(), n_samples=200 if split_choice == "train" else None,
+                label_transform=_get_label_transform(), n_samples=200 if split_choice == "train" else 50,
             ) for ctype in datasets.livecell.CELL_TYPES
         ]
         return all_livecell_datasets
@@ -140,7 +140,7 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
         ),
         # cell segmentation in confocal microscopy images.
         datasets.get_plantseg_dataset(
-            path=os.path.join(input_path, "plantseg"), name="root", n_samples=1000 if split_choice == "train" else 100,
+            path=os.path.join(input_path, "plantseg"), name="root", n_samples=500 if split_choice == "train" else 100,
             patch_shape=(1, *patch_shape), download=True, ndim=2, raw_transform=ResizeRawTrafo((3, *patch_shape)),
             sampler=MinInstanceSampler(min_num_instances=4, min_size=10), split=split_choice, label_dtype=label_dtype,
             label_transform=ResizeLabelTrafo(patch_shape, min_size=10),
