@@ -263,7 +263,7 @@ class ResizeRawTrafo:
 
         if self.do_rescaling:
             # NOTE: Below is done for TissueNet: to work with the valid channels.
-            raw = normalize_percentile(raw, axis=(1, 2))
+            raw = normalize_percentile(raw, axis=(0, 1))
             raw = normalize(raw)
             raw = raw * 255
 
