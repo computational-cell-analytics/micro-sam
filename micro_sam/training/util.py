@@ -262,7 +262,7 @@ class ResizeRawTrafo:
         raw = to_rgb(raw)  # Ensure all images are in 3-channels: triplicate one channel to three channels.
 
         if self.do_rescaling:
-            # NOTE: Below is done for TissueNet: to work with the valid channels.
+            # NOTE: Below is done for TissueNet: to work with the valid channels (i.e. the first and second channels).
             raw = normalize_percentile(raw, axis=(0, 1))
             raw = normalize(raw)
             raw = raw * 255
