@@ -8,7 +8,7 @@ N_OBJECTS = {
     # "vit_t": 50,
     "vit_b": 40,
     "vit_l": 30,
-    "vit_h": 25,
+    # "vit_h": 25,
 }
 
 
