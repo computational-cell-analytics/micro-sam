@@ -36,8 +36,9 @@ def _identity(x):
 
 def _cellpose_raw_trafo(x):
     """Transforms input images to desired format.
+
     NOTE: The input channel logic is arranged a bit strangely in `cyto` dataset.
-    We take care of it here.
+    This function takes care of it here.
     """
     r, g, b = x
 

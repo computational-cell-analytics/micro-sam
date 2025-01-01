@@ -188,6 +188,7 @@ def train_sam(
     peft_kwargs: Optional[Dict] = None,
     ignore_warnings: bool = True,
     verify_n_labels_in_loader: Optional[int] = 50,
+    box_distortion_factor: Optional[float] = 0.025,
     **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
@@ -228,8 +229,9 @@ def train_sam(
         peft_kwargs: Keyword arguments for the PEFT wrapper class.
         verify_n_labels_in_loader: The number of labels to verify out of the train and validation dataloaders.
             By default, 50 batches of labels are verified from the dataloaders.
-        model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
         ignore_warnings: Whether to ignore raised warnings.
+        box_distortion_factor: The factor for distorting the box annotations derived from the ground-truth masks.
+        model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
     """
     with _filter_warnings(ignore_warnings):
 
@@ -251,7 +253,7 @@ def train_sam(
         )
 
         # This class creates all the training data for a batch (inputs, prompts and labels).
-        convert_inputs = ConvertToSamInputs(transform=model.transform, box_distortion_factor=0.025)
+        convert_inputs = ConvertToSamInputs(transform=model.transform, box_distortion_factor=box_distortion_factor)
 
         # Create the UNETR decoder (if train with it) and the optimizer.
         if with_segmentation_decoder:

@@ -41,6 +41,7 @@ def finetune_lm_generalist(args):
         save_root=args.save_root,
         scheduler_kwargs=scheduler_kwargs,
         verify_n_labels_in_loader=None,  # NOTE: Verifies all labels in the loader(s).
+        box_distortion_factor=0.05,
     )
 
     if args.export_path is not None:
