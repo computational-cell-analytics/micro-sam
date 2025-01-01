@@ -63,14 +63,10 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
     label_dtype = torch.float32
     sampler = MinInstanceSampler(min_size=10)
 
-    def _get_label_transform(min_size=10):
+    def _get_label_transform():
         label_transform = PerObjectDistanceTransform(
-            distances=True,
-            boundary_distances=True,
-            directed_distances=False,
-            foreground=True,
-            instances=True,
-            min_size=min_size
+            distances=True, boundary_distances=True, directed_distances=False,
+            foreground=True, instances=True, min_size=10
         )
         return label_transform
 
