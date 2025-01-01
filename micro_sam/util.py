@@ -868,10 +868,7 @@ def precompute_image_embeddings(
 
 
 def set_precomputed(
-    predictor: SamPredictor,
-    image_embeddings: ImageEmbeddings,
-    i: Optional[int] = None,
-    tile_id: Optional[int] = None,
+    predictor: SamPredictor, image_embeddings: ImageEmbeddings, i: Optional[int] = None, tile_id: Optional[int] = None,
 ) -> SamPredictor:
     """Set the precomputed image embeddings for a predictor.
 
@@ -938,8 +935,7 @@ def compute_iou(mask1: np.ndarray, mask2: np.ndarray) -> float:
 
 
 def get_centers_and_bounding_boxes(
-    segmentation: np.ndarray,
-    mode: str = "v"
+    segmentation: np.ndarray, mode: str = "v"
 ) -> Tuple[Dict[int, np.ndarray], Dict[int, tuple]]:
     """Returns the center coordinates of the foreground instances in the ground-truth.
 
@@ -969,11 +965,7 @@ def get_centers_and_bounding_boxes(
     return center_coordinates, bbox_coordinates
 
 
-def load_image_data(
-    path: str,
-    key: Optional[str] = None,
-    lazy_loading: bool = False
-) -> np.ndarray:
+def load_image_data(path: str, key: Optional[str] = None, lazy_loading: bool = False) -> np.ndarray:
     """Helper function to load image data from file.
 
     Args:
@@ -994,10 +986,7 @@ def load_image_data(
     return image_data
 
 
-def segmentation_to_one_hot(
-    segmentation: np.ndarray,
-    segmentation_ids: Optional[np.ndarray] = None,
-) -> torch.Tensor:
+def segmentation_to_one_hot(segmentation: np.ndarray, segmentation_ids: Optional[np.ndarray] = None) -> torch.Tensor:
     """Convert the segmentation to one-hot encoded masks.
 
     Args:
@@ -1012,7 +1001,12 @@ def segmentation_to_one_hot(
         n_ids = int(segmentation.max())
 
     else:
-        assert segmentation_ids[0] != 0, "No objects were found."
+        msg = "No foreground objects were found."
+        if len(segmentation_ids) == 0:  # The list should not be completely empty.
+            raise AssertionError(msg)
+
+        if segmentation_ids[0] == 0:  # The list should not have zero-only.
+            raise AssertionError(msg)
 
         # the segmentation ids have to be sorted
         segmentation_ids = np.sort(segmentation_ids)
