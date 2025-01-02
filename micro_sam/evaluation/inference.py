@@ -26,9 +26,7 @@ from ..prompt_generators import PointAndBoxPromptGenerator, IterativePromptGener
 
 
 def _load_prompts(
-    cached_point_prompts, save_point_prompts,
-    cached_box_prompts, save_box_prompts,
-    image_name
+    cached_point_prompts, save_point_prompts, cached_box_prompts, save_box_prompts, image_name
 ):
 
     def load_prompt_type(cached_prompts, save_prompts):
@@ -65,15 +63,8 @@ def _load_prompts(
     return prompts, cached_point_prompts, cached_box_prompts
 
 
-def _get_batched_prompts(
-    gt,
-    gt_ids,
-    use_points,
-    use_boxes,
-    n_positives,
-    n_negatives,
-    dilation,
-):
+def _get_batched_prompts(gt, gt_ids, use_points, use_boxes, n_positives, n_negatives, dilation):
+
     # Initialize the prompt generator.
     prompt_generator = PointAndBoxPromptGenerator(
         n_positive_points=n_positives, n_negative_points=n_negatives,
@@ -139,9 +130,7 @@ def _run_inference_with_prompts_for_image(
 
 
 def precompute_all_embeddings(
-    predictor: SamPredictor,
-    image_paths: List[Union[str, os.PathLike]],
-    embedding_dir: Union[str, os.PathLike],
+    predictor: SamPredictor, image_paths: List[Union[str, os.PathLike]], embedding_dir: Union[str, os.PathLike],
 ) -> None:
     """Precompute all image embeddings.
 
@@ -552,6 +541,24 @@ def run_amg(
     peft_kwargs: Optional[Dict] = None,
     cache_embeddings: bool = False
 ) -> str:
+    """Run Segment Anything inference for multiple images using automatic mask generation (AMG).
+
+    Args:
+        checkpoint: The filepath to model checkpoints.
+        model_type: The segment anything model choice.
+        experimet_folder: The directory where the relevant files are saved.
+        val_image_paths: The list of filepaths of input images for grid-search.
+        val_gt_paths: The list of filepaths of corresponding labels for grid-search.
+        test_image_paths: The list of filepaths of input images for automatic instance segmentation.
+        iou_thresh_values: Optional choice of values for grid search of `iou_thresh` parameter.
+        stability_score_values: Optional choice of values for grid search of `stability_score` parameter.
+        peft_kwargs: Keyword arguments for th PEFT wrapper class.
+        cache_embeddings: Whether to cache embeddings in experiment folder.
+
+    Returns:
+        Filepath where the predictions have been saved.
+    """
+
     if cache_embeddings:
         embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
         os.makedirs(embedding_folder, exist_ok=True)
@@ -604,6 +611,22 @@ def run_instance_segmentation_with_decoder(
     peft_kwargs: Optional[Dict] = None,
     cache_embeddings: bool = False,
 ) -> str:
+    """Run Segment Anything inference for multiple images using additional automatic instance segmentation (AIS).
+
+    Args:
+        checkpoint: The filepath to model checkpoints.
+        model_type: The segment anything model choice.
+        experimet_folder: The directory where the relevant files are saved.
+        val_image_paths: The list of filepaths of input images for grid-search.
+        val_gt_paths: The list of filepaths of corresponding labels for grid-search.
+        test_image_paths: The list of filepaths of input images for automatic instance segmentation.
+        peft_kwargs: Keyword arguments for th PEFT wrapper class.
+        cache_embeddings: Whether to cache embeddings in experiment folder.
+
+    Returns:
+        Filepath where the predictions have been saved.
+    """
+
     if cache_embeddings:
         embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
         os.makedirs(embedding_folder, exist_ok=True)

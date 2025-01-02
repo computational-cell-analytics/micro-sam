@@ -1,5 +1,4 @@
-"""
-Functions for prompt-based segmentation with Segment Anything.
+"""Functions for prompt-based segmentation with Segment Anything.
 """
 
 import warnings
@@ -341,7 +340,7 @@ def segment_from_mask(
         mask: The mask used to derive prompts.
         image_embeddings: Optional precomputed image embeddings.
             Has to be passed if the predictor is not yet initialized.
-         i: Index for the image data. Required if the input data has three spatial dimensions
+        i: Index for the image data. Required if the input data has three spatial dimensions
              or a time dimension and two spatial dimensions.
         use_box: Whether to derive the bounding box prompt from the mask.
         use_mask: Whether to use the mask itself as prompt.

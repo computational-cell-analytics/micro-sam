@@ -2,7 +2,6 @@
 Helper functions for downloading Segment Anything models and predicting image embeddings.
 """
 
-
 import os
 import pickle
 import hashlib
@@ -203,8 +202,11 @@ def get_device(device: Optional[Union[str, torch.device]] = None) -> Union[str, 
         elif device_type.lower() == "cpu":
             pass  # cpu is always available
         else:
-            raise RuntimeError(f"Unsupported device: {device}\n"
-                               "Please choose from 'cpu', 'cuda', or 'mps'.")
+            raise RuntimeError(
+                f"Unsupported device: {device}\n"
+                "Please choose from 'cpu', 'cuda', or 'mps'."
+            )
+
     return device
 
 
@@ -310,6 +312,7 @@ def get_sam_model(
         return_state: Return the unpickled checkpoint state.
         peft_kwargs: Keyword arguments for th PEFT wrapper class.
         flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
+        model_kwargs: Additional parameters necessary to initialize the Segment Anything model.
 
     Returns:
         The segment anything predictor.
@@ -434,9 +437,7 @@ def _handle_checkpoint_loading(sam, model_state):
 
 
 def export_custom_sam_model(
-    checkpoint_path: Union[str, os.PathLike],
-    model_type: str,
-    save_path: Union[str, os.PathLike],
+    checkpoint_path: Union[str, os.PathLike], model_type: str, save_path: Union[str, os.PathLike],
 ) -> None:
     """Export a finetuned segment anything model to the standard model format.
 
@@ -514,9 +515,8 @@ def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init
         ds.attrs["input_size"] = input_size
         pbar_update(1)
 
-    _write_embedding_signature(
-        f, input_, predictor, tile_shape, halo, input_size=None, original_size=None,
-    )
+    _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size=None, original_size=None)
+
     return features
 
 
@@ -562,9 +562,7 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init
         ds.attrs["original_size"] = original_size
         ds.attrs["input_size"] = input_size
 
-    _write_embedding_signature(
-        f, input_, predictor, tile_shape, halo, input_size=None, original_size=None,
-    )
+    _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size=None, original_size=None)
 
     return features
 
@@ -575,9 +573,7 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
         # In this case we load the embeddings.
         features = f["features"][:]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
-        image_embeddings = {
-            "features": features, "input_size": input_size, "original_size": original_size,
-        }
+        image_embeddings = {"features": features, "input_size": input_size, "original_size": original_size}
         # Also set the embeddings.
         set_precomputed(predictor, image_embeddings)
         return image_embeddings
@@ -593,16 +589,12 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
 
     # Save the embeddings if we have a save_path.
     if save_path is not None:
-        f.create_dataset(
-            "features", data=features, compression="gzip", chunks=features.shape
-        )
+        f.create_dataset("features", data=features, compression="gzip", chunks=features.shape)
         _write_embedding_signature(
             f, input_, predictor, tile_shape=None, halo=None, input_size=input_size, original_size=original_size,
         )
 
-    image_embeddings = {
-        "features": features, "input_size": input_size, "original_size": original_size,
-    }
+    image_embeddings = {"features": features, "input_size": input_size, "original_size": original_size}
     return image_embeddings
 
 
@@ -611,9 +603,7 @@ def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_up
     if "input_size" in f.attrs:
         features = f["features"]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
-        image_embeddings = {
-            "features": features, "input_size": input_size, "original_size": original_size,
-        }
+        image_embeddings = {"features": features, "input_size": input_size, "original_size": original_size}
         return image_embeddings
 
     # Otherwise compute them. Note: saving happens automatically because we
@@ -629,9 +619,7 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_u
         # In this case we load the embeddings.
         features = f["features"] if lazy_loading else f["features"][:]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
-        image_embeddings = {
-            "features": features, "input_size": input_size, "original_size": original_size,
-        }
+        image_embeddings = {"features": features, "input_size": input_size, "original_size": original_size}
         return image_embeddings
 
     # Otherwise we have to compute the embeddings.
@@ -692,9 +680,7 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_up
     if "input_size" in f.attrs:
         features = f["features"]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
-        image_embeddings = {
-            "features": features, "input_size": input_size, "original_size": original_size,
-        }
+        image_embeddings = {"features": features, "input_size": input_size, "original_size": original_size}
         return image_embeddings
 
     # Otherwise compute them. Note: saving happens automatically because we
@@ -713,6 +699,7 @@ def _compute_data_signature(input_):
 def _get_embedding_signature(input_, predictor, tile_shape, halo, data_signature=None):
     if data_signature is None:
         data_signature = _compute_data_signature(input_)
+
     signature = {
         "data_signature": data_signature,
         "tile_shape": tile_shape if tile_shape is None else list(tile_shape),
@@ -740,6 +727,7 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
     # In this case the embeddings will be computed and we don't need to perform any checks.
     if "input_size" not in f.attrs:
         return
+
     signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
     for key, val in signature.items():
         # Check whether the key is missing from the attrs or if the value is not matching.
@@ -868,10 +856,7 @@ def precompute_image_embeddings(
 
 
 def set_precomputed(
-    predictor: SamPredictor,
-    image_embeddings: ImageEmbeddings,
-    i: Optional[int] = None,
-    tile_id: Optional[int] = None,
+    predictor: SamPredictor, image_embeddings: ImageEmbeddings, i: Optional[int] = None, tile_id: Optional[int] = None,
 ) -> SamPredictor:
     """Set the precomputed image embeddings for a predictor.
 
@@ -938,16 +923,15 @@ def compute_iou(mask1: np.ndarray, mask2: np.ndarray) -> float:
 
 
 def get_centers_and_bounding_boxes(
-    segmentation: np.ndarray,
-    mode: str = "v"
+    segmentation: np.ndarray, mode: str = "v"
 ) -> Tuple[Dict[int, np.ndarray], Dict[int, tuple]]:
     """Returns the center coordinates of the foreground instances in the ground-truth.
 
     Args:
         segmentation: The segmentation.
         mode: Determines the functionality used for computing the centers.
-        If 'v', the object's eccentricity centers computed by vigra are used.
-        If 'p' the object's centroids computed by skimage are used.
+            If 'v', the object's eccentricity centers computed by vigra are used.
+            If 'p' the object's centroids computed by skimage are used.
 
     Returns:
         A dictionary that maps object ids to the corresponding centroid.
@@ -969,11 +953,7 @@ def get_centers_and_bounding_boxes(
     return center_coordinates, bbox_coordinates
 
 
-def load_image_data(
-    path: str,
-    key: Optional[str] = None,
-    lazy_loading: bool = False
-) -> np.ndarray:
+def load_image_data(path: str, key: Optional[str] = None, lazy_loading: bool = False) -> np.ndarray:
     """Helper function to load image data from file.
 
     Args:
@@ -991,13 +971,11 @@ def load_image_data(
             image_data = f[key]
             if not lazy_loading:
                 image_data = image_data[:]
+
     return image_data
 
 
-def segmentation_to_one_hot(
-    segmentation: np.ndarray,
-    segmentation_ids: Optional[np.ndarray] = None,
-) -> torch.Tensor:
+def segmentation_to_one_hot(segmentation: np.ndarray, segmentation_ids: Optional[np.ndarray] = None) -> torch.Tensor:
     """Convert the segmentation to one-hot encoded masks.
 
     Args:

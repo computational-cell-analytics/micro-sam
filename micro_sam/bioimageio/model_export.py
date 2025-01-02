@@ -34,13 +34,8 @@ DEFAULTS = {
 }
 
 
-def _create_test_inputs_and_outputs(
-    image,
-    labels,
-    model_type,
-    checkpoint_path,
-    tmp_dir,
-):
+def _create_test_inputs_and_outputs(image, labels, model_type, checkpoint_path, tmp_dir):
+
     # For now we just generate a single box prompt here, but we could also generate more input prompts.
     generator = PointAndBoxPromptGenerator(
         n_positive_points=1,
@@ -59,10 +54,7 @@ def _create_test_inputs_and_outputs(
 
     # Generate logits from the two
     mask_prompts = np.stack(
-        [
-            _compute_logits_from_mask(labels == 1),
-            _compute_logits_from_mask(labels == 2),
-        ]
+        [_compute_logits_from_mask(labels == 1), _compute_logits_from_mask(labels == 2)]
     )[None]
 
     predictor = PredictorAdaptor(model_type=model_type)
@@ -104,11 +96,7 @@ def _create_test_inputs_and_outputs(
         "point_labels": point_label_path,
         "mask_prompts": mask_prompt_path,
     }
-    outputs = {
-        "mask": mask_path,
-        "score": score_path,
-        "embeddings": embed_path
-    }
+    outputs = {"mask": mask_path, "score": score_path, "embeddings": embed_path}
     return inputs, outputs
 
 
@@ -161,6 +149,7 @@ def _get_checkpoint(model_type, checkpoint_path, tmp_dir):
         return checkpoint_path, None
 
 
+# TODO: Update this with our latest yaml file updates.
 def _write_dependencies(dependency_file, require_mobile_sam):
     content = """name: sam
 channels:

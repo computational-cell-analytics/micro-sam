@@ -29,8 +29,7 @@ def _get_range_of_search_values(input_vals, step):
 
 
 def default_grid_search_values_amg(
-    iou_thresh_values: Optional[List[float]] = None,
-    stability_score_values: Optional[List[float]] = None,
+    iou_thresh_values: Optional[List[float]] = None, stability_score_values: Optional[List[float]] = None,
 ) -> Dict[str, List[float]]:
     """Default grid-search parameter for AMG-based instance segmentation.
 
@@ -92,6 +91,7 @@ def default_grid_search_values_instance_segmentation_with_decoder(
         )
     if min_size_values is None:
         min_size_values = [50, 100, 200]
+
     return {
         "center_distance_threshold": center_distance_threshold_values,
         "boundary_distance_threshold": boundary_distance_threshold_values,
@@ -140,6 +140,7 @@ def _load_image(path, key, roi):
         return im
     with open_file(path, "r") as f:
         im = f[key][:] if roi is None else f[key][roi]
+
     return im
 
 

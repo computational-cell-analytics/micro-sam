@@ -3,6 +3,7 @@ import warnings
 from typing import Optional, Union
 
 import torch
+
 from segment_anything.utils.onnx import SamOnnxModel
 
 try:
@@ -67,7 +68,7 @@ def export_image_encoder(
     model_type: str,
     output_root: Union[str, os.PathLike],
     export_name: Optional[str] = None,
-    checkpoint_path: Optional[str] = None,
+    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
 ) -> None:
     """Export SAM image encoder to torchscript.
 
@@ -103,8 +104,8 @@ def export_image_encoder(
 
 
 def export_onnx_model(
-    model_type,
-    output_root,
+    model_type: str,
+    output_root: Union[str, os.PathLike],
     opset: int,
     export_name: Optional[str] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
@@ -155,8 +156,7 @@ def export_onnx_model(
                 m.approximate = "tanh"
 
     dynamic_axes = {
-        "point_coords": {1: "num_points"},
-        "point_labels": {1: "num_points"},
+        "point_coords": {1: "num_points"}, "point_labels": {1: "num_points"},
     }
 
     embed_dim = sam.prompt_encoder.embed_dim
@@ -208,8 +208,8 @@ def export_onnx_model(
 
 
 def export_bioengine_model(
-    model_type,
-    output_root,
+    model_type: str,
+    output_root: Union[str, os.PathLike],
     opset: int,
     export_name: Optional[str] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,

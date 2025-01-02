@@ -53,13 +53,8 @@ class SemanticSamTrainer(DefaultTrainer):
         dice_weight: The weighing for the dice loss in the combined dice-cross entropy loss function.
         kwargs: The keyword arguments of the DefaultTrainer super class.
     """
-    def __init__(
-        self,
-        convert_inputs,
-        num_classes: int,
-        dice_weight: Optional[float] = None,
-        **kwargs
-    ):
+
+    def __init__(self, convert_inputs, num_classes: int, dice_weight: Optional[float] = None, **kwargs):
         assert num_classes > 1
 
         if "loss" not in kwargs:
