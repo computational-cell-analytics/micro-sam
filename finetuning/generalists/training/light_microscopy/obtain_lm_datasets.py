@@ -17,13 +17,10 @@ from micro_sam.training.util import ResizeRawTrafo, ResizeLabelTrafo
 
 def _to_8bit(raw):
     "Ensures three channels for inputs and rescale them to 8 bit."
-    if raw.ndim == 2:
-        raw = to_rgb(raw)  # Ensure all images are in 3-channels: triplicate one channel to three channels.
-    else:
-        if raw.shape[0] != 3:
-            assert raw.shape[0] == 1, raw.shape
-            raw = np.concatenate([raw] * 3, axis=0)
+    if raw.ndim == 3 and raw.shape[0] == 1:  # If the inputs have 1 channel, we triplicate it.
+        raw = np.concatenate([raw] * 3, axis=0)
 
+    raw = to_rgb(raw)  # Ensure all images are in 3-channels: triplicate one channel to three channels.
     raw = normalize(raw) * 255
     return raw
 
@@ -65,8 +62,7 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
 
     def _get_label_transform():
         label_transform = PerObjectDistanceTransform(
-            distances=True, boundary_distances=True, directed_distances=False,
-            foreground=True, instances=True, min_size=10
+            distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True,
         )
         return label_transform
 
@@ -149,7 +145,7 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
         datasets.get_tissuenet_dataset(
             path=os.path.join(input_path, "tissuenet"), split=split_choice, download=True, patch_shape=patch_shape,
             raw_channel="rgb", label_channel="cell", raw_transform=ResizeRawTrafo((3, *patch_shape), do_rescaling=True),
-            label_transform=ResizeLabelTrafo(patch_shape, min_size=10), sampler=sampler, label_dtype=label_dtype,
+            label_transform=ResizeLabelTrafo(patch_shape), sampler=sampler, label_dtype=label_dtype,
             n_samples=500 if split_choice == "train" else 100,
         ),
         # bacteria segmentation in label-free microscopy images.
@@ -163,7 +159,7 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
             path=os.path.join(input_path, "plantseg"), name="root", n_samples=500 if split_choice == "train" else 100,
             patch_shape=(1, *patch_shape), download=True, ndim=2, raw_transform=ResizeRawTrafo((3, *patch_shape)),
             sampler=MinInstanceSampler(min_num_instances=4, min_size=10), split=split_choice, label_dtype=label_dtype,
-            label_transform=ResizeLabelTrafo(patch_shape, min_size=10),
+            label_transform=ResizeLabelTrafo(patch_shape),
         ),
         # cell segmentation in multi-modal microscopy images.
         datasets.get_neurips_cellseg_supervised_dataset(
