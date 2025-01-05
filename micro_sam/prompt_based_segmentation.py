@@ -383,7 +383,7 @@ def segment_from_mask(
             raise ValueError("If points are passed you also need to pass labels.")
         point_coords, point_labels = points, labels
 
-    elif use_points:
+    elif use_points and mask.sum() != 0:
         point_coords, point_labels = _compute_points_from_mask(
             mask, original_size=original_size, box_extension=box_extension,
             use_single_point=use_single_point,
@@ -395,7 +395,7 @@ def segment_from_mask(
     if box is None:
         box = _compute_box_from_mask(
             mask, original_size=original_size, box_extension=box_extension
-        ) if use_box else None
+        ) if use_box and mask.sum() != 0 else None
     else:
         box = _process_box(box, mask.shape, original_size=original_size, box_extension=box_extension)
 
