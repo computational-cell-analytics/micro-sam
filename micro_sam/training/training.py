@@ -195,22 +195,18 @@ def train_sam(
     """Run training for a SAM model.
 
     Args:
-        name: The name of the model to be trained.
-            The checkpoint and logs wil have this name.
+        name: The name of the model to be trained. The checkpoint and logs will have this name.
         model_type: The type of the SAM model.
         train_loader: The dataloader for training.
         val_loader: The dataloader for validation.
         n_epochs: The number of epochs to train for.
-        early_stopping: Enable early stopping after this number of epochs
-            without improvement.
+        early_stopping: Enable early stopping after this number of epochs without improvement.
         n_objects_per_batch: The number of objects per batch used to compute
             the loss for interative segmentation. If None all objects will be used,
             if given objects will be randomly sub-sampled.
         checkpoint_path: Path to checkpoint for initializing the SAM model.
-        with_segmentation_decoder: Whether to train additional UNETR decoder
-            for automatic instance segmentation.
-        freeze: Specify parts of the model that should be frozen, namely:
-            image_encoder, prompt_encoder and mask_decoder
+        with_segmentation_decoder: Whether to train additional UNETR decoder for automatic instance segmentation.
+        freeze: Specify parts of the model that should be frozen, namely: image_encoder, prompt_encoder and mask_decoder
             By default nothing is frozen and the full model is updated.
         device: The device to use for training.
         lr: The learning rate.
@@ -228,9 +224,9 @@ def train_sam(
         optimizer_class: The optimizer class.
             By default, torch.optim.AdamW is used.
         peft_kwargs: Keyword arguments for the PEFT wrapper class.
+        ignore_warnings: Whether to ignore raised warnings.
         verify_n_labels_in_loader: The number of labels to verify out of the train and validation dataloaders.
             By default, 50 batches of labels are verified from the dataloaders.
-        ignore_warnings: Whether to ignore raised warnings.
         box_distortion_factor: The factor for distorting the box annotations derived from the ground-truth masks.
         load_weights: Whether to initialize the model with pretrained parameter weights.
         model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
@@ -274,10 +270,11 @@ def train_sam(
                 if not param_name.startswith("encoder"):
                     joint_model_params.append(params)
 
-            optimizer = optimizer_class(joint_model_params, lr=lr)
-
+            model_params = joint_model_params
         else:
-            optimizer = optimizer_class(model.parameters(), lr=lr)
+            model_params = model.parameters()
+
+        optimizer = optimizer_class(model_params, lr=lr)
 
         if scheduler_kwargs is None:
             scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
