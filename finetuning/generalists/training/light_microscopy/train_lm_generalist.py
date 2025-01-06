@@ -42,6 +42,7 @@ def finetune_lm_generalist(args):
         scheduler_kwargs=scheduler_kwargs,
         verify_n_labels_in_loader=None,  # NOTE: Verifies all labels in the loader(s).
         box_distortion_factor=0.05,
+        load_weights=(not args.from_scratch),
     )
 
     if args.export_path is not None:
@@ -49,9 +50,7 @@ def finetune_lm_generalist(args):
             "" if args.save_root is None else args.save_root, "checkpoints", checkpoint_name, "best.pt"
         )
         export_custom_sam_model(
-            checkpoint_path=checkpoint_path,
-            model_type=model_type,
-            save_path=args.export_path,
+            checkpoint_path=checkpoint_path, model_type=model_type, save_path=args.export_path
         )
 
 
@@ -63,7 +62,7 @@ def main():
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
-        help="The model type to use for fine-tuning. Either vit_t, vit_b, vit_l or vit_h."
+        help="The model type to use for fine-tuning. Either 'vit_t', 'vit_b', 'vit_l' or 'vit_h'."
     )
     parser.add_argument(
         "--save_root", "-s", default=None,
@@ -79,6 +78,9 @@ def main():
     )
     parser.add_argument(
         "--n_objects", type=int, default=25, help="The number of instances (objects) per batch used for finetuning."
+    )
+    parser.add_argument(
+        "--from_scratch", action="store_true", help="Whether to train Segment Anything model from scratch."
     )
     args = parser.parse_args()
     finetune_lm_generalist(args)

@@ -277,6 +277,7 @@ def get_sam_model(
     return_state: bool = False,
     peft_kwargs: Optional[Dict] = None,
     flexible_load_checkpoint: bool = False,
+    load_weights: bool = True,
     **model_kwargs,
 ) -> SamPredictor:
     r"""Get the SegmentAnything Predictor.
@@ -301,17 +302,18 @@ def get_sam_model(
     https://www.fatiando.org/pooch/latest/api/generated/pooch.os_cache.html
 
     Args:
-        model_type: The SegmentAnything model to use. Will use the standard vit_h model by default.
+        model_type: The Segment Anything model to use. Will use the standard `vit_l` model by default.
             To get a list of all available model names you can call `get_model_names`.
         device: The device for the model. If none is given will use GPU if available.
         checkpoint_path: The path to a file with weights that should be used instead of using the
             weights corresponding to `model_type`. If given, `model_type` must match the architecture
-            corresponding to the weight file. E.g. if you use weights for SAM with vit_b encoder
+            corresponding to the weight file. e.g. if you use weights for SAM with `vit_b` encoder
             then `model_type` must be given as "vit_b".
         return_sam: Return the sam model object as well as the predictor.
         return_state: Return the unpickled checkpoint state.
         peft_kwargs: Keyword arguments for th PEFT wrapper class.
         flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
+        load_weights: Whether to initialize the model with pretrained parameter weights.
         model_kwargs: Additional parameters necessary to initialize the Segment Anything model.
 
     Returns:
@@ -354,7 +356,7 @@ def get_sam_model(
         raise ValueError(f"Invalid model_type: {abbreviated_model_type}. Expect one of {_MODEL_TYPES}")
     if abbreviated_model_type == "vit_t" and not VIT_T_SUPPORT:
         raise RuntimeError(
-            "mobile_sam is required for the vit-tiny."
+            "'mobile_sam' is required for the vit-tiny. "
             "You can install it via 'pip install git+https://github.com/ChaoningZhang/MobileSAM.git'"
         )
 
@@ -378,10 +380,11 @@ def get_sam_model(
         sam = custom_models.peft_sam.PEFT_Sam(sam, **peft_kwargs).sam
 
     # In case the model checkpoints have some issues when it is initialized with different parameters than default.
-    if flexible_load_checkpoint:
-        sam = _handle_checkpoint_loading(sam, model_state)
-    else:
-        sam.load_state_dict(model_state)
+    if load_weights:
+        if flexible_load_checkpoint:
+            sam = _handle_checkpoint_loading(sam, model_state)
+        else:
+            sam.load_state_dict(model_state)
 
     sam.to(device=device)
 
