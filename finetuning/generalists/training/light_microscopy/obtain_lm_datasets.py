@@ -144,9 +144,10 @@ def get_concat_lm_datasets(input_path, patch_shape, split_choice):
         # cell segmentation in tissue microscopy images.
         datasets.get_tissuenet_dataset(
             path=os.path.join(input_path, "tissuenet"), split=split_choice, download=True, patch_shape=patch_shape,
-            raw_channel="rgb", label_channel="cell", raw_transform=ResizeRawTrafo((3, *patch_shape), do_rescaling=True),
-            label_transform=ResizeLabelTrafo(patch_shape), sampler=sampler, label_dtype=label_dtype,
-            n_samples=500 if split_choice == "train" else 100,
+            raw_channel="rgb", label_channel="cell", label_transform=ResizeLabelTrafo(patch_shape),
+            # NOTE: Below is done for TissueNet: to work with the valid channels (i.e. the first and second channels).
+            raw_transform=ResizeRawTrafo((3, *patch_shape), do_rescaling=True, valid_channels=(0, 1)),
+            n_samples=500 if split_choice == "train" else 100, sampler=sampler, label_dtype=label_dtype,
         ),
         # bacteria segmentation in label-free microscopy images.
         datasets.get_deepbacs_dataset(

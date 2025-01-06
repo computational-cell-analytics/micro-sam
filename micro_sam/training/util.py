@@ -1,6 +1,6 @@
 import os
 from math import ceil, floor
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Tuple
 
 import numpy as np
 
@@ -188,11 +188,13 @@ class ConvertToSamInputs:
             get_points = True
 
         # keeping the solution open by checking for deterministic/dynamic choice of point prompts
-        prompt_generator = PointAndBoxPromptGenerator(n_positive_points=n_pos,
-                                                      n_negative_points=n_neg,
-                                                      dilation_strength=self.dilation_strength,
-                                                      get_box_prompts=get_boxes,
-                                                      get_point_prompts=get_points)
+        prompt_generator = PointAndBoxPromptGenerator(
+            n_positive_points=n_pos,
+            n_negative_points=n_neg,
+            dilation_strength=self.dilation_strength,
+            get_box_prompts=get_boxes,
+            get_point_prompts=get_points
+        )
 
         batched_inputs = []
         batched_sampled_cell_ids_list = []
@@ -218,6 +220,7 @@ class ConvertToSamInputs:
                 batched_input["boxes"] = self.transform.apply_boxes_torch(
                     box_prompts, original_size=gt.shape[-2:]
                 ) if self.transform is not None else box_prompts
+
             if get_points:
                 batched_input["point_coords"] = self.transform.apply_coords_torch(
                     point_prompts, original_size=gt.shape[-2:]
@@ -255,17 +258,23 @@ def normalize_to_8bit(raw):
 
 
 class ResizeRawTrafo:
-    def __init__(self, desired_shape, do_rescaling=False, padding="constant"):
+    def __init__(
+        self,
+        desired_shape: Tuple[int, ...],
+        do_rescaling: bool = False,
+        valid_channels: Optional[Union[int, Tuple[int, ...]]] = None,
+        padding: str = "constant"
+    ):
         self.desired_shape = desired_shape
-        self.padding = padding
         self.do_rescaling = do_rescaling
+        self.valid_channels = valid_channels
+        self.padding = padding
 
     def __call__(self, raw):
         raw = to_rgb(raw)  # Ensure all images are in 3-channels: triplicate one channel to three channels.
 
         if self.do_rescaling:
-            # NOTE: Below is done for TissueNet: to work with the valid channels (i.e. the first and second channels).
-            raw = normalize_percentile(raw, axis=(0, 1))
+            raw = normalize_percentile(raw, axis=self.valid_channels)
             raw = normalize(raw)
             raw = raw * 255
 
@@ -280,10 +289,12 @@ class ResizeRawTrafo:
 
 
 class ResizeLabelTrafo:
-    def __init__(self, desired_shape, padding="constant", min_size=0):
+    def __init__(
+        self, desired_shape: Tuple[int, ...], min_size: int = 0, padding: str = "constant",
+    ):
         self.desired_shape = desired_shape
-        self.padding = padding
         self.min_size = min_size
+        self.padding = padding
 
     def __call__(self, labels):
         distance_trafo = PerObjectDistanceTransform(

@@ -995,10 +995,10 @@ def segmentation_to_one_hot(segmentation: np.ndarray, segmentation_ids: Optional
     else:
         msg = "No foreground objects were found."
         if len(segmentation_ids) == 0:  # The list should not be completely empty.
-            raise AssertionError(msg)
+            raise RuntimeError(msg)
 
-        if segmentation_ids[0] == 0:  # The list should not have zero-only.
-            raise AssertionError(msg)
+        if 0 in segmentation_ids:  # The list should not have 'zero' as a value.
+            raise RuntimeError(msg)
 
         # the segmentation ids have to be sorted
         segmentation_ids = np.sort(segmentation_ids)
