@@ -114,8 +114,13 @@ class FacTSurgery(nn.Module):
         new_v = self.FacTv(new_v)
 
         # NOTE : Scaling Factor is set to 1 as it can be tuned via the learning rate.
-        qkv[:, :, :, : self.dim] += new_q
-        qkv[:, :, :, -self.dim:] += new_v
+        qkv = torch.cat(
+            [
+                qkv[:, :, :, :self.dim] + new_q,  # replacing new q values
+                qkv[:, :, :, self.dim:-self.dim],  # leaving the middle part as identical
+                qkv[:, :, :, -self.dim:] + new_v  # replacing new v values
+            ], dim=-1
+        )
 
         return qkv
 
