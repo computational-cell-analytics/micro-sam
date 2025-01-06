@@ -139,6 +139,7 @@ def generate_data_for_model_comparison(
         n_samples: The number of samples to draw from the dataloader.
         checkpoint1: Optional checkpoint for the first model.
         checkpoint2: Optional checkpoint for the second model.
+        checkpoint3: Optional checkpoint for the third model.
     """
     prompt_generator = PointAndBoxPromptGenerator(
         n_positive_points=1,
@@ -147,6 +148,7 @@ def generate_data_for_model_comparison(
         get_point_prompts=True,
         get_box_prompts=True,
     )
+
     predictor1 = util.get_sam_model(model_type=model_type1, checkpoint_path=checkpoint1)
     predictor2 = util.get_sam_model(model_type=model_type2, checkpoint_path=checkpoint2)
 

@@ -11,9 +11,7 @@ ExperimentSettings = List[ExperimentSetting]
 
 
 def full_experiment_settings(
-    use_boxes: bool = False,
-    positive_range: Optional[List[int]] = None,
-    negative_range: Optional[List[int]] = None,
+    use_boxes: bool = False, positive_range: Optional[List[int]] = None, negative_range: Optional[List[int]] = None,
 ) -> ExperimentSettings:
     """The full experiment settings.
 

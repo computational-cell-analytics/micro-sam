@@ -1,5 +1,6 @@
+import os
 from contextlib import nullcontext
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Union, Optional
 
 import torch
 import torch.nn as nn
@@ -9,13 +10,13 @@ from .peft_sam import LoRASurgery
 
 
 def get_simple_sam_3d_model(
-    device,
-    n_classes,
-    image_size,
-    lora_rank=None,
-    freeze_encoder=False,
-    model_type="vit_b",
-    checkpoint_path=None,
+    device: Union[str, torch.device],
+    n_classes: int,
+    image_size: int,
+    lora_rank: Optional[int] = None,
+    freeze_encoder: bool = False,
+    model_type: str = "vit_b",
+    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
 ):
     if lora_rank is None:
         peft_kwargs = {}
@@ -36,6 +37,7 @@ def get_simple_sam_3d_model(
     freeze_encoder_ = freeze_encoder if lora_rank is None else False
     sam_3d = SimpleSam3DWrapper(sam, num_classes=n_classes, freeze_encoder=freeze_encoder_)
     sam_3d.to(device)
+
     return sam_3d
 
 
@@ -142,9 +144,7 @@ class SimpleSam3DWrapper(nn.Module):
         return encoder_features
 
     def forward(
-        self,
-        batched_input: List[Dict[str, Any]],
-        multimask_output: bool
+        self, batched_input: List[Dict[str, Any]], multimask_output: bool
     ) -> List[Dict[str, torch.Tensor]]:
         """Predict 3D masks for the current inputs.
 

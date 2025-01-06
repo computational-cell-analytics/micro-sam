@@ -5,11 +5,11 @@ import numpy as np
 
 import torch
 
-from . import _widgets as widgets
-from ._annotator import _AnnotatorBase
-from ._state import AnnotatorState
-from .util import _initialize_parser, _sync_embedding_widget
 from .. import util
+from . import _widgets as widgets
+from ._state import AnnotatorState
+from ._annotator import _AnnotatorBase
+from .util import _initialize_parser, _sync_embedding_widget
 
 
 class Annotator2d(_AnnotatorBase):
@@ -54,9 +54,9 @@ def annotator_2d(
             https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
         tile_shape: Shape of tiles for tiled embedding prediction.
             If `None` then the whole image is passed to Segment Anything.
-        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
+        halo: Shape of the overlap between tiles, which is needed to segment objects on tile borders.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
-        viewer: The viewer to which the SegmentAnything functionality should be added.
+        viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
             This will take more time when precomputing embeddings, but will then make
