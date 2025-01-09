@@ -37,24 +37,37 @@ def get_sam_3d_model(
     )
 
     # Make sure not to freeze the encoder when using LoRA.
-    freeze_encoder_ = freeze_encoder if lora_rank is None else False
-    sam_3d = Sam3DWrapper(sam, freeze_encoder=freeze_encoder_)
+    _freeze_encoder = freeze_encoder if lora_rank is None else False
+    sam_3d = Sam3DWrapper(sam, freeze_encoder=_freeze_encoder, model_type=model_type)
     sam_3d.to(device)
 
     return sam_3d
 
 
 class Sam3DWrapper(nn.Module):
-    def __init__(self, sam_model: Sam, freeze_encoder: bool):
+    def __init__(self, sam_model: Sam, freeze_encoder: bool, model_type: str = "vit_b"):
         """Initializes the Sam3DWrapper object.
 
         Args:
             sam_model: The Sam model to be wrapped.
             freeze_encoder: Whether to freeze the image encoder.
+            model_type: The choice of segment anything model to wrap adapters
+                for respective model configuration.
         """
         super().__init__()
+
+        # Model configurations
+        if model_type == "vit_b":
+            embed_dim, num_heads = 768, 12
+        elif model_type == "vit_l":
+            embed_dim, num_heads = 1024, 16
+        elif model_type == "vit_h":
+            embed_dim, num_heads = 1280, 16
+        else:
+            raise ValueError(f"'{model_type}' is not a supported choice of model.")
+
         sam_model.image_encoder = ImageEncoderViT3DWrapper(
-            image_encoder=sam_model.image_encoder
+            image_encoder=sam_model.image_encoder, num_heads=num_heads, embed_dim=embed_dim,
         )
         self.sam_model = sam_model
 
@@ -142,7 +155,7 @@ class ImageEncoderViT3DWrapper(nn.Module):
         self.image_encoder = image_encoder
         self.img_size = self.image_encoder.img_size
 
-        # replace default blocks with 3d adapter blocks
+        # Replace default blocks with 3d adapter blocks
         for i, blk in enumerate(self.image_encoder.blocks):
             self.image_encoder.blocks[i] = NDBlockWrapper(block=blk, num_heads=num_heads, dim=embed_dim)
 
