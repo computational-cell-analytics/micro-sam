@@ -355,6 +355,11 @@ class PEFT_Sam(nn.Module):
             for name, module in model.image_encoder.named_modules():
                 if isinstance(module, torch.nn.Linear):
                     *parent_path, layer_name = name.split(".")
+
+                    # We avoid quantizing the MLP layers and the qkv projection layer in the attention block.
+                    if "mlp" in parent_path or "qkv_proj" == layer_name:
+                        continue
+
                     parent_module = model.image_encoder
 
                     for sub_module in parent_path:
