@@ -375,9 +375,46 @@ def get_sam_model(
         if abbreviated_model_type == "vit_t":
             raise ValueError("'micro-sam' does not support parameter efficient finetuning for 'mobile-sam'.")
 
+        _quantize = peft_kwargs.pop("quantize", None)
+
         sam = custom_models.peft_sam.PEFT_Sam(sam, **peft_kwargs).sam
 
+        if _quantize:
+            import bitsandbytes as bnb
+            for name, module in sam.image_encoder.named_modules():
+                if isinstance(module, torch.nn.Linear):
+                    *parent_path, layer_name = name.split(".")
+                    parent_module = sam.image_encoder
+
+                    for sub_module in parent_path:
+                        parent_module = getattr(parent_module, sub_module)
+
+                    # Extract weight and bias from the state_dict
+                    weight_data = model_state.pop(f"image_encoder.{'.'.join(parent_path)}.{layer_name}.weight")
+                    bias_data = model_state.pop(f"image_encoder.{'.'.join(parent_path)}.{layer_name}.bias", None)
+
+                    layer_state_dict = {
+                        k.split(f"image_encoder.{'.'.join(parent_path)}.")[1]: v
+                        for k, v in model_state.items() if k.startswith(f"image_encoder.{'.'.join(parent_path)}.{layer_name}")
+                    }
+
+                    # Recreate the Linear4bit layer and load weights
+                    linear_q4bit = bnb.nn.Linear4bit(
+                        module.in_features,
+                        module.out_features,
+                        bias=True,
+                    )
+
+                    # Assign the quantized weights to the new layer
+                    linear_q4bit.weight = bnb.nn.Params4bit.from_prequantized(quantized_stats=layer_state_dict, data=weight_data)
+                    if bias_data is not None:
+                        linear_q4bit.bias = torch.nn.Parameter(bias_data)
+
+                    # Replace the original linear layer with the quantized one
+                    setattr(parent_module, layer_name, linear_q4bit)
+
     # In case the model checkpoints have some issues when it is initialized with different parameters than default.
+
     if flexible_load_checkpoint:
         sam = _handle_checkpoint_loading(sam, model_state)
     else:

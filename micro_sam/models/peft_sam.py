@@ -328,22 +328,6 @@ class PEFT_Sam(nn.Module):
         self.peft_module = peft_module
         self.peft_blocks = []
 
-        # Whether to quantize the linear layers to 4 bit precision.
-        # NOTE: This is currently supported for CUDA-supported devices only.
-        if quantize:
-            if not _have_bnb:
-                raise ModuleNotFoundError("Please install 'bitsandbytes'.")
-
-            for name, module in model.image_encoder.named_modules():
-                if isinstance(module, torch.nn.Linear):
-                    *parent_path, layer_name = name.split(".")
-                    parent_module = model.image_encoder
-
-                    for sub_module in parent_path:
-                        parent_module = getattr(parent_module, sub_module)
-
-                    setattr(parent_module, layer_name, bnb.nn.Linear4bit(module.in_features, module.out_features))
-
         # Let's freeze all the pretrained image encoder layers first
         for param in model.image_encoder.parameters():
             param.requires_grad = False
@@ -361,6 +345,22 @@ class PEFT_Sam(nn.Module):
                 self.peft_blocks.append(self.peft_module(block=blk))
             else:
                 self.peft_blocks.append(self.peft_module(rank=rank, block=blk, **module_kwargs))
+
+        # Whether to quantize the linear layers to 4 bit precision.
+        # NOTE: This is currently supported for CUDA-supported devices only.
+        if quantize:
+            if not _have_bnb:
+                raise ModuleNotFoundError("Please install 'bitsandbytes'.")
+
+            for name, module in model.image_encoder.named_modules():
+                if isinstance(module, torch.nn.Linear):
+                    *parent_path, layer_name = name.split(".")
+                    parent_module = model.image_encoder
+
+                    for sub_module in parent_path:
+                        parent_module = getattr(parent_module, sub_module)
+
+                    setattr(parent_module, layer_name, bnb.nn.Linear4bit(module.in_features, module.out_features))
 
         self.peft_blocks = nn.ModuleList(self.peft_blocks)
 
