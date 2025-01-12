@@ -30,17 +30,26 @@ class LoRASurgery(nn.Module):
         rank: The rank of the decomposition matrices for updating weights in each attention layer.
         block: The chosen attention blocks for implementing LoRA.
     """
-    def __init__(self, rank: int, block: nn.Module):
+    def __init__(self, rank: int, block: nn.Module, quantize: bool = False):
         super().__init__()
         self.qkv_proj = block.attn.qkv
         self.dim = self.qkv_proj.in_features
-        self.alpha = 1  # From our experiments, 'alpha' as 1 gives the best performance.
+        self.alpha = 1  # NOTE: From our experiments, 'alpha' as 1 gives the best performance.
         self.rank = rank
 
-        self.w_a_linear_q = nn.Linear(self.dim, self.rank, bias=False)
-        self.w_b_linear_q = nn.Linear(self.rank, self.dim, bias=False)
-        self.w_a_linear_v = nn.Linear(self.dim, self.rank, bias=False)
-        self.w_b_linear_v = nn.Linear(self.rank, self.dim, bias=False)
+        # Whether to quantize the linear layers to 4 bit precision.
+        # NOTE: This is currently supported for CUDA-supported devices only.
+        if quantize:
+            if not _have_bnb:
+                raise ModuleNotFoundError("Please install 'bitsandbytes'.")
+            linear_layer_class = bnb.nn.Linear4bit
+        else:
+            linear_layer_class = nn.Linear
+
+        self.w_a_linear_q = linear_layer_class(self.dim, self.rank, bias=False)
+        self.w_b_linear_q = linear_layer_class(self.rank, self.dim, bias=False)
+        self.w_a_linear_v = linear_layer_class(self.dim, self.rank, bias=False)
+        self.w_b_linear_v = linear_layer_class(self.rank, self.dim, bias=False)
 
         self.reset_parameters()
 
@@ -301,7 +310,7 @@ class PEFT_Sam(nn.Module):
         rank: The rank for low-rank adaptation.
         peft_module: Wrapper to operate on the image encoder blocks for the PEFT method.
         attention_layers_to_update: Which specific layers we apply PEFT methods to.
-        quantize: Whether to quantize the model for lower precision training.
+        module_kwargs: Additional arguments supported by the peft modules.
     """
 
     def __init__(
@@ -310,7 +319,6 @@ class PEFT_Sam(nn.Module):
         rank: int,
         peft_module: nn.Module = LoRASurgery,
         attention_layers_to_update: Union[List[int]] = None,
-        quantize: bool = False,
         **module_kwargs
     ):
         super().__init__()
@@ -345,27 +353,6 @@ class PEFT_Sam(nn.Module):
                 self.peft_blocks.append(self.peft_module(block=blk))
             else:
                 self.peft_blocks.append(self.peft_module(rank=rank, block=blk, **module_kwargs))
-
-        # Whether to quantize the linear layers to 4 bit precision.
-        # NOTE: This is currently supported for CUDA-supported devices only.
-        if quantize:
-            if not _have_bnb:
-                raise ModuleNotFoundError("Please install 'bitsandbytes'.")
-
-            for name, module in model.image_encoder.named_modules():
-                if isinstance(module, torch.nn.Linear):
-                    *parent_path, layer_name = name.split(".")
-
-                    # We avoid quantizing the MLP layers and the qkv projection layer in the attention block.
-                    if "mlp" in parent_path or "qkv_proj" == layer_name:
-                        continue
-
-                    parent_module = model.image_encoder
-
-                    for sub_module in parent_path:
-                        parent_module = getattr(parent_module, sub_module)
-
-                    setattr(parent_module, layer_name, bnb.nn.Linear4bit(module.in_features, module.out_features))
 
         self.peft_blocks = nn.ModuleList(self.peft_blocks)
 

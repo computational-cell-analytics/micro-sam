@@ -56,18 +56,19 @@ def finetune_livecell(args):
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10, "verbose": True}
 
-    # NOTE: memory req. for all vit_b models (compared on A100 80GB)
+    # NOTE 1: memory req. for all vit_b models (compared on A100 80GB).
+    # NOTE 2: all lora mentions are with rank 16.
     # vit_b
     # freeze_encoder: ~ 33.89 GB
-    # QLoRA: ~48.54 GB
-    # LoRA: ~48.62 GB
-    # FFT: ~49.56 GB
+    # QLoRA: ~35.34 GB
+    # LoRA: ~48.92 GB
+    # FFT: ~49.84 GB
 
     # vit_h
-    # freeze_encoder: ~36.05 GB
-    # QLoRA: ~ 65.68 GB
-    # LoRA: ~ 67.14 GB
-    # FFT: ~72.34 GB
+    # freeze_encoder: ~36.33 GB
+    # QLoRA: ~ 36.41 GB
+    # LoRA: ~ 67.52 GB
+    # FFT: ~72.79 GB
 
     # Run training.
     sam_training.train_sam(
