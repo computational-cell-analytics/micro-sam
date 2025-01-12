@@ -342,8 +342,22 @@ class PEFT_Sam(nn.Module):
                     for sub_module in parent_path:
                         parent_module = getattr(parent_module, sub_module)
 
-                    setattr(parent_module, layer_name, bnb.nn.Linear4bit(module.in_features, module.out_features))
-
+                    # Create the new Linear4bit layer
+                    linear_q = bnb.nn.Linear4bit(
+                        module.in_features,
+                        module.out_features,
+                        bias=True,  # Maintain bias if the original layer had it
+                    )
+                    # Assign quantized weight and bias to the new layer
+                    new_weight = bnb.nn.Params4bit(
+                        data=module.weight,
+                        requires_grad=False,    # Typically, weights in 4-bit layers are frozen during inference
+                    )
+                    linear_q.weight = new_weight
+                    if module.bias is not None:  # Check if the original layer had a bias
+                        linear_q.bias = torch.nn.Parameter(module.bias)
+                    # Replace the original linear layer with the quantized one
+                    setattr(parent_module, layer_name, linear_q)
         # Let's freeze all the pretrained image encoder layers first
         for param in model.image_encoder.parameters():
             param.requires_grad = False
