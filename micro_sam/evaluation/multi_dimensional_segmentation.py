@@ -216,24 +216,25 @@ def segment_slices_from_ground_truth(
         )
         results = {"mSA": msa, "SA50": sa[0], "SA75": sa[5]}
 
-    elif evaluation_metric.startswith("dice"):
-        if evaluation_metric == "dice":
-            # Calculate overall dice score (by binarizing all labels).
-            dice = dice_score(segmentation=final_segmentation, groundtruth=curr_gt)
-        elif evaluation_metric == "dice_per_class":
-            # Calculate dice per class.
-            dice = [
-                dice_score(segmentation=(final_segmentation == i), groundtruth=(curr_gt == i))
-                for i in np.unique(curr_gt)[1:]
-            ]
-            dice = np.mean(dice)
-        else:
-            raise ValueError("Please choose either 'dice' / 'dice_per_class'.")
+    elif evaluation_metric == "dice":
+        # Calculate overall dice score (by binarizing all labels).
+        dice = dice_score(segmentation=final_segmentation, groundtruth=curr_gt)
+        results = {"Dice": dice}
 
+    elif evaluation_metric == "dice_per_class":
+        # Calculate dice per class.
+        dice = [
+            dice_score(segmentation=(final_segmentation == i), groundtruth=(curr_gt == i))
+            for i in np.unique(curr_gt)[1:]
+        ]
+        dice = np.mean(dice)
         results = {"Dice": dice}
 
     else:
-        raise ValueError(f"'{evaluation_metric}' is not a supported evaluation metrics. Please choose 'sa' / 'dice'.")
+        raise ValueError(
+            f"'{evaluation_metric}' is not a supported evaluation metrics. "
+            "Please choose 'sa' / 'dice' / 'dice_per_class'."
+        )
 
     if return_segmentation:
         return results, final_segmentation
