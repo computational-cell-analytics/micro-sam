@@ -770,11 +770,20 @@ def get_unetr(
         resize_input=True,
     )
     if decoder_state is not None:
+        strict = True
         unetr_state_dict = unetr.state_dict()
-        for k, v in unetr_state_dict.items():
+        qlora_keys = []
+        for k, _ in unetr_state_dict.items():
             if not k.startswith("encoder"):
                 unetr_state_dict[k] = decoder_state[k]
-        unetr.load_state_dict(unetr_state_dict, strict=False)
+            # handle problematic QLoRA parameters
+            if k.find("weight") != -1 and not k.endswith("weight"):
+                qlora_keys.append(k)
+            if qlora_keys:
+                # make sure the keys of both dictionaries match before setting strict to False
+                assert unetr.state_dict().keys() == unetr_state_dict.keys(), "Unexpected or missing keys in state dict."
+                strict = False
+        unetr.load_state_dict(unetr_state_dict, strict=strict)
 
     unetr.to(device)
     return unetr
