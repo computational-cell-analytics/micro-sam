@@ -376,12 +376,13 @@ def get_sam_model(
             raise ValueError("'micro-sam' does not support parameter efficient finetuning for 'mobile-sam'.")
 
         sam = custom_models.peft_sam.PEFT_Sam(sam, **peft_kwargs).sam
+        sam.to(device=device)
 
     # In case the model checkpoints have some issues when it is initialized with different parameters than default.
     if flexible_load_checkpoint:
         sam = _handle_checkpoint_loading(sam, model_state)
     else:
-        sam.load_state_dict(model_state)
+        sam.load_state_dict(model_state, strict=False)
 
     sam.to(device=device)
 
