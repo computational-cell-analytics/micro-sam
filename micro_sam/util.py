@@ -112,6 +112,10 @@ def models():
         "vit_l_em_organelles": "xxh128:096c9695966803ca6fde24f4c1e3c3fb",
         "vit_b_em_organelles": "xxh128:f6f6593aeecd0e15a07bdac86360b6cc",
         "vit_t_em_organelles": "xxh128:253474720c497cce605e57c9b1d18fd9",
+        # Histopathology models:
+        "vit_b_histopathology": "xxh128:ffd1a2cd84570458b257bd95fdd8f974",
+        "vit_l_histopathology": "xxh128:b591833c89754271023e901281dee3f2",
+        "vit_h_histopathology": "xxh128:bd1856dafc156a43fb3aa705f1a6e92e",
     }
     # Additional decoders for instance segmentation.
     decoder_registry = {
@@ -123,6 +127,10 @@ def models():
         "vit_l_em_organelles_decoder": "xxh128:d60fd96bd6060856f6430f29e42568fb",
         "vit_b_em_organelles_decoder": "xxh128:b2d4dcffb99f76d83497d39ee500088f",
         "vit_t_em_organelles_decoder": "xxh128:8f897c7bb93174a4d1638827c4dd6f44",
+        # Histopathology models:
+        "vit_b_histopathology_decoder": "xxh128:6a66194dcb6e36199cbee2214ecf7213",
+        "vit_l_histopathology_decoder": "xxh128:46aab7765d4400e039772d5a50b55c04",
+        "vit_h_histopathology_decoder": "xxh128:3ed9f87e46ad5e16935bd8d722c8dc47",
     }
     registry = {**encoder_registry, **decoder_registry}
 
@@ -137,6 +145,9 @@ def models():
         "vit_l_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l.pt",  # noqa
         "vit_b_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b.pt",
         "vit_t_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t.pt",  # noqa
+        "vit_b_histopathology": "https://owncloud.gwdg.de/index.php/s/sBB4H8CTmIoBZsQ/download",
+        "vit_l_histopathology": "https://owncloud.gwdg.de/index.php/s/IZgnn1cpBq2PHod/download",
+        "vit_h_histopathology": "https://owncloud.gwdg.de/index.php/s/L7AcvVz7DoWJ2RZ/download",
     }
 
     decoder_urls = {
@@ -146,6 +157,9 @@ def models():
         "vit_l_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l_decoder.pt",  # noqa
         "vit_b_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b_decoder.pt",  # noqa
         "vit_t_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t_decoder.pt",  # noqa
+        "vit_b_histopathology_decoder": "https://owncloud.gwdg.de/index.php/s/KO9AWqynI7SFOBj/download",
+        "vit_l_histopathology_decoder": "https://owncloud.gwdg.de/index.php/s/oIs6VSmkOp7XrKF/download",
+        "vit_h_histopathology_decoder": "https://owncloud.gwdg.de/index.php/s/1qAKxy5H0jgwZvM/download",
     }
     urls = {**encoder_urls, **decoder_urls}
 
