@@ -746,6 +746,7 @@ def get_unetr(
     image_encoder: torch.nn.Module,
     decoder_state: Optional[OrderedDict[str, torch.Tensor]] = None,
     device: Optional[Union[str, torch.device]] = None,
+    out_channels: int = 3,
 ) -> torch.nn.Module:
     """Get UNETR model for automatic instance segmentation.
 
@@ -754,6 +755,7 @@ def get_unetr(
             This is used as encoder by the UNETR too.
         decoder_state: Optional decoder state to initialize the weights of the UNETR decoder.
         device: The device.
+        out_channels: The number of output channels.
 
     Returns:
         The UNETR model.
@@ -763,7 +765,7 @@ def get_unetr(
     unetr = UNETR(
         backbone="sam",
         encoder=image_encoder,
-        out_channels=3,
+        out_channels=out_channels,
         use_sam_stats=True,
         final_activation="Sigmoid",
         use_skip_connection=False,
