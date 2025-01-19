@@ -744,6 +744,7 @@ class DecoderAdapter(torch.nn.Module):
 
 def get_unetr(
     image_encoder: torch.nn.Module,
+    out_channels: int = 3,
     decoder_state: Optional[OrderedDict[str, torch.Tensor]] = None,
     device: Optional[Union[str, torch.device]] = None,
 ) -> torch.nn.Module:
@@ -752,6 +753,7 @@ def get_unetr(
     Args:
         image_encoder: The image encoder of the SAM model.
             This is used as encoder by the UNETR too.
+        out_channels: The number of output channels.
         decoder_state: Optional decoder state to initialize the weights of the UNETR decoder.
         device: The device.
 
@@ -763,7 +765,7 @@ def get_unetr(
     unetr = UNETR(
         backbone="sam",
         encoder=image_encoder,
-        out_channels=3,
+        out_channels=out_channels,
         use_sam_stats=True,
         final_activation="Sigmoid",
         use_skip_connection=False,
