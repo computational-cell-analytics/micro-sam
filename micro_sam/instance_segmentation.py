@@ -744,18 +744,18 @@ class DecoderAdapter(torch.nn.Module):
 
 def get_unetr(
     image_encoder: torch.nn.Module,
-    out_channels: int = 3,
     decoder_state: Optional[OrderedDict[str, torch.Tensor]] = None,
     device: Optional[Union[str, torch.device]] = None,
+    out_channels: int = 3,
 ) -> torch.nn.Module:
     """Get UNETR model for automatic instance segmentation.
 
     Args:
         image_encoder: The image encoder of the SAM model.
             This is used as encoder by the UNETR too.
-        out_channels: The number of output channels.
         decoder_state: Optional decoder state to initialize the weights of the UNETR decoder.
         device: The device.
+        out_channels: The number of output channels.
 
     Returns:
         The UNETR model.
