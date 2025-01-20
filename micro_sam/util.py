@@ -372,10 +372,31 @@ def get_sam_model(
     # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything.
     # Overwrites the SAM model by freezing the backbone and allow PEFT.
     if peft_kwargs and isinstance(peft_kwargs, dict):
+        _quantize = peft_kwargs.pop("quantize", False)
+        if _quantize:
+            # get default sam model and put lora wrapper on top of it
+            _, sam = get_sam_model(
+                model_type=model_type,
+                checkpoint_path=None,
+                device=device,
+                return_state=False,
+                return_sam=True
+            )
         if abbreviated_model_type == "vit_t":
             raise ValueError("'micro-sam' does not support parameter efficient finetuning for 'mobile-sam'.")
 
         sam = custom_models.peft_sam.PEFT_Sam(sam, **peft_kwargs).sam
+
+        # update the model state to take the lora weights from the qlora checkpoint and the sam weights for everything else
+        if _quantize:
+            updated_model_state = {}
+            for k, v in sam.state_dict().items():
+                if k.find("w_b_linear") != -1 or k.find("w_a_linear") != -1:
+                    updated_model_state[k] = model_state[k]
+                else:
+                    updated_model_state[k] = v
+            model_state = updated_model_state
+
         if "quantize" in peft_kwargs and peft_kwargs["quantize"]:
             # Quantization happens when loading the model to device. This needs to be done before loading the state to
             # avoid a mismatch between the shape of the quantized and unquantized weights.
