@@ -397,16 +397,9 @@ def get_sam_model(
                     updated_model_state[k] = v
             model_state = updated_model_state
 
-        if "quantize" in peft_kwargs and peft_kwargs["quantize"]:
-            # Quantization happens when loading the model to device. This needs to be done before loading the state to
-            # avoid a mismatch between the shape of the quantized and unquantized weights.
-            sam.to(device=device)
-            # Handle QLoRA weight parameters, that get recognized as unexpected keys in load_state_dict
-            flexible_load_checkpoint = True
-
     # In case the model checkpoints have some issues when it is initialized with different parameters than default.
     if flexible_load_checkpoint:
-        sam = _handle_checkpoint_loading(sam, model_state, peft_kwargs)
+        sam = _handle_checkpoint_loading(sam, model_state)
     else:
         sam.load_state_dict(model_state)
 
@@ -434,24 +427,6 @@ def _handle_checkpoint_loading(sam, model_state, peft_kwargs):
     # Whether to handle the mismatch issues in a bit more elegant way.
     # eg. while training for multi-class semantic segmentation in the mask encoder,
     # parameters are updated - leading to "size mismatch" errors
-    # TODO: add other docs
-    strict = True
-
-    if peft_kwargs and "quantize" in peft_kwargs:
-        # Handle QLoRA weight parameters, that get recognized as unexpected keys in
-        # load_state_dict although there is no mismatch in parameters, by setting strict to False.
-        problematic_keys = []
-        for k, v in model_state.items():
-            if k.find("weight") != -1 and not k.endswith("weight"):
-                problematic_keys.append(k)
-        if problematic_keys:
-            warnings.warn(f"Parameters with problematic behaviour: {problematic_keys}")
-            strict = False
-            # make sure there is no real mismatch
-            assert model_state.keys() == sam.state_dict().keys(), "Unexpected or missing keys in the model state."
-
-        sam.load_state_dict(model_state, strict=strict)
-        return sam
 
     new_state_dict = {}  # for loading matching parameters
     mismatched_layers = []  # for tracking mismatching parameters
