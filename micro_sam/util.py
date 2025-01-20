@@ -423,7 +423,7 @@ def get_sam_model(
     return predictor
 
 
-def _handle_checkpoint_loading(sam, model_state, peft_kwargs):
+def _handle_checkpoint_loading(sam, model_state):
     # Whether to handle the mismatch issues in a bit more elegant way.
     # eg. while training for multi-class semantic segmentation in the mask encoder,
     # parameters are updated - leading to "size mismatch" errors
