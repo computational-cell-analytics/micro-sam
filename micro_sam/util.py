@@ -475,10 +475,10 @@ def export_custom_qlora_model(
     save_path: Path where the final model will be stored.
     """
     # FM model
-    _, checkpoint_state = get_sam_model(
-        model_type=model_type, checkpoint_path=checkpoint_path, return_state=True,
+    _, sam = get_sam_model(
+        model_type=model_type, checkpoint_path=checkpoint_path, return_sam=True,
     )
-    checkpoint_model_state = checkpoint_state["model_state"]
+    model_state = sam.state_dict()
 
     # Qlora model
     ft_state = torch.load(finetuned_path, map_location="cpu")
@@ -486,13 +486,13 @@ def export_custom_qlora_model(
 
     # Replace stuff
     updated_model_state = {}
-    for k, v in ft_model_state.items():
+    for k, v in model_state.items():
         if k.find("w_b_linear") != -1 or k.find("w_a_linear") != -1:
             updated_model_state[k] = v
         else:
-            updated_model_state[k] = checkpoint_model_state[k]
+            updated_model_state[k] = model_state[k]
 
-    model_state = updated_model_state
+    new_state = updated_model_state
 
     breakpoint()
 
