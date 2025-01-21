@@ -379,13 +379,11 @@ def get_sam_model(
             raise ValueError("'micro-sam' does not support parameter efficient finetuning for 'mobile-sam'.")
 
         sam = custom_models.peft_sam.PEFT_Sam(sam, **peft_kwargs).sam
-
     # In case the model checkpoints have some issues when it is initialized with different parameters than default.
     if flexible_load_checkpoint:
         sam = _handle_checkpoint_loading(sam, model_state)
     else:
         sam.load_state_dict(model_state)
-
     sam.to(device=device)
 
     predictor = SamPredictor(sam)
@@ -478,11 +476,9 @@ def export_custom_qlora_model(
     _, sam = get_sam_model(
         model_type=model_type, checkpoint_path=checkpoint_path, return_sam=True,
     )
-    model_state = sam.state_dict()
 
     # Qlora model
-    ft_state = torch.load(finetuned_path, map_location="cpu")
-    ft_model_state = ft_state["model_state"]
+    ft_state, ft_model_state = _load_checkpoint(finetuned_path)
 
     # Replace stuff
     updated_model_state = {}
@@ -493,19 +489,15 @@ def export_custom_qlora_model(
             updated_model_state[k] = v
 
     # next, we try to get all remaining stuff from sam.
-    for k, v in model_state.items():
+    for k, v in sam.state_dict().items():
         if k.find("attn.qkv.") != -1:
             k = k.replace("qkv", "qkv.qkv_proj")
             updated_model_state[k] = v
+        else:
 
-    new_state = updated_model_state
-
-    # TODO:
-    # store the "new_state" inside by replacing the current model state in `ft_state`
-    # and then store "ft_state" to "save_path"
-    # and then run inference with lora-only.
-
-    breakpoint()
+            updated_model_state[k] = v
+    ft_state['model_state'] = updated_model_state
+    torch.save(ft_state, save_path)
 
 
 def get_model_names() -> Iterable:
