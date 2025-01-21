@@ -372,30 +372,13 @@ def get_sam_model(
     # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything.
     # Overwrites the SAM model by freezing the backbone and allow PEFT.
     if peft_kwargs and isinstance(peft_kwargs, dict):
-        _quantize = peft_kwargs.pop("quantize", False)
-        if _quantize:
-            # get default sam model and put lora wrapper on top of it
-            _, sam = get_sam_model(
-                model_type=model_type,
-                checkpoint_path=None,
-                device=device,
-                return_state=False,
-                return_sam=True
-            )
+        # NOTE: We bump out 'quantize' parameter, if found, as we do not quantize in inference.
+        peft_kwargs.pop("quantize", None)
+
         if abbreviated_model_type == "vit_t":
             raise ValueError("'micro-sam' does not support parameter efficient finetuning for 'mobile-sam'.")
 
         sam = custom_models.peft_sam.PEFT_Sam(sam, **peft_kwargs).sam
-
-        # update the model state to take the lora weights from the qlora checkpoint and the sam weights for everything else
-        if _quantize:
-            updated_model_state = {}
-            for k, v in sam.state_dict().items():
-                if k.find("w_b_linear") != -1 or k.find("w_a_linear") != -1:
-                    updated_model_state[k] = model_state[k]
-                else:
-                    updated_model_state[k] = v
-            model_state = updated_model_state
 
     # In case the model checkpoints have some issues when it is initialized with different parameters than default.
     if flexible_load_checkpoint:
@@ -477,6 +460,41 @@ def export_custom_sam_model(
         [(k[len(prefix):] if k.startswith(prefix) else k, v) for k, v in model_state.items()]
     )
     torch.save(model_state, save_path)
+
+
+def export_custom_qlora_model(
+    checkpoint_path,
+    finetuned_path,
+    model_type,
+    save_path,
+):
+    """
+    checkpoint_path: Path for the original FM.
+    finetuned_path: Path for the new QLoRA ft model.
+    model_type: ...
+    save_path: Path where the final model will be stored.
+    """
+    # FM model
+    _, checkpoint_state = get_sam_model(
+        model_type=model_type, checkpoint_path=checkpoint_path, return_state=True,
+    )
+    checkpoint_model_state = checkpoint_state["model_state"]
+
+    # Qlora model
+    ft_state = torch.load(finetuned_path, map_location="cpu")
+    ft_model_state = ft_state["model_state"]
+
+    # Replace stuff
+    updated_model_state = {}
+    for k, v in ft_model_state.items():
+        if k.find("w_b_linear") != -1 or k.find("w_a_linear") != -1:
+            updated_model_state[k] = v
+        else:
+            updated_model_state[k] = checkpoint_model_state[k]
+
+        model_state = updated_model_state
+
+    breakpoint()
 
 
 def get_model_names() -> Iterable:
