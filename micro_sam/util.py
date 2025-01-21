@@ -486,13 +486,24 @@ def export_custom_qlora_model(
 
     # Replace stuff
     updated_model_state = {}
-    for k, v in model_state.items():
+
+    # First, we get lora stuff from qlora ft model.
+    for k, v in ft_model_state.items():
         if k.find("w_b_linear") != -1 or k.find("w_a_linear") != -1:
             updated_model_state[k] = v
-        else:
-            updated_model_state[k] = model_state[k]
+
+    # next, we try to get all remaining stuff from sam.
+    for k, v in model_state.items():
+        if k.find("attn.qkv.") != -1:
+            k = k.replace("qkv", "qkv.qkv_proj")
+            updated_model_state[k] = v
 
     new_state = updated_model_state
+
+    # TODO:
+    # store the "new_state" inside by replacing the current model state in `ft_state`
+    # and then store "ft_state" to "save_path"
+    # and then run inference with lora-only.
 
     breakpoint()
 
