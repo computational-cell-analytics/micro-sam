@@ -926,6 +926,9 @@ class EmbeddingWidget(_WidgetBase):
         # Filter out the decoders from the model list.
         self.model_options = [model for model in self.model_options if not model.endswith("decoder")]
 
+        # NOTE: We currently remove the medical imaging model from displaying it as an option.
+        self.model_options = [model for model in self.model_options if not model.endswith("medical_imaging")]
+
         layout = QtWidgets.QVBoxLayout()
         self.model_dropdown, layout = self._add_choice_param(
             "model_type", self.model_type, self.model_options, title="Model:", layout=layout,
