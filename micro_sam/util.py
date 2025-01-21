@@ -440,13 +440,13 @@ def _handle_checkpoint_loading(sam, model_state):
 def export_custom_sam_model(
     checkpoint_path: Union[str, os.PathLike], model_type: str, save_path: Union[str, os.PathLike],
 ) -> None:
-    """Export a finetuned segment anything model to the standard model format.
+    """Export a finetuned Segment Anything Model to the standard model format.
 
     The exported model can be used by the interactive annotation tools in `micro_sam.annotator`.
 
     Args:
         checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
-        model_type: The SegmentAnything model type corresponding to the checkpoint (vit_h, vit_b, vit_l or vit_t).
+        model_type: The Segment Anything Model type corresponding to the checkpoint (vit_h, vit_b, vit_l or vit_t).
         save_path: Where to save the exported model.
     """
     _, state = get_sam_model(
@@ -461,34 +461,38 @@ def export_custom_sam_model(
 
 
 def export_custom_qlora_model(
-    checkpoint_path,
-    finetuned_path,
-    model_type,
-    save_path,
-):
+    checkpoint_path: Union[str, os.PathLike],
+    finetuned_path: Union[str, os.PathLike],
+    model_type: str,
+    save_path: Union[str, os.PathLike],
+) -> None:
+    """Export a finetuned Segment Anything Model, in QLoRA style, to LoRA-style checkpoint format.
+
+    The exported model can be used with the LoRA backbone by passing the relevant `peft_kwargs` to `get_sam_model`.
+
+    Args:
+        checkpoint_path: The path to the base foundation model from which the new model has been finetuned.
+        finetuned_path: The path to the new finetuned model, using QLoRA.
+        model_type: The Segment Anything Model type corresponding to the checkpoint.
+        save_path: Where to save the exported model.
     """
-    checkpoint_path: Path for the original FM.
-    finetuned_path: Path for the new QLoRA ft model.
-    model_type: ...
-    save_path: Path where the final model will be stored.
-    """
-    # FM model
+    # Step 1: Get the base SAM model: used to start finetuning from.
     _, sam = get_sam_model(
         model_type=model_type, checkpoint_path=checkpoint_path, return_sam=True,
     )
 
-    # Qlora model
+    # Step 2: Load the QLoRA-style finetuned model.
     ft_state, ft_model_state = _load_checkpoint(finetuned_path)
 
-    # Replace stuff
+    # Step 3: Get LoRA weights from QLoRA and retain all original parameters from the base SAM model.
     updated_model_state = {}
 
-    # First, we get lora stuff from qlora ft model.
+    # - At first, we get all LoRA layers from the QLoRA-style finetuned model checkpoint.
     for k, v in ft_model_state.items():
         if k.find("w_b_linear") != -1 or k.find("w_a_linear") != -1:
             updated_model_state[k] = v
 
-    # next, we try to get all remaining stuff from sam.
+    # - Next, we get all the remaining parameters from the base SAM model.
     for k, v in sam.state_dict().items():
         if k.find("attn.qkv.") != -1:
             k = k.replace("qkv", "qkv.qkv_proj")
@@ -496,7 +500,11 @@ def export_custom_qlora_model(
         else:
 
             updated_model_state[k] = v
+
+    # - Finally, we replace the old model state with the new one (to retain other relevant stuff)
     ft_state['model_state'] = updated_model_state
+
+    # Step 4: Store the new "state" to "save_path"
     torch.save(ft_state, save_path)
 
 
