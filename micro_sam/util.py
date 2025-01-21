@@ -492,7 +492,7 @@ def export_custom_qlora_model(
         else:
             updated_model_state[k] = checkpoint_model_state[k]
 
-        model_state = updated_model_state
+    model_state = updated_model_state
 
     breakpoint()
 
