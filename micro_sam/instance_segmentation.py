@@ -780,7 +780,7 @@ def get_unetr(
         for k, v in unetr_state_dict.items():
             if not k.startswith("encoder"):
                 if flexible_load_checkpoint:  # Whether allow reinitalization of params, if not found.
-                    if k in decoder_state:  # We first check whether the weights are available in the provided decoder state.
+                    if k in decoder_state:  # First check whether the key is available in the provided decoder state.
                         unetr_state_dict[k] = decoder_state[k]
                     else:  # Otherwise, allow it to initialize it.
                         warnings.warn(f"Could not find '{k}' in the pretrained state dict. Hence, we reinitialize it.")
