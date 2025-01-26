@@ -408,8 +408,8 @@ def run_instance_segmentation_grid_search_and_inference(
     run_instance_segmentation_grid_search(
         segmenter=segmenter,
         grid_search_values=grid_search_values,
-        image_key=val_image_paths,
-        gt_key=val_gt_paths,
+        image_paths=val_image_paths,
+        gt_paths=val_gt_paths,
         result_dir=result_dir,
         embedding_dir=embedding_dir,
         fixed_generate_kwargs=fixed_generate_kwargs,
