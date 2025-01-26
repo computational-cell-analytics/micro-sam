@@ -6,7 +6,7 @@ import pickle
 import numpy as np
 from tqdm import tqdm
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Tuple
 
 import imageio.v3 as imageio
 from skimage.segmentation import relabel_sequential
@@ -20,6 +20,7 @@ from ..inference import batched_inference
 from ..instance_segmentation import (
     mask_data_to_segmentation, get_predictor_and_decoder,
     AutomaticMaskGenerator, InstanceSegmentationWithDecoder,
+    TiledAutomaticMaskGenerator, TiledInstanceSegmentationWithDecoder,
 )
 from . import instance_segmentation
 from ..prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
@@ -539,7 +540,8 @@ def run_amg(
     iou_thresh_values: Optional[List[float]] = None,
     stability_score_values: Optional[List[float]] = None,
     peft_kwargs: Optional[Dict] = None,
-    cache_embeddings: bool = False
+    cache_embeddings: bool = False,
+    tiling_window_params: Optional[Dict[str, Tuple[int, int]]] = None,
 ) -> str:
     """Run Segment Anything inference for multiple images using automatic mask generation (AMG).
 
@@ -554,6 +556,7 @@ def run_amg(
         stability_score_values: Optional choice of values for grid search of `stability_score` parameter.
         peft_kwargs: Keyword arguments for th PEFT wrapper class.
         cache_embeddings: Whether to cache embeddings in experiment folder.
+        tiling_window_params: The parameters to decide whether to use tiling window operation for AIS.
 
     Returns:
         Filepath where the predictions have been saved.
@@ -566,7 +569,23 @@ def run_amg(
         embedding_folder = None
 
     predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint, peft_kwargs=peft_kwargs)
-    amg = AutomaticMaskGenerator(predictor)
+
+    # Get the AMG class.
+    if tiling_window_params:
+        if not isinstance(tiling_window_params, dict):
+            raise RuntimeError("The tiling window parameters are expected to be provided as a dictionary of params.")
+
+        if "tile_shape" not in tiling_window_params:
+            raise RuntimeError("'tile_shape' parameter is missing from the provided parameters.")
+
+        if "halo" not in tiling_window_params:
+            raise RuntimeError("'halo' parameter is missing from the provided parameters.")
+
+        amg_class = TiledAutomaticMaskGenerator
+    else:
+        amg_class = AutomaticMaskGenerator
+
+    amg = amg_class(predictor)
     amg_prefix = "amg"
 
     # where the predictions are saved
@@ -592,6 +611,7 @@ def run_amg(
         prediction_dir=prediction_folder,
         result_dir=gs_result_folder,
         experiment_folder=experiment_folder,
+        tiling_window_params=tiling_window_params,
     )
     return prediction_folder
 
@@ -610,6 +630,7 @@ def run_instance_segmentation_with_decoder(
     test_image_paths: List[Union[str, os.PathLike]],
     peft_kwargs: Optional[Dict] = None,
     cache_embeddings: bool = False,
+    tiling_window_params: Optional[Dict[str, Tuple[int, int]]] = None,
 ) -> str:
     """Run Segment Anything inference for multiple images using additional automatic instance segmentation (AIS).
 
@@ -622,6 +643,7 @@ def run_instance_segmentation_with_decoder(
         test_image_paths: The list of filepaths of input images for automatic instance segmentation.
         peft_kwargs: Keyword arguments for th PEFT wrapper class.
         cache_embeddings: Whether to cache embeddings in experiment folder.
+        tiling_window_params: The parameters to decide whether to use tiling window operation for AIS.
 
     Returns:
         Filepath where the predictions have been saved.
@@ -636,7 +658,23 @@ def run_instance_segmentation_with_decoder(
     predictor, decoder = get_predictor_and_decoder(
         model_type=model_type, checkpoint_path=checkpoint, peft_kwargs=peft_kwargs,
     )
-    segmenter = InstanceSegmentationWithDecoder(predictor, decoder)
+
+    # Get the AIS class.
+    if tiling_window_params:
+        if not isinstance(tiling_window_params, dict):
+            raise RuntimeError("The tiling window parameters are expected to be provided as a dictionary of params.")
+
+        if "tile_shape" not in tiling_window_params:
+            raise RuntimeError("'tile_shape' parameter is missing from the provided parameters.")
+
+        if "halo" not in tiling_window_params:
+            raise RuntimeError("'halo' parameter is missing from the provided parameters.")
+
+        ais_class = TiledInstanceSegmentationWithDecoder
+    else:
+        ais_class = InstanceSegmentationWithDecoder
+
+    segmenter = ais_class(predictor, decoder)
     seg_prefix = "instance_segmentation_with_decoder"
 
     # where the predictions are saved
@@ -650,9 +688,15 @@ def run_instance_segmentation_with_decoder(
     grid_search_values = instance_segmentation.default_grid_search_values_instance_segmentation_with_decoder()
 
     instance_segmentation.run_instance_segmentation_grid_search_and_inference(
-        segmenter, grid_search_values,
-        val_image_paths, val_gt_paths, test_image_paths,
-        embedding_dir=embedding_folder, prediction_dir=prediction_folder,
-        result_dir=gs_result_folder, experiment_folder=experiment_folder,
+        segmenter=segmenter,
+        grid_search_values=grid_search_values,
+        val_image_paths=val_image_paths,
+        val_gt_paths=val_gt_paths,
+        test_image_paths=test_image_paths,
+        embedding_dir=embedding_folder,
+        prediction_dir=prediction_folder,
+        result_dir=gs_result_folder,
+        experiment_folder=experiment_folder,
+        tiling_window_params=tiling_window_params,
     )
     return prediction_folder
