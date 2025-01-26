@@ -235,12 +235,12 @@ def run_instance_segmentation_grid_search(
             assert predictor is not None
             embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
 
-        image_embeddings = util.precompute_image_embeddings(
-            predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings
-        )
-
         if tiling_window_params is None:
             tiling_window_params = {}
+
+        image_embeddings = util.precompute_image_embeddings(
+            predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings, **tiling_window_params
+        )
 
         segmenter.initialize(image, image_embeddings, **tiling_window_params)
 
@@ -293,12 +293,12 @@ def run_instance_segmentation_inference(
             assert predictor is not None
             embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
 
-        image_embeddings = util.precompute_image_embeddings(
-            predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings
-        )
-
         if tiling_window_params is None:
             tiling_window_params = {}
+
+        image_embeddings = util.precompute_image_embeddings(
+            predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings, **tiling_window_params
+        )
 
         segmenter.initialize(image, image_embeddings, **tiling_window_params)
 
