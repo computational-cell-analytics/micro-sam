@@ -316,7 +316,6 @@ def _compare_eval(
         else:
             prompt = (g.attrs["point_coords"] - offset, g.attrs["point_labels"])
 
-        enhance_image = False
         if enhance_image:
             im = _enhance_image(image[bb])
         else:
