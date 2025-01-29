@@ -265,8 +265,8 @@ def _overlay_points(im, prompt, radius):
 
 
 def _compare_eval(
-    f, eval_result, advantage_column, n_images_per_sample, prefix,
-    sample_name, plot_folder, point_radius, outline_dilation, have_model3,
+    f, eval_result, advantage_column, n_images_per_sample, prefix, sample_name,
+    plot_folder, point_radius, outline_dilation, have_model3, enhance_image,
 ):
     result = eval_result.sort_values(advantage_column, ascending=False).iloc[:n_images_per_sample]
     n_rows = result.shape[0]
@@ -316,7 +316,12 @@ def _compare_eval(
         else:
             prompt = (g.attrs["point_coords"] - offset, g.attrs["point_labels"])
 
-        im = _enhance_image(image[bb])
+        enhance_image = False
+        if enhance_image:
+            im = _enhance_image(image[bb])
+        else:
+            im = image[bb]
+
         gt, mask1, mask2 = gt[bb], mask1[bb], mask2[bb]
 
         if have_model3:
@@ -367,7 +372,7 @@ def _compare_eval(
 
 def _compare_prompts(
     f, prefix, n_images_per_sample, min_size, sample_name, plot_folder,
-    point_radius, outline_dilation, have_model3,
+    point_radius, outline_dilation, have_model3, enhance_image,
 ):
     box_eval = _evaluate_samples(f, prefix, min_size)
     if plot_folder is None:
@@ -379,16 +384,16 @@ def _compare_prompts(
         os.makedirs(plot_folder2, exist_ok=True)
     _compare_eval(
         f, box_eval, "advantage1", n_images_per_sample, prefix, sample_name, plot_folder1,
-        point_radius, outline_dilation, have_model3,
+        point_radius, outline_dilation, have_model3, enhance_image,
     )
     _compare_eval(
         f, box_eval, "advantage2", n_images_per_sample, prefix, sample_name, plot_folder2,
-        point_radius, outline_dilation, have_model3,
+        point_radius, outline_dilation, have_model3, enhance_image,
     )
 
 
 def _compare_models(
-    path, n_images_per_sample, min_size, plot_folder, point_radius, outline_dilation, have_model3,
+    path, n_images_per_sample, min_size, plot_folder, point_radius, outline_dilation, have_model3, enhance_image,
 ):
     sample_name = Path(path).stem
     with h5py.File(path, "r") as f:
@@ -399,11 +404,11 @@ def _compare_models(
             plot_folder_box = os.path.join(plot_folder, "box")
         _compare_prompts(
             f, "points", n_images_per_sample, min_size, sample_name, plot_folder_points,
-            point_radius, outline_dilation, have_model3,
+            point_radius, outline_dilation, have_model3, enhance_image,
         )
         _compare_prompts(
             f, "box", n_images_per_sample, min_size, sample_name, plot_folder_box,
-            point_radius, outline_dilation, have_model3,
+            point_radius, outline_dilation, have_model3, enhance_image,
         )
 
 
@@ -415,6 +420,7 @@ def model_comparison(
     point_radius: int = 4,
     outline_dilation: int = 0,
     have_model3=False,
+    enhance_image=True,
 ) -> None:
     """Create images for a qualitative model comparision.
 
@@ -425,11 +431,13 @@ def model_comparison(
         plot_folder: The folder where to save the plots. If not given the plots will be displayed.
         point_radius: The radius of the point overlay.
         outline_dilation: The dilation factor of the outline overlay.
+        enhance_image: Whether to enhance the input image.
     """
     files = glob(os.path.join(output_folder, "*.h5"))
     for path in tqdm(files):
         _compare_models(
-            path, n_images_per_sample, min_size, plot_folder, point_radius, outline_dilation, have_model3,
+            path, n_images_per_sample, min_size, plot_folder, point_radius,
+            outline_dilation, have_model3, enhance_image,
         )
 
 
