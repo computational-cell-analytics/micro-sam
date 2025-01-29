@@ -6,7 +6,7 @@ from glob import glob
 from tqdm import tqdm
 from pathlib import Path
 from functools import partial
-from typing import Optional, Union
+from typing import Optional, Union, Dict, Any
 
 import h5py
 import numpy as np
@@ -124,6 +124,9 @@ def generate_data_for_model_comparison(
     checkpoint1: Optional[Union[str, os.PathLike]] = None,
     checkpoint2: Optional[Union[str, os.PathLike]] = None,
     checkpoint3: Optional[Union[str, os.PathLike]] = None,
+    peft_kwargs1: Optional[Dict[str, Any]] = None,
+    peft_kwargs2: Optional[Dict[str, Any]] = None,
+    peft_kwargs3: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Generate samples for qualitative model comparison.
 
@@ -149,11 +152,11 @@ def generate_data_for_model_comparison(
         get_box_prompts=True,
     )
 
-    predictor1 = util.get_sam_model(model_type=model_type1, checkpoint_path=checkpoint1)
-    predictor2 = util.get_sam_model(model_type=model_type2, checkpoint_path=checkpoint2)
+    predictor1 = util.get_sam_model(model_type=model_type1, checkpoint_path=checkpoint1, peft_kwargs=peft_kwargs1)
+    predictor2 = util.get_sam_model(model_type=model_type2, checkpoint_path=checkpoint2, peft_kwargs=peft_kwargs2)
 
     if model_type3 is not None:
-        predictor3 = util.get_sam_model(model_type=model_type3, checkpoint_path=checkpoint3)
+        predictor3 = util.get_sam_model(model_type=model_type3, checkpoint_path=checkpoint3, peft_kwargs=peft_kwargs3)
     else:
         predictor3 = None
 
