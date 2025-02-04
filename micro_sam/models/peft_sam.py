@@ -307,7 +307,7 @@ class PEFT_Sam(nn.Module):
     def __init__(
         self,
         model: Sam,
-        rank: int,
+        rank: Optional[int] = None,
         peft_module: nn.Module = LoRASurgery,
         attention_layers_to_update: Union[List[int]] = None,
         quantize: bool = False,
@@ -315,7 +315,9 @@ class PEFT_Sam(nn.Module):
     ):
         super().__init__()
 
-        assert rank > 0
+        if issubclass(peft_module, Union[LoRASurgery, FacTSurgery]) and (not rank or rank <= 0):
+            raise RuntimeError("The chosen PEFT method cannot run without a valid rank choice.")
+
         assert issubclass(peft_module, Union[LoRASurgery, FacTSurgery, SelectiveSurgery, SSFSurgery, AdaptFormer]), (
             "Invalid PEFT module"
         )
