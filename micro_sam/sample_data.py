@@ -381,3 +381,29 @@ def fetch_nucleus_3d_example_data(save_directory: Union[str, os.PathLike]) -> st
         progressbar=True,
     )
     return os.path.join(save_directory, fname)
+
+
+def fetch_wholeslide_histopathology_example_data(save_directory: Union[str, os.PathLike]) -> str:
+    """Download the sample histpathology data for the 2d annotator.
+
+    This downloads a WSI image from https://openslide.cs.cmu.edu/download/openslide-testdata/,
+    under the "CC0 1.0 Universal" license.
+
+    Args:
+        save_directory: Root folder to save the downloaded data.
+
+    Returns:
+        The path of the downloaded image.
+    """
+    save_directory = Path(save_directory)
+    os.makedirs(save_directory, exist_ok=True)
+    print("Example data directory is:", save_directory.resolve())
+    fname = "whole-slide-histopathology-example-image.svs"
+    pooch.retrieve(
+        url="https://openslide.cs.cmu.edu/download/openslide-testdata/Aperio/CMU-1.svs",
+        known_hash="00a3d54482cd707abf254fe69dccc8d06b8ff757a1663f1290c23418c480eb30",
+        fname=fname,
+        path=save_directory,
+        progressbar=True,
+    )
+    return os.path.join(save_directory, fname)
