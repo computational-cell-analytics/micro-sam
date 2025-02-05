@@ -120,7 +120,11 @@ def automatic_instance_segmentation(
             verbose=verbose,
         )
 
-        segmenter.initialize(image=image_data, image_embeddings=image_embeddings)
+        # If we run AIS with tiling then we use the same tile shape for the watershed postprocessing.
+        if isinstance(segmenter, InstanceSegmentationWithDecoder) and tile_shape is not None:
+            generate_kwargs.update({"tile_shape": tile_shape, "halo": halo})
+
+        segmenter.initialize(image=image_data, image_embeddings=image_embeddings, verbose=verbose)
         masks = segmenter.generate(**generate_kwargs)
 
         if len(masks) == 0:  # instance segmentation can have no masks, hence we just save empty labels

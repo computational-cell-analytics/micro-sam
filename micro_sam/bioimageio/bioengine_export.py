@@ -3,6 +3,7 @@ import warnings
 from typing import Optional, Union
 
 import torch
+
 from segment_anything.utils.onnx import SamOnnxModel
 
 try:
@@ -67,7 +68,7 @@ def export_image_encoder(
     model_type: str,
     output_root: Union[str, os.PathLike],
     export_name: Optional[str] = None,
-    checkpoint_path: Optional[str] = None,
+    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
 ) -> None:
     """Export SAM image encoder to torchscript.
 
@@ -103,15 +104,16 @@ def export_image_encoder(
 
 
 def export_onnx_model(
-    model_type,
-    output_root,
-    opset: int,
+    model_type: str,
+    output_root: Union[str, os.PathLike],
+    opset: int = 17,
     export_name: Optional[str] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_single_mask: bool = True,
     gelu_approximate: bool = False,
     use_stability_score: bool = False,
     return_extra_metrics: bool = False,
+    quantize_model: bool = False,
 ) -> None:
     """Export SAM prompt encoder and mask decoder to onnx.
 
@@ -122,7 +124,7 @@ def export_onnx_model(
     Args:
         model_type: The SAM model type.
         output_root: The output root directory where the exported model is saved.
-        opset: The ONNX opset version.
+        opset: The ONNX opset version. The recommended opset version is 17.
         export_name: The name of the exported model.
         checkpoint_path: Optional checkpoint for loading the SAM model.
         return_single_mask: Whether the mask decoder returns a single or multiple masks.
@@ -130,6 +132,8 @@ def export_onnx_model(
             does not have an efficient GeLU implementation.
         use_stability_score: Whether to use the stability score instead of the predicted score.
         return_extra_metrics: Whether to return a larger set of metrics.
+        quantize_model: Whether to also export a quantized version of the model.
+            This only works for onnxruntime < 1.17.
     """
     if export_name is None:
         export_name = model_type
@@ -154,10 +158,7 @@ def export_onnx_model(
             if isinstance(m, torch.nn.GELU):
                 m.approximate = "tanh"
 
-    dynamic_axes = {
-        "point_coords": {1: "num_points"},
-        "point_labels": {1: "num_points"},
-    }
+    dynamic_axes = {"point_coords": {1: "num_points"}, "point_labels": {1: "num_points"}}
 
     embed_dim = sam.prompt_encoder.embed_dim
     embed_size = sam.prompt_encoder.image_embedding_size
@@ -202,14 +203,31 @@ def export_onnx_model(
         _ = ort_session.run(None, ort_inputs)
         print("Model has successfully been run with ONNXRuntime.")
 
+    # This requires onnxruntime < 1.17.
+    # See https://github.com/facebookresearch/segment-anything/issues/699#issuecomment-1984670808
+    if quantize_model:
+        assert onnxruntime_exists
+        from onnxruntime.quantization import QuantType
+        from onnxruntime.quantization.quantize import quantize_dynamic
+
+        quantized_path = os.path.join(weight_output_folder, "model_quantized.onnx")
+        quantize_dynamic(
+            model_input=weight_path,
+            model_output=quantized_path,
+            # optimize_model=True,
+            per_channel=False,
+            reduce_range=False,
+            weight_type=QuantType.QUInt8,
+        )
+
     config_output_path = os.path.join(output_folder, "config.pbtxt")
     with open(config_output_path, "w") as f:
         f.write(DECODER_CONFIG % name)
 
 
 def export_bioengine_model(
-    model_type,
-    output_root,
+    model_type: str,
+    output_root: Union[str, os.PathLike],
     opset: int,
     export_name: Optional[str] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,

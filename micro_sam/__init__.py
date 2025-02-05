@@ -9,6 +9,7 @@
 .. include:: ../doc/contributing.md
 .. include:: ../doc/band.md
 """
+
 import os
 
 from .__version__ import __version__

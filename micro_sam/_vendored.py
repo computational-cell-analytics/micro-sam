@@ -1,5 +1,4 @@
-"""
-Functions from other third party libraries.
+"""Functions from other third party libraries.
 
 We can remove these functions once the bugs affecting our code is fixed upstream.
 
@@ -7,7 +6,7 @@ The license type of the thrid party software project must be compatible with
 the software license the micro-sam project is distributed under.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal
 
 import numpy as np
 
@@ -109,7 +108,9 @@ def _compute_rle_numpy(mask):
     return counts
 
 
-def mask_to_rle_pytorch(tensor: torch.Tensor, rle_implementation: str = "default") -> List[Dict[str, Any]]:
+def mask_to_rle_pytorch(
+    tensor: torch.Tensor, rle_implementation: Literal["default", "numpy", "numba", "nifty"] = "default"
+) -> List[Dict[str, Any]]:
     """Calculates the runlength encoding of binary input masks.
 
     This replaces the function in

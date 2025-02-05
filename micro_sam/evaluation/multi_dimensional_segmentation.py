@@ -1,11 +1,11 @@
 import os
-import numpy as np
-import pandas as pd
 from tqdm import tqdm
-from math import floor
 from itertools import product
 from typing import Union, Tuple, Optional, List, Dict, Literal
 
+import numpy as np
+import pandas as pd
+from math import floor
 import imageio.v3 as imageio
 
 import torch
@@ -72,7 +72,7 @@ def segment_slices_from_ground_truth(
     return_segmentation: bool = False,
     min_size: int = 0,
     evaluation_metric: Literal["sa", "dice"] = "sa",
-) -> Union[float, Tuple[np.ndarray, float]]:
+) -> Union[Dict, Tuple[Dict, np.ndarray]]:
     """Segment all objects in a volume by prompt-based segmentation in one slice per object.
 
     This function first segments each object in the respective specified slice using interactive
@@ -96,6 +96,10 @@ def segment_slices_from_ground_truth(
         min_size: The minimal size for evaluating an object in the ground-truth.
             The size is measured within the central slice.
         evaluation_metric: The choice of supported metric to evaluate predictions.
+
+    Returns:
+        A dictionary of results with all desired metrics.
+        Optional segmentation result (controlled by `return_segmentation` argument).
     """
     assert volume.ndim == 3
 
@@ -146,7 +150,7 @@ def segment_slices_from_ground_truth(
             _get_points, _get_box = False, True
         else:
             raise ValueError(
-                f"The provided interactive prompting '{interactive_seg_mode}' for the first slice isn't supported."
+                f"The provided interactive prompting '{interactive_seg_mode}' for the first slice isn't supported. "
                 "Please choose from 'box' / 'points'."
             )
 
@@ -211,11 +215,26 @@ def segment_slices_from_ground_truth(
             segmentation=final_segmentation, groundtruth=curr_gt, return_accuracies=True
         )
         results = {"mSA": msa, "SA50": sa[0], "SA75": sa[5]}
+
     elif evaluation_metric == "dice":
+        # Calculate overall dice score (by binarizing all labels).
         dice = dice_score(segmentation=final_segmentation, groundtruth=curr_gt)
         results = {"Dice": dice}
+
+    elif evaluation_metric == "dice_per_class":
+        # Calculate dice per class.
+        dice = [
+            dice_score(segmentation=(final_segmentation == i), groundtruth=(curr_gt == i))
+            for i in np.unique(curr_gt)[1:]
+        ]
+        dice = np.mean(dice)
+        results = {"Dice": dice}
+
     else:
-        raise ValueError(f"'{evaluation_metric}' is not a supported evaluation metrics. Please choose 'sa' / 'dice'.")
+        raise ValueError(
+            f"'{evaluation_metric}' is not a supported evaluation metrics. "
+            "Please choose 'sa' / 'dice' / 'dice_per_class'."
+        )
 
     if return_segmentation:
         return results, final_segmentation
@@ -256,13 +275,13 @@ def run_multi_dimensional_segmentation_grid_search(
     grid_search_values: Optional[Dict[str, List]] = None,
     min_size: int = 0,
     evaluation_metric: Literal["sa", "dice"] = "sa",
-):
+) -> str:
     """Run grid search for prompt-based multi-dimensional instance segmentation.
 
     The parameters and their respective value ranges for the grid search are specified via the
     `grid_search_values` argument. For example, to run a grid search over the parameters `iou_threshold`,
     `projection` and `box_extension`, you can pass the following:
-    ```
+    ```python
     grid_search_values = {
         "iou_threshold": [0.5, 0.6, 0.7, 0.8, 0.9],
         "projection": ["mask", "box", "points"],
@@ -286,6 +305,9 @@ def run_multi_dimensional_segmentation_grid_search(
         min_size: The minimal size for evaluating an object in the ground-truth.
             The size is measured within the central slice.
         evaluation_metric: The choice of metric for evaluating predictions.
+
+    Returns:
+        Filepath where the best parameters are saved.
     """
     if grid_search_values is None:
         grid_search_values = default_grid_search_values_multi_dimensional_segmentation()

@@ -6,6 +6,12 @@ import torch.nn as nn
 
 from segment_anything.modeling import Sam
 
+try:
+    import bitsandbytes as bnb
+    _have_bnb = True
+except ImportError:
+    _have_bnb = False
+
 
 class LoRASurgery(nn.Module):
     """Operates on the attention layers for performing low-rank adaptation.
@@ -22,7 +28,7 @@ class LoRASurgery(nn.Module):
 
     Args:
         rank: The rank of the decomposition matrices for updating weights in each attention layer.
-        block: The chosen attention blocks for implementing lora.
+        block: The chosen attention blocks for implementing LoRA.
     """
     def __init__(self, rank: int, block: nn.Module):
         super().__init__()
@@ -50,8 +56,14 @@ class LoRASurgery(nn.Module):
         qkv = self.qkv_proj(x)  # B, N, N, 3 * org_C
         new_q = self.alpha * self.w_b_linear_q(self.w_a_linear_q(x))
         new_v = self.alpha * self.w_b_linear_v(self.w_a_linear_v(x))
-        qkv[:, :, :, :self.dim] += new_q
-        qkv[:, :, :, -self.dim:] += new_v
+        qkv = torch.cat(
+            [
+                qkv[:, :, :, :self.dim] + new_q,  # replacing new q values
+                qkv[:, :, :, self.dim:-self.dim],  # leaving the middle part as identical
+                qkv[:, :, :, -self.dim:] + new_v  # replacing new v values
+            ], dim=-1
+        )
+
         return qkv
 
 
@@ -101,7 +113,7 @@ class FacTSurgery(nn.Module):
         new_q = self.FacTv(new_q)
         new_v = self.FacTv(new_v)
 
-        # NOTE : Scaling Factor was set to 1 as it can be tuned via the learning rate
+        # NOTE : Scaling Factor is set to 1 as it can be tuned via the learning rate.
         qkv[:, :, :, : self.dim] += new_q
         qkv[:, :, :, -self.dim:] += new_v
 
@@ -289,19 +301,22 @@ class PEFT_Sam(nn.Module):
         rank: The rank for low-rank adaptation.
         peft_module: Wrapper to operate on the image encoder blocks for the PEFT method.
         attention_layers_to_update: Which specific layers we apply PEFT methods to.
+        quantize: Whether to quantize the model for lower precision training.
     """
 
     def __init__(
         self,
         model: Sam,
-        rank: int,
+        rank: Optional[int] = None,
         peft_module: nn.Module = LoRASurgery,
         attention_layers_to_update: Union[List[int]] = None,
+        quantize: bool = False,
         **module_kwargs
     ):
         super().__init__()
 
-        assert rank > 0
+        if issubclass(peft_module, Union[LoRASurgery, FacTSurgery]) and (not rank or rank <= 0):
+            raise RuntimeError("The chosen PEFT method cannot run without a valid rank choice.")
 
         assert issubclass(peft_module, Union[LoRASurgery, FacTSurgery, SelectiveSurgery, SSFSurgery, AdaptFormer]), (
             "Invalid PEFT module"
@@ -315,7 +330,39 @@ class PEFT_Sam(nn.Module):
         self.peft_module = peft_module
         self.peft_blocks = []
 
-        # let's freeze all the pretrained image encoder layers first
+        # Whether to quantize the linear layers to 4 bit precision.
+        # NOTE: This is currently supported for CUDA-supported devices only.
+        if quantize:
+            if not _have_bnb:
+                raise ModuleNotFoundError("Please install 'bitsandbytes'.")
+
+            for name, module in model.image_encoder.named_modules():
+                if isinstance(module, torch.nn.Linear):
+                    *parent_path, layer_name = name.split(".")
+                    parent_module = model.image_encoder
+
+                    for sub_module in parent_path:
+                        parent_module = getattr(parent_module, sub_module)
+
+                    # Create the new Linear4bit layer
+                    linear_q = bnb.nn.Linear4bit(
+                        module.in_features,
+                        module.out_features,
+                        bias=False if module.bias is None else True,
+                    )
+                    # Assign weights and bias to the new layer
+                    new_weight = bnb.nn.Params4bit(
+                        data=module.weight,
+                        requires_grad=False,
+                    )
+                    linear_q.weight = new_weight
+                    if module.bias is not None:
+                        linear_q.bias = torch.nn.Parameter(module.bias)
+
+                    # Replace the original linear layer with the quantized one
+                    setattr(parent_module, layer_name, linear_q)
+
+        # Let's freeze all the pretrained image encoder layers first
         for param in model.image_encoder.parameters():
             param.requires_grad = False
 

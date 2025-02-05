@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 
 import zarr
 import numpy as np
+
 from qtpy.QtWidgets import QWidget
 
 import torch.nn as nn

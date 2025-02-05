@@ -582,9 +582,7 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
     call_button="Update settings",
     cache_directory={"mode": "d"},  # choose a directory
 )
-def settings_widget(
-    cache_directory: Optional[Path] = util.get_cache_directory(),
-) -> None:
+def settings_widget(cache_directory: Optional[Path] = util.get_cache_directory()) -> None:
     """Widget to update global micro_sam settings.
 
     Args:
@@ -927,6 +925,9 @@ class EmbeddingWidget(_WidgetBase):
         self.model_options = list(util.models().urls.keys())
         # Filter out the decoders from the model list.
         self.model_options = [model for model in self.model_options if not model.endswith("decoder")]
+
+        # NOTE: We currently remove the medical imaging model from displaying it as an option.
+        self.model_options = [model for model in self.model_options if not model.endswith("medical_imaging")]
 
         layout = QtWidgets.QVBoxLayout()
         self.model_dropdown, layout = self._add_choice_param(
