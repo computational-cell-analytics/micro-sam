@@ -299,10 +299,10 @@
 </span><span id="L-218"><a href="#L-218"><span class="linenos">218</span></a>            <span class="k">with</span> <span class="n">torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">():</span>
 </span><span id="L-219"><a href="#L-219"><span class="linenos">219</span></a>                <span class="n">net_mean_model_iou</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">batched_iou_predictions</span><span class="p">)</span>
 </span><span id="L-220"><a href="#L-220"><span class="linenos">220</span></a>
-</span><span id="L-221"><a href="#L-221"><span class="linenos">221</span></a>            <span class="n">loss</span> <span class="o">+=</span> <span class="n">net_loss</span>
-</span><span id="L-222"><a href="#L-222"><span class="linenos">222</span></a>            <span class="n">mask_loss</span> <span class="o">+=</span> <span class="n">net_mask_loss</span>
-</span><span id="L-223"><a href="#L-223"><span class="linenos">223</span></a>            <span class="n">iou_regression_loss</span> <span class="o">+=</span> <span class="n">net_iou_regression_loss</span>
-</span><span id="L-224"><a href="#L-224"><span class="linenos">224</span></a>            <span class="n">mean_model_iou</span> <span class="o">+=</span> <span class="n">net_mean_model_iou</span>
+</span><span id="L-221"><a href="#L-221"><span class="linenos">221</span></a>            <span class="n">loss</span> <span class="o">=</span> <span class="n">loss</span> <span class="o">+</span> <span class="n">net_loss</span>
+</span><span id="L-222"><a href="#L-222"><span class="linenos">222</span></a>            <span class="n">mask_loss</span> <span class="o">=</span> <span class="n">mask_loss</span> <span class="o">+</span> <span class="n">net_mask_loss</span>
+</span><span id="L-223"><a href="#L-223"><span class="linenos">223</span></a>            <span class="n">iou_regression_loss</span> <span class="o">=</span> <span class="n">iou_regression_loss</span> <span class="o">+</span> <span class="n">net_iou_regression_loss</span>
+</span><span id="L-224"><a href="#L-224"><span class="linenos">224</span></a>            <span class="n">mean_model_iou</span> <span class="o">=</span> <span class="n">mean_model_iou</span> <span class="o">+</span> <span class="n">net_mean_model_iou</span>
 </span><span id="L-225"><a href="#L-225"><span class="linenos">225</span></a>
 </span><span id="L-226"><a href="#L-226"><span class="linenos">226</span></a>            <span class="k">if</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="p">(</span><span class="n">num_subiter</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>   <span class="c1"># We need not update the prompts for the last iteration.</span>
 </span><span id="L-227"><a href="#L-227"><span class="linenos">227</span></a>                <span class="c1"># Determine the next prompts based on current predictions.</span>
@@ -752,10 +752,10 @@
 </span><span id="SamTrainer-219"><a href="#SamTrainer-219"><span class="linenos">219</span></a>            <span class="k">with</span> <span class="n">torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">():</span>
 </span><span id="SamTrainer-220"><a href="#SamTrainer-220"><span class="linenos">220</span></a>                <span class="n">net_mean_model_iou</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">batched_iou_predictions</span><span class="p">)</span>
 </span><span id="SamTrainer-221"><a href="#SamTrainer-221"><span class="linenos">221</span></a>
-</span><span id="SamTrainer-222"><a href="#SamTrainer-222"><span class="linenos">222</span></a>            <span class="n">loss</span> <span class="o">+=</span> <span class="n">net_loss</span>
-</span><span id="SamTrainer-223"><a href="#SamTrainer-223"><span class="linenos">223</span></a>            <span class="n">mask_loss</span> <span class="o">+=</span> <span class="n">net_mask_loss</span>
-</span><span id="SamTrainer-224"><a href="#SamTrainer-224"><span class="linenos">224</span></a>            <span class="n">iou_regression_loss</span> <span class="o">+=</span> <span class="n">net_iou_regression_loss</span>
-</span><span id="SamTrainer-225"><a href="#SamTrainer-225"><span class="linenos">225</span></a>            <span class="n">mean_model_iou</span> <span class="o">+=</span> <span class="n">net_mean_model_iou</span>
+</span><span id="SamTrainer-222"><a href="#SamTrainer-222"><span class="linenos">222</span></a>            <span class="n">loss</span> <span class="o">=</span> <span class="n">loss</span> <span class="o">+</span> <span class="n">net_loss</span>
+</span><span id="SamTrainer-223"><a href="#SamTrainer-223"><span class="linenos">223</span></a>            <span class="n">mask_loss</span> <span class="o">=</span> <span class="n">mask_loss</span> <span class="o">+</span> <span class="n">net_mask_loss</span>
+</span><span id="SamTrainer-224"><a href="#SamTrainer-224"><span class="linenos">224</span></a>            <span class="n">iou_regression_loss</span> <span class="o">=</span> <span class="n">iou_regression_loss</span> <span class="o">+</span> <span class="n">net_iou_regression_loss</span>
+</span><span id="SamTrainer-225"><a href="#SamTrainer-225"><span class="linenos">225</span></a>            <span class="n">mean_model_iou</span> <span class="o">=</span> <span class="n">mean_model_iou</span> <span class="o">+</span> <span class="n">net_mean_model_iou</span>
 </span><span id="SamTrainer-226"><a href="#SamTrainer-226"><span class="linenos">226</span></a>
 </span><span id="SamTrainer-227"><a href="#SamTrainer-227"><span class="linenos">227</span></a>            <span class="k">if</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="p">(</span><span class="n">num_subiter</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>   <span class="c1"># We need not update the prompts for the last iteration.</span>
 </span><span id="SamTrainer-228"><a href="#SamTrainer-228"><span class="linenos">228</span></a>                <span class="c1"># Determine the next prompts based on current predictions.</span>
@@ -1114,10 +1114,7 @@ Otherwise the loss computation is limited to n_objects_per_batch, and the object
                 <dd id="SamTrainer.iteration" class="variable">iteration</dd>
                 <dd id="SamTrainer.epoch" class="variable">epoch</dd>
                 <dd id="SamTrainer.Deserializer" class="class">Deserializer</dd>
-                <dd id="SamTrainer.from_checkpoint" class="function">from_checkpoint</dd>
                 <dd id="SamTrainer.Serializer" class="class">Serializer</dd>
-                <dd id="SamTrainer.save_checkpoint" class="function">save_checkpoint</dd>
-                <dd id="SamTrainer.load_checkpoint" class="function">load_checkpoint</dd>
                 <dd id="SamTrainer.fit" class="function">fit</dd>
 
             </div>

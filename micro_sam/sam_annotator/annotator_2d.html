@@ -71,11 +71,11 @@
 </span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a>
 </span><span id="L-6"><a href="#L-6"><span class="linenos">  6</span></a><span class="kn">import</span> <span class="nn">torch</span>
 </span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a>
-</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="kn">from</span> <span class="nn">.</span> <span class="kn">import</span> <span class="n">_widgets</span> <span class="k">as</span> <span class="n">widgets</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a><span class="kn">from</span> <span class="nn">._annotator</span> <span class="kn">import</span> <span class="n">_AnnotatorBase</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="kn">from</span> <span class="nn">..</span> <span class="kn">import</span> <span class="n">util</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a><span class="kn">from</span> <span class="nn">.</span> <span class="kn">import</span> <span class="n">_widgets</span> <span class="k">as</span> <span class="n">widgets</span>
 </span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a><span class="kn">from</span> <span class="nn">._state</span> <span class="kn">import</span> <span class="n">AnnotatorState</span>
-</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a><span class="kn">from</span> <span class="nn">.util</span> <span class="kn">import</span> <span class="n">_initialize_parser</span><span class="p">,</span> <span class="n">_sync_embedding_widget</span>
-</span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a><span class="kn">from</span> <span class="nn">..</span> <span class="kn">import</span> <span class="n">util</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a><span class="kn">from</span> <span class="nn">._annotator</span> <span class="kn">import</span> <span class="n">_AnnotatorBase</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a><span class="kn">from</span> <span class="nn">.util</span> <span class="kn">import</span> <span class="n">_initialize_parser</span><span class="p">,</span> <span class="n">_sync_embedding_widget</span>
 </span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a>
 </span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a>
 </span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a><span class="k">class</span> <span class="nc">Annotator2d</span><span class="p">(</span><span class="n">_AnnotatorBase</span><span class="p">):</span>
@@ -120,9 +120,9 @@
 </span><span id="L-54"><a href="#L-54"><span class="linenos"> 54</span></a><span class="sd">            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.</span>
 </span><span id="L-55"><a href="#L-55"><span class="linenos"> 55</span></a><span class="sd">        tile_shape: Shape of tiles for tiled embedding prediction.</span>
 </span><span id="L-56"><a href="#L-56"><span class="linenos"> 56</span></a><span class="sd">            If `None` then the whole image is passed to Segment Anything.</span>
-</span><span id="L-57"><a href="#L-57"><span class="linenos"> 57</span></a><span class="sd">        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.</span>
+</span><span id="L-57"><a href="#L-57"><span class="linenos"> 57</span></a><span class="sd">        halo: Shape of the overlap between tiles, which is needed to segment objects on tile borders.</span>
 </span><span id="L-58"><a href="#L-58"><span class="linenos"> 58</span></a><span class="sd">        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.</span>
-</span><span id="L-59"><a href="#L-59"><span class="linenos"> 59</span></a><span class="sd">        viewer: The viewer to which the SegmentAnything functionality should be added.</span>
+</span><span id="L-59"><a href="#L-59"><span class="linenos"> 59</span></a><span class="sd">        viewer: The viewer to which the Segment Anything functionality should be added.</span>
 </span><span id="L-60"><a href="#L-60"><span class="linenos"> 60</span></a><span class="sd">            This enables using a pre-initialized viewer.</span>
 </span><span id="L-61"><a href="#L-61"><span class="linenos"> 61</span></a><span class="sd">        precompute_amg_state: Whether to precompute the state for automatic mask generation.</span>
 </span><span id="L-62"><a href="#L-62"><span class="linenos"> 62</span></a><span class="sd">            This will take more time when precomputing embeddings, but will then make</span>
@@ -710,9 +710,9 @@ The annotators differ in their data dimensionality and the widgets.</p>
 </span><span id="annotator_2d-55"><a href="#annotator_2d-55"><span class="linenos"> 55</span></a><span class="sd">            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.</span>
 </span><span id="annotator_2d-56"><a href="#annotator_2d-56"><span class="linenos"> 56</span></a><span class="sd">        tile_shape: Shape of tiles for tiled embedding prediction.</span>
 </span><span id="annotator_2d-57"><a href="#annotator_2d-57"><span class="linenos"> 57</span></a><span class="sd">            If `None` then the whole image is passed to Segment Anything.</span>
-</span><span id="annotator_2d-58"><a href="#annotator_2d-58"><span class="linenos"> 58</span></a><span class="sd">        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.</span>
+</span><span id="annotator_2d-58"><a href="#annotator_2d-58"><span class="linenos"> 58</span></a><span class="sd">        halo: Shape of the overlap between tiles, which is needed to segment objects on tile borders.</span>
 </span><span id="annotator_2d-59"><a href="#annotator_2d-59"><span class="linenos"> 59</span></a><span class="sd">        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.</span>
-</span><span id="annotator_2d-60"><a href="#annotator_2d-60"><span class="linenos"> 60</span></a><span class="sd">        viewer: The viewer to which the SegmentAnything functionality should be added.</span>
+</span><span id="annotator_2d-60"><a href="#annotator_2d-60"><span class="linenos"> 60</span></a><span class="sd">        viewer: The viewer to which the Segment Anything functionality should be added.</span>
 </span><span id="annotator_2d-61"><a href="#annotator_2d-61"><span class="linenos"> 61</span></a><span class="sd">            This enables using a pre-initialized viewer.</span>
 </span><span id="annotator_2d-62"><a href="#annotator_2d-62"><span class="linenos"> 62</span></a><span class="sd">        precompute_amg_state: Whether to precompute the state for automatic mask generation.</span>
 </span><span id="annotator_2d-63"><a href="#annotator_2d-63"><span class="linenos"> 63</span></a><span class="sd">            This will take more time when precomputing embeddings, but will then make</span>
@@ -775,9 +775,9 @@ The segmentation will be loaded as the 'committed_objects' layer.</li>
 <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models">https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models</a>.</li>
 <li><strong>tile_shape:</strong>  Shape of tiles for tiled embedding prediction.
 If <code>None</code> then the whole image is passed to Segment Anything.</li>
-<li><strong>halo:</strong>  Shape of the overlap between tiles, which is needed to segment objects on tile boarders.</li>
+<li><strong>halo:</strong>  Shape of the overlap between tiles, which is needed to segment objects on tile borders.</li>
 <li><strong>return_viewer:</strong>  Whether to return the napari viewer to further modify it before starting the tool.</li>
-<li><strong>viewer:</strong>  The viewer to which the SegmentAnything functionality should be added.
+<li><strong>viewer:</strong>  The viewer to which the Segment Anything functionality should be added.
 This enables using a pre-initialized viewer.</li>
 <li><strong>precompute_amg_state:</strong>  Whether to precompute the state for automatic mask generation.
 This will take more time when precomputing embeddings, but will then make
