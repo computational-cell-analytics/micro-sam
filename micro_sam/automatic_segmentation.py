@@ -128,9 +128,10 @@ def automatic_instance_segmentation(
         masks = segmenter.generate(**generate_kwargs)
 
         if isinstance(masks, list):
-            # whether the predictions from 'generate' are list of dict
+            # whether the predictions from 'generate' are list of dict,
+            # which contains additional info req. for post-processing, eg. area per object.
             if len(masks) == 0:
-                # instance segmentation can have no masks, hence we just save empty labels
+                # instance segmentation can have no masks, hence we just save empty labels.
                 if isinstance(segmenter, InstanceSegmentationWithDecoder):
                     this_shape = segmenter._foreground.shape
                 elif isinstance(segmenter, AMGBase):
@@ -142,7 +143,7 @@ def automatic_instance_segmentation(
             else:
                 instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=0)
         else:
-            # if predictions provided, store them as it is w/o further post-processing (eg. area-based filtering, etc.)
+            # if (raw) predictions provided, store them as it is w/o further post-processing.
             instances = masks
 
     else:
