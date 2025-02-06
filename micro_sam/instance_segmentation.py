@@ -572,7 +572,7 @@ def _process_tiled_embeddings(predictor, image, image_embeddings, tile_shape, ha
     # Use tile shape and halo from the precomputed embeddings if not given.
     # Otherwise check that they are consistent.
     feats = image_embeddings["features"]
-    tile_shape_, halo_ = feats.attrs["tile_shape"], feats.attrs["halo"]
+    tile_shape_, halo_ = tuple(feats.attrs["tile_shape"]), tuple(feats.attrs["halo"])
     if tile_shape is None:
         tile_shape = tile_shape_
     elif tile_shape != tile_shape_:
@@ -835,7 +835,7 @@ def get_predictor_and_decoder(
         model_type: The type of the image encoder used in the SAM model.
         checkpoint_path: Path to the checkpoint from which to load the data.
         device: The device.
-        peft_kwargs: Keyword arguments for th PEFT wrapper class.
+        peft_kwargs: Keyword arguments for the PEFT wrapper class.
 
     Returns:
         The SAM predictor.
@@ -1160,6 +1160,8 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
                 See `util.precompute_image_embeddings` for details.
             i: Index for the image data. Required if `image` has three spatial dimensions
                 or a time dimension and two spatial dimensions.
+            tile_shape: Shape of the tiles for precomputing image embeddings.
+            halo: Overlap of the tiles for tiled precomputation of image embeddings.
             verbose: Dummy input to be compatible with other function signatures.
             pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
                 Can be used together with pbar_update to handle napari progress bar in other thread.
