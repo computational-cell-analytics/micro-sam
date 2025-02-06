@@ -131,15 +131,7 @@ def automatic_instance_segmentation(
             # whether the predictions from 'generate' are list of dict,
             # which contains additional info req. for post-processing, eg. area per object.
             if len(masks) == 0:
-                # instance segmentation can have no masks, hence we just save empty labels.
-                if isinstance(segmenter, InstanceSegmentationWithDecoder):
-                    this_shape = segmenter._foreground.shape
-                elif isinstance(segmenter, AMGBase):
-                    this_shape = segmenter._original_size
-                else:
-                    this_shape = image_data.shape[-2:]
-
-                instances = np.zeros(this_shape, dtype="uint32")
+                instances = np.zeros(image_data.shape[-2:], dtype="uint32")
             else:
                 instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=0)
         else:
