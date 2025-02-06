@@ -1160,9 +1160,9 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
                 See `util.precompute_image_embeddings` for details.
             i: Index for the image data. Required if `image` has three spatial dimensions
                 or a time dimension and two spatial dimensions.
-            verbose: Dummy input to be compatible with other function signatures.
             tile_shape: Shape of the tiles for precomputing image embeddings.
             halo: Overlap of the tiles for tiled precomputation of image embeddings.
+            verbose: Dummy input to be compatible with other function signatures.
             pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
                 Can be used together with pbar_update to handle napari progress bar in other thread.
                 To enables using this function within a threadworker.
