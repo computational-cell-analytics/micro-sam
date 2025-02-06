@@ -572,7 +572,7 @@ def _process_tiled_embeddings(predictor, image, image_embeddings, tile_shape, ha
     # Use tile shape and halo from the precomputed embeddings if not given.
     # Otherwise check that they are consistent.
     feats = image_embeddings["features"]
-    tile_shape_, halo_ = feats.attrs["tile_shape"], feats.attrs["halo"]
+    tile_shape_, halo_ = tuple(feats.attrs["tile_shape"]), tuple(feats.attrs["halo"])
     if tile_shape is None:
         tile_shape = tile_shape_
     elif tile_shape != tile_shape_:
@@ -835,7 +835,7 @@ def get_predictor_and_decoder(
         model_type: The type of the image encoder used in the SAM model.
         checkpoint_path: Path to the checkpoint from which to load the data.
         device: The device.
-        peft_kwargs: Keyword arguments for th PEFT wrapper class.
+        peft_kwargs: Keyword arguments for the PEFT wrapper class.
 
     Returns:
         The SAM predictor.

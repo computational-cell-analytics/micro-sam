@@ -368,6 +368,7 @@ def automatic_3d_segmentation(
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
+    return_embeddings: bool = False,
     **kwargs,
 ) -> np.ndarray:
     """Segment volume in 3d.
@@ -388,6 +389,7 @@ def automatic_3d_segmentation(
         tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
         halo: Overlap of the tiles for tiled prediction.
         verbose: Verbosity flag.
+        return_embeddings: Whether to return the precomputed image embeddings.
         kwargs: Keyword arguments for the 'generate' method of the 'segmentor'.
 
     Returns:
@@ -430,4 +432,7 @@ def automatic_3d_segmentation(
         verbose=verbose,
     )
 
-    return segmentation
+    if return_embeddings:
+        return segmentation, image_embeddings
+    else:
+        return segmentation
