@@ -17,10 +17,10 @@ DATA_FOLDER = "data"
 def get_dataloader(split, patch_shape, batch_size, train_instance_segmentation):
     """Return train or val data loader for finetuning SAM.
 
-    The data loader must be a torch data loader that retuns `x, y` tensors,
+    The data loader must be a torch data loader that returns `x, y` tensors,
     where `x` is the image data and `y` are the labels.
     The labels have to be in a label mask instance segmentation format.
-    I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
+    i.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
     Important: the ID 0 is reseved for background, and the IDs must be consecutive
 
     Here, we use `torch_em.default_segmentation_loader` for creating a suitable data loader from
@@ -34,12 +34,12 @@ def get_dataloader(split, patch_shape, batch_size, train_instance_segmentation):
     image_dir = fetch_tracking_example_data(DATA_FOLDER)
     segmentation_dir = fetch_tracking_segmentation_data(DATA_FOLDER)
 
-    # torch_em.default_segmentation_loader is a convenience function to build a torch dataloader
+    # 'torch_em.default_segmentation_loader' is a convenience function to build a torch dataloader
     # from image data and labels for training segmentation models.
     # It supports image data in various formats. Here, we load image data and labels from the two
     # folders with tif images that were downloaded by the example data functionality, by specifying
     # `raw_key` and `label_key` as `*.tif`. This means all images in the respective folders that end with
-    # .tif will be loadded.
+    # .tif will be loaded.
     # The function supports many other file formats. For example, if you have tif stacks with multiple slices
     # instead of multiple tif images in a foldder, then you can pass raw_key=label_key=None.
 
@@ -82,7 +82,7 @@ def run_training(checkpoint_name, model_type, train_instance_segmentation):
     batch_size = 1  # the training batch size
     patch_shape = (1, 512, 512)  # the size of patches for training
     n_objects_per_batch = 25  # the number of objects per batch that will be sampled
-    device = torch.device("cuda")  # the device/GPU used for training
+    device = torch.device("cuda")  # the device used for training
 
     # Get the dataloaders.
     train_loader = get_dataloader("train", patch_shape, batch_size, train_instance_segmentation)
@@ -103,7 +103,7 @@ def run_training(checkpoint_name, model_type, train_instance_segmentation):
 
 def export_model(checkpoint_name, model_type):
     """Export the trained model."""
-    # export the model after training so that it can be used by the rest of the micro_sam library
+    # export the model after training so that it can be used by the rest of the 'micro_sam' library
     export_path = "./finetuned_hela_model.pth"
     checkpoint_path = os.path.join("checkpoints", checkpoint_name, "best.pt")
     export_custom_sam_model(
@@ -117,7 +117,7 @@ def main():
     """Finetune a Segment Anything model.
 
     This example uses image data and segmentations from the cell tracking challenge,
-    but can easily be adapted for other data (including data you have annoated with micro_sam beforehand).
+    but can easily be adapted for other data (including data you have annotated with micro_sam beforehand).
     """
     # The model_type determines which base model is used to initialize the weights that are finetuned.
     # We use vit_b here because it can be trained faster. Note that vit_h usually yields higher quality results.
