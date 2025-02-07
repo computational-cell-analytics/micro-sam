@@ -14,6 +14,7 @@ from torch.optim.lr_scheduler import _LRScheduler
 from torch.utils.data import DataLoader, Dataset
 
 import torch_em
+from torch_em.util import load_data
 from torch_em.data.datasets.util import split_kwargs
 
 from elf.io import open_file
@@ -354,13 +355,12 @@ def _update_patch_shape(patch_shape, raw_paths, raw_key, with_channels):
     if raw_key is None:  # If no key is given then we assume it's an image file.
         ndim = imageio.imread(path).ndim
     else:  # Otherwise we try to open the file from key.
-        try:  # First try to open it with elf.
-            with open_file(path, "r") as f:
-                ndim = f[raw_key].ndim
-        except ValueError:  # This may fail for images in a folder with different sizes.
-            # In that case we read one of the images.
+        if "*" in raw_key:  # In that case we read one of the images.
             image_path = glob(os.path.join(path, raw_key))[0]
             ndim = imageio.imread(image_path).ndim
+        else:  # Otherwise open it with elf.
+            with open_file(path, "r") as f:
+                ndim = f[raw_key].ndim
 
     if ndim == 2:
         assert len(patch_shape) == 2
@@ -416,6 +416,24 @@ def default_sam_dataset(
         The segmentation dataset.
     """
 
+    # By default, let the 'default_segmentation_dataset' heuristic decide for itself.
+    is_seg_dataset = None
+    # Check if the raw inputs are RGB or not. If yes, use 'ImageCollectionDataset'.
+    if raw_paths is not None:
+        # Get valid raw paths to make checks possible.
+        if raw_key is None:
+            rpath = raw_paths if isinstance(raw_paths, str) else raw_paths[0]
+        else:
+            rpath = glob(os.path.join(raw_paths if isinstance(raw_paths, str) else raw_paths[0], raw_key))[0]
+
+        # Load one of the raw inputs to validate whether it is RGB or not.
+        test_raw_inputs = load_data(path=rpath, key=raw_key if raw_key and "*" not in raw_key else None)
+        if test_raw_inputs.ndim == 3 and test_raw_inputs.shape[-1] == 3:  # i.e. if it is an RGB image.
+            is_seg_dataset = False
+            # Provide list of inputs to 'ImageCollectionDataset' in this case.
+            raw_paths = [raw_paths] if isinstance(raw_paths, str) else raw_paths
+            label_paths = [label_paths] if isinstance(label_paths, str) else label_paths
+
     # Set the data transformations.
     if raw_transform is None:
         raw_transform = require_8bit
@@ -436,7 +454,10 @@ def default_sam_dataset(
 
     # Check the patch shape to add a singleton if required.
     patch_shape = _update_patch_shape(
-        patch_shape, raw_paths, raw_key, with_channels
+        patch_shape=patch_shape,
+        raw_paths=raw_paths,
+        raw_key=raw_key,
+        with_channels=with_channels,
     )
 
     # Set a minimum number of samples per epoch.
@@ -449,6 +470,7 @@ def default_sam_dataset(
             batch_size=1,
             patch_shape=patch_shape,
             ndim=2,
+            is_seg_dataset=is_seg_dataset,
             **kwargs
         )
         n_samples = max(len(loader), 100 if is_train else 5)
@@ -465,6 +487,7 @@ def default_sam_dataset(
         ndim=2,
         sampler=sampler,
         n_samples=n_samples,
+        is_seg_dataset=is_seg_dataset,
         **kwargs,
     )
 
