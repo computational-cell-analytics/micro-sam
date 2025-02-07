@@ -6,6 +6,8 @@ from typing import Union, Literal, Optional, Tuple, List
 import json
 import numpy as np
 import imageio.v3 as imageio
+from skimage.measure import regionprops
+from skimage.measure import label as connected_components
 
 from torch_em.data.datasets.util import download_source, unzip
 
@@ -14,8 +16,6 @@ from micro_sam.prompt_based_segmentation import segment_from_points, segment_fro
 
 
 URL = "https://api.data.neurosys.com:4443/agar-public/AGAR_demo.zip"
-CHECKSUM = "71113e092d241768186a5808fd0a19e2140bac904c57d64d97b4fbdc90208bb2"
-
 ROOT = "data"  # override this to your desired folder to store the data.
 
 
@@ -28,7 +28,7 @@ def get_agar_data(path: Union[os.PathLike, str] = ROOT) -> str:
 
     # Download the dataset
     zip_path = os.path.join(data_dir, "AGAR_demo.zip")
-    download_source(path=zip_path, url=URL, checksum=CHECKSUM, download=True)
+    download_source(path=zip_path, url=URL, download=True)
     unzip(zip_path=zip_path, dst=data_dir)
 
     return os.path.join(data_dir, "AGAR_representative")
@@ -93,7 +93,7 @@ def extract_prompts_from_data(prompt_choice: Literal["points", "box"] = "points"
 
 def main():
     # Make choice for a prompt
-    prompt_choice = "points"
+    prompt_choice = "box"
     view = True  # Whether to view the segmentations.
 
     # Get the images and corresponding point prompts.
@@ -144,6 +144,16 @@ def main():
             raise NotImplementedError(f"The prompt choice '{prompt_choice}' is not valid.")
 
         # Merge all segmentations into one.
+
+        # 1. First, we get the area per object and try to map as: big objects first and small ones then
+        #    (to avoid losing tiny objects near-by or to overlaps)
+        mask_props = [{"mask": mask, "area": regionprops(connected_components(mask))[0].area} for mask in masks]
+
+        # 2. Next, we assort based on area from greatest to smallest.
+        assorted_masks = sorted(mask_props, key=(lambda x: x["area"]), reverse=True)
+        masks = [per_mask["mask"] for per_mask in assorted_masks]
+
+        # 3. Finally, we merge all individual segmentations into one.
         segmentation = np.zeros(image.shape[:2], dtype=int)
         for j, mask in enumerate(masks, start=1):
             segmentation[mask > 0] = j
