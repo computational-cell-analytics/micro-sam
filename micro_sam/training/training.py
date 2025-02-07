@@ -418,21 +418,21 @@ def default_sam_dataset(
 
     # By default, let the 'default_segmentation_dataset' heuristic decide for itself.
     is_seg_dataset = None
-    # Check if the raw inputs are RGB or not. If yes, use 'ImageCollectionDataset'.
-    if raw_paths is not None:
-        # Get valid raw paths to make checks possible.
-        if raw_key is None:
-            rpath = raw_paths if isinstance(raw_paths, str) else raw_paths[0]
-        else:
-            rpath = glob(os.path.join(raw_paths if isinstance(raw_paths, str) else raw_paths[0], raw_key))[0]
 
-        # Load one of the raw inputs to validate whether it is RGB or not.
-        test_raw_inputs = load_data(path=rpath, key=raw_key if raw_key and "*" not in raw_key else None)
-        if test_raw_inputs.ndim == 3 and test_raw_inputs.shape[-1] == 3:  # i.e. if it is an RGB image.
-            is_seg_dataset = False
-            # Provide list of inputs to 'ImageCollectionDataset' in this case.
-            raw_paths = [raw_paths] if isinstance(raw_paths, str) else raw_paths
-            label_paths = [label_paths] if isinstance(label_paths, str) else label_paths
+    # Check if the raw inputs are RGB or not. If yes, use 'ImageCollectionDataset'.
+    # Get valid raw paths to make checks possible.
+    if raw_key is None:
+        rpath = raw_paths if isinstance(raw_paths, str) else raw_paths[0]
+    else:
+        rpath = glob(os.path.join(raw_paths if isinstance(raw_paths, str) else raw_paths[0], raw_key))[0]
+
+    # Load one of the raw inputs to validate whether it is RGB or not.
+    test_raw_inputs = load_data(path=rpath, key=raw_key if raw_key and "*" not in raw_key else None)
+    if test_raw_inputs.ndim == 3 and test_raw_inputs.shape[-1] == 3:  # i.e. if it is an RGB image.
+        is_seg_dataset = False
+        # Provide list of inputs to 'ImageCollectionDataset' in this case.
+        raw_paths = [raw_paths] if isinstance(raw_paths, str) else raw_paths
+        label_paths = [label_paths] if isinstance(label_paths, str) else label_paths
 
     # Set the data transformations.
     if raw_transform is None:
