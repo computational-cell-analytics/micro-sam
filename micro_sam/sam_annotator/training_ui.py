@@ -11,30 +11,10 @@ import torch_em
 
 import micro_sam.util as util
 import micro_sam.sam_annotator._widgets as widgets
+from micro_sam.training.training import _find_best_configuration
 from micro_sam.training import default_sam_dataset, train_sam_for_configuration, CONFIGURATIONS
 
 from ._tooltips import get_tooltip
-
-
-def _find_best_configuration():
-    if torch.cuda.is_available():
-
-        # Check how much memory we have and select the best matching GPU
-        # for the available VRAM size.
-        _, vram = torch.cuda.mem_get_info()
-        vram = vram / 1e9  # in GB
-
-        # Maybe we can get more configurations in the future.
-        if vram > 80:  # More than 80 GB: use the A100 configurations.
-            return "A100"
-        elif vram > 30:  # More than 30 GB: use the V100 configurations.
-            return "V100"
-        elif vram > 14:  # More than 14 GB: use the RTX5000 configurations.
-            return "rtx5000"
-        else:  # Otherwise: not enough memory to train on the GPU, use CPU instead.
-            return "CPU"
-    else:
-        return "CPU"
 
 
 class TrainingWidget(widgets._WidgetBase):
@@ -274,7 +254,7 @@ class TrainingWidget(widgets._WidgetBase):
                         image, label_image = next(iter(val_loader))
                         image, label_image = image.cpu().numpy().squeeze(), label_image.cpu().numpy().squeeze()
 
-                    # Select the last channel of the label image if we have a channel axis.
+                    # Select the first channel of the label image if we have a channel axis.
                     # (This contains the labels.)
                     if label_image.ndim == 3:
                         label_image = label_image[0]
