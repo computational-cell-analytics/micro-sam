@@ -75,8 +75,7 @@ def automatic_instance_segmentation(
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
     return_embeddings: bool = False,
-    annotator: bool = False,
-    view: bool = False,
+    annotate: bool = False,
     **generate_kwargs
 ) -> np.ndarray:
     """Run automatic segmentation for the input image.
@@ -96,8 +95,7 @@ def automatic_instance_segmentation(
         halo: Overlap of the tiles for tiled prediction.
         verbose: Verbosity flag.
         return_embeddings: Whether to return the precomputed image embeddings.
-        annotator: Whether to activate the annotator for continue annotation process.
-        view: Whether to visualize the segmentations corresponding to the original input image.
+        annotate: Whether to activate the annotator for continue annotation process.
         generate_kwargs: optional keyword arguments for the generate function of the AMG or AIS class.
 
     Returns:
@@ -144,16 +142,21 @@ def automatic_instance_segmentation(
             # if (raw) predictions provided, store them as it is w/o further post-processing.
             instances = masks
 
-        if annotator:  # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
+        if annotate:  # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
             from micro_sam.sam_annotator import annotator_2d
-            annotator_2d(
+            viewer = annotator_2d(
                 image=image_data,
                 model_type=predictor.model_name,
                 embedding_path=embedding_path,
                 segmentation_result=instances,  # Initializes the automatic segmentation to the annotator.
                 tile_shape=tile_shape,
                 halo=halo,
+                return_viewer=True,  # Returns the viewer, which allows the user to store the updated segmentations.
             )
+            # We extract the segmentation in "committed_objects" layer, where the user either:
+            # a) Performed interactive segmentation / corrections and committed them, OR
+            # b) Did not do anything and closed the annotator, i.e. keeps the segmentations as it is.
+            instances = viewer.layers["committed_objects"].data
 
     else:
         if (image_data.ndim != 3) and (image_data.ndim != 4 and image_data.shape[-1] != 3):
@@ -176,29 +179,24 @@ def automatic_instance_segmentation(
         else:
             instances = outputs
 
-        if annotator:  # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
+        if annotate:  # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
             from micro_sam.sam_annotator import annotator_3d
-            annotator_3d(
+            viewer = annotator_3d(
                 image=image_data,
                 model_type=predictor.model_name,
                 embedding_path=embedding_path,
                 segmentation_result=instances,  # Initializes the automatic segmentation to the annotator.
                 tile_shape=tile_shape,
-                halp=halo,
+                halo=halo,
+                return_viewer=True,  # Returns the viewer, which allows the user to store the updated segmentations.
             )
+            # Same as above.
+            instances = viewer.layers["committed_objects"].data
 
     # Save the instance segmentation, if 'output_path' provided.
     if output_path is not None:
         output_path = Path(output_path).with_suffix(".tif")
         imageio.imwrite(output_path, instances, compression="zlib")
-
-    # Whether to visualize the input image and corresponding segmentation.
-    if view:
-        import napari
-        v = napari.Viewer()
-        v.add_image(image_data, name="Image")
-        v.add_labels(instances.astype(int), name="Instance Segmentation")
-        napari.run()
 
     if return_embeddings:
         return instances, image_embeddings
@@ -256,10 +254,7 @@ def main():
         help="The choice of automatic segmentation with the Segment Anything models. Either 'amg' or 'ais'."
     )
     parser.add_argument(
-        "--view", action="store_true", help="Whether to view the segmentations in napari."
-    )
-    parser.add_argument(
-        "--annotator", action="store_true",
+        "--annotate", action="store_true",
         help="Whether to continue annotation after the automatic segmentation is generated."
     )
     parser.add_argument(
@@ -319,8 +314,7 @@ def main():
         ndim=args.ndim,
         tile_shape=args.tile_shape,
         halo=args.halo,
-        annotator=args.annotator,
-        view=args.view,
+        annotate=args.annotate,
         **generate_kwargs,
     )
 
