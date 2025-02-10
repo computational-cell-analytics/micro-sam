@@ -19,7 +19,7 @@ def finetune_lm_generalist(args):
     checkpoint_path = None  # override this to start training from a custom checkpoint
     patch_shape = (512, 512)  # the patch shape for training
     n_objects_per_batch = args.n_objects  # this is the number of objects per batch that will be sampled (default: 25)
-    checkpoint_name = f"{args.model_type}/lm_generalist_sam"
+    checkpoint_name = f"{(model_type)}" + ("_scratch" if args.from_scratch else "") + "/lm_generalist_sam"
 
     # all the stuff we need for training
     train_loader, val_loader = get_generalist_lm_loaders(input_path=args.input_path, patch_shape=patch_shape)
@@ -31,7 +31,7 @@ def finetune_lm_generalist(args):
         model_type=model_type,
         train_loader=train_loader,
         val_loader=val_loader,
-        early_stopping=None,  # NOTE: Avoid early stopping for training the generalist model.
+        early_stopping=None,  # Avoid early stopping for training the generalist model.
         n_objects_per_batch=n_objects_per_batch,
         checkpoint_path=checkpoint_path,
         with_segmentation_decoder=True,
@@ -40,7 +40,7 @@ def finetune_lm_generalist(args):
         n_iterations=args.iterations,
         save_root=args.save_root,
         scheduler_kwargs=scheduler_kwargs,
-        verify_n_labels_in_loader=None,  # NOTE: Verifies all labels in the loader(s).
+        verify_n_labels_in_loader=None,  # Verifies all labels in the loader(s).
         box_distortion_factor=0.05,
         load_weights=(not args.from_scratch),
     )
@@ -65,7 +65,7 @@ def main():
         help="The model type to use for fine-tuning. Either 'vit_t', 'vit_b', 'vit_l' or 'vit_h'."
     )
     parser.add_argument(
-        "--save_root", "-s", default=None,
+        "--save_root", "-s", default="/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam",
         help="Where to save the checkpoint and logs. By default they will be saved where this script is run from."
     )
     parser.add_argument(
