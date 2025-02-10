@@ -355,12 +355,13 @@ def _update_patch_shape(patch_shape, raw_paths, raw_key, with_channels):
     if raw_key is None:  # If no key is given then we assume it's an image file.
         ndim = imageio.imread(path).ndim
     else:  # Otherwise we try to open the file from key.
-        if "*" in raw_key:  # In that case we read one of the images.
-            image_path = glob(os.path.join(path, raw_key))[0]
-            ndim = imageio.imread(image_path).ndim
-        else:  # Otherwise open it with elf.
+        try:  # First try to open it with elf.
             with open_file(path, "r") as f:
                 ndim = f[raw_key].ndim
+        except ValueError:  # This may fail for images in a folder with different sizes.
+            # In that case we read one of the images.
+            image_path = glob(os.path.join(path, raw_key))[0]
+            ndim = imageio.imread(image_path).ndim
 
     if ndim == 2:
         assert len(patch_shape) == 2
