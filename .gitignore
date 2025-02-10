@@ -184,3 +184,7 @@ gpu_jobs/
 # Additional stuff to ignore
 data/
 embeddings/
+*.sh
+*.png
+*.svg
+*.csv
