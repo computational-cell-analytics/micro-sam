@@ -9,8 +9,8 @@ ROOT = "/home/nimanwai/micro-sam/development"
 
 
 def get_comparison_plot_for_new_models(metric, model_type):
-    old_mfolder = "old_model" if model_type == "vit_b_lm" else "vit_l_old_model"
-    new_mfolder = "new_model" if model_type == "vit_b_lm" else "vit_l_new_model"
+    old_mfolder = "vit_b_old_model" if model_type == "vit_b_lm" else "vit_l_old_model"
+    new_mfolder = "vit_b_new_model" if model_type == "vit_b_lm" else "vit_l_new_model"
 
     old_results = natsorted(glob(os.path.join(ROOT, old_mfolder, "*", "results", "ais_2d.csv")))
     new_results = natsorted(glob(os.path.join(ROOT, new_mfolder, "*", "results", "ais_2d.csv")))
