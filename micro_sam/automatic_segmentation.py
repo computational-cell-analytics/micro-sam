@@ -75,6 +75,7 @@ def automatic_instance_segmentation(
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
     return_embeddings: bool = False,
+    annotate: bool = False,
     **generate_kwargs
 ) -> np.ndarray:
     """Run automatic segmentation for the input image.
@@ -94,6 +95,7 @@ def automatic_instance_segmentation(
         halo: Overlap of the tiles for tiled prediction.
         verbose: Verbosity flag.
         return_embeddings: Whether to return the precomputed image embeddings.
+        annotate: Whether to activate the annotator for continue annotation process.
         generate_kwargs: optional keyword arguments for the generate function of the AMG or AIS class.
 
     Returns:
@@ -161,6 +163,30 @@ def automatic_instance_segmentation(
         else:
             instances = outputs
 
+    # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
+    if annotate:
+        from micro_sam.sam_annotator import annotator_2d, annotator_3d
+        annotator_function = annotator_2d if ndim == 2 else annotator_3d
+
+        viewer = annotator_function(
+            image=image_data,
+            model_type=predictor.model_name,
+            embedding_path=embedding_path,
+            segmentation_result=instances,  # Initializes the automatic segmentation to the annotator.
+            tile_shape=tile_shape,
+            halo=halo,
+            return_viewer=True,  # Returns the viewer, which allows the user to store the updated segmentations.
+        )
+
+        # Start the GUI here
+        import napari
+        napari.run()
+
+        # We extract the segmentation in "committed_objects" layer, where the user either:
+        # a) Performed interactive segmentation / corrections and committed them, OR
+        # b) Did not do anything and closed the annotator, i.e. keeps the segmentations as it is.
+        instances = viewer.layers["committed_objects"].data
+
     # Save the instance segmentation, if 'output_path' provided.
     if output_path is not None:
         output_path = Path(output_path).with_suffix(".tif")
@@ -222,6 +248,10 @@ def main():
         help="The choice of automatic segmentation with the Segment Anything models. Either 'amg' or 'ais'."
     )
     parser.add_argument(
+        "--annotate", action="store_true",
+        help="Whether to continue annotation after the automatic segmentation is generated."
+    )
+    parser.add_argument(
         "-d", "--device", default=None,
         help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
         "By default the most performant available device will be selected."
@@ -278,6 +308,7 @@ def main():
         ndim=args.ndim,
         tile_shape=args.tile_shape,
         halo=args.halo,
+        annotate=args.annotate,
         **generate_kwargs,
     )
 
