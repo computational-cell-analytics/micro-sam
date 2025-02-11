@@ -142,22 +142,6 @@ def automatic_instance_segmentation(
             # if (raw) predictions provided, store them as it is w/o further post-processing.
             instances = masks
 
-        if annotate:  # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
-            from micro_sam.sam_annotator import annotator_2d
-            viewer = annotator_2d(
-                image=image_data,
-                model_type=predictor.model_name,
-                embedding_path=embedding_path,
-                segmentation_result=instances,  # Initializes the automatic segmentation to the annotator.
-                tile_shape=tile_shape,
-                halo=halo,
-                return_viewer=True,  # Returns the viewer, which allows the user to store the updated segmentations.
-            )
-            # We extract the segmentation in "committed_objects" layer, where the user either:
-            # a) Performed interactive segmentation / corrections and committed them, OR
-            # b) Did not do anything and closed the annotator, i.e. keeps the segmentations as it is.
-            instances = viewer.layers["committed_objects"].data
-
     else:
         if (image_data.ndim != 3) and (image_data.ndim != 4 and image_data.shape[-1] != 3):
             raise ValueError(f"The inputs does not match the shape expectation of 3d inputs: {image_data.shape}")
@@ -179,19 +163,29 @@ def automatic_instance_segmentation(
         else:
             instances = outputs
 
-        if annotate:  # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
-            from micro_sam.sam_annotator import annotator_3d
-            viewer = annotator_3d(
-                image=image_data,
-                model_type=predictor.model_name,
-                embedding_path=embedding_path,
-                segmentation_result=instances,  # Initializes the automatic segmentation to the annotator.
-                tile_shape=tile_shape,
-                halo=halo,
-                return_viewer=True,  # Returns the viewer, which allows the user to store the updated segmentations.
-            )
-            # Same as above.
-            instances = viewer.layers["committed_objects"].data
+    # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
+    if annotate:
+        from micro_sam.sam_annotator import annotator_2d, annotator_3d
+        annotator_function = annotator_2d if ndim == 2 else annotator_3d
+
+        viewer = annotator_function(
+            image=image_data,
+            model_type=predictor.model_name,
+            embedding_path=embedding_path,
+            segmentation_result=instances,  # Initializes the automatic segmentation to the annotator.
+            tile_shape=tile_shape,
+            halo=halo,
+            return_viewer=True,  # Returns the viewer, which allows the user to store the updated segmentations.
+        )
+
+        # Start the GUI here
+        import napari
+        napari.run()
+
+        # We extract the segmentation in "committed_objects" layer, where the user either:
+        # a) Performed interactive segmentation / corrections and committed them, OR
+        # b) Did not do anything and closed the annotator, i.e. keeps the segmentations as it is.
+        instances = viewer.layers["committed_objects"].data
 
     # Save the instance segmentation, if 'output_path' provided.
     if output_path is not None:

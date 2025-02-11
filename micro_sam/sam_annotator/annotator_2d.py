@@ -98,10 +98,10 @@ def annotator_2d(
         device=device, tile_shape=tile_shape, halo=halo
     )
 
-    napari.run()
-
     if return_viewer:
         return viewer
+
+    napari.run()
 
 
 def main():
