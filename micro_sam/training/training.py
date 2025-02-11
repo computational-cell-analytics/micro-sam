@@ -381,7 +381,7 @@ def default_sam_dataset(
     label_key: Optional[str],
     patch_shape: Tuple[int],
     with_segmentation_decoder: bool,
-    with_channels: bool = False,
+    with_channels: Optional[bool] = None,
     sampler: Optional[Callable] = None,
     raw_transform: Optional[Callable] = None,
     n_samples: Optional[int] = None,
@@ -403,7 +403,7 @@ def default_sam_dataset(
             or a glob pattern for selecting multiple files.
         patch_shape: The shape for training patches.
         with_segmentation_decoder: Whether to train with additional segmentation decoder.
-        with_channels: Whether the image data has RGB channels.
+        with_channels: Whether the image data has channels. By default, it makes the decision based on inputs.
         sampler: A sampler to reject batches according to a given criterion.
         raw_transform: Transformation applied to the image data.
             If not given the data will be cast to 8bit.
@@ -431,12 +431,21 @@ def default_sam_dataset(
     test_raw_inputs = load_data(path=rpath, key=raw_key if raw_key and "*" not in raw_key else None)
     if test_raw_inputs.ndim == 3:
         if test_raw_inputs.shape[-1] == 3:  # i.e. if it is an RGB image and has channels last.
-            is_seg_dataset = False
-            # Provide list of inputs to 'ImageCollectionDataset' in this case.
+            is_seg_dataset = False  # we use 'ImageCollectionDataset' in this case.
+            # We need to provide a list of inputs to 'ImageCollectionDataset'.
             raw_paths = [raw_paths] if isinstance(raw_paths, str) else raw_paths
             label_paths = [label_paths] if isinstance(label_paths, str) else label_paths
+
+            # This is not relevant for 'ImageCollectionDataset'. Hence, we set 'with_channels to 'False'.
+            with_channels = False if with_channels is None else with_channels
+
         elif test_raw_inputs.shape[0] == 3:  # i.e. if it is an RGB image and has channels first.
-            with_channels = True
+            # This is relevant for 'SegmentationDataset'. If not provided by the user, we set this to 'True'.
+            with_channels = True if with_channels is None else with_channels
+
+    # Set 'with_channels' to 'False', i.e. the default behavior of 'default_segmentation_dataset'
+    # Otherwise, let the user / data-heuristic make the choice.
+    with_channels = False if with_channels is None else with_channels
 
     # Set the data transformations.
     if raw_transform is None:
