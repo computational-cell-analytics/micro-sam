@@ -422,18 +422,21 @@ def default_sam_dataset(
 
     # Check if the raw inputs are RGB or not. If yes, use 'ImageCollectionDataset'.
     # Get valid raw paths to make checks possible.
-    if raw_key is None:
-        rpath = raw_paths if isinstance(raw_paths, str) else raw_paths[0]
-    else:
+    if raw_key and "*" in raw_key:  # Use the wildcard pattern to find the filepath to only one image.
         rpath = glob(os.path.join(raw_paths if isinstance(raw_paths, str) else raw_paths[0], raw_key))[0]
+    else:  # Otherwise, either 'raw_key' is None or container format, supported by 'elf', then we load 1 filepath.
+        rpath = raw_paths if isinstance(raw_paths, str) else raw_paths[0]
 
     # Load one of the raw inputs to validate whether it is RGB or not.
     test_raw_inputs = load_data(path=rpath, key=raw_key if raw_key and "*" not in raw_key else None)
-    if test_raw_inputs.ndim == 3 and test_raw_inputs.shape[-1] == 3:  # i.e. if it is an RGB image.
-        is_seg_dataset = False
-        # Provide list of inputs to 'ImageCollectionDataset' in this case.
-        raw_paths = [raw_paths] if isinstance(raw_paths, str) else raw_paths
-        label_paths = [label_paths] if isinstance(label_paths, str) else label_paths
+    if test_raw_inputs.ndim == 3:
+        if test_raw_inputs.shape[-1] == 3:  # i.e. if it is an RGB image and has channels last.
+            is_seg_dataset = False
+            # Provide list of inputs to 'ImageCollectionDataset' in this case.
+            raw_paths = [raw_paths] if isinstance(raw_paths, str) else raw_paths
+            label_paths = [label_paths] if isinstance(label_paths, str) else label_paths
+        elif test_raw_inputs.shape[0] == 3:  # i.e. if it is an RGB image and has channels first.
+            with_channels = True
 
     # Set the data transformations.
     if raw_transform is None:
@@ -445,9 +448,7 @@ def default_sam_dataset(
             foreground=True, instances=True, min_size=min_size,
         )
     else:
-        label_transform = torch_em.transform.label.MinSizeLabelTransform(
-            min_size=min_size
-        )
+        label_transform = torch_em.transform.label.MinSizeLabelTransform(min_size=min_size)
 
     # Set a default sampler if none was passed.
     if sampler is None:
@@ -455,10 +456,7 @@ def default_sam_dataset(
 
     # Check the patch shape to add a singleton if required.
     patch_shape = _update_patch_shape(
-        patch_shape=patch_shape,
-        raw_paths=raw_paths,
-        raw_key=raw_key,
-        with_channels=with_channels,
+        patch_shape=patch_shape, raw_paths=raw_paths, raw_key=raw_key, with_channels=with_channels,
     )
 
     # Set a minimum number of samples per epoch.
@@ -470,6 +468,7 @@ def default_sam_dataset(
             label_key=label_key,
             batch_size=1,
             patch_shape=patch_shape,
+            with_channels=with_channels,
             ndim=2,
             is_seg_dataset=is_seg_dataset,
             **kwargs
