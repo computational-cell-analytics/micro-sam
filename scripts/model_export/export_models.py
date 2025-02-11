@@ -116,7 +116,7 @@ def export_model(model_path, model_type, modality, version, email):
 
     # Unzip files
     from torch_em.data.datasets.util import unzip
-    unzip(zip_path=output_path, dst=(output_path + ".unzip"))
+    unzip(zip_path=output_path, dst=(output_path + ".unzip"), remove=False)
 
     print("Exported model", model_id)
     encoder_path = os.path.join(output_path + ".unzip", f"{model_type}.pt")
