@@ -436,15 +436,15 @@ def default_sam_dataset(
             raw_paths = [raw_paths] if isinstance(raw_paths, str) else raw_paths
             label_paths = [label_paths] if isinstance(label_paths, str) else label_paths
 
-            # This is not relevant for 'ImageCollectionDataset'. Hence, we set 'with_channels to 'False'.
+            # This is not relevant for 'ImageCollectionDataset'. Hence, we set 'with_channels' to 'False'.
             with_channels = False if with_channels is None else with_channels
 
-        elif test_raw_inputs.shape[0] == 3:  # i.e. if it is an RGB image and has channels first.
+        elif test_raw_inputs.shape[0] == 3:  # i.e. if it is a RGB image and has 3 channels first.
             # This is relevant for 'SegmentationDataset'. If not provided by the user, we set this to 'True'.
             with_channels = True if with_channels is None else with_channels
 
     # Set 'with_channels' to 'False', i.e. the default behavior of 'default_segmentation_dataset'
-    # Otherwise, let the user / data-heuristic make the choice.
+    # Otherwise, let the user make the choice as priority, else set this to our suggested default.
     with_channels = False if with_channels is None else with_channels
 
     # Set the data transformations.
