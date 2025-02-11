@@ -13,9 +13,9 @@ MODEL_TO_ID = {
     "vit_t_em_organelles": "greedy-whale",
     "vit_b_em_organelles": "noisy-ox",
     "vit_l_em_organelles": "humorous-crab",
-    "vit_t_lm": "faithful-chicken",
-    "vit_b_lm": "diplomatic-bug",
-    "vit_l_lm": "idealistic-rat",
+    # "vit_t_lm": "faithful-chicken",
+    # "vit_b_lm": "diplomatic-bug",
+    # "vit_l_lm": "idealistic-rat",
 }
 
 MODEL_TO_NAME = {
@@ -46,9 +46,14 @@ def download_file(url, filename):
 
 
 def get_id_and_emoji(name):
+    animal_file = "animals.yaml"
+    download_file(ANIMAL_URL, animal_file)
+    with open(animal_file) as f:
+        animal_dict = yaml.safe_load(f)
+
     if name in MODEL_TO_ID:
         model_id = MODEL_TO_ID[name]
-        adj, name = model_id.split()
+        adj, name = model_id.split("-")
 
     else:
         adjective_file = "adjectives.txt"
@@ -58,10 +63,6 @@ def get_id_and_emoji(name):
             for adj in f.readlines():
                 adjectives.append(adj.rstrip("\n"))
 
-        animal_file = "animals.yaml"
-        download_file(ANIMAL_URL, animal_file)
-        with open(animal_file) as f:
-            animal_dict = yaml.safe_load(f)
         animal_names = list(animal_dict.keys())
 
         collection_file = "collection.json"
