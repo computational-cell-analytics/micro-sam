@@ -37,7 +37,7 @@ If you are interested in contributing to micro-sam, please see the [contributing
 ## Citation
 
 If you are using this repository in your research please cite
-- our [paper]([https://doi.org/10.1101/2023.08.21.554208](https://www.nature.com/articles/s41592-024-02580-4)
+- our [paper](https://www.nature.com/articles/s41592-024-02580-4) (now published in Nature Methods!)
 - and the original [Segment Anything publication](https://arxiv.org/abs/2304.02643).
 - If you use a `vit-tiny` models please also cite [Mobile SAM](https://arxiv.org/abs/2306.14289).
 
