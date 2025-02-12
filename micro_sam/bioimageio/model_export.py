@@ -28,7 +28,10 @@ DEFAULTS = {
     ],
     "description": "Finetuned Segment Anything Model for Microscopy",
     "cite": [
-        spec.CiteEntry(text="Archit et al. Segment Anything for Microscopy", doi=spec.Doi("10.1101/2023.08.21.554208")),
+        spec.CiteEntry(
+            text="Archit et al. Segment Anything for Microscopy",
+            doi=spec.Doi("10.1038/s41592-024-02580-4")
+        ),
     ],
     "tags": ["segment-anything", "instance-segmentation"],
 }
