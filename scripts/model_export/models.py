@@ -13,9 +13,9 @@ MODEL_TO_ID = {
     "vit_t_em_organelles": "greedy-whale",
     "vit_b_em_organelles": "noisy-ox",
     "vit_l_em_organelles": "humorous-crab",
-    # "vit_t_lm": "faithful-chicken",
-    # "vit_b_lm": "diplomatic-bug",
-    # "vit_l_lm": "idealistic-rat",
+    "vit_t_lm": "faithful-chicken",
+    "vit_b_lm": "diplomatic-bug",
+    "vit_l_lm": "idealistic-rat",
 }
 
 MODEL_TO_NAME = {
