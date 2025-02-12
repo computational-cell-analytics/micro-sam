@@ -171,8 +171,12 @@ class TrainingWidget(widgets._WidgetBase):
 
         patch_shape = (self.patch_x, self.patch_y)
         dataset = default_sam_dataset(
-            str(self.raw_path), self.raw_key, str(self.label_path), self.label_key,
-            patch_shape=patch_shape, with_segmentation_decoder=self.with_segmentation_decoder,
+            raw_paths=str(self.raw_path),
+            raw_key=self.raw_key,
+            label_paths=str(self.label_path),
+            label_key=self.label_key,
+            patch_shape=patch_shape,
+            with_segmentation_decoder=self.with_segmentation_decoder,
         )
 
         raw_path_val, label_path_val = self.raw_path_val, self.label_path_val
@@ -183,8 +187,12 @@ class TrainingWidget(widgets._WidgetBase):
         else:
             train_dataset = dataset
             val_dataset = default_sam_dataset(
-                str(raw_path_val), self.raw_key, str(label_path_val), self.label_key,
-                patch_shape=patch_shape, with_segmentation_decoder=self.with_segmentation_decoder,
+                raw_paths=str(raw_path_val),
+                raw_key=self.raw_key,
+                label_paths=str(label_path_val),
+                label_key=self.label_key,
+                patch_shape=patch_shape,
+                with_segmentation_decoder=self.with_segmentation_decoder,
             )
 
         train_loader = torch_em.segmentation.get_data_loader(
