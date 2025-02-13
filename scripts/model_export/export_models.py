@@ -1,4 +1,18 @@
 """Helper scripts to export models for upload to bioimageio/zenodo.
+
+Hashes for new models:
+
+Exported model idealistic-rat
+Encoder:
+vit_l_lm xxh128:fc32ea6f7fcc7eb02737d1304f81f5f2
+Decoder:
+vit_l_lm_decoder xxh128:779b5a50ecc6d46d495753fba8717f2f
+
+Exported model diplomatic-bug
+Encoder:
+vit_b_lm xxh128:8fd5806be3c3ba213e19a709d6d1495f
+Decoder:
+vit_b_lm_decoder xxh128:9f580a96984b3085389ced5d9a4ae75d
 """
 
 import os
