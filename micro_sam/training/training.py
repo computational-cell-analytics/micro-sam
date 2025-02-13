@@ -738,15 +738,8 @@ def main():
     train_images, train_gt, train_image_key, train_gt_key = args.images, args.labels, args.image_key, args.label_key
     val_images, val_gt, val_image_key, val_gt_key = args.val_images, args.val_labels, args.val_image_key, args.val_label_key  # noqa
 
-    # Make sure that raw and label paths passed are valid.
-    if [p for p in train_images if not os.path.exists(p)]:
-        raise FileNotFoundError("The path to image data does not exist.")
-    if [p for p in train_gt if not os.path.exists(p)]:
-        raise FileNotFoundError("The path to label data does not exist.")
-    if val_images is not None and [p for p in val_images if not os.path.exists(p)]:
-        raise FileNotFoundError("The path to validation image data does not exist.")
-    if val_gt is not None and [p for p in val_gt if not os.path.exists(p)]:
-        raise FileNotFoundError("The path to validation label data does not exist.")
+    print(train_images, train_gt, train_image_key, train_gt_key)
+    print(val_images, val_gt, val_image_key, val_gt_key)
 
     # 2. Prepare the dataloaders.
 
@@ -792,6 +785,8 @@ def main():
 
     if model_type is None:  # If user does not specify the model, we use the default model corresponding to the config.
         model_type = CONFIGURATIONS[config]["model_type"]
+
+    print(model_type, config)
 
     train_sam_for_configuration(
         name=checkpoint_name,

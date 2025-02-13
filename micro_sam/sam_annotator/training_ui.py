@@ -250,7 +250,10 @@ class TrainingWidget(widgets._WidgetBase):
                 # we just export the checkpoint.
                 if os.path.splitext(self.output_path)[1] in (".pt", ".pth"):
                     util.export_custom_sam_model(
-                        checkpoint_path=export_checkpoint, model_type=model_type, save_path=self.output_path,
+                        checkpoint_path=export_checkpoint,
+                        model_type=model_type,
+                        save_path=self.output_path,
+                        with_segmentation_decoder=self.with_segmentation_decoder,
                     )
 
                 # Otherwise we export it as bioimage.io model.
