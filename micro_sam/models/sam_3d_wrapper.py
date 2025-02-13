@@ -1,4 +1,5 @@
-from typing import Any, List, Dict, Type
+import os
+from typing import Any, List, Dict, Type, Union, Optional
 
 import torch
 import torch.nn as nn
@@ -11,13 +12,13 @@ from .peft_sam import LoRASurgery
 
 
 def get_sam_3d_model(
-    device,
-    n_classes,
-    image_size,
-    lora_rank=None,
-    freeze_encoder=False,
-    model_type="vit_b",
-    checkpoint_path=None,
+    device: Union[str, torch.device],
+    n_classes: int,
+    image_size: int,
+    lora_rank: Optional[int] = None,
+    freeze_encoder: bool = False,
+    model_type: str = "vit_b",
+    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
 ):
     if lora_rank is None:
         peft_kwargs = {}
@@ -36,23 +37,37 @@ def get_sam_3d_model(
     )
 
     # Make sure not to freeze the encoder when using LoRA.
-    freeze_encoder_ = freeze_encoder if lora_rank is None else False
-    sam_3d = Sam3DWrapper(sam, freeze_encoder=freeze_encoder_)
+    _freeze_encoder = freeze_encoder if lora_rank is None else False
+    sam_3d = Sam3DWrapper(sam, freeze_encoder=_freeze_encoder, model_type=model_type)
     sam_3d.to(device)
+
     return sam_3d
 
 
 class Sam3DWrapper(nn.Module):
-    def __init__(self, sam_model: Sam, freeze_encoder: bool):
+    def __init__(self, sam_model: Sam, freeze_encoder: bool, model_type: str = "vit_b"):
         """Initializes the Sam3DWrapper object.
 
         Args:
             sam_model: The Sam model to be wrapped.
             freeze_encoder: Whether to freeze the image encoder.
+            model_type: The choice of segment anything model to wrap adapters
+                for respective model configuration.
         """
         super().__init__()
+
+        # Model configurations
+        if model_type == "vit_b":
+            embed_dim, num_heads = 768, 12
+        elif model_type == "vit_l":
+            embed_dim, num_heads = 1024, 16
+        elif model_type == "vit_h":
+            embed_dim, num_heads = 1280, 16
+        else:
+            raise ValueError(f"'{model_type}' is not a supported choice of model.")
+
         sam_model.image_encoder = ImageEncoderViT3DWrapper(
-            image_encoder=sam_model.image_encoder
+            image_encoder=sam_model.image_encoder, num_heads=num_heads, embed_dim=embed_dim,
         )
         self.sam_model = sam_model
 
@@ -61,11 +76,7 @@ class Sam3DWrapper(nn.Module):
             for param in self.sam_model.image_encoder.parameters():
                 param.requires_grad = False
 
-    def forward(
-        self,
-        batched_input: List[Dict[str, Any]],
-        multimask_output: bool
-    ) -> List[Dict[str, torch.Tensor]]:
+    def forward(self, batched_input: List[Dict[str, Any]], multimask_output: bool) -> List[Dict[str, torch.Tensor]]:
         """Predict 3D masks for the current inputs.
 
         Unlike original SAM this model only supports automatic segmentation and does not support prompts.
@@ -133,21 +144,18 @@ class Sam3DWrapper(nn.Module):
             "iou_predictions": iou_pred,
             "low_res_logits": low_res_mask.unsqueeze(0)
         } for mask, iou_pred, low_res_mask in zip(masks, iou_predictions, low_res_masks)]
+
         return outputs
 
 
 class ImageEncoderViT3DWrapper(nn.Module):
-    def __init__(
-        self,
-        image_encoder: nn.Module,
-        num_heads: int = 12,
-        embed_dim: int = 768,
-    ):
+    def __init__(self, image_encoder: nn.Module, num_heads: int = 12, embed_dim: int = 768):
+
         super().__init__()
         self.image_encoder = image_encoder
         self.img_size = self.image_encoder.img_size
 
-        # replace default blocks with 3d adapter blocks
+        # Replace default blocks with 3d adapter blocks
         for i, blk in enumerate(self.image_encoder.blocks):
             self.image_encoder.blocks[i] = NDBlockWrapper(block=blk, num_heads=num_heads, dim=embed_dim)
 

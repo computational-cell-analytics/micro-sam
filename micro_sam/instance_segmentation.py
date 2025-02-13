@@ -1,10 +1,10 @@
-"""
-Automated instance segmentation functionality.
+"""Automated instance segmentation functionality.
 The classes implemented here extend the automatic instance segmentation from Segment Anything:
 https://computational-cell-analytics.github.io/micro-sam/micro_sam.html
 """
 
 import os
+import warnings
 from abc import ABC
 from copy import deepcopy
 from collections import OrderedDict
@@ -12,10 +12,12 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import vigra
 import numpy as np
-import torch
-
+import elf.parallel as parallel
+from elf.parallel.filters import apply_filter
 from skimage.measure import label, regionprops
 from skimage.segmentation import relabel_sequential
+
+import torch
 from torchvision.ops.boxes import batched_nms, box_area
 
 from torch_em.model import UNETR
@@ -375,9 +377,7 @@ class AutomaticMaskGenerator(AMGBase):
 
         if points_per_side is not None:
             self.point_grids = amg_utils.build_all_layer_point_grids(
-                points_per_side,
-                crop_n_layers,
-                crop_n_points_downscale_factor,
+                points_per_side, crop_n_layers, crop_n_points_downscale_factor,
             )
         elif point_grids is not None:
             self.point_grids = point_grids
@@ -404,8 +404,8 @@ class AutomaticMaskGenerator(AMGBase):
         in_points = torch.as_tensor(transformed_points, device=self._predictor.device, dtype=torch.float)
         in_labels = torch.ones(in_points.shape[0], dtype=torch.int, device=in_points.device)
         masks, iou_preds, _ = self._predictor.predict_torch(
-            in_points[:, None, :],
-            in_labels[:, None],
+            point_coords=in_points[:, None, :],
+            point_labels=in_labels[:, None],
             multimask_output=True,
             return_logits=True,
         )
@@ -561,16 +561,18 @@ class AutomaticMaskGenerator(AMGBase):
 
 
 # Helper function for tiled embedding computation and checking consistent state.
-def _process_tiled_embeddings(predictor, image, image_embeddings, tile_shape, halo):
+def _process_tiled_embeddings(predictor, image, image_embeddings, tile_shape, halo, verbose):
     if image_embeddings is None:
         if tile_shape is None or halo is None:
             raise ValueError("To compute tiled embeddings the parameters tile_shape and halo have to be passed.")
-        image_embeddings = util.precompute_image_embeddings(predictor, image, tile_shape=tile_shape, halo=halo)
+        image_embeddings = util.precompute_image_embeddings(
+            predictor, image, tile_shape=tile_shape, halo=halo, verbose=verbose
+        )
 
     # Use tile shape and halo from the precomputed embeddings if not given.
     # Otherwise check that they are consistent.
     feats = image_embeddings["features"]
-    tile_shape_, halo_ = feats.attrs["tile_shape"], feats.attrs["halo"]
+    tile_shape_, halo_ = tuple(feats.attrs["tile_shape"]), tuple(feats.attrs["halo"])
     if tile_shape is None:
         tile_shape = tile_shape_
     elif tile_shape != tile_shape_:
@@ -652,7 +654,7 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         self._original_size = original_size
 
         image_embeddings, tile_shape, halo = _process_tiled_embeddings(
-            self._predictor, image, image_embeddings, tile_shape, halo
+            self._predictor, image, image_embeddings, tile_shape, halo, verbose=verbose,
         )
 
         tiling = blocking([0, 0], original_size, tile_shape)
@@ -701,8 +703,7 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
 class DecoderAdapter(torch.nn.Module):
     """Adapter to contain the UNETR decoder in a single module.
 
-    To apply the decoder on top of pre-computed embeddings for
-    the segmentation functionality.
+    To apply the decoder on top of pre-computed embeddings for the segmentation functionality.
     See also: https://github.com/constantinpape/torch-em/blob/main/torch_em/model/unetr.py
     """
     def __init__(self, unetr):
@@ -750,15 +751,20 @@ def get_unetr(
     image_encoder: torch.nn.Module,
     decoder_state: Optional[OrderedDict[str, torch.Tensor]] = None,
     device: Optional[Union[str, torch.device]] = None,
+    out_channels: int = 3,
+    flexible_load_checkpoint: bool = False,
 ) -> torch.nn.Module:
     """Get UNETR model for automatic instance segmentation.
 
     Args:
         image_encoder: The image encoder of the SAM model.
             This is used as encoder by the UNETR too.
-        decoder_state: Optional decoder state to initialize the weights
-            of the UNETR decoder.
+        decoder_state: Optional decoder state to initialize the weights of the UNETR decoder.
         device: The device.
+        out_channels: The number of output channels.
+        flexible_load_checkpoint: Whether to allow reinitialization of parameters
+            which could not be found in the provided decoder state.
+
     Returns:
         The UNETR model.
     """
@@ -767,7 +773,7 @@ def get_unetr(
     unetr = UNETR(
         backbone="sam",
         encoder=image_encoder,
-        out_channels=3,
+        out_channels=out_channels,
         use_sam_stats=True,
         final_activation="Sigmoid",
         use_skip_connection=False,
@@ -777,7 +783,18 @@ def get_unetr(
         unetr_state_dict = unetr.state_dict()
         for k, v in unetr_state_dict.items():
             if not k.startswith("encoder"):
-                unetr_state_dict[k] = decoder_state[k]
+                if flexible_load_checkpoint:  # Whether allow reinitalization of params, if not found.
+                    if k in decoder_state:  # First check whether the key is available in the provided decoder state.
+                        unetr_state_dict[k] = decoder_state[k]
+                    else:  # Otherwise, allow it to initialize it.
+                        warnings.warn(f"Could not find '{k}' in the pretrained state dict. Hence, we reinitialize it.")
+                        unetr_state_dict[k] = v
+
+                else:  # Whether be strict on finding the parameter in the decoder state.
+                    if k not in decoder_state:
+                        raise RuntimeError(f"The parameters for '{k}' could not be found.")
+                    unetr_state_dict[k] = decoder_state[k]
+
         unetr.load_state_dict(unetr_state_dict)
 
     unetr.to(device)
@@ -795,6 +812,7 @@ def get_decoder(
         image_encoder: The image encoder of the SAM model.
         decoder_state: State to initialize the weights of the UNETR decoder.
         device: The device.
+
     Returns:
         The decoder for instance segmentation.
     """
@@ -817,7 +835,7 @@ def get_predictor_and_decoder(
         model_type: The type of the image encoder used in the SAM model.
         checkpoint_path: Path to the checkpoint from which to load the data.
         device: The device.
-        lora_rank: The rank for low rank adaptation of the attention layers.
+        peft_kwargs: Keyword arguments for the PEFT wrapper class.
 
     Returns:
         The SAM predictor.
@@ -837,6 +855,55 @@ def get_predictor_and_decoder(
         )
     decoder = get_decoder(predictor.model.image_encoder, state["decoder_state"], device)
     return predictor, decoder
+
+
+def _watershed_from_center_and_boundary_distances_parallel(
+    center_distances,
+    boundary_distances,
+    foreground_map,
+    center_distance_threshold,
+    boundary_distance_threshold,
+    foreground_threshold,
+    distance_smoothing,
+    min_size,
+    tile_shape,
+    halo,
+    n_threads,
+    verbose=False,
+):
+    center_distances = apply_filter(
+        center_distances, "gaussianSmoothing", sigma=distance_smoothing,
+        block_shape=tile_shape, n_threads=n_threads
+    )
+    boundary_distances = apply_filter(
+        boundary_distances, "gaussianSmoothing", sigma=distance_smoothing,
+        block_shape=tile_shape, n_threads=n_threads
+    )
+
+    fg_mask = foreground_map > foreground_threshold
+
+    marker_map = np.logical_and(
+        center_distances < center_distance_threshold, boundary_distances < boundary_distance_threshold
+    )
+    marker_map[~fg_mask] = 0
+
+    markers = np.zeros(marker_map.shape, dtype="uint64")
+    markers = parallel.label(
+        marker_map, out=markers, block_shape=tile_shape, n_threads=n_threads, verbose=verbose,
+    )
+
+    seg = np.zeros_like(markers, dtype="uint64")
+    seg = parallel.seeded_watershed(
+        boundary_distances, seeds=markers, out=seg, block_shape=tile_shape,
+        halo=halo, n_threads=n_threads, verbose=verbose, mask=fg_mask,
+    )
+
+    out = np.zeros_like(seg, dtype="uint64")
+    out = parallel.size_filter(
+        seg, out=out, min_size=min_size, block_shape=tile_shape, n_threads=n_threads, verbose=verbose
+    )
+
+    return out
 
 
 class InstanceSegmentationWithDecoder:
@@ -974,6 +1041,9 @@ class InstanceSegmentationWithDecoder:
         distance_smoothing: float = 1.6,
         min_size: int = 0,
         output_mode: Optional[str] = "binary_mask",
+        tile_shape: Optional[Tuple[int, int]] = None,
+        halo: Optional[Tuple[int, int]] = None,
+        n_threads: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Generate instance segmentation for the currently initialized image.
 
@@ -988,6 +1058,11 @@ class InstanceSegmentationWithDecoder:
             distance_smoothing: Sigma value for smoothing the distance predictions.
             min_size: Minimal object size in the segmentation result.
             output_mode: The form masks are returned in. Pass None to directly return the instance segmentation.
+            tile_shape: Tile shape for parallelizing the instance segmentation post-processing.
+                This parameter is independent from the tile shape for computing the embeddings.
+                If not given then post-processing will not be parallelized.
+            halo: Halo for parallel post-processing. See also `tile_shape`.
+            n_threads: Number of threads for parallel post-processing. See also `tile_shape`.
 
         Returns:
             The instance segmentation masks.
@@ -999,16 +1074,29 @@ class InstanceSegmentationWithDecoder:
             foreground = vigra.filters.gaussianSmoothing(self._foreground, foreground_smoothing)
         else:
             foreground = self._foreground
-        # Further optimization: parallel implementation using elf.parallel functionality.
-        # (Make sure to expose n_threads to avoid over-subscription in case of outer parallelization)
-        segmentation = watershed_from_center_and_boundary_distances(
-            self._center_distances, self._boundary_distances, foreground,
-            center_distance_threshold=center_distance_threshold,
-            boundary_distance_threshold=boundary_distance_threshold,
-            foreground_threshold=foreground_threshold,
-            distance_smoothing=distance_smoothing,
-            min_size=min_size,
-        )
+
+        if tile_shape is None:
+            segmentation = watershed_from_center_and_boundary_distances(
+                self._center_distances, self._boundary_distances, foreground,
+                center_distance_threshold=center_distance_threshold,
+                boundary_distance_threshold=boundary_distance_threshold,
+                foreground_threshold=foreground_threshold,
+                distance_smoothing=distance_smoothing,
+                min_size=min_size,
+            )
+        else:
+            if halo is None:
+                raise ValueError("You must pass a value for halo if tile_shape is given.")
+            segmentation = _watershed_from_center_and_boundary_distances_parallel(
+                self._center_distances, self._boundary_distances, foreground,
+                center_distance_threshold=center_distance_threshold,
+                boundary_distance_threshold=boundary_distance_threshold,
+                foreground_threshold=foreground_threshold,
+                distance_smoothing=distance_smoothing,
+                min_size=min_size, tile_shape=tile_shape,
+                halo=halo, n_threads=n_threads, verbose=False,
+            )
+
         if output_mode is not None:
             segmentation = self._to_masks(segmentation, output_mode)
         return segmentation
@@ -1072,6 +1160,8 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
                 See `util.precompute_image_embeddings` for details.
             i: Index for the image data. Required if `image` has three spatial dimensions
                 or a time dimension and two spatial dimensions.
+            tile_shape: Shape of the tiles for precomputing image embeddings.
+            halo: Overlap of the tiles for tiled precomputation of image embeddings.
             verbose: Dummy input to be compatible with other function signatures.
             pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
                 Can be used together with pbar_update to handle napari progress bar in other thread.
@@ -1080,7 +1170,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         """
         original_size = image.shape[:2]
         image_embeddings, tile_shape, halo = _process_tiled_embeddings(
-            self._predictor, image, image_embeddings, tile_shape, halo
+            self._predictor, image, image_embeddings, tile_shape, halo, verbose=verbose,
         )
         tiling = blocking([0, 0], original_size, tile_shape)
 
@@ -1113,6 +1203,8 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
             foreground[inner_bb] = output[0][local_bb]
             center_distances[inner_bb] = output[1][local_bb]
             boundary_distances[inner_bb] = output[2][local_bb]
+            pbar_update(1)
+
         pbar_close()
 
         # Set the state.

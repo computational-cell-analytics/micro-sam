@@ -15,12 +15,8 @@ class SimpleSamTrainer(SamTrainer):
         use_box: Whether to use box prompts for interactive segmentation.
         kwargs: The keyword arguments of the `SamTrainer` (and `DefaultTrainer`) class.
     """
-    def __init__(
-        self,
-        use_points: bool = True,
-        use_box: bool = True,
-        **kwargs
-    ):
+
+    def __init__(self, use_points: bool = True, use_box: bool = True, **kwargs):
         super().__init__(
             n_sub_iteration=1,
             mask_prob=0,
@@ -73,9 +69,6 @@ class MedSAMTrainer(SimpleSamTrainer):
     https://github.com/computational-cell-analytics/micro-sam/blob/master/micro_sam/training/simple_sam_trainer.py
     for details on its implementation.
     """
+
     def __init__(self, **kwargs):
-        super().__init__(
-            use_points=False,
-            use_box=True,
-            **kwargs
-        )
+        super().__init__(use_points=False, use_box=True, **kwargs)
