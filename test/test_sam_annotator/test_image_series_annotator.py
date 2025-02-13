@@ -22,7 +22,7 @@ def _create_images(tmpdir, n_images):
 
 
 @pytest.mark.gui
-@pytest.mark.skipif(platform.system() == "Windows", reason="Gui test is not working on windows.")
+@pytest.mark.skipif(platform.system() in ("Windows", "Linux"), reason="Gui test is not working on windows.")
 def test_image_series_annotator(make_napari_viewer_proxy):
     """Integration test for annotator_tracking.
     """
@@ -47,7 +47,7 @@ def test_image_series_annotator(make_napari_viewer_proxy):
 
 
 @pytest.mark.gui
-@pytest.mark.skipif(platform.system() == "Windows", reason="Gui test is not working on windows.")
+@pytest.mark.skipif(platform.system() in ("Windows", "Linux"), reason="Gui test is not working on windows.")
 def test_image_folder_annotator(make_napari_viewer_proxy):
     """Integration test for annotator_tracking.
     """

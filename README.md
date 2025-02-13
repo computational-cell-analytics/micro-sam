@@ -5,6 +5,8 @@
 
 # Segment Anything for Microscopy
 
+<a href="https://github.com/computational-cell-analytics/micro-sam"><img src="https://github.com/computational-cell-analytics/micro-sam/blob/master/doc/logo/logo_and_text.png" width="300" align="right">
+
 Tools for segmentation and tracking in microscopy build on top of [Segment Anything](https://segment-anything.com/).
 Segment and track objects in microscopy images interactively with a few clicks!
 
@@ -22,7 +24,7 @@ If you run into any problems or have questions regarding our tool please open an
 
 ## Installation and Usage
 
-Please check [the documentation](https://computational-cell-analytics.github.io/micro-sam/) for details on how to install and use `micro_sam`. You can also watch [the quickstart video](https://youtu.be/gcv0fa84mCc) or [all video tutorials](https://youtube.com/playlist?list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO&si=qNbB8IFXqAX33r_Z).
+Please check [the documentation](https://computational-cell-analytics.github.io/micro-sam/) for details on how to install and use `micro_sam`. You can also watch [the quickstart video](https://youtu.be/gcv0fa84mCc), [our virtual I2K workshop video](https://www.youtube.com/watch?v=dxjU4W7bCis&list=PLdA9Vgd1gxTbvxmtk9CASftUOl_XItjDN&index=33) or [all video tutorials](https://youtube.com/playlist?list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO&si=qNbB8IFXqAX33r_Z).
 
 
 ## Contributing
@@ -35,7 +37,7 @@ If you are interested in contributing to micro-sam, please see the [contributing
 ## Citation
 
 If you are using this repository in your research please cite
-- our [preprint](https://doi.org/10.1101/2023.08.21.554208)
+- our [paper](https://www.nature.com/articles/s41592-024-02580-4) (now published in Nature Methods!)
 - and the original [Segment Anything publication](https://arxiv.org/abs/2304.02643).
 - If you use a `vit-tiny` models please also cite [Mobile SAM](https://arxiv.org/abs/2306.14289).
 
@@ -50,8 +52,20 @@ There are a few other napari plugins build around Segment Anything:
 Compared to these we support more applications (2d, 3d and tracking), and provide finetuning methods and finetuned models for microscopy data.
 [WebKnossos](https://webknossos.org/) also offers integration of SegmentAnything for interactive segmentation.
 
+We have also built follow-up work that is based on `micro_sam`:
+- https://github.com/computational-cell-analytics/patho-sam - improves SAM for histopathology
+- https://github.com/computational-cell-analytics/medico-sam - improves it for medical imaging
+- https://github.com/computational-cell-analytics/peft-sam - studies parameter efficient fine-tuning for SAM
 
 ## Release Overview
+
+**New in version 1.2.0**
+
+The main changes in this version are:
+
+- Installation using only conda-forge dependencies and simplified installation instructions (on Linux and Mac OS).
+- Fix annotation in napari widgets with scale factors.
+- Support for several parameter-efficient training methods.
 
 **New in version 1.1.1**
 

@@ -15,11 +15,11 @@ class PromptGeneratorBase:
     """PromptGeneratorBase is an interface to implement specific prompt generators.
     """
     def __call__(
-            self,
-            segmentation: torch.Tensor,
-            prediction: Optional[torch.Tensor] = None,
-            bbox_coordinates: Optional[List[tuple]] = None,
-            center_coordinates: Optional[List[np.ndarray]] = None
+        self,
+        segmentation: torch.Tensor,
+        prediction: Optional[torch.Tensor] = None,
+        bbox_coordinates: Optional[List[tuple]] = None,
+        center_coordinates: Optional[List[np.ndarray]] = None
     ) -> Tuple[
         Optional[torch.Tensor],  # the point coordinates
         Optional[torch.Tensor],  # the point labels
@@ -49,8 +49,10 @@ class PromptGeneratorBase:
             The mask prompts. Float tensor of shape NUM_OBJECTS x 1 x H' x W'.
                 With H' = W'= 256.
         """
-        raise NotImplementedError("PromptGeneratorBase is just a class template. \
-                                  Use a child class that implements the specific generator instead")
+        raise NotImplementedError(
+            "PromptGeneratorBase is just a class template. "
+            "Use a child class that implements the specific generator instead"
+        )
 
 
 class PointAndBoxPromptGenerator(PromptGeneratorBase):
@@ -145,8 +147,10 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
 
         background_mask = torch.zeros(object_mask.shape, device=object_mask.device)
         _ds = self.dilation_strength
-        background_mask[max(bbox_coordinates[0] - _ds, 0): min(bbox_coordinates[2] + _ds, object_mask.shape[-2]),
-                        max(bbox_coordinates[1] - _ds, 0): min(bbox_coordinates[3] + _ds, object_mask.shape[-1])] = 1
+        background_mask[
+            max(bbox_coordinates[0] - _ds, 0): min(bbox_coordinates[2] + _ds, object_mask.shape[-2]),
+            max(bbox_coordinates[1] - _ds, 0): min(bbox_coordinates[3] + _ds, object_mask.shape[-1])
+        ] = 1
         background_mask = torch.abs(background_mask - dilated_object)
 
         # the valid background coordinates

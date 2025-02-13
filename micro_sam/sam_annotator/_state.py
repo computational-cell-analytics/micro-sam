@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 
 import zarr
 import numpy as np
+
 from qtpy.QtWidgets import QWidget
 
 import torch.nn as nn
@@ -42,6 +43,7 @@ class AnnotatorState(metaclass=Singleton):
     image_embeddings: Optional[util.ImageEmbeddings] = None
     predictor: Optional[SamPredictor] = None
     image_shape: Optional[Tuple[int, int]] = None
+    image_scale: Optional[Tuple[float, ...]] = None
     embedding_path: Optional[str] = None
     data_signature: Optional[str] = None
 
@@ -197,6 +199,7 @@ class AnnotatorState(metaclass=Singleton):
         self.image_embeddings = None
         self.predictor = None
         self.image_shape = None
+        self.image_scale = None
         self.embedding_path = None
         self.amg = None
         self.amg_state = None

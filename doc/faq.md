@@ -7,12 +7,12 @@ If you encounter a problem or question not addressed here feel free to [open an 
 
 
 ### 1. How to install `micro_sam`?
-The [installation](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation) for `micro_sam` is supported in three ways: [from mamba](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-mamba) (recommended), [from source](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-source) and [from installers](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-installer). Check out our [tutorial video](https://youtu.be/gcv0fa84mCc) to get started with `micro_sam`, briefly walking you through the installation process and how to start the tool.
+The [installation](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation) for `micro_sam` is supported in three ways: [from conda](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-conda) (recommended), [from source](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-source) and [from installers](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-installer). Check out our [tutorial video](https://youtu.be/gcv0fa84mCc) to get started with `micro_sam`, briefly walking you through the installation process and how to start the tool.
 
 
 ### 2. I cannot install `micro_sam` using the installer, I am getting some errors.
 The installer should work out-of-the-box on Windows and Linux platforms. Please open an issue to report the error you encounter.
->NOTE: The installers enable using `micro_sam` without mamba or conda. However, we recommend the installation from mamba / from source to use all its features seamlessly. Specifically, the installers currently only support the CPU and won't enable you to use the GPU (if you have one). 
+>NOTE: The installers enable using `micro_sam` without conda. However, we recommend the installation from conda or from source to use all its features seamlessly. Specifically, the installers currently only support the CPU and won't enable you to use the GPU (if you have one). 
 
 
 ### 3. What is the minimum system requirement for `micro_sam`?
@@ -40,7 +40,7 @@ Having a GPU will significantly speed up the annotation tools and especially the
 
 
 ### 5. I am missing a few packages (eg. `ModuleNotFoundError: No module named 'elf.io`). What should I do?
-With the latest release 1.0.0, the installation from mamba and source should take care of this and install all the relevant packages for you.
+With the latest release 1.0.0, the installation from conda and source should take care of this and install all the relevant packages for you.
 So please reinstall `micro_sam`, following [the installation guide](#installation).
 
 ### 6. Can I install `micro_sam` using pip?
@@ -132,7 +132,7 @@ We want to remove these errors, so we would be very grateful if you can [open an
 
 
 ### 10. The objects are not segmented in my 3d data using the interactive annotation tool.
-The first thing to check is: a) make sure you are using the latest version of `micro_sam` (pull the latest commit from master if your installation is from source, or update the installation from conda / mamba using `mamba update micro_sam`), and b) try out the steps from the [3d annotation tutorial video](https://youtu.be/nqpyNQSyu74) to verify if this shows the same behaviour (or the same errors) as you faced. For 3d images, it's important to pass the inputs in the python axis convention, ZYX.
+The first thing to check is: a) make sure you are using the latest version of `micro_sam` (pull the latest commit from master if your installation is from source, or update the installation from conda using `conda update micro_sam`), and b) try out the steps from the [3d annotation tutorial video](https://youtu.be/nqpyNQSyu74) to verify if this shows the same behaviour (or the same errors) as you faced. For 3d images, it's important to pass the inputs in the python axis convention, ZYX.
 c) try using a different model and change the projection mode for 3d segmentation. This is also explained in the video.
 
 
@@ -156,6 +156,10 @@ This can happen for long running computations. You just need to wait a bit longe
 The `micro-sam` CLIs for precomputation of image embeddings and annotators (Annotator 2d, Annotator 3d, Annotator Tracking, Image Series Annotator) accept the argument `-c` / `--checkpoint` to pass model checkpoints. If you start a `micro-sam` annotator from the `napari` plugin menu, you can provide the path to model checkpoints in the annotator widget (on right) under `Embedding Settings` drop-down in the `custom weights path` option.
 
 NOTE: It is important to choose the correct model type when you opt for the above recommendation, using the `-m / --model_type` argument or selecting it from the `Model` dropdown in `Embedding Settings` respectively. Otherwise you will face parameter mismatch issues.
+
+
+### 16. Some parameters in the annotator / finetuning widget are unclear to me.
+`micro-sam` has tooltips for menu options across all widgets (i.e. an information window will appear if you hover over name of the menu), which briefly describe the utility of the specific menu option.
 
 
 ## Fine-tuning questions

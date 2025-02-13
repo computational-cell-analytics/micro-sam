@@ -10,9 +10,10 @@ from torch.utils.data import random_split
 import torch_em
 
 import micro_sam.util as util
-from ._tooltips import get_tooltip
 import micro_sam.sam_annotator._widgets as widgets
 from micro_sam.training import default_sam_dataset, train_sam_for_configuration, CONFIGURATIONS
+
+from ._tooltips import get_tooltip
 
 
 def _find_best_configuration():
