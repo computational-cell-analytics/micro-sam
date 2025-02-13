@@ -180,3 +180,8 @@ logs/
 
 # "gpu_jobs" folder where slurm batch submission scripts are saved
 gpu_jobs/
+
+# Additional stuff to ignore
+data/
+embeddings/
+*.zarr

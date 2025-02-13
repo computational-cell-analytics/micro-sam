@@ -27,12 +27,9 @@ class JointSamTrainer(SamTrainer):
         instance_metric: The metric to compare the predictions and the targets.
         kwargs: The keyword arguments of the `SamTrainer` (and `DefaultTrainer`) class.
     """
+
     def __init__(
-        self,
-        unetr: torch.nn.Module,
-        instance_loss: torch.nn.Module,
-        instance_metric: torch.nn.Module,
-        **kwargs
+        self, unetr: torch.nn.Module, instance_loss: torch.nn.Module, instance_metric: torch.nn.Module, **kwargs
     ):
         super().__init__(**kwargs)
         self.unetr = unetr
@@ -196,7 +193,7 @@ class JointSamLogger(TorchEmLogger):
         self.tb.add_image(tag=f"{name}/samples", img_tensor=sample_grid, global_step=step)
 
     def log_train(
-            self, step, loss, lr, x, y, samples, mask_loss, iou_regression_loss, model_iou, instance_loss
+        self, step, loss, lr, x, y, samples, mask_loss, iou_regression_loss, model_iou, instance_loss
     ):
         self.tb.add_scalar(tag="train/loss", scalar_value=loss, global_step=step)
         self.tb.add_scalar(tag="train/mask_loss", scalar_value=mask_loss, global_step=step)
@@ -208,7 +205,7 @@ class JointSamLogger(TorchEmLogger):
             self.add_image(x, y, samples, "train", step)
 
     def log_validation(
-            self, step, metric, loss, x, y, samples, mask_loss, iou_regression_loss, model_iou, instance_loss
+        self, step, metric, loss, x, y, samples, mask_loss, iou_regression_loss, model_iou, instance_loss
     ):
         self.tb.add_scalar(tag="validation/loss", scalar_value=loss, global_step=step)
         self.tb.add_scalar(tag="validation/mask_loss", scalar_value=mask_loss, global_step=step)

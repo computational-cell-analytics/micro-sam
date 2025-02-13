@@ -5,9 +5,12 @@ from typing import Optional, Union, Tuple
 import numpy as np
 import imageio.v3 as imageio
 
+from torch_em.data.datasets.util import split_kwargs
+
 from . import util
 from .instance_segmentation import (
-    get_amg, get_decoder, mask_data_to_segmentation, InstanceSegmentationWithDecoder, AMGBase
+    get_amg, get_decoder, mask_data_to_segmentation, InstanceSegmentationWithDecoder,
+    AMGBase, AutomaticMaskGenerator, TiledAutomaticMaskGenerator
 )
 from .multi_dimensional_segmentation import automatic_3d_segmentation
 
@@ -30,7 +33,7 @@ def get_predictor_and_segmenter(
             Otherwise AIS will be used, which requires a special segmentation decoder.
             If not specified AIS will be used if it is available and otherwise AMG will be used.
         is_tiled: Whether to return segmenter for performing segmentation in tiling window style.
-        kwargs: Keyword arguments for the automatic instance segmentation class.
+        kwargs: Keyword arguments for the automatic mask generation class.
 
     Returns:
         The Segment Anything model.
@@ -46,17 +49,16 @@ def get_predictor_and_segmenter(
 
     if amg is None:
         amg = "decoder_state" not in state
+
     if amg:
         decoder = None
     else:
         if "decoder_state" not in state:
-            raise RuntimeError("You have passed amg=False, but your model does not contain a segmentation decoder.")
+            raise RuntimeError("You have passed 'amg=False', but your model does not contain a segmentation decoder.")
         decoder_state = state["decoder_state"]
         decoder = get_decoder(image_encoder=predictor.model.image_encoder, decoder_state=decoder_state, device=device)
 
-    segmenter = get_amg(
-        predictor=predictor, is_tiled=is_tiled, decoder=decoder, **kwargs
-    )
+    segmenter = get_amg(predictor=predictor, is_tiled=is_tiled, decoder=decoder, **kwargs)
 
     return predictor, segmenter
 
@@ -72,6 +74,7 @@ def automatic_instance_segmentation(
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
+    return_embeddings: bool = False,
     **generate_kwargs
 ) -> np.ndarray:
     """Run automatic segmentation for the input image.
@@ -90,6 +93,7 @@ def automatic_instance_segmentation(
         tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
         halo: Overlap of the tiles for tiled prediction.
         verbose: Verbosity flag.
+        return_embeddings: Whether to return the precomputed image embeddings.
         generate_kwargs: optional keyword arguments for the generate function of the AMG or AIS class.
 
     Returns:
@@ -118,25 +122,29 @@ def automatic_instance_segmentation(
             verbose=verbose,
         )
 
-        segmenter.initialize(image=image_data, image_embeddings=image_embeddings)
+        # If we run AIS with tiling then we use the same tile shape for the watershed postprocessing.
+        if isinstance(segmenter, InstanceSegmentationWithDecoder) and tile_shape is not None:
+            generate_kwargs.update({"tile_shape": tile_shape, "halo": halo})
+
+        segmenter.initialize(image=image_data, image_embeddings=image_embeddings, verbose=verbose)
         masks = segmenter.generate(**generate_kwargs)
 
-        if len(masks) == 0:  # instance segmentation can have no masks, hence we just save empty labels
-            if isinstance(segmenter, InstanceSegmentationWithDecoder):
-                this_shape = segmenter._foreground.shape
-            elif isinstance(segmenter, AMGBase):
-                this_shape = segmenter._original_size
+        if isinstance(masks, list):
+            # whether the predictions from 'generate' are list of dict,
+            # which contains additional info req. for post-processing, eg. area per object.
+            if len(masks) == 0:
+                instances = np.zeros(image_data.shape[-2:], dtype="uint32")
             else:
-                this_shape = image_data.shape[-2:]
-
-            instances = np.zeros(this_shape, dtype="uint32")
+                instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=0)
         else:
-            instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=0)
+            # if (raw) predictions provided, store them as it is w/o further post-processing.
+            instances = masks
+
     else:
         if (image_data.ndim != 3) and (image_data.ndim != 4 and image_data.shape[-1] != 3):
             raise ValueError(f"The inputs does not match the shape expectation of 3d inputs: {image_data.shape}")
 
-        instances = automatic_3d_segmentation(
+        outputs = automatic_3d_segmentation(
             volume=image_data,
             predictor=predictor,
             segmentor=segmenter,
@@ -144,15 +152,24 @@ def automatic_instance_segmentation(
             tile_shape=tile_shape,
             halo=halo,
             verbose=verbose,
+            return_embeddings=return_embeddings,
             **generate_kwargs
         )
 
+        if return_embeddings:
+            instances, image_embeddings = outputs
+        else:
+            instances = outputs
+
+    # Save the instance segmentation, if 'output_path' provided.
     if output_path is not None:
-        # Save the instance segmentation
         output_path = Path(output_path).with_suffix(".tif")
         imageio.imwrite(output_path, instances, compression="zlib")
 
-    return instances
+    if return_embeddings:
+        return instances, image_embeddings
+    else:
+        return instances
 
 
 def main():
@@ -188,8 +205,7 @@ def main():
         help=f"The segment anything model that will be used, one of {available_models}."
     )
     parser.add_argument(
-        "-c", "--checkpoint", default=None,
-        help="Checkpoint from which the SAM model will be loaded loaded."
+        "-c", "--checkpoint", default=None, help="Checkpoint from which the SAM model will be loaded."
     )
     parser.add_argument(
         "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction.", default=None
@@ -202,7 +218,8 @@ def main():
         help="The number of spatial dimensions in the data. Please specify this if your data has a channel dimension."
     )
     parser.add_argument(
-        "--amg", action="store_true", help="Whether to use automatic mask generation with the model."
+        "--mode", type=str, default=None,
+        help="The choice of automatic segmentation with the Segment Anything models. Either 'amg' or 'ais'."
     )
     parser.add_argument(
         "-d", "--device", default=None,
@@ -222,16 +239,33 @@ def main():
 
     # NOTE: the script below allows the possibility to catch additional parsed arguments which correspond to
     # the automatic segmentation post-processing parameters (eg. 'center_distance_threshold' in AIS)
-    generate_kwargs = {
+    extra_kwargs = {
         parameter_args[i].lstrip("--"): _convert_argval(parameter_args[i + 1]) for i in range(0, len(parameter_args), 2)
     }
+
+    # Separate extra arguments as per where they should be passed in the automatic segmentation class.
+    # This is done to ensure the extra arguments are allocated to the desired location.
+    # eg. for AMG, 'points_per_side' is expected by '__init__',
+    # and 'stability_score_thresh' is expected in 'generate' method.
+    amg_class = AutomaticMaskGenerator if args.tile_shape is None else TiledAutomaticMaskGenerator
+    amg_kwargs, generate_kwargs = split_kwargs(amg_class, **extra_kwargs)
+
+    # Validate for the expected automatic segmentation mode.
+    # By default, it is set to 'None', i.e. searches for the decoder state to prioritize AIS for finetuned models.
+    # Otherwise, runs AMG for all models in any case.
+    amg = None
+    if args.mode is not None:
+        assert args.mode in ["ais", "amg"], \
+            f"'{args.mode}' is not a valid automatic segmentation mode. Please choose either 'amg' or 'ais'."
+        amg = (args.mode == "amg")
 
     predictor, segmenter = get_predictor_and_segmenter(
         model_type=args.model_type,
         checkpoint=args.checkpoint,
         device=args.device,
-        amg=args.amg,
+        amg=amg,
         is_tiled=args.tile_shape is not None,
+        **amg_kwargs,
     )
 
     automatic_instance_segmentation(

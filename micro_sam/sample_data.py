@@ -1,5 +1,4 @@
-r"""
-Sample microscopy data.
+r"""Sample microscopy data.
 
 You can change the download location for sample data and model weights
 by setting the environment variable: MICROSAM_CACHEDIR
@@ -9,17 +8,15 @@ inside your default cache directory, eg:
     * Mac: ~/Library/Caches/<AppName>
     * Unix: ~/.cache/<AppName> or the value of the XDG_CACHE_HOME environment variable, if defined.
     * Windows: C:\Users\<user>\AppData\Local\<AppAuthor>\<AppName>\Cache
-
 """
 
 import os
+import pooch
 from pathlib import Path
 from typing import Union
 
-import pooch
 import numpy as np
 import imageio.v3 as imageio
-
 from skimage.measure import label
 from skimage.transform import resize
 from skimage.data import binary_blobs
@@ -32,6 +29,7 @@ def fetch_image_series_example_data(save_directory: Union[str, os.PathLike]) -> 
 
     Args:
         save_directory: Root folder to save the downloaded data.
+
     Returns:
         The folder that contains the downloaded data.
     """
@@ -85,6 +83,7 @@ def fetch_wholeslide_example_data(save_directory: Union[str, os.PathLike]) -> st
 
     Args:
         save_directory: Root folder to save the downloaded data.
+
     Returns:
         The path of the downloaded image.
     """
@@ -119,11 +118,12 @@ def sample_data_wholeslide():
 def fetch_livecell_example_data(save_directory: Union[str, os.PathLike]) -> str:
     """Download the sample data for the 2d annotator.
 
-    This downloads a single image from the LiveCELL dataset.
+    This downloads a single image from the LIVECell dataset.
     See https://doi.org/10.1038/s41592-021-01249-6 for details on the data.
 
     Args:
         save_directory: Root folder to save the downloaded data.
+
     Returns:
         The path of the downloaded image.
     """
@@ -141,7 +141,7 @@ def fetch_livecell_example_data(save_directory: Union[str, os.PathLike]) -> str:
 
 
 def sample_data_livecell():
-    """Provides livecell 2d example image to napari."""
+    """Provides LIVECell 2d example image to napari."""
     # Return list of tuples
     # [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]
     # Check the documentation for more information about the
@@ -161,6 +161,7 @@ def fetch_hela_2d_example_data(save_directory: Union[str, os.PathLike]) -> Union
 
     Args:
         save_directory: Root folder to save the downloaded data.
+
     Returns:
         The path of the downloaded image.
     """
@@ -200,6 +201,7 @@ def fetch_3d_example_data(save_directory: Union[str, os.PathLike]) -> str:
 
     Args:
         save_directory: Root folder to save the downloaded data.
+
     Returns:
         The folder that contains the downloaded data.
     """
@@ -241,8 +243,8 @@ def sample_data_3d():
 def fetch_tracking_example_data(save_directory: Union[str, os.PathLike]) -> str:
     """Download the sample data for the tracking annotator.
 
-    This data is the cell tracking challenge dataset DIC-C2DH-HeLa.
-    Cell tracking challenge webpage: http://data.celltrackingchallenge.net
+    This data is the Cell Tracking Challenge dataset DIC-C2DH-HeLa.
+    Cell Tracking Challenge webpage: http://data.celltrackingchallenge.net
     HeLa cells on a flat glass
     Dr. G. van Cappellen. Erasmus Medical Center, Rotterdam, The Netherlands
     Training dataset: http://data.celltrackingchallenge.net/training-datasets/DIC-C2DH-HeLa.zip (37 MB)
@@ -250,6 +252,7 @@ def fetch_tracking_example_data(save_directory: Union[str, os.PathLike]) -> str:
 
     Args:
         save_directory: Root folder to save the downloaded data.
+
     Returns:
         The folder that contains the downloaded data.
     """
@@ -295,6 +298,7 @@ def fetch_tracking_segmentation_data(save_directory: Union[str, os.PathLike]) ->
 
     Args:
         save_directory: Root folder to save the downloaded data.
+
     Returns:
         The folder that contains the downloaded data.
     """
@@ -361,6 +365,7 @@ def fetch_nucleus_3d_example_data(save_directory: Union[str, os.PathLike]) -> st
 
     Args:
         save_directory: Root folder to save the downloaded data.
+
     Returns:
         The path of the downloaded image.
     """
@@ -371,6 +376,32 @@ def fetch_nucleus_3d_example_data(save_directory: Union[str, os.PathLike]) -> st
     pooch.retrieve(
         url="https://owncloud.gwdg.de/index.php/s/eW0uNCo8gedzWU4/download",
         known_hash="4946896f747dc1c3fc82fb2e1320226d92f99d22be88ea5f9c37e3ba4e281205",
+        fname=fname,
+        path=save_directory,
+        progressbar=True,
+    )
+    return os.path.join(save_directory, fname)
+
+
+def fetch_wholeslide_histopathology_example_data(save_directory: Union[str, os.PathLike]) -> str:
+    """Download the sample histpathology data for the 2d annotator.
+
+    This downloads a WSI image from https://openslide.cs.cmu.edu/download/openslide-testdata/,
+    under the "CC0 1.0 Universal" license.
+
+    Args:
+        save_directory: Root folder to save the downloaded data.
+
+    Returns:
+        The path of the downloaded image.
+    """
+    save_directory = Path(save_directory)
+    os.makedirs(save_directory, exist_ok=True)
+    print("Example data directory is:", save_directory.resolve())
+    fname = "whole-slide-histopathology-example-image.svs"
+    pooch.retrieve(
+        url="https://openslide.cs.cmu.edu/download/openslide-testdata/Aperio/CMU-1.svs",
+        known_hash="00a3d54482cd707abf254fe69dccc8d06b8ff757a1663f1290c23418c480eb30",
         fname=fname,
         path=save_directory,
         progressbar=True,

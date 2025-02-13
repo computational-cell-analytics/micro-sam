@@ -329,7 +329,7 @@ def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> Non
     if all_slices:
         vutil.clear_annotations(viewer)
     else:
-        i = int(viewer.cursor.position[0])
+        i = int(viewer.dims.point[0])
         vutil.clear_annotations_slice(viewer, i=i)
 
     # Perform garbage collection.
@@ -348,7 +348,7 @@ def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None
         _reset_tracking_state(viewer)
         vutil.clear_annotations(viewer)
     else:
-        i = int(viewer.cursor.position[0])
+        i = int(viewer.dims.point[0])
         vutil.clear_annotations_slice(viewer, i=i)
 
     # Perform garbage collection.
@@ -598,9 +598,7 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
     call_button="Update settings",
     cache_directory={"mode": "d"},  # choose a directory
 )
-def settings_widget(
-    cache_directory: Optional[Path] = util.get_cache_directory(),
-) -> None:
+def settings_widget(cache_directory: Optional[Path] = util.get_cache_directory()) -> None:
     """Widget to update global micro_sam settings.
 
     Args:
@@ -752,7 +750,9 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
         return None
 
     shape = viewer.layers["current_object"].data.shape[1:]
-    position = viewer.cursor.position
+
+    position_world = viewer.dims.point
+    position = viewer.layers["point_prompts"].world_to_data(position_world)
     z = int(position[0])
 
     point_prompts = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], z)
@@ -791,7 +791,7 @@ def segment_frame(viewer: "napari.viewer.Viewer") -> None:
         return None
     state = AnnotatorState()
     shape = state.image_shape[1:]
-    position = viewer.cursor.position
+    position = viewer.dims.point
     t = int(position[0])
 
     point_prompts = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], i=t, track_id=state.current_track_id)
@@ -884,7 +884,9 @@ class EmbeddingWidget(_WidgetBase):
     def _initialize_image(self):
         state = AnnotatorState()
         image_shape = self.image_selection.get_value().data.shape
+        image_scale = tuple(self.image_selection.get_value().scale)
         state.image_shape = image_shape
+        state.image_scale = image_scale
 
     def _create_image_section(self):
         image_section = QtWidgets.QVBoxLayout()
@@ -939,6 +941,9 @@ class EmbeddingWidget(_WidgetBase):
         self.model_options = list(util.models().urls.keys())
         # Filter out the decoders from the model list.
         self.model_options = [model for model in self.model_options if not model.endswith("decoder")]
+
+        # NOTE: We currently remove the medical imaging model from displaying it as an option.
+        self.model_options = [model for model in self.model_options if not model.endswith("medical_imaging")]
 
         layout = QtWidgets.QVBoxLayout()
         self.model_dropdown, layout = self._add_choice_param(
@@ -1098,6 +1103,9 @@ class EmbeddingWidget(_WidgetBase):
         else:
             ndim = image.data.ndim
             state.image_shape = image.data.shape
+
+        # Set layer scale
+        state.image_scale = tuple(image.scale)
 
         # Process tile_shape and halo, set other data.
         tile_shape, halo = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
@@ -1671,7 +1679,7 @@ class AutoSegmentWidget(_WidgetBase):
         if self.volumetric and self.apply_to_volume:
             worker = self._run_segmentation_3d(kwargs)
         elif self.volumetric and not self.apply_to_volume:
-            i = int(self._viewer.cursor.position[0])
+            i = int(self._viewer.dims.point[0])
             worker = self._run_segmentation_2d(kwargs, i=i)
         else:
             worker = self._run_segmentation_2d(kwargs)

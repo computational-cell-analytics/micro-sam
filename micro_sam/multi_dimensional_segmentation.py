@@ -5,15 +5,14 @@ import os
 from typing import Optional, Union, Tuple
 
 import numpy as np
+from scipy.ndimage import binary_closing
+from skimage.measure import label, regionprops
+from skimage.segmentation import relabel_sequential
 
 import nifty
 
 import elf.segmentation as seg_utils
 import elf.tracking.tracking_utils as track_utils
-
-from scipy.ndimage import binary_closing
-from skimage.measure import label, regionprops
-from skimage.segmentation import relabel_sequential
 
 from segment_anything.predictor import SamPredictor
 
@@ -25,6 +24,7 @@ except ImportError:
 from . import util
 from .prompt_based_segmentation import segment_from_mask
 from .instance_segmentation import AMGBase, mask_data_to_segmentation
+
 
 PROJECTION_MODES = ("box", "mask", "points", "points_and_mask", "single_point")
 
@@ -139,8 +139,9 @@ def segment_mask_in_volume(
             if threshold is not None:
                 iou = util.compute_iou(seg_prev, seg_z)
                 if iou < threshold:
-                    msg = f"Segmentation stopped at slice {z} due to IOU {iou} < {threshold}."
-                    print(msg)
+                    if verbose:
+                        msg = f"Segmentation stopped at slice {z} due to IOU {iou} < {threshold}."
+                        print(msg)
                     break
 
             segmentation[z] = seg_z
@@ -367,6 +368,7 @@ def automatic_3d_segmentation(
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
+    return_embeddings: bool = False,
     **kwargs,
 ) -> np.ndarray:
     """Segment volume in 3d.
@@ -387,6 +389,7 @@ def automatic_3d_segmentation(
         tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
         halo: Overlap of the tiles for tiled prediction.
         verbose: Verbosity flag.
+        return_embeddings: Whether to return the precomputed image embeddings.
         kwargs: Keyword arguments for the 'generate' method of the 'segmentor'.
 
     Returns:
@@ -429,4 +432,7 @@ def automatic_3d_segmentation(
         verbose=verbose,
     )
 
-    return segmentation
+    if return_embeddings:
+        return segmentation, image_embeddings
+    else:
+        return segmentation

@@ -1,6 +1,5 @@
 import os
 import time
-
 from glob import glob
 from pathlib import Path
 from typing import List, Optional, Union, Tuple
@@ -16,13 +15,13 @@ from qtpy import QtWidgets
 
 from .. import util
 from . import _widgets as widgets
-from ..precompute_state import _precompute_state_for_files
-from ..instance_segmentation import get_decoder
+from ._tooltips import get_tooltip
+from ._state import AnnotatorState
 from .annotator_2d import Annotator2d
 from .annotator_3d import Annotator3d
-from ._state import AnnotatorState
 from .util import _sync_embedding_widget
-from ._tooltips import get_tooltip
+from ..instance_segmentation import get_decoder
+from ..precompute_state import _precompute_state_for_files
 
 
 def _precompute(
@@ -83,8 +82,7 @@ def _get_input_shape(image, is_volumetric=False):
 def _initialize_annotator(
     viewer, image, image_embedding_path,
     model_type, halo, tile_shape, predictor, decoder, is_volumetric,
-    precompute_amg_state, checkpoint_path, device,
-    embedding_path,
+    precompute_amg_state, checkpoint_path, device, embedding_path,
 ):
     if viewer is None:
         viewer = napari.Viewer()
@@ -208,8 +206,7 @@ def image_series_annotator(
     viewer, annotator = _initialize_annotator(
         viewer, image, image_embedding_path,
         model_type, halo, tile_shape, predictor, decoder, is_volumetric,
-        precompute_amg_state, checkpoint_path, device,
-        embedding_path,
+        precompute_amg_state, checkpoint_path, device, embedding_path,
     )
 
     def _save_segmentation(image_path, current_idx, segmentation):
@@ -254,8 +251,7 @@ def image_series_annotator(
             return
 
         print(
-            "Loading next image:",
-            images[next_image_id] if not have_inputs_as_arrays else f"at index {next_image_id}"
+            "Loading next image:", images[next_image_id] if not have_inputs_as_arrays else f"at index {next_image_id}"
         )
 
         if have_inputs_as_arrays:
@@ -270,6 +266,7 @@ def image_series_annotator(
 
         if state.amg is not None:
             state.amg.clear_state()
+
         state.initialize_predictor(
             image, model_type=model_type, ndim=3 if is_volumetric else 2,
             save_path=image_embedding_path,
@@ -317,6 +314,7 @@ def image_folder_annotator(
         The napari viewer, only returned if `return_viewer=True`.
     """
     image_files = sorted(glob(os.path.join(input_folder, pattern)))
+
     return image_series_annotator(
         image_files, output_folder, viewer=viewer, return_viewer=return_viewer, **kwargs
     )
