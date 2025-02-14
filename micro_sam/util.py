@@ -455,7 +455,10 @@ def _handle_checkpoint_loading(sam, model_state):
 
 
 def export_custom_sam_model(
-    checkpoint_path: Union[str, os.PathLike], model_type: str, save_path: Union[str, os.PathLike],
+    checkpoint_path: Union[str, os.PathLike],
+    model_type: str,
+    save_path: Union[str, os.PathLike],
+    with_segmentation_decoder: bool = False,
 ) -> None:
     """Export a finetuned Segment Anything Model to the standard model format.
 
@@ -465,6 +468,8 @@ def export_custom_sam_model(
         checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
         model_type: The Segment Anything Model type corresponding to the checkpoint (vit_h, vit_b, vit_l or vit_t).
         save_path: Where to save the exported model.
+        with_segmentation_decoder: Whether to store the decoder state in the model checkpoint as well.
+            If set to 'True', the model checkpoint will not be compatible with other tools besides 'micro-sam'.
     """
     _, state = get_sam_model(
         model_type=model_type, checkpoint_path=checkpoint_path, return_state=True, device="cpu",
@@ -474,7 +479,18 @@ def export_custom_sam_model(
     model_state = OrderedDict(
         [(k[len(prefix):] if k.startswith(prefix) else k, v) for k, v in model_state.items()]
     )
-    torch.save(model_state, save_path)
+
+    # Store the 'decoder_state' as well, if desired.
+    if with_segmentation_decoder:
+        if "decoder_state" not in state:
+            raise RuntimeError(f"'decoder_state' is not found in the model at '{checkpoint_path}'.")
+
+        decoder_state = state["decoder_state"]
+        save_state = {"model_state": model_state, "decoder_state": decoder_state}
+    else:
+        save_state = model_state
+
+    torch.save(save_state, save_path)
 
 
 def export_custom_qlora_model(
