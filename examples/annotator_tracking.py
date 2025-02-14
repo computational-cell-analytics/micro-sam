@@ -38,6 +38,6 @@ def main():
 
 # The corresponding CLI call for track_ctc_data:
 # (replace with cache directory on your machine)
-# $ micro_sam.annotator_tracking -i /home/pape/.cache/micro_sam/sample_data/DIC-C2DH-HeLa.zip.unzip/DIC-C2DH-HeLa/01 -k *.tif -e /home/pape/.cache/micro_sam/embeddings/embeddings-ctc.zarr
+# $ micro_sam.annotator_tracking -i /home/pape/.cache/micro_sam/sample_data/DIC-C2DH-HeLa.zip.unzip/DIC-C2DH-HeLa/01 -k *.tif -e /home/pape/.cache/micro_sam/embeddings/embeddings-ctc.zarr  # noqa
 if __name__ == "__main__":
     main()

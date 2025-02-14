@@ -14,6 +14,7 @@ from torch.optim.lr_scheduler import _LRScheduler
 from torch.utils.data import DataLoader, Dataset
 
 import torch_em
+from torch_em.util import load_data
 from torch_em.data.datasets.util import split_kwargs
 
 from elf.io import open_file
@@ -380,7 +381,7 @@ def default_sam_dataset(
     label_key: Optional[str],
     patch_shape: Tuple[int],
     with_segmentation_decoder: bool,
-    with_channels: bool = False,
+    with_channels: Optional[bool] = None,
     sampler: Optional[Callable] = None,
     raw_transform: Optional[Callable] = None,
     n_samples: Optional[int] = None,
@@ -402,7 +403,7 @@ def default_sam_dataset(
             or a glob pattern for selecting multiple files.
         patch_shape: The shape for training patches.
         with_segmentation_decoder: Whether to train with additional segmentation decoder.
-        with_channels: Whether the image data has RGB channels.
+        with_channels: Whether the image data has channels. By default, it makes the decision based on inputs.
         sampler: A sampler to reject batches according to a given criterion.
         raw_transform: Transformation applied to the image data.
             If not given the data will be cast to 8bit.
@@ -416,6 +417,36 @@ def default_sam_dataset(
         The segmentation dataset.
     """
 
+    # By default, let the 'default_segmentation_dataset' heuristic decide for itself.
+    is_seg_dataset = None
+
+    # Check if the raw inputs are RGB or not. If yes, use 'ImageCollectionDataset'.
+    # Get valid raw paths to make checks possible.
+    if raw_key and "*" in raw_key:  # Use the wildcard pattern to find the filepath to only one image.
+        rpath = glob(os.path.join(raw_paths if isinstance(raw_paths, str) else raw_paths[0], raw_key))[0]
+    else:  # Otherwise, either 'raw_key' is None or container format, supported by 'elf', then we load 1 filepath.
+        rpath = raw_paths if isinstance(raw_paths, str) else raw_paths[0]
+
+    # Load one of the raw inputs to validate whether it is RGB or not.
+    test_raw_inputs = load_data(path=rpath, key=raw_key if raw_key and "*" not in raw_key else None)
+    if test_raw_inputs.ndim == 3:
+        if test_raw_inputs.shape[-1] == 3:  # i.e. if it is an RGB image and has channels last.
+            is_seg_dataset = False  # we use 'ImageCollectionDataset' in this case.
+            # We need to provide a list of inputs to 'ImageCollectionDataset'.
+            raw_paths = [raw_paths] if isinstance(raw_paths, str) else raw_paths
+            label_paths = [label_paths] if isinstance(label_paths, str) else label_paths
+
+            # This is not relevant for 'ImageCollectionDataset'. Hence, we set 'with_channels' to 'False'.
+            with_channels = False if with_channels is None else with_channels
+
+        elif test_raw_inputs.shape[0] == 3:  # i.e. if it is a RGB image and has 3 channels first.
+            # This is relevant for 'SegmentationDataset'. If not provided by the user, we set this to 'True'.
+            with_channels = True if with_channels is None else with_channels
+
+    # Set 'with_channels' to 'False', i.e. the default behavior of 'default_segmentation_dataset'
+    # Otherwise, let the user make the choice as priority, else set this to our suggested default.
+    with_channels = False if with_channels is None else with_channels
+
     # Set the data transformations.
     if raw_transform is None:
         raw_transform = require_8bit
@@ -426,9 +457,7 @@ def default_sam_dataset(
             foreground=True, instances=True, min_size=min_size,
         )
     else:
-        label_transform = torch_em.transform.label.MinSizeLabelTransform(
-            min_size=min_size
-        )
+        label_transform = torch_em.transform.label.MinSizeLabelTransform(min_size=min_size)
 
     # Set a default sampler if none was passed.
     if sampler is None:
@@ -436,7 +465,7 @@ def default_sam_dataset(
 
     # Check the patch shape to add a singleton if required.
     patch_shape = _update_patch_shape(
-        patch_shape, raw_paths, raw_key, with_channels
+        patch_shape=patch_shape, raw_paths=raw_paths, raw_key=raw_key, with_channels=with_channels,
     )
 
     # Set a minimum number of samples per epoch.
@@ -448,7 +477,9 @@ def default_sam_dataset(
             label_key=label_key,
             batch_size=1,
             patch_shape=patch_shape,
+            with_channels=with_channels,
             ndim=2,
+            is_seg_dataset=is_seg_dataset,
             **kwargs
         )
         n_samples = max(len(loader), 100 if is_train else 5)
@@ -465,6 +496,7 @@ def default_sam_dataset(
         ndim=2,
         sampler=sampler,
         n_samples=n_samples,
+        is_seg_dataset=is_seg_dataset,
         **kwargs,
     )
 
