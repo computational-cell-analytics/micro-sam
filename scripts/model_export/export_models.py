@@ -13,6 +13,12 @@ Encoder:
 vit_b_lm xxh128:8fd5806be3c3ba213e19a709d6d1495f
 Decoder:
 vit_b_lm_decoder xxh128:9f580a96984b3085389ced5d9a4ae75d
+
+Exported model faithful-chicken
+Encoder:
+vit_t_lm xxh128:72ec5074774761a6e5c05a08942f981e
+Decoder:
+vit_t_lm_decoder xxh128:3e914a5f397b0312cdd36813031f8823
 """
 
 import os
