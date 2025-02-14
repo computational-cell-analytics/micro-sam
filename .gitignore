@@ -184,6 +184,8 @@ gpu_jobs/
 # Additional stuff to ignore
 data/
 embeddings/
+
+*.zarr
 *.sh
 *.png
 *.svg
