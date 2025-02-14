@@ -28,7 +28,10 @@ DEFAULTS = {
     ],
     "description": "Finetuned Segment Anything Model for Microscopy",
     "cite": [
-        spec.CiteEntry(text="Archit et al. Segment Anything for Microscopy", doi=spec.Doi("10.1101/2023.08.21.554208")),
+        spec.CiteEntry(
+            text="Archit et al. Segment Anything for Microscopy",
+            doi=spec.Doi("10.1038/s41592-024-02580-4")
+        ),
     ],
     "tags": ["segment-anything", "instance-segmentation"],
 }
@@ -488,6 +491,8 @@ def export_sam_model(
             extra_kwargs["id_emoji"] = kwargs["id_emoji"]
         if "uploader" in kwargs:
             extra_kwargs["uploader"] = kwargs["uploader"]
+        if "version" in kwargs:
+            extra_kwargs["version"] = kwargs["version"]
 
         if decoder_path is not None:
             extra_kwargs["attachments"] = [spec.FileDescr(source=decoder_path)]

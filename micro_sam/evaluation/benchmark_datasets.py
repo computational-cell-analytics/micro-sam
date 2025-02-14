@@ -84,6 +84,9 @@ DATASET_CONTAINER_KEYS = {
     # 3d
     "plantseg_root": ["raw", "label"],
     "plantseg_ovules": ["raw", "label"],
+    "gonuclear": ["raw/nuclei", "labels/nuclei"],
+    "mouse_embryo": ["raw", "label"],
+    "cellseg_3d": [None, None],
     "lucchi": ["raw", "labels"],
 }
 
@@ -295,7 +298,7 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
 
         # 3d: out-of-domain
         "plantseg_ovules": lambda: datasets.plantseg.get_plantseg_paths(path=path, name="ovules", split="test"),
-        "gonuclear": lambda: datasets.gonuclear.get_gonuclear_paths(path-path),
+        "gonuclear": lambda: datasets.gonuclear.get_gonuclear_paths(path=path),
         "mouse_embryo": lambda: datasets.mouse_embryo.get_mouse_embryo_paths(path=path, name="nuclei", split="val"),
         "cellseg_3d": lambda: datasets.cellseg_3d.get_cellseg_3d_paths(path=path),
 
@@ -318,7 +321,7 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
         "asem_mito": lambda: datasets.asem.get_asem_paths(path=path, volume_ids=datasets.asem.ORGANELLES["mito"])
     }
 
-    if ndim == 2 and dataset_choice not in DATASET_CONTAINER_KEYS:
+    if (ndim == 2 and dataset_choice not in DATASET_CONTAINER_KEYS) or dataset_choice == "cellseg_3d":
         image_paths, gt_paths = available_datasets[dataset_choice]()
 
         if dataset_choice in DATASET_RETURNS_FOLDER:
@@ -354,7 +357,7 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
     # Logic to extract relevant patches for inference
     image_counter = 1
     for per_paths in tqdm(paths_set, desc=f"Extracting {ndim}d patches for {dataset_choice}"):
-        if ndim == 2 and dataset_choice not in DATASET_CONTAINER_KEYS:
+        if (ndim == 2 and dataset_choice not in DATASET_CONTAINER_KEYS) or dataset_choice == "cellseg_3d":
             image_path, gt_path = per_paths
             image, gt = util.load_image_data(image_path), util.load_image_data(gt_path)
         else:

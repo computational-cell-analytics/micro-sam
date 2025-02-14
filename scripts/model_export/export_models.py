@@ -1,25 +1,48 @@
 """Helper scripts to export models for upload to bioimageio/zenodo.
+
+Hashes for new models:
+
+Exported model idealistic-rat
+Encoder:
+vit_l_lm xxh128:fc32ea6f7fcc7eb02737d1304f81f5f2
+Decoder:
+vit_l_lm_decoder xxh128:779b5a50ecc6d46d495753fba8717f2f
+
+Exported model diplomatic-bug
+Encoder:
+vit_b_lm xxh128:8fd5806be3c3ba213e19a709d6d1495f
+Decoder:
+vit_b_lm_decoder xxh128:9f580a96984b3085389ced5d9a4ae75d
+
+Exported model faithful-chicken
+Encoder:
+vit_t_lm xxh128:72ec5074774761a6e5c05a08942f981e
+Decoder:
+vit_t_lm_decoder xxh128:3e914a5f397b0312cdd36813031f8823
 """
 
-import argparse
 import os
+import xxhash
 import warnings
+import argparse
 from glob import glob
 
-import bioimageio.spec.model.v0_5 as spec
 import h5py
+from skimage.measure import label
 import imageio.v3 as imageio
-import xxhash
+
+import bioimageio.spec.model.v0_5 as spec
 
 from micro_sam.bioimageio import export_sam_model
-from skimage.measure import label
 
 from models import get_id_and_emoji, MODEL_TO_NAME
 
+
 BUF_SIZE = 65536  # lets read stuff in 64kb chunks!
 
-INPUT_FOLDER = "./v2"
+INPUT_FOLDER = "/media/anwai/ANWAI/models/micro_sam"
 OUTPUT_FOLDER = "./exported_models"
+BIOIMAGEIO_VERSION = 1.1  # version marked for v3 (LM) Generalist Models
 
 
 def create_doc(model_type, modality, version):
@@ -40,17 +63,17 @@ def create_doc(model_type, modality, version):
 def get_data(modality):
     if modality == "lm":
         image_path = os.path.join(
-            "/home/pape/Work/data/incu_cyte/livecell/images",
-            "livecell_train_val_images/A172_Phase_A7_1_00d00h00m_1.tif"
+            "/media/anwai/ANWAI/data/livecell/"
+            "images/livecell_train_val_images/A172_Phase_A7_1_00d00h00m_1.tif"
         )
         label_path = os.path.join(
-            "/home/pape/Work/data/incu_cyte/livecell/annotations",
-            "livecell_train_val_images/A172/A172_Phase_A7_1_00d00h00m_1.tif"
+            "/media/anwai/ANWAI/data/livecell/"
+            "annotations/livecell_train_val_images/A172/A172_Phase_A7_1_00d00h00m_1.tif"
         )
         image = imageio.imread(image_path)
         label_image = imageio.imread(label_path)
     else:
-        path = "/home/pape/Work/data/kasthuri/kasthuri_train.h5"
+        path = "/media/anwai/ANWAI/data/kasthuri/kasthuri_train.h5"
         with h5py.File(path, "r") as f:
             image = f["raw"][0]
             label_image = f["labels"][0]
@@ -99,7 +122,8 @@ def export_model(model_path, model_type, modality, version, email):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         export_sam_model(
-            image, label_image,
+            image=image,
+            label_image=label_image,
             name=export_name,
             model_type=model_type,
             checkpoint_path=model_path,
@@ -109,7 +133,12 @@ def export_model(model_path, model_type, modality, version, email):
             id=model_id,
             id_emoji=emoji,
             uploader=uploader,
+            version=BIOIMAGEIO_VERSION,
         )
+
+    # Unzip files
+    from torch_em.data.datasets.util import unzip
+    unzip(zip_path=output_path, dst=(output_path + ".unzip"), remove=False)
 
     print("Exported model", model_id)
     encoder_path = os.path.join(output_path + ".unzip", f"{model_type}.pt")
@@ -124,9 +153,9 @@ def export_model(model_path, model_type, modality, version, email):
 
 
 def export_all_models(email, version):
-    models = glob(os.path.join(f"./v{version}/**/vit*"))
+    models = glob(os.path.join(INPUT_FOLDER, f"v{version}/**/vit*"), recursive=True)
     for path in models:
-        modality, model_type = path.split("/")[-2:]
+        modality, _, model_type = path.split("/")[-3:]  # current expected structure: v3/lm/generalist/vit_b/best.pt
         # print(model_path, modality, model_type)
         model_path = os.path.join(path, "best.pt")
         assert os.path.exists(model_path), model_path
@@ -137,13 +166,13 @@ def export_all_models(email, version):
 def export_vit_t_lm(email):
     model_type = "vit_t"
     model_path = os.path.join(INPUT_FOLDER, "lm", "generalist", model_type, "best.pt")
-    export_model(model_path, model_type, "lm", version=2, email=email)
+    export_model(model_path, model_type, "lm", version=3, email=email)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--email", required=True)
-    parser.add_argument("-v", "--version", default=2, type=int)
+    parser.add_argument("-v", "--version", default=3, type=int)
     args = parser.parse_args()
 
     export_all_models(args.email, args.version)
