@@ -244,8 +244,8 @@ def main():
         help="The number of spatial dimensions in the data. Please specify this if your data has a channel dimension."
     )
     parser.add_argument(
-        "--mode", type=str, default=None,
-        help="The choice of automatic segmentation with the Segment Anything models. Either 'amg' or 'ais'."
+        "--mode", type=str, default="auto",
+        help="The choice of automatic segmentation with the Segment Anything models. Either 'auto', 'amg' and 'ais'."
     )
     parser.add_argument(
         "--annotate", action="store_true",
@@ -281,10 +281,10 @@ def main():
     amg_kwargs, generate_kwargs = split_kwargs(amg_class, **extra_kwargs)
 
     # Validate for the expected automatic segmentation mode.
-    # By default, it is set to 'None', i.e. searches for the decoder state to prioritize AIS for finetuned models.
+    # By default, it is set to 'auto', i.e. searches for the decoder state to prioritize AIS for finetuned models.
     # Otherwise, runs AMG for all models in any case.
     amg = None
-    if args.mode is not None:
+    if args.mode != "auto":
         assert args.mode in ["ais", "amg"], \
             f"'{args.mode}' is not a valid automatic segmentation mode. Please choose either 'amg' or 'ais'."
         amg = (args.mode == "amg")
