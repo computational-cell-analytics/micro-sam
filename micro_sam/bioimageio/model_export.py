@@ -491,6 +491,8 @@ def export_sam_model(
             extra_kwargs["id_emoji"] = kwargs["id_emoji"]
         if "uploader" in kwargs:
             extra_kwargs["uploader"] = kwargs["uploader"]
+        if "version" in kwargs:
+            extra_kwargs["version"] = kwargs["version"]
 
         if decoder_path is not None:
             extra_kwargs["attachments"] = [spec.FileDescr(source=decoder_path)]

@@ -42,6 +42,7 @@ BUF_SIZE = 65536  # lets read stuff in 64kb chunks!
 
 INPUT_FOLDER = "/media/anwai/ANWAI/models/micro_sam"
 OUTPUT_FOLDER = "./exported_models"
+BIOIMAGEIO_VERSION = 1.1  # version marked for v3 (LM) Generalist Models
 
 
 def create_doc(model_type, modality, version):
@@ -132,6 +133,7 @@ def export_model(model_path, model_type, modality, version, email):
             id=model_id,
             id_emoji=emoji,
             uploader=uploader,
+            version=BIOIMAGEIO_VERSION,
         )
 
     # Unzip files
