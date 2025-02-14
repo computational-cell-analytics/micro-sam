@@ -21,9 +21,11 @@ DATASET_NAME_MAPPING = {
     "deepbacs": r"$\mathit{DeepBacs}$",
     "deepseas": "DeepSeas",
     "dynamicnuclearnet": r"$\mathit{DynamicNuclearNet}$",
+    "gonuclear": "GoNuclear",
     "hpa": "HPA",
     "ifnuclei": "IFNuclei",
     "livecell": r"$\mathit{LIVECell}$",
+    "lizard": "Lizard",
     "neurips_cellseg": r"$\mathit{NeurIPS}$ $\mathit{CellSeg}$",
     "organoidnet": "OrganoIDNet",
     "orgasegment": r"$\mathit{OrgaSegment}$",
@@ -55,17 +57,16 @@ def get_comparison_plot_for_new_models(metric, model_type):
         results.append(pd.DataFrame.from_dict([res]))
 
     results = pd.concat(results, ignore_index=True)
+    print(results)
 
-    # Assuming 'results' DataFrame is already provided
     plt.figure(figsize=(12, 8))
-    plt.plot(results["dataset"], results["vit_b_lm"], marker="o", label="LM Generalist (v2)", linestyle="-")
+    plt.plot(results["dataset"], results[f"{model_type}_lm"], marker="o", label="ViT-Base (v2)", linestyle="-")
     plt.plot(
-        results["dataset"], results["vit_b_lm (NEW)"], marker="s",
-        label=r"$\mathit{(NEW)}$ LM Generalist (v3)", linestyle="--"
+        results["dataset"], results[f"{model_type}_lm (NEW)"], marker="s",
+        label=r"$\mathit{(NEW)}$ ViT-Base (v3)", linestyle="--"
     )
 
-    # Formatting
-    plt.xticks(rotation=90, fontweight="bold", fontsize=12)  # Rotate x-axis labels for readability
+    plt.xticks(rotation=90, fontweight="bold", fontsize=12)
     plt.yticks(fontsize=12)
     plt.ylabel("Mean Segmentation Accuracy", fontsize=14, fontweight="bold")
     plt.title(r"$\mu$SAM LM Generalist Model", fontsize=12)
@@ -75,6 +76,7 @@ def get_comparison_plot_for_new_models(metric, model_type):
 
 
 def main():
+    # get_comparison_plot_for_new_models(metric="mSA", model_type="vit_t")
     get_comparison_plot_for_new_models(metric="mSA", model_type="vit_b")
     # get_comparison_plot_for_new_models(metric="mSA", model_type="vit_l")
 
