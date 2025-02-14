@@ -615,6 +615,58 @@ def train_sam_for_configuration(
     )
 
 
+def _export_helper(save_root, checkpoint_name, output_path, model_type, with_segmentation_decoder, val_loader):
+
+    # Get the 'best' model checkpoint ready for export.
+    best_checkpoint = os.path.join(save_root, "checkpoints", checkpoint_name, "best.pt")
+    if not os.path.exists(best_checkpoint):
+        raise FileNotFoundError(f"The trained model not found at the expected location: '{best_checkpoint}'.")
+
+    # Export the model if an output path has been given.
+    if output_path:
+
+        # If the filepath has a pytorch-specific ending, then we just export the checkpoint.
+        if os.path.splitext(output_path)[1] in (".pt", ".pth"):
+            export_custom_sam_model(
+                checkpoint_path=best_checkpoint,
+                model_type=model_type[:5],
+                save_path=output_path,
+                with_segmentation_decoder=with_segmentation_decoder,
+            )
+
+        # Otherwise we export it as bioimage.io model.
+        else:
+            from micro_sam.bioimageio import export_sam_model
+
+            # Load image and corresponding labels from the val loader.
+            with torch.no_grad():
+                image_data, label_data = next(iter(val_loader))
+                image_data, label_data = image_data.numpy().squeeze(), label_data.numpy().squeeze()
+
+                # Select the first channel of the label image if we have a channel axis, i.e. contains the labels
+                if label_data.ndim == 3:
+                    label_data = label_data[0]  # Gets the channel with instances.
+                assert image_data.shape == label_data.shape
+                label_data = label_data.astype("uint32")
+
+                export_sam_model(
+                    image=image_data,
+                    label_image=label_data,
+                    model_type=model_type[:5],
+                    name=checkpoint_name,
+                    output_path=output_path,
+                    checkpoint_path=best_checkpoint,
+                )
+
+        # The final path where the model has been stored.
+        final_path = output_path
+
+    else:  # If no exports have been made, inform the user about the best checkpoint.
+        final_path = best_checkpoint
+
+    return final_path
+
+
 def main():
     """@private"""
     import argparse
@@ -804,52 +856,8 @@ def main():
     )
 
     # 4. Export the model, if desired by the user
-
-    # Get the 'best' model checkpoint ready for export.
-    best_checkpoint = os.path.join(save_root, "checkpoints", checkpoint_name, "best.pt")
-    if not os.path.exists(best_checkpoint):
-        raise FileNotFoundError(f"The trained model not found at the expected location: '{best_checkpoint}'.")
-
-    # Export the model if an output path has been given.
-    if output_path:
-
-        # If the filepath has a pytorch-specific ending, then we just export the checkpoint.
-        if os.path.splitext(output_path)[1] in (".pt", ".pth"):
-            export_custom_sam_model(
-                checkpoint_path=best_checkpoint,
-                model_type=model_type[:5],
-                save_path=output_path,
-                with_segmentation_decoder=with_segmentation_decoder,
-            )
-
-        # Otherwise we export it as bioimage.io model.
-        else:
-            from micro_sam.bioimageio import export_sam_model
-
-            # Load image and corresponding labels from the val loader.
-            with torch.no_grad():
-                image_data, label_data = next(iter(val_loader))
-                image_data, label_data = image_data.numpy().squeeze(), label_data.numpy().squeeze()
-
-                # Select the first channel of the label image if we have a channel axis, i.e. contains the labels
-                if label_data.ndim == 3:
-                    label_data = label_data[0]  # Gets the channel with instances.
-                assert image_data.shape == label_data.shape
-                label_data = label_data.astype("uint32")
-
-                export_sam_model(
-                    image=image_data,
-                    label_image=label_data,
-                    model_type=model_type[:5],
-                    name=checkpoint_name,
-                    output_path=output_path,
-                    checkpoint_path=best_checkpoint,
-                )
-
-        # The final path where the model has been stored.
-        final_path = output_path
-
-    else:  # If no exports have been made, inform the user about the best checkpoint.
-        final_path = best_checkpoint
+    final_path = _export_helper(
+        save_root, checkpoint_name, output_path, model_type, with_segmentation_decoder, val_loader
+    )
 
     print(f"Training has finished. The trained model is saved at {final_path}.")
