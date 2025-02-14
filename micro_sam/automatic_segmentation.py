@@ -245,7 +245,7 @@ def main():
     )
     parser.add_argument(
         "--mode", type=str, default="auto",
-        help="The choice of automatic segmentation with the Segment Anything models. Either 'auto', 'amg' and 'ais'."
+        help="The choice of automatic segmentation with the Segment Anything models. Either 'auto', 'amg' or 'ais'."
     )
     parser.add_argument(
         "--annotate", action="store_true",
