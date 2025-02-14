@@ -469,6 +469,7 @@ def export_custom_sam_model(
         model_type: The Segment Anything Model type corresponding to the checkpoint (vit_h, vit_b, vit_l or vit_t).
         save_path: Where to save the exported model.
         with_segmentation_decoder: Whether to store the decoder state in the model checkpoint as well.
+            If set to 'True', the model checkpoint will not be compatible with other tools besides 'micro-sam'.
     """
     _, state = get_sam_model(
         model_type=model_type, checkpoint_path=checkpoint_path, return_state=True, device="cpu",
