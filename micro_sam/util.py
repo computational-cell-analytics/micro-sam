@@ -277,7 +277,6 @@ def get_sam_model(
     return_state: bool = False,
     peft_kwargs: Optional[Dict] = None,
     flexible_load_checkpoint: bool = False,
-    load_weights: bool = True,
     **model_kwargs,
 ) -> SamPredictor:
     r"""Get the SegmentAnything Predictor.
@@ -313,7 +312,6 @@ def get_sam_model(
         return_state: Return the unpickled checkpoint state.
         peft_kwargs: Keyword arguments for th PEFT wrapper class.
         flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
-        load_weights: Whether to initialize the model with pretrained parameter weights.
         model_kwargs: Additional parameters necessary to initialize the Segment Anything model.
 
     Returns:
@@ -380,11 +378,10 @@ def get_sam_model(
         sam = custom_models.peft_sam.PEFT_Sam(sam, **peft_kwargs).sam
 
     # In case the model checkpoints have some issues when it is initialized with different parameters than default.
-    if load_weights:
-        if flexible_load_checkpoint:
-            sam = _handle_checkpoint_loading(sam, model_state)
-        else:
-            sam.load_state_dict(model_state)
+    if flexible_load_checkpoint:
+        sam = _handle_checkpoint_loading(sam, model_state)
+    else:
+        sam.load_state_dict(model_state)
 
     sam.to(device=device)
 

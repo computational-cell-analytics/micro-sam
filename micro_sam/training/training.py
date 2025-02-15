@@ -189,7 +189,6 @@ def train_sam(
     ignore_warnings: bool = True,
     verify_n_labels_in_loader: Optional[int] = 50,
     box_distortion_factor: Optional[float] = 0.025,
-    load_weights: bool = True,
     **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
@@ -228,7 +227,6 @@ def train_sam(
         verify_n_labels_in_loader: The number of labels to verify out of the train and validation dataloaders.
             By default, 50 batches of labels are verified from the dataloaders.
         box_distortion_factor: The factor for distorting the box annotations derived from the ground-truth masks.
-        load_weights: Whether to initialize the model with pretrained parameter weights.
         model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
     """
     with _filter_warnings(ignore_warnings):
@@ -247,7 +245,6 @@ def train_sam(
             checkpoint_path=checkpoint_path,
             return_state=True,
             peft_kwargs=peft_kwargs,
-            load_weights=load_weights,
             **model_kwargs
         )
 

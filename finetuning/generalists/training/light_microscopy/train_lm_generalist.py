@@ -19,7 +19,7 @@ def finetune_lm_generalist(args):
     checkpoint_path = None  # override this to start training from a custom checkpoint
     patch_shape = (512, 512)  # the patch shape for training
     n_objects_per_batch = args.n_objects  # this is the number of objects per batch that will be sampled (default: 25)
-    checkpoint_name = f"{(model_type)}" + ("_scratch" if args.from_scratch else "") + "/lm_generalist_sam"
+    checkpoint_name = f"{(model_type)}/lm_generalist_sam"
 
     # all the stuff we need for training
     train_loader, val_loader = get_generalist_lm_loaders(input_path=args.input_path, patch_shape=patch_shape)
@@ -42,7 +42,6 @@ def finetune_lm_generalist(args):
         scheduler_kwargs=scheduler_kwargs,
         verify_n_labels_in_loader=None,  # Verifies all labels in the loader(s).
         box_distortion_factor=0.05,
-        load_weights=(not args.from_scratch),
     )
 
     if args.export_path is not None:
@@ -78,9 +77,6 @@ def main():
     )
     parser.add_argument(
         "--n_objects", type=int, default=25, help="The number of instances (objects) per batch used for finetuning."
-    )
-    parser.add_argument(
-        "--from_scratch", action="store_true", help="Whether to train Segment Anything model from scratch."
     )
     args = parser.parse_args()
     finetune_lm_generalist(args)

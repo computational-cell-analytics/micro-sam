@@ -47,7 +47,6 @@ def get_trainable_sam_model(
     return_state: bool = False,
     peft_kwargs: Optional[Dict] = None,
     flexible_load_checkpoint: bool = False,
-    load_weights: bool = True,
     **model_kwargs
 ) -> TrainableSAM:
     """Get the trainable sam model.
@@ -62,7 +61,6 @@ def get_trainable_sam_model(
         return_state: Whether to return the full checkpoint state.
         peft_kwargs: Keyword arguments for the PEFT wrapper class.
         flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
-        load_weights: Whether to initialize the model with pretrained parameter weights.
         model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
 
     Returns:
@@ -77,7 +75,6 @@ def get_trainable_sam_model(
         return_sam=True,
         return_state=True,
         flexible_load_checkpoint=flexible_load_checkpoint,
-        load_weights=load_weights,
         **model_kwargs
     )
 
