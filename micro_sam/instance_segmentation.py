@@ -12,8 +12,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import vigra
 import numpy as np
-import elf.parallel as parallel
-from elf.parallel.filters import apply_filter
 from skimage.measure import label, regionprops
 from skimage.segmentation import relabel_sequential
 
@@ -22,6 +20,9 @@ from torchvision.ops.boxes import batched_nms, box_area
 
 from torch_em.model import UNETR
 from torch_em.util.segmentation import watershed_from_center_and_boundary_distances
+
+import elf.parallel as parallel
+from elf.parallel.filters import apply_filter
 
 from nifty.tools import blocking
 
@@ -1077,7 +1078,9 @@ class InstanceSegmentationWithDecoder:
 
         if tile_shape is None:
             segmentation = watershed_from_center_and_boundary_distances(
-                self._center_distances, self._boundary_distances, foreground,
+                center_distances=self._center_distances,
+                boundary_distances=self._boundary_distances,
+                foreground_map=foreground,
                 center_distance_threshold=center_distance_threshold,
                 boundary_distance_threshold=boundary_distance_threshold,
                 foreground_threshold=foreground_threshold,
@@ -1088,13 +1091,18 @@ class InstanceSegmentationWithDecoder:
             if halo is None:
                 raise ValueError("You must pass a value for halo if tile_shape is given.")
             segmentation = _watershed_from_center_and_boundary_distances_parallel(
-                self._center_distances, self._boundary_distances, foreground,
+                center_distances=self._center_distances,
+                boundary_distances=self._boundary_distances,
+                foreground_map=foreground,
                 center_distance_threshold=center_distance_threshold,
                 boundary_distance_threshold=boundary_distance_threshold,
                 foreground_threshold=foreground_threshold,
                 distance_smoothing=distance_smoothing,
-                min_size=min_size, tile_shape=tile_shape,
-                halo=halo, n_threads=n_threads, verbose=False,
+                min_size=min_size,
+                tile_shape=tile_shape,
+                halo=halo,
+                n_threads=n_threads,
+                verbose=False,
             )
 
         if output_mode is not None:

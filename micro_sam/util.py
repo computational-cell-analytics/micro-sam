@@ -318,12 +318,12 @@ def get_sam_model(
     https://www.fatiando.org/pooch/latest/api/generated/pooch.os_cache.html
 
     Args:
-        model_type: The SegmentAnything model to use. Will use the standard vit_h model by default.
+        model_type: The Segment Anything model to use. Will use the standard `vit_l` model by default.
             To get a list of all available model names you can call `get_model_names`.
         device: The device for the model. If none is given will use GPU if available.
         checkpoint_path: The path to a file with weights that should be used instead of using the
             weights corresponding to `model_type`. If given, `model_type` must match the architecture
-            corresponding to the weight file. E.g. if you use weights for SAM with vit_b encoder
+            corresponding to the weight file. e.g. if you use weights for SAM with `vit_b` encoder
             then `model_type` must be given as "vit_b".
         return_sam: Return the sam model object as well as the predictor.
         return_state: Return the unpickled checkpoint state.
@@ -371,7 +371,7 @@ def get_sam_model(
         raise ValueError(f"Invalid model_type: {abbreviated_model_type}. Expect one of {_MODEL_TYPES}")
     if abbreviated_model_type == "vit_t" and not VIT_T_SUPPORT:
         raise RuntimeError(
-            "mobile_sam is required for the vit-tiny."
+            "'mobile_sam' is required for the vit-tiny. "
             "You can install it via 'pip install git+https://github.com/ChaoningZhang/MobileSAM.git'"
         )
 
@@ -484,7 +484,6 @@ def export_custom_sam_model(
     if with_segmentation_decoder:
         if "decoder_state" not in state:
             raise RuntimeError(f"'decoder_state' is not found in the model at '{checkpoint_path}'.")
-
         decoder_state = state["decoder_state"]
         save_state = {"model_state": model_state, "decoder_state": decoder_state}
     else:
@@ -560,12 +559,14 @@ def _to_image(input_):
         input_ = input_ / input_.max()
         # then bring to [0, 255] and cast to uint8
         input_ = (input_ * 255).astype("uint8")
+
     if input_.ndim == 2:
         image = np.concatenate([input_[..., None]] * 3, axis=-1)
     elif input_.ndim == 3 and input_.shape[-1] == 3:
         image = input_
     else:
         raise ValueError(f"Invalid input image of shape {input_.shape}. Expect either 2D grayscale or 3D RGB image.")
+
     return image
 
 
@@ -975,6 +976,7 @@ def set_precomputed(
     else:
         predictor.features = features[i].to(device) if torch.is_tensor(features) else \
             torch.from_numpy(features[i]).to(device)
+
     predictor.original_size = image_embeddings["original_size"]
     predictor.input_size = image_embeddings["input_size"]
     predictor.is_image_set = True
@@ -1072,7 +1074,12 @@ def segmentation_to_one_hot(segmentation: np.ndarray, segmentation_ids: Optional
         n_ids = int(segmentation.max())
 
     else:
-        assert segmentation_ids[0] != 0, "No objects were found."
+        msg = "No foreground objects were found."
+        if len(segmentation_ids) == 0:  # The list should not be completely empty.
+            raise RuntimeError(msg)
+
+        if 0 in segmentation_ids:  # The list should not have 'zero' as a value.
+            raise RuntimeError(msg)
 
         # the segmentation ids have to be sorted
         segmentation_ids = np.sort(segmentation_ids)
