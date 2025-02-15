@@ -33,6 +33,10 @@ DEFAULTS = {
     "tags": ["segment-anything", "instance-segmentation"],
 }
 
+# Reference: https://github.com/bioimage-io/spec-bioimage-io/commit/39d343681d427ec93cf69eef7597d9eb9678deb1#diff-0bbdaa8196fa31f945afabcf04a4295ff098f1f24400ef9e59b0f684d411905eL269  # noqa
+# We had this parameter in bioimageio.spec. This has been removed. We just make a copy of the same parameter.
+ARBITRARY_SIZE = spec.ParameterizedSize(min=1, step=1)
+
 
 def _create_test_inputs_and_outputs(image, labels, model_type, checkpoint_path, tmp_dir):
 
@@ -204,7 +208,7 @@ def _check_model(model_description, input_paths, result_paths):
     image = xarray.DataArray(np.load(input_paths["image"]), dims=tuple("bcyx"))
     embeddings = xarray.DataArray(np.load(result_paths["embeddings"]), dims=tuple("bcyx"))
     box_prompts = xarray.DataArray(np.load(input_paths["box_prompts"]), dims=tuple("bic"))
-    point_prompts = xarray.DataArray(np.load(input_paths["point_prompts"]), dims=tuple("biic"))
+    point_prompts = xarray.DataArray(np.load(input_paths["point_prompts"]), dims=tuple("bhwc"))
     point_labels = xarray.DataArray(np.load(input_paths["point_labels"]), dims=tuple("bic"))
     mask_prompts = xarray.DataArray(np.load(input_paths["mask_prompts"]), dims=tuple("bicyx"))
 
@@ -292,8 +296,8 @@ def export_sam_model(
                     # NOTE: to support 1 and 3 channels we can add another preprocessing.
                     # Best solution: Have a pre-processing for this! (1C -> RGB)
                     spec.ChannelAxis(channel_names=[spec.Identifier(cname) for cname in "RGB"]),
-                    spec.SpaceInputAxis(id=spec.AxisId("y"), size=spec.ARBITRARY_SIZE),
-                    spec.SpaceInputAxis(id=spec.AxisId("x"), size=spec.ARBITRARY_SIZE),
+                    spec.SpaceInputAxis(id=spec.AxisId("y"), size=ARBITRARY_SIZE),
+                    spec.SpaceInputAxis(id=spec.AxisId("x"), size=ARBITRARY_SIZE),
                 ],
                 test_tensor=spec.FileDescr(source=input_paths["image"]),
                 data=spec.IntervalOrRatioDataDescr(type="uint8")
@@ -307,7 +311,7 @@ def export_sam_model(
                     spec.BatchAxis(size=1),
                     spec.IndexInputAxis(
                         id=spec.AxisId("object"),
-                        size=spec.ARBITRARY_SIZE
+                        size=ARBITRARY_SIZE
                     ),
                     spec.ChannelAxis(channel_names=[spec.Identifier(bname) for bname in "hwxy"]),
                 ],
@@ -323,11 +327,11 @@ def export_sam_model(
                     spec.BatchAxis(size=1),
                     spec.IndexInputAxis(
                         id=spec.AxisId("object"),
-                        size=spec.ARBITRARY_SIZE
+                        size=ARBITRARY_SIZE
                     ),
                     spec.IndexInputAxis(
                         id=spec.AxisId("point"),
-                        size=spec.ARBITRARY_SIZE
+                        size=ARBITRARY_SIZE
                     ),
                     spec.ChannelAxis(channel_names=[spec.Identifier(bname) for bname in "xy"]),
                 ],
@@ -343,11 +347,11 @@ def export_sam_model(
                     spec.BatchAxis(size=1),
                     spec.IndexInputAxis(
                         id=spec.AxisId("object"),
-                        size=spec.ARBITRARY_SIZE
+                        size=ARBITRARY_SIZE
                     ),
                     spec.IndexInputAxis(
                         id=spec.AxisId("point"),
-                        size=spec.ARBITRARY_SIZE
+                        size=ARBITRARY_SIZE
                     ),
                 ],
                 test_tensor=spec.FileDescr(source=input_paths["point_labels"]),
@@ -362,7 +366,7 @@ def export_sam_model(
                     spec.BatchAxis(size=1),
                     spec.IndexInputAxis(
                         id=spec.AxisId("object"),
-                        size=spec.ARBITRARY_SIZE
+                        size=ARBITRARY_SIZE
                     ),
                     spec.ChannelAxis(channel_names=["channel"]),
                     spec.SpaceInputAxis(id=spec.AxisId("y"), size=256),

@@ -2,6 +2,7 @@
 """
 
 import os
+import gc
 import pickle
 from pathlib import Path
 from typing import Optional
@@ -313,6 +314,9 @@ def clear(viewer: "napari.viewer.Viewer") -> None:
     """
     vutil.clear_annotations(viewer)
 
+    # Perform garbage collection.
+    gc.collect()
+
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
 def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> None:
@@ -327,6 +331,9 @@ def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> Non
     else:
         i = int(viewer.dims.point[0])
         vutil.clear_annotations_slice(viewer, i=i)
+
+    # Perform garbage collection.
+    gc.collect()
 
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
@@ -343,6 +350,9 @@ def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None
     else:
         i = int(viewer.dims.point[0])
         vutil.clear_annotations_slice(viewer, i=i)
+
+    # Perform garbage collection.
+    gc.collect()
 
 
 def _commit_impl(viewer, layer, preserve_committed):
@@ -510,6 +520,9 @@ def commit(
         viewer.layers["auto_segmentation"].refresh()
         _select_layer(viewer, "committed_objects")
 
+    # Perform garbage collection
+    gc.collect()
+
 
 @magic_factory(
     call_button="Commit [C]",
@@ -553,6 +566,9 @@ def commit_track(
 
     # Reset the tracking state.
     _reset_tracking_state(viewer)
+
+    # Perform garbage collection
+    gc.collect()
 
 
 def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="label"):
@@ -925,6 +941,9 @@ class EmbeddingWidget(_WidgetBase):
         self.model_options = list(util.models().urls.keys())
         # Filter out the decoders from the model list.
         self.model_options = [model for model in self.model_options if not model.endswith("decoder")]
+
+        # NOTE: We currently remove the medical imaging model from displaying it as an option.
+        self.model_options = [model for model in self.model_options if not model.endswith("medical_imaging")]
 
         layout = QtWidgets.QVBoxLayout()
         self.model_dropdown, layout = self._add_choice_param(

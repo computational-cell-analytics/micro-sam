@@ -4,6 +4,7 @@ import unittest
 from shutil import rmtree
 
 import bioimageio.spec
+
 import micro_sam.util as util
 from micro_sam.sample_data import synthetic_data
 
@@ -11,7 +12,6 @@ spec_minor = int(bioimageio.spec.__version__.split(".")[1])
 
 
 @unittest.skipIf(spec_minor < 5, "Needs bioimagio.spec >= 0.5")
-@unittest.expectedFailure
 class TestModelExport(unittest.TestCase):
     tmp_folder = "tmp"
     model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"
@@ -20,9 +20,8 @@ class TestModelExport(unittest.TestCase):
         os.makedirs(self.tmp_folder, exist_ok=True)
 
     def tearDown(self):
-        rmtree(self.tmp_folder)
+        rmtree(self.tmp_folder, ignore_errors=True)
 
-    @unittest.expectedFailure
     def test_model_export(self):
         from micro_sam.bioimageio import export_sam_model
         image, labels = synthetic_data(shape=(1024, 1022))

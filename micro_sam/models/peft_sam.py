@@ -312,7 +312,7 @@ class PEFT_Sam(nn.Module):
     def __init__(
         self,
         model: Sam,
-        rank: int,
+        rank: Optional[int] = None,
         peft_module: nn.Module = LoRASurgery,
         attention_layers_to_update: Union[List[int]] = None,
         quantize: bool = False,
@@ -320,7 +320,9 @@ class PEFT_Sam(nn.Module):
     ):
         super().__init__()
 
-        assert rank > 0
+        if issubclass(peft_module, Union[LoRASurgery, FacTSurgery]) and (not rank or rank <= 0):
+            raise RuntimeError("The chosen PEFT method cannot run without a valid rank choice.")
+
         assert issubclass(peft_module, Union[LoRASurgery, FacTSurgery, SelectiveSurgery, SSFSurgery, AdaptFormer]), (
             "Invalid PEFT module"
         )
@@ -347,7 +349,23 @@ class PEFT_Sam(nn.Module):
                     for sub_module in parent_path:
                         parent_module = getattr(parent_module, sub_module)
 
-                    setattr(parent_module, layer_name, bnb.nn.Linear4bit(module.in_features, module.out_features))
+                    # Create the new Linear4bit layer
+                    linear_q = bnb.nn.Linear4bit(
+                        module.in_features,
+                        module.out_features,
+                        bias=False if module.bias is None else True,
+                    )
+                    # Assign weights and bias to the new layer
+                    new_weight = bnb.nn.Params4bit(
+                        data=module.weight,
+                        requires_grad=False,
+                    )
+                    linear_q.weight = new_weight
+                    if module.bias is not None:
+                        linear_q.bias = torch.nn.Parameter(module.bias)
+
+                    # Replace the original linear layer with the quantized one
+                    setattr(parent_module, layer_name, linear_q)
 
         # Let's freeze all the pretrained image encoder layers first
         for param in model.image_encoder.parameters():

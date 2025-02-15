@@ -70,8 +70,8 @@ class SemanticSamTrainer(DefaultTrainer):
         self.compute_ce_loss = nn.CrossEntropyLoss()
         self.dice_weight = dice_weight
 
-        if self.dice_weight is not None:
-            assert self.dice_weight > 0 and self.dice_weight < 1, "The weight factor should lie between 0 and 1."
+        if self.dice_weight is not None and (self.dice_weight < 0 or self.dice_weight > 1):
+            raise ValueError("The weight factor should lie between 0 and 1.")
 
         self._kwargs = kwargs
 

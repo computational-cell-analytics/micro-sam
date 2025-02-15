@@ -112,6 +112,12 @@ def models():
         "vit_l_em_organelles": "xxh128:096c9695966803ca6fde24f4c1e3c3fb",
         "vit_b_em_organelles": "xxh128:f6f6593aeecd0e15a07bdac86360b6cc",
         "vit_t_em_organelles": "xxh128:253474720c497cce605e57c9b1d18fd9",
+        # Histopathology models:
+        "vit_b_histopathology": "xxh128:ffd1a2cd84570458b257bd95fdd8f974",
+        "vit_l_histopathology": "xxh128:b591833c89754271023e901281dee3f2",
+        "vit_h_histopathology": "xxh128:bd1856dafc156a43fb3aa705f1a6e92e",
+        # Medical Imaging models:
+        "vit_b_medical_imaging": "xxh128:5be672f1458263a9edc9fd40d7f56ac1",
     }
     # Additional decoders for instance segmentation.
     decoder_registry = {
@@ -123,6 +129,10 @@ def models():
         "vit_l_em_organelles_decoder": "xxh128:d60fd96bd6060856f6430f29e42568fb",
         "vit_b_em_organelles_decoder": "xxh128:b2d4dcffb99f76d83497d39ee500088f",
         "vit_t_em_organelles_decoder": "xxh128:8f897c7bb93174a4d1638827c4dd6f44",
+        # Histopathology models:
+        "vit_b_histopathology_decoder": "xxh128:6a66194dcb6e36199cbee2214ecf7213",
+        "vit_l_histopathology_decoder": "xxh128:46aab7765d4400e039772d5a50b55c04",
+        "vit_h_histopathology_decoder": "xxh128:3ed9f87e46ad5e16935bd8d722c8dc47",
     }
     registry = {**encoder_registry, **decoder_registry}
 
@@ -137,6 +147,10 @@ def models():
         "vit_l_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l.pt",  # noqa
         "vit_b_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b.pt",
         "vit_t_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t.pt",  # noqa
+        "vit_b_histopathology": "https://owncloud.gwdg.de/index.php/s/sBB4H8CTmIoBZsQ/download",
+        "vit_l_histopathology": "https://owncloud.gwdg.de/index.php/s/IZgnn1cpBq2PHod/download",
+        "vit_h_histopathology": "https://owncloud.gwdg.de/index.php/s/L7AcvVz7DoWJ2RZ/download",
+        "vit_b_medical_imaging": "https://owncloud.gwdg.de/index.php/s/AB69HGhj8wuozXQ/download",
     }
 
     decoder_urls = {
@@ -146,6 +160,9 @@ def models():
         "vit_l_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l_decoder.pt",  # noqa
         "vit_b_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b_decoder.pt",  # noqa
         "vit_t_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t_decoder.pt",  # noqa
+        "vit_b_histopathology_decoder": "https://owncloud.gwdg.de/index.php/s/KO9AWqynI7SFOBj/download",
+        "vit_l_histopathology_decoder": "https://owncloud.gwdg.de/index.php/s/oIs6VSmkOp7XrKF/download",
+        "vit_h_histopathology_decoder": "https://owncloud.gwdg.de/index.php/s/1qAKxy5H0jgwZvM/download",
     }
     urls = {**encoder_urls, **decoder_urls}
 
@@ -372,17 +389,18 @@ def get_sam_model(
     # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything.
     # Overwrites the SAM model by freezing the backbone and allow PEFT.
     if peft_kwargs and isinstance(peft_kwargs, dict):
+        # NOTE: We bump out 'quantize' parameter, if found, as we do not quantize in inference.
+        peft_kwargs.pop("quantize", None)
+
         if abbreviated_model_type == "vit_t":
             raise ValueError("'micro-sam' does not support parameter efficient finetuning for 'mobile-sam'.")
 
         sam = custom_models.peft_sam.PEFT_Sam(sam, **peft_kwargs).sam
-
     # In case the model checkpoints have some issues when it is initialized with different parameters than default.
     if flexible_load_checkpoint:
         sam = _handle_checkpoint_loading(sam, model_state)
     else:
         sam.load_state_dict(model_state)
-
     sam.to(device=device)
 
     predictor = SamPredictor(sam)
@@ -437,16 +455,21 @@ def _handle_checkpoint_loading(sam, model_state):
 
 
 def export_custom_sam_model(
-    checkpoint_path: Union[str, os.PathLike], model_type: str, save_path: Union[str, os.PathLike],
+    checkpoint_path: Union[str, os.PathLike],
+    model_type: str,
+    save_path: Union[str, os.PathLike],
+    with_segmentation_decoder: bool = False,
 ) -> None:
-    """Export a finetuned segment anything model to the standard model format.
+    """Export a finetuned Segment Anything Model to the standard model format.
 
     The exported model can be used by the interactive annotation tools in `micro_sam.annotator`.
 
     Args:
         checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
-        model_type: The SegmentAnything model type corresponding to the checkpoint (vit_h, vit_b, vit_l or vit_t).
+        model_type: The Segment Anything Model type corresponding to the checkpoint (vit_h, vit_b, vit_l or vit_t).
         save_path: Where to save the exported model.
+        with_segmentation_decoder: Whether to store the decoder state in the model checkpoint as well.
+            If set to 'True', the model checkpoint will not be compatible with other tools besides 'micro-sam'.
     """
     _, state = get_sam_model(
         model_type=model_type, checkpoint_path=checkpoint_path, return_state=True, device="cpu",
@@ -456,7 +479,66 @@ def export_custom_sam_model(
     model_state = OrderedDict(
         [(k[len(prefix):] if k.startswith(prefix) else k, v) for k, v in model_state.items()]
     )
-    torch.save(model_state, save_path)
+
+    # Store the 'decoder_state' as well, if desired.
+    if with_segmentation_decoder:
+        if "decoder_state" not in state:
+            raise RuntimeError(f"'decoder_state' is not found in the model at '{checkpoint_path}'.")
+
+        decoder_state = state["decoder_state"]
+        save_state = {"model_state": model_state, "decoder_state": decoder_state}
+    else:
+        save_state = model_state
+
+    torch.save(save_state, save_path)
+
+
+def export_custom_qlora_model(
+    checkpoint_path: Union[str, os.PathLike],
+    finetuned_path: Union[str, os.PathLike],
+    model_type: str,
+    save_path: Union[str, os.PathLike],
+) -> None:
+    """Export a finetuned Segment Anything Model, in QLoRA style, to LoRA-style checkpoint format.
+
+    The exported model can be used with the LoRA backbone by passing the relevant `peft_kwargs` to `get_sam_model`.
+
+    Args:
+        checkpoint_path: The path to the base foundation model from which the new model has been finetuned.
+        finetuned_path: The path to the new finetuned model, using QLoRA.
+        model_type: The Segment Anything Model type corresponding to the checkpoint.
+        save_path: Where to save the exported model.
+    """
+    # Step 1: Get the base SAM model: used to start finetuning from.
+    _, sam = get_sam_model(
+        model_type=model_type, checkpoint_path=checkpoint_path, return_sam=True,
+    )
+
+    # Step 2: Load the QLoRA-style finetuned model.
+    ft_state, ft_model_state = _load_checkpoint(finetuned_path)
+
+    # Step 3: Get LoRA weights from QLoRA and retain all original parameters from the base SAM model.
+    updated_model_state = {}
+
+    # - At first, we get all LoRA layers from the QLoRA-style finetuned model checkpoint.
+    for k, v in ft_model_state.items():
+        if k.find("w_b_linear") != -1 or k.find("w_a_linear") != -1:
+            updated_model_state[k] = v
+
+    # - Next, we get all the remaining parameters from the base SAM model.
+    for k, v in sam.state_dict().items():
+        if k.find("attn.qkv.") != -1:
+            k = k.replace("qkv", "qkv.qkv_proj")
+            updated_model_state[k] = v
+        else:
+
+            updated_model_state[k] = v
+
+    # - Finally, we replace the old model state with the new one (to retain other relevant stuff)
+    ft_state['model_state'] = updated_model_state
+
+    # Step 4: Store the new "state" to "save_path"
+    torch.save(ft_state, save_path)
 
 
 def get_model_names() -> Iterable:
