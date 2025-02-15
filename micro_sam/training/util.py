@@ -230,14 +230,14 @@ class ConvertToSamInputs:
 
 
 class ConvertToSemanticSamInputs:
-    """Convert outputs of data loader to the expected batched inputs of the SegmentAnything model
+    """Convert outputs of data loader to the expected batched inputs of the Segment Anything model
     for semantic segmentation.
     """
     def __call__(self, x, y):
         """Convert the outputs of dataloader to the batched format of inputs expected by SAM.
         """
         batched_inputs = []
-        for image, gt in zip(x, y):
+        for image in x:
             batched_input = {"image": image, "original_size": image.shape[-2:]}
             batched_inputs.append(batched_input)
 
@@ -295,8 +295,12 @@ class ResizeLabelTrafo:
 
     def __call__(self, labels):
         distance_trafo = PerObjectDistanceTransform(
-            distances=True, boundary_distances=True, directed_distances=False,
-            foreground=True, instances=True, min_size=self.min_size
+            distances=True,
+            boundary_distances=True,
+            directed_distances=False,
+            foreground=True,
+            instances=True,
+            min_size=self.min_size
         )
         labels = distance_trafo(labels)
 

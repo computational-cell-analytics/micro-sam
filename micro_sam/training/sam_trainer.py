@@ -206,9 +206,11 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         for i in range(0, num_subiter):
             # We do multimasking only in the first sub-iteration as we then pass single prompt
             # after the first sub-iteration, we don't do multimasking because we get multiple prompts.
-            batched_outputs = self.model(batched_inputs,
-                                         image_embeddings=image_embeddings,
-                                         multimask_output=multimask_output if i == 0 else False)
+            batched_outputs = self.model(
+                batched_inputs=batched_inputs,
+                image_embeddings=image_embeddings,
+                multimask_output=multimask_output if i == 0 else False,
+            )
 
             # Compute loss for tis sub-iteration.
             net_loss, net_mask_loss, net_iou_regression_loss = self._compute_loss(batched_outputs, y_one_hot)
@@ -305,8 +307,10 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         batched_inputs, y_one_hot = self._preprocess_batch(batched_inputs, y, sampled_ids)
 
         loss, mask_loss, iou_regression_loss, model_iou = self._compute_iterative_loss(
-            batched_inputs, y_one_hot,
-            num_subiter=self.n_sub_iteration, multimask_output=multimask_output
+            batched_inputs=batched_inputs,
+            y_one_hot=y_one_hot,
+            num_subiter=self.n_sub_iteration,
+            multimask_output=multimask_output
         )
         return loss, mask_loss, iou_regression_loss, model_iou, y_one_hot
 
@@ -351,8 +355,9 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             if self.logger is not None:
                 lr = [pm["lr"] for pm in self.optimizer.param_groups][0]
                 samples = sampled_binary_y if self._iteration % self.log_image_interval == 0 else None
-                self.logger.log_train(self._iteration, loss, lr, x, y, samples,
-                                      mask_loss, iou_regression_loss, model_iou)
+                self.logger.log_train(
+                    self._iteration, loss, lr, x, y, samples, mask_loss, iou_regression_loss, model_iou
+                )
 
             self._iteration += 1
             n_iter += 1
@@ -372,7 +377,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         image_embeddings, batched_inputs = self.model.image_embeddings_oft(batched_inputs)
 
         batched_outputs = self.model(
-            batched_inputs,
+            batched_inputs=batched_inputs,
             image_embeddings=image_embeddings,
             multimask_output=multimask_output,
         )
@@ -424,8 +429,7 @@ class SamLogger(TorchEmLogger):
     """@private"""
     def __init__(self, trainer, save_root, **unused_kwargs):
         super().__init__(trainer, save_root)
-        self.log_dir = f"./logs/{trainer.name}" if save_root is None else\
-            os.path.join(save_root, "logs", trainer.name)
+        self.log_dir = f"./logs/{trainer.name}" if save_root is None else os.path.join(save_root, "logs", trainer.name)
         os.makedirs(self.log_dir, exist_ok=True)
 
         self.tb = torch.utils.tensorboard.SummaryWriter(self.log_dir)

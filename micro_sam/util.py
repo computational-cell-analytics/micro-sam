@@ -484,7 +484,6 @@ def export_custom_sam_model(
     if with_segmentation_decoder:
         if "decoder_state" not in state:
             raise RuntimeError(f"'decoder_state' is not found in the model at '{checkpoint_path}'.")
-
         decoder_state = state["decoder_state"]
         save_state = {"model_state": model_state, "decoder_state": decoder_state}
     else:
@@ -560,12 +559,14 @@ def _to_image(input_):
         input_ = input_ / input_.max()
         # then bring to [0, 255] and cast to uint8
         input_ = (input_ * 255).astype("uint8")
+
     if input_.ndim == 2:
         image = np.concatenate([input_[..., None]] * 3, axis=-1)
     elif input_.ndim == 3 and input_.shape[-1] == 3:
         image = input_
     else:
         raise ValueError(f"Invalid input image of shape {input_.shape}. Expect either 2D grayscale or 3D RGB image.")
+
     return image
 
 
@@ -975,6 +976,7 @@ def set_precomputed(
     else:
         predictor.features = features[i].to(device) if torch.is_tensor(features) else \
             torch.from_numpy(features[i]).to(device)
+
     predictor.original_size = image_embeddings["original_size"]
     predictor.input_size = image_embeddings["input_size"]
     predictor.is_image_set = True

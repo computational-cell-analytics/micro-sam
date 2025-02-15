@@ -100,13 +100,13 @@ def _check_loader(loader, with_segmentation_decoder, name=None, verify_n_labels_
             if targets_min < 0 or targets_min > 1:
                 raise ValueError(
                     "Invalid value range in the target data from the value loader. "
-                    "Expect the 3 last target channels (for normalized distances and foreground probabilities)"
+                    "Expect the 3 last target channels (for normalized distances and foreground probabilities) "
                     f"to be in range [0.0, 1.0], but got min {targets_min}"
                 )
             if targets_max < 0 or targets_max > 1:
                 raise ValueError(
                     "Invalid value range in the target data from the value loader. "
-                    "Expect the 3 last target channels (for normalized distances and foreground probabilities)"
+                    "Expect the 3 last target channels (for normalized distances and foreground probabilities) "
                     f"to be in range [0.0, 1.0], but got max {targets_max}"
                 )
 
@@ -114,7 +114,7 @@ def _check_loader(loader, with_segmentation_decoder, name=None, verify_n_labels_
             if n_channels_y != 1:
                 raise ValueError(
                     "Invalid number of channels in the target data from the data loader. "
-                    "Expect 1 channel for training without an instance segmentation decoder,"
+                    "Expect 1 channel for training without an instance segmentation decoder, "
                     f"but got {n_channels_y} channels."
                 )
             # Check instance channel per sample in a batch
@@ -456,8 +456,12 @@ def default_sam_dataset(
 
     if with_segmentation_decoder:
         label_transform = torch_em.transform.label.PerObjectDistanceTransform(
-            distances=True, boundary_distances=True, directed_distances=False,
-            foreground=True, instances=True, min_size=min_size,
+            distances=True,
+            boundary_distances=True,
+            directed_distances=False,
+            foreground=True,
+            instances=True,
+            min_size=min_size,
         )
     else:
         label_transform = torch_em.transform.label.MinSizeLabelTransform(min_size=min_size)
@@ -611,9 +615,13 @@ def train_sam_for_configuration(
 
     train_kwargs.update(**kwargs)
     train_sam(
-        name=name, train_loader=train_loader, val_loader=val_loader,
-        checkpoint_path=checkpoint_path, with_segmentation_decoder=with_segmentation_decoder,
-        model_type=model_type, **train_kwargs
+        name=name,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        checkpoint_path=checkpoint_path,
+        with_segmentation_decoder=with_segmentation_decoder,
+        model_type=model_type,
+        **train_kwargs
     )
 
 
