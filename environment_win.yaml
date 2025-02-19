@@ -10,7 +10,6 @@ dependencies:
     - natsort
     - pip
     - pooch
-    - protobuf <5
     - pyqt
     - python-xxhash
     - python-elf >=0.4.8
