@@ -178,6 +178,8 @@ examples/data/*
 # Torch-em stuff
 checkpoints/
 logs/
+*.pth
+*.pt
 
 # And some other stuff to avoid tracking as well.
 gpu_jobs/

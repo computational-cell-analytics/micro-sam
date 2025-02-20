@@ -808,7 +808,6 @@ def main():
 
     # If the user wants to preprocess the inputs, we allow the possibility to do so.
     _raw_transform = get_raw_transform(args.preprocess)
-    print(_raw_transform)
 
     # Get the dataset with files for training.
     dataset = default_sam_dataset(
