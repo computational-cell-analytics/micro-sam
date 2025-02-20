@@ -1,12 +1,4 @@
 """Helper scripts to export models for upload to bioimageio/zenodo.
-
-Hashes for new models:
-
-Exported model faithful-chicken
-Encoder:
-vit_t_lm xxh128:72ec5074774761a6e5c05a08942f981e
-Decoder:
-vit_t_lm_decoder xxh128:3e914a5f397b0312cdd36813031f8823
 """
 
 import os
