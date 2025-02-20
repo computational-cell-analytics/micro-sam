@@ -12,8 +12,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import vigra
 import numpy as np
-import elf.parallel as parallel
-from elf.parallel.filters import apply_filter
 from skimage.measure import label, regionprops
 from skimage.segmentation import relabel_sequential
 
@@ -24,6 +22,9 @@ from torch_em.model import UNETR
 from torch_em.util.segmentation import watershed_from_center_and_boundary_distances
 
 from nifty.tools import blocking
+
+import elf.parallel as parallel
+from elf.parallel.filters import apply_filter
 
 import segment_anything.utils.amg as amg_utils
 from segment_anything.predictor import SamPredictor
