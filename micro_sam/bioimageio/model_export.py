@@ -166,6 +166,7 @@ dependencies:
     - segment-anything"""
     if require_mobile_sam:
         content += """
+    - timm
     - pip:
         - git+https://github.com/ChaoningZhang/MobileSAM.git"""
     with open(dependency_file, "w") as f:
