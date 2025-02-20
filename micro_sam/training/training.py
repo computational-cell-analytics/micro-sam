@@ -487,6 +487,7 @@ def default_sam_dataset(
             with_channels=with_channels,
             ndim=2,
             is_seg_dataset=is_seg_dataset,
+            raw_transform=raw_transform,
             **kwargs
         )
         n_samples = max(len(loader), 100 if is_train else 5)
@@ -779,6 +780,9 @@ def main():
         "--batch_size", type=int, default=1,
         help="The choice of batch size for training the Segment Anything Model. By default, trains on batch size 1."
     )
+    parser.add_argument(
+        "--preprocess", type=str, default=None, help="Whether to normalize the raw inputs."
+    )
 
     args = parser.parse_args()
 
@@ -802,6 +806,22 @@ def main():
 
     # 2. Prepare the dataloaders.
 
+    # If the user wants to preprocess the inputs, we allow the possibility to do so.
+    from torch_em.transform.raw import normalize, normalize_percentile
+
+    if args.preprocess is None:
+        _raw_transform = None  # By default, avoid preprocessing the inputs at all.
+    else:
+        if args.preprocess == "normalize_minmax":
+            raw_trafo = normalize
+        elif args.preprocess == "normalize_percentile":
+            raw_trafo = normalize_percentile
+        else:
+            raise ValueError(f"'{args.preprocess}' is not a supported preprocessing.")
+
+        def _raw_transform(image):
+            return raw_trafo(image) * 255
+
     # Get the dataset with files for training.
     dataset = default_sam_dataset(
         raw_paths=train_images,
@@ -810,6 +830,7 @@ def main():
         label_key=train_gt_key,
         patch_shape=patch_shape,
         with_segmentation_decoder=with_segmentation_decoder,
+        raw_transform=_raw_transform,
     )
 
     # If val images are not exclusively provided, we create a val split from the training data.
@@ -828,6 +849,7 @@ def main():
             label_key=val_gt_key,
             patch_shape=patch_shape,
             with_segmentation_decoder=with_segmentation_decoder,
+            raw_transform=_raw_transform,
         )
 
     # Get the dataloaders from the datasets.
@@ -844,8 +866,6 @@ def main():
 
     if model_type is None:  # If user does not specify the model, we use the default model corresponding to the config.
         model_type = CONFIGURATIONS[config]["model_type"]
-
-    print(model_type, config)
 
     train_sam_for_configuration(
         name=checkpoint_name,

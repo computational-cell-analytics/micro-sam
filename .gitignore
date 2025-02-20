@@ -189,6 +189,10 @@ iterative_prompting_results/
 *.sh
 *.svg
 *.csv
+*.tiff
+*.tif
+*.zip
+*MACOSX
 
 # Related to i2k workshop folders.
 data/
