@@ -252,10 +252,6 @@ def main():
         help="Whether to continue annotation after the automatic segmentation is generated."
     )
     parser.add_argument(
-        "--ignore_postprocessing", action="store_true",
-        help="Whether to avoid postprocessing the outputs of automatic segmentation."
-    )
-    parser.add_argument(
         "-d", "--device", default=None,
         help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
         "By default the most performant available device will be selected."
@@ -284,10 +280,6 @@ def main():
     amg_class = AutomaticMaskGenerator if args.tile_shape is None else TiledAutomaticMaskGenerator
     amg_kwargs, generate_kwargs = split_kwargs(amg_class, **extra_kwargs)
 
-    # By default, additional post-processing under `generate` method after automatic segmentation is present.
-    # Otherwise, setting `output_mode` to `None` would avoid doing this.
-    generate_kwargs["output_mode"] = None if args.ignore_postprocessing else "binary_mask"
-
     # Validate for the expected automatic segmentation mode.
     # By default, it is set to 'auto', i.e. searches for the decoder state to prioritize AIS for finetuned models.
     # Otherwise, runs AMG for all models in any case.
@@ -305,6 +297,11 @@ def main():
         is_tiled=args.tile_shape is not None,
         **amg_kwargs,
     )
+
+    # We perform additional post-processing for AMG-only.
+    # Otherwise, we ignore additional post-processing for AIS.
+    if isinstance(segmenter, InstanceSegmentationWithDecoder):
+        generate_kwargs["output_mode"] = None
 
     automatic_instance_segmentation(
         predictor=predictor,
