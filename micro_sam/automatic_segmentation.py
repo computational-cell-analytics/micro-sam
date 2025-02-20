@@ -298,6 +298,11 @@ def main():
         **amg_kwargs,
     )
 
+    # We perform additional post-processing for AMG-only.
+    # Otherwise, we ignore additional post-processing for AIS.
+    if isinstance(segmenter, InstanceSegmentationWithDecoder):
+        generate_kwargs["output_mode"] = None
+
     automatic_instance_segmentation(
         predictor=predictor,
         segmenter=segmenter,
