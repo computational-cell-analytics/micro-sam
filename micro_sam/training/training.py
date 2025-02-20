@@ -800,9 +800,6 @@ def main():
     train_images, train_gt, train_image_key, train_gt_key = args.images, args.labels, args.image_key, args.label_key
     val_images, val_gt, val_image_key, val_gt_key = args.val_images, args.val_labels, args.val_image_key, args.val_label_key  # noqa
 
-    print(train_images, train_gt, train_image_key, train_gt_key)
-    print(val_images, val_gt, val_image_key, val_gt_key)
-
     # 2. Prepare the dataloaders.
 
     # Get the dataset with files for training.
