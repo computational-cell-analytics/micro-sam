@@ -29,7 +29,7 @@ from . import sam_trainer as trainers
 from ..instance_segmentation import get_unetr
 from . import joint_sam_trainer as joint_trainers
 from ..util import get_device, get_model_names, export_custom_sam_model
-from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit
+from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit, get_raw_transform
 
 
 FilePath = Union[str, os.PathLike]
@@ -807,20 +807,8 @@ def main():
     # 2. Prepare the dataloaders.
 
     # If the user wants to preprocess the inputs, we allow the possibility to do so.
-    from torch_em.transform.raw import normalize, normalize_percentile
-
-    if args.preprocess is None:
-        _raw_transform = None  # By default, avoid preprocessing the inputs at all.
-    else:
-        if args.preprocess == "normalize_minmax":
-            raw_trafo = normalize
-        elif args.preprocess == "normalize_percentile":
-            raw_trafo = normalize_percentile
-        else:
-            raise ValueError(f"'{args.preprocess}' is not a supported preprocessing.")
-
-        def _raw_transform(image):
-            return raw_trafo(image) * 255
+    _raw_transform = get_raw_transform(args.preprocess)
+    print(_raw_transform)
 
     # Get the dataset with files for training.
     dataset = default_sam_dataset(
