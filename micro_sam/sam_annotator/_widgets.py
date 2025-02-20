@@ -1110,7 +1110,7 @@ class EmbeddingWidget(_WidgetBase):
             # Whether to prefer decoder.
             # With 'amg', it is set to 'False', else it is 'True' for the default 'auto' and 'ais' mode.
             prefer_decoder = True
-            if self.automatic_segmentation_mode in "amg":
+            if self.automatic_segmentation_mode == "amg":
                 prefer_decoder = False
 
             state.initialize_predictor(
