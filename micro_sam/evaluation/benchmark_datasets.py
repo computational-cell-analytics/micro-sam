@@ -27,12 +27,39 @@ from ..automatic_segmentation import automatic_instance_segmentation, get_predic
 
 
 LM_2D_DATASETS = [
-    "livecell", "deepbacs", "tissuenet", "neurips_cellseg", "dynamicnuclearnet",
-    "hpa", "covid_if", "pannuke", "lizard", "orgasegment", "omnipose", "dic_hepg2",
+    # in-domain
+    "livecell",  # cell segmentation in PhC (has a TEST-set)
+    "deepbacs",  # bacteria segmentation in label-free microscopy (has a TEST-set),
+    "tissuenet",  # cell segmentation in tissue microscopy images (has a TEST-set),
+    "neurips_cellseg",  # cell segmentation in various (has a TEST-set),
+    "cellpose",  # cell segmentation in FM (has 'cyto2' on which we can TEST on),
+    "dynamicnuclearnet",  # nuclei segmentation in FM (has a TEST-set)
+    "orgasegment",  # organoid segmentation in BF (has a TEST-set)
+    "yeaz",  # yeast segmentation in BF (has a TEST-set)
+
+    # out-of-domain
+    "arvidsson",  # nuclei segmentation in HCS FM
+    "bitdepth_nucseg",  # nuclei segmentation in FM
+    "cellbindb",  # cell segmentation in various microscopy
+    "covid_if",  # cell segmentation in IF
+    "deepseas",  # cell segmentation in PhC,
+    "hpa",  # cell segmentation in confocal,
+    "ifnuclei",  # nuclei segmentation in IFM
+    "lizard",  # nuclei segmentation in H&E histopathology,
+    "organoidnet",  # organoid segmentation in BF
+    "toiam",  # microbial cell segmentation in PhC
+    "vicar",  # cell segmentation in label-free
 ]
 
 LM_3D_DATASETS = [
-    "plantseg_root", "plantseg_ovules", "gonuclear", "mouse_embryo", "embegseg", "cellseg3d"
+    # in-domain
+    "plantseg_root",  # cell segmentation in lightsheet (has a TEST-set)
+
+    # out-of-domain
+    "plantseg_ovules",  # cell segmentation in confocal
+    "gonuclear",  # nuclei segmentation in FM
+    "mouse_embryo",  # cell segmentation in lightsheet
+    "cellseg3d",  # nuclei segmentation in FM
 ]
 
 EM_2D_DATASETS = ["mitolab_tem"]
@@ -47,6 +74,19 @@ DATASET_RETURNS_FOLDER = {
 }
 
 DATASET_CONTAINER_KEYS = {
+    # 2d
+    "tissuenet": ["raw/rgb", "labels/cell"],
+    "covid_if": ["raw/serum_IgG/s0", "labels/cells/s0"],
+    "dynamicnuclearnet": ["raw", "labels"],
+    "hpa": [["raw/protein", "raw/microtubules", "raw/er"], "labels"],
+    "lizard": ["image", "labels/segmentation"],
+
+    # 3d
+    "plantseg_root": ["raw", "label"],
+    "plantseg_ovules": ["raw", "label"],
+    "gonuclear": ["raw/nuclei", "labels/nuclei"],
+    "mouse_embryo": ["raw", "label"],
+    "cellseg_3d": [None, None],
     "lucchi": ["raw", "labels"],
 }
 
@@ -64,8 +104,10 @@ def _download_benchmark_datasets(path, dataset_choice):
     """
     available_datasets = {
         # Light Microscopy datasets
+
+        # 2d datasets: in-domain
         "livecell": lambda: datasets.livecell.get_livecell_data(
-            path=os.path.join(path, "livecell"), split="test", download=True,
+            path=os.path.join(path, "livecell"), download=True,
         ),
         "deepbacs": lambda: datasets.deepbacs.get_deepbacs_data(
             path=os.path.join(path, "deepbacs"), bac_type="mixed", download=True,
@@ -76,32 +118,62 @@ def _download_benchmark_datasets(path, dataset_choice):
         "neurips_cellseg": lambda: datasets.neurips_cell_seg.get_neurips_cellseg_data(
             root=os.path.join(path, "neurips_cellseg"), split="test", download=True,
         ),
-        "plantseg_root": lambda: datasets.plantseg.get_plantseg_data(
-            path=os.path.join(path, "plantseg"), download=True, name="root",
-        ),
-        "plantseg_ovules": lambda: datasets.plantseg.get_plantseg_data(
-            path=os.path.join(path, "plantseg"), download=True, name="ovules",
-        ),
-        "covid_if": lambda: datasets.covid_if.get_covid_if_data(
-            path=os.path.join(path, "covid_if"), download=True,
-        ),
-        "hpa": lambda: datasets.hpa.get_hpa_segmentation_data(
-            path=os.path.join(path, "hpa"), download=True,
+        "cellpose": lambda: datasets.cellpose.get_cellpose_data(
+            path=os.path.join(path, "cellpose"), split="train", choice="cyto2", download=True,
         ),
         "dynamicnuclearnet": lambda: datasets.dynamicnuclearnet.get_dynamicnuclearnet_data(
             path=os.path.join(path, "dynamicnuclearnet"), split="test", download=True,
         ),
-        "pannuke": lambda: datasets.pannuke.get_pannuke_data(
-            path=os.path.join(path, "pannuke"), download=True, folds=["fold_1", "fold_2", "fold_3"],
-        ),
-        "lizard": lambda: datasets.lizard.get_lizard_data(
-            path=os.path.join(path, "lizard"), download=True,
-        ),
         "orgasegment": lambda: datasets.orgasegment.get_orgasegment_data(
             path=os.path.join(path, "orgasegment"), split="eval", download=True,
         ),
-        "omnipose": lambda: datasets.omnipose.get_omnipose_data(
-            path=os.path.join(path, "omnipose"), download=True,
+        "yeaz": lambda: datasets.yeaz.get_yeaz_data(
+            path=os.path.join(path, "yeaz"), choice="bf", download=True,
+        ),
+
+        # 2d datasets: out-of-domain
+        "arvidsson": lambda: datasets.arvidsson.get_arvidsson_data(
+            path=os.path.join(path, "arvidsson"), split="test", download=True,
+        ),
+        "bitdepth_nucseg": lambda: datasets.bitdepth_nucseg.get_bitdepth_nucseg_data(
+            path=os.path.join(path, "bitdepth_nucseg"), download=True,
+        ),
+        "cellbindb": lambda: datasets.cellbindb.get_cellbindb_data(
+            path=os.path.join(path, "cellbindb"), download=True,
+        ),
+        "covid_if": lambda: datasets.covid_if.get_covid_if_data(
+            path=os.path.join(path, "covid_if"), download=True,
+        ),
+        "deepseas": lambda: datasets.deepseas.get_deepseas_data(
+            path=os.path.join(path, "deepseas"), split="test",
+        ),
+        "hpa": lambda: datasets.hpa.get_hpa_segmentation_data(
+            path=os.path.join(path, "hpa"), download=True,
+        ),
+        "ifnuclei": lambda: datasets.ifnuclei.get_ifnuclei_data(
+            path=os.path.join(path, "ifnuclei"), download=True,
+        ),
+        "lizard": lambda: datasets.lizard.get_lizard_data(
+            path=os.path.join(path, "lizard"), split="test", download=True,
+        ),
+        "organoidnet": lambda: datasets.organoidnet.get_organoidnet_data(
+            path=os.path.join(path, "organoidnet"), split="Test", download=True,
+        ),
+        "toiam": lambda: datasets.toiam.get_toiam_data(
+            path=os.path.join(path, "toiam"), download=True,
+        ),
+        "vicar": lambda: datasets.vicar.get_vicar_data(
+            path=os.path.join(path, "vicar"), download=True,
+        ),
+
+        # 3d datasets: in-domain
+        "plantseg_root": lambda: datasets.plantseg.get_plantseg_data(
+            path=os.path.join(path, "plantseg_root"), split="test", download=True, name="root",
+        ),
+
+        # 3d datasets: out-of-domain
+        "plantseg_ovules": lambda: datasets.plantseg.get_plantseg_data(
+            path=os.path.join(path, "plantseg_ovules"), split="test", download=True, name="ovules",
         ),
         "gonuclear": lambda: datasets.gonuclear.get_gonuclear_data(
             path=os.path.join(path, "gonuclear"), download=True,
@@ -109,15 +181,8 @@ def _download_benchmark_datasets(path, dataset_choice):
         "mouse_embryo": lambda: datasets.mouse_embryo.get_mouse_embryo_data(
             path=os.path.join(path, "mouse_embryo"), download=True,
         ),
-        "embedseg_data": lambda: [
-            datasets.embedseg_data.get_embedseg_data(path=os.path.join(path, "embedseg_data"), download=True, name=name)
-            for name in datasets.embedseg_data.URLS.keys()
-        ],
         "cellseg_3d": lambda: datasets.cellseg_3d.get_cellseg_3d_data(
             path=os.path.join(path, "cellseg_3d"), download=True,
-        ),
-        "dic_hepg2": lambda: datasets.dic_hepg2.get_dic_hepg2_data(
-            path=os.path.join(path, "dic_hepg2"), download=True,
         ),
 
         # Electron Microscopy datasets
@@ -202,26 +267,40 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
 
     available_datasets = {
         # Light Microscopy datasets
+
+        # 2d: in-domain
         "livecell": lambda: datasets.livecell.get_livecell_paths(path=path, split="test"),
         "deepbacs": lambda: datasets.deepbacs.get_deepbacs_paths(path=path, split="test", bac_type="mixed"),
         "tissuenet": lambda: datasets.tissuenet.get_tissuenet_paths(path=path, split="test"),
         "neurips_cellseg": lambda: datasets.neurips_cell_seg.get_neurips_cellseg_paths(root=path, split="test"),
-        "plantseg_root": lambda: datasets.plantseg.get_plantseg_paths(path=path, name="root", split="test"),
-        "plantseg_ovules": lambda: datasets.plantseg.get_plantseg_paths(path=path, name="ovules", split="test"),
-        "covid_if": lambda: datasets.covid_if.get_covid_if_paths(path=path),
-        "hpa": lambda: datasets.hpa.get_hpa_segmentation_paths(path=path, split="test"),
+        "cellpose": lambda: datasets.cellpose.get_cellpose_paths(path=path, split="train", choice="cyto2"),
         "dynamicnuclearnet": lambda: datasets.dynamicnuclearnet.get_dynamicnuclearnet_paths(path=path, split="test"),
-        "pannuke": lambda: datasets.pannuke.get_pannuke_paths(path=path),
-        "lizard": lambda: datasets.lizard.get_lizard_paths(parth=path),
         "orgasegment": lambda: datasets.orgasegment.get_orgasegment_paths(path=path, split="eval"),
-        "omnipose": lambda: datasets.omnipose.get_omnipose_paths(path=path, split="test"),
-        "gonuclear": lambda: datasets.gonuclear.get_gonuclear_paths(path-path),
-        "mouse_embryo": lambda: datasets.mouse_embryo.get_mouse_embryo_paths(path=path, name="nuclei", split="val"),
-        "embedseg_data": lambda: datasets.embedseg_data.get_embedseg_paths(
-            path=path, name=list(datasets.embedseg_data.URLS.keys())[0], split="test"
+        "yeaz": lambda: datasets.yeaz.get_yeaz_paths(path=path, choice="bf", split="test"),
+
+        # 2d: out-of-domain
+        "arvidsson": lambda: datasets.arvidsson.get_arvidsson_paths(path=path, split="test"),
+        "bitdepth_nucseg": lambda: datasets.bitdepth_nucseg.get_bitdepth_nucseg_paths(path=path, magnification="20x"),
+        "cellbindb": lambda: datasets.cellbindb.get_cellbindb_paths(
+            path=path, data_choice=["10×Genomics_DAPI", "DAPI", "mIF"]
         ),
+        "covid_if": lambda: datasets.covid_if.get_covid_if_paths(path=path),
+        "deepseas": lambda: datasets.deepseas.get_deepseas_paths(path=path, split="test"),
+        "hpa": lambda: datasets.hpa.get_hpa_segmentation_paths(path=path, split="val"),
+        "ifnuclei": lambda: datasets.ifnuclei.get_ifnuclei_paths(path=path),
+        "lizard": lambda: datasets.lizard.get_lizard_paths(path=path, split="test"),
+        "organoidnet": lambda: datasets.organoidnet.get_organoidnet_paths(path=path, split="Test"),
+        "toiam": lambda: datasets.toiam.get_toiam_paths(path=path),
+        "vicar": lambda: datasets.vicar.get_vicar_paths(path=path),
+
+        # 3d: in-domain
+        "plantseg_root": lambda: datasets.plantseg.get_plantseg_paths(path=path, name="root", split="test"),
+
+        # 3d: out-of-domain
+        "plantseg_ovules": lambda: datasets.plantseg.get_plantseg_paths(path=path, name="ovules", split="test"),
+        "gonuclear": lambda: datasets.gonuclear.get_gonuclear_paths(path=path),
+        "mouse_embryo": lambda: datasets.mouse_embryo.get_mouse_embryo_paths(path=path, name="nuclei", split="val"),
         "cellseg_3d": lambda: datasets.cellseg_3d.get_cellseg_3d_paths(path=path),
-        "dic_hepg2": lambda: datasets.dic_hepg2.get_dic_hepg2_paths(path=path, split="test"),
 
         # Electron Microscopy datasets
         "mitoem_rat": lambda: datasets.mitoem.get_mitoem_paths(path=path, splits="test", samples="rat"),
@@ -242,7 +321,7 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
         "asem_mito": lambda: datasets.asem.get_asem_paths(path=path, volume_ids=datasets.asem.ORGANELLES["mito"])
     }
 
-    if ndim == 2:
+    if (ndim == 2 and dataset_choice not in DATASET_CONTAINER_KEYS) or dataset_choice == "cellseg_3d":
         image_paths, gt_paths = available_datasets[dataset_choice]()
 
         if dataset_choice in DATASET_RETURNS_FOLDER:
@@ -268,9 +347,7 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
         save_image_dir.append(os.path.join(path, "roi_2d", "inputs"))
         save_gt_dir.append(os.path.join(path, "roi_2d", "labels"))
 
-    _dir_exists = [
-         os.path.exists(idir) and os.path.exists(gdir) for idir, gdir in zip(save_image_dir, save_gt_dir)
-    ]
+    _dir_exists = [os.path.exists(idir) and os.path.exists(gdir) for idir, gdir in zip(save_image_dir, save_gt_dir)]
     if all(_dir_exists):
         return ndim
 
@@ -279,16 +356,36 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
 
     # Logic to extract relevant patches for inference
     image_counter = 1
-    for per_paths in tqdm(paths_set, desc=f"Extracting patches for {dataset_choice}"):
-        if ndim == 2:
+    for per_paths in tqdm(paths_set, desc=f"Extracting {ndim}d patches for {dataset_choice}"):
+        if (ndim == 2 and dataset_choice not in DATASET_CONTAINER_KEYS) or dataset_choice == "cellseg_3d":
             image_path, gt_path = per_paths
             image, gt = util.load_image_data(image_path), util.load_image_data(gt_path)
         else:
             image_path = per_paths
-            image = util.load_image_data(image_path, DATASET_CONTAINER_KEYS[dataset_choice][0])
             gt = util.load_image_data(image_path, DATASET_CONTAINER_KEYS[dataset_choice][1])
+            if dataset_choice == "hpa":
+                # Get inputs per channel and stack them together to make the desired 3 channel image.
+                image = np.stack(
+                    [util.load_image_data(image_path, k) for k in DATASET_CONTAINER_KEYS[dataset_choice][0]], axis=0,
+                )
+                # Resize inputs to desired tile shape, in favor of working with the shape of foreground.
+                from torch_em.transform.generic import ResizeLongestSideInputs
+                raw_transform = ResizeLongestSideInputs(target_shape=tile_shape, is_rgb=True)
+                label_transform = ResizeLongestSideInputs(target_shape=tile_shape, is_label=True)
+                image, gt = raw_transform(image).transpose(1, 2, 0), label_transform(gt)
 
-        skip_smaller_shape = (np.array(image.shape) >= np.array(tile_shape)).all()
+            else:
+                image = util.load_image_data(image_path, DATASET_CONTAINER_KEYS[dataset_choice][0])
+
+        if dataset_choice in ["tissuenet", "lizard"]:
+            if image.ndim == 3 and image.shape[0] == 3:  # Make channels last for tissuenet RGB-style images.
+                image = image.transpose(1, 2, 0)
+
+        # Allow RGBs to stay as it is with channels last
+        if image.ndim == 3 and image.shape[-1] == 3:
+            skip_smaller_shape = (np.array(image.shape) >= np.array((*tile_shape, 3))).all()
+        else:
+            skip_smaller_shape = (np.array(image.shape) >= np.array(tile_shape)).all()
 
         # Ensure ground truth has instance labels.
         gt = connected_components(gt)
@@ -297,15 +394,15 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
             continue
 
         # Let's extract and save all the crops.
-        # NOTE: The first round of extraction is always to match the desired input dimensions.
+        # The first round of extraction is always to match the desired input dimensions.
         image_crops, gt_crops = _get_crops_for_input(image, gt, ndim, tile_shape, skip_smaller_shape, crops_per_input)
         image_counter = _save_image_label_crops(
             image_crops, gt_crops, dataset_choice, ndim, image_counter, save_image_dir[0], save_gt_dir[0]
         )
 
-        # NOTE: The next round of extraction is to get 2d crops from 3d inputs.
+        # The next round of extraction is to get 2d crops from 3d inputs.
         if extract_2d_crops_from_volumes:
-            curr_tile_shape = tile_shape[-2:]  # NOTE: We expect 2d tile shape for this stage.
+            curr_tile_shape = tile_shape[1:]  # We expect 2d tile shape for this stage.
 
             curr_image_crops, curr_gt_crops = [], []
             for per_z_im, per_z_gt in zip(image, gt):
@@ -342,8 +439,10 @@ def _get_crops_for_input(image, gt, ndim, tile_shape, skip_smaller_shape, crops_
     for i, (per_n_instance, per_id) in enumerate(sorted(zip(n_instances, n_ids), reverse=True), start=1):
         crop_box = crop_boxes[per_id]
         crop_image, crop_gt = image[crop_box], gt[crop_box]
+
         # NOTE: We avoid using the crops which do not match the desired tile shape.
-        if skip_smaller_shape and crop_image.shape != tile_shape:
+        _rtile_shape = (*tile_shape, 3) if image.ndim == 3 and image.shape[-1] == 3 else tile_shape  # For RGB images.
+        if skip_smaller_shape and crop_image.shape != _rtile_shape:
             continue
 
         # NOTE: There could be a case where some later patches are invalid.
@@ -365,9 +464,15 @@ def _save_image_label_crops(image_crops, gt_crops, dataset_choice, ndim, image_c
         zip(image_crops, gt_crops), total=len(image_crops), desc=f"Saving {ndim}d crops for {dataset_choice}"
     ):
         fname = f"{dataset_choice}_{image_counter:05}.tif"
-        assert image_crop.shape == gt_crop.shape
+
+        if image_crop.ndim == 3 and image_crop.shape[-1] == 3:
+            assert image_crop.shape[:2] == gt_crop.shape
+        else:
+            assert image_crop.shape == gt_crop.shape
+
         imageio.imwrite(os.path.join(save_image_dir, fname), image_crop, compression="zlib")
         imageio.imwrite(os.path.join(save_gt_dir, fname), gt_crop, compression="zlib")
+
         image_counter += 1
 
     return image_counter
@@ -387,7 +492,7 @@ def _run_automatic_segmentation_per_dataset(
     ndim: Optional[int] = None,
     device: Optional[Union[torch.device, str]] = None,
     checkpoint_path: Optional[Union[os.PathLike, str]] = None,
-    run_amg: bool = False,
+    run_amg: Optional[bool] = None,
     **auto_seg_kwargs
 ):
     """Functionality to run automatic segmentation for multiple input files at once.
@@ -404,14 +509,22 @@ def _run_automatic_segmentation_per_dataset(
         run_amg: Whether to run automatic segmentation in AMG mode.
         auto_seg_kwargs: Additional arguments for automatic segmentation parameters.
     """
+    # First, we check if 'run_amg' is done, whether decoder is available or not.
+    # Depending on that, we can set 'run_amg' to the default best automatic segmentation (i.e. AIS > AMG).
+    if run_amg is None or (not run_amg):  # The 2nd condition checks if you want AIS and if decoder state exists or not.
+        _, state = util.get_sam_model(
+            model_type=model_type, checkpoint_path=checkpoint_path, device=device, return_state=True
+        )
+        run_amg = ("decoder_state" not in state)
+
     experiment_name = "AMG" if run_amg else "AIS"
     fname = f"{experiment_name.lower()}_{ndim}d"
 
     result_path = os.path.join(output_folder, "results", f"{fname}.csv")
-    prediction_dir = os.path.join(output_folder, fname, "inference")
-    if os.path.exists(prediction_dir):
+    if os.path.exists(result_path):
         return
 
+    prediction_dir = os.path.join(output_folder, fname, "inference")
     os.makedirs(prediction_dir, exist_ok=True)
 
     # Get the predictor (and the additional instance segmentation decoder, if available).
@@ -448,6 +561,7 @@ def _run_interactive_segmentation_per_dataset(
     device: Optional[Union[torch.device, str]] = None,
     ndim: Optional[int] = None,
     checkpoint_path: Optional[Union[os.PathLike, str]] = None,
+    use_masks: bool = False,
 ):
     """Functionality to run interactive segmentation for multiple input files at once.
     It stores the evaluated interactive segmentation results.
@@ -461,10 +575,16 @@ def _run_interactive_segmentation_per_dataset(
         device: The torch device.
         ndim: The number of input dimensions.
         checkpoint_path: The filepath for stored checkpoints.
+        use_masks: Whether to use masks for iterative prompting.
     """
     if ndim == 2:
         # Get the Segment Anything predictor.
         predictor = util.get_sam_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path)
+
+        prediction_root = os.path.join(
+            output_folder, "interactive_segmentation_2d", f"start_with_{prompt_choice}",
+            "iterative_prompting_" + ("with_masks" if use_masks else "without_masks")
+        )
 
         # Run interactive instance segmentation
         # (starting with box and points followed by iterative prompt-based correction)
@@ -473,17 +593,19 @@ def _run_interactive_segmentation_per_dataset(
             image_paths=image_paths,
             gt_paths=gt_paths,
             embedding_dir=None,  # We set this to None to compute embeddings on-the-fly.
-            prediction_dir=os.path.join(output_folder, "interactive_segmentation_2d", f"start_with_{prompt_choice}"),
+            prediction_dir=prediction_root,
             start_with_box_prompt=(prompt_choice == "box"),
+            use_masks=use_masks,
             # TODO: add parameter for deform over box prompts (to simulate prompts in practice).
         )
 
         # Evaluate the interactive instance segmentation.
         run_evaluation_for_iterative_prompting(
             gt_paths=gt_paths,
-            prediction_root=os.path.join(output_folder, "interactive_segmentation_2d", f"start_with_{prompt_choice}"),
+            prediction_root=prediction_root,
             experiment_folder=output_folder,
             start_with_box_prompt=(prompt_choice == "box"),
+            use_masks=use_masks,
         )
 
     else:
@@ -524,7 +646,7 @@ def _run_interactive_segmentation_per_dataset(
 
 
 def _run_benchmark_evaluation_series(
-    image_paths, gt_paths, model_type, output_folder, ndim, device, checkpoint_path, run_amg,
+    image_paths, gt_paths, model_type, output_folder, ndim, device, checkpoint_path, run_amg, evaluation_methods,
 ):
     seg_kwargs = {
         "image_paths": image_paths,
@@ -539,25 +661,30 @@ def _run_benchmark_evaluation_series(
     # Perform:
     # a. automatic segmentation (supported in both 2d and 3d, wherever relevant)
     #    The automatic segmentation steps below are configured in a way that AIS has priority (if decoder is found)
-    #    Else, it runs for AMG.
+    #    Otherwise, it runs for AMG.
     #    Next, we check if the user expects to run AMG as well (after the run for AIS).
 
-    # i. Run automatic segmentation method supported with the SAM model (AMG or AIS).
-    _run_automatic_segmentation_per_dataset(run_amg=False, **seg_kwargs)
+    if evaluation_methods != "interactive":  # Avoid auto. seg. evaluation for 'interactive'-only run choice.
+        # i. Run automatic segmentation method supported with the SAM model (AMG or AIS).
+        _run_automatic_segmentation_per_dataset(run_amg=None, **seg_kwargs)
 
-    # ii. Run automatic mask generation (AMG) (in case the first run is AIS).
-    _run_automatic_segmentation_per_dataset(run_amg=run_amg, **seg_kwargs)
+        # ii. Run automatic mask generation (AMG).
+        #     NOTE: This would only run if the user wants to. Else by default, it is set to 'False'.
+        _run_automatic_segmentation_per_dataset(run_amg=run_amg, **seg_kwargs)
 
-    # b. Run interactive segmentation (supported in both 2d and 3d, wherever relevant)
-    _run_interactive_segmentation_per_dataset(prompt_choice="box", **seg_kwargs)
-    _run_interactive_segmentation_per_dataset(prompt_choice="points", **seg_kwargs)
+    if evaluation_methods != "automatic":  # Avoid int. seg. evaluation for 'automatic'-only run choice.
+        # b. Run interactive segmentation (supported in both 2d and 3d, wherever relevant)
+        _run_interactive_segmentation_per_dataset(prompt_choice="box", **seg_kwargs)
+        _run_interactive_segmentation_per_dataset(prompt_choice="box", use_masks=True, **seg_kwargs)
+        _run_interactive_segmentation_per_dataset(prompt_choice="points", **seg_kwargs)
+        _run_interactive_segmentation_per_dataset(prompt_choice="points", use_masks=True, **seg_kwargs)
 
 
 def _clear_cached_items(retain, path, output_folder):
     import shutil
     from pathlib import Path
 
-    REMOVE_LIST = ["data", "crops", "auto", "int"]
+    REMOVE_LIST = ["data", "crops", "automatic", "interactive"]
     if retain is None:
         remove_list = REMOVE_LIST
     else:
@@ -582,11 +709,11 @@ def _clear_cached_items(retain, path, output_folder):
                 paths.append(curr_path)
 
     # Stage 2: Remove predictions
-    if "auto" in remove_list:
+    if "automatic" in remove_list:
         paths.extend(glob(os.path.join(output_folder, "amg_*")))
         paths.extend(glob(os.path.join(output_folder, "ais_*")))
 
-    if "int" in remove_list:
+    if "interactive" in remove_list:
         paths.extend(glob(os.path.join(output_folder, "interactive_segmentation_*")))
 
     [shutil.rmtree(_path) if Path(_path).is_dir() else os.remove(_path) for _path in paths]
@@ -600,6 +727,7 @@ def run_benchmark_evaluations(
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     run_amg: bool = False,
     retain: Optional[List[str]] = None,
+    evaluation_methods: Literal["all", "automatic", "interactive"] = "all",
     ignore_warnings: bool = False,
 ):
     """Run evaluation for benchmarking Segment Anything models on microscopy datasets.
@@ -613,7 +741,10 @@ def run_benchmark_evaluations(
         run_amg: Whether to run automatic segmentation in AMG mode.
         retain: Whether to retain certain parts of the benchmark runs.
             By default, removes everything besides quantitative results.
-            There is the choice to retain 'data', 'crops', 'auto', or 'int'.
+            There is the choice to retain 'data', 'crops', 'automatic', or 'interactive'.
+        evaluation_methods: The choice of evaluation methods.
+            By default, runs 'all' evaluation methods (i.e. both 'automatic' or 'interactive').
+            Otherwise, specify either 'automatic' / 'interactive' for specific evaluation runs.
         ignore_warnings: Whether to ignore warnings.
     """
     start = time.time()
@@ -627,9 +758,6 @@ def run_benchmark_evaluations(
         for choice in dataset_choice:
             output_folder = os.path.join(output_folder, choice)
             result_dir = os.path.join(output_folder, "results")
-            if os.path.exists(result_dir):
-                continue
-
             os.makedirs(result_dir, exist_ok=True)
 
             data_path = os.path.join(input_folder, choice)
@@ -643,14 +771,30 @@ def run_benchmark_evaluations(
             # Run inference and evaluation scripts on benchmark datasets.
             image_paths, gt_paths = _get_image_label_paths(path=data_path, ndim=ndim)
             _run_benchmark_evaluation_series(
-                image_paths, gt_paths, model_type, output_folder, ndim, device, checkpoint_path, run_amg
+                image_paths=image_paths,
+                gt_paths=gt_paths,
+                model_type=model_type,
+                output_folder=output_folder,
+                ndim=ndim,
+                device=device,
+                checkpoint_path=checkpoint_path,
+                run_amg=run_amg,
+                evaluation_methods=evaluation_methods,
             )
 
             # Run inference and evaluation scripts on '2d' crops for volumetric datasets
             if ndim == 3:
                 image_paths, gt_paths = _get_image_label_paths(path=data_path, ndim=2)
                 _run_benchmark_evaluation_series(
-                    image_paths, gt_paths, model_type, output_folder, 2, device, checkpoint_path, run_amg
+                    image_paths=image_paths,
+                    gt_paths=gt_paths,
+                    model_type=model_type,
+                    output_folder=output_folder,
+                    ndim=2,
+                    device=device,
+                    checkpoint_path=checkpoint_path,
+                    run_amg=run_amg,
+                    evaluation_methods=evaluation_methods,
                 )
 
             _clear_cached_items(retain=retain, path=data_path, output_folder=output_folder)
@@ -658,7 +802,7 @@ def run_benchmark_evaluations(
     diff = time.time() - start
     hours, rest = divmod(diff, 3600)
     minutes, seconds = divmod(rest, 60)
-    print("Time taken for running benchmarks: ", f"{int(hours)}h {int(minutes)}m {seconds:.2f}s")
+    print("Time taken for running benchmarks: ", f"{int(hours)}h {int(minutes)}m {int(seconds)}s")
 
 
 def main():
@@ -698,10 +842,16 @@ def main():
     parser.add_argument(
         "--retain", nargs="*", default=None,
         help="By default, the functionality removes all besides quantitative results required for running benchmarks. "
-        "In case you would like to retain parts of the benchmark evaluation for visualization / reproducability, "
-        "you should choose one or multiple of 'data', 'crops', 'auto', 'int'. "
+        "In case you would like to retain parts of the benchmark evaluation for visualization / reproducibility, "
+        "you should choose one or multiple of 'data', 'crops', 'automatic', 'interactive'. "
         "where they are responsible for either retaining original inputs / extracted crops / "
         "predictions of automatic segmentation / predictions of interactive segmentation, respectively."
+    )
+    parser.add_argument(
+        "--evaluate", type=str, default="all", choices=["all", "automatic", "interactive"],
+        help="The choice of methods for benchmarking evaluation for reproducibility. "
+        "By default, we run all evaluations with 'all' / 'automatic' runs automatic segmentation only / "
+        "'interactive' runs interactive segmentation (starting from box and single point) with iterative prompting."
     )
     args = parser.parse_args()
 
@@ -713,6 +863,7 @@ def main():
         checkpoint_path=args.checkpoint_path,
         run_amg=args.amg,
         retain=args.retain,
+        evaluation_methods=args.evaluate,
         ignore_warnings=True,
     )
 

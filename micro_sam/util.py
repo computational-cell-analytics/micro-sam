@@ -105,9 +105,9 @@ def models():
         "vit_t": "xxh128:8eadbc88aeb9d8c7e0b4b60c3db48bd0",
         # The current version of our models in the modelzoo.
         # LM generalist models:
-        "vit_l_lm": "xxh128:ad3afe783b0d05a788eaf3cc24b308d2",
-        "vit_b_lm": "xxh128:61ce01ea731d89ae41a252480368f886",
-        "vit_t_lm": "xxh128:f90e2ba3dd3d5b935aa870cf2e48f689",
+        "vit_l_lm": "xxh128:fc32ea6f7fcc7eb02737d1304f81f5f2",
+        "vit_b_lm": "xxh128:8fd5806be3c3ba213e19a709d6d1495f",
+        "vit_t_lm": "xxh128:72ec5074774761a6e5c05a08942f981e",
         # EM models:
         "vit_l_em_organelles": "xxh128:096c9695966803ca6fde24f4c1e3c3fb",
         "vit_b_em_organelles": "xxh128:f6f6593aeecd0e15a07bdac86360b6cc",
@@ -122,9 +122,9 @@ def models():
     # Additional decoders for instance segmentation.
     decoder_registry = {
         # LM generalist models:
-        "vit_l_lm_decoder": "xxh128:40c1ae378cfdce24008b9be24889a5b1",
-        "vit_b_lm_decoder": "xxh128:1bac305195777ba7375634ca15a3c370",
-        "vit_t_lm_decoder": "xxh128:82d3604e64f289bb66ec46a5643da169",
+        "vit_l_lm_decoder": "xxh128:779b5a50ecc6d46d495753fba8717f2f",
+        "vit_b_lm_decoder": "xxh128:9f580a96984b3085389ced5d9a4ae75d",
+        "vit_t_lm_decoder": "xxh128:3e914a5f397b0312cdd36813031f8823",
         # EM models:
         "vit_l_em_organelles_decoder": "xxh128:d60fd96bd6060856f6430f29e42568fb",
         "vit_b_em_organelles_decoder": "xxh128:b2d4dcffb99f76d83497d39ee500088f",
@@ -141,9 +141,9 @@ def models():
         "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
         "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
         "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
-        "vit_l_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1/files/vit_l.pt",
-        "vit_b_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1/files/vit_b.pt",
-        "vit_t_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1/files/vit_t.pt",
+        "vit_l_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1.1/files/vit_l.pt",
+        "vit_b_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1.1/files/vit_b.pt",
+        "vit_t_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1.1/files/vit_t.pt",
         "vit_l_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l.pt",  # noqa
         "vit_b_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b.pt",
         "vit_t_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t.pt",  # noqa
@@ -154,9 +154,9 @@ def models():
     }
 
     decoder_urls = {
-        "vit_l_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1/files/vit_l_decoder.pt",  # noqa
-        "vit_b_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1/files/vit_b_decoder.pt",  # noqa
-        "vit_t_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1/files/vit_t_decoder.pt",  # noqa
+        "vit_l_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1.1/files/vit_l_decoder.pt",  # noqa
+        "vit_b_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1.1/files/vit_b_decoder.pt",  # noqa
+        "vit_t_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1.1/files/vit_t_decoder.pt",  # noqa
         "vit_l_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l_decoder.pt",  # noqa
         "vit_b_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b_decoder.pt",  # noqa
         "vit_t_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t_decoder.pt",  # noqa
@@ -318,12 +318,12 @@ def get_sam_model(
     https://www.fatiando.org/pooch/latest/api/generated/pooch.os_cache.html
 
     Args:
-        model_type: The SegmentAnything model to use. Will use the standard vit_h model by default.
+        model_type: The Segment Anything model to use. Will use the standard `vit_l` model by default.
             To get a list of all available model names you can call `get_model_names`.
         device: The device for the model. If none is given will use GPU if available.
         checkpoint_path: The path to a file with weights that should be used instead of using the
             weights corresponding to `model_type`. If given, `model_type` must match the architecture
-            corresponding to the weight file. E.g. if you use weights for SAM with vit_b encoder
+            corresponding to the weight file. e.g. if you use weights for SAM with `vit_b` encoder
             then `model_type` must be given as "vit_b".
         return_sam: Return the sam model object as well as the predictor.
         return_state: Return the unpickled checkpoint state.
@@ -371,7 +371,7 @@ def get_sam_model(
         raise ValueError(f"Invalid model_type: {abbreviated_model_type}. Expect one of {_MODEL_TYPES}")
     if abbreviated_model_type == "vit_t" and not VIT_T_SUPPORT:
         raise RuntimeError(
-            "mobile_sam is required for the vit-tiny."
+            "'mobile_sam' is required for the vit-tiny. "
             "You can install it via 'pip install git+https://github.com/ChaoningZhang/MobileSAM.git'"
         )
 
@@ -455,7 +455,10 @@ def _handle_checkpoint_loading(sam, model_state):
 
 
 def export_custom_sam_model(
-    checkpoint_path: Union[str, os.PathLike], model_type: str, save_path: Union[str, os.PathLike],
+    checkpoint_path: Union[str, os.PathLike],
+    model_type: str,
+    save_path: Union[str, os.PathLike],
+    with_segmentation_decoder: bool = False,
 ) -> None:
     """Export a finetuned Segment Anything Model to the standard model format.
 
@@ -465,6 +468,8 @@ def export_custom_sam_model(
         checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
         model_type: The Segment Anything Model type corresponding to the checkpoint (vit_h, vit_b, vit_l or vit_t).
         save_path: Where to save the exported model.
+        with_segmentation_decoder: Whether to store the decoder state in the model checkpoint as well.
+            If set to 'True', the model checkpoint will not be compatible with other tools besides 'micro-sam'.
     """
     _, state = get_sam_model(
         model_type=model_type, checkpoint_path=checkpoint_path, return_state=True, device="cpu",
@@ -474,7 +479,17 @@ def export_custom_sam_model(
     model_state = OrderedDict(
         [(k[len(prefix):] if k.startswith(prefix) else k, v) for k, v in model_state.items()]
     )
-    torch.save(model_state, save_path)
+
+    # Store the 'decoder_state' as well, if desired.
+    if with_segmentation_decoder:
+        if "decoder_state" not in state:
+            raise RuntimeError(f"'decoder_state' is not found in the model at '{checkpoint_path}'.")
+        decoder_state = state["decoder_state"]
+        save_state = {"model_state": model_state, "decoder_state": decoder_state}
+    else:
+        save_state = model_state
+
+    torch.save(save_state, save_path)
 
 
 def export_custom_qlora_model(
@@ -544,12 +559,14 @@ def _to_image(input_):
         input_ = input_ / input_.max()
         # then bring to [0, 255] and cast to uint8
         input_ = (input_ * 255).astype("uint8")
+
     if input_.ndim == 2:
         image = np.concatenate([input_[..., None]] * 3, axis=-1)
     elif input_.ndim == 3 and input_.shape[-1] == 3:
         image = input_
     else:
         raise ValueError(f"Invalid input image of shape {input_.shape}. Expect either 2D grayscale or 3D RGB image.")
+
     return image
 
 
@@ -959,6 +976,7 @@ def set_precomputed(
     else:
         predictor.features = features[i].to(device) if torch.is_tensor(features) else \
             torch.from_numpy(features[i]).to(device)
+
     predictor.original_size = image_embeddings["original_size"]
     predictor.input_size = image_embeddings["input_size"]
     predictor.is_image_set = True
@@ -1056,7 +1074,12 @@ def segmentation_to_one_hot(segmentation: np.ndarray, segmentation_ids: Optional
         n_ids = int(segmentation.max())
 
     else:
-        assert segmentation_ids[0] != 0, "No objects were found."
+        msg = "No foreground objects were found."
+        if len(segmentation_ids) == 0:  # The list should not be completely empty.
+            raise RuntimeError(msg)
+
+        if 0 in segmentation_ids:  # The list should not have 'zero' as a value.
+            raise RuntimeError(msg)
 
         # the segmentation ids have to be sorted
         segmentation_ids = np.sort(segmentation_ids)

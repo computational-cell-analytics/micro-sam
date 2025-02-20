@@ -26,7 +26,6 @@ VOLUME_CHOICE = {
     "plantseg_ovules_test": "plantseg_ovules_test_N_435_final_crop_ds2.h5",
     "plantseg_root_val": "plantseg_root_val_Movie1_t00040_crop_gt.h5",
     "plantseg_root_test": "plantseg_root_test_Movie1_t00045_crop_gt.h5"
-
 }
 
 

@@ -243,8 +243,9 @@ def _preprocess_closing(slice_segmentation, gap_closing, pbar_update):
         # have overlap with more than one object from the initial segmentation.
         # This indicates wrong merging of closeby objects that we want to prevent.
         matches = nifty.ground_truth.overlap(closed_z, seg_z)
-        matches = {seg_id: matches.overlapArrays(seg_id, sorted=False)[0]
-                   for seg_id in range(1, int(closed_z.max() + 1))}
+        matches = {
+            seg_id: matches.overlapArrays(seg_id, sorted=False)[0] for seg_id in range(1, int(closed_z.max() + 1))
+        }
         matches = {k: v[v != 0] for k, v in matches.items()}
 
         ids_initial, ids_closed = [], []

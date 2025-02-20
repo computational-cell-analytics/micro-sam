@@ -75,6 +75,7 @@ def automatic_instance_segmentation(
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
     return_embeddings: bool = False,
+    annotate: bool = False,
     **generate_kwargs
 ) -> np.ndarray:
     """Run automatic segmentation for the input image.
@@ -94,6 +95,7 @@ def automatic_instance_segmentation(
         halo: Overlap of the tiles for tiled prediction.
         verbose: Verbosity flag.
         return_embeddings: Whether to return the precomputed image embeddings.
+        annotate: Whether to activate the annotator for continue annotation process.
         generate_kwargs: optional keyword arguments for the generate function of the AMG or AIS class.
 
     Returns:
@@ -133,7 +135,7 @@ def automatic_instance_segmentation(
             # whether the predictions from 'generate' are list of dict,
             # which contains additional info req. for post-processing, eg. area per object.
             if len(masks) == 0:
-                instances = np.zeros(image_data.shape[-2:], dtype="uint32")
+                instances = np.zeros(image_data.shape[:2], dtype="uint32")
             else:
                 instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=0)
         else:
@@ -160,6 +162,30 @@ def automatic_instance_segmentation(
             instances, image_embeddings = outputs
         else:
             instances = outputs
+
+    # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
+    if annotate:
+        from micro_sam.sam_annotator import annotator_2d, annotator_3d
+        annotator_function = annotator_2d if ndim == 2 else annotator_3d
+
+        viewer = annotator_function(
+            image=image_data,
+            model_type=predictor.model_name,
+            embedding_path=embedding_path,
+            segmentation_result=instances,  # Initializes the automatic segmentation to the annotator.
+            tile_shape=tile_shape,
+            halo=halo,
+            return_viewer=True,  # Returns the viewer, which allows the user to store the updated segmentations.
+        )
+
+        # Start the GUI here
+        import napari
+        napari.run()
+
+        # We extract the segmentation in "committed_objects" layer, where the user either:
+        # a) Performed interactive segmentation / corrections and committed them, OR
+        # b) Did not do anything and closed the annotator, i.e. keeps the segmentations as it is.
+        instances = viewer.layers["committed_objects"].data
 
     # Save the instance segmentation, if 'output_path' provided.
     if output_path is not None:
@@ -218,8 +244,12 @@ def main():
         help="The number of spatial dimensions in the data. Please specify this if your data has a channel dimension."
     )
     parser.add_argument(
-        "--mode", type=str, default=None,
-        help="The choice of automatic segmentation with the Segment Anything models. Either 'amg' or 'ais'."
+        "--mode", type=str, default="auto",
+        help="The choice of automatic segmentation with the Segment Anything models. Either 'auto', 'amg' or 'ais'."
+    )
+    parser.add_argument(
+        "--annotate", action="store_true",
+        help="Whether to continue annotation after the automatic segmentation is generated."
     )
     parser.add_argument(
         "-d", "--device", default=None,
@@ -251,10 +281,10 @@ def main():
     amg_kwargs, generate_kwargs = split_kwargs(amg_class, **extra_kwargs)
 
     # Validate for the expected automatic segmentation mode.
-    # By default, it is set to 'None', i.e. searches for the decoder state to prioritize AIS for finetuned models.
+    # By default, it is set to 'auto', i.e. searches for the decoder state to prioritize AIS for finetuned models.
     # Otherwise, runs AMG for all models in any case.
     amg = None
-    if args.mode is not None:
+    if args.mode != "auto":
         assert args.mode in ["ais", "amg"], \
             f"'{args.mode}' is not a valid automatic segmentation mode. Please choose either 'amg' or 'ais'."
         amg = (args.mode == "amg")
@@ -268,6 +298,11 @@ def main():
         **amg_kwargs,
     )
 
+    # We perform additional post-processing for AMG-only.
+    # Otherwise, we ignore additional post-processing for AIS.
+    if isinstance(segmenter, InstanceSegmentationWithDecoder):
+        generate_kwargs["output_mode"] = None
+
     automatic_instance_segmentation(
         predictor=predictor,
         segmenter=segmenter,
@@ -278,6 +313,7 @@ def main():
         ndim=args.ndim,
         tile_shape=args.tile_shape,
         halo=args.halo,
+        annotate=args.annotate,
         **generate_kwargs,
     )
 

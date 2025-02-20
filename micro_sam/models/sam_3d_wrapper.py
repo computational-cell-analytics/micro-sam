@@ -51,8 +51,7 @@ class Sam3DWrapper(nn.Module):
         Args:
             sam_model: The Sam model to be wrapped.
             freeze_encoder: Whether to freeze the image encoder.
-            model_type: The choice of segment anything model to wrap adapters
-                for respective model configuration.
+            model_type: The choice of segment anything model to wrap adapters for respective model configuration.
         """
         super().__init__()
 
