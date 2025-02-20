@@ -31,7 +31,7 @@ jobs:
       - name: Setup micromamba
         uses: mamba-org/setup-micromamba@v1
         with:
-          environment-file: ${{ runner.os == 'Windows' && 'environment_win.yaml' || 'environment.yaml' }}
+          environment-file: 'environment.yaml'
           create-args: >-
             python=${{ matrix.python-version }}
 
