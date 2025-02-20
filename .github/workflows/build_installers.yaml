@@ -18,16 +18,13 @@ jobs:
         cd deployment
         mamba install -y -c conda-forge constructor
         mamba install -y -c conda-forge ruamel.yaml
-        mamba env create --file=../environment_cpu.yaml -n __MICROSAM_BUILD_ENV__
-        conda activate __MICROSAM_BUILD_ENV__
-        # TODO get the current version here and use it for pinning or enable passing this from dispatch
-        mamba install -y -c conda-forge micro_sam
+        mamba create -y -c conda-forge -n __MICROSAM_BUILD_ENV__ micro_sam natsort
         conda activate base
 
       RUN_SCRIPT: |
         python version_getter.py
         mkdir ./${{ matrix.os }}_x86_64
-        constructor --output-dir ./${{ matrix.os }}_x86_64 --config-filename construct_${{ matrix.os }}.yaml . 
+        constructor --output-dir ./${{ matrix.os }}_x86_64 --config-filename construct_${{ matrix.os }}.yaml .
 
     steps:
       - name: checkout

@@ -3,16 +3,17 @@
 
 import os
 import pickle
-
-from functools import partial
 from glob import glob
 from pathlib import Path
+from functools import partial
 from typing import Optional, Tuple, Union, List
 
 import h5py
 import numpy as np
+
 import torch
 import torch.nn as nn
+
 from segment_anything.predictor import SamPredictor
 
 try:
@@ -153,7 +154,7 @@ def cache_is_state(
 
 
 def _precompute_state_for_file(
-    predictor, input_path, output_path, key, ndim, tile_shape, halo, precompute_amg_state, decoder,
+    predictor, input_path, output_path, key, ndim, tile_shape, halo, precompute_amg_state, decoder, verbose
 ):
     if isinstance(input_path, np.ndarray):
         image_data = input_path
@@ -163,7 +164,7 @@ def _precompute_state_for_file(
     # Precompute the image embeddings.
     output_path = Path(output_path).with_suffix(".zarr")
     embeddings = util.precompute_image_embeddings(
-        predictor, image_data, output_path, ndim=ndim, tile_shape=tile_shape, halo=halo,
+        predictor, image_data, output_path, ndim=ndim, tile_shape=tile_shape, halo=halo, verbose=verbose
     )
 
     # Precompute the state for automatic instance segmnetaiton (AMG or AIS).
@@ -182,10 +183,10 @@ def _precompute_state_for_file(
             ndim = image_data.ndim
 
         if ndim == 2:
-            cache_function(raw=image_data, verbose=True)
+            cache_function(raw=image_data, verbose=verbose)
         else:
             n = image_data.shape[0]
-            for i in tqdm(range(n), total=n, desc="Precompute instance segmentation state"):
+            for i in tqdm(range(n), total=n, desc="Precompute instance segmentation state", disable=not verbose):
                 cache_function(raw=image_data, i=i, verbose=False)
 
 
@@ -212,6 +213,7 @@ def _precompute_state_for_files(
             predictor, file_path, out_path,
             key=key, ndim=ndim, tile_shape=tile_shape, halo=halo,
             precompute_amg_state=precompute_amg_state, decoder=decoder,
+            verbose=False,
         )
 
 
@@ -234,10 +236,10 @@ def precompute_state(
             a container file (e.g. hdf5 or zarr) or a folder with images files.
             In case of a container file the argument `key` must be given. In case of a folder
             it can be given to provide a glob pattern to subselect files from the folder.
-        output_path: The output path were the embeddings and other state will be saved.
+        output_path: The output path where the embeddings and other state will be saved.
         pattern: Glob pattern to select files in a folder. The embeddings will be computed
             for each of these files. To select all files in a folder pass "*".
-        model_type: The SegmentAnything model to use. Will use the standard vit_h model by default.
+        model_type: The SegmentAnything model to use. Will use the standard vit_l model by default.
         checkpoint_path: Path to a checkpoint for a custom model.
         key: The key to the input file. This is needed for contaner files (e.g. hdf5 or zarr)
             or to load several images as 3d volume. Provide a glob pattern, e.g. "*.tif", for this case.
@@ -247,9 +249,8 @@ def precompute_state(
         precompute_amg_state: Whether to precompute the state for automatic instance segmentation
             in addition to the image embeddings.
     """
-    predictor, state = util.get_sam_model(
-        model_type=model_type, checkpoint_path=checkpoint_path, return_state=True,
-    )
+    predictor, state = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path, return_state=True)
+
     if "decoder_state" in state:
         decoder = instance_segmentation.get_decoder(predictor.model.image_encoder, state["decoder_state"])
     else:
@@ -261,7 +262,7 @@ def precompute_state(
             predictor, input_path, output_path, key,
             ndim=ndim, tile_shape=tile_shape, halo=halo,
             precompute_amg_state=precompute_amg_state,
-            decoder=decoder,
+            decoder=decoder, verbose=True,
         )
     else:
         input_files = glob(os.path.join(input_path, pattern))
@@ -289,7 +290,6 @@ def main():
     parser.add_argument(
         "-e", "--embedding_path", required=True, help="The path where the embeddings will be saved."
     )
-
     parser.add_argument(
         "--pattern", help="Pattern / wildcard for selecting files in a folder. To select all files use '*'."
     )
@@ -298,7 +298,6 @@ def main():
         help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
         "for an image stack it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
     )
-
     parser.add_argument(
         "-m", "--model_type", default=util._DEFAULT_MODEL,
         help=f"The segment anything model that will be used, one of {available_models}."

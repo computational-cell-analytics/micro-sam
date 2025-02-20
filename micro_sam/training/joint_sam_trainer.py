@@ -4,6 +4,7 @@ import numpy as np
 from collections import OrderedDict
 
 import torch
+from torch.utils.tensorboard import SummaryWriter
 from torchvision.utils import make_grid
 
 from .sam_trainer import SamTrainer
@@ -13,12 +14,22 @@ from torch_em.trainer.tensorboard_logger import normalize_im
 
 
 class JointSamTrainer(SamTrainer):
+    """Trainer class for jointly training the Segment Anything model with an additional convolutional decoder.
+
+    This class is inherited from `SamTrainer`.
+    Check out https://github.com/computational-cell-analytics/micro-sam/blob/master/micro_sam/training/sam_trainer.py
+    for details on its implementation.
+
+    Args:
+        unetr: The UNet-style model with vision transformer as the image encoder.
+            Required to perform automatic instance segmentation.
+        instance_loss: The loss to compare the predictions (for instance segmentation) and the targets.
+        instance_metric: The metric to compare the predictions and the targets.
+        kwargs: The keyword arguments of the `SamTrainer` (and `DefaultTrainer`) class.
+    """
+
     def __init__(
-        self,
-        unetr: torch.nn.Module,
-        instance_loss: torch.nn.Module,
-        instance_metric: torch.nn.Module,
-        **kwargs
+        self, unetr: torch.nn.Module, instance_loss: torch.nn.Module, instance_metric: torch.nn.Module, **kwargs
     ):
         super().__init__(**kwargs)
         self.unetr = unetr
@@ -60,6 +71,9 @@ class JointSamTrainer(SamTrainer):
         return save_dict
 
     def _instance_iteration(self, x, y, metric_for_val=False):
+        """Perform the segmentation of distance maps and
+        compute the loss (and metric) between the prediction and target.
+        """
         outputs = self.unetr(x.to(self.device))
         loss = self.instance_loss(outputs, y.to(self.device))
         if metric_for_val:
@@ -165,7 +179,7 @@ class JointSamLogger(TorchEmLogger):
             os.path.join(save_root, "logs", trainer.name)
         os.makedirs(self.log_dir, exist_ok=True)
 
-        self.tb = torch.utils.tensorboard.SummaryWriter(self.log_dir)
+        self.tb = SummaryWriter(self.log_dir)
         self.log_image_interval = trainer.log_image_interval
 
     def add_image(self, x, y, samples, name, step):
@@ -179,7 +193,7 @@ class JointSamLogger(TorchEmLogger):
         self.tb.add_image(tag=f"{name}/samples", img_tensor=sample_grid, global_step=step)
 
     def log_train(
-            self, step, loss, lr, x, y, samples, mask_loss, iou_regression_loss, model_iou, instance_loss
+        self, step, loss, lr, x, y, samples, mask_loss, iou_regression_loss, model_iou, instance_loss
     ):
         self.tb.add_scalar(tag="train/loss", scalar_value=loss, global_step=step)
         self.tb.add_scalar(tag="train/mask_loss", scalar_value=mask_loss, global_step=step)
@@ -191,7 +205,7 @@ class JointSamLogger(TorchEmLogger):
             self.add_image(x, y, samples, "train", step)
 
     def log_validation(
-            self, step, metric, loss, x, y, samples, mask_loss, iou_regression_loss, model_iou, instance_loss
+        self, step, metric, loss, x, y, samples, mask_loss, iou_regression_loss, model_iou, instance_loss
     ):
         self.tb.add_scalar(tag="validation/loss", scalar_value=loss, global_step=step)
         self.tb.add_scalar(tag="validation/mask_loss", scalar_value=mask_loss, global_step=step)

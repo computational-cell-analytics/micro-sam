@@ -1,8 +1,7 @@
-import argparse
 import os
 import pickle
 import warnings
-
+import argparse
 from glob import glob
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -10,9 +9,8 @@ from typing import List, Optional, Tuple
 import h5py
 import napari
 import numpy as np
-
-from scipy.ndimage import shift
 from skimage import draw
+from scipy.ndimage import shift
 
 from .. import prompt_based_segmentation, util
 from .. import _model_settings as model_settings
@@ -57,7 +55,6 @@ def _initialize_parser(description, with_segmentation_result=True, with_instance
         help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
         "for a image series it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
     )
-
     parser.add_argument(
         "-e", "--embedding_path",
         help="The filepath for saving/loading the pre-computed image embeddings. "
@@ -91,7 +88,6 @@ def _initialize_parser(description, with_segmentation_result=True, with_instance
         help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
         "By default the most performant available device will be selected."
     )
-
     parser.add_argument(
         "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
     )
@@ -120,7 +116,11 @@ def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:
     viewer.layers["point_prompts"].data = []
     viewer.layers["point_prompts"].refresh()
     if "prompts" in viewer.layers:
-        viewer.layers["prompts"].data = []
+        # Select all prompts and then remove them.
+        # This is how it worked before napari 0.5.
+        # viewer.layers["prompts"].data = []
+        viewer.layers["prompts"].selected_data = set(range(len(viewer.layers["prompts"].data)))
+        viewer.layers["prompts"].remove_selected()
         viewer.layers["prompts"].refresh()
     if not clear_segmentations:
         return
@@ -176,7 +176,7 @@ def point_layer_to_prompts(
         this_points, this_labels = points, labels
     else:
         assert points.shape[1] == 3, f"{points.shape}"
-        mask = points[:, 0] == i
+        mask = np.round(points[:, 0]) == i
         this_points = points[mask][:, 1:]
         this_labels = labels[mask]
     assert len(this_points) == len(this_labels)
@@ -301,9 +301,7 @@ def prompt_layer_to_state(prompt_layer: napari.layers.Points, i: int) -> str:
         return "track"
 
 
-def prompt_layers_to_state(
-    point_layer: napari.layers.Points, box_layer: napari.layers.Shapes, i: int
-) -> str:
+def prompt_layers_to_state(point_layer: napari.layers.Points, box_layer: napari.layers.Shapes, i: int) -> str:
     """Get the state of the track from a point layer and shape layer for a given timeframe.
 
     Only relevant for annotator_tracking.
@@ -353,7 +351,7 @@ def segment_slices_with_prompts(
     image_shape = shape[1:]
     seg = np.zeros(shape, dtype="uint32")
 
-    z_values = point_prompts.data[:, 0]
+    z_values = np.round(point_prompts.data[:, 0])
     z_values_boxes = np.concatenate([box[:1, 0] for box in box_prompts.data]) if box_prompts.data else\
         np.zeros(0, dtype="int")
 
@@ -490,8 +488,7 @@ def _batched_interactive_segmentation(predictor, points, labels, boxes, image_em
 
 def prompt_segmentation(
     predictor, points, labels, boxes, masks, shape, multiple_box_prompts,
-    image_embeddings=None, i=None, box_extension=0, batched=None,
-    previous_segmentation=None,
+    image_embeddings=None, i=None, box_extension=0, batched=None, previous_segmentation=None,
 ):
     """@private"""
     assert len(points) == len(labels)
@@ -580,8 +577,7 @@ def _shift_object(mask, motion_model):
 
 def track_from_prompts(
     point_prompts, box_prompts, seg, predictor, slices, image_embeddings,
-    stop_upper, threshold, projection,
-    motion_smoothing=0.5, box_extension=0, update_progress=None,
+    stop_upper, threshold, projection, motion_smoothing=0.5, box_extension=0, update_progress=None,
 ):
     """@private
     """
@@ -682,10 +678,10 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
         widget.model_dropdown.setCurrentIndex(index)
 
     if save_path is not None:
-        widget.embeddings_save_path_param.setText(save_path)
+        widget.embeddings_save_path_param.setText(str(save_path))
 
     if checkpoint_path is not None:
-        widget.custom_weights_param.setText(checkpoint_path)
+        widget.custom_weights_param.setText(str(checkpoint_path))
 
     if device is not None:
         widget.device = device

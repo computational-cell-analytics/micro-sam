@@ -1,20 +1,22 @@
-"""
-Functions for prompt-based segmentation with Segment Anything.
+"""Functions for prompt-based segmentation with Segment Anything.
 """
 
 import warnings
 from typing import Optional, Tuple
 
 import numpy as np
-import torch
-from nifty.tools import blocking
-from skimage.feature import peak_local_max
 from skimage.filters import gaussian
+from skimage.feature import peak_local_max
 from skimage.segmentation import find_boundaries
 from scipy.ndimage import distance_transform_edt
 
+import torch
+
+from nifty.tools import blocking
+
 from segment_anything.predictor import SamPredictor
 from segment_anything.utils.transforms import ResizeLongestSide
+
 from . import util
 
 
@@ -74,10 +76,7 @@ def _compute_points_from_mask(mask, original_size, box_extension, use_single_poi
 
     # get the point labels
     point_labels = np.concatenate(
-        [
-            np.ones(len(inner_maxima), dtype="uint8"),
-            np.zeros(len(outer_maxima), dtype="uint8"),
-        ]
+        [np.ones(len(inner_maxima), dtype="uint8"), np.zeros(len(outer_maxima), dtype="uint8")]
     )
     return point_coords[:, ::-1], point_labels
 
@@ -338,7 +337,7 @@ def segment_from_mask(
         mask: The mask used to derive prompts.
         image_embeddings: Optional precomputed image embeddings.
             Has to be passed if the predictor is not yet initialized.
-         i: Index for the image data. Required if the input data has three spatial dimensions
+        i: Index for the image data. Required if the input data has three spatial dimensions
              or a time dimension and two spatial dimensions.
         use_box: Whether to derive the bounding box prompt from the mask.
         use_mask: Whether to use the mask itself as prompt.
@@ -381,7 +380,7 @@ def segment_from_mask(
             raise ValueError("If points are passed you also need to pass labels.")
         point_coords, point_labels = points, labels
 
-    elif use_points:
+    elif use_points and mask.sum() != 0:
         point_coords, point_labels = _compute_points_from_mask(
             mask, original_size=original_size, box_extension=box_extension,
             use_single_point=use_single_point,
@@ -393,7 +392,7 @@ def segment_from_mask(
     if box is None:
         box = _compute_box_from_mask(
             mask, original_size=original_size, box_extension=box_extension
-        ) if use_box else None
+        ) if use_box and mask.sum() != 0 else None
     else:
         box = _process_box(box, mask.shape, original_size=original_size, box_extension=box_extension)
 

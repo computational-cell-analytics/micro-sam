@@ -1,11 +1,12 @@
 import os
 from typing import Optional, Union
 
-import torch
 import numpy as np
 
-import segment_anything.utils.amg as amg_utils
+import torch
+
 from segment_anything import SamPredictor
+import segment_anything.utils.amg as amg_utils
 from segment_anything.utils.transforms import ResizeLongestSide
 
 from . import util
@@ -38,8 +39,7 @@ def batched_inference(
         boxes: The box prompts. Array of shape N_PROMPTS x 4.
             The bounding boxes are represented by [MIN_X, MIN_Y, MAX_X, MAX_Y].
         points: The point prompt coordinates. Array of shape N_PROMPTS x 1 x 2.
-            The points are represented by their coordinates [X, Y], which are given
-            in the last dimension.
+            The points are represented by their coordinates [X, Y], which are given in the last dimension.
         point_labels: The point prompt labels. Array of shape N_PROMPTS x 1.
             The labels are either 0 (negative prompt) or 1 (positive prompt).
         multimasking: Whether to predict with 3 or 1 mask.

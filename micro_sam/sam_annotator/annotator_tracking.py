@@ -2,16 +2,18 @@ from typing import Optional, Tuple, Union
 
 import napari
 import numpy as np
+
 import torch
 
 from magicgui.widgets import ComboBox, Container
 
-from ._annotator import _AnnotatorBase
-from ._state import AnnotatorState
-from . import util as vutil
-from ._tooltips import get_tooltip
-from . import _widgets as widgets
 from .. import util
+from . import util as vutil
+from . import _widgets as widgets
+from ._tooltips import get_tooltip
+from ._state import AnnotatorState
+from ._annotator import _AnnotatorBase
+
 
 # Cyan (track) and Magenta (division)
 STATE_COLOR_CYCLE = ["#00FFFF", "#FF00FF", ]
@@ -24,8 +26,9 @@ def create_tracking_menu(points_layer, box_layer, states, track_ids):
     state = AnnotatorState()
 
     state_menu = ComboBox(label="track_state", choices=states, tooltip=get_tooltip("annotator_tracking", "track_state"))
-    track_id_menu = ComboBox(label="track_id", choices=list(map(str, track_ids)),
-                             tooltip=get_tooltip("annotator_tracking", "track_id"))
+    track_id_menu = ComboBox(
+        label="track_id", choices=list(map(str, track_ids)), tooltip=get_tooltip("annotator_tracking", "track_id")
+    )
     tracking_widget = Container(widgets=[state_menu, track_id_menu])
 
     def update_state(event):
@@ -109,16 +112,16 @@ class AnnotatorTracking(_AnnotatorBase):
                 "state": self._track_state_labels,
                 "track_id": ["1"],  # we use string to avoid pandas warning
             },
-            edge_color="label",
-            edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
+            border_color="label",
+            border_color_cycle=vutil.LABEL_COLOR_CYCLE,
             symbol="o",
             face_color="state",
             face_color_cycle=STATE_COLOR_CYCLE,
-            edge_width=0.4,
+            border_width=0.4,
             size=12,
             ndim=self._ndim,
         )
-        self._point_prompt_layer.edge_color_mode = "cycle"
+        self._point_prompt_layer.border_color_mode = "cycle"
         self._point_prompt_layer.face_color_mode = "cycle"
 
         # Using the box layer to set divisions currently doesn't work.
@@ -202,7 +205,7 @@ def annotator_tracking(
     """Start the tracking annotation tool fora given timeseries.
 
     Args:
-        raw: The image data.
+        image: The image data.
         embedding_path: Filepath for saving the precomputed embeddings.
         model_type: The Segment Anything model to use. For details on the available models check out
             https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.

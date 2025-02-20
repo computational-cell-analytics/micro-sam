@@ -1,11 +1,11 @@
 import napari
 import numpy as np
 
-from magicgui.widgets import Widget, Container, FunctionGui
 from qtpy import QtWidgets
+from magicgui.widgets import Widget, Container, FunctionGui
 
-from . import _widgets as widgets
 from . import util as vutil
+from . import _widgets as widgets
 from ._state import AnnotatorState
 
 
@@ -29,15 +29,15 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         self._point_prompt_layer = self._viewer.add_points(
             name="point_prompts",
             property_choices={"label": self._point_labels},
-            edge_color="label",
-            edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
+            border_color="label",
+            border_color_cycle=vutil.LABEL_COLOR_CYCLE,
             symbol="o",
             face_color="transparent",
-            edge_width=0.5,
+            border_width=0.5,
             size=12,
             ndim=self._ndim,
         )
-        self._point_prompt_layer.edge_color_mode = "cycle"
+        self._point_prompt_layer.border_color_mode = "cycle"
 
         # Add the shape layer for box and other shape prompts.
         self._viewer.add_shapes(
@@ -61,16 +61,27 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         self._prompt_widget = widgets.create_prompt_menu(self._point_prompt_layer, self._point_labels)
 
         # Create the dictionray for the widgets and get the widgets of the child plugin.
-        self._widgets = {
-            "embeddings": self._embedding_widget,
-            "prompts": self._prompt_widget,
-        }
+        self._widgets = {"embeddings": self._embedding_widget, "prompts": self._prompt_widget}
         self._widgets.update(self._get_widgets())
 
     def _create_keybindings(self):
         @self._viewer.bind_key("s", overwrite=True)
         def _segment(viewer):
             self._widgets["segment"](viewer)
+
+        # Note: we also need to over-write the keybindings for specific layers.
+        # See https://github.com/napari/napari/issues/7302 for details.
+        # Here, we need to over-write the 's' keybinding for both of the prompt layers.
+        prompt_layer = self._viewer.layers["prompts"]
+        point_prompt_layer = self._viewer.layers["point_prompts"]
+
+        @prompt_layer.bind_key("s", overwrite=True)
+        def _segment_prompts(event):
+            self._widgets["segment"](self._viewer)
+
+        @point_prompt_layer.bind_key("s", overwrite=True)
+        def _segment_point_prompts(event):
+            self._widgets["segment"](self._viewer)
 
         @self._viewer.bind_key("c", overwrite=True)
         def _commit(viewer):
@@ -149,11 +160,15 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
 
         # Reset all layers.
         self._viewer.layers["current_object"].data = np.zeros(self._shape, dtype="uint32")
+        self._viewer.layers["current_object"].scale = state.image_scale
         self._viewer.layers["auto_segmentation"].data = np.zeros(self._shape, dtype="uint32")
+        self._viewer.layers["auto_segmentation"].scale = state.image_scale
         if segmentation_result is None or segmentation_result is False:
             self._viewer.layers["committed_objects"].data = np.zeros(self._shape, dtype="uint32")
         else:
             assert segmentation_result.shape == self._shape
             self._viewer.layers["committed_objects"].data = segmentation_result
-
+        self._viewer.layers["committed_objects"].scale = state.image_scale
+        self._viewer.layers["point_prompts"].scale = state.image_scale
+        self._viewer.layers["prompts"].scale = state.image_scale
         vutil.clear_annotations(self._viewer, clear_segmentations=False)

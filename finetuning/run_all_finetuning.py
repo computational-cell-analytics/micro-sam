@@ -8,40 +8,34 @@ N_OBJECTS = {
     "vit_t": 50,
     "vit_b": 40,
     "vit_l": 30,
-    "vit_h": 25
+    "vit_h": 25,
 }
 
 
-def write_batch_script(out_path, _name, env_name, model_type, save_root):
+def write_batch_script(out_path, _name, env_name, model_type, save_root, dry):
     "Writing scripts with different micro-sam finetunings."
     batch_script = f"""#!/bin/bash
 #SBATCH -t 14-00:00:00
-#SBATCH --mem 64G
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH -p grete:shared
-#SBATCH -G A100:1
-#SBATCH -A nim00007
+#SBATCH -p grete-h100:shared
+#SBATCH -G H100:1
+#SBATCH -A gzz0001
 #SBATCH -c 16
+#SBATCH --mem 64G
 #SBATCH --qos=14d
-#SBATCH --constraint=80gb
 #SBATCH --job-name={os.path.split(_name)[-1]}
 
-source activate {env_name} \n"""
+source ~/.bashrc
+micromamba activate {env_name} \n"""
 
-    # python script
+    # The python script
     python_script = f"python {_name}.py "
+    python_script += f"-s {save_root} "  # The save root folder
+    python_script += f"-m {model_type} "  # The name of the model configuration
+    python_script += f"--n_objects {N_OBJECTS[model_type[:5]]} "  # The choice of the number of objects
 
-    # save root folder
-    python_script += f"-s {save_root} "
-
-    # name of the model configuration
-    python_script += f"-m {model_type} "
-
-    # choice of the number of objects
-    python_script += f"--n_objects {N_OBJECTS[model_type[:5]]} "
-
-    # let's add the python script to the bash script
+    # Add the python script to the bash script
     batch_script += python_script
 
     _op = out_path[:-3] + f"_{os.path.split(_name)[-1]}.sh"
@@ -49,7 +43,8 @@ source activate {env_name} \n"""
         f.write(batch_script)
 
     cmd = ["sbatch", _op]
-    subprocess.run(cmd)
+    if not dry:
+        subprocess.run(cmd)
 
 
 def get_batch_script_names(tmp_folder):
@@ -101,17 +96,17 @@ def submit_slurm(args):
             write_batch_script(
                 out_path=get_batch_script_names(tmp_folder),
                 _name=script_name,
-                env_name="mobilesam" if model_type == "vit_t" else "sam",
+                env_name="mobilesam" if model_type == "vit_t" else "super",
                 model_type=model_type,
-                save_root=args.save_root
+                save_root=args.save_root,
+                dry=args.dry,
             )
 
 
 def main(args):
-    try:
+    tmp_dir = "./gpu_jobs"
+    if os.path.exists(tmp_dir):
         shutil.rmtree("./gpu_jobs")
-    except FileNotFoundError:
-        pass
 
     submit_slurm(args)
 
@@ -119,8 +114,19 @@ def main(args):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("-e", "--experiment_name", type=str, default=None)
-    parser.add_argument("-s", "--save_root", type=str, default="/scratch/usr/nimanwai/micro-sam/")
-    parser.add_argument("-m", "--model_type", type=str, default=None)
+    parser.add_argument(
+        "-e", "--experiment_name", type=str, default=None, help="The choice of experiment name.",
+    )
+    parser.add_argument(
+        "-s", "--save_root", type=str, default="/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam",
+        help="The path where to store the model checkpoints and logs.",
+    )
+    parser.add_argument(
+        "-m", "--model_type", type=str, default=None, help="The choice of model type for Segment Anything model."
+    )
+    parser.add_argument(
+        "--dry", action="store_true", help="Whether to submit the scripts to slurm or only store the scripts."
+    )
     args = parser.parse_args()
+
     main(args)

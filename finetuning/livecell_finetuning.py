@@ -40,7 +40,7 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
 
 
 def finetune_livecell(args):
-    """Example code for finetuning SAM on LiveCELL"""
+    """Example code for finetuning SAM on LIVECell"""
     # override this (below) if you have some more complex set-up and need to specify the exact gpu
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -55,6 +55,19 @@ def finetune_livecell(args):
     # all the stuff we need for training
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10, "verbose": True}
+
+    # NOTE: memory req. for all vit_b models (compared on A100 80GB)
+    # vit_b
+    # freeze_encoder: ~ 33.89 GB
+    # QLoRA: ~48.54 GB
+    # LoRA: ~48.62 GB
+    # FFT: ~49.56 GB
+
+    # vit_h
+    # freeze_encoder: ~36.05 GB
+    # QLoRA: ~ 65.68 GB
+    # LoRA: ~ 67.14 GB
+    # FFT: ~72.34 GB
 
     # Run training.
     sam_training.train_sam(
@@ -72,6 +85,7 @@ def finetune_livecell(args):
         save_root=args.save_root,
         scheduler_kwargs=scheduler_kwargs,
         save_every_kth_epoch=args.save_every_kth_epoch,
+        peft_kwargs={"rank": args.lora_rank, "quantize": True} if args.lora_rank is not None else None,
     )
 
     if args.export_path is not None:
@@ -84,10 +98,10 @@ def finetune_livecell(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LiveCELL dataset.")
+    parser = argparse.ArgumentParser(description="Finetune Segment Anything for the LIVECell dataset.")
     parser.add_argument(
-        "--input_path", "-i", default="/scratch/projects/nim00007/sam/data/livecell/",
-        help="The filepath to the LiveCELL data. If the data does not exist yet it will be downloaded."
+        "--input_path", "-i", default="/mnt/vast-nhr/projects/cidas/cca/data/livecell/",
+        help="The filepath to the LIVECell data. If the data does not exist yet it will be downloaded."
     )
     parser.add_argument(
         "--model_type", "-m", default="vit_b",
@@ -115,6 +129,9 @@ def main():
     )
     parser.add_argument(
         "--n_objects", type=int, default=25, help="The number of instances (objects) per batch used for finetuning."
+    )
+    parser.add_argument(
+        "--lora_rank", type=int, default=None, help="The rank for low rank adaptation of the attention layers."
     )
     args = parser.parse_args()
     finetune_livecell(args)

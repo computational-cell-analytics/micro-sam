@@ -1,10 +1,3 @@
-# Bulky files
-*.pth
-*.tif
-examples/data/*
-*.out
-*embeddings/*
-
 # Code coverage files
 coverage.xml
 .coverage*
@@ -174,6 +167,30 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+# Bulky files
+*.pth
+*.tif
+examples/data/*
+*.out
+*embeddings/*
+
+# Additional stuff to avoid tracking.
 # Torch-em stuff
 checkpoints/
 logs/
+
+# And some other stuff to avoid tracking as well.
+gpu_jobs/
+sam_embeddings/
+results/
+iterative_prompting_results/
+*.png
+*.zarr
+*.sh
+*.svg
+*.csv
+
+# Related to i2k workshop folders.
+data/
+embeddings/
+*.zarr

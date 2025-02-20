@@ -19,11 +19,18 @@ The annotation tools can be started from the napari plugin menu:
 
 You can find additional information on the annotation tools [in the FAQ section](#usage-question).
 
+HINT: If you would like to start napari to use `micro-sam` from the plugin menu, you must start it by activating the environment where `micro-sam` has been installed using:
+
+```bash
+conda activate <ENVIRONMENT_NAME>
+napari
+```
+
 
 ## Annotator 2D
 
 The 2d annotator can be started by
-- clicking `Annotator 2d` in the plugin menu.
+- clicking `Annotator 2d` in the plugin menu after starting `napari`.
 - running `$ micro_sam.annotator_2d` in the command line.
 - calling `micro_sam.sam_annotator.annotator_2d` in a python script. Check out [examples/annotator_2d.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py) for details.
 
@@ -55,7 +62,7 @@ Check out [the video tutorial](https://youtu.be/9xjJBg_Bfuc) for an in-depth exp
 ## Annotator 3D
 
 The 3d annotator can be started by
-- clicking `Annotator 3d` in the plugin menu.
+- clicking `Annotator 3d` in the plugin menu after starting `napari`.
 - running `$ micro_sam.annotator_3d` in the command line.
 - calling `micro_sam.sam_annotator.annotator_3d` in a python script. Check out [examples/annotator_3d.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_3d.py) for details.
 
@@ -81,7 +88,7 @@ Check out [the video tutorial](https://youtu.be/nqpyNQSyu74) for an in-depth exp
 ## Annotator Tracking
 
 The tracking annotator can be started by
-- clicking `Annotator Tracking` in the plugin menu.
+- clicking `Annotator Tracking` in the plugin menu after starting `napari`.
 - running `$ micro_sam.annotator_tracking` in the command line.
 - calling `micro_sam.sam_annotator.annotator_tracking` in a python script. Check out [examples/annotator_tracking.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_tracking.py) for details. 
 
@@ -107,7 +114,7 @@ Check out [the video tutorial](https://youtu.be/1gg8OPHqOyc) for an in-depth exp
 ## Image Series Annotator
 
 The image series annotation tool enables running the [2d annotator](#annotator-2d) or [3d annotator](#annotator-3d) for multiple images that are saved in a folder. This makes it convenient to annotate many images without having to restart the tool for every image. It can be started by
-- clicking `Image Series Annotator` in the plugin menu.
+- clicking `Image Series Annotator` in the plugin menu after starting `napari`.
 - running `$ micro_sam.image_series_annotator` in the command line.
 - calling `micro_sam.sam_annotator.image_series_annotator` in a python script. Check out [examples/image_series_annotator.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/image_series_annotator.py) for details. 
 
@@ -126,7 +133,7 @@ Check out [the video tutorial](https://youtu.be/HqRoImdTX3c) for an in-depth exp
 
 ## Finetuning UI
 
-We also provide a graphical inferface for fine-tuning models on your own data. It can be started by clicking `Finetuning` in the plugin menu.
+We also provide a graphical inferface for fine-tuning models on your own data. It can be started by clicking `Finetuning` in the plugin menu after starting `napari`.
 
 **Note:** if you know a bit of python programming we recommend to use a script for model finetuning instead. This will give you more options to configure the training. See [these instructions](#training-your-own-model) for details.
 

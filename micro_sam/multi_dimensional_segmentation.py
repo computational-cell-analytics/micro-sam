@@ -5,23 +5,33 @@ import os
 from typing import Optional, Union, Tuple
 
 import numpy as np
-import nifty
-import elf.tracking.tracking_utils as track_utils
-import elf.segmentation as seg_utils
-
-from segment_anything.predictor import SamPredictor
+import torch
 from scipy.ndimage import binary_closing
 from skimage.measure import label, regionprops
 from skimage.segmentation import relabel_sequential
+
+import nifty
+
+import elf.segmentation as seg_utils
+import elf.tracking.tracking_utils as track_utils
+
+from segment_anything.predictor import SamPredictor
 
 try:
     from napari.utils import progress as tqdm
 except ImportError:
     from tqdm import tqdm
 
+try:
+    from trackastra.model import Trackastra
+    from trackastra.tracking import graph_to_napari_tracks
+except ImportError:
+    Trackastra = None
+
 from . import util
-from .instance_segmentation import AMGBase, mask_data_to_segmentation
 from .prompt_based_segmentation import segment_from_mask
+from .instance_segmentation import AMGBase, mask_data_to_segmentation
+
 
 PROJECTION_MODES = ("box", "mask", "points", "points_and_mask", "single_point")
 
@@ -136,8 +146,9 @@ def segment_mask_in_volume(
             if threshold is not None:
                 iou = util.compute_iou(seg_prev, seg_z)
                 if iou < threshold:
-                    msg = f"Segmentation stopped at slice {z} due to IOU {iou} < {threshold}."
-                    print(msg)
+                    if verbose:
+                        msg = f"Segmentation stopped at slice {z} due to IOU {iou} < {threshold}."
+                        print(msg)
                     break
 
             segmentation[z] = seg_z
@@ -239,8 +250,9 @@ def _preprocess_closing(slice_segmentation, gap_closing, pbar_update):
         # have overlap with more than one object from the initial segmentation.
         # This indicates wrong merging of closeby objects that we want to prevent.
         matches = nifty.ground_truth.overlap(closed_z, seg_z)
-        matches = {seg_id: matches.overlapArrays(seg_id, sorted=False)[0]
-                   for seg_id in range(1, int(closed_z.max() + 1))}
+        matches = {
+            seg_id: matches.overlapArrays(seg_id, sorted=False)[0] for seg_id in range(1, int(closed_z.max() + 1))
+        }
         matches = {k: v[v != 0] for k, v in matches.items()}
 
         ids_initial, ids_closed = [], []
@@ -322,7 +334,7 @@ def merge_instance_segmentation_3d(
     uv_ids = np.array([[edge["source"], edge["target"]] for edge in edges])
     overlaps = np.array([edge["score"] for edge in edges])
 
-    n_nodes = int(slice_segmentation[-1].max() + 1)
+    n_nodes = int(slice_segmentation.max() + 1)
     graph = nifty.graph.undirectedGraph(n_nodes)
     graph.insertEdges(uv_ids)
 
@@ -354,16 +366,24 @@ def merge_instance_segmentation_3d(
 
 
 def _segment_slices(
-    data, predictor, segmentor, embedding_path, verbose, with_background=True, **kwargs
+    data, predictor, segmentor, embedding_path, verbose, tile_shape, halo, with_background=True, **kwargs
 ):
     assert data.ndim == 3
 
-    image_embeddings = util.precompute_image_embeddings(predictor, data, save_path=embedding_path, ndim=3)
+    min_object_size = kwargs.pop("min_object_size", 0)
+    image_embeddings = util.precompute_image_embeddings(
+        predictor=predictor,
+        input_=data,
+        save_path=embedding_path,
+        ndim=3,
+        tile_shape=tile_shape,
+        halo=halo,
+        verbose=verbose,
+    )
 
     offset = 0
     segmentation = np.zeros(data.shape, dtype="uint32")
 
-    min_object_size = kwargs.pop("min_object_size", 0)
     for i in tqdm(range(segmentation.shape[0]), desc="Segment slices", disable=not verbose):
         segmentor.initialize(data[i], image_embeddings=image_embeddings, verbose=False, i=i)
         seg = segmentor.generate(**kwargs)
@@ -389,10 +409,13 @@ def automatic_3d_segmentation(
     with_background: bool = True,
     gap_closing: Optional[int] = None,
     min_z_extent: Optional[int] = None,
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
+    return_embeddings: bool = False,
     **kwargs,
 ) -> np.ndarray:
-    """Segment volume in 3d.
+    """Automatically segment objects in a volume.
 
     First segments slices individually in 2d and then merges them across 3d
     based on overlap of objects between slices.
@@ -407,21 +430,32 @@ def automatic_3d_segmentation(
             operation. The value is used to determine the number of iterations for the closing.
         min_z_extent: Require a minimal extent in z for the segmented objects.
             This can help to prevent segmentation artifacts.
+        tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
+        halo: Overlap of the tiles for tiled prediction.
         verbose: Verbosity flag.
+        return_embeddings: Whether to return the precomputed image embeddings.
         kwargs: Keyword arguments for the 'generate' method of the 'segmentor'.
 
     Returns:
         The segmentation.
     """
-    segmentation = _segment_slices(
-        volume, predictor, segmentor, embedding_path, verbose, with_background=with_background, **kwargs
+    segmentation, image_embeddings = _segment_slices(
+        volume, predictor, segmentor, embedding_path, verbose,
+        tile_shape=tile_shape, halo=halo, with_background=with_background, **kwargs
     )
 
     segmentation = merge_instance_segmentation_3d(
-        segmentation, beta=0.5, with_background=with_background, gap_closing=gap_closing, min_z_extent=min_z_extent
+        segmentation,
+        beta=0.5,
+        with_background=with_background,
+        gap_closing=gap_closing,
+        min_z_extent=min_z_extent,
+        verbose=verbose,
     )
-
-    return segmentation
+    if return_embeddings:
+        return segmentation, image_embeddings
+    else:
+        return segmentation
 
 
 def _filter_tracks(tracking_result, min_track_length):
@@ -516,27 +550,32 @@ def _parse_result(slice_segmentation, solver, graph):
     return segmentation, lineages
 
 
+def _tracking_impl(timeseries, segmentation, mode):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = Trackastra.from_pretrained("general_2d", device=device)
+    lineage_graph = model.track(timeseries, segmentation, mode=mode)
+    track_data, parent_graph, _ = graph_to_napari_tracks(lineage_graph)
+    # TODO
+
+
 def track_across_frames(
-    slice_segmentation: np.ndarray,
+    timeseries: np.ndarray,
+    segmentation: np.ndarray,
     gap_closing: Optional[int] = None,
     min_time_extent: Optional[int] = None,
     verbose: bool = True,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
-):
-    """TODO
+) -> Tuple[np.ndarray]:
     """
-    # from elf.tracking.tracking_utils import preprocess_closing
-    from elf.tracking.motile_tracking import _track_with_motile_impl
-
+    """
     _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init=pbar_init, pbar_update=pbar_update)
 
     if gap_closing is not None and gap_closing > 0:
-        slice_segmentation = _preprocess_closing(slice_segmentation, gap_closing, pbar_update)
+        segmentation = _preprocess_closing(segmentation, gap_closing, pbar_update)
 
-    solver, graph = _track_with_motile_impl(slice_segmentation, max_children=2)
-
-    segmentation, lineage = _parse_result(slice_segmentation, solver, graph)
+    solver, graph = _tracking_impl(timeseries, segmentation, mode="greedy")
+    segmentation, lineage = _parse_result(segmentation, solver, graph)
 
     return segmentation, lineage
 
@@ -546,18 +585,25 @@ def automatic_tracking(
     predictor: SamPredictor,
     segmentor: AMGBase,
     embedding_path: Optional[Union[str, os.PathLike]] = None,
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
     gap_closing: Optional[int] = None,
     min_time_extent: Optional[int] = None,
     verbose: bool = True,
     **kwargs,
-):
-    """TODO
+) -> Tuple[np.ndarray,]:
     """
+    """
+    # TODO error raising
+    if Trackastra is None:
+        raise RuntimeError
 
-    segmentation = _segment_slices(timeseries, predictor, segmentor, embedding_path, verbose, **kwargs)
-    segmentation, lineage = track_across_frames(
-        segmentation, gap_closing=gap_closing, min_time_extent=min_time_extent,
-        verbose=verbose,
+    segmentation, _ = _segment_slices(
+        timeseries, predictor, segmentor, embedding_path, verbose,
+        tile_shape=tile_shape, halo=halo,
+        **kwargs,
     )
-
+    segmentation, lineage = track_across_frames(
+        timeseries, segmentation, gap_closing=gap_closing, min_time_extent=min_time_extent, verbose=verbose,
+    )
     return segmentation, lineage

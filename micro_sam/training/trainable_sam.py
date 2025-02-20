@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple
 
 import torch
 from torch import nn
@@ -14,16 +14,11 @@ class TrainableSAM(nn.Module):
 
     Args:
         sam: The SegmentAnything Model.
-        device: The device for training.
     """
-    def __init__(
-        self,
-        sam: Sam,
-        device: Union[str, torch.device],
-    ) -> None:
+
+    def __init__(self, sam: Sam) -> None:
         super().__init__()
         self.sam = sam
-        self.device = device
         self.transform = ResizeLongestSide(sam.image_encoder.img_size)
 
     def preprocess(self, x: torch.Tensor) -> Tuple[torch.Tensor, Tuple[int, int]]:
@@ -54,21 +49,19 @@ class TrainableSAM(nn.Module):
     def image_embeddings_oft(self, batched_inputs):
         # Compute the input images.
         input_images, input_size = self.preprocess(
-            torch.stack([x["image"] for x in batched_inputs], dim=0).to(self.device)
+            torch.stack([x["image"] for x in batched_inputs], dim=0).to(self.sam.device, non_blocking=True)
         )
         # Update the input size for each input in the batch.
         for i in range(len(batched_inputs)):
             batched_inputs[i]["input_size"] = input_size
         # Compute the image embeddings.
         image_embeddings = self.sam.image_encoder(input_images)
+
         return image_embeddings, batched_inputs
 
     # batched inputs follow the same syntax as the input to sam.forward
     def forward(
-        self,
-        batched_inputs: List[Dict[str, Any]],
-        image_embeddings: torch.Tensor,
-        multimask_output: bool = False,
+        self, batched_inputs: List[Dict[str, Any]], image_embeddings: torch.Tensor, multimask_output: bool = False,
     ) -> List[Dict[str, Any]]:
         """Forward pass.
 
@@ -83,25 +76,24 @@ class TrainableSAM(nn.Module):
         outputs = []
         for image_record, curr_embedding in zip(batched_inputs, image_embeddings):
             if "point_coords" in image_record:
-                points = (image_record["point_coords"].to(self.device), image_record["point_labels"].to(self.device))
+                points = (
+                    image_record["point_coords"].to(self.sam.device, non_blocking=True),
+                    image_record["point_labels"].to(self.sam.device, non_blocking=True)
+                )
             else:
                 points = None
 
             if "boxes" in image_record:
-                boxes = image_record.get("boxes").to(self.device)
+                boxes = image_record.get("boxes").to(self.sam.device, non_blocking=True)
             else:
                 boxes = None
 
             if "mask_inputs" in image_record:
-                masks = image_record.get("mask_inputs").to(self.device)
+                masks = image_record.get("mask_inputs").to(self.sam.device, non_blocking=True)
             else:
                 masks = None
 
-            sparse_embeddings, dense_embeddings = self.sam.prompt_encoder(
-                points=points,
-                boxes=boxes,
-                masks=masks,
-            )
+            sparse_embeddings, dense_embeddings = self.sam.prompt_encoder(points=points, boxes=boxes, masks=masks)
 
             low_res_masks, iou_predictions = self.sam.mask_decoder(
                 image_embeddings=curr_embedding.unsqueeze(0),
@@ -112,17 +104,11 @@ class TrainableSAM(nn.Module):
             )
 
             masks = self.sam.postprocess_masks(
-                low_res_masks,
-                input_size=image_record["input_size"],
-                original_size=image_record["original_size"],
+                masks=low_res_masks, input_size=image_record["input_size"], original_size=image_record["original_size"],
             )
 
             outputs.append(
-                {
-                    "low_res_masks": low_res_masks,
-                    "masks": masks,
-                    "iou_predictions": iou_predictions
-                }
+                {"low_res_masks": low_res_masks, "masks": masks, "iou_predictions": iou_predictions}
             )
 
         return outputs

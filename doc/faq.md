@@ -7,12 +7,12 @@ If you encounter a problem or question not addressed here feel free to [open an 
 
 
 ### 1. How to install `micro_sam`?
-The [installation](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation) for `micro_sam` is supported in three ways: [from mamba](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-mamba) (recommended), [from source](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-source) and [from installers](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-installer). Check out our [tutorial video](https://youtu.be/gcv0fa84mCc) to get started with `micro_sam`, briefly walking you through the installation process and how to start the tool.
+The [installation](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation) for `micro_sam` is supported in three ways: [from conda](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-conda) (recommended), [from source](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-source) and [from installers](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-installer). Check out our [tutorial video](https://youtu.be/gcv0fa84mCc) to get started with `micro_sam`, briefly walking you through the installation process and how to start the tool.
 
 
 ### 2. I cannot install `micro_sam` using the installer, I am getting some errors.
 The installer should work out-of-the-box on Windows and Linux platforms. Please open an issue to report the error you encounter.
->NOTE: The installers enable using `micro_sam` without mamba or conda. However, we recommend the installation from mamba / from source to use all its features seamlessly. Specifically, the installers currently only support the CPU and won't enable you to use the GPU (if you have one). 
+>NOTE: The installers enable using `micro_sam` without conda. However, we recommend the installation from conda or from source to use all its features seamlessly. Specifically, the installers currently only support the CPU and won't enable you to use the GPU (if you have one). 
 
 
 ### 3. What is the minimum system requirement for `micro_sam`?
@@ -40,7 +40,7 @@ Having a GPU will significantly speed up the annotation tools and especially the
 
 
 ### 5. I am missing a few packages (eg. `ModuleNotFoundError: No module named 'elf.io`). What should I do?
-With the latest release 1.0.0, the installation from mamba and source should take care of this and install all the relevant packages for you.
+With the latest release 1.0.0, the installation from conda and source should take care of this and install all the relevant packages for you.
 So please reinstall `micro_sam`, following [the installation guide](#installation).
 
 ### 6. Can I install `micro_sam` using pip?
@@ -53,6 +53,23 @@ The PyPI page for `micro-sam` exists only so that the [napari-hub](https://www.n
 ### 7. I get the following error: `importError: cannot import name 'UNETR' from 'torch_em.model'`.
 It's possible that you have an older version of `torch-em` installed. Similar errors could often be raised from other libraries, the reasons being: a) Outdated packages installed, or b) Some non-existent module being called. If the source of such error is from `micro_sam`, then `a)` is most likely the reason . We recommend installing the latest version following the [installation instructions](https://github.com/constantinpape/torch-em?tab=readme-ov-file#installation).
 
+### 8. My system does not support internet connection. Where should I put the model checkpoints for the `micro-sam` models?
+We recommend transferring the model checkpoints to the system-level cache directory (you can find yours by running the following in terminal: `python -c "from micro_sam import util; print(util.microsam_cachedir())`). Once you have identified the cache directory, you need to create an additional `models` directory inside the `micro-sam` cache directory (if not present already) and move the model checkpoints there. At last, you **must** rename the transferred checkpoints as per the respective [key values](https://github.com/computational-cell-analytics/micro-sam/blob/master/micro_sam/util.py#L87) in the url dictionaries located in the `micro_sam.util.models` function (below mentioned is an example for Linux users).
+
+```bash
+# Download and transfer the model checkpoints for 'vit_b_lm' and `vit_b_lm_decoder`.
+# Next, verify the cache directory.
+> python -c "from micro_sam import util; print(util.microsam_cachedir())"
+/home/anwai/.cache/micro_sam
+
+# Create 'models' folder in the cache directory
+> mkdir /home/anwai/.cache/micro_sam/models
+
+# Move the checkpoints to the models directory and rename them
+# The following steps transfer and rename the checkpoints to the desired filenames.
+> mv vit_b.pt /home/anwai/.cache/micro_sam/models/vit_b_lm
+> mv vit_b_decoder.pt /home/anwai/.cache/micro_sam/models/vit_b_lm_decoder
+```
 
 ## Usage questions
 
@@ -115,7 +132,7 @@ We want to remove these errors, so we would be very grateful if you can [open an
 
 
 ### 10. The objects are not segmented in my 3d data using the interactive annotation tool.
-The first thing to check is: a) make sure you are using the latest version of `micro_sam` (pull the latest commit from master if your installation is from source, or update the installation from conda / mamba using `mamba update micro_sam`), and b) try out the steps from the [3d annotation tutorial video](https://youtu.be/nqpyNQSyu74) to verify if this shows the same behaviour (or the same errors) as you faced. For 3d images, it's important to pass the inputs in the python axis convention, ZYX.
+The first thing to check is: a) make sure you are using the latest version of `micro_sam` (pull the latest commit from master if your installation is from source, or update the installation from conda using `conda update micro_sam`), and b) try out the steps from the [3d annotation tutorial video](https://youtu.be/nqpyNQSyu74) to verify if this shows the same behaviour (or the same errors) as you faced. For 3d images, it's important to pass the inputs in the python axis convention, ZYX.
 c) try using a different model and change the projection mode for 3d segmentation. This is also explained in the video.
 
 
@@ -135,18 +152,28 @@ This can happen for long running computations. You just need to wait a bit longe
 `micro_sam` performs automatic segmentation in 3D volumes by first segmenting slices individually in 2D and merging the segmentations across 3D based on overlap of objects between slices. The expected shape of your 3D RGB volume should be `(Z * Y * X * 3)` (reason: Segment Anything is devised to consider 3-channel inputs, so while the user provides micro-sam with 1-channel inputs, we handle this by triplicating this to fit the requirement, or with 3-channel inputs, we use them in the expected RGB array structures as it is).
 
 
+### 15. I want to use a model stored in a different directory than the `micro_sam` cache. How can I do this?
+The `micro-sam` CLIs for precomputation of image embeddings and annotators (Annotator 2d, Annotator 3d, Annotator Tracking, Image Series Annotator) accept the argument `-c` / `--checkpoint` to pass model checkpoints. If you start a `micro-sam` annotator from the `napari` plugin menu, you can provide the path to model checkpoints in the annotator widget (on right) under `Embedding Settings` drop-down in the `custom weights path` option.
+
+NOTE: It is important to choose the correct model type when you opt for the above recommendation, using the `-m / --model_type` argument or selecting it from the `Model` dropdown in `Embedding Settings` respectively. Otherwise you will face parameter mismatch issues.
+
+
+### 16. Some parameters in the annotator / finetuning widget are unclear to me.
+`micro-sam` has tooltips for menu options across all widgets (i.e. an information window will appear if you hover over name of the menu), which briefly describe the utility of the specific menu option.
+
+
 ## Fine-tuning questions
 
 
 ### 1. I have a microscopy dataset I would like to fine-tune Segment Anything for. Is it possible using `micro_sam`?
 Yes, you can fine-tune Segment Anything on your own dataset. Here's how you can do it:
-- Check out the [tutorial notebook](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/micro-sam-finetuning.ipynb) on how to fine-tune Segment Anything with our `micro_sam.training` library.
+- Check out the [tutorial notebook](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb) on how to fine-tune Segment Anything with our `micro_sam.training` library.
 - Or check the [examples](https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/finetuning) for additional scripts that demonstrate finetuning.
 - If you are not familiar with coding in python at all then you can also use the [graphical interface for finetuning](finetuning-ui). But we recommend using a script for more flexibility and reproducibility.
 
 
 ### 2. I would like to fine-tune Segment Anything on open-source cloud services (e.g. Kaggle Notebooks), is it possible?
-Yes, you can fine-tune Segment Anything on your custom datasets on Kaggle (and [BAND](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#using-micro_sam-on-band)). Check out our [tutorial notebook](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/micro-sam-finetuning.ipynb) for this.
+Yes, you can fine-tune Segment Anything on your custom datasets on Kaggle (and [BAND](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#using-micro_sam-on-band)). Check out our [tutorial notebook](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb) for this.
 
 
 <!---

@@ -3,20 +3,20 @@
 
 import os
 from glob import glob
-from itertools import product
+from tqdm import tqdm
 from pathlib import Path
+from itertools import product
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-import imageio.v3 as imageio
 import numpy as np
 import pandas as pd
+import imageio.v3 as imageio
 
-from elf.evaluation import mean_segmentation_accuracy
 from elf.io import open_file
-from tqdm import tqdm
+from elf.evaluation import mean_segmentation_accuracy
 
-from ..instance_segmentation import AMGBase, InstanceSegmentationWithDecoder, mask_data_to_segmentation
 from .. import util
+from ..instance_segmentation import AMGBase, InstanceSegmentationWithDecoder, mask_data_to_segmentation
 
 
 def _get_range_of_search_values(input_vals, step):
@@ -29,8 +29,7 @@ def _get_range_of_search_values(input_vals, step):
 
 
 def default_grid_search_values_amg(
-    iou_thresh_values: Optional[List[float]] = None,
-    stability_score_values: Optional[List[float]] = None,
+    iou_thresh_values: Optional[List[float]] = None, stability_score_values: Optional[List[float]] = None,
 ) -> Dict[str, List[float]]:
     """Default grid-search parameter for AMG-based instance segmentation.
 
@@ -92,6 +91,7 @@ def default_grid_search_values_instance_segmentation_with_decoder(
         )
     if min_size_values is None:
         min_size_values = [50, 100, 200]
+
     return {
         "center_distance_threshold": center_distance_threshold_values,
         "boundary_distance_threshold": boundary_distance_threshold_values,
@@ -140,6 +140,7 @@ def _load_image(path, key, roi):
         return im
     with open_file(path, "r") as f:
         im = f[key][:] if roi is None else f[key][roi]
+
     return im
 
 
@@ -155,6 +156,7 @@ def run_instance_segmentation_grid_search(
     image_key: Optional[str] = None,
     gt_key: Optional[str] = None,
     rois: Optional[Tuple[slice, ...]] = None,
+    tiling_window_params: Optional[Dict[str, Tuple[int, int]]] = None,
 ) -> None:
     """Run grid search for automatic mask generation.
 
@@ -187,6 +189,7 @@ def run_instance_segmentation_grid_search(
         gt_key: Key for loading the ground-truth data from a more complex file format like HDF5.
             If not given a simple image format like tif is assumed.
         rois: Region of interests to resetrict the evaluation to.
+        tiling_window_params: The parameters to decide whether to use tiling window operation for AIS.
     """
     verbose_embeddings = False
 
@@ -227,14 +230,19 @@ def run_instance_segmentation_grid_search(
         gt = _load_image(gt_path, gt_key, roi=None if rois is None else rois[i])
 
         if embedding_dir is None:
-            segmenter.initialize(image)
+            embedding_path = None
         else:
             assert predictor is not None
             embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
-            image_embeddings = util.precompute_image_embeddings(
-                predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings
-            )
-            segmenter.initialize(image, image_embeddings)
+
+        if tiling_window_params is None:
+            tiling_window_params = {}
+
+        image_embeddings = util.precompute_image_embeddings(
+            predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings, **tiling_window_params
+        )
+
+        segmenter.initialize(image, image_embeddings, **tiling_window_params)
 
         _grid_search_iteration(
             segmenter, gs_combinations, gt, image_name,
@@ -245,9 +253,10 @@ def run_instance_segmentation_grid_search(
 def run_instance_segmentation_inference(
     segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
     image_paths: List[Union[str, os.PathLike]],
-    embedding_dir: Union[str, os.PathLike],
+    embedding_dir: Optional[Union[str, os.PathLike]],
     prediction_dir: Union[str, os.PathLike],
     generate_kwargs: Optional[Dict[str, Any]] = None,
+    tiling_window_params: Optional[Dict[str, Tuple[int, int]]] = None,
 ) -> None:
     """Run inference for automatic mask generation.
 
@@ -257,6 +266,8 @@ def run_instance_segmentation_inference(
         embedding_dir: Folder to cache the image embeddings.
         prediction_dir: Folder to save the predictions.
         generate_kwargs: The keyword arguments for the `generate` method of the segmenter.
+        tiling_window_params: The parameters to decide whether to use tiling window operation
+            for automatic segmentation.
     """
 
     verbose_embeddings = False
@@ -276,12 +287,21 @@ def run_instance_segmentation_inference(
         assert os.path.exists(image_path), image_path
         image = imageio.imread(image_path)
 
-        embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
+        if embedding_dir is None:
+            embedding_path = None
+        else:
+            assert predictor is not None
+            embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
+
+        if tiling_window_params is None:
+            tiling_window_params = {}
+
         image_embeddings = util.precompute_image_embeddings(
-            predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings
+            predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings, **tiling_window_params
         )
 
-        segmenter.initialize(image, image_embeddings)
+        segmenter.initialize(image, image_embeddings, **tiling_window_params)
+
         masks = segmenter.generate(**generate_kwargs)
 
         if len(masks) == 0:  # the instance segmentation can have no masks, hence we just save empty labels
@@ -301,9 +321,7 @@ def run_instance_segmentation_inference(
 
 
 def evaluate_instance_segmentation_grid_search(
-    result_dir: Union[str, os.PathLike],
-    grid_search_parameters: List[str],
-    criterion: str = "mSA"
+    result_dir: Union[str, os.PathLike], grid_search_parameters: List[str], criterion: str = "mSA"
 ) -> Tuple[Dict[str, Any], float]:
     """Evaluate gridsearch results.
 
@@ -316,7 +334,6 @@ def evaluate_instance_segmentation_grid_search(
         The best parameter setting.
         The evaluation score for the best setting.
     """
-
     # Load all the grid search results.
     gs_files = glob(os.path.join(result_dir, "*.csv"))
     gs_result = pd.concat([pd.read_csv(gs_file) for gs_file in gs_files])
@@ -360,11 +377,13 @@ def run_instance_segmentation_grid_search_and_inference(
     val_image_paths: List[Union[str, os.PathLike]],
     val_gt_paths: List[Union[str, os.PathLike]],
     test_image_paths: List[Union[str, os.PathLike]],
-    embedding_dir: Union[str, os.PathLike],
+    embedding_dir: Optional[Union[str, os.PathLike]],
     prediction_dir: Union[str, os.PathLike],
+    experiment_folder: Union[str, os.PathLike],
     result_dir: Union[str, os.PathLike],
     fixed_generate_kwargs: Optional[Dict[str, Any]] = None,
     verbose_gs: bool = True,
+    tiling_window_params: Optional[Dict[str, Tuple[int, int]]] = None,
 ) -> None:
     """Run grid search and inference for automatic mask generation.
 
@@ -379,14 +398,23 @@ def run_instance_segmentation_grid_search_and_inference(
         test_image_paths: The input images for inference.
         embedding_dir: Folder to cache the image embeddings.
         prediction_dir: Folder to save the predictions.
+        experiment_folder: Folder for caching best grid search parameters in 'results'.
         result_dir: Folder to cache the evaluation results per image.
         fixed_generate_kwargs: Fixed keyword arguments for the `generate` method of the segmenter.
         verbose_gs: Whether to run the gridsearch for individual images in a verbose mode.
+        tiling_window_params: The parameters to decide whether to use tiling window operation
+            for automatic segmentation.
     """
     run_instance_segmentation_grid_search(
-        segmenter, grid_search_values, val_image_paths, val_gt_paths,
-        result_dir=result_dir, embedding_dir=embedding_dir,
-        fixed_generate_kwargs=fixed_generate_kwargs, verbose_gs=verbose_gs,
+        segmenter=segmenter,
+        grid_search_values=grid_search_values,
+        image_paths=val_image_paths,
+        gt_paths=val_gt_paths,
+        result_dir=result_dir,
+        embedding_dir=embedding_dir,
+        fixed_generate_kwargs=fixed_generate_kwargs,
+        verbose_gs=verbose_gs,
+        tiling_window_params=tiling_window_params,
     )
 
     best_kwargs, best_msa = evaluate_instance_segmentation_grid_search(result_dir, list(grid_search_values.keys()))
@@ -394,11 +422,16 @@ def run_instance_segmentation_grid_search_and_inference(
     print("Best grid-search result:", best_msa, "with parmeters:\n", best_param_str)
     print()
 
-    save_grid_search_best_params(best_kwargs, best_msa, Path(embedding_dir).parent)
+    save_grid_search_best_params(best_kwargs, best_msa, experiment_folder)
 
     generate_kwargs = {} if fixed_generate_kwargs is None else fixed_generate_kwargs
     generate_kwargs.update(best_kwargs)
 
     run_instance_segmentation_inference(
-        segmenter, test_image_paths, embedding_dir, prediction_dir, generate_kwargs
+        segmenter=segmenter,
+        image_paths=test_image_paths,
+        embedding_dir=embedding_dir,
+        prediction_dir=prediction_dir,
+        generate_kwargs=generate_kwargs,
+        tiling_window_params=tiling_window_params,
     )

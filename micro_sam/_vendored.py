@@ -1,14 +1,15 @@
-"""
-Functions from other third party libraries.
+"""Functions from other third party libraries.
 
 We can remove these functions once the bugs affecting our code is fixed upstream.
 
 The license type of the thrid party software project must be compatible with
 the software license the micro-sam project is distributed under.
 """
-from typing import Any, Dict, List
+
+from typing import Any, Dict, List, Literal
 
 import numpy as np
+
 import torch
 
 try:
@@ -27,7 +28,7 @@ except ImportError:
 
 
 def batched_mask_to_box(masks: torch.Tensor) -> torch.Tensor:
-    """Calculates boxes in XYXY format around masks. Return [0,0,0,0] for an empty mask.
+    """Calculates boxes in XYXY format around masks. Return [0, 0, 0, 0] for an empty mask.
 
     For input shape C1xC2x...xHxW, the output shape is C1xC2x...x4.
 
@@ -36,7 +37,7 @@ def batched_mask_to_box(masks: torch.Tensor) -> torch.Tensor:
     It further ensures that inputs are boolean tensors, otherwise the function yields wrong results.
     See https://github.com/facebookresearch/segment-anything/issues/552 for details.
     """
-    assert masks.dtype == torch.bool
+    assert masks.dtype == torch.bool, masks.dtype
 
     # torch.max below raises an error on empty inputs, just skip in this case
     if torch.numel(masks) == 0:
@@ -107,7 +108,9 @@ def _compute_rle_numpy(mask):
     return counts
 
 
-def mask_to_rle_pytorch(tensor: torch.Tensor, rle_implementation: str = "default") -> List[Dict[str, Any]]:
+def mask_to_rle_pytorch(
+    tensor: torch.Tensor, rle_implementation: Literal["default", "numpy", "numba", "nifty"] = "default"
+) -> List[Dict[str, Any]]:
     """Calculates the runlength encoding of binary input masks.
 
     This replaces the function in

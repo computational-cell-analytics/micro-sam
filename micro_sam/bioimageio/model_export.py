@@ -1,25 +1,25 @@
 import os
 import tempfile
-
 from pathlib import Path
 from typing import Optional, Union
 
+import xarray
+import numpy as np
+import matplotlib.pyplot as plt
+
+import torch
+
 import bioimageio.core
 import bioimageio.spec.model.v0_5 as spec
-import matplotlib.pyplot as plt
-import numpy as np
-import torch
-import xarray
-
 from bioimageio.spec import save_bioimageio_package
 from bioimageio.core.digest_spec import create_sample_for_model
-
 
 from .. import util
 from ..prompt_generators import PointAndBoxPromptGenerator
 from ..evaluation.model_comparison import _enhance_image, _overlay_outline, _overlay_box
 from ..prompt_based_segmentation import _compute_logits_from_mask
 from .predictor_adaptor import PredictorAdaptor
+
 
 DEFAULTS = {
     "authors": [
@@ -28,19 +28,21 @@ DEFAULTS = {
     ],
     "description": "Finetuned Segment Anything Model for Microscopy",
     "cite": [
-        spec.CiteEntry(text="Archit et al. Segment Anything for Microscopy", doi=spec.Doi("10.1101/2023.08.21.554208")),
+        spec.CiteEntry(
+            text="Archit et al. Segment Anything for Microscopy",
+            doi=spec.Doi("10.1038/s41592-024-02580-4")
+        ),
     ],
     "tags": ["segment-anything", "instance-segmentation"],
 }
 
+# Reference: https://github.com/bioimage-io/spec-bioimage-io/commit/39d343681d427ec93cf69eef7597d9eb9678deb1#diff-0bbdaa8196fa31f945afabcf04a4295ff098f1f24400ef9e59b0f684d411905eL269  # noqa
+# We had this parameter in bioimageio.spec. This has been removed. We just make a copy of the same parameter.
+ARBITRARY_SIZE = spec.ParameterizedSize(min=1, step=1)
 
-def _create_test_inputs_and_outputs(
-    image,
-    labels,
-    model_type,
-    checkpoint_path,
-    tmp_dir,
-):
+
+def _create_test_inputs_and_outputs(image, labels, model_type, checkpoint_path, tmp_dir):
+
     # For now we just generate a single box prompt here, but we could also generate more input prompts.
     generator = PointAndBoxPromptGenerator(
         n_positive_points=1,
@@ -59,10 +61,7 @@ def _create_test_inputs_and_outputs(
 
     # Generate logits from the two
     mask_prompts = np.stack(
-        [
-            _compute_logits_from_mask(labels == 1),
-            _compute_logits_from_mask(labels == 2),
-        ]
+        [_compute_logits_from_mask(labels == 1), _compute_logits_from_mask(labels == 2)]
     )[None]
 
     predictor = PredictorAdaptor(model_type=model_type)
@@ -104,11 +103,7 @@ def _create_test_inputs_and_outputs(
         "point_labels": point_label_path,
         "mask_prompts": mask_prompt_path,
     }
-    outputs = {
-        "mask": mask_path,
-        "score": score_path,
-        "embeddings": embed_path
-    }
+    outputs = {"mask": mask_path, "score": score_path, "embeddings": embed_path}
     return inputs, outputs
 
 
@@ -161,6 +156,7 @@ def _get_checkpoint(model_type, checkpoint_path, tmp_dir):
         return checkpoint_path, None
 
 
+# TODO: Update this with our latest yaml file updates.
 def _write_dependencies(dependency_file, require_mobile_sam):
     content = """name: sam
 channels:
@@ -170,6 +166,7 @@ dependencies:
     - segment-anything"""
     if require_mobile_sam:
         content += """
+    - timm
     - pip:
         - git+https://github.com/ChaoningZhang/MobileSAM.git"""
     with open(dependency_file, "w") as f:
@@ -215,7 +212,7 @@ def _check_model(model_description, input_paths, result_paths):
     image = xarray.DataArray(np.load(input_paths["image"]), dims=tuple("bcyx"))
     embeddings = xarray.DataArray(np.load(result_paths["embeddings"]), dims=tuple("bcyx"))
     box_prompts = xarray.DataArray(np.load(input_paths["box_prompts"]), dims=tuple("bic"))
-    point_prompts = xarray.DataArray(np.load(input_paths["point_prompts"]), dims=tuple("biic"))
+    point_prompts = xarray.DataArray(np.load(input_paths["point_prompts"]), dims=tuple("bhwc"))
     point_labels = xarray.DataArray(np.load(input_paths["point_labels"]), dims=tuple("bic"))
     mask_prompts = xarray.DataArray(np.load(input_paths["mask_prompts"]), dims=tuple("bicyx"))
 
@@ -303,8 +300,8 @@ def export_sam_model(
                     # NOTE: to support 1 and 3 channels we can add another preprocessing.
                     # Best solution: Have a pre-processing for this! (1C -> RGB)
                     spec.ChannelAxis(channel_names=[spec.Identifier(cname) for cname in "RGB"]),
-                    spec.SpaceInputAxis(id=spec.AxisId("y"), size=spec.ARBITRARY_SIZE),
-                    spec.SpaceInputAxis(id=spec.AxisId("x"), size=spec.ARBITRARY_SIZE),
+                    spec.SpaceInputAxis(id=spec.AxisId("y"), size=ARBITRARY_SIZE),
+                    spec.SpaceInputAxis(id=spec.AxisId("x"), size=ARBITRARY_SIZE),
                 ],
                 test_tensor=spec.FileDescr(source=input_paths["image"]),
                 data=spec.IntervalOrRatioDataDescr(type="uint8")
@@ -318,7 +315,7 @@ def export_sam_model(
                     spec.BatchAxis(size=1),
                     spec.IndexInputAxis(
                         id=spec.AxisId("object"),
-                        size=spec.ARBITRARY_SIZE
+                        size=ARBITRARY_SIZE
                     ),
                     spec.ChannelAxis(channel_names=[spec.Identifier(bname) for bname in "hwxy"]),
                 ],
@@ -334,11 +331,11 @@ def export_sam_model(
                     spec.BatchAxis(size=1),
                     spec.IndexInputAxis(
                         id=spec.AxisId("object"),
-                        size=spec.ARBITRARY_SIZE
+                        size=ARBITRARY_SIZE
                     ),
                     spec.IndexInputAxis(
                         id=spec.AxisId("point"),
-                        size=spec.ARBITRARY_SIZE
+                        size=ARBITRARY_SIZE
                     ),
                     spec.ChannelAxis(channel_names=[spec.Identifier(bname) for bname in "xy"]),
                 ],
@@ -354,11 +351,11 @@ def export_sam_model(
                     spec.BatchAxis(size=1),
                     spec.IndexInputAxis(
                         id=spec.AxisId("object"),
-                        size=spec.ARBITRARY_SIZE
+                        size=ARBITRARY_SIZE
                     ),
                     spec.IndexInputAxis(
                         id=spec.AxisId("point"),
-                        size=spec.ARBITRARY_SIZE
+                        size=ARBITRARY_SIZE
                     ),
                 ],
                 test_tensor=spec.FileDescr(source=input_paths["point_labels"]),
@@ -373,7 +370,7 @@ def export_sam_model(
                     spec.BatchAxis(size=1),
                     spec.IndexInputAxis(
                         id=spec.AxisId("object"),
-                        size=spec.ARBITRARY_SIZE
+                        size=ARBITRARY_SIZE
                     ),
                     spec.ChannelAxis(channel_names=["channel"]),
                     spec.SpaceInputAxis(id=spec.AxisId("y"), size=256),
@@ -495,6 +492,8 @@ def export_sam_model(
             extra_kwargs["id_emoji"] = kwargs["id_emoji"]
         if "uploader" in kwargs:
             extra_kwargs["uploader"] = kwargs["uploader"]
+        if "version" in kwargs:
+            extra_kwargs["version"] = kwargs["version"]
 
         if decoder_path is not None:
             extra_kwargs["attachments"] = [spec.FileDescr(source=decoder_path)]

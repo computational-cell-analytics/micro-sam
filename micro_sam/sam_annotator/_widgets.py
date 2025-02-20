@@ -1,26 +1,31 @@
 """Implements the widgets used in the annotation plugins.
 """
 
-import json
-import multiprocessing as mp
 import os
+import gc
 import pickle
 from pathlib import Path
 from typing import Optional
+import multiprocessing as mp
 
-import elf.parallel
 import h5py
-import napari
-import numpy as np
+import json
 import zarr
 import z5py
+import napari
+import numpy as np
+
+import elf.parallel
 
 from qtpy import QtWidgets
 from qtpy.QtCore import QObject, Signal
 from superqt import QCollapsible
 from magicgui import magic_factory
 from magicgui.widgets import ComboBox, Container, create_widget
-from napari.qt.threading import thread_worker
+# We have disabled the thread workers for now because they result in a
+# massive slowdown in napari >= 0.5.
+# See also https://forum.image.sc/t/napari-thread-worker-leads-to-massive-slowdown/103786
+# from napari.qt.threading import thread_worker
 from napari.utils import progress
 
 from ._state import AnnotatorState
@@ -143,20 +148,20 @@ class _WidgetBase(QtWidgets.QWidget):
         layout.addWidget(dropdown)
         return dropdown, layout
 
-    def _add_shape_param(self, names, values, min_val, max_val, step=1, tooltip=None):
+    def _add_shape_param(self, names, values, min_val, max_val, step=1, title=None, tooltip=None):
         layout = QtWidgets.QHBoxLayout()
 
         x_layout = QtWidgets.QVBoxLayout()
         x_param, _ = self._add_int_param(
             names[0], values[0], min_val=min_val, max_val=max_val, layout=x_layout, step=step,
-            tooltip=tooltip
+            title=title[0] if title is not None else title, tooltip=tooltip
         )
         layout.addLayout(x_layout)
 
         y_layout = QtWidgets.QVBoxLayout()
         y_param, _ = self._add_int_param(
             names[1], values[1], min_val=min_val, max_val=max_val, layout=y_layout, step=step,
-            tooltip=tooltip
+            title=title[1] if title is not None else title, tooltip=tooltip
         )
         layout.addLayout(y_layout)
 
@@ -172,7 +177,7 @@ class _WidgetBase(QtWidgets.QWidget):
         layout.addWidget(label)
 
         path_textbox = QtWidgets.QLineEdit()
-        path_textbox.setText(value)
+        path_textbox.setText(str(value))
         if placeholder is not None:
             path_textbox.setPlaceholderText(placeholder)
         path_textbox.textChanged.connect(lambda val: setattr(self, name, val))
@@ -208,7 +213,7 @@ class _WidgetBase(QtWidgets.QWidget):
         if tooltip:
             directory.setToolTip(tooltip)
         if directory and Path(directory).is_dir():
-            textbox.setText(directory)
+            textbox.setText(str(directory))
         else:
             # Handle the case where the selected path is not a directory
             print("Invalid directory selected. Please try again.")
@@ -220,7 +225,7 @@ class _WidgetBase(QtWidgets.QWidget):
         if tooltip:
             file_path.setToolTip(tooltip)
         if file_path and Path(file_path).is_file():
-            textbox.setText(file_path)
+            textbox.setText(str(file_path))
         else:
             # Handle the case where the selected path is not a file
             print("Invalid file selected. Please try again.")
@@ -311,6 +316,9 @@ def clear(viewer: "napari.viewer.Viewer") -> None:
     """
     vutil.clear_annotations(viewer)
 
+    # Perform garbage collection.
+    gc.collect()
+
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
 def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> None:
@@ -323,8 +331,11 @@ def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> Non
     if all_slices:
         vutil.clear_annotations(viewer)
     else:
-        i = int(viewer.cursor.position[0])
+        i = int(viewer.dims.point[0])
         vutil.clear_annotations_slice(viewer, i=i)
+
+    # Perform garbage collection.
+    gc.collect()
 
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
@@ -339,8 +350,11 @@ def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None
         _reset_tracking_state(viewer)
         vutil.clear_annotations(viewer)
     else:
-        i = int(viewer.cursor.position[0])
+        i = int(viewer.dims.point[0])
         vutil.clear_annotations_slice(viewer, i=i)
+
+    # Perform garbage collection.
+    gc.collect()
 
 
 def _commit_impl(viewer, layer, preserve_committed):
@@ -508,6 +522,9 @@ def commit(
         viewer.layers["auto_segmentation"].refresh()
         _select_layer(viewer, "committed_objects")
 
+    # Perform garbage collection
+    gc.collect()
+
 
 @magic_factory(
     call_button="Commit [C]",
@@ -552,6 +569,9 @@ def commit_track(
     # Reset the tracking state.
     _reset_tracking_state(viewer)
 
+    # Perform garbage collection
+    gc.collect()
+
 
 def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="label"):
     """Create the menu for toggling point prompt labels."""
@@ -580,9 +600,7 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
     call_button="Update settings",
     cache_directory={"mode": "d"},  # choose a directory
 )
-def settings_widget(
-    cache_directory: Optional[Path] = util.get_cache_directory(),
-) -> None:
+def settings_widget(cache_directory: Optional[Path] = util.get_cache_directory()) -> None:
     """Widget to update global micro_sam settings.
 
     Args:
@@ -734,7 +752,9 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
         return None
 
     shape = viewer.layers["current_object"].data.shape[1:]
-    position = viewer.cursor.position
+
+    position_world = viewer.dims.point
+    position = viewer.layers["point_prompts"].world_to_data(position_world)
     z = int(position[0])
 
     point_prompts = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], z)
@@ -773,7 +793,7 @@ def segment_frame(viewer: "napari.viewer.Viewer") -> None:
         return None
     state = AnnotatorState()
     shape = state.image_shape[1:]
-    position = viewer.cursor.position
+    position = viewer.dims.point
     t = int(position[0])
 
     point_prompts = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], i=t, track_id=state.current_track_id)
@@ -866,7 +886,9 @@ class EmbeddingWidget(_WidgetBase):
     def _initialize_image(self):
         state = AnnotatorState()
         image_shape = self.image_selection.get_value().data.shape
+        image_scale = tuple(self.image_selection.get_value().scale)
         state.image_shape = image_shape
+        state.image_scale = image_scale
 
     def _create_image_section(self):
         image_section = QtWidgets.QVBoxLayout()
@@ -922,6 +944,9 @@ class EmbeddingWidget(_WidgetBase):
         # Filter out the decoders from the model list.
         self.model_options = [model for model in self.model_options if not model.endswith("decoder")]
 
+        # NOTE: We currently remove the medical imaging model from displaying it as an option.
+        self.model_options = [model for model in self.model_options if not model.endswith("medical_imaging")]
+
         layout = QtWidgets.QVBoxLayout()
         self.model_dropdown, layout = self._add_choice_param(
             "model_type", self.model_type, self.model_options, title="Model:", layout=layout,
@@ -974,13 +999,14 @@ class EmbeddingWidget(_WidgetBase):
         )
         setting_values.layout().addLayout(layout)
 
-        # Create UI for prefering the decoder.
-        self.prefer_decoder = True
-        widget = self._add_boolean_param(
-            "prefer_decoder", self.prefer_decoder, title="Prefer Segmentation Decoder",
-            tooltip=get_tooltip("embedding", "prefer_decoder")
+        # Create UI for the choice of automatic segmentation mode.
+        self.automatic_segmentation_mode = "auto"
+        auto_seg_options = ["auto", "amg", "ais"]
+        self.automatic_segmentation_mode_dropdown, layout = self._add_choice_param(
+            "automatic_segmentation_mode", self.automatic_segmentation_mode, auto_seg_options,
+            title="automatic segmentation mode", tooltip=get_tooltip("embedding", "automatic_segmentation_mode")
         )
-        setting_values.layout().addWidget(widget)
+        setting_values.layout().addLayout(layout)
 
         settings = _make_collapsible(setting_values, title="Embedding Settings")
         return settings
@@ -1081,6 +1107,9 @@ class EmbeddingWidget(_WidgetBase):
             ndim = image.data.ndim
             state.image_shape = image.data.shape
 
+        # Set layer scale
+        state.image_scale = tuple(image.scale)
+
         # Process tile_shape and halo, set other data.
         tile_shape, halo = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
         save_path = None if self.embeddings_save_path == "" else self.embeddings_save_path
@@ -1089,25 +1118,33 @@ class EmbeddingWidget(_WidgetBase):
         # Set up progress bar and signals for using it within a threadworker.
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
-        @thread_worker()
+        # @thread_worker()
         def compute_image_embedding():
 
             def pbar_init(total, description):
                 pbar_signals.pbar_total.emit(total)
                 pbar_signals.pbar_description.emit(description)
 
+            # Whether to prefer decoder.
+            # With 'amg', it is set to 'False', else it is 'True' for the default 'auto' and 'ais' mode.
+            prefer_decoder = True
+            if self.automatic_segmentation_mode == "amg":
+                prefer_decoder = False
+
             state.initialize_predictor(
                 image_data, model_type=self.model_type, save_path=save_path, ndim=ndim,
                 device=self.device, checkpoint_path=self.custom_weights, tile_shape=tile_shape, halo=halo,
-                prefer_decoder=self.prefer_decoder, pbar_init=pbar_init,
+                prefer_decoder=prefer_decoder, pbar_init=pbar_init,
                 pbar_update=lambda update: pbar_signals.pbar_update.emit(update),
             )
             pbar_signals.pbar_stop.emit()
 
-        worker = compute_image_embedding()
-        worker.returned.connect(self._update_model)
-        worker.start()
-        return worker
+        compute_image_embedding()
+        self._update_model()
+        # worker = compute_image_embedding()
+        # worker.returned.connect(self._update_model)
+        # worker.start()
+        # return worker
 
 
 #
@@ -1196,7 +1233,7 @@ class SegmentNDWidget(_WidgetBase):
         state = AnnotatorState()
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
-        @thread_worker
+        # @thread_worker
         def tracking_impl():
             shape = state.image_shape
 
@@ -1238,15 +1275,17 @@ class SegmentNDWidget(_WidgetBase):
             self._viewer.layers["current_object"].data[seg == 1] = state.current_track_id
             self._viewer.layers["current_object"].refresh()
 
-        worker = tracking_impl()
-        worker.returned.connect(update_segmentation)
-        worker.start()
-        return worker
+        ret_val = tracking_impl()
+        update_segmentation(ret_val)
+        # worker = tracking_impl()
+        # worker.returned.connect(update_segmentation)
+        # worker.start()
+        # return worker
 
     def _run_volumetric_segmentation(self):
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
-        @thread_worker
+        # @thread_worker
         def volumetric_segmentation_impl():
             state = AnnotatorState()
             shape = state.image_shape
@@ -1278,10 +1317,13 @@ class SegmentNDWidget(_WidgetBase):
             self._viewer.layers["current_object"].data = seg
             self._viewer.layers["current_object"].refresh()
 
-        worker = volumetric_segmentation_impl()
-        worker.returned.connect(update_segmentation)
-        worker.start()
-        return worker
+        seg = volumetric_segmentation_impl()
+        self._viewer.layers["current_object"].data = seg
+        self._viewer.layers["current_object"].refresh()
+        # worker = volumetric_segmentation_impl()
+        # worker.returned.connect(update_segmentation)
+        # worker.start()
+        # return worker
 
     def __call__(self):
         if _validate_embeddings(self._viewer):
@@ -1523,7 +1565,7 @@ class AutoSegmentWidget(_WidgetBase):
     def _run_segmentation_2d(self, kwargs, i=None):
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
-        @thread_worker
+        # @thread_worker
         def seg_impl():
             def pbar_init(total, description):
                 pbar_signals.pbar_total.emit(total)
@@ -1549,10 +1591,12 @@ class AutoSegmentWidget(_WidgetBase):
                 self._viewer.layers["auto_segmentation"].data[i] = seg
             self._viewer.layers["auto_segmentation"].refresh()
 
-        worker = seg_impl()
-        worker.returned.connect(update_segmentation)
-        worker.start()
-        return worker
+        seg = seg_impl()
+        update_segmentation(seg)
+        # worker = seg_impl()
+        # worker.returned.connect(update_segmentation)
+        # worker.start()
+        # return worker
 
     # We refuse to run 3D segmentation with the AMG unless we have a GPU or all embeddings
     # are precomputed. Otherwise this would take too long.
@@ -1579,7 +1623,7 @@ class AutoSegmentWidget(_WidgetBase):
 
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
-        @thread_worker
+        # @thread_worker
         def seg_impl():
             segmentation = np.zeros_like(self._viewer.layers["auto_segmentation"].data)
             offset = 0
@@ -1618,10 +1662,12 @@ class AutoSegmentWidget(_WidgetBase):
             self._viewer.layers["auto_segmentation"].data = segmentation
             self._viewer.layers["auto_segmentation"].refresh()
 
-        worker = seg_impl()
-        worker.returned.connect(update_segmentation)
-        worker.start()
-        return worker
+        seg = seg_impl()
+        update_segmentation(seg)
+        # worker = seg_impl()
+        # worker.returned.connect(update_segmentation)
+        # worker.start()
+        # return worker
 
     def __call__(self):
         if _validate_embeddings(self._viewer):
@@ -1642,7 +1688,7 @@ class AutoSegmentWidget(_WidgetBase):
         if self.volumetric and self.apply_to_volume:
             worker = self._run_segmentation_3d(kwargs)
         elif self.volumetric and not self.apply_to_volume:
-            i = int(self._viewer.cursor.position[0])
+            i = int(self._viewer.dims.point[0])
             worker = self._run_segmentation_2d(kwargs, i=i)
         else:
             worker = self._run_segmentation_2d(kwargs)

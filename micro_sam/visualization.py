@@ -1,13 +1,14 @@
+"""Functionality for visualizing image embeddings.
 """
-Functionality for visualizing image embeddings.
-"""
+
 from typing import Tuple
 
 import numpy as np
+from skimage.transform import resize
+
+from nifty.tools import blocking
 
 from elf.segmentation.embeddings import embedding_pca
-from nifty.tools import blocking
-from skimage.transform import resize
 
 from .util import ImageEmbeddings
 
@@ -35,6 +36,7 @@ def compute_pca(embeddings: np.ndarray) -> np.ndarray:
         pca = np.stack(pca)
     else:
         raise ValueError(f"Expect input of ndim 4 or 5, got {embeddings.ndim}")
+
     return pca
 
 
@@ -47,6 +49,7 @@ def _get_crop(embed_shape, shape):
     elif shape[1] > shape[0]:
         aspect_ratio = float(shape[0] / shape[1])
         crop = np.s_[:int(aspect_ratio * embed_shape[0]), :]
+
     return crop
 
 
@@ -101,10 +104,7 @@ def _resize_and_cocatenate(arrays, axis):
         axis_ = arrays[0].ndim + resize_axis
         return tuple(resize_len if i == axis_ else sh for i, sh in enumerate(shape))
 
-    return np.concatenate(
-        [resize(arr, resize_shape(arr.shape)) for arr in arrays],
-        axis=axis
-    )
+    return np.concatenate([resize(arr, resize_shape(arr.shape)) for arr in arrays], axis=axis)
 
 
 def _project_tiled_embeddings(image_embeddings):
@@ -166,4 +166,5 @@ def project_embeddings_for_visualization(
         if embeddings.ndim == 5:
             shape = (embeddings.shape[0],) + shape
         embedding_vis, scale = _project_embeddings(embeddings, shape)
+
     return embedding_vis, scale

@@ -11,8 +11,8 @@ from typing import List, Optional, Union
 import numpy as np
 import pandas as pd
 import imageio.v3 as imageio
-
 from skimage.measure import label
+
 from elf.evaluation import mean_segmentation_accuracy
 
 
@@ -62,9 +62,7 @@ def run_evaluation(
     msas, sa50s, sa75s = _run_evaluation(gt_paths, prediction_paths, verbose=verbose)
 
     results = pd.DataFrame.from_dict({
-        "msa": [np.mean(msas)],
-        "sa50": [np.mean(sa50s)],
-        "sa75": [np.mean(sa75s)],
+        "mSA": [np.mean(msas)], "SA50": [np.mean(sa50s)], "SA75": [np.mean(sa75s)],
     })
 
     if save_path is not None:
@@ -80,6 +78,7 @@ def run_evaluation_for_iterative_prompting(
     experiment_folder: Union[os.PathLike, str],
     start_with_box_prompt: bool = False,
     overwrite_results: bool = False,
+    use_masks: bool = False,
 ) -> pd.DataFrame:
     """Run evaluation for iterative prompt-based segmentation predictions.
 
@@ -88,6 +87,8 @@ def run_evaluation_for_iterative_prompting(
         prediction_root: The folder with the iterative prompt-based instance segmentations to evaluate.
         experiment_folder: The folder where all the experiment results are stored.
         start_with_box_prompt: Whether to evaluate on experiments with iterative prompting starting with box.
+        overwrite_results: Whether to overwrite the results to update them with the new evaluation run.
+        use_masks: Whether to use masks for iterative prompting.
 
     Returns:
         A DataFrame that contains the evaluation results.
@@ -95,7 +96,9 @@ def run_evaluation_for_iterative_prompting(
     assert os.path.exists(prediction_root), prediction_root
 
     # Save the results in the experiment folder
-    result_folder = os.path.join(experiment_folder, "results")
+    result_folder = os.path.join(
+        experiment_folder, "results", "iterative_prompting_" + ("with" if use_masks else "without") + "_mask"
+    )
     os.makedirs(result_folder, exist_ok=True)
 
     csv_path = os.path.join(
@@ -109,7 +112,7 @@ def run_evaluation_for_iterative_prompting(
 
     # If the results have been computed already, it's not needed to re-run it again.
     if os.path.exists(csv_path):
-        print(pd.read_csv(csv_path))
+        print(f"Results with iterative prompting for interactive segmentation are already stored at '{csv_path}'.")
         return
 
     list_of_results = []
@@ -119,7 +122,6 @@ def run_evaluation_for_iterative_prompting(
         pred_paths = sorted(glob(os.path.join(pred_folder, "*")))
         result = run_evaluation(gt_paths=gt_paths, prediction_paths=pred_paths, save_path=None)
         list_of_results.append(result)
-        print(result)
 
     res_df = pd.concat(list_of_results, ignore_index=True)
     res_df.to_csv(csv_path)

@@ -2,28 +2,30 @@
 Helper functions for downloading Segment Anything models and predicting image embeddings.
 """
 
-import hashlib
 import os
 import pickle
+import hashlib
 import warnings
-from collections import OrderedDict
 from pathlib import Path
+from collections import OrderedDict
 from typing import Any, Dict, Iterable, Optional, Tuple, Union
 
-import imageio.v3 as imageio
-import numpy as np
-import pooch
-import torch
-import vigra
-import xxhash
 import zarr
-
-from elf.io import open_file
-from nifty.tools import blocking
+import vigra
+import torch
+import pooch
+import xxhash
+import numpy as np
+import imageio.v3 as imageio
 from skimage.measure import regionprops
 from skimage.segmentation import relabel_sequential
 
+from elf.io import open_file
+
+from nifty.tools import blocking
+
 from .__version__ import __version__
+from . import models as custom_models
 
 try:
     # Avoid import warnigns from mobile_sam
@@ -40,9 +42,9 @@ try:
 except ImportError:
     from tqdm import tqdm
 
-# this is the default model used in micro_sam
-# currently set to the default vit_h
-_DEFAULT_MODEL = "vit_l"
+# This is the default model used in micro_sam
+# Currently it is set to vit_b_lm
+_DEFAULT_MODEL = "vit_b_lm"
 
 # The valid model types. Each type corresponds to the architecture of the
 # vision transformer used within SAM.
@@ -103,24 +105,34 @@ def models():
         "vit_t": "xxh128:8eadbc88aeb9d8c7e0b4b60c3db48bd0",
         # The current version of our models in the modelzoo.
         # LM generalist models:
-        "vit_l_lm": "xxh128:ad3afe783b0d05a788eaf3cc24b308d2",
-        "vit_b_lm": "xxh128:61ce01ea731d89ae41a252480368f886",
-        "vit_t_lm": "xxh128:f90e2ba3dd3d5b935aa870cf2e48f689",
+        "vit_l_lm": "xxh128:fc32ea6f7fcc7eb02737d1304f81f5f2",
+        "vit_b_lm": "xxh128:8fd5806be3c3ba213e19a709d6d1495f",
+        "vit_t_lm": "xxh128:72ec5074774761a6e5c05a08942f981e",
         # EM models:
         "vit_l_em_organelles": "xxh128:096c9695966803ca6fde24f4c1e3c3fb",
         "vit_b_em_organelles": "xxh128:f6f6593aeecd0e15a07bdac86360b6cc",
         "vit_t_em_organelles": "xxh128:253474720c497cce605e57c9b1d18fd9",
+        # Histopathology models:
+        "vit_b_histopathology": "xxh128:ffd1a2cd84570458b257bd95fdd8f974",
+        "vit_l_histopathology": "xxh128:b591833c89754271023e901281dee3f2",
+        "vit_h_histopathology": "xxh128:bd1856dafc156a43fb3aa705f1a6e92e",
+        # Medical Imaging models:
+        "vit_b_medical_imaging": "xxh128:5be672f1458263a9edc9fd40d7f56ac1",
     }
     # Additional decoders for instance segmentation.
     decoder_registry = {
         # LM generalist models:
-        "vit_l_lm_decoder": "xxh128:40c1ae378cfdce24008b9be24889a5b1",
-        "vit_b_lm_decoder": "xxh128:1bac305195777ba7375634ca15a3c370",
-        "vit_t_lm_decoder": "xxh128:82d3604e64f289bb66ec46a5643da169",
+        "vit_l_lm_decoder": "xxh128:779b5a50ecc6d46d495753fba8717f2f",
+        "vit_b_lm_decoder": "xxh128:9f580a96984b3085389ced5d9a4ae75d",
+        "vit_t_lm_decoder": "xxh128:3e914a5f397b0312cdd36813031f8823",
         # EM models:
         "vit_l_em_organelles_decoder": "xxh128:d60fd96bd6060856f6430f29e42568fb",
         "vit_b_em_organelles_decoder": "xxh128:b2d4dcffb99f76d83497d39ee500088f",
         "vit_t_em_organelles_decoder": "xxh128:8f897c7bb93174a4d1638827c4dd6f44",
+        # Histopathology models:
+        "vit_b_histopathology_decoder": "xxh128:6a66194dcb6e36199cbee2214ecf7213",
+        "vit_l_histopathology_decoder": "xxh128:46aab7765d4400e039772d5a50b55c04",
+        "vit_h_histopathology_decoder": "xxh128:3ed9f87e46ad5e16935bd8d722c8dc47",
     }
     registry = {**encoder_registry, **decoder_registry}
 
@@ -129,21 +141,28 @@ def models():
         "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
         "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
         "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
-        "vit_l_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1/files/vit_l.pt",
-        "vit_b_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1/files/vit_b.pt",
-        "vit_t_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1/files/vit_t.pt",
-        "vit_l_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l.pt",
+        "vit_l_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1.1/files/vit_l.pt",
+        "vit_b_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1.1/files/vit_b.pt",
+        "vit_t_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1.1/files/vit_t.pt",
+        "vit_l_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l.pt",  # noqa
         "vit_b_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b.pt",
-        "vit_t_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t.pt",
+        "vit_t_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t.pt",  # noqa
+        "vit_b_histopathology": "https://owncloud.gwdg.de/index.php/s/sBB4H8CTmIoBZsQ/download",
+        "vit_l_histopathology": "https://owncloud.gwdg.de/index.php/s/IZgnn1cpBq2PHod/download",
+        "vit_h_histopathology": "https://owncloud.gwdg.de/index.php/s/L7AcvVz7DoWJ2RZ/download",
+        "vit_b_medical_imaging": "https://owncloud.gwdg.de/index.php/s/AB69HGhj8wuozXQ/download",
     }
 
     decoder_urls = {
-        "vit_l_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1/files/vit_l_decoder.pt",
-        "vit_b_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1/files/vit_b_decoder.pt",
-        "vit_t_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1/files/vit_t_decoder.pt",
-        "vit_l_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l_decoder.pt",
-        "vit_b_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b_decoder.pt",
-        "vit_t_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t_decoder.pt",
+        "vit_l_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1.1/files/vit_l_decoder.pt",  # noqa
+        "vit_b_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1.1/files/vit_b_decoder.pt",  # noqa
+        "vit_t_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1.1/files/vit_t_decoder.pt",  # noqa
+        "vit_l_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l_decoder.pt",  # noqa
+        "vit_b_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b_decoder.pt",  # noqa
+        "vit_t_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t_decoder.pt",  # noqa
+        "vit_b_histopathology_decoder": "https://owncloud.gwdg.de/index.php/s/KO9AWqynI7SFOBj/download",
+        "vit_l_histopathology_decoder": "https://owncloud.gwdg.de/index.php/s/oIs6VSmkOp7XrKF/download",
+        "vit_h_histopathology_decoder": "https://owncloud.gwdg.de/index.php/s/1qAKxy5H0jgwZvM/download",
     }
     urls = {**encoder_urls, **decoder_urls}
 
@@ -200,8 +219,11 @@ def get_device(device: Optional[Union[str, torch.device]] = None) -> Union[str, 
         elif device_type.lower() == "cpu":
             pass  # cpu is always available
         else:
-            raise RuntimeError(f"Unsupported device: {device}\n"
-                               "Please choose from 'cpu', 'cuda', or 'mps'.")
+            raise RuntimeError(
+                f"Unsupported device: {device}\n"
+                "Please choose from 'cpu', 'cuda', or 'mps'."
+            )
+
     return device
 
 
@@ -270,6 +292,9 @@ def get_sam_model(
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
     return_state: bool = False,
+    peft_kwargs: Optional[Dict] = None,
+    flexible_load_checkpoint: bool = False,
+    **model_kwargs,
 ) -> SamPredictor:
     r"""Get the SegmentAnything Predictor.
 
@@ -293,15 +318,18 @@ def get_sam_model(
     https://www.fatiando.org/pooch/latest/api/generated/pooch.os_cache.html
 
     Args:
-        model_type: The SegmentAnything model to use. Will use the standard vit_h model by default.
+        model_type: The Segment Anything model to use. Will use the standard `vit_l` model by default.
             To get a list of all available model names you can call `get_model_names`.
         device: The device for the model. If none is given will use GPU if available.
         checkpoint_path: The path to a file with weights that should be used instead of using the
             weights corresponding to `model_type`. If given, `model_type` must match the architecture
-            corresponding to the weight file. E.g. if you use weights for SAM with vit_b encoder
+            corresponding to the weight file. e.g. if you use weights for SAM with `vit_b` encoder
             then `model_type` must be given as "vit_b".
         return_sam: Return the sam model object as well as the predictor.
         return_state: Return the unpickled checkpoint state.
+        peft_kwargs: Keyword arguments for th PEFT wrapper class.
+        flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
+        model_kwargs: Additional parameters necessary to initialize the Segment Anything model.
 
     Returns:
         The segment anything predictor.
@@ -322,7 +350,9 @@ def get_sam_model(
         # If we have a custom model then we may also have a decoder checkpoint.
         # Download it here, so that we can add it to the state.
         decoder_name = f"{model_type}_decoder"
-        decoder_path = model_registry.fetch(decoder_name, progressbar=True) if decoder_name in model_registry.registry else None
+        decoder_path = model_registry.fetch(
+            decoder_name, progressbar=True
+        ) if decoder_name in model_registry.registry else None
 
     # checkpoint_path has been passed, we use it instead of downloading a model.
     else:
@@ -341,13 +371,36 @@ def get_sam_model(
         raise ValueError(f"Invalid model_type: {abbreviated_model_type}. Expect one of {_MODEL_TYPES}")
     if abbreviated_model_type == "vit_t" and not VIT_T_SUPPORT:
         raise RuntimeError(
-            "mobile_sam is required for the vit-tiny."
+            "'mobile_sam' is required for the vit-tiny. "
             "You can install it via 'pip install git+https://github.com/ChaoningZhang/MobileSAM.git'"
         )
 
     state, model_state = _load_checkpoint(checkpoint_path)
-    sam = sam_model_registry[abbreviated_model_type]()
-    sam.load_state_dict(model_state)
+
+    # Whether to update parameters necessary to initialize the model
+    if model_kwargs:  # Checks whether model_kwargs have been provided or not
+        if abbreviated_model_type == "vit_t":
+            raise ValueError("'micro-sam' does not support changing the model parameters for 'mobile-sam'.")
+        sam = custom_models.sam_model_registry[abbreviated_model_type](**model_kwargs)
+
+    else:
+        sam = sam_model_registry[abbreviated_model_type]()
+
+    # Whether to use Parameter Efficient Finetuning methods to wrap around Segment Anything.
+    # Overwrites the SAM model by freezing the backbone and allow PEFT.
+    if peft_kwargs and isinstance(peft_kwargs, dict):
+        # NOTE: We bump out 'quantize' parameter, if found, as we do not quantize in inference.
+        peft_kwargs.pop("quantize", None)
+
+        if abbreviated_model_type == "vit_t":
+            raise ValueError("'micro-sam' does not support parameter efficient finetuning for 'mobile-sam'.")
+
+        sam = custom_models.peft_sam.PEFT_Sam(sam, **peft_kwargs).sam
+    # In case the model checkpoints have some issues when it is initialized with different parameters than default.
+    if flexible_load_checkpoint:
+        sam = _handle_checkpoint_loading(sam, model_state)
+    else:
+        sam.load_state_dict(model_state)
     sam.to(device=device)
 
     predictor = SamPredictor(sam)
@@ -357,7 +410,7 @@ def get_sam_model(
 
     # Add the decoder to the state if we have one and if the state is returned.
     if decoder_path is not None and return_state:
-        state["decoder_state"] = torch.load(decoder_path, map_location=device)
+        state["decoder_state"] = torch.load(decoder_path, map_location=device, weights_only=False)
 
     if return_sam and return_state:
         return predictor, sam, state
@@ -368,19 +421,55 @@ def get_sam_model(
     return predictor
 
 
+def _handle_checkpoint_loading(sam, model_state):
+    # Whether to handle the mismatch issues in a bit more elegant way.
+    # eg. while training for multi-class semantic segmentation in the mask encoder,
+    # parameters are updated - leading to "size mismatch" errors
+
+    new_state_dict = {}  # for loading matching parameters
+    mismatched_layers = []  # for tracking mismatching parameters
+
+    reference_state = sam.state_dict()
+
+    for k, v in model_state.items():
+        if k in reference_state:  # This is done to get rid of unwanted layers from pretrained SAM.
+            if reference_state[k].size() == v.size():
+                new_state_dict[k] = v
+            else:
+                mismatched_layers.append(k)
+
+    reference_state.update(new_state_dict)
+
+    if len(mismatched_layers) > 0:
+        warnings.warn(f"The layers with size mismatch: {mismatched_layers}")
+
+    for mlayer in mismatched_layers:
+        if 'weight' in mlayer:
+            torch.nn.init.kaiming_uniform_(reference_state[mlayer])
+        elif 'bias' in mlayer:
+            reference_state[mlayer].zero_()
+
+    sam.load_state_dict(reference_state)
+
+    return sam
+
+
 def export_custom_sam_model(
     checkpoint_path: Union[str, os.PathLike],
     model_type: str,
     save_path: Union[str, os.PathLike],
+    with_segmentation_decoder: bool = False,
 ) -> None:
-    """Export a finetuned segment anything model to the standard model format.
+    """Export a finetuned Segment Anything Model to the standard model format.
 
     The exported model can be used by the interactive annotation tools in `micro_sam.annotator`.
 
     Args:
         checkpoint_path: The path to the corresponding checkpoint if not in the default model folder.
-        model_type: The SegmentAnything model type corresponding to the checkpoint (vit_h, vit_b, vit_l or vit_t).
+        model_type: The Segment Anything Model type corresponding to the checkpoint (vit_h, vit_b, vit_l or vit_t).
         save_path: Where to save the exported model.
+        with_segmentation_decoder: Whether to store the decoder state in the model checkpoint as well.
+            If set to 'True', the model checkpoint will not be compatible with other tools besides 'micro-sam'.
     """
     _, state = get_sam_model(
         model_type=model_type, checkpoint_path=checkpoint_path, return_state=True, device="cpu",
@@ -390,7 +479,65 @@ def export_custom_sam_model(
     model_state = OrderedDict(
         [(k[len(prefix):] if k.startswith(prefix) else k, v) for k, v in model_state.items()]
     )
-    torch.save(model_state, save_path)
+
+    # Store the 'decoder_state' as well, if desired.
+    if with_segmentation_decoder:
+        if "decoder_state" not in state:
+            raise RuntimeError(f"'decoder_state' is not found in the model at '{checkpoint_path}'.")
+        decoder_state = state["decoder_state"]
+        save_state = {"model_state": model_state, "decoder_state": decoder_state}
+    else:
+        save_state = model_state
+
+    torch.save(save_state, save_path)
+
+
+def export_custom_qlora_model(
+    checkpoint_path: Union[str, os.PathLike],
+    finetuned_path: Union[str, os.PathLike],
+    model_type: str,
+    save_path: Union[str, os.PathLike],
+) -> None:
+    """Export a finetuned Segment Anything Model, in QLoRA style, to LoRA-style checkpoint format.
+
+    The exported model can be used with the LoRA backbone by passing the relevant `peft_kwargs` to `get_sam_model`.
+
+    Args:
+        checkpoint_path: The path to the base foundation model from which the new model has been finetuned.
+        finetuned_path: The path to the new finetuned model, using QLoRA.
+        model_type: The Segment Anything Model type corresponding to the checkpoint.
+        save_path: Where to save the exported model.
+    """
+    # Step 1: Get the base SAM model: used to start finetuning from.
+    _, sam = get_sam_model(
+        model_type=model_type, checkpoint_path=checkpoint_path, return_sam=True,
+    )
+
+    # Step 2: Load the QLoRA-style finetuned model.
+    ft_state, ft_model_state = _load_checkpoint(finetuned_path)
+
+    # Step 3: Get LoRA weights from QLoRA and retain all original parameters from the base SAM model.
+    updated_model_state = {}
+
+    # - At first, we get all LoRA layers from the QLoRA-style finetuned model checkpoint.
+    for k, v in ft_model_state.items():
+        if k.find("w_b_linear") != -1 or k.find("w_a_linear") != -1:
+            updated_model_state[k] = v
+
+    # - Next, we get all the remaining parameters from the base SAM model.
+    for k, v in sam.state_dict().items():
+        if k.find("attn.qkv.") != -1:
+            k = k.replace("qkv", "qkv.qkv_proj")
+            updated_model_state[k] = v
+        else:
+
+            updated_model_state[k] = v
+
+    # - Finally, we replace the old model state with the new one (to retain other relevant stuff)
+    ft_state['model_state'] = updated_model_state
+
+    # Step 4: Store the new "state" to "save_path"
+    torch.save(ft_state, save_path)
 
 
 def get_model_names() -> Iterable:
@@ -412,12 +559,14 @@ def _to_image(input_):
         input_ = input_ / input_.max()
         # then bring to [0, 255] and cast to uint8
         input_ = (input_ * 255).astype("uint8")
+
     if input_.ndim == 2:
         image = np.concatenate([input_[..., None]] * 3, axis=-1)
     elif input_.ndim == 3 and input_.shape[-1] == 3:
         image = input_
     else:
         raise ValueError(f"Invalid input image of shape {input_.shape}. Expect either 2D grayscale or 3D RGB image.")
+
     return image
 
 
@@ -449,9 +598,8 @@ def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init
         ds.attrs["input_size"] = input_size
         pbar_update(1)
 
-    _write_embedding_signature(
-        f, input_, predictor, tile_shape, halo, input_size=None, original_size=None,
-    )
+    _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size=None, original_size=None)
+
     return features
 
 
@@ -497,9 +645,7 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init
         ds.attrs["original_size"] = original_size
         ds.attrs["input_size"] = input_size
 
-    _write_embedding_signature(
-        f, input_, predictor, tile_shape, halo, input_size=None, original_size=None,
-    )
+    _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size=None, original_size=None)
 
     return features
 
@@ -510,9 +656,7 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
         # In this case we load the embeddings.
         features = f["features"][:]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
-        image_embeddings = {
-            "features": features, "input_size": input_size, "original_size": original_size,
-        }
+        image_embeddings = {"features": features, "input_size": input_size, "original_size": original_size}
         # Also set the embeddings.
         set_precomputed(predictor, image_embeddings)
         return image_embeddings
@@ -528,16 +672,12 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
 
     # Save the embeddings if we have a save_path.
     if save_path is not None:
-        f.create_dataset(
-            "features", data=features, compression="gzip", chunks=features.shape
-        )
+        f.create_dataset("features", data=features, compression="gzip", chunks=features.shape)
         _write_embedding_signature(
             f, input_, predictor, tile_shape=None, halo=None, input_size=input_size, original_size=original_size,
         )
 
-    image_embeddings = {
-        "features": features, "input_size": input_size, "original_size": original_size,
-    }
+    image_embeddings = {"features": features, "input_size": input_size, "original_size": original_size}
     return image_embeddings
 
 
@@ -546,9 +686,7 @@ def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_up
     if "input_size" in f.attrs:
         features = f["features"]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
-        image_embeddings = {
-            "features": features, "input_size": input_size, "original_size": original_size,
-        }
+        image_embeddings = {"features": features, "input_size": input_size, "original_size": original_size}
         return image_embeddings
 
     # Otherwise compute them. Note: saving happens automatically because we
@@ -564,9 +702,7 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_u
         # In this case we load the embeddings.
         features = f["features"] if lazy_loading else f["features"][:]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
-        image_embeddings = {
-            "features": features, "input_size": input_size, "original_size": original_size,
-        }
+        image_embeddings = {"features": features, "input_size": input_size, "original_size": original_size}
         return image_embeddings
 
     # Otherwise we have to compute the embeddings.
@@ -627,9 +763,7 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_up
     if "input_size" in f.attrs:
         features = f["features"]
         original_size, input_size = f.attrs["original_size"], f.attrs["input_size"]
-        image_embeddings = {
-            "features": features, "input_size": input_size, "original_size": original_size,
-        }
+        image_embeddings = {"features": features, "input_size": input_size, "original_size": original_size}
         return image_embeddings
 
     # Otherwise compute them. Note: saving happens automatically because we
@@ -648,6 +782,7 @@ def _compute_data_signature(input_):
 def _get_embedding_signature(input_, predictor, tile_shape, halo, data_signature=None):
     if data_signature is None:
         data_signature = _compute_data_signature(input_)
+
     signature = {
         "data_signature": data_signature,
         "tile_shape": tile_shape if tile_shape is None else list(tile_shape),
@@ -675,6 +810,7 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
     # In this case the embeddings will be computed and we don't need to perform any checks.
     if "input_size" not in f.attrs:
         return
+
     signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
     for key, val in signature.items():
         # Check whether the key is missing from the attrs or if the value is not matching.
@@ -803,10 +939,7 @@ def precompute_image_embeddings(
 
 
 def set_precomputed(
-    predictor: SamPredictor,
-    image_embeddings: ImageEmbeddings,
-    i: Optional[int] = None,
-    tile_id: Optional[int] = None,
+    predictor: SamPredictor, image_embeddings: ImageEmbeddings, i: Optional[int] = None, tile_id: Optional[int] = None,
 ) -> SamPredictor:
     """Set the precomputed image embeddings for a predictor.
 
@@ -843,6 +976,7 @@ def set_precomputed(
     else:
         predictor.features = features[i].to(device) if torch.is_tensor(features) else \
             torch.from_numpy(features[i]).to(device)
+
     predictor.original_size = image_embeddings["original_size"]
     predictor.input_size = image_embeddings["input_size"]
     predictor.is_image_set = True
@@ -873,16 +1007,15 @@ def compute_iou(mask1: np.ndarray, mask2: np.ndarray) -> float:
 
 
 def get_centers_and_bounding_boxes(
-    segmentation: np.ndarray,
-    mode: str = "v"
+    segmentation: np.ndarray, mode: str = "v"
 ) -> Tuple[Dict[int, np.ndarray], Dict[int, tuple]]:
     """Returns the center coordinates of the foreground instances in the ground-truth.
 
     Args:
         segmentation: The segmentation.
         mode: Determines the functionality used for computing the centers.
-        If 'v', the object's eccentricity centers computed by vigra are used.
-        If 'p' the object's centroids computed by skimage are used.
+            If 'v', the object's eccentricity centers computed by vigra are used.
+            If 'p' the object's centroids computed by skimage are used.
 
     Returns:
         A dictionary that maps object ids to the corresponding centroid.
@@ -904,11 +1037,7 @@ def get_centers_and_bounding_boxes(
     return center_coordinates, bbox_coordinates
 
 
-def load_image_data(
-    path: str,
-    key: Optional[str] = None,
-    lazy_loading: bool = False
-) -> np.ndarray:
+def load_image_data(path: str, key: Optional[str] = None, lazy_loading: bool = False) -> np.ndarray:
     """Helper function to load image data from file.
 
     Args:
@@ -926,13 +1055,11 @@ def load_image_data(
             image_data = f[key]
             if not lazy_loading:
                 image_data = image_data[:]
+
     return image_data
 
 
-def segmentation_to_one_hot(
-    segmentation: np.ndarray,
-    segmentation_ids: Optional[np.ndarray] = None,
-) -> torch.Tensor:
+def segmentation_to_one_hot(segmentation: np.ndarray, segmentation_ids: Optional[np.ndarray] = None) -> torch.Tensor:
     """Convert the segmentation to one-hot encoded masks.
 
     Args:
@@ -947,7 +1074,12 @@ def segmentation_to_one_hot(
         n_ids = int(segmentation.max())
 
     else:
-        assert segmentation_ids[0] != 0, "No objects were found."
+        msg = "No foreground objects were found."
+        if len(segmentation_ids) == 0:  # The list should not be completely empty.
+            raise RuntimeError(msg)
+
+        if 0 in segmentation_ids:  # The list should not have 'zero' as a value.
+            raise RuntimeError(msg)
 
         # the segmentation ids have to be sorted
         segmentation_ids = np.sort(segmentation_ids)
