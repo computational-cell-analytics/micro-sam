@@ -1,6 +1,7 @@
 import os
 from math import ceil, floor
-from typing import Dict, List, Optional, Union, Tuple
+from functools import partial
+from typing import Dict, List, Optional, Union, Tuple, Callable
 
 import numpy as np
 
@@ -37,6 +38,34 @@ def require_8bit(x):
     if x.max() < 1:
         x = x * 255
     return x
+
+
+def _raw_transform(image: np.ndarray, raw_trafo: Callable) -> np.ndarray:
+    return raw_trafo(image) * 255
+
+
+def get_raw_transform(preprocess: Optional[str] = None) -> Optional[Callable]:
+    """Transformation functions to normalize inputs.
+
+    Args:
+        preprocess: By default, the transformation function is set to 'None'.
+            The user can choose from 'normalize_minmax' / 'normalize_percentile'.
+
+    Returns:
+        The transformation function.
+    """
+
+    if preprocess is None:
+        return None
+    else:
+        if preprocess == "normalize_minmax":
+            raw_trafo = normalize
+        elif preprocess == "normalize_percentile":
+            raw_trafo = normalize_percentile
+        else:
+            raise ValueError(f"'{preprocess}' is not a supported preprocessing.")
+
+        return partial(_raw_transform, raw_trafo=raw_trafo)
 
 
 def get_trainable_sam_model(

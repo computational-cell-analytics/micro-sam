@@ -29,7 +29,7 @@ from . import sam_trainer as trainers
 from ..instance_segmentation import get_unetr
 from . import joint_sam_trainer as joint_trainers
 from ..util import get_device, get_model_names, export_custom_sam_model
-from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit
+from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit, get_raw_transform
 
 
 FilePath = Union[str, os.PathLike]
@@ -487,6 +487,7 @@ def default_sam_dataset(
             with_channels=with_channels,
             ndim=2,
             is_seg_dataset=is_seg_dataset,
+            raw_transform=raw_transform,
             **kwargs
         )
         n_samples = max(len(loader), 100 if is_train else 5)
@@ -779,6 +780,9 @@ def main():
         "--batch_size", type=int, default=1,
         help="The choice of batch size for training the Segment Anything Model. By default, trains on batch size 1."
     )
+    parser.add_argument(
+        "--preprocess", type=str, default=None, help="Whether to normalize the raw inputs."
+    )
 
     args = parser.parse_args()
 
@@ -802,6 +806,9 @@ def main():
 
     # 2. Prepare the dataloaders.
 
+    # If the user wants to preprocess the inputs, we allow the possibility to do so.
+    _raw_transform = get_raw_transform(args.preprocess)
+
     # Get the dataset with files for training.
     dataset = default_sam_dataset(
         raw_paths=train_images,
@@ -810,6 +817,7 @@ def main():
         label_key=train_gt_key,
         patch_shape=patch_shape,
         with_segmentation_decoder=with_segmentation_decoder,
+        raw_transform=_raw_transform,
     )
 
     # If val images are not exclusively provided, we create a val split from the training data.
@@ -828,6 +836,7 @@ def main():
             label_key=val_gt_key,
             patch_shape=patch_shape,
             with_segmentation_decoder=with_segmentation_decoder,
+            raw_transform=_raw_transform,
         )
 
     # Get the dataloaders from the datasets.
@@ -844,8 +853,6 @@ def main():
 
     if model_type is None:  # If user does not specify the model, we use the default model corresponding to the config.
         model_type = CONFIGURATIONS[config]["model_type"]
-
-    print(model_type, config)
 
     train_sam_for_configuration(
         name=checkpoint_name,
