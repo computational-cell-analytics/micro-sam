@@ -397,7 +397,9 @@ def automatic_3d_segmentation(
         The segmentation.
     """
     offset = 0
-    segmentation = np.zeros(volume.shape, dtype="uint32")
+    segmentation = np.zeros(
+        volume.shape if volume.ndim == 3 else volume.shape[:3], dtype="uint32"
+    )
 
     min_object_size = kwargs.pop("min_object_size", 0)
     image_embeddings = util.precompute_image_embeddings(
@@ -416,7 +418,16 @@ def automatic_3d_segmentation(
         if len(seg) == 0:
             continue
         else:
-            seg = mask_data_to_segmentation(seg, with_background=with_background, min_object_size=min_object_size)
+            if isinstance(seg, list):
+                # whether the predictions from 'generate' are list of dict,
+                # which contains additional info req. for post-processing, eg., area per object.
+                if len(seg) == 0:
+                    seg = np.zeros(volume.shape[:3], dtype="uint32")  # in 3d, it's always color-channels last.
+                else:
+                    seg = mask_data_to_segmentation(
+                        seg, with_background=with_background, min_object_size=min_object_size
+                    )
+
             max_z = seg.max()
             if max_z == 0:
                 continue
