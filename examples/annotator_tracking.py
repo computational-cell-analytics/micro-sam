@@ -22,17 +22,22 @@ def track_ctc_data(use_finetuned_model):
     if use_finetuned_model:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-ctc-vit_b_lm.zarr")
         model_type = "vit_b_lm"
+        precompute_amg_state = True
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-ctc.zarr")
         model_type = "vit_h"
+        precompute_amg_state = False
 
     # start the annotator with cached embeddings
-    annotator_tracking(timeseries, embedding_path=embedding_path, model_type=model_type)
+    annotator_tracking(
+        timeseries, embedding_path=embedding_path, model_type=model_type,
+        precompute_amg_state=precompute_amg_state,
+    )
 
 
 def main():
     # Whether to use the fine-tuned SAM model.
-    use_finetuned_model = False
+    use_finetuned_model = True
     track_ctc_data(use_finetuned_model)
 
 
