@@ -183,12 +183,14 @@
 </span><span id="L-114"><a href="#L-114"><span class="linenos">114</span></a>        <span class="n">pixel_mean</span><span class="o">=</span><span class="p">[</span><span class="mf">123.675</span><span class="p">,</span> <span class="mf">116.28</span><span class="p">,</span> <span class="mf">103.53</span><span class="p">],</span>
 </span><span id="L-115"><a href="#L-115"><span class="linenos">115</span></a>        <span class="n">pixel_std</span><span class="o">=</span><span class="p">[</span><span class="mf">58.395</span><span class="p">,</span> <span class="mf">57.12</span><span class="p">,</span> <span class="mf">57.375</span><span class="p">],</span>
 </span><span id="L-116"><a href="#L-116"><span class="linenos">116</span></a>    <span class="p">)</span>
-</span><span id="L-117"><a href="#L-117"><span class="linenos">117</span></a>    <span class="n">sam</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
-</span><span id="L-118"><a href="#L-118"><span class="linenos">118</span></a>    <span class="k">if</span> <span class="n">checkpoint</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-119"><a href="#L-119"><span class="linenos">119</span></a>        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">checkpoint</span><span class="p">,</span> <span class="s2">&quot;rb&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-</span><span id="L-120"><a href="#L-120"><span class="linenos">120</span></a>            <span class="n">state_dict</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
-</span><span id="L-121"><a href="#L-121"><span class="linenos">121</span></a>        <span class="n">sam</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">state_dict</span><span class="p">)</span>
-</span><span id="L-122"><a href="#L-122"><span class="linenos">122</span></a>    <span class="k">return</span> <span class="n">sam</span>
+</span><span id="L-117"><a href="#L-117"><span class="linenos">117</span></a>
+</span><span id="L-118"><a href="#L-118"><span class="linenos">118</span></a>    <span class="n">sam</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
+</span><span id="L-119"><a href="#L-119"><span class="linenos">119</span></a>    <span class="k">if</span> <span class="n">checkpoint</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-120"><a href="#L-120"><span class="linenos">120</span></a>        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">checkpoint</span><span class="p">,</span> <span class="s2">&quot;rb&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+</span><span id="L-121"><a href="#L-121"><span class="linenos">121</span></a>            <span class="n">state_dict</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+</span><span id="L-122"><a href="#L-122"><span class="linenos">122</span></a>        <span class="n">sam</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">state_dict</span><span class="p">)</span>
+</span><span id="L-123"><a href="#L-123"><span class="linenos">123</span></a>
+</span><span id="L-124"><a href="#L-124"><span class="linenos">124</span></a>    <span class="k">return</span> <span class="n">sam</span>
 </span></pre></div>
 
 

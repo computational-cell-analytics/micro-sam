@@ -53,6 +53,7 @@
     <li><a href="#choosing-a-model">Choosing a Model</a></li>
     <li><a href="#other-models">Other Models</a></li>
   </ul></li>
+  <li><a href="#community-data-submissions">Community Data Submissions</a></li>
   <li><a href="#faq">FAQ</a>
   <ul>
     <li><a href="#installation-questions">Installation questions</a></li>
@@ -716,12 +717,12 @@ They are available in the <a href="https://bioimage.io/#/">BioImage.IO Model Zoo
 <li><code>vit_l</code>: Default Segment Anything model with ViT Large backbone.</li>
 <li><code>vit_b</code>: Default Segment Anything model with ViT Base backbone.</li>
 <li><code>vit_t</code>: Segment Anything model with ViT Tiny backbone. From the <a href="https://arxiv.org/abs/2306.14289">Mobile SAM publication</a>.</li>
-<li><code>vit_l_lm</code>: Finetuned Segment Anything model for cells and nuclei in light microscopy data with ViT Large backbone. (<a href="https://doi.org/10.5281/zenodo.11111176">Zenodo</a>) (<a href="TODO">idealistic-rat on BioImage.IO</a>)</li>
-<li><code>vit_b_lm</code>: Finetuned Segment Anything model for cells and nuclei in light microscopy data with ViT Base backbone. (<a href="https://zenodo.org/doi/10.5281/zenodo.11103797">Zenodo</a>) (<a href="TODO">diplomatic-bug on BioImage.IO</a>)</li>
-<li><code>vit_t_lm</code>: Finetuned Segment Anything model for cells and nuclei in light microscopy data with ViT Tiny backbone. (<a href="https://doi.org/10.5281/zenodo.11111328">Zenodo</a>) (<a href="TODO">faithful-chicken BioImage.IO</a>)</li>
-<li><code>vit_l_em_organelles</code>: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with ViT Large backbone. (<a href="https://doi.org/10.5281/zenodo.11111054">Zenodo</a>) (<a href="TODO">humorous-crab on BioImage.IO</a>)</li>
-<li><code>vit_b_em_organelles</code>: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with ViT Base backbone. (<a href="https://doi.org/10.5281/zenodo.11111293">Zenodo</a>) (<a href="TODO">noisy-ox on BioImage.IO</a>)</li>
-<li><code>vit_t_em_organelles</code>: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with ViT Tiny backbone. (<a href="https://doi.org/10.5281/zenodo.11110950">Zenodo</a>) (<a href="TODO">greedy-whale on BioImage.IO</a>)</li>
+<li><code>vit_l_lm</code>: Finetuned Segment Anything model for cells and nuclei in light microscopy data with ViT Large backbone. (<a href="https://doi.org/10.5281/zenodo.11111176">Zenodo</a>) (<a href="https://bioimage.io/#/?id=idealistic-rat">idealistic-rat on BioImage.IO</a>)</li>
+<li><code>vit_b_lm</code>: Finetuned Segment Anything model for cells and nuclei in light microscopy data with ViT Base backbone. (<a href="https://zenodo.org/doi/10.5281/zenodo.11103797">Zenodo</a>) (<a href="https://bioimage.io/#/?id=diplomatic-bug">diplomatic-bug on BioImage.IO</a>)</li>
+<li><code>vit_t_lm</code>: Finetuned Segment Anything model for cells and nuclei in light microscopy data with ViT Tiny backbone. (<a href="https://doi.org/10.5281/zenodo.11111328">Zenodo</a>) (<a href="https://bioimage.io/#/?id=faithful-chicken">faithful-chicken BioImage.IO</a>)</li>
+<li><code>vit_l_em_organelles</code>: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with ViT Large backbone. (<a href="https://doi.org/10.5281/zenodo.11111054">Zenodo</a>) (<a href="https://bioimage.io/#/?id=humorous-crab">humorous-crab on BioImage.IO</a>)</li>
+<li><code>vit_b_em_organelles</code>: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with ViT Base backbone. (<a href="https://doi.org/10.5281/zenodo.11111293">Zenodo</a>) (<a href="https://bioimage.io/#/?id=noisy-ox">noisy-ox on BioImage.IO</a>)</li>
+<li><code>vit_t_em_organelles</code>: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with ViT Tiny backbone. (<a href="https://doi.org/10.5281/zenodo.11110950">Zenodo</a>) (<a href="https://bioimage.io/#/?id=greedy-whale">greedy-whale on BioImage.IO</a>)</li>
 </ul>
 
 <p>See the two figures below of the improvements through the finetuned model for LM and EM data. </p>
@@ -755,6 +756,16 @@ We are working on further improving these models and adding new models for other
 
 <p>Previous versions of our models are available on Zenodo:</p>
 
+<h3 id="v2-models">v2 Models</h3>
+
+<ul>
+<li>vit_t_lm (<a href="https://zenodo.org/records/11111329">Zenodo</a>): the ViT-Tiny model for segmenting cells and nuclei in LM.</li>
+<li>vit_b_lm (<a href="https://zenodo.org/records/11103798">Zenodo</a>): the ViT-Base model for segmenting cells and nuclei in LM.</li>
+<li>vit_l_lm (<a href="https://zenodo.org/records/11111177">Zenodo</a>): the ViT-Large mopdel for segmenting cells and nuclei in LM.</li>
+</ul>
+
+<h3 id="v1-models">v1 Models</h3>
+
 <ul>
 <li><a href="https://zenodo.org/records/10524894">vit_b_em_boundaries</a>: for segmenting compartments delineated by boundaries such as cells or neurites in EM.</li>
 <li><a href="https://zenodo.org/records/10524828">vit_b_em_organelles</a>: for segmenting mitochondria, nuclei or other organelles in EM.</li>
@@ -778,6 +789,50 @@ We are working on further improving these models and adding new models for other
 <li><a href="https://doi.org/10.5281/zenodo.11117559">The LM Generalist Model with ViT-H backend (vit_h_lm)</a></li>
 <li><a href="https://doi.org/10.5281/zenodo.11117495">The EM Generalist Model with ViT-H backend (vit_h_em_organelles)</a></li>
 <li><a href="https://doi.org/10.5281/zenodo.11117615">Finetuned Models for the user studies</a></li>
+</ul>
+
+<h1 id="community-data-submissions">Community Data Submissions</h1>
+
+<p>We are looking to further improve the <code><a href="">micro_sam</a></code> models by training on more diverse microscopy data.
+For this, we want to collect data where the models don't work well yet, and need your help!</p>
+
+<p>If you are using <code><a href="">micro_sam</a></code> for a task where the current models don't do a good job, but you have annotated data and successfully fine-tuned a model, then you can submit this data to us, so that we can use it to train our next version of improved microscopy models.
+To do this, please either create an <a href="https://github.com/computational-cell-analytics/micro-sam/issues">issue on github</a> or a post on <a href="https://forum.image.sc/">image.sc</a> and:</p>
+
+<ul>
+<li>Use a title "Data submission for micro_sam: ..." ("..." should be a title for your data, e.g. "cells in brightfield microscopy")
+<ul>
+<li>On image.sc use the tag <code>micro-sam</code>.</li>
+</ul></li>
+<li>Briefly describe your data and add an image that shows the microscopy data and the segmentation masks you have.</li>
+<li>Make sure to describe:
+<ul>
+<li>The imaging modality and the structure(s) that you have segmented.</li>
+<li>The <code><a href="">micro_sam</a></code> model you have used for finetuning and segmenting the data.
+<ul>
+<li>You can also submit data that was not segmented with <code><a href="">micro_sam</a></code>, as long as you have sufficient annotations we are happy to include it!</li>
+</ul></li>
+<li>How many images and annotations you have / can submit and how you have created the annotations.
+<ul>
+<li>You should submit at least 5 images / 100 annotated objects to have a meaningful impact. If you are unsure if you have enough data please go ahead and create the issue / post and we can discuss the details.</li>
+</ul></li>
+<li>Which data-format your images and annotations are stored in. We recommend using either <code>tif</code> images or <code>ome.zarr</code> files.</li>
+</ul></li>
+<li>Please indicate that you are willing to share the data for training purpose (see also next paragraph).</li>
+</ul>
+
+<p>Once you have created the post / issue, we will check if your data is suitable for submission or discuss with you how it could be extended to be suitable. Then:</p>
+
+<ul>
+<li>We will share an agreement for data sharing. You can find <strong>a draft</strong> <a href="https://docs.google.com/document/d/1X3VOf1qtJ5WtwDGcpGYZ-kfr3E2paIEquyuCtJnF_I0/edit?usp=sharing">here</a>.</li>
+<li>You will be able to choose how you want to submit / publish your data.
+<ul>
+<li>Share it under a CC0 license. In this case, we will use the data for re-training and also make it publicly available as soon as the next model versions become available.</li>
+<li>Share it for training with the option to publish it later. For example, if your data is unpublished and you want to only published once the respective publication is available. In this case, we will use the data for re-training, but not make it freely available yet. We will check with you peridiodically to see if your data can now be published.</li>
+<li>Share it for training only. In this case, we will re-train the model on it, but not make it publicly available.</li>
+</ul></li>
+<li>We encourage you to choose the first option (making the data available under CC0).</li>
+<li>We will then send you a link to upload your data, after you have agreed to these terms.</li>
 </ul>
 
 <h1 id="faq">FAQ</h1>
@@ -983,6 +1038,11 @@ c) try using a different model and change the projection mode for 3d segmentatio
 <h3 id="16-some-parameters-in-the-annotator-finetuning-widget-are-unclear-to-me">16. Some parameters in the annotator / finetuning widget are unclear to me.</h3>
 
 <p><code>micro-sam</code> has tooltips for menu options across all widgets (i.e. an information window will appear if you hover over name of the menu), which briefly describe the utility of the specific menu option.</p>
+
+<h3 id="17-i-want-to-use-an-older-version-of-the-pretrained-models">17. I want to use an older version of the pretrained models.</h3>
+
+<p>The older model versions are still available on zenodo. You can find the download links for all of them <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#other-models">here</a>.
+You can then use those models with the custom checkpoint option, see answer 15 for details.</p>
 
 <h2 id="fine-tuning-questions">Fine-tuning questions</h2>
 
@@ -1344,16 +1404,17 @@ In order to use BAND and start <code><a href="">micro_sam</a></code> on it follo
 </span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="sd">.. include:: ../doc/cli_tools.md</span>
 </span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a><span class="sd">.. include:: ../doc/python_library.md</span>
 </span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="sd">.. include:: ../doc/finetuned_models.md</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="sd">.. include:: ../doc/faq.md</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="sd">.. include:: ../doc/contributing.md</span>
-</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="sd">.. include:: ../doc/band.md</span>
-</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a>
-</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a><span class="kn">import</span> <span class="nn">os</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>
-</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a><span class="kn">from</span> <span class="nn">.__version__</span> <span class="kn">import</span> <span class="n">__version__</span>
-</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a>
-</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;PYTORCH_ENABLE_MPS_FALLBACK&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;1&quot;</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="sd">.. include:: ../doc/data_submission.md</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="sd">.. include:: ../doc/faq.md</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="sd">.. include:: ../doc/contributing.md</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="sd">.. include:: ../doc/band.md</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>
+</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a><span class="kn">import</span> <span class="nn">os</span>
+</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>
+</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a><span class="kn">from</span> <span class="nn">.__version__</span> <span class="kn">import</span> <span class="n">__version__</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>
+</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;PYTORCH_ENABLE_MPS_FALLBACK&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;1&quot;</span>
 </span></pre></div>
 
 
