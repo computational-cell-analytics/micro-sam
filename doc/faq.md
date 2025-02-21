@@ -162,6 +162,11 @@ NOTE: It is important to choose the correct model type when you opt for the abov
 `micro-sam` has tooltips for menu options across all widgets (i.e. an information window will appear if you hover over name of the menu), which briefly describe the utility of the specific menu option.
 
 
+### 17. I want to use an older version of the pretrained models.
+The older model versions are still available on zenodo. You can find the download links for all of them [here](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#other-models).
+You can then use those models with the custom checkpoint option, see answer 15 for details.
+
+
 ## Fine-tuning questions
 
 
