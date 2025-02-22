@@ -101,6 +101,13 @@ def automatic_instance_segmentation(
     Returns:
         The segmentation result.
     """
+    # Avoid overwriting already stored segmentations.
+    if output_path is not None:
+        output_path = Path(output_path).with_suffix(".tif")
+        if os.path.exists(output_path):
+            print(f"The segmentation results are already stored at '{os.path.abspath(output_path)}'.")
+            return
+
     # Load the input image file.
     if isinstance(input_path, np.ndarray):
         image_data = input_path
@@ -189,8 +196,8 @@ def automatic_instance_segmentation(
 
     # Save the instance segmentation, if 'output_path' provided.
     if output_path is not None:
-        output_path = Path(output_path).with_suffix(".tif")
         imageio.imwrite(output_path, instances, compression="zlib")
+        print(f"The segmentation results are stored at '{os.path.abspath(output_path)}'.")
 
     if return_embeddings:
         return instances, image_embeddings
@@ -256,6 +263,9 @@ def main():
         help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
         "By default the most performant available device will be selected."
     )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="Whether to allow verbosity of outputs."
+    )
 
     args, parameter_args = parser.parse_known_args()
 
@@ -314,6 +324,7 @@ def main():
         tile_shape=args.tile_shape,
         halo=args.halo,
         annotate=args.annotate,
+        verbose=args.verbose,
         **generate_kwargs,
     )
 
