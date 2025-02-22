@@ -27,7 +27,7 @@ def _validate_model_type(state: OrderedDict) -> str:
         embed_dim_size = state["image_encoder.patch_embed.proj.weight"].shape[0]
 
         # Mapping for SAM models based on 'embed_dim'.
-        # TODO: We can make this more flexible to subject this to the 'depth' as well.
+        # NOTE: We can make this more flexible to subject this to the 'depth' as well.
         embed_dim_combinations = {768: "vit_b", 1024: "vit_l", 1280: "vit_h"}
         _provided_model_type = embed_dim_combinations[embed_dim_size]
 

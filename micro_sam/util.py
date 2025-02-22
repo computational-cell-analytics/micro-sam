@@ -387,7 +387,7 @@ def get_sam_model(
         # Verify whether the 'abbreviated_model_type' matches the '_provided_model_type'
         # Otherwise replace 'abbreviated_model_type' with the later.
         if abbreviated_model_type != _provided_model_type:
-            # Printing the warning to avoid any filtering of warnings on user's end.
+            # Printing the message below to avoid any filtering of warnings on user's end.
             print(
                 f"CRITICAL WARNING: The chosen 'model_type' is '{abbreviated_model_type}', "
                 f"however the model checkpoint provided correspond to '{_provided_model_type}', which does not match. "
