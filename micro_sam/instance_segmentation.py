@@ -26,9 +26,6 @@ from elf.parallel.filters import apply_filter
 
 from nifty.tools import blocking
 
-import elf.parallel as parallel
-from elf.parallel.filters import apply_filter
-
 import segment_anything.utils.amg as amg_utils
 from segment_anything.predictor import SamPredictor
 
