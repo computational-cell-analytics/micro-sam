@@ -179,6 +179,7 @@ def automatic_instance_segmentation(
             image=image_data,
             model_type=predictor.model_name,
             embedding_path=embedding_path,
+            checkpoint_path=predictor.checkpoint_path,
             segmentation_result=instances,  # Initializes the automatic segmentation to the annotator.
             tile_shape=tile_shape,
             halo=halo,

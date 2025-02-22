@@ -428,6 +428,7 @@ def get_sam_model(
     predictor.model_type = abbreviated_model_type
     predictor._hash = model_hash
     predictor.model_name = model_type
+    predictor.checkpoint_path = checkpoint_path
 
     # Add the decoder to the state if we have one and if the state is returned.
     if decoder_path is not None and return_state:
