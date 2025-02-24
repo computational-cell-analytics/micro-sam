@@ -147,6 +147,6 @@ You can select the label data via `Path to labels` and `Label data key`, followi
 
 The `Configuration` option allows you to choose the hardware configuration for training. We try to automatically select the correct setting for your system, but it can also be changed. Details on the configurations can be found [here](#training-your-own-model).
 
-In addtion, you can fine-tune Segment Anything models on your data by
+NOTE: We recommend to fine-tune Segment Anything models on your data by
 - running `$ micro_sam.train` in the command line.
 - calling `micro_sam.training.train_sam` in a python script. Check out [examples/finetuning/finetune_hela.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/finetuning/finetune_hela.py) OR [notebooks/sam_finetuning.ipynb](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb) for details.
