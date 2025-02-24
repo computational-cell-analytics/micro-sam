@@ -44,6 +44,12 @@ def _raw_transform(image: np.ndarray, raw_trafo: Callable) -> np.ndarray:
     return raw_trafo(image) * 255
 
 
+def _normalize_percentile(image: np.ndarray) -> np.ndarray:
+    image = normalize_percentile(image)  # Use 1st and 99th percentile values for min-max normalization.
+    image = normalize(image)  # Normalize the rescaled values for ranging them under (0, 1)
+    return image
+
+
 def get_raw_transform(preprocess: Optional[str] = None) -> Optional[Callable]:
     """Transformation functions to normalize inputs.
 
@@ -61,7 +67,7 @@ def get_raw_transform(preprocess: Optional[str] = None) -> Optional[Callable]:
         if preprocess == "normalize_minmax":
             raw_trafo = normalize
         elif preprocess == "normalize_percentile":
-            raw_trafo = normalize_percentile
+            raw_trafo = _normalize_percentile
         else:
             raise ValueError(f"'{preprocess}' is not a supported preprocessing.")
 
