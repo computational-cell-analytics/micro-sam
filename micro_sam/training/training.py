@@ -366,6 +366,9 @@ def _update_patch_shape(patch_shape, raw_paths, raw_key, with_channels):
             image_path = glob(os.path.join(path, raw_key))[0]
             ndim = imageio.imread(image_path).ndim
 
+    if not isinstance(patch_shape, tuple):
+        patch_shape = tuple(patch_shape)
+
     if ndim == 2:
         assert len(patch_shape) == 2
         return patch_shape
