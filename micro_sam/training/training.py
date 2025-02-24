@@ -735,7 +735,8 @@ def main():
     )
     parser.add_argument(
         "--segmentation_decoder", type=str, default="instances",  # TODO: in future, we can extend this to semantic seg.
-        help="Whether to finetune Segment Anything Model with additional instance segmentation decoder."
+        help="Whether to finetune Segment Anything Model with additional segmentation decoder for desired targets. "
+        "By default, it trains with the additional segmentation decoder for instance segmentation."
     )
 
     # Optional advanced settings a user can opt to change the values for.
@@ -781,7 +782,9 @@ def main():
         help="The choice of batch size for training the Segment Anything Model. By default, trains on batch size 1."
     )
     parser.add_argument(
-        "--preprocess", type=str, default=None, help="Whether to normalize the raw inputs."
+        "--preprocess", type=str, default=None, choices=("normalize_minmax", "normalize_percentile"),
+        help="Whether to normalize the raw inputs. By default, does not perform any preprocessing of input images "
+        "Otherwise, choose from either 'normalize_percentile' or 'normalize_minmax'."
     )
 
     args = parser.parse_args()
@@ -824,7 +827,7 @@ def main():
     if val_images is None:
         assert val_gt is None and val_image_key is None and val_gt_key is None
         # Use 10% of the dataset for validation - at least one image - for validation.
-        n_val = min(1, int(0.1 * len(dataset)))
+        n_val = max(1, int(0.1 * len(dataset)))
         train_dataset, val_dataset = random_split(dataset, lengths=[len(dataset) - n_val, n_val])
 
     else:  # If val images provided, we create a new dataset for it.
