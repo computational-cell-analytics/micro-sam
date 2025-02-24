@@ -133,9 +133,7 @@ Check out [the video tutorial](https://youtu.be/HqRoImdTX3c) for an in-depth exp
 
 ## Finetuning UI
 
-We also provide a graphical inferface for fine-tuning models on your own data. It can be started by
-- clicking `Finetuning` in the plugin menu after starting `napari`.
-- running `$ micro_sam.train` in the command line.
+We also provide a graphical inferface for fine-tuning models on your own data. It can be started by clicking `Finetuning` in the plugin menu after starting `napari`.
 
 **Note:** if you know a bit of python programming we recommend to use a script for model finetuning instead. This will give you more options to configure the training. See [these instructions](#training-your-own-model) for details.
 
@@ -148,3 +146,7 @@ You can select the image data via `Path to images`. You can either load images f
 You can select the label data via `Path to labels` and `Label data key`, following the same logic as for the image data. The label masks are expected to have the same size as the image data. You can for example use annotations created with one of the `micro_sam` annotation tools for this, they are stored in the correct format. See [the FAQ](#fine-tuning-questions) for more details on the expected label data.
 
 The `Configuration` option allows you to choose the hardware configuration for training. We try to automatically select the correct setting for your system, but it can also be changed. Details on the configurations can be found [here](#training-your-own-model).
+
+In addtion, you can fine-tune Segment Anything models on your data by
+- running `$ micro_sam.train` in the command line.
+- calling `micro_sam.training.train_sam` in a python script. Check out [examples/finetuning/finetune_hela.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/finetuning/finetune_hela.py) OR [notebooks/sam_finetuning.ipynb](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb) for details.
