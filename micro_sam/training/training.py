@@ -631,6 +631,10 @@ def train_sam_for_configuration(
 
 def _export_helper(save_root, checkpoint_name, output_path, model_type, with_segmentation_decoder, val_loader):
 
+    # Whether the model is stored in the current working directory or in another location.
+    if save_root is None:
+        save_root = os.getcwd()  # Map this to current working directory, if not specified by the user.
+
     # Get the 'best' model checkpoint ready for export.
     best_checkpoint = os.path.join(save_root, "checkpoints", checkpoint_name, "best.pt")
     if not os.path.exists(best_checkpoint):
