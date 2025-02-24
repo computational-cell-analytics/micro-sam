@@ -133,7 +133,9 @@ Check out [the video tutorial](https://youtu.be/HqRoImdTX3c) for an in-depth exp
 
 ## Finetuning UI
 
-We also provide a graphical inferface for fine-tuning models on your own data. It can be started by clicking `Finetuning` in the plugin menu after starting `napari`.
+We also provide a graphical inferface for fine-tuning models on your own data. It can be started by
+- clicking `Finetuning` in the plugin menu after starting `napari`.
+- running `$ micro_sam.train` in the command line.
 
 **Note:** if you know a bit of python programming we recommend to use a script for model finetuning instead. This will give you more options to configure the training. See [these instructions](#training-your-own-model) for details.
 
