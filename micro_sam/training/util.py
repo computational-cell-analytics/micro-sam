@@ -46,7 +46,7 @@ def _raw_transform(image: np.ndarray, raw_trafo: Callable) -> np.ndarray:
 
 def _normalize_percentile(image: np.ndarray) -> np.ndarray:
     image = normalize_percentile(image)  # Use 1st and 99th percentile values for min-max normalization.
-    image = normalize(image)  # Normalize the rescaled values for ranging them under (0, 1)
+    image = np.clip(image, 0, 1)  # Clip the values to be in range [0, 1].
     return image
 
 
