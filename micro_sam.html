@@ -170,7 +170,7 @@ You can also train models on your own data, see <a href="#training-your-own-mode
 <p>If you are using <code><a href="">micro_sam</a></code> in your research please cite</p>
 
 <ul>
-<li>our <a href="https://doi.org/10.1101/2023.08.21.554208">preprint</a></li>
+<li>our <a href="https://www.nature.com/articles/s41592-024-02580-4">paper</a> (now published in Nature Methods!)</li>
 <li>and the original <a href="https://arxiv.org/abs/2304.02643">Segment Anything publication</a>.</li>
 <li>If you use a <code>vit-tiny</code> models, please also cite <a href="https://arxiv.org/abs/2306.14289">Mobile SAM</a>.</li>
 </ul>
@@ -221,7 +221,7 @@ You can also use <a href="https://mamba.readthedocs.io/en/latest/">mamba</a>, wh
 </div>
 
 <p>This will also install <code>pytorch</code> from the <code>conda-forge</code> channel. If you have a recent enough operating system, it will automatically install the best suitable <code>pytorch</code> version on your system.
-This means it will install the CPU version if you don't have a nVidia GPU, and will install a GPU version if you have.
+This means it will install the CPU version if you don't have a nvidia GPU, and will install a GPU version if you have.
 However, if you have an older operating system, or a CUDA version older than 12, than it may not install the correct version. In this case you will have to specify you're CUDA version, for example for CUDA 11, like this:</p>
 
 <div class="pdoc-code codehilite">
@@ -533,6 +533,13 @@ Once you click <code>Annotate Images</code> the images from the folder you have 
 
 <p>The <code>Configuration</code> option allows you to choose the hardware configuration for training. We try to automatically select the correct setting for your system, but it can also be changed. Details on the configurations can be found <a href="#training-your-own-model">here</a>.</p>
 
+<p>NOTE: We recommend to fine-tune Segment Anything models on your data by</p>
+
+<ul>
+<li>running <code>$ micro_sam.train</code> in the command line.</li>
+<li>calling <code>micro_sam.training.train_sam</code> in a python script. Check out <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/finetuning/finetune_hela.py">examples/finetuning/finetune_hela.py</a> OR <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb">notebooks/sam_finetuning.ipynb</a> for details.</li>
+</ul>
+
 <h1 id="using-the-command-line-interface-cli">Using the Command Line Interface (CLI)</h1>
 
 <p><code>micro-sam</code> extends access to a bunch of functionalities using the command line interface (CLI) scripts via terminal.</p>
@@ -545,6 +552,7 @@ Once you click <code>Annotate Images</code> the images from the folder you have 
 <li>Running <code>$ micro_sam.annotator_3d</code> for starting the 3d annotator.</li>
 <li>Running <code>$ micro_sam.annotator_tracking</code> for starting the tracking annotator.</li>
 <li>Running <code>$ micro_sam.image_series_annotator</code> for starting the image series annotator.</li>
+<li>Running <code>$ micro_sam.train</code> for finetuning Segment Anything models on your data.</li>
 <li>Running <code>$ <a href="micro_sam/automatic_segmentation.html">micro_sam.automatic_segmentation</a></code> for automatic instance segmentation.
 <ul>
 <li>We support all post-processing parameters for automatic instance segmentation (for both AMG and AIS).
@@ -564,6 +572,7 @@ Once you click <code>Annotate Images</code> the images from the folder you have 
 
 <pre><code>    - Remember to specify the automatic segmentation mode using `--mode &lt;MODE_NAME&gt;` when using additional post-processing parameters.
 - You can check details for supported parameters and their respective default values at `micro_sam/instance_segmentation.py` under the `generate` method for `AutomaticMaskGenerator` and `InstanceSegmentationWithDecoder` class.
+- A good practice is to set `--ndim &lt;NDIM&gt;`, where `&lt;NDIM&gt;` corresponds to the number of dimensions of input images.
 </code></pre>
 
 <p>NOTE: For all CLIs above, you can find more details by adding the argument <code>-h</code> to the CLI script (eg. <code>$ micro_sam.annotator_2d -h</code>).</p>
@@ -604,7 +613,7 @@ We provide jupyter notebooks that demonstrate how to use it <a href="https://git
 We use this functionality to provide the <a href="#finetuned-models">finetuned microscopy models</a> and it can also be used to train models on your own data.
 In fact the best results can be expected when finetuning on your own data, and we found that it does not require much annotated training data to get significant improvements in model performance.
 So a good strategy is to annotate a few images with one of the provided models using our interactive annotation tools and, if the model is not working as good as required for your use-case, finetune on the annotated data.
-We recommend checking out our latest <a href="https://doi.org/10.1101/2023.08.21.554208">preprint</a> for details on the results on how much data is required for finetuning Segment Anything.</p>
+We recommend checking out our <a href="https://www.nature.com/articles/s41592-024-02580-4">paper</a> for details on the results on how much data is required for finetuning Segment Anything.</p>
 
 <p>The training logic is implemented in <code><a href="micro_sam/training.html">micro_sam.training</a></code> and is based on <a href="https://github.com/constantinpape/torch-em">torch-em</a>. Check out <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb">the finetuning notebook</a> to see how to use it.
 We also support training an additional decoder for automatic instance segmentation. This yields better results than the automatic mask generation of segment anything and is significantly faster.
@@ -857,7 +866,7 @@ If you encounter a problem or question not addressed here feel free to <a href="
 <h3 id="3-what-is-the-minimum-system-requirement-for-micro_sam">3. What is the minimum system requirement for <code><a href="">micro_sam</a></code>?</h3>
 
 <p>From our experience, the <code><a href="">micro_sam</a></code> annotation tools work seamlessly on most laptop or workstation CPUs and with &gt; 8GB RAM.
-You might encounter some slowness for $\leq$ 8GB RAM. The resources <code><a href="">micro_sam</a></code>'s annotation tools have been tested on are:</p>
+You might encounter some slowness for &gt;= 8GB RAM. The resources <code><a href="">micro_sam</a></code>'s annotation tools have been tested on are:</p>
 
 <ul>
 <li>Windows:
