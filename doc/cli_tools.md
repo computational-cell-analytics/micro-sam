@@ -8,6 +8,7 @@ The supported CLIs can be used by
 - Running `$ micro_sam.annotator_3d` for starting the 3d annotator.
 - Running `$ micro_sam.annotator_tracking` for starting the tracking annotator.
 - Running `$ micro_sam.image_series_annotator` for starting the image series annotator.
+- Running `$ micro_sam.train` for finetuning Segment Anything models on your data.
 - Running `$ micro_sam.automatic_segmentation` for automatic instance segmentation.
     - We support all post-processing parameters for automatic instance segmentation (for both AMG and AIS).
         - The automatic segmentation mode can be controlled by: `--mode <MODE_NAME>`, where the available choice for `MODE_NAME` is `amg` / `ais`.
@@ -20,5 +21,6 @@ The supported CLIs can be used by
         ```
         - Remember to specify the automatic segmentation mode using `--mode <MODE_NAME>` when using additional post-processing parameters.
     - You can check details for supported parameters and their respective default values at `micro_sam/instance_segmentation.py` under the `generate` method for `AutomaticMaskGenerator` and `InstanceSegmentationWithDecoder` class.
+    - A good practice is to set `--ndim <NDIM>`, where `<NDIM>` corresponds to the number of dimensions of input images.
 
 NOTE: For all CLIs above, you can find more details by adding the argument `-h` to the CLI script (eg. `$ micro_sam.annotator_2d -h`).

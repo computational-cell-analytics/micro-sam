@@ -387,15 +387,22 @@ def _segment_slices(
     for i in tqdm(range(segmentation.shape[0]), desc="Segment slices", disable=not verbose):
         segmentor.initialize(data[i], image_embeddings=image_embeddings, verbose=False, i=i)
         seg = segmentor.generate(**kwargs)
-        if len(seg) == 0:
+
+        if isinstance(seg, list) and len(seg) == 0:
             continue
         else:
-            seg = mask_data_to_segmentation(seg, with_background=with_background, min_object_size=min_object_size)
+            if isinstance(seg, list):
+                seg = mask_data_to_segmentation(
+                    seg, with_background=with_background, min_object_size=min_object_size
+                )
+
+            # Set offset for instance per slice.
             max_z = seg.max()
             if max_z == 0:
                 continue
             seg[seg != 0] += offset
             offset = max_z + offset
+
         segmentation[i] = seg
 
     return segmentation
@@ -443,7 +450,6 @@ def automatic_3d_segmentation(
         volume, predictor, segmentor, embedding_path, verbose,
         tile_shape=tile_shape, halo=halo, with_background=with_background, **kwargs
     )
-
     segmentation = merge_instance_segmentation_3d(
         segmentation,
         beta=0.5,

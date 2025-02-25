@@ -33,7 +33,7 @@ conda activate micro-sam
 ```
 
 This will also install `pytorch` from the `conda-forge` channel. If you have a recent enough operating system, it will automatically install the best suitable `pytorch` version on your system.
-This means it will install the CPU version if you don't have a nVidia GPU, and will install a GPU version if you have.
+This means it will install the CPU version if you don't have a nvidia GPU, and will install a GPU version if you have.
 However, if you have an older operating system, or a CUDA version older than 12, than it may not install the correct version. In this case you will have to specify you're CUDA version, for example for CUDA 11, like this:
 ```bash
 conda install -c conda-forge micro_sam "libtorch=*=cuda11*"
