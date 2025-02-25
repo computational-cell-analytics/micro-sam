@@ -29,7 +29,7 @@ from . import sam_trainer as trainers
 from ..instance_segmentation import get_unetr
 from . import joint_sam_trainer as joint_trainers
 from ..util import get_device, get_model_names, export_custom_sam_model
-from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit
+from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit, get_raw_transform
 
 
 FilePath = Union[str, os.PathLike]
@@ -366,6 +366,9 @@ def _update_patch_shape(patch_shape, raw_paths, raw_key, with_channels):
             image_path = glob(os.path.join(path, raw_key))[0]
             ndim = imageio.imread(image_path).ndim
 
+    if not isinstance(patch_shape, tuple):
+        patch_shape = tuple(patch_shape)
+
     if ndim == 2:
         assert len(patch_shape) == 2
         return patch_shape
@@ -487,6 +490,7 @@ def default_sam_dataset(
             with_channels=with_channels,
             ndim=2,
             is_seg_dataset=is_seg_dataset,
+            raw_transform=raw_transform,
             **kwargs
         )
         n_samples = max(len(loader), 100 if is_train else 5)
@@ -627,6 +631,10 @@ def train_sam_for_configuration(
 
 def _export_helper(save_root, checkpoint_name, output_path, model_type, with_segmentation_decoder, val_loader):
 
+    # Whether the model is stored in the current working directory or in another location.
+    if save_root is None:
+        save_root = os.getcwd()  # Map this to current working directory, if not specified by the user.
+
     # Get the 'best' model checkpoint ready for export.
     best_checkpoint = os.path.join(save_root, "checkpoints", checkpoint_name, "best.pt")
     if not os.path.exists(best_checkpoint):
@@ -734,7 +742,8 @@ def main():
     )
     parser.add_argument(
         "--segmentation_decoder", type=str, default="instances",  # TODO: in future, we can extend this to semantic seg.
-        help="Whether to finetune Segment Anything Model with additional instance segmentation decoder."
+        help="Whether to finetune Segment Anything Model with additional segmentation decoder for desired targets. "
+        "By default, it trains with the additional segmentation decoder for instance segmentation."
     )
 
     # Optional advanced settings a user can opt to change the values for.
@@ -779,6 +788,11 @@ def main():
         "--batch_size", type=int, default=1,
         help="The choice of batch size for training the Segment Anything Model. By default, trains on batch size 1."
     )
+    parser.add_argument(
+        "--preprocess", type=str, default=None, choices=("normalize_minmax", "normalize_percentile"),
+        help="Whether to normalize the raw inputs. By default, does not perform any preprocessing of input images "
+        "Otherwise, choose from either 'normalize_percentile' or 'normalize_minmax'."
+    )
 
     args = parser.parse_args()
 
@@ -802,6 +816,9 @@ def main():
 
     # 2. Prepare the dataloaders.
 
+    # If the user wants to preprocess the inputs, we allow the possibility to do so.
+    _raw_transform = get_raw_transform(args.preprocess)
+
     # Get the dataset with files for training.
     dataset = default_sam_dataset(
         raw_paths=train_images,
@@ -810,13 +827,14 @@ def main():
         label_key=train_gt_key,
         patch_shape=patch_shape,
         with_segmentation_decoder=with_segmentation_decoder,
+        raw_transform=_raw_transform,
     )
 
     # If val images are not exclusively provided, we create a val split from the training data.
     if val_images is None:
         assert val_gt is None and val_image_key is None and val_gt_key is None
         # Use 10% of the dataset for validation - at least one image - for validation.
-        n_val = min(1, int(0.1 * len(dataset)))
+        n_val = max(1, int(0.1 * len(dataset)))
         train_dataset, val_dataset = random_split(dataset, lengths=[len(dataset) - n_val, n_val])
 
     else:  # If val images provided, we create a new dataset for it.
@@ -828,6 +846,7 @@ def main():
             label_key=val_gt_key,
             patch_shape=patch_shape,
             with_segmentation_decoder=with_segmentation_decoder,
+            raw_transform=_raw_transform,
         )
 
     # Get the dataloaders from the datasets.
@@ -844,8 +863,6 @@ def main():
 
     if model_type is None:  # If user does not specify the model, we use the default model corresponding to the config.
         model_type = CONFIGURATIONS[config]["model_type"]
-
-    print(model_type, config)
 
     train_sam_for_configuration(
         name=checkpoint_name,
