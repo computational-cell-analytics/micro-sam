@@ -421,7 +421,7 @@ def default_sam_dataset(
     """
 
     # By default, let the 'default_segmentation_dataset' heuristic decide for itself.
-    is_seg_dataset = None
+    is_seg_dataset = kwargs.get("is_seg_dataset", None)
 
     # Check if the raw inputs are RGB or not. If yes, use 'ImageCollectionDataset'.
     # Get valid raw paths to make checks possible.
