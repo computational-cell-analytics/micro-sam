@@ -17,7 +17,7 @@ The installer should work out-of-the-box on Windows and Linux platforms. Please 
 
 ### 3. What is the minimum system requirement for `micro_sam`?
 From our experience, the `micro_sam` annotation tools work seamlessly on most laptop or workstation CPUs and with > 8GB RAM.
-You might encounter some slowness for $\leq$ 8GB RAM. The resources `micro_sam`'s annotation tools have been tested on are:
+You might encounter some slowness for >= 8GB RAM. The resources `micro_sam`'s annotation tools have been tested on are:
 - Windows:
     - Windows 10 Pro, Intel i5 7th Gen, 8GB RAM
     - Windows 10 Enterprise LTSC, Intel i7 13th Gen, 32GB RAM

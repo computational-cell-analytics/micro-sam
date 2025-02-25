@@ -30,7 +30,7 @@ We reimplement the training logic described in the [Segment Anything publication
 We use this functionality to provide the [finetuned microscopy models](#finetuned-models) and it can also be used to train models on your own data.
 In fact the best results can be expected when finetuning on your own data, and we found that it does not require much annotated training data to get significant improvements in model performance.
 So a good strategy is to annotate a few images with one of the provided models using our interactive annotation tools and, if the model is not working as good as required for your use-case, finetune on the annotated data.
-We recommend checking out our latest [preprint](https://doi.org/10.1101/2023.08.21.554208) for details on the results on how much data is required for finetuning Segment Anything.
+We recommend checking out our [paper](https://www.nature.com/articles/s41592-024-02580-4) for details on the results on how much data is required for finetuning Segment Anything.
 
 The training logic is implemented in `micro_sam.training` and is based on [torch-em](https://github.com/constantinpape/torch-em). Check out [the finetuning notebook](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb) to see how to use it.
 We also support training an additional decoder for automatic instance segmentation. This yields better results than the automatic mask generation of segment anything and is significantly faster.
