@@ -4,6 +4,7 @@
 import os
 from typing import Optional, Union, Tuple
 
+import networkx as nx
 import numpy as np
 import torch
 from scipy.ndimage import binary_closing
@@ -14,6 +15,7 @@ import nifty
 
 import elf.segmentation as seg_utils
 import elf.tracking.tracking_utils as track_utils
+from elf.tracking.motile_tracking import recolor_segmentation
 
 from segment_anything.predictor import SamPredictor
 
@@ -477,83 +479,50 @@ def _filter_tracks(tracking_result, min_track_length):
     return tracking_result
 
 
-def _parse_result(slice_segmentation, solver, graph):
-    import networkx as nx
-    import motile
-    from nifty.tools import takeDict
+def _match_lineage_id_to_segmentation(segmentations, track_data, parent_graph):
+    # The track data has the following layout: n_tracks x 4
+    # With the following columns:
+    # track_id - id of the track (= result from trackastra)
+    # timepoint
+    # y coordinate
+    # x coordinate
 
-    lineage_graph = nx.DiGraph()
+    # Use the last three columns to index the segmentation and get the segmentation id.
+    index = np.round(track_data[:, 1:], 0).astype("int32")
+    index = tuple(index[:, i] for i in range(index.shape[1]))
+    segmentation_ids = segmentations[index]
 
-    node_indicators = solver.get_variables(motile.variables.NodeSelected)
-    edge_indicators = solver.get_variables(motile.variables.EdgeSelected)
+    track_ids = track_data[:, 0].astype("int32")
+    assert len(segmentation_ids) == len(track_ids)
+    node_to_track = {k: v for k, v in zip(segmentation_ids, track_ids)}
 
-    # build new graphs that contain the selected nodes and tracking / lineage results
-    for node, index in node_indicators.items():
-        if solver.solution[index] > 0.5:
-            lineage_graph.add_node(node, **graph.nodes[node])
+    # Find the lineages as connected components in the parent graph.
+    # First, we build a proper graph.
+    lineage_graph = nx.Graph()
+    for k, v in parent_graph.items():
+        lineage_graph.add_edge(k, v)
 
-    for edge, index in edge_indicators.items():
-        if solver.solution[index] > 0.5:
-            lineage_graph.add_edge(*edge, **graph.edges[edge])
+    # Then, find the connected components, and compute mapping from track_id to lineage based on it.
+    lineages = list(nx.connected_components(lineage_graph))
+    track_to_lineage = {}
+    for lineage_id, lineage in enumerate(lineages, 1):
+        track_to_lineage.update({track_id: lineage_id for track_id in lineage})
 
-    # Use connected components to find the lineages in the result graph.
-    components = nx.weakly_connected_components(lineage_graph)
+    # This only takes care of lineages with more than one track, so we need to add single track lineages.
+    missing_tracks = list(set(node_to_track.values()) - set(track_to_lineage.keys()))
+    lineage_offset_id = len(lineages) + 2
+    track_to_lineage.update({
+        track_id: lineage_id for lineage_id, track_id in enumerate(missing_tracks, lineage_offset_id)}
+    )
 
-    # Compute the track assignments and the lineages
-    # (according to the representation expected by micro_sam)
-    track_assignment = {}
-    lineages = {}
+    # Translate track mapping to lineage mapping.
+    node_to_lineage = {k: track_to_lineage[v] for k, v in node_to_track.items()}
 
-    # Initialize the track id with 1.
-    track_id = 1
+    # Map segmentation ids that are not part of any track / lineage to zero.
+    unmatched_ids = np.setdiff1d(np.unique(segmentations), segmentation_ids)
+    node_to_lineage.update({unmatched: 0 for unmatched in unmatched_ids})
 
-    # Iterate over all lineages in the graph.
-    for lineage_nodes in components:
-
-        # Extract the sub-graph for thhis lineage, make sure it's a tree and
-        # then find its root node.
-        node_list = sorted(list(lineage_nodes))
-        sub_graph = lineage_graph.subgraph(node_list)
-        assert nx.is_tree(sub_graph)
-        root = [node for node in sub_graph.nodes() if sub_graph.in_degree(node) == 0]
-        assert len(root) == 1
-        root = root[0]
-
-        # Perform depth first search over the graph to map all nodes
-        # to their track id and build the lineage information for this sub-graph.
-        for u, v in nx.dfs_edges(sub_graph, root):
-            # Assign u to the current track_id if it has not been assigned yet.
-            if u not in track_assignment:
-                track_assignment[u] = track_id
-
-            degree_u = sub_graph.out_degree(u)
-            assert degree_u in (1, 2)  # The only allowed degrees for u.
-            if degree_u == 2:  # Division -> increase track id and record lineage.
-                track_id += 1
-                mother_track = track_assignment[u]
-                if mother_track in lineages:
-                    lineages[mother_track].append(track_id)
-                else:
-                    lineages[mother_track] = [track_id]
-
-            degree_v = sub_graph.out_degree(v)
-            assert degree_v in (0, 1, 2)  # The only allowed degrees for v.
-            if degree_v == 0:  # The track stops here. Assign v to the track id and increase it.
-                track_assignment[v] = track_id
-                track_id += 1
-                # TODO double check how we handle lineages with only 1 track in micro-sam annotation.
-                # If they are also kept in the lineages field then we need to add them here as well.
-
-    # Recolor the segmentation according to the track assignment.
-
-    # Map non-selected nodes and backround to zero
-    seg_ids = np.unique(slice_segmentation)
-    not_selected = list(set(seg_ids) - set(track_assignment.keys()))
-    track_assignment.update({not_select: 0 for not_select in not_selected})
-    track_assignment[0] = 0
-
-    segmentation = takeDict(track_assignment, slice_segmentation)
-    return segmentation, lineages
+    return node_to_lineage
 
 
 def _tracking_impl(timeseries, segmentation, mode):
@@ -561,7 +530,12 @@ def _tracking_impl(timeseries, segmentation, mode):
     model = Trackastra.from_pretrained("general_2d", device=device)
     lineage_graph = model.track(timeseries, segmentation, mode=mode)
     track_data, parent_graph, _ = graph_to_napari_tracks(lineage_graph)
-    # TODO
+    node_to_lineage = _match_lineage_id_to_segmentation(segmentation, track_data, parent_graph)
+    tracking_result = recolor_segmentation(segmentation, node_to_lineage)
+
+    # TODO extract the lineage in our expected format.
+    lineage = None
+    return tracking_result, lineage
 
 
 def track_across_frames(
@@ -572,17 +546,30 @@ def track_across_frames(
     verbose: bool = True,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
-) -> Tuple[np.ndarray]:
+) -> Tuple[np.ndarray, ]:
     """
+
+    Args:
+        timeseries: The input timeseries of images.
+        segmentation: The segmentation. Expect segmentation results per frame
+            that are relabeled so that segmentation ids don't overlap.
+        gap_closing: If given, gaps in the segmentation are closed with a binary closing
+            operation. The value is used to determine the number of iterations for the closing.
+        min_time_extent: Require a minimal extent in time for the tracked objects.
+        verbose: Verbosity flag.
+        pbar_init: Function to initialize the progress bar.
+        pbar_update: Function to update the progress bar.
+
+    Returns:
+        a
+        b
     """
     _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init=pbar_init, pbar_update=pbar_update)
 
     if gap_closing is not None and gap_closing > 0:
         segmentation = _preprocess_closing(segmentation, gap_closing, pbar_update)
 
-    solver, graph = _tracking_impl(timeseries, segmentation, mode="greedy")
-    segmentation, lineage = _parse_result(segmentation, solver, graph)
-
+    segmentation, lineage = _tracking_impl(timeseries, segmentation, mode="greedy")
     return segmentation, lineage
 
 
@@ -591,19 +578,36 @@ def automatic_tracking(
     predictor: SamPredictor,
     segmentor: AMGBase,
     embedding_path: Optional[Union[str, os.PathLike]] = None,
-    tile_shape: Optional[Tuple[int, int]] = None,
-    halo: Optional[Tuple[int, int]] = None,
     gap_closing: Optional[int] = None,
     min_time_extent: Optional[int] = None,
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
     **kwargs,
 ) -> Tuple[np.ndarray,]:
-    """
-    """
-    # TODO error raising
-    if Trackastra is None:
-        raise RuntimeError
+    """Automatically track objects in multi-dimensional segmentation based on an automatic segmentation.
 
+    Args:
+        timeseries: The input timeseries of images.
+        predictor: The SAM model.
+        segmentor: The instance segmentation class.
+        embedding_path: The path to save pre-computed embeddings.
+        gap_closing: If given, gaps in the segmentation are closed with a binary closing
+            operation. The value is used to determine the number of iterations for the closing.
+        min_time_extent: Require a minimal extent in time for the tracked objects.
+        tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
+        halo: Overlap of the tiles for tiled prediction.
+        verbose: Verbosity flag.
+        kwargs: Keyword arguments for the 'generate' method of the 'segmentor'.
+
+    Returns:
+        a
+        b
+    """
+    if Trackastra is None:
+        raise RuntimeError(
+            "Automatic tracking requires trackastra. You can install it via 'pip install trackastra'"
+        )
     segmentation, _ = _segment_slices(
         timeseries, predictor, segmentor, embedding_path, verbose,
         tile_shape=tile_shape, halo=halo,
