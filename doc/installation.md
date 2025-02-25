@@ -54,9 +54,7 @@ conda create -c pytorch -c conda-forge -n micro-sam micro_sam "nifty=1.2.1=*_4" 
 ## From source
 
 To install `micro_sam` from source, we recommend to first set up an environment with the necessary requirements:
-- [environment.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/master/environment.yaml): to set up an environment on Linux or Mac OS.
-- [environment_cpu_win.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/master/environment_cpu_win.yaml): to set up an environment on windows with CPU support.
-- [environment_gpu_win.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/master/environment_gpu_win.yaml): to set up an environment on windows with GPU support.
+- [environment.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/master/environment.yaml): to set up an environment on Windows, Linux or Mac OS.
 
 To create one of these environments and install `micro_sam` into it follow these steps
 
@@ -75,7 +73,7 @@ cd micro-sam
 3. Create the respective environment:
 
 ```bash
-conda env create -f <ENV_FILE>.yaml
+conda env create -f environment.yaml
 ```
 
 4. Activate the environment:
