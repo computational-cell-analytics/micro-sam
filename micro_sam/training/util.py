@@ -61,8 +61,8 @@ def get_raw_transform(preprocess: Optional[str] = None) -> Optional[Callable]:
         The transformation function.
     """
 
-    if preprocess is None:
-        return None
+    if preprocess is None:  # Ensures that inputs are 8-bit.
+        return require_8bit
     else:
         if preprocess == "normalize_minmax":
             raw_trafo = normalize
