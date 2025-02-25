@@ -407,7 +407,7 @@ def _segment_slices(
 
         segmentation[i] = seg
 
-    return segmentation
+    return segmentation, image_embeddings
 
 
 def automatic_3d_segmentation(
