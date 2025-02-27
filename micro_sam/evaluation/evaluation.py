@@ -180,7 +180,6 @@ def main():
         "-o", "--output_path", type=str, default=None,
         help="The filepath to store the evaluation results. The current support stores results in a 'csv' file."
     )
-
     parser.add_argument(
         "--threshold", default=None, type=float, nargs="*",
         help="The choice of overlap threshold(s) for calculating the segmentation accuracy. By default, "
@@ -189,6 +188,14 @@ def main():
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Whether to allow verbosity of evaluation."
     )
+
+    # TODO: We can extend this in future for other metrics, eg. dice score, etc.
+    # NOTE: This argument is not exposed to the user atm.
+    # parser.add_argument(
+    #     "--metric", type=str, default="segmentation_accuracy", choices=("segmentation_accuracy"),
+    #     help="The choice of metric for evaluation. By default, it computes segmentation accuracy "
+    #     "for instance segmentation."
+    # )
 
     args = parser.parse_args()
 
