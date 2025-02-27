@@ -528,7 +528,7 @@ def commit(
 
 @magic_factory(
     call_button="Commit [C]",
-    layer={"choices": ["current_object"]},
+    layer={"choices": ["current_object", "auto_segmentation"]},
     commit_path={"mode": "d"},  # choose a directory
 )
 def commit_track(
@@ -552,10 +552,17 @@ def commit_track(
 
     # Update the lineages.
     state = AnnotatorState()
-    updated_lineage = {
-        parent + id_offset: [child + id_offset for child in children] for parent, children in state.lineage.items()
-    }
-    state.committed_lineages.append(updated_lineage)
+    lineage = state.lineage
+
+    if isinstance(lineage, list):  # This is a list of lineages from auto-tracking.
+        assert id_offset == 0
+        assert len(state.committed_lineages) == 0
+        state.committed_lineages.extend(lineage)
+    else:  # This is a single lineage from interactive tracking.
+        updated_lineage = {
+            parent + id_offset: [child + id_offset for child in children] for parent, children in state.lineage.items()
+        }
+        state.committed_lineages.append(updated_lineage)
 
     if commit_path is not None:
         _commit_to_file(
@@ -885,10 +892,12 @@ class EmbeddingWidget(_WidgetBase):
 
     def _initialize_image(self):
         state = AnnotatorState()
-        image_shape = self.image_selection.get_value().data.shape
-        image_scale = tuple(self.image_selection.get_value().scale)
+        layer = self.image_selection.get_value()
+        image_shape = layer.data.shape
+        image_scale = tuple(layer.scale)
         state.image_shape = image_shape
         state.image_scale = image_scale
+        state.image_name = layer.name
 
     def _create_image_section(self):
         image_section = QtWidgets.QVBoxLayout()
@@ -1727,10 +1736,16 @@ class AutoTrackWidget(AutoSegmentWidget):
             }
             return _generate_message(val_results["message_type"], val_results["message"])
 
+        state = AnnotatorState()
+        if len(state.committed_lineages) > 0:
+            # TODO raise a proper error window for this.
+            raise RuntimeError
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
-        @thread_worker
+        # @thread_worker
         def seg_impl():
+            image_name = state.get_image_name(self._viewer)
+            timeseries = self._viewer.layers[image_name].data
             segmentation = np.zeros_like(self._viewer.layers["auto_segmentation"].data)
             offset = 0
 
@@ -1752,28 +1767,29 @@ class AutoTrackWidget(AutoSegmentWidget):
                 pbar_signals.pbar_update.emit(1)
 
             pbar_signals.pbar_reset.emit()
-            segmentation, lineage = track_across_frames(
-                segmentation,
+            segmentation, lineages = track_across_frames(
+                timeseries, segmentation,
                 verbose=True, pbar_init=pbar_init,
                 pbar_update=lambda update: pbar_signals.pbar_update.emit(1),
             )
             pbar_signals.pbar_stop.emit()
-            return (segmentation, lineage)
+            return (segmentation, lineages)
 
-        # TODO update the tracking result
         def update_segmentation(result):
-            segmentation, lineage = result
+            segmentation, lineages = result
             is_empty = segmentation.max() == 0
             if is_empty:
                 self._empty_segmentation_warning()
 
             state = AnnotatorState()
-            state.lineage = lineage
+            state.lineage = lineages
 
             self._viewer.layers["auto_segmentation"].data = segmentation
             self._viewer.layers["auto_segmentation"].refresh()
 
-        worker = seg_impl()
-        worker.returned.connect(update_segmentation)
-        worker.start()
-        return worker
+        result = seg_impl()
+        update_segmentation(result)
+        # worker = seg_impl()
+        # worker.returned.connect(update_segmentation)
+        # worker.start()
+        # return worker

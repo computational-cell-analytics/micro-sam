@@ -85,10 +85,13 @@ class TestMultiDimensionalSegmentation(unittest.TestCase):
         stacked_data = np.stack(stacked_data)
         stacked_seg = np.stack(stacked_seg)
 
-        tracks, lineage = track_across_frames(stacked_data, stacked_seg)
+        tracks, lineages = track_across_frames(stacked_data, stacked_seg)
 
-        # TODO more checks
         self.assertEqual(tracks.shape, stacked_seg.shape)
+        # FIXME this sometimes fails and I don't quite understand why.
+        track_ids = set(np.unique(tracks)) - {0}
+        lineage_roots = set([next(iter(lin.keys())) for lin in lineages])
+        self.assertEqual(track_ids, lineage_roots)
 
 
 if __name__ == "__main__":

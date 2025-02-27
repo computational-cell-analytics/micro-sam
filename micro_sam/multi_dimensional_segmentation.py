@@ -479,7 +479,7 @@ def _filter_tracks(tracking_result, min_track_length):
     return tracking_result
 
 
-def _match_lineage_id_to_segmentation(segmentations, track_data, parent_graph):
+def _extract_tracks_and_lineages(segmentations, track_data, parent_graph):
     # The track data has the following layout: n_tracks x 4
     # With the following columns:
     # track_id - id of the track (= result from trackastra)
@@ -492,6 +492,7 @@ def _match_lineage_id_to_segmentation(segmentations, track_data, parent_graph):
     index = tuple(index[:, i] for i in range(index.shape[1]))
     segmentation_ids = segmentations[index]
 
+    # Find the mapping of nodes (= segmented objects) to track-ids.
     track_ids = track_data[:, 0].astype("int32")
     assert len(segmentation_ids) == len(track_ids)
     node_to_track = {k: v for k, v in zip(segmentation_ids, track_ids)}
@@ -502,27 +503,45 @@ def _match_lineage_id_to_segmentation(segmentations, track_data, parent_graph):
     for k, v in parent_graph.items():
         lineage_graph.add_edge(k, v)
 
-    # Then, find the connected components, and compute mapping from track_id to lineage based on it.
-    lineages = list(nx.connected_components(lineage_graph))
-    track_to_lineage = {}
-    for lineage_id, lineage in enumerate(lineages, 1):
-        track_to_lineage.update({track_id: lineage_id for track_id in lineage})
+    # Then, find the connected components, and compute the lineage representation expected by micro-sam from it:
+    # E.g. if we have three lineages, the first consisting of three tracks and the second and third of one track each:
+    # [
+    #   {1: [2, 3]},  lineage with a dividing cell
+    #   {4: []}, lineage with just one cell
+    #   {5: []}, lineage with just one cell
+    # ]
 
-    # This only takes care of lineages with more than one track, so we need to add single track lineages.
-    missing_tracks = list(set(node_to_track.values()) - set(track_to_lineage.keys()))
-    lineage_offset_id = len(lineages) + 2
-    track_to_lineage.update({
-        track_id: lineage_id for lineage_id, track_id in enumerate(missing_tracks, lineage_offset_id)}
-    )
+    # First, we fill the lineages which have one or more divisions, i.e. trees with more than one node.
+    lineages = []
+    for component in nx.connected_components(lineage_graph):
+        root = next(iter(component))
+        lineage_dict = {}
 
-    # Translate track mapping to lineage mapping.
-    node_to_lineage = {k: track_to_lineage[v] for k, v in node_to_track.items()}
+        def dfs(node, parent):
+            # Avoid revisiting the parent node
+            children = [n for n in lineage_graph[node] if n != parent]
+            lineage_dict[node] = children
+            for child in children:
+                dfs(child, node)
 
-    # Map segmentation ids that are not part of any track / lineage to zero.
-    unmatched_ids = np.setdiff1d(np.unique(segmentations), segmentation_ids)
-    node_to_lineage.update({unmatched: 0 for unmatched in unmatched_ids})
+        dfs(root, None)
+        lineages.append(lineage_dict)
 
-    return node_to_lineage
+    # Then add single node lineages, which are not reflected in the original graph.
+    all_tracks = set(track_ids.tolist())
+    lineage_tracks = []
+    for lineage in lineages:
+        for k, v in lineage.items():
+            lineage_tracks.append(k)
+            lineage_tracks.extend(v)
+    singleton_tracks = list(all_tracks - set(lineage_tracks))
+    lineages.extend([{track: []} for track in singleton_tracks])
+
+    # Make sure node_to_track contains everything.
+    all_seg_ids = np.unique(segmentations)
+    missing_seg_ids = np.setdiff1d(all_seg_ids, list(node_to_track.keys()))
+    node_to_track.update({seg_id: 0 for seg_id in missing_seg_ids})
+    return node_to_track, lineages
 
 
 def _tracking_impl(timeseries, segmentation, mode):
@@ -530,12 +549,9 @@ def _tracking_impl(timeseries, segmentation, mode):
     model = Trackastra.from_pretrained("general_2d", device=device)
     lineage_graph = model.track(timeseries, segmentation, mode=mode)
     track_data, parent_graph, _ = graph_to_napari_tracks(lineage_graph)
-    node_to_lineage = _match_lineage_id_to_segmentation(segmentation, track_data, parent_graph)
-    tracking_result = recolor_segmentation(segmentation, node_to_lineage)
-
-    # TODO extract the lineage in our expected format.
-    lineage = None
-    return tracking_result, lineage
+    node_to_track, lineages = _extract_tracks_and_lineages(segmentation, track_data, parent_graph)
+    tracking_result = recolor_segmentation(segmentation, node_to_track)
+    return tracking_result, lineages
 
 
 def track_across_frames(
