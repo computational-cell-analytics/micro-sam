@@ -115,6 +115,11 @@ def automatic_instance_segmentation(
         image_data = util.load_image_data(input_path, key)
 
     ndim = image_data.ndim if ndim is None else ndim
+    
+    # We perform additional post-processing for AMG-only.
+    # Otherwise, we ignore additional post-processing for AIS.
+    if isinstance(segmenter, InstanceSegmentationWithDecoder):
+        generate_kwargs["output_mode"] = None
 
     if ndim == 2:
         if (image_data.ndim != 2) and (image_data.ndim != 3 and image_data.shape[-1] != 3):
@@ -307,11 +312,6 @@ def main():
         is_tiled=args.tile_shape is not None,
         **amg_kwargs,
     )
-
-    # We perform additional post-processing for AMG-only.
-    # Otherwise, we ignore additional post-processing for AIS.
-    if isinstance(segmenter, InstanceSegmentationWithDecoder):
-        generate_kwargs["output_mode"] = None
 
     automatic_instance_segmentation(
         predictor=predictor,
