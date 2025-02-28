@@ -32,7 +32,9 @@ from ._state import AnnotatorState
 from . import util as vutil
 from ._tooltips import get_tooltip
 from .. import instance_segmentation, util
-from ..multi_dimensional_segmentation import segment_mask_in_volume, merge_instance_segmentation_3d, PROJECTION_MODES
+from ..multi_dimensional_segmentation import (
+    segment_mask_in_volume, merge_instance_segmentation_3d, track_across_frames, PROJECTION_MODES
+)
 
 
 #
@@ -526,7 +528,7 @@ def commit(
 
 @magic_factory(
     call_button="Commit [C]",
-    layer={"choices": ["current_object"]},
+    layer={"choices": ["current_object", "auto_segmentation"]},
     commit_path={"mode": "d"},  # choose a directory
 )
 def commit_track(
@@ -550,10 +552,17 @@ def commit_track(
 
     # Update the lineages.
     state = AnnotatorState()
-    updated_lineage = {
-        parent + id_offset: [child + id_offset for child in children] for parent, children in state.lineage.items()
-    }
-    state.committed_lineages.append(updated_lineage)
+    lineage = state.lineage
+
+    if isinstance(lineage, list):  # This is a list of lineages from auto-tracking.
+        assert id_offset == 0
+        assert len(state.committed_lineages) == 0
+        state.committed_lineages.extend(lineage)
+    else:  # This is a single lineage from interactive tracking.
+        updated_lineage = {
+            parent + id_offset: [child + id_offset for child in children] for parent, children in state.lineage.items()
+        }
+        state.committed_lineages.append(updated_lineage)
 
     if commit_path is not None:
         _commit_to_file(
@@ -883,10 +892,12 @@ class EmbeddingWidget(_WidgetBase):
 
     def _initialize_image(self):
         state = AnnotatorState()
-        image_shape = self.image_selection.get_value().data.shape
-        image_scale = tuple(self.image_selection.get_value().scale)
+        layer = self.image_selection.get_value()
+        image_shape = layer.data.shape
+        image_scale = tuple(layer.scale)
         state.image_shape = image_shape
         state.image_scale = image_scale
+        state.image_name = layer.name
 
     def _create_image_section(self):
         image_section = QtWidgets.QVBoxLayout()
@@ -1455,7 +1466,7 @@ class AutoSegmentWidget(_WidgetBase):
         return self._add_boolean_param(
             "apply_to_volume", self.apply_to_volume, title="Apply to Volume",
             tooltip=get_tooltip("autosegment", "apply_to_volume")
-            )
+        )
 
     def _add_common_settings(self, settings):
         # Create the UI element for min object size.
@@ -1692,3 +1703,91 @@ class AutoSegmentWidget(_WidgetBase):
             worker = self._run_segmentation_2d(kwargs)
         _select_layer(self._viewer, "auto_segmentation")
         return worker
+
+
+class AutoTrackWidget(AutoSegmentWidget):
+    def _create_tracking_switch(self):
+        self.apply_to_volume = False
+        return self._add_boolean_param(
+            "apply_to_volume", self.apply_to_volume, title="Track Timeseries",
+            tooltip=get_tooltip("autotrack", "run_tracking")
+        )
+
+    def _create_widget(self):
+        # Add the switch for segmenting the slice vs. tracking the timeseries.
+        self.layout().addWidget(self._create_tracking_switch())
+
+        # Add the nested settings widget.
+        self.settings = self._create_settings()
+        self.layout().addWidget(self.settings)
+
+        # Add the run button.
+        self.run_button = QtWidgets.QPushButton("Automatic Tracking")
+        self.run_button.clicked.connect(self.__call__)
+        self.run_button.setToolTip(get_tooltip("autotrack", "run_button"))
+        self.layout().addWidget(self.run_button)
+
+    def _run_segmentation_3d(self, kwargs):
+        allow_segment_3d = self._allow_segment_3d()
+        if not allow_segment_3d:
+            return _generate_message("error", "Tracking with AMG is only supported if you have a GPU.")
+
+        state = AnnotatorState()
+        if len(state.committed_lineages) > 0:
+            return _generate_message(
+                "error",
+                "Automatic tracking can only be called if you haven't commited results from interactive tracking yet."
+            )
+        pbar, pbar_signals = _create_pbar_for_threadworker()
+
+        # @thread_worker
+        def seg_impl():
+            image_name = state.get_image_name(self._viewer)
+            timeseries = self._viewer.layers[image_name].data
+            segmentation = np.zeros_like(self._viewer.layers["auto_segmentation"].data)
+            offset = 0
+
+            def pbar_init(total, description):
+                pbar_signals.pbar_total.emit(total)
+                pbar_signals.pbar_description.emit(description)
+
+            pbar_init(segmentation.shape[0], "Run tracking")
+
+            # Further optimization: parallelize if state is precomputed for all slices
+            for i in range(segmentation.shape[0]):
+                seg = _instance_segmentation_impl(self.with_background, self.min_object_size, i=i, **kwargs)
+                seg_max = seg.max()
+                if seg_max == 0:
+                    continue
+                seg[seg != 0] += offset
+                offset = seg_max + offset
+                segmentation[i] = seg
+                pbar_signals.pbar_update.emit(1)
+
+            pbar_signals.pbar_reset.emit()
+            segmentation, lineages = track_across_frames(
+                timeseries, segmentation,
+                verbose=True, pbar_init=pbar_init,
+                pbar_update=lambda update: pbar_signals.pbar_update.emit(1),
+            )
+            pbar_signals.pbar_stop.emit()
+            return (segmentation, lineages)
+
+        def update_segmentation(result):
+            segmentation, lineages = result
+            is_empty = segmentation.max() == 0
+            if is_empty:
+                self._empty_segmentation_warning()
+
+            state = AnnotatorState()
+            state.lineage = lineages
+
+            self._viewer.layers["auto_segmentation"].data = segmentation
+            self._viewer.layers["auto_segmentation"].refresh()
+
+        result = seg_impl()
+        update_segmentation(result)
+        # worker = seg_impl()
+        # worker.returned.connect(update_segmentation)
+        # worker.start()
+        # return worker
