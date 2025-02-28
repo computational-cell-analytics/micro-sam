@@ -30,7 +30,7 @@ class Annotator2d(_AnnotatorBase):
 
 def annotator_2d(
     image: np.ndarray,
-    embedding_path: Optional[str] = None,
+    embedding_path: Optional[Union[str, util.ImageEmbeddings]] = None,
     segmentation_result: Optional[np.ndarray] = None,
     model_type: str = util._DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
@@ -46,7 +46,8 @@ def annotator_2d(
 
     Args:
         image: The image data.
-        embedding_path: Filepath where to save the embeddings.
+        embedding_path: Filepath where to save the embeddings
+            or the precompted image embeddings computed by `precompute_image_embeddings`.
         segmentation_result: An initial segmentation to load.
             This can be used to correct segmentations with Segment Anything or to save and load progress.
             The segmentation will be loaded as the 'committed_objects' layer.
