@@ -17,6 +17,7 @@ from skimage.measure import label
 from elf.evaluation import mean_segmentation_accuracy
 
 from ..util import load_image_data
+from ..automatic_segmentation import _has_extension
 
 
 def _run_evaluation(gt_paths, prediction_paths, verbose=True, thresholds=None):
@@ -203,13 +204,12 @@ def main():
     def _get_inputs_from_paths(paths, key):
         fpaths = []
         for path in paths:
-            if os.path.isdir(path):  # if the path is a directory, fetch all inputs provided with a pattern.
+            if _has_extension(path):  # it is just one filepath and we check whether we can access it via 'elf'.
+                fpaths.append(path if key is None else load_image_data(path=path, key=key))
+            else:  # otherwise, path is a directory, fetch all inputs provided with a pattern.
                 assert key is not None, \
                     f"You must provide a wildcard / pattern as the filepath '{os.path.abspath(path)}' is a directory."
                 fpaths.extend(natsorted(glob(os.path.join(path, key))))
-
-            else:  # Otherwise, it is just one filepath and we check whether we can access it via 'elf'.
-                fpaths.append(path if key is None else load_image_data(path=path, key=key))
 
         return fpaths
 
@@ -220,7 +220,7 @@ def main():
     # Check whether output path is a csv or not, if passed.
     output_path = args.output_path
     if output_path is not None:
-        if os.path.isdir(output_path):  # If it is a directory, store this in "<OUTPUT_PATH>/results.csv"
+        if not _has_extension(output_path):  # If it is a directory, store this in "<OUTPUT_PATH>/results.csv"
             os.makedirs(output_path, exist_ok=True)
             output_path = os.path.join(output_path, "results.csv")
 
