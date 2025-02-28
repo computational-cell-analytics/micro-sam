@@ -893,6 +893,13 @@ class EmbeddingWidget(_WidgetBase):
     def _initialize_image(self):
         state = AnnotatorState()
         layer = self.image_selection.get_value()
+
+        # This is encountered when there is no image layer available / selected.
+        # In this case, we need not specify other image-level parameters to the state. Hence, we skip them.
+        # NOTE: On code-level, this happens as the first step when "Compute Embedding" click is triggered.
+        if layer is None:
+            return
+
         image_shape = layer.data.shape
         image_scale = tuple(layer.scale)
         state.image_shape = image_shape
@@ -1041,6 +1048,11 @@ class EmbeddingWidget(_WidgetBase):
         Returns:
             bool: True if the computation should be aborted, otherwise False.
         """
+
+        # Check if we have an existing input image to compute the embeddings.
+        image = self.image_selection.get_value()
+        if image is None:
+            return _generate_message("error", "No image has been selected.")
 
         # Check if we have an existing embedding path.
         # If yes we check the data signature of these embeddings against the selected image

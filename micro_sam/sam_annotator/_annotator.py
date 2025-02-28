@@ -150,6 +150,13 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
     def _update_image(self, segmentation_result=None):
         state = AnnotatorState()
 
+        # This is encountered when there is no image layer available / selected.
+        # In this case, we need not update the image shape or check for changes.
+        # NOTE: On code-level, this happens when '__init__' method is called by '_AnnotatorBase',
+        #       where one of the first steps is to '_create_widgets', which reaches here.
+        if state.image_shape is None:
+            return
+
         # Update the image shape if it has changed.
         if state.image_shape != self._shape:
             if len(state.image_shape) != self._ndim:
