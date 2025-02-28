@@ -161,11 +161,11 @@ def main():
 
     # labels and predictions for quantitative evaluation.
     parser.add_argument(
-        "--labels", required=True, type=str, nargs="*",
+        "--labels", required=True, type=str, nargs="+",
         help="Filepath(s) to ground-truth labels or the directory where the label data is stored."
     )
     parser.add_argument(
-        "--predictions", required=True, type=str, nargs="*",
+        "--predictions", required=True, type=str, nargs="+",
         help="Filepath to predicted labels or the directory where the predicted label data is stored."
     )
     parser.add_argument(
@@ -181,7 +181,7 @@ def main():
         help="The filepath to store the evaluation results. The current support stores results in a 'csv' file."
     )
     parser.add_argument(
-        "--threshold", default=None, type=float, nargs="*",
+        "--threshold", default=None, type=float, nargs="+",
         help="The choice of overlap threshold(s) for calculating the segmentation accuracy. By default, "
         "np.arange(0.5, 1., 0.05) is used to provide the mean segmentation accurcy score over all values.",
     )
