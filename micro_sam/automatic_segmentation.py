@@ -1,4 +1,6 @@
 import os
+from glob import glob
+from tqdm import tqdm
 from pathlib import Path
 from typing import Optional, Union, Tuple
 
@@ -210,6 +212,25 @@ def automatic_instance_segmentation(
         return instances
 
 
+def _get_inputs_from_paths(paths, pattern):
+    "Function to get all filepaths in a directory."
+
+    if isinstance(paths, str):
+        paths = [paths]
+
+    fpaths = []
+    for path in paths:
+        if os.path.isdir(path):  # if the path is a directory, fetch all inputs provided with a pattern.
+            assert pattern is not None, \
+                f"You must provide a pattern to search for files in the directory: {os.path.abspath(path)}."
+            fpaths.extend(glob(os.path.join(path, pattern)))
+
+        else:  # Otherwise, it is just one filepath.
+            fpaths.append(path)
+
+    return fpaths
+
+
 def main():
     """@private"""
     import argparse
@@ -313,25 +334,51 @@ def main():
         **amg_kwargs,
     )
 
-    # TODO:
     # Get the filepaths to input images.
-    # Get the filepaths to the output images.
-    # If provided, store the embeddings in different files for separate inputs.
+    # Check wiether the inputs are as expected, otherwise assort them.
+    input_path = args.input_path
+    pattern = args.pattern
+    input_paths = _get_inputs_from_paths(input_path, pattern)
 
-    automatic_instance_segmentation(
-        predictor=predictor,
-        segmenter=segmenter,
-        input_path=args.input_path,
-        output_path=args.output_path,
-        embedding_path=args.embedding_path,
-        key=args.key,
-        ndim=args.ndim,
-        tile_shape=args.tile_shape,
-        halo=args.halo,
-        annotate=args.annotate,
-        verbose=args.verbose,
-        **generate_kwargs,
-    )
+    assert len(input_paths) > 0, "We internally could not extract any image data."
+
+    # Get other paths (i.e. for storing outputs and embedding path)
+    output_path = args.output_path
+    embedding_path = args.embedding_path
+    has_one_input = len(input_paths) == 1
+
+    # Run automatic segmentation per image.
+    for path in tqdm(input_paths, desc="Run automatic segmentation"):
+        if not has_one_input:
+            # Let's check for 'embedding_path'.
+            if embedding_path:
+                if os.path.isdir(embedding_path):  # for directory, use image filename for multiple images.
+                    _embedding_fpath = os.path.join(embedding_path, Path(os.path.basename(path)).with_suffix(".zarr"))
+                else:  # otherwise, it is a filename. in this case, I use the filename as suffix to provided path.
+                    _embedding_fpath = Path(embedding_path).with_suffix(".zarr")
+                    _embedding_fpath = _embedding_fpath.replace(".zarr", f"_{Path(embedding_path).stem}.zarr")
+
+            # Next, let's check for output file to store segmentation.
+            if os.path.isdir(output_path):  # for directory, use image filename for multiple images.
+                _output_fpath = os.path.join(output_path, Path(os.path.basename(path)).with_suffix(".tif"))
+            else:  # otherwise, it is a filename. in this case, I use the filename as suffix to provided path.
+                _output_fpath = Path(output_path).with_suffix(".tif")
+                _output_fpath = _output_fpath.replace(".tif", f"_{Path(output_path).stem}.tif")
+
+        automatic_instance_segmentation(
+            predictor=predictor,
+            segmenter=segmenter,
+            input_path=path,
+            output_path=_output_fpath,
+            embedding_path=_embedding_fpath,
+            key=args.key,
+            ndim=args.ndim,
+            tile_shape=args.tile_shape,
+            halo=args.halo,
+            annotate=args.annotate,
+            verbose=args.verbose,
+            **generate_kwargs,
+        )
 
 
 if __name__ == "__main__":
