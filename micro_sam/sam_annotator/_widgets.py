@@ -893,12 +893,18 @@ class EmbeddingWidget(_WidgetBase):
     def _initialize_image(self):
         state = AnnotatorState()
         layer = self.image_selection.get_value()
-        if layer is not None:
-            image_shape = layer.data.shape
-            image_scale = tuple(layer.scale)
-            state.image_shape = image_shape
-            state.image_scale = image_scale
-            state.image_name = layer.name
+
+        # This is encountered when there is no image layer available / selected.
+        # In this case, we need not specify other image-level parameters to the state. Hence, we skip them.
+        # NOTE: On code-level, this happens as the first step when "Compute Embedding" click is triggered.
+        if layer is None:
+            return
+
+        image_shape = layer.data.shape
+        image_scale = tuple(layer.scale)
+        state.image_shape = image_shape
+        state.image_scale = image_scale
+        state.image_name = layer.name
 
     def _create_image_section(self):
         image_section = QtWidgets.QVBoxLayout()
