@@ -161,8 +161,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         if state.image_shape != self._shape:
             if len(state.image_shape) != self._ndim:
                 raise RuntimeError(
-                    f"The dim of the annotator {self._ndim} does not match "
-                    "the image data of shape {state.image_shape}."
+                    f"The dim of the annotator {self._ndim} does not match the image data of shape {state.image_shape}."
                 )
             self._shape = state.image_shape
 
