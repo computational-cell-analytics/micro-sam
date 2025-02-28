@@ -35,6 +35,10 @@ tooltips = {
     "pred_iou_thresh": "Enter the threshold for filtering objects based on the predicted IOU.",
     "stability_score_thresh": "Enter the threshold for filtering objects based on the stability score.",
   },
+  "autotrack": {
+      "run_button": "Run automatic tracking.",
+      "run_tracking": "Choose if to run tracking for the whole timeseries or if to segment only the current timeframe."
+  },
   "prompt_menu": {
     "labels": "Choose positive prompts to inlcude regions or negative ones to exclude regions. Toggle between the settings by pressing [t].",  # noqa
   },
