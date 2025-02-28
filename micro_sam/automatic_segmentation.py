@@ -222,13 +222,18 @@ def _get_inputs_from_paths(paths, pattern):
     for path in paths:
         if os.path.isdir(path):  # if the path is a directory, fetch all inputs provided with a pattern.
             assert pattern is not None, \
-                f"You must provide a pattern to search for files in the directory: {os.path.abspath(path)}."
+                f"You must provide a pattern to search for files in the directory: '{os.path.abspath(path)}'."
             fpaths.extend(glob(os.path.join(path, pattern)))
 
         else:  # Otherwise, it is just one filepath.
             fpaths.append(path)
 
     return fpaths
+
+
+def _has_extension(fpath: Union[os.PathLike, str]) -> bool:
+    "Returns whether the provided path has an extension or not."
+    return bool(os.path.splitext(fpath)[1])
 
 
 def main():
@@ -349,21 +354,28 @@ def main():
 
     # Run automatic segmentation per image.
     for path in tqdm(input_paths, desc="Run automatic segmentation"):
-        if not has_one_input:
+        if has_one_input:  # if we have one image only.
+            _output_fpath = str(Path(output_path).with_suffix(".tif"))
+            _embedding_fpath = embedding_path
+
+        else:  # if we have multiple image, we need to make the other target filepaths compatible.
             # Let's check for 'embedding_path'.
+            _embedding_fpath = embedding_path
             if embedding_path:
-                if os.path.isdir(embedding_path):  # for directory, use image filename for multiple images.
+                if _has_extension(embedding_path):  # in this case, use filename as addl. suffix to provided path.
+                    _embedding_fpath = str(Path(embedding_path).with_suffix(".zarr"))
+                    _embedding_fpath = _embedding_fpath.replace(".zarr", f"_{Path(path).stem}.zarr")
+                else:   # otherwise, for directory, use image filename for multiple images.
+                    os.makedirs(embedding_path, exist_ok=True)
                     _embedding_fpath = os.path.join(embedding_path, Path(os.path.basename(path)).with_suffix(".zarr"))
-                else:  # otherwise, it is a filename. in this case, I use the filename as suffix to provided path.
-                    _embedding_fpath = Path(embedding_path).with_suffix(".zarr")
-                    _embedding_fpath = _embedding_fpath.replace(".zarr", f"_{Path(embedding_path).stem}.zarr")
 
             # Next, let's check for output file to store segmentation.
-            if os.path.isdir(output_path):  # for directory, use image filename for multiple images.
+            if _has_extension(output_path):  # in this case, use filename as addl. suffix to provided path.
+                _output_fpath = str(Path(output_path).with_suffix(".tif"))
+                _output_fpath = _output_fpath.replace(".tif", f"_{Path(path).stem}.tif")
+            else:  # otherwise, for directory, use image filename for multiple images.
+                os.makedirs(output_path, exist_ok=True)
                 _output_fpath = os.path.join(output_path, Path(os.path.basename(path)).with_suffix(".tif"))
-            else:  # otherwise, it is a filename. in this case, I use the filename as suffix to provided path.
-                _output_fpath = Path(output_path).with_suffix(".tif")
-                _output_fpath = _output_fpath.replace(".tif", f"_{Path(output_path).stem}.tif")
 
         automatic_instance_segmentation(
             predictor=predictor,
