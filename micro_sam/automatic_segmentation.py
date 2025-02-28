@@ -338,18 +338,14 @@ def main():
         **amg_kwargs,
     )
 
-    # Get the filepaths to input images.
-    # Check wiether the inputs are as expected, otherwise assort them.
-    input_path = args.input_path
-    pattern = args.pattern
-    input_paths = _get_inputs_from_paths(input_path, pattern)
-
-    assert len(input_paths) > 0, "We internally could not extract any image data."
-
-    # Get other paths (i.e. for storing outputs and embedding path)
+    # Get the filepaths to input images (and other paths to store stuff, eg. segmentations and embeddings)
+    # Check whether the inputs are as expected, otherwise assort them.
+    input_paths = _get_inputs_from_paths(args.input_path, args.pattern)
     output_path = args.output_path
     embedding_path = args.embedding_path
     has_one_input = len(input_paths) == 1
+
+    assert len(input_paths) > 0, "'micro-sam' could not extract any image data internally."
 
     # Run automatic segmentation per image.
     for path in tqdm(input_paths, desc="Run automatic segmentation"):
