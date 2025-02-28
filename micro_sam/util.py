@@ -342,6 +342,7 @@ def get_sam_model(
 
     # checkpoint_path has not been passed, we download a known model and derive the correct
     # URL from the model_type. If the model_type is invalid pooch will raise an error.
+    _provided_checkpoint_path = checkpoint_path is not None
     if checkpoint_path is None:
         model_registry = models()
         checkpoint_path = model_registry.fetch(model_type, progressbar=True)
@@ -377,6 +378,26 @@ def get_sam_model(
 
     state, model_state = _load_checkpoint(checkpoint_path)
 
+    if _provided_checkpoint_path:
+        # To get the model weights, we prioritize having the correct 'checkpoint_path' over 'model_type'
+        # It is done to avoid strange parameter mismatch issues while incompatible model type and weights combination.
+        from micro_sam.models.build_sam import _validate_model_type
+        _provided_model_type = _validate_model_type(state)
+
+        # Verify whether the 'abbreviated_model_type' matches the '_provided_model_type'
+        # Otherwise replace 'abbreviated_model_type' with the later.
+        if abbreviated_model_type != _provided_model_type:
+            # Printing the message below to avoid any filtering of warnings on user's end.
+            print(
+                f"CRITICAL WARNING: The chosen 'model_type' is '{abbreviated_model_type}', "
+                f"however the model checkpoint provided correspond to '{_provided_model_type}', which does not match. "
+                f"We internally switch the model type to the expected value, i.e. '{_provided_model_type}'. "
+                "However, please avoid mismatching combination of 'model_type' and 'checkpoint_path' in future."
+            )
+
+        # Replace the extracted 'abbreviated_model_type' subjected to the model weights.
+        abbreviated_model_type = _provided_model_type
+
     # Whether to update parameters necessary to initialize the model
     if model_kwargs:  # Checks whether model_kwargs have been provided or not
         if abbreviated_model_type == "vit_t":
@@ -407,6 +428,7 @@ def get_sam_model(
     predictor.model_type = abbreviated_model_type
     predictor._hash = model_hash
     predictor.model_name = model_type
+    predictor.checkpoint_path = checkpoint_path
 
     # Add the decoder to the state if we have one and if the state is returned.
     if decoder_path is not None and return_state:
