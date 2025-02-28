@@ -32,7 +32,7 @@ In fact the best results can be expected when finetuning on your own data, and w
 So a good strategy is to annotate a few images with one of the provided models using our interactive annotation tools and, if the model is not working as good as required for your use-case, finetune on the annotated data.
 We recommend checking out our [paper](https://www.nature.com/articles/s41592-024-02580-4) for details on the results on how much data is required for finetuning Segment Anything.
 
-The training logic is implemented in `micro_sam.training` and is based on [torch-em](https://github.com/constantinpape/torch-em). Check out [the finetuning notebook](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb) to see how to use it, or our latest training CLI (`micro_sam.train`), see `micro_sam.train -h` for details on how to use it.
+The training logic is implemented in `micro_sam.training` and is based on [torch-em](https://github.com/constantinpape/torch-em). Check out [the finetuning notebook](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb) to see how to use it, or the training CLI (`micro_sam.train`), see `micro_sam.train -h` for details on how to use it.
 We also support training an additional decoder for automatic instance segmentation. This yields better results than the automatic mask generation of segment anything and is significantly faster.
 The notebook explains how to train it together with the rest of SAM and how to then use it.
 
