@@ -108,6 +108,7 @@ class AnnotatorState(metaclass=Singleton):
         # Compute the image embeddings.
         if isinstance(save_path, dict) and "features" in save_path:  # i.e. embeddings are precomputed
             self.image_embeddings = save_path
+            self.embedding_path = None  # setting this to 'None' as we do not have embeddings cached.
 
         else:  # otherwise, compute the image embeddings.
             self.image_embeddings = util.precompute_image_embeddings(
