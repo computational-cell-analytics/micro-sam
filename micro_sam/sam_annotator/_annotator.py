@@ -150,25 +150,27 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
     def _update_image(self, segmentation_result=None):
         state = AnnotatorState()
 
-        # Update the image shape if it has changed.
-        if state.image_shape != self._shape:
-            if len(state.image_shape) != self._ndim:
-                raise RuntimeError(
-                    f"The dim of the annotator {self._ndim} does not match the image data of shape {state.image_shape}."
-                )
-            self._shape = state.image_shape
+        if state.image_shape is not None:
+            # Update the image shape if it has changed.
+            if state.image_shape != self._shape:
+                if len(state.image_shape) != self._ndim:
+                    raise RuntimeError(
+                        f"The dim of the annotator {self._ndim} does not match "
+                        "the image data of shape {state.image_shape}."
+                    )
+                self._shape = state.image_shape
 
-        # Reset all layers.
-        self._viewer.layers["current_object"].data = np.zeros(self._shape, dtype="uint32")
-        self._viewer.layers["current_object"].scale = state.image_scale
-        self._viewer.layers["auto_segmentation"].data = np.zeros(self._shape, dtype="uint32")
-        self._viewer.layers["auto_segmentation"].scale = state.image_scale
-        if segmentation_result is None or segmentation_result is False:
-            self._viewer.layers["committed_objects"].data = np.zeros(self._shape, dtype="uint32")
-        else:
-            assert segmentation_result.shape == self._shape
-            self._viewer.layers["committed_objects"].data = segmentation_result
-        self._viewer.layers["committed_objects"].scale = state.image_scale
-        self._viewer.layers["point_prompts"].scale = state.image_scale
-        self._viewer.layers["prompts"].scale = state.image_scale
-        vutil.clear_annotations(self._viewer, clear_segmentations=False)
+            # Reset all layers.
+            self._viewer.layers["current_object"].data = np.zeros(self._shape, dtype="uint32")
+            self._viewer.layers["current_object"].scale = state.image_scale
+            self._viewer.layers["auto_segmentation"].data = np.zeros(self._shape, dtype="uint32")
+            self._viewer.layers["auto_segmentation"].scale = state.image_scale
+            if segmentation_result is None or segmentation_result is False:
+                self._viewer.layers["committed_objects"].data = np.zeros(self._shape, dtype="uint32")
+            else:
+                assert segmentation_result.shape == self._shape
+                self._viewer.layers["committed_objects"].data = segmentation_result
+            self._viewer.layers["committed_objects"].scale = state.image_scale
+            self._viewer.layers["point_prompts"].scale = state.image_scale
+            self._viewer.layers["prompts"].scale = state.image_scale
+            vutil.clear_annotations(self._viewer, clear_segmentations=False)

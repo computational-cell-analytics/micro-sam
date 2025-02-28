@@ -893,11 +893,12 @@ class EmbeddingWidget(_WidgetBase):
     def _initialize_image(self):
         state = AnnotatorState()
         layer = self.image_selection.get_value()
-        image_shape = layer.data.shape
-        image_scale = tuple(layer.scale)
-        state.image_shape = image_shape
-        state.image_scale = image_scale
-        state.image_name = layer.name
+        if layer is not None:
+            image_shape = layer.data.shape
+            image_scale = tuple(layer.scale)
+            state.image_shape = image_shape
+            state.image_scale = image_scale
+            state.image_name = layer.name
 
     def _create_image_section(self):
         image_section = QtWidgets.QVBoxLayout()
@@ -1041,6 +1042,11 @@ class EmbeddingWidget(_WidgetBase):
         Returns:
             bool: True if the computation should be aborted, otherwise False.
         """
+
+        # Check if we have an existing input image to compute the embeddings.
+        image = self.image_selection.get_value()
+        if image is None:
+            return _generate_message("error", "No image has been selected.")
 
         # Check if we have an existing embedding path.
         # If yes we check the data signature of these embeddings against the selected image
