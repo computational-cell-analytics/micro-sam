@@ -1196,7 +1196,7 @@ class SegmentNDWidget(_WidgetBase):
         setting_values.setLayout(QtWidgets.QVBoxLayout())
 
         # Create the UI for the projection modes.
-        self.projection = "points"
+        self.projection = "single_point"
         self.projection_dropdown, layout = self._add_choice_param(
             "projection", self.projection, PROJECTION_MODES, tooltip=get_tooltip("segmentnd", "projection_dropdown")
             )
