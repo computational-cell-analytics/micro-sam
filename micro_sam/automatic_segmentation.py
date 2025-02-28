@@ -115,7 +115,7 @@ def automatic_instance_segmentation(
         image_data = util.load_image_data(input_path, key)
 
     ndim = image_data.ndim if ndim is None else ndim
-    
+
     # We perform additional post-processing for AMG-only.
     # Otherwise, we ignore additional post-processing for AIS.
     if isinstance(segmenter, InstanceSegmentationWithDecoder):
@@ -219,31 +219,31 @@ def main():
 
     parser = argparse.ArgumentParser(description="Run automatic segmentation for an image.")
     parser.add_argument(
-        "-i", "--input_path", required=True,
+        "-i", "--input_path", required=True, type=str, nargs="+",
         help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
         "or elf.io.open_file (e.g. hdf5, zarr, mrc). For the latter you also need to pass the 'key' parameter."
     )
     parser.add_argument(
-        "-o", "--output_path", required=True,
+        "-o", "--output_path", required=True, type=str,
         help="The filepath to store the instance segmentation. The current support stores segmentation in a 'tif' file."
     )
     parser.add_argument(
         "-e", "--embedding_path", default=None, type=str, help="The path where the embeddings will be saved."
     )
     parser.add_argument(
-        "--pattern", help="Pattern / wildcard for selecting files in a folder. To select all files use '*'."
+        "--pattern", type=str, help="Pattern / wildcard for selecting files in a folder. To select all files use '*'."
     )
     parser.add_argument(
-        "-k", "--key",
+        "-k", "--key", default=None, type=str,
         help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
         "for an image stack it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
     )
     parser.add_argument(
-        "-m", "--model_type", default=util._DEFAULT_MODEL,
+        "-m", "--model_type", default=util._DEFAULT_MODEL, type=str,
         help=f"The segment anything model that will be used, one of {available_models}."
     )
     parser.add_argument(
-        "-c", "--checkpoint", default=None, help="Checkpoint from which the SAM model will be loaded."
+        "-c", "--checkpoint", default=None, type=str, help="Checkpoint from which the SAM model will be loaded."
     )
     parser.add_argument(
         "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction.", default=None
@@ -252,11 +252,11 @@ def main():
         "--halo", nargs="+", type=int, help="The halo for using tiled prediction.", default=None
     )
     parser.add_argument(
-        "-n", "--ndim", type=int, default=None,
+        "-n", "--ndim", default=None, type=int,
         help="The number of spatial dimensions in the data. Please specify this if your data has a channel dimension."
     )
     parser.add_argument(
-        "--mode", type=str, default="auto",
+        "--mode", default="auto", type=str,
         help="The choice of automatic segmentation with the Segment Anything models. Either 'auto', 'amg' or 'ais'."
     )
     parser.add_argument(
@@ -264,7 +264,7 @@ def main():
         help="Whether to continue annotation after the automatic segmentation is generated."
     )
     parser.add_argument(
-        "-d", "--device", default=None,
+        "-d", "--device", default=None, type=str,
         help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
         "By default the most performant available device will be selected."
     )
@@ -312,6 +312,11 @@ def main():
         is_tiled=args.tile_shape is not None,
         **amg_kwargs,
     )
+
+    # TODO:
+    # Get the filepaths to input images.
+    # Get the filepaths to the output images.
+    # If provided, store the embeddings in different files for separate inputs.
 
     automatic_instance_segmentation(
         predictor=predictor,
