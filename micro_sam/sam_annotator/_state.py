@@ -106,23 +106,29 @@ class AnnotatorState(metaclass=Singleton):
             self.decoder = decoder
 
         # Compute the image embeddings.
-        self.image_embeddings = util.precompute_image_embeddings(
-            predictor=self.predictor,
-            input_=image_data,
-            save_path=save_path,
-            ndim=ndim,
-            tile_shape=tile_shape,
-            halo=halo,
-            verbose=True,
-            pbar_init=pbar_init,
-            pbar_update=pbar_update,
-        )
-        self.embedding_path = save_path
+        if isinstance(save_path, dict) and "features" in save_path:  # i.e. embeddings are precomputed
+            self.image_embeddings = save_path
+
+        else:  # otherwise, compute the image embeddings.
+            self.image_embeddings = util.precompute_image_embeddings(
+                predictor=self.predictor,
+                input_=image_data,
+                save_path=save_path,
+                ndim=ndim,
+                tile_shape=tile_shape,
+                halo=halo,
+                verbose=True,
+                pbar_init=pbar_init,
+                pbar_update=pbar_update,
+            )
+            self.embedding_path = save_path
+
         # If we have an embedding path the data signature has already been computed,
         # and we can read it from there.
-        if save_path is not None:
+        if save_path is not None and isinstance(save_path, str):
             with zarr.open(save_path, "r") as f:
                 self.data_signature = f.attrs["data_signature"]
+
         # Otherwise we compute it here.
         else:
             self.data_signature = util._compute_data_signature(image_data)

@@ -160,7 +160,7 @@ def automatic_instance_segmentation(
         if (image_data.ndim != 3) and (image_data.ndim != 4 and image_data.shape[-1] != 3):
             raise ValueError(f"The inputs does not match the shape expectation of 3d inputs: {image_data.shape}")
 
-        outputs = automatic_3d_segmentation(
+        instances, image_embeddings = automatic_3d_segmentation(
             volume=image_data,
             predictor=predictor,
             segmentor=segmenter,
@@ -168,14 +168,9 @@ def automatic_instance_segmentation(
             tile_shape=tile_shape,
             halo=halo,
             verbose=verbose,
-            return_embeddings=return_embeddings,
+            return_embeddings=True,
             **generate_kwargs
         )
-
-        if return_embeddings:
-            instances, image_embeddings = outputs
-        else:
-            instances = outputs
 
     # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
     if annotate:
@@ -185,7 +180,7 @@ def automatic_instance_segmentation(
         viewer = annotator_function(
             image=image_data,
             model_type=predictor.model_name,
-            embedding_path=embedding_path,
+            embedding_path=image_embeddings,  # Providing the precomputed image embeddings.
             segmentation_result=instances,  # Initializes the automatic segmentation to the annotator.
             tile_shape=tile_shape,
             halo=halo,
@@ -341,11 +336,11 @@ def main():
     # Get the filepaths to input images (and other paths to store stuff, eg. segmentations and embeddings)
     # Check whether the inputs are as expected, otherwise assort them.
     input_paths = _get_inputs_from_paths(args.input_path, args.pattern)
+    assert len(input_paths) > 0, "'micro-sam' could not extract any image data internally."
+
     output_path = args.output_path
     embedding_path = args.embedding_path
     has_one_input = len(input_paths) == 1
-
-    assert len(input_paths) > 0, "'micro-sam' could not extract any image data internally."
 
     # Run automatic segmentation per image.
     for path in tqdm(input_paths, desc="Run automatic segmentation"):
