@@ -1730,16 +1730,14 @@ class AutoTrackWidget(AutoSegmentWidget):
     def _run_segmentation_3d(self, kwargs):
         allow_segment_3d = self._allow_segment_3d()
         if not allow_segment_3d:
-            val_results = {
-                "message_type": "error",
-                "message": "Tracking with AMG is only supported if you have a GPU."
-            }
-            return _generate_message(val_results["message_type"], val_results["message"])
+            return _generate_message("error", "Tracking with AMG is only supported if you have a GPU.")
 
         state = AnnotatorState()
         if len(state.committed_lineages) > 0:
-            # TODO raise a proper error window for this.
-            raise RuntimeError
+            return _generate_message(
+                "error",
+                "Automatic tracking can only be called if you haven't commited results from interactive tracking yet."
+            )
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
         # @thread_worker

@@ -2,7 +2,7 @@
 """
 
 import os
-from typing import Optional, Union, Tuple
+from typing import Dict, List, Optional, Union, Tuple
 
 import networkx as nx
 import numpy as np
@@ -544,13 +544,34 @@ def _extract_tracks_and_lineages(segmentations, track_data, parent_graph):
     return node_to_track, lineages
 
 
-def _tracking_impl(timeseries, segmentation, mode):
+def _filter_lineages(lineages, tracking_result):
+    track_ids = set(np.unique(tracking_result)) - {0}
+    filtered_lineages = []
+    for lineage in lineages:
+        filtered_lineage = {k: v for k, v in lineage.items() if k in track_ids}
+        if filtered_lineage:
+            filtered_lineages.append(filtered_lineage)
+    return filtered_lineages
+
+
+def _tracking_impl(timeseries, segmentation, mode, min_time_extent):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = Trackastra.from_pretrained("general_2d", device=device)
     lineage_graph = model.track(timeseries, segmentation, mode=mode)
     track_data, parent_graph, _ = graph_to_napari_tracks(lineage_graph)
     node_to_track, lineages = _extract_tracks_and_lineages(segmentation, track_data, parent_graph)
     tracking_result = recolor_segmentation(segmentation, node_to_track)
+
+    # TODO
+    # We should check if trackastra supports this already.
+    # Filter out short tracks / lineages.
+    if min_time_extent is not None and min_time_extent > 0:
+        raise NotImplementedError
+
+    # Filter out pruned lineages.
+    # Mmay either be missing due to track filtering or non-consectutive track numbering in trackastra.
+    lineages = _filter_lineages(lineages, tracking_result)
+
     return tracking_result, lineages
 
 
@@ -562,8 +583,11 @@ def track_across_frames(
     verbose: bool = True,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
-) -> Tuple[np.ndarray, ]:
-    """
+) -> Tuple[np.ndarray, List[Dict]]:
+    """Track segmented objects over time.
+
+    This function uses Trackastra: https://www.ecva.net/papers/eccv_2024/papers_ECCV/papers/09819.pdf
+    for tracking. Please cite it if you use the automated tracking functionality.
 
     Args:
         timeseries: The input timeseries of images.
@@ -577,15 +601,17 @@ def track_across_frames(
         pbar_update: Function to update the progress bar.
 
     Returns:
-        a
-        b
+        The tracking result. Each object is colored by its track id.
+        The lineages, which correspond to the cell divisions. Lineages are represented by a list of dicts,
+            with each dict encoding a lineage, where keys correspond to parent track ids.
+            Each key either maps to a list with two child track ids (cell division) or to an empty list (no division).
     """
     _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init=pbar_init, pbar_update=pbar_update)
 
     if gap_closing is not None and gap_closing > 0:
         segmentation = _preprocess_closing(segmentation, gap_closing, pbar_update)
 
-    segmentation, lineage = _tracking_impl(timeseries, segmentation, mode="greedy")
+    segmentation, lineage = _tracking_impl(timeseries, segmentation, mode="greedy", min_time_extent=min_time_extent)
     return segmentation, lineage
 
 
@@ -600,8 +626,11 @@ def automatic_tracking(
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
     **kwargs,
-) -> Tuple[np.ndarray,]:
-    """Automatically track objects in multi-dimensional segmentation based on an automatic segmentation.
+) -> Tuple[np.ndarray, List[Dict]]:
+    """Automatically track objects in a timesries based on per-frame automatic segmentation.
+
+    This function uses Trackastra: https://www.ecva.net/papers/eccv_2024/papers_ECCV/papers/09819.pdf
+    for tracking. Please cite it if you use the automated tracking functionality.
 
     Args:
         timeseries: The input timeseries of images.
@@ -617,12 +646,14 @@ def automatic_tracking(
         kwargs: Keyword arguments for the 'generate' method of the 'segmentor'.
 
     Returns:
-        a
-        b
+        The tracking result. Each object is colored by its track id.
+        The lineages, which correspond to the cell divisions. Lineages are represented by a list of dicts,
+            with each dict encoding a lineage, where keys correspond to parent track ids.
+            Each key either maps to a list with two child track ids (cell division) or to an empty list (no division).
     """
     if Trackastra is None:
         raise RuntimeError(
-            "Automatic tracking requires trackastra. You can install it via 'pip install trackastra'"
+            "Automatic tracking requires trackastra. You can install it via 'pip install trackastra'."
         )
     segmentation, _ = _segment_slices(
         timeseries, predictor, segmentor, embedding_path, verbose,
