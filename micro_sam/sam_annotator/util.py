@@ -677,7 +677,7 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
     if index > 0:
         widget.model_dropdown.setCurrentIndex(index)
 
-    if save_path is not None:
+    if save_path is not None and isinstance(save_path, str):
         widget.embeddings_save_path_param.setText(str(save_path))
 
     if checkpoint_path is not None:
