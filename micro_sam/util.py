@@ -1149,7 +1149,7 @@ def micro_sam_info():
     # The documentation link panel.
     console.print(
         Panel(
-            "[bold #CC79A7]Software documented at:[/bold #CC79A7]\n"
+            "[bold #CC79A7]Tools documented at:[/bold #CC79A7]\n"
             "https://computational-cell-analytics.github.io/micro-sam", title="Documentation"
         )
     )
