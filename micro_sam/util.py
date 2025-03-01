@@ -1121,3 +1121,51 @@ def get_block_shape(shape: Tuple[int]) -> Tuple[int]:
         raise ValueError(f"Only 2 or 3 dimensional shapes are supported, got {ndim}D.")
 
     return block_shape
+
+
+def micro_sam_info():
+    """@private"""
+    from rich.panel import Panel
+    from rich.console import Console
+
+    import micro_sam
+
+    # Create a new console for logging all information.
+    console = Console()
+
+    # Log the headline of CLI.
+    console.print("[bold cyan]μSAM Information Booth[/bold cyan]", justify="center")
+    console.print("-" * console.width)
+
+    # Log the latest version of micro-sam.
+    console.print(
+        Panel(f"[bold yellow]Version:[/bold yellow] {micro_sam.__version__}", title="μSAM Version", expand=True)
+    )
+
+    # Log the cache directory for user.
+    console.print(Panel(f"[bold cyan]Cache Directory:[/bold cyan]\n{get_cache_directory()}", title="Cache Directory"))
+
+    # Get all supported model names.
+    available_models = list(get_model_names())
+    # Remove all decoder model names
+    available_models = [m for m in available_models if not m.endswith("_decoder")]
+    model_list = "\n".join(available_models)
+    # Log all supported model names.
+    console.print(
+        Panel(f"[bold green]Available Models:[/bold green]\n{model_list}", title="List of Supported Models")
+    )
+
+    # Log the publication details.
+    console.print(
+        Panel(
+            "[bold magenta]Published in Nature Methods:[/bold magenta]\nhttps://www.nature.com/articles/s41592-024-02580-4",  # noqa
+            title="Publication"
+        )
+    )
+
+    # Log the documentation website.
+
+    # TODO:
+    # check some versions.
+    # check os.
+    # check memory and GPU requirements.
