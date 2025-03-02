@@ -3,10 +3,10 @@
 
 import os
 import gc
+import multiprocessing as mp
 import pickle
 from pathlib import Path
 from typing import Optional
-import multiprocessing as mp
 
 import h5py
 import json
@@ -573,10 +573,18 @@ def commit_track(
     if layer == "current_object":
         vutil.clear_annotations(viewer)
 
+    # Create / update the tracking layer.
+    layer_name = "tracks"
+    track_data, parent_graph = _derive_track_data(seg, state.committed_lineages)
+    if layer_name in viewer.layers:
+        pass
+    else:
+        viewer.add_tracks(track_data, name=layer_name, graph=parent_graph)
+
     # Reset the tracking state.
     _reset_tracking_state(viewer)
 
-    # Perform garbage collection
+    # Perform garbage collection.
     gc.collect()
 
 
