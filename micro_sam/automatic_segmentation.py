@@ -381,7 +381,3 @@ def main():
             verbose=args.verbose,
             **generate_kwargs,
         )
-
-
-if __name__ == "__main__":
-    main()

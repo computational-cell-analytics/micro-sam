@@ -1121,3 +1121,89 @@ def get_block_shape(shape: Tuple[int]) -> Tuple[int]:
         raise ValueError(f"Only 2 or 3 dimensional shapes are supported, got {ndim}D.")
 
     return block_shape
+
+
+def micro_sam_info():
+    """Display μSAM information using a rich console."""
+    import psutil
+    import platform
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.console import Console
+
+    import torch
+    import micro_sam
+
+    # Open up a new console.
+    console = Console()
+
+    # The header for information CLI.
+    console.print("[bold #0072B2]μSAM Information Booth[/bold #0072B2]", justify="center")
+    console.print("-" * console.width)
+
+    # μSAM version panel.
+    console.print(
+        Panel(f"[bold #F0E442]Version:[/bold #F0E442] {micro_sam.__version__}", title="μSAM Version", expand=True)
+    )
+
+    # The documentation link panel.
+    console.print(
+        Panel(
+            "[bold #CC79A7]Tools documented at:[/bold #CC79A7]\n"
+            "https://computational-cell-analytics.github.io/micro-sam", title="Documentation"
+        )
+    )
+
+    # The publication panel.
+    console.print(
+        Panel(
+            "[bold #E69F00]Published in Nature Methods:[/bold #E69F00]\n"
+            "https://www.nature.com/articles/s41592-024-02580-4", title="Publication"
+        )
+    )
+
+    # The cache directory panel.
+    console.print(
+        Panel(f"[bold #009E73]Cache Directory:[/bold #009E73]\n{get_cache_directory()}", title="Cache Directory")
+    )
+
+    # The available models panel.
+    available_models = list(get_model_names())
+    # We filter out the decoder models.
+    available_models = [m for m in available_models if not m.endswith("_decoder")]
+    model_list = "\n".join(available_models)
+    console.print(
+        Panel(f"[bold #D55E00]Available Models:[/bold #D55E00]\n{model_list}", title="List of Supported Models")
+    )
+
+    # The system information table.
+    total_memory = psutil.virtual_memory().total / (1024 ** 3)
+    table = Table(title="System Information", show_header=True, header_style="bold #0072B2", expand=True)
+    table.add_column("Property")
+    table.add_column("Value", style="bold #56B4E9")
+    table.add_row("System", platform.system())
+    table.add_row("Node Name", platform.node())
+    table.add_row("Release", platform.release())
+    table.add_row("Version", platform.version())
+    table.add_row("Machine", platform.machine())
+    table.add_row("Processor", platform.processor())
+    table.add_row("Platform", platform.platform())
+    table.add_row("Total RAM (GB)", f"{total_memory:.2f}")
+    console.print(table)
+
+    # The device information and check for available GPU acceleration.
+    default_device = _get_default_device()
+
+    if default_device == "cuda":
+        device_index = torch.cuda.current_device()
+        device_name = torch.cuda.get_device_name(device_index)
+        console.print(Panel(f"[bold #000000]CUDA Device:[/bold #000000] {device_name}", title="GPU Information"))
+    elif default_device == "mps":
+        console.print(Panel("[bold #000000]MPS Device is available[/bold #000000]", title="GPU Information"))
+    else:
+        console.print(
+            Panel(
+                "[bold #000000]No GPU acceleration device detected. Running on CPU.[/bold #000000]",
+                title="Device Information"
+            )
+        )
