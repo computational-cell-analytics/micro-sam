@@ -375,8 +375,16 @@ class PEFT_Sam(nn.Module):
         if issubclass(self.peft_module, SSFSurgery):
             self.peft_blocks.append(self.peft_module(rank=rank, block=model.image_encoder.patch_embed))
 
+        start_layer = module_kwargs.pop("start_layer", None)
+
         for t_layer_i, blk in enumerate(model.image_encoder.blocks):
             # If we only want specific layers with PEFT instead of all
+
+            # For late lora, we only apply lora on the layers after a certain "start layer".
+            if start_layer is not None:
+                if t_layer_i < start_layer:
+                    continue
+
             if t_layer_i not in self.peft_layers:
                 continue
 
