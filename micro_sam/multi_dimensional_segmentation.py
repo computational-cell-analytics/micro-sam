@@ -2,6 +2,8 @@
 """
 
 import os
+import multiprocessing as mp
+from concurrent import futures
 from typing import Dict, List, Optional, Union, Tuple
 
 import networkx as nx
@@ -664,3 +666,34 @@ def automatic_tracking(
         timeseries, segmentation, gap_closing=gap_closing, min_time_extent=min_time_extent, verbose=verbose,
     )
     return segmentation, lineage
+
+
+def get_napari_track_data(
+    segmentation: np.ndarray, lineages: List[Dict], n_threads: Optional[int] = None
+) -> Tuple[np.ndarray, ]:
+    """Derive the inputs for the napari tracking layer from a tracking result.
+
+    Args:
+        segmentation:
+        lineages:
+        n_threads:
+
+    Returns:
+    """
+    if n_threads is None:
+        n_threads = mp.cpu_count()
+
+    def compute_props(t):
+        props = regionprops(segmentation[t])
+        # Create the track data representation for napari, which expects:
+        # track_id, timepoint, y, x
+        track_data = np.array([[prop.label, t] + list(prop.centroid) for prop in props])
+        return track_data
+
+    with futures.ThreadPoolExecutor(n_threads) as tp:
+        track_data = list(tp.map(compute_props, range(segmentation.shape[0])))
+    track_data = np.array(track_data)
+
+    # TODO
+    parent_graph = None
+    return track_data, parent_graph
