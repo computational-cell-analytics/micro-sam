@@ -306,6 +306,7 @@ class PEFT_Sam(nn.Module):
         rank: The rank for low-rank adaptation.
         peft_module: Wrapper to operate on the image encoder blocks for the PEFT method.
         attention_layers_to_update: Which specific layers we apply PEFT methods to.
+            For reference, the total number of blocks for 'vit_b' is 12, for 'vit_l' is 24 and for 'vit_h' is 32.
         quantize: Whether to quantize the model for lower precision training.
     """
 
@@ -314,7 +315,7 @@ class PEFT_Sam(nn.Module):
         model: Sam,
         rank: Optional[int] = None,
         peft_module: nn.Module = LoRASurgery,
-        attention_layers_to_update: Union[List[int]] = None,
+        attention_layers_to_update: Optional[Union[List[int]]] = None,
         quantize: bool = False,
         **module_kwargs
     ):
@@ -375,7 +376,14 @@ class PEFT_Sam(nn.Module):
         if issubclass(self.peft_module, SSFSurgery):
             self.peft_blocks.append(self.peft_module(rank=rank, block=model.image_encoder.patch_embed))
 
+        # If specified, the attention layers to update should match the available blocks.
+        if attention_layers_to_update and (
+            set(attention_layers_to_update) - set(list(range(len(model.image_encoder.blocks))))
+        ):
+            raise ValueError("The chosen layer(s) to apply PEFT method is not a valid transformer block id.")
+
         for t_layer_i, blk in enumerate(model.image_encoder.blocks):
+
             # If we only want specific layers with PEFT instead of all
             if t_layer_i not in self.peft_layers:
                 continue
