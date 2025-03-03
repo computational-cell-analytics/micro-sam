@@ -29,42 +29,93 @@ class LoRASurgery(nn.Module):
     Args:
         rank: The rank of the decomposition matrices for updating weights in each attention layer.
         block: The chosen attention blocks for implementing LoRA.
+        start_layer: The layer from which to start applying LoRA if late lora is used.
     """
-    def __init__(self, rank: int, block: nn.Module):
+    def __init__(self, rank: int, block: nn.Module, start_layer: int = -1):
         super().__init__()
-        self.qkv_proj = block.attn.qkv
+
+        self.block = block
+        block.attn.qkv = AttnLoRA(rank, block.attn.qkv, late_lora=start_layer)
+        if start_layer >= 0:
+            block.attn.mlp = MLPLoRA(rank, block.mlp)
+
+    def forward(self, x):
+        return x
+
+
+class AttnLoRA(nn.Module):
+
+    def __init__(self, rank: int, layer: nn.Module, late_lora: int = -1):
+        super().__init__()
+        self.qkv_proj = layer
         self.dim = self.qkv_proj.in_features
         self.alpha = 1  # From our experiments, 'alpha' as 1 gives the best performance.
         self.rank = rank
+        self.late_lora = late_lora
 
         self.w_a_linear_q = nn.Linear(self.dim, self.rank, bias=False)
         self.w_b_linear_q = nn.Linear(self.rank, self.dim, bias=False)
         self.w_a_linear_v = nn.Linear(self.dim, self.rank, bias=False)
         self.w_b_linear_v = nn.Linear(self.rank, self.dim, bias=False)
+        if self.late_lora >= 0:
+            self.w_a_linear_k = nn.Linear(self.dim, self.rank, bias=False)
+            self.w_b_linear_k = nn.Linear(self.rank, self.dim, bias=False)
 
         self.reset_parameters()
 
-        block.attn.qkv = self
+        layer = self
 
     def reset_parameters(self):
         nn.init.kaiming_uniform_(self.w_a_linear_q.weight, a=math.sqrt(5))
         nn.init.kaiming_uniform_(self.w_a_linear_v.weight, a=math.sqrt(5))
         nn.init.zeros_(self.w_b_linear_q.weight)
         nn.init.zeros_(self.w_b_linear_v.weight)
+        if self.late_lora >= 0:
+            nn.init.kaiming_uniform_(self.w_a_linear_k.weight, a=math.sqrt(5))
+            nn.init.zeros_(self.w_b_linear_k.weight)
 
     def forward(self, x):
         qkv = self.qkv_proj(x)  # B, N, N, 3 * org_C
         new_q = self.alpha * self.w_b_linear_q(self.w_a_linear_q(x))
         new_v = self.alpha * self.w_b_linear_v(self.w_a_linear_v(x))
+        new_k = self.alpha * self.w_b_linear_k(self.w_a_linear_k(x)) if self.late_lora >= 0 else 0
         qkv = torch.cat(
             [
                 qkv[:, :, :, :self.dim] + new_q,  # replacing new q values
-                qkv[:, :, :, self.dim:-self.dim],  # leaving the middle part as identical
+                qkv[:, :, :, self.dim:-self.dim] + new_k,  # leaving the middle part as identical
                 qkv[:, :, :, -self.dim:] + new_v  # replacing new v values
             ], dim=-1
         )
 
         return qkv
+
+
+class MLPLoRA(nn.Module):
+    def __init__(self, rank, layer):
+        super().__init__()
+        self.layer = layer
+        self.rank = rank
+        self.w_a_linear_1 = nn.Linear(layer.lin1.in_features, rank, bias=False)
+        self.w_b_linear_1 = nn.Linear(rank, layer.lin1.out_features, bias=False)
+        self.w_a_linear_2 = nn.Linear(layer.lin2.in_features, rank, bias=False)
+        self.w_b_linear_2 = nn.Linear(rank, layer.lin2.out_features, bias=False)
+        self.act = layer.act
+
+        self.reset_parameters()
+
+        layer = self
+
+    def reset_parameters(self):
+        nn.init.kaiming_uniform_(self.w_a_linear_1.weight, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.w_a_linear_2.weight, a=math.sqrt(5))
+        nn.init.zeros_(self.w_b_linear_1.weight)
+        nn.init.zeros_(self.w_b_linear_2.weight)
+
+    def forward(self, x):
+        x = self.layer(x)
+        x = self.w_b_linear_2(self.w_a_linear_2(x))
+        x = self.w_b_linear_1(self.w_a_linear_1(x))
+        return x
 
 
 class FacTSurgery(nn.Module):
@@ -375,14 +426,14 @@ class PEFT_Sam(nn.Module):
         if issubclass(self.peft_module, SSFSurgery):
             self.peft_blocks.append(self.peft_module(rank=rank, block=model.image_encoder.patch_embed))
 
-        start_layer = module_kwargs.pop("start_layer", None)
+        start_layer = module_kwargs.get("start_layer", None)
 
         for t_layer_i, blk in enumerate(model.image_encoder.blocks):
             # If we only want specific layers with PEFT instead of all
 
             # For late lora, we only apply lora on the layers after a certain "start layer".
             if start_layer is not None:
-                if t_layer_i < start_layer:
+                if t_layer_i <= start_layer:
                     continue
 
             if t_layer_i not in self.peft_layers:
@@ -394,7 +445,6 @@ class PEFT_Sam(nn.Module):
                 self.peft_blocks.append(self.peft_module(rank=rank, block=blk, **module_kwargs))
 
         self.peft_blocks = nn.ModuleList(self.peft_blocks)
-
         self.sam = model
 
     def forward(self, batched_input, multimask_output):
