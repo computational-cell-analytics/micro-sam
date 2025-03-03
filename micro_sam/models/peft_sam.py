@@ -377,8 +377,9 @@ class PEFT_Sam(nn.Module):
             self.peft_blocks.append(self.peft_module(rank=rank, block=model.image_encoder.patch_embed))
 
         # If specified, the attention layers to update should match the available blocks.
-        _all_layers_match = (set(attention_layers_to_update) - set(list(range(len(model.image_encoder.blocks)))))
-        if attention_layers_to_update and _all_layers_match:
+        if attention_layers_to_update and (
+            set(attention_layers_to_update) - set(list(range(len(model.image_encoder.blocks))))
+        ):
             raise ValueError("The chosen layer(s) to apply PEFT method is not a valid transformer block id.")
 
         for t_layer_i, blk in enumerate(model.image_encoder.blocks):
