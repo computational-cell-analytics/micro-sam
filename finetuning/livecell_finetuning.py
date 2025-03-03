@@ -72,7 +72,9 @@ def finetune_livecell(args):
         save_root=args.save_root,
         scheduler_kwargs=scheduler_kwargs,
         save_every_kth_epoch=args.save_every_kth_epoch,
-        peft_kwargs={"rank": args.lora_rank, "start_layer": 10} if args.lora_rank is not None else None,
+        peft_kwargs={
+            "rank": args.lora_rank, "attention_layers_to_update": [9, 10, 11]
+        } if args.lora_rank is not None else None,
     )
 
     if args.export_path is not None:
