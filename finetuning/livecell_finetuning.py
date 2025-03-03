@@ -56,19 +56,6 @@ def finetune_livecell(args):
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10, "verbose": True}
 
-    # NOTE: memory req. for all vit_b models (compared on A100 80GB)
-    # vit_b
-    # freeze_encoder: ~ 33.89 GB
-    # QLoRA: ~48.54 GB
-    # LoRA: ~48.62 GB
-    # FFT: ~49.56 GB
-
-    # vit_h
-    # freeze_encoder: ~36.05 GB
-    # QLoRA: ~ 65.68 GB
-    # LoRA: ~ 67.14 GB
-    # FFT: ~72.34 GB
-
     # Run training.
     sam_training.train_sam(
         name=checkpoint_name,
@@ -85,7 +72,7 @@ def finetune_livecell(args):
         save_root=args.save_root,
         scheduler_kwargs=scheduler_kwargs,
         save_every_kth_epoch=args.save_every_kth_epoch,
-        peft_kwargs={"rank": args.lora_rank, "quantize": True} if args.lora_rank is not None else None,
+        peft_kwargs={"rank": args.lora_rank, "start_layer": 10} if args.lora_rank is not None else None,
     )
 
     if args.export_path is not None:
