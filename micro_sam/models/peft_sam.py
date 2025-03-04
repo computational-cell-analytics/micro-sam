@@ -31,12 +31,12 @@ class LoRASurgery(nn.Module):
         block: The chosen attention blocks for implementing LoRA.
         start_layer: The layer from which to start applying LoRA if late lora is used.
     """
-    def __init__(self, rank: int, block: nn.Module, start_layer: int = -1):
+    def __init__(self, rank: int, block: nn.Module, attention_layers_to_update: List = []):
         super().__init__()
 
         self.block = block
-        block.attn.qkv = AttnLoRA(rank, block.attn.qkv, late_lora=start_layer)
-        if start_layer >= 0:
+        block.attn.qkv = AttnLoRA(rank, block.attn.qkv, late_lora=bool(attention_layers_to_update))
+        if bool(attention_layers_to_update):
             block.attn.mlp = MLPLoRA(rank, block.mlp)
 
     def forward(self, x):
@@ -45,7 +45,7 @@ class LoRASurgery(nn.Module):
 
 class AttnLoRA(nn.Module):
 
-    def __init__(self, rank: int, layer: nn.Module, late_lora: int = -1):
+    def __init__(self, rank: int, layer: nn.Module, late_lora: bool = False):
         super().__init__()
         self.qkv_proj = layer
         self.dim = self.qkv_proj.in_features
@@ -57,7 +57,7 @@ class AttnLoRA(nn.Module):
         self.w_b_linear_q = nn.Linear(self.rank, self.dim, bias=False)
         self.w_a_linear_v = nn.Linear(self.dim, self.rank, bias=False)
         self.w_b_linear_v = nn.Linear(self.rank, self.dim, bias=False)
-        if self.late_lora >= 0:
+        if self.late_lora:
             self.w_a_linear_k = nn.Linear(self.dim, self.rank, bias=False)
             self.w_b_linear_k = nn.Linear(self.rank, self.dim, bias=False)
 
@@ -70,7 +70,7 @@ class AttnLoRA(nn.Module):
         nn.init.kaiming_uniform_(self.w_a_linear_v.weight, a=math.sqrt(5))
         nn.init.zeros_(self.w_b_linear_q.weight)
         nn.init.zeros_(self.w_b_linear_v.weight)
-        if self.late_lora >= 0:
+        if self.late_lora:
             nn.init.kaiming_uniform_(self.w_a_linear_k.weight, a=math.sqrt(5))
             nn.init.zeros_(self.w_b_linear_k.weight)
 
@@ -78,7 +78,7 @@ class AttnLoRA(nn.Module):
         qkv = self.qkv_proj(x)  # B, N, N, 3 * org_C
         new_q = self.alpha * self.w_b_linear_q(self.w_a_linear_q(x))
         new_v = self.alpha * self.w_b_linear_v(self.w_a_linear_v(x))
-        new_k = self.alpha * self.w_b_linear_k(self.w_a_linear_k(x)) if self.late_lora >= 0 else 0
+        new_k = self.alpha * self.w_b_linear_k(self.w_a_linear_k(x)) if self.late_lora else 0
         qkv = torch.cat(
             [
                 qkv[:, :, :, :self.dim] + new_q,  # replacing new q values
@@ -366,7 +366,6 @@ class PEFT_Sam(nn.Module):
         model: Sam,
         rank: Optional[int] = None,
         peft_module: nn.Module = LoRASurgery,
-        attention_layers_to_update: Optional[Union[List[int]]] = None,
         quantize: bool = False,
         **module_kwargs
     ):
@@ -379,8 +378,10 @@ class PEFT_Sam(nn.Module):
             "Invalid PEFT module"
         )
 
+        attention_layers_to_update = module_kwargs.get("attention_layers_to_update", [])
         if attention_layers_to_update:
             self.peft_layers = attention_layers_to_update
+
         else:   # Applies PEFT to the image encoder by default
             self.peft_layers = list(range(len(model.image_encoder.blocks)))
 
