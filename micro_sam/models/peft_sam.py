@@ -29,19 +29,19 @@ class LoRASurgery(nn.Module):
     Args:
         rank: The rank of the decomposition matrices for updating weights in each attention layer.
         block: The chosen attention blocks for implementing LoRA.
+        update_matrices: Which specific matrices to update in the attention layer. Choice of "q", "k", "v", "mlp".
     """
     def __init__(self, rank: int, block: nn.Module, update_matrices: List[str] = ["q", "v"]):
         super().__init__()
-
         # Check whether all values for "update_matrices" are as expected.
-        if not set(update_matrices) - set("q", "k", "v", "mlp"):
+        if set(update_matrices) - set(["q", "k", "v", "mlp"]):
             raise ValueError()
 
         self.block = block
         block.attn.qkv = AttnLoRA(rank=rank, block=block.attn.qkv, update_matrices=update_matrices)
 
         if "mlp" in update_matrices:
-            block.attn.mlp = MLPLoRA(rank=rank, mlp_layer=block.attn.mlp)  # TODO
+            block.mlp = MLPLoRA(rank=rank, mlp_layer=block.mlp)  # TODO
 
     def forward(self, x):
         return x
@@ -74,20 +74,24 @@ class AttnLoRA(nn.Module):
         block = self
 
     def reset_parameters(self):
-        nn.init.kaiming_uniform_(self.w_a_linear_q.weight, a=math.sqrt(5))
-        nn.init.kaiming_uniform_(self.w_a_linear_v.weight, a=math.sqrt(5))
-        nn.init.zeros_(self.w_b_linear_q.weight)
-        nn.init.zeros_(self.w_b_linear_v.weight)
+        if hasattr(self, "w_a_linear_q"):
+            nn.init.kaiming_uniform_(self.w_a_linear_q.weight, a=math.sqrt(5))
+            nn.init.zeros_(self.w_b_linear_q.weight)
 
-        if self.update_all:
+        if hasattr(self, "w_a_linear_v"):
+            nn.init.kaiming_uniform_(self.w_a_linear_v.weight, a=math.sqrt(5))
+            nn.init.zeros_(self.w_b_linear_v.weight)
+
+        if hasattr(self, "w_a_linear_k"):
             nn.init.kaiming_uniform_(self.w_a_linear_k.weight, a=math.sqrt(5))
             nn.init.zeros_(self.w_b_linear_k.weight)
 
     def forward(self, x):
         qkv = self.qkv_proj(x)  # B, N, N, 3 * org_C
-        new_q = self.alpha * self.w_b_linear_q(self.w_a_linear_q(x))
-        new_v = self.alpha * self.w_b_linear_v(self.w_a_linear_v(x))
-        new_k = self.alpha * self.w_b_linear_k(self.w_a_linear_k(x)) if self.late_lora else 0
+
+        new_q = self.alpha * self.w_b_linear_q(self.w_a_linear_q(x)) if hasattr(self, "w_a_linear_q") else 0
+        new_v = self.alpha * self.w_b_linear_v(self.w_a_linear_v(x)) if hasattr(self, "w_a_linear_v") else 0
+        new_k = self.alpha * self.w_b_linear_k(self.w_a_linear_k(x)) if hasattr(self, "w_a_linear_k") else 0
         qkv = torch.cat(
             [
                 qkv[:, :, :, :self.dim] + new_q,  # replacing new q values.
@@ -101,7 +105,7 @@ class AttnLoRA(nn.Module):
 
 class MLPLoRA(nn.Module):
 
-    def __init__(self, rank, mlp_layer):
+    def __init__(self, rank: int, mlp_layer: nn.Module):
         super().__init__()
 
         self.mlp_layer = mlp_layer
@@ -110,7 +114,7 @@ class MLPLoRA(nn.Module):
         self.w_b_linear_1 = nn.Linear(rank, mlp_layer.lin1.out_features, bias=False)
         self.w_a_linear_2 = nn.Linear(mlp_layer.lin2.in_features, rank, bias=False)
         self.w_b_linear_2 = nn.Linear(rank, mlp_layer.lin2.out_features, bias=False)
-        self.activation = mlp_layer.activation  # TODO: check this
+        self.activation = mlp_layer.act
 
         self.reset_parameters()
 
@@ -123,10 +127,10 @@ class MLPLoRA(nn.Module):
         nn.init.zeros_(self.w_b_linear_2.weight)
 
     def forward(self, x):
-        x = self.layer(x)
-        x = self.w_b_linear_2(self.w_a_linear_2(x))
-        x = self.w_b_linear_1(self.w_a_linear_1(x))
-        ...
+        x = self.mlp_layer.lin1(x) + self.w_b_linear_1(self.w_a_linear_1(x))
+        x = self.activation(x)
+        x = self.mlp_layer.lin2(x) + self.w_b_linear_2(self.w_a_linear_2(x))
+
         return x
 
 
