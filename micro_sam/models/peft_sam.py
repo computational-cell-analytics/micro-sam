@@ -29,15 +29,19 @@ class LoRASurgery(nn.Module):
     Args:
         rank: The rank of the decomposition matrices for updating weights in each attention layer.
         block: The chosen attention blocks for implementing LoRA.
-        start_layer: The layer from which to start applying LoRA if late lora is used.
     """
-    def __init__(self, rank: int, block: nn.Module, attention_layers_to_update: List = []):
+    def __init__(self, rank: int, block: nn.Module, update_matrices: List[str] = ["q", "v"]):
         super().__init__()
 
+        # Check whether all values for "update_matrices" are as expected.
+        if not set(update_matrices) - set("q", "k", "v", "mlp"):
+            raise ValueError()
+
         self.block = block
-        block.attn.qkv = AttnLoRA(rank, block.attn.qkv, late_lora=bool(attention_layers_to_update))
-        if bool(attention_layers_to_update):
-            block.attn.mlp = MLPLoRA(rank, block.mlp)
+        block.attn.qkv = AttnLoRA(rank=rank, block=block.attn.qkv, update_matrices=update_matrices)
+
+        if "mlp" in update_matrices:
+            block.attn.mlp = MLPLoRA(rank=rank, mlp_layer=block.attn.mlp)  # TODO
 
     def forward(self, x):
         return x
@@ -45,32 +49,37 @@ class LoRASurgery(nn.Module):
 
 class AttnLoRA(nn.Module):
 
-    def __init__(self, rank: int, layer: nn.Module, late_lora: bool = False):
+    def __init__(self, rank: int, block: nn.Module, update_matrices: List[str] = ["q", "v"]):
         super().__init__()
-        self.qkv_proj = layer
+        self.qkv_proj = block
         self.dim = self.qkv_proj.in_features
         self.alpha = 1  # From our experiments, 'alpha' as 1 gives the best performance.
         self.rank = rank
-        self.late_lora = late_lora
 
-        self.w_a_linear_q = nn.Linear(self.dim, self.rank, bias=False)
-        self.w_b_linear_q = nn.Linear(self.rank, self.dim, bias=False)
-        self.w_a_linear_v = nn.Linear(self.dim, self.rank, bias=False)
-        self.w_b_linear_v = nn.Linear(self.rank, self.dim, bias=False)
-        if self.late_lora:
+        # By default, we follow LoRA's recommended setup, i.e. update the "q" and "v" matrices.
+        if "q" in update_matrices:
+            self.w_a_linear_q = nn.Linear(self.dim, self.rank, bias=False)
+            self.w_b_linear_q = nn.Linear(self.rank, self.dim, bias=False)
+
+        if "v" in update_matrices:
+            self.w_a_linear_v = nn.Linear(self.dim, self.rank, bias=False)
+            self.w_b_linear_v = nn.Linear(self.rank, self.dim, bias=False)
+
+        if "k" in update_matrices:
             self.w_a_linear_k = nn.Linear(self.dim, self.rank, bias=False)
             self.w_b_linear_k = nn.Linear(self.rank, self.dim, bias=False)
 
         self.reset_parameters()
 
-        layer = self
+        block = self
 
     def reset_parameters(self):
         nn.init.kaiming_uniform_(self.w_a_linear_q.weight, a=math.sqrt(5))
         nn.init.kaiming_uniform_(self.w_a_linear_v.weight, a=math.sqrt(5))
         nn.init.zeros_(self.w_b_linear_q.weight)
         nn.init.zeros_(self.w_b_linear_v.weight)
-        if self.late_lora:
+
+        if self.update_all:
             nn.init.kaiming_uniform_(self.w_a_linear_k.weight, a=math.sqrt(5))
             nn.init.zeros_(self.w_b_linear_k.weight)
 
@@ -81,9 +90,9 @@ class AttnLoRA(nn.Module):
         new_k = self.alpha * self.w_b_linear_k(self.w_a_linear_k(x)) if self.late_lora else 0
         qkv = torch.cat(
             [
-                qkv[:, :, :, :self.dim] + new_q,  # replacing new q values
-                qkv[:, :, :, self.dim:-self.dim] + new_k,  # leaving the middle part as identical
-                qkv[:, :, :, -self.dim:] + new_v  # replacing new v values
+                qkv[:, :, :, :self.dim] + new_q,  # replacing new q values.
+                qkv[:, :, :, self.dim:-self.dim] + new_k,  # replacing new k values.
+                qkv[:, :, :, -self.dim:] + new_v  # replacing new v values.
             ], dim=-1
         )
 
@@ -91,19 +100,21 @@ class AttnLoRA(nn.Module):
 
 
 class MLPLoRA(nn.Module):
-    def __init__(self, rank, layer):
+
+    def __init__(self, rank, mlp_layer):
         super().__init__()
-        self.layer = layer
+
+        self.mlp_layer = mlp_layer
         self.rank = rank
-        self.w_a_linear_1 = nn.Linear(layer.lin1.in_features, rank, bias=False)
-        self.w_b_linear_1 = nn.Linear(rank, layer.lin1.out_features, bias=False)
-        self.w_a_linear_2 = nn.Linear(layer.lin2.in_features, rank, bias=False)
-        self.w_b_linear_2 = nn.Linear(rank, layer.lin2.out_features, bias=False)
-        self.act = layer.act
+        self.w_a_linear_1 = nn.Linear(mlp_layer.lin1.in_features, rank, bias=False)
+        self.w_b_linear_1 = nn.Linear(rank, mlp_layer.lin1.out_features, bias=False)
+        self.w_a_linear_2 = nn.Linear(mlp_layer.lin2.in_features, rank, bias=False)
+        self.w_b_linear_2 = nn.Linear(rank, mlp_layer.lin2.out_features, bias=False)
+        self.activation = mlp_layer.activation  # TODO: check this
 
         self.reset_parameters()
 
-        layer = self
+        mlp_layer = self
 
     def reset_parameters(self):
         nn.init.kaiming_uniform_(self.w_a_linear_1.weight, a=math.sqrt(5))
@@ -115,6 +126,7 @@ class MLPLoRA(nn.Module):
         x = self.layer(x)
         x = self.w_b_linear_2(self.w_a_linear_2(x))
         x = self.w_b_linear_1(self.w_a_linear_1(x))
+        ...
         return x
 
 
@@ -366,6 +378,7 @@ class PEFT_Sam(nn.Module):
         model: Sam,
         rank: Optional[int] = None,
         peft_module: nn.Module = LoRASurgery,
+        attention_layers_to_update: Optional[List[int]] = None,
         quantize: bool = False,
         **module_kwargs
     ):
@@ -378,10 +391,8 @@ class PEFT_Sam(nn.Module):
             "Invalid PEFT module"
         )
 
-        attention_layers_to_update = module_kwargs.get("attention_layers_to_update", [])
         if attention_layers_to_update:
             self.peft_layers = attention_layers_to_update
-
         else:   # Applies PEFT to the image encoder by default
             self.peft_layers = list(range(len(model.image_encoder.blocks)))
 
