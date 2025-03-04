@@ -365,6 +365,20 @@ class LayerNormSurgery(SelectiveSurgery):
         self.allow_gradient_update_for_parameters(infix=["norm1", "norm2"])
 
 
+class ClassicalSurgery(SelectiveSurgery):
+    """Child class for freezing specific blocks"""
+
+    def __init__(self, block: nn.Module):
+        super().__init__(block=block)
+        self.block = block
+
+        for k, v in self.block.named_parameters():
+            v.requires_grad = True
+
+    def forward(self, x):
+        return x
+
+
 class PEFT_Sam(nn.Module):
     """Wraps the Segment Anything model's image encoder to different parameter efficient finetuning methods.
 
@@ -394,7 +408,6 @@ class PEFT_Sam(nn.Module):
         assert issubclass(peft_module, Union[LoRASurgery, FacTSurgery, SelectiveSurgery, SSFSurgery, AdaptFormer]), (
             "Invalid PEFT module"
         )
-
         if attention_layers_to_update:
             self.peft_layers = attention_layers_to_update
         else:   # Applies PEFT to the image encoder by default
