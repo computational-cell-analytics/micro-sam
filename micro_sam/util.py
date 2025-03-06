@@ -493,7 +493,7 @@ def export_custom_sam_model(
 
 
 def export_custom_qlora_model(
-    checkpoint_path: Union[str, os.PathLike],
+    checkpoint_path: Optional[Union[str, os.PathLike]],
     finetuned_path: Union[str, os.PathLike],
     model_type: str,
     save_path: Union[str, os.PathLike],
