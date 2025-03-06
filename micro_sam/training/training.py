@@ -191,6 +191,7 @@ def train_sam(
     ignore_warnings: bool = True,
     verify_n_labels_in_loader: Optional[int] = 50,
     box_distortion_factor: Optional[float] = 0.025,
+    overwrite_training: bool = True,
     **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
@@ -337,6 +338,9 @@ def train_sam(
         if pbar_signals is not None:
             progress_bar_wrapper = _ProgressBarWrapper(pbar_signals)
             trainer_fit_params["progress"] = progress_bar_wrapper
+
+        # Avoid overwriting a trained model, if desired by the user.
+        trainer_fit_params["overwrite_training"] = overwrite_training
 
         trainer.fit(**trainer_fit_params)
 
