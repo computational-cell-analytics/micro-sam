@@ -230,6 +230,9 @@ def train_sam(
         verify_n_labels_in_loader: The number of labels to verify out of the train and validation dataloaders.
             By default, 50 batches of labels are verified from the dataloaders.
         box_distortion_factor: The factor for distorting the box annotations derived from the ground-truth masks.
+        overwrite_training: Whether to overwrite the trained model stored at the same location.
+            By default, overwrites the trained model at each run.
+            If set to 'False', it will avoid retraining the model if the previous run was completed.
         model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
     """
     with _filter_warnings(ignore_warnings):
