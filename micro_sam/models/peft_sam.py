@@ -35,13 +35,13 @@ class LoRASurgery(nn.Module):
         super().__init__()
         # Check whether all values for "update_matrices" are as expected.
         if set(update_matrices) - set(["q", "k", "v", "mlp"]):
-            raise ValueError()
+            raise ValueError(f"Some of the expected keys for updating matrics in '{update_matrices}' are not expected.")
 
         self.block = block
         block.attn.qkv = AttentionLoRA(rank=rank, block=block.attn.qkv, update_matrices=update_matrices)
 
         if "mlp" in update_matrices:
-            block.mlp = MLPLoRA(rank=rank, mlp_layer=block.mlp)  # TODO
+            block.mlp = MLPLoRA(rank=rank, mlp_layer=block.mlp)
 
     def forward(self, x):
         return x
@@ -53,7 +53,7 @@ class AttentionLoRA(nn.Module):
     Args:
         rank: The rank of the decomposition matrices for updating weights in each attention layer.
         block: The chosen attention blocks for implementing LoRA.
-        update_matrices: Which specific matrices to update in the attention layer. Choice of "q", "k", "v", "mlp".
+        update_matrices: Which specific matrices to update in the attention layer. Choice of "q", "k", "v".
     """
 
     def __init__(self, rank: int, block: nn.Module, update_matrices: List[str] = ["q", "v"]):
