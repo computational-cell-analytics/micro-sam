@@ -14,7 +14,7 @@ except ImportError:
 
 
 class LoRASurgery(nn.Module):
-    """Operates on the attention layers for performing low-rank adaptation.
+    """Operates on the linear layers (attention and/or other feed forward) for performing low-rank adaptation.
 
     (Inspired from: https://github.com/JamesQFreeman/Sam_LoRA/)
 
@@ -38,7 +38,7 @@ class LoRASurgery(nn.Module):
             raise ValueError()
 
         self.block = block
-        block.attn.qkv = AttnLoRA(rank=rank, block=block.attn.qkv, update_matrices=update_matrices)
+        block.attn.qkv = AttentionLoRA(rank=rank, block=block.attn.qkv, update_matrices=update_matrices)
 
         if "mlp" in update_matrices:
             block.mlp = MLPLoRA(rank=rank, mlp_layer=block.mlp)  # TODO
@@ -47,7 +47,14 @@ class LoRASurgery(nn.Module):
         return x
 
 
-class AttnLoRA(nn.Module):
+class AttentionLoRA(nn.Module):
+    """Operates on the attention layers only for performing low-rank adaptation.
+
+    Args:
+        rank: The rank of the decomposition matrices for updating weights in each attention layer.
+        block: The chosen attention blocks for implementing LoRA.
+        update_matrices: Which specific matrices to update in the attention layer. Choice of "q", "k", "v", "mlp".
+    """
 
     def __init__(self, rank: int, block: nn.Module, update_matrices: List[str] = ["q", "v"]):
         super().__init__()
@@ -104,6 +111,12 @@ class AttnLoRA(nn.Module):
 
 
 class MLPLoRA(nn.Module):
+    """Operates on the feed forward layers for performing low-rank adaptation.
+
+    Args:
+        rank: The rank of the decomposition matrices for updating weights in each attention layer.
+        mlp_layer: The chosen MLP layer for implementing LoRA.
+    """
 
     def __init__(self, rank: int, mlp_layer: nn.Module):
         super().__init__()
@@ -130,7 +143,6 @@ class MLPLoRA(nn.Module):
         x = self.mlp_layer.lin1(x) + self.w_b_linear_1(self.w_a_linear_1(x))
         x = self.activation(x)
         x = self.mlp_layer.lin2(x) + self.w_b_linear_2(self.w_a_linear_2(x))
-
         return x
 
 
@@ -217,7 +229,6 @@ class SSFSurgery(nn.Module):
     Args:
         rank: This parameter is not used in `SSFSurgery`. This is kept here for consistency.
         block: The chosen attention blocks for implementing ssf.
-        dim: The input dimensions determining the shape of scale and shift parameters.
     """
     def __init__(self, rank: int, block: nn.Module):
         super().__init__()
@@ -339,8 +350,8 @@ class AdaptFormer(nn.Module):
 
 
 class AttentionSurgery(SelectiveSurgery):
-    """Child class for allowing gradient updates for parameters in attention layers.
-    """
+    """Child class for allowing gradient updates for parameters in attention layers."""
+
     def __init__(self, block: nn.Module):
         super().__init__(block=block)
         # Allow gradient updates for the attention layers in the image encoder.
@@ -348,8 +359,8 @@ class AttentionSurgery(SelectiveSurgery):
 
 
 class BiasSurgery(SelectiveSurgery):
-    """Child class for allowing gradient updates for bias parameters.
-    """
+    """Child class for allowing gradient updates for bias parameters."""
+
     def __init__(self, block: nn.Module):
         super().__init__(block=block)
         # Allow gradient updates for the bias parameters in the image encoder.
@@ -357,8 +368,8 @@ class BiasSurgery(SelectiveSurgery):
 
 
 class LayerNormSurgery(SelectiveSurgery):
-    """Child class for allowing gradient updates in normalization layers.
-    """
+    """Child class for allowing gradient updates in normalization layers."""
+
     def __init__(self, block: nn.Module):
         super().__init__(block=block)
         # Allow gradient updates for the LayerNorm parameters in the image encoder.
@@ -366,7 +377,7 @@ class LayerNormSurgery(SelectiveSurgery):
 
 
 class ClassicalSurgery(SelectiveSurgery):
-    """Child class for freezing specific blocks"""
+    """Child class for freezing specific blocks."""
 
     def __init__(self, block: nn.Module):
         super().__init__(block=block)
@@ -389,6 +400,7 @@ class PEFT_Sam(nn.Module):
         attention_layers_to_update: Which specific layers we apply PEFT methods to.
             For reference, the total number of blocks for 'vit_b' is 12, for 'vit_l' is 24 and for 'vit_h' is 32.
         quantize: Whether to quantize the model for lower precision training.
+        module_kwargs: The additional arguments for the respective PEFT modules.
     """
 
     def __init__(
