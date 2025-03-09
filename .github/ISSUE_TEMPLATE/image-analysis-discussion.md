@@ -2,7 +2,7 @@
 name: Image Analysis Discussion
 about: Discuss questions, brainstorm ideas for feedback on your image analysis task.
 title: "[DISCUSSION]"
-labels: ''
+labels: 'discussion'
 assignees: ''
 
 ---
