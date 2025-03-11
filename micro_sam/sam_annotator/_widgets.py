@@ -953,6 +953,9 @@ class EmbeddingWidget(_WidgetBase):
         if "segment_nd" in state.widgets:
             vutil._sync_ndsegment_widget(state.widgets["segment_nd"], self.model_type, self.custom_weights)
 
+    def _update_model_type(self):
+        self.model_type = "vit_" + self.model_size[0] + self.supported_dropdown_maps[self.model_family]
+
     def _create_model_section(self):
         self.model_family = "Default"
 
@@ -974,6 +977,7 @@ class EmbeddingWidget(_WidgetBase):
             "model_family", self.model_family, list(self.supported_dropdown_maps.keys()),
             title="Model:", layout=layout, tooltip=get_tooltip("embedding", "model")
         )
+        self.model_family_dropdown.currentTextChanged.connect(self._update_model_type)
         return layout
 
     def _create_settings_widget(self):
@@ -1006,6 +1010,7 @@ class EmbeddingWidget(_WidgetBase):
             "model_size", self.model_size, self.model_size_options,
             title="model size:", tooltip=get_tooltip("embedding", "model"),
         )
+        self.model_size_dropdown.currentTextChanged.connect(self._update_model_type)
         setting_values.layout().addLayout(layout)
 
         # Now that all parameters in place, let's get them all into one `model_type`.
