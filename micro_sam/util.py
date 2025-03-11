@@ -579,12 +579,11 @@ def _compute_embeddings_batched(predictor, batched_images):
     # Note: after the transformation the images are all of the same size,
     # so they can be stacked and processed as a batch, even if the input images were of different size.
     for image in batched_images:
-        original_sizes.append(image.shape[:2])
         tensor = predictor.transform.apply_image(image)
         tensor = torch.as_tensor(tensor, device=predictor.device)
         tensor = tensor.permute(2, 0, 1).contiguous()[None, :, :, :]
 
-        original_sizes.append(image.shape)
+        original_sizes.append(image.shape[:2])
         input_sizes.append(tensor.shape[-2:])
 
         tensor = predictor.model.preprocess(tensor)
