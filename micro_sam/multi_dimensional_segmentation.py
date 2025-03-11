@@ -368,7 +368,7 @@ def merge_instance_segmentation_3d(
 
 
 def _segment_slices(
-    data, predictor, segmentor, embedding_path, verbose, tile_shape, halo, with_background=True, **kwargs
+    data, predictor, segmentor, embedding_path, verbose, tile_shape, halo, with_background=True, batch_size=1, **kwargs
 ):
     assert data.ndim == 3
 
@@ -381,6 +381,7 @@ def _segment_slices(
         tile_shape=tile_shape,
         halo=halo,
         verbose=verbose,
+        batch_size=batch_size,
     )
 
     offset = 0
@@ -422,6 +423,7 @@ def automatic_3d_segmentation(
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
     return_embeddings: bool = False,
+    batch_size: int = 1,
     **kwargs,
 ) -> np.ndarray:
     """Automatically segment objects in a volume.
@@ -443,6 +445,7 @@ def automatic_3d_segmentation(
         halo: Overlap of the tiles for tiled prediction.
         verbose: Verbosity flag.
         return_embeddings: Whether to return the precomputed image embeddings.
+        batch_size: The batch size to compute image embeddings over planes.
         kwargs: Keyword arguments for the 'generate' method of the 'segmentor'.
 
     Returns:

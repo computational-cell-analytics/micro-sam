@@ -948,7 +948,7 @@ def precompute_image_embeddings(
         tile_shape: Shape of tiles for tiled prediction. By default prediction is run without tiling.
         halo: Overlap of the tiles for tiled prediction.
         verbose: Whether to be verbose in the computation.
-        batch_size:
+        batch_size: The batch size for precomputing image embeddings over tiles (or planes).
         pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
             Can be used together with pbar_update to handle napari progress bar in other thread.
             To enables using this function within a threadworker.

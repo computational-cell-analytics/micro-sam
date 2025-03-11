@@ -78,6 +78,7 @@ def automatic_instance_segmentation(
     verbose: bool = True,
     return_embeddings: bool = False,
     annotate: bool = False,
+    batch_size: int = 1,
     **generate_kwargs
 ) -> np.ndarray:
     """Run automatic segmentation for the input image.
@@ -98,6 +99,8 @@ def automatic_instance_segmentation(
         verbose: Verbosity flag.
         return_embeddings: Whether to return the precomputed image embeddings.
         annotate: Whether to activate the annotator for continue annotation process.
+        batch_size: The batch size to compute image embeddings over tiles / z-planes.
+            By default, does it sequentially, i.e. one after the other.
         generate_kwargs: optional keyword arguments for the generate function of the AMG or AIS class.
 
     Returns:
@@ -136,6 +139,7 @@ def automatic_instance_segmentation(
             tile_shape=tile_shape,
             halo=halo,
             verbose=verbose,
+            batch_size=batch_size,
         )
 
         # If we run AIS with tiling then we use the same tile shape for the watershed postprocessing.
@@ -169,6 +173,7 @@ def automatic_instance_segmentation(
             halo=halo,
             verbose=verbose,
             return_embeddings=True,
+            batch_size=batch_size,
             **generate_kwargs
         )
 
@@ -289,6 +294,11 @@ def main():
         "By default the most performant available device will be selected."
     )
     parser.add_argument(
+        "--batch_size", type=int, default=1,
+        help="The batch size for computing image embeddings over tiles or z-plane. "
+        "By default, computes the image embeddings for one tile / z-plane at a time."
+    )
+    parser.add_argument(
         "-v", "--verbose", action="store_true", help="Whether to allow verbosity of outputs."
     )
 
@@ -379,5 +389,6 @@ def main():
             halo=args.halo,
             annotate=args.annotate,
             verbose=args.verbose,
+            batch_size=args.batch_size,
             **generate_kwargs,
         )
