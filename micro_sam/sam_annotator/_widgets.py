@@ -954,19 +954,25 @@ class EmbeddingWidget(_WidgetBase):
             vutil._sync_ndsegment_widget(state.widgets["segment_nd"], self.model_type, self.custom_weights)
 
     def _create_model_section(self):
-        self.model_type = util._DEFAULT_MODEL
-
-        self.model_options = list(util.models().urls.keys())
-        # Filter out the decoders from the model list.
-        self.model_options = [model for model in self.model_options if not model.endswith("decoder")]
-
-        # NOTE: We currently remove the medical imaging model from displaying it as an option.
-        self.model_options = [model for model in self.model_options if not model.endswith("medical_imaging")]
+        self.model_family = "Default"
 
         layout = QtWidgets.QVBoxLayout()
-        self.model_dropdown, layout = self._add_choice_param(
-            "model_type", self.model_type, self.model_options, title="Model:", layout=layout,
-            tooltip=get_tooltip("embedding", "model")
+
+        # NOTE: We stick to the base variant for each model family.
+        # i.e. 'Default', 'Light Microscopy', 'EM_Organelles', 'Medical_Imaging', 'Histopathology'.
+
+        # Create a list of support dropdown values and correspond them to suffixes.
+        self.supported_dropdown_maps = {
+            "Default": "",
+            "Light Microscopy": "_lm",
+            "Electron Microscopy": "_em_organelles",
+            "Medical Imaging": "_medical_imaging",
+            "Histopathology": "_histopathology",
+        }
+
+        self.model_family_dropdown, layout = self._add_choice_param(
+            "model_family", self.model_family, list(self.supported_dropdown_maps.keys()),
+            title="Model:", layout=layout, tooltip=get_tooltip("embedding", "model")
         )
         return layout
 
@@ -975,12 +981,43 @@ class EmbeddingWidget(_WidgetBase):
         setting_values.setToolTip(get_tooltip("embedding", "settings"))
         setting_values.setLayout(QtWidgets.QVBoxLayout())
 
+        # Create UI for the model size.
+        # NOTE: The available options for all are either 'tiny', 'base', 'large' or 'huge'.
+        # This would depend on the chosen 'self.model_family'.
+        self.model_size = "base"
+
+        # Get all model options.
+        self.model_options = list(util.models().urls.keys())
+        # Filter out the decoders from the model list.
+        self.model_options = [model for model in self.model_options if not model.endswith("decoder")]
+
+        # Now, we get the available sizes per model family.
+        size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
+
+        if self.model_family == "Default":  # for this, we have models for all sizes
+            self.model_size_options = list(size_map.values())
+        else:
+            model_suffix = self.supported_dropdown_maps[self.model_family]
+            self.model_size_options = [
+                size_map[option[4]] for option in self.model_options if option.endswith(model_suffix)
+            ]
+
+        self.model_size_dropdown, layout = self._add_choice_param(
+            "model_size", self.model_size, self.model_size_options,
+            title="model size:", tooltip=get_tooltip("embedding", "model"),
+        )
+        setting_values.layout().addLayout(layout)
+
+        # Now that all parameters in place, let's get them all into one `model_type`.
+        self.model_type = "vit_" + self.model_size[0] + self.supported_dropdown_maps[self.model_family]
+
         # Create UI for the device.
         self.device = "auto"
         device_options = ["auto"] + util._available_devices()
 
-        self.device_dropdown, layout = self._add_choice_param("device", self.device, device_options,
-                                                              tooltip=get_tooltip("embedding", "device"))
+        self.device_dropdown, layout = self._add_choice_param(
+            "device", self.device, device_options, tooltip=get_tooltip("embedding", "device")
+        )
         setting_values.layout().addLayout(layout)
 
         # Create UI for the save path.
