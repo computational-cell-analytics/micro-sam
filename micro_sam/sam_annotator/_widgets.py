@@ -959,7 +959,7 @@ class EmbeddingWidget(_WidgetBase):
         layout = QtWidgets.QVBoxLayout()
 
         # NOTE: We stick to the base variant for each model family.
-        # i.e. 'Default', 'Light Microscopy', 'EM_Organelles', 'Medical_Imaging', 'Histopathology'.
+        # i.e. 'Default', 'Light Microscopy', 'Electron Microscopy', 'Medical_Imaging', 'Histopathology'.
 
         # Create a list of support dropdown values and correspond them to suffixes.
         self.supported_dropdown_maps = {
