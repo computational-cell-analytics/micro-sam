@@ -177,6 +177,11 @@ def automatic_instance_segmentation(
             **generate_kwargs
         )
 
+    # Before starting to annotate, if at all desired, store the automatic segmentations in the first stage.
+    if output_path is not None:
+        imageio.imwrite(output_path, instances, compression="zlib")
+        print(f"The automatic segmentation results are stored at '{os.path.abspath(output_path)}'.")
+
     # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
     if annotate:
         from micro_sam.sam_annotator import annotator_2d, annotator_3d
@@ -201,10 +206,10 @@ def automatic_instance_segmentation(
         # b) Did not do anything and closed the annotator, i.e. keeps the segmentations as it is.
         instances = viewer.layers["committed_objects"].data
 
-    # Save the instance segmentation, if 'output_path' provided.
-    if output_path is not None:
-        imageio.imwrite(output_path, instances, compression="zlib")
-        print(f"The segmentation results are stored at '{os.path.abspath(output_path)}'.")
+        # Save the instance segmentation, if 'output_path' provided.
+        if output_path is not None:
+            imageio.imwrite(output_path, instances, compression="zlib")
+            print(f"The final segmentation results are stored at '{os.path.abspath(output_path)}'.")
 
     if return_embeddings:
         return instances, image_embeddings
