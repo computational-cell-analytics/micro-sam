@@ -958,21 +958,21 @@ class EmbeddingWidget(_WidgetBase):
         current_selection = self.model_size_dropdown.currentText()
         self._get_model_size_options()  # Update model size options dynamically
 
-        # NOTE: We prevent recursive updates for this step temporarily.
+        # NOTE: We need to prevent recursive updates for this step temporarily.
         self.model_size_dropdown.blockSignals(True)
 
         # Let's clear and recreate the dropdown.
         self.model_size_dropdown.clear()
         self.model_size_dropdown.addItems(self.model_size_options)
 
-        # Restore previous selection, if still valid.
+        # We restore the previous selection, if still valid.
         if current_selection in self.model_size_options:
             self.model_size = current_selection
         else:
             if self.model_size_options:  # Default to the first available model size
                 self.model_size = self.model_size_options[0]
 
-        # Let's map the selection to the correct model type (e.g., "tiny" -> "vit_t")
+        # Let's map the selection to the correct model type (eg. "tiny" -> "vit_t")
         size_key = next(
             (k for k, v in {"t": "tiny", "b": "base", "l": "large", "h": "huge"}.items() if v == self.model_size), "b"
         )
@@ -980,16 +980,17 @@ class EmbeddingWidget(_WidgetBase):
 
         self.model_size_dropdown.setCurrentText(self.model_size)  # Apply the selected text to the dropdown
 
-        # We need to force a refresh for UI.
+        # We force a refresh for UI here.
         self.model_size_dropdown.update()
 
-        # NOTE: We should re-enable signals again.
+        # NOTE: And finally, we should re-enable signals again.
         self.model_size_dropdown.blockSignals(False)
 
     def _get_model_size_options(self):
         size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
-        self.model_size_mapping = {}  # We store the actual model names mapped to UI labels.
 
+        # We store the actual model names mapped to UI labels.
+        self.model_size_mapping = {}
         if self.model_family == "Default":
             self.model_size_options = list(size_map.values())
             self.model_size_mapping = {size_map[k]: f"vit_{k}" for k in size_map.keys()}
