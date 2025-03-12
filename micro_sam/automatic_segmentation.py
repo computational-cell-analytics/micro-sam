@@ -65,6 +65,12 @@ def get_predictor_and_segmenter(
     return predictor, segmenter
 
 
+def _add_suffix_to_output_path(output_path: Union[str, os.PathLike], suffix: str) -> str:
+    fpath = Path(output_path).resolve()
+    fext = fpath.suffix if fpath.suffix else ".tif"
+    return str(fpath.with_name(f"{fpath.stem}{suffix}{fext}"))
+
+
 def automatic_instance_segmentation(
     predictor: util.SamPredictor,
     segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
@@ -179,8 +185,9 @@ def automatic_instance_segmentation(
 
     # Before starting to annotate, if at all desired, store the automatic segmentations in the first stage.
     if output_path is not None:
-        imageio.imwrite(output_path, instances, compression="zlib")
-        print(f"The automatic segmentation results are stored at '{os.path.abspath(output_path)}'.")
+        _output_path = _add_suffix_to_output_path(output_path, "_automatic") if annotate else output_path
+        imageio.imwrite(_output_path, instances, compression="zlib")
+        print(f"The automatic segmentation results are stored at '{os.path.abspath(_output_path)}'.")
 
     # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
     if annotate:
