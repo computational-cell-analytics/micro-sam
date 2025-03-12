@@ -108,6 +108,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         instances = automatic_instance_segmentation(
             predictor=predictor, segmenter=segmenter, input_path=image,
             ndim=2, tile_shape=self.tile_shape, halo=self.halo,
+            batch_size=2,
         )
         self.assertEqual(mask.shape, instances.shape)
 

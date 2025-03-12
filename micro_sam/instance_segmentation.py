@@ -562,12 +562,12 @@ class AutomaticMaskGenerator(AMGBase):
 
 
 # Helper function for tiled embedding computation and checking consistent state.
-def _process_tiled_embeddings(predictor, image, image_embeddings, tile_shape, halo, verbose):
+def _process_tiled_embeddings(predictor, image, image_embeddings, tile_shape, halo, verbose, batch_size):
     if image_embeddings is None:
         if tile_shape is None or halo is None:
             raise ValueError("To compute tiled embeddings the parameters tile_shape and halo have to be passed.")
         image_embeddings = util.precompute_image_embeddings(
-            predictor, image, tile_shape=tile_shape, halo=halo, verbose=verbose
+            predictor, image, tile_shape=tile_shape, halo=halo, verbose=verbose, batch_size=batch_size
         )
 
     # Use tile shape and halo from the precomputed embeddings if not given.
@@ -634,6 +634,7 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         verbose: bool = False,
         pbar_init: Optional[callable] = None,
         pbar_update: Optional[callable] = None,
+        batch_size: int = 1,
     ) -> None:
         """Initialize image embeddings and masks for an image.
 
@@ -650,12 +651,13 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
                 Can be used together with pbar_update to handle napari progress bar in other thread.
                 To enables using this function within a threadworker.
             pbar_update: Callback to update an external progress bar.
+            batch_size: The batch size for image embedding prediction.
         """
         original_size = image.shape[:2]
         self._original_size = original_size
 
         image_embeddings, tile_shape, halo = _process_tiled_embeddings(
-            self._predictor, image, image_embeddings, tile_shape, halo, verbose=verbose,
+            self._predictor, image, image_embeddings, tile_shape, halo, verbose=verbose, batch_size=batch_size
         )
 
         tiling = blocking([0, 0], original_size, tile_shape)
@@ -1159,6 +1161,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         verbose: bool = False,
         pbar_init: Optional[callable] = None,
         pbar_update: Optional[callable] = None,
+        batch_size: int = 1,
     ) -> None:
         """Initialize image embeddings and decoder predictions for an image.
 
@@ -1175,10 +1178,11 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
                 Can be used together with pbar_update to handle napari progress bar in other thread.
                 To enables using this function within a threadworker.
             pbar_update: Callback to update an external progress bar.
+            batch_size: The batch size for image embedding computation and segmentation decoder prediction.
         """
         original_size = image.shape[:2]
         image_embeddings, tile_shape, halo = _process_tiled_embeddings(
-            self._predictor, image, image_embeddings, tile_shape, halo, verbose=verbose,
+            self._predictor, image, image_embeddings, tile_shape, halo, verbose=verbose, batch_size=batch_size
         )
         tiling = blocking([0, 0], original_size, tile_shape)
 
@@ -1189,29 +1193,43 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         center_distances = np.zeros(original_size, dtype="float32")
         boundary_distances = np.zeros(original_size, dtype="float32")
 
-        for tile_id in range(tiling.numberOfBlocks):
+        n_tiles = tiling.numberOfBlocks
+        n_batches = int(np.ceil(n_tiles / batch_size))
 
-            # Get the image embeddings from the predictor for this tile.
-            self._predictor = util.set_precomputed(self._predictor, image_embeddings, i=i, tile_id=tile_id)
-            embeddings = self._predictor.features
-            input_shape = tuple(self._predictor.input_size)
-            original_shape = tuple(self._predictor.original_size)
+        for batch_id in range(n_batches):
+            tile_start = batch_id * batch_size
+            tile_stop = min(tile_start + batch_size, n_tiles)
 
-            # Predict with the UNETR decoder for this tile.
-            output = self._decoder(embeddings, input_shape, original_shape).cpu().numpy().squeeze(0)
-            assert output.shape[0] == 3, f"{output.shape}"
+            batched_embeddings = []
+            for tile_id in range(tile_start, tile_stop):
+                # Get the image embeddings from the predictor for this tile.
+                self._predictor = util.set_precomputed(self._predictor, image_embeddings, i=i, tile_id=tile_id)
+                embeddings = self._predictor.features
+                input_shape = tuple(self._predictor.input_size)
+                original_shape = tuple(self._predictor.original_size)
 
-            # Set the predictions in the output for this tile.
-            block = tiling.getBlockWithHalo(tile_id, halo=list(halo))
-            local_bb = tuple(
-                slice(beg, end) for beg, end in zip(block.innerBlockLocal.begin, block.innerBlockLocal.end)
-            )
-            inner_bb = tuple(slice(beg, end) for beg, end in zip(block.innerBlock.begin, block.innerBlock.end))
+                batched_embeddings.append(embeddings)
 
-            foreground[inner_bb] = output[0][local_bb]
-            center_distances[inner_bb] = output[1][local_bb]
-            boundary_distances[inner_bb] = output[2][local_bb]
-            pbar_update(1)
+            batched_embeddings = torch.cat(batched_embeddings)
+            # Predict with the UNETR decoder for this batch.
+            batched_output = self._decoder(batched_embeddings, input_shape, original_shape).cpu().numpy()
+            assert batched_output.shape[0] == batch_size, f"{batched_output.shape}"
+            assert batched_output.shape[1] == 3, f"{batched_output.shape}"
+
+            for i, tile_id in enumerate(range(tile_start, tile_stop)):
+                output = batched_output[i]
+
+                # Set the predictions in the output for this tile.
+                block = tiling.getBlockWithHalo(tile_id, halo=list(halo))
+                local_bb = tuple(
+                    slice(beg, end) for beg, end in zip(block.innerBlockLocal.begin, block.innerBlockLocal.end)
+                )
+                inner_bb = tuple(slice(beg, end) for beg, end in zip(block.innerBlock.begin, block.innerBlock.end))
+
+                foreground[inner_bb] = output[0][local_bb]
+                center_distances[inner_bb] = output[1][local_bb]
+                boundary_distances[inner_bb] = output[2][local_bb]
+                pbar_update(1)
 
         pbar_close()
 
