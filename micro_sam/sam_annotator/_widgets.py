@@ -1202,6 +1202,14 @@ class EmbeddingWidget(_WidgetBase):
         if not skip_validate and self._validate_inputs():
             return
 
+        # For 'custom_weights', we remove the displayed text on top of the drop-down menu.
+        if self.custom_weights:
+            # NOTE: We prevent recursive updates for this step temporarily.
+            self.model_family_dropdown.blockSignals(True)
+            self.model_family_dropdown.setCurrentText("Default")
+            # NOTE: And re-enable signals again.
+            self.model_family_dropdown.blockSignals(False)
+
         # Get the image.
         image = self.image_selection.get_value()
 
