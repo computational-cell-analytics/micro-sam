@@ -1,4 +1,6 @@
 import os
+from glob import glob
+from tqdm import tqdm
 from pathlib import Path
 from typing import Optional, Union, Tuple
 
@@ -63,6 +65,12 @@ def get_predictor_and_segmenter(
     return predictor, segmenter
 
 
+def _add_suffix_to_output_path(output_path: Union[str, os.PathLike], suffix: str) -> str:
+    fpath = Path(output_path).resolve()
+    fext = fpath.suffix if fpath.suffix else ".tif"
+    return str(fpath.with_name(f"{fpath.stem}{suffix}{fext}"))
+
+
 def automatic_instance_segmentation(
     predictor: util.SamPredictor,
     segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
@@ -76,6 +84,7 @@ def automatic_instance_segmentation(
     verbose: bool = True,
     return_embeddings: bool = False,
     annotate: bool = False,
+    batch_size: int = 1,
     **generate_kwargs
 ) -> np.ndarray:
     """Run automatic segmentation for the input image.
@@ -96,6 +105,8 @@ def automatic_instance_segmentation(
         verbose: Verbosity flag.
         return_embeddings: Whether to return the precomputed image embeddings.
         annotate: Whether to activate the annotator for continue annotation process.
+        batch_size: The batch size to compute image embeddings over tiles / z-planes.
+            By default, does it sequentially, i.e. one after the other.
         generate_kwargs: optional keyword arguments for the generate function of the AMG or AIS class.
 
     Returns:
@@ -116,6 +127,11 @@ def automatic_instance_segmentation(
 
     ndim = image_data.ndim if ndim is None else ndim
 
+    # We perform additional post-processing for AMG-only.
+    # Otherwise, we ignore additional post-processing for AIS.
+    if isinstance(segmenter, InstanceSegmentationWithDecoder):
+        generate_kwargs["output_mode"] = None
+
     if ndim == 2:
         if (image_data.ndim != 2) and (image_data.ndim != 3 and image_data.shape[-1] != 3):
             raise ValueError(f"The inputs does not match the shape expectation of 2d inputs: {image_data.shape}")
@@ -129,13 +145,18 @@ def automatic_instance_segmentation(
             tile_shape=tile_shape,
             halo=halo,
             verbose=verbose,
+            batch_size=batch_size,
         )
+        initialize_kwargs = dict(image=image_data, image_embeddings=image_embeddings, verbose=verbose)
 
         # If we run AIS with tiling then we use the same tile shape for the watershed postprocessing.
+        # In this case, we also add the batch size to the initialize kwargs,
+        # so that the segmentation decoder can be applied in a batched fashion.
         if isinstance(segmenter, InstanceSegmentationWithDecoder) and tile_shape is not None:
             generate_kwargs.update({"tile_shape": tile_shape, "halo": halo})
+            initialize_kwargs["batch_size"] = batch_size
 
-        segmenter.initialize(image=image_data, image_embeddings=image_embeddings, verbose=verbose)
+        segmenter.initialize(**initialize_kwargs)
         masks = segmenter.generate(**generate_kwargs)
 
         if isinstance(masks, list):
@@ -153,7 +174,7 @@ def automatic_instance_segmentation(
         if (image_data.ndim != 3) and (image_data.ndim != 4 and image_data.shape[-1] != 3):
             raise ValueError(f"The inputs does not match the shape expectation of 3d inputs: {image_data.shape}")
 
-        outputs = automatic_3d_segmentation(
+        instances, image_embeddings = automatic_3d_segmentation(
             volume=image_data,
             predictor=predictor,
             segmentor=segmenter,
@@ -161,14 +182,16 @@ def automatic_instance_segmentation(
             tile_shape=tile_shape,
             halo=halo,
             verbose=verbose,
-            return_embeddings=return_embeddings,
+            return_embeddings=True,
+            batch_size=batch_size,
             **generate_kwargs
         )
 
-        if return_embeddings:
-            instances, image_embeddings = outputs
-        else:
-            instances = outputs
+    # Before starting to annotate, if at all desired, store the automatic segmentations in the first stage.
+    if output_path is not None:
+        _output_path = _add_suffix_to_output_path(output_path, "_automatic") if annotate else output_path
+        imageio.imwrite(_output_path, instances, compression="zlib")
+        print(f"The automatic segmentation results are stored at '{os.path.abspath(_output_path)}'.")
 
     # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
     if annotate:
@@ -178,8 +201,7 @@ def automatic_instance_segmentation(
         viewer = annotator_function(
             image=image_data,
             model_type=predictor.model_name,
-            embedding_path=embedding_path,
-            checkpoint_path=predictor.checkpoint_path,
+            embedding_path=image_embeddings,  # Providing the precomputed image embeddings.
             segmentation_result=instances,  # Initializes the automatic segmentation to the annotator.
             tile_shape=tile_shape,
             halo=halo,
@@ -195,15 +217,38 @@ def automatic_instance_segmentation(
         # b) Did not do anything and closed the annotator, i.e. keeps the segmentations as it is.
         instances = viewer.layers["committed_objects"].data
 
-    # Save the instance segmentation, if 'output_path' provided.
-    if output_path is not None:
-        imageio.imwrite(output_path, instances, compression="zlib")
-        print(f"The segmentation results are stored at '{os.path.abspath(output_path)}'.")
+        # Save the instance segmentation, if 'output_path' provided.
+        if output_path is not None:
+            imageio.imwrite(output_path, instances, compression="zlib")
+            print(f"The final segmentation results are stored at '{os.path.abspath(output_path)}'.")
 
     if return_embeddings:
         return instances, image_embeddings
     else:
         return instances
+
+
+def _get_inputs_from_paths(paths, pattern):
+    "Function to get all filepaths in a directory."
+
+    if isinstance(paths, str):
+        paths = [paths]
+
+    fpaths = []
+    for path in paths:
+        if _has_extension(path):  # It is just one filepath.
+            fpaths.append(path)
+        else:  # Otherwise, if the path is a directory, fetch all inputs provided with a pattern.
+            assert pattern is not None, \
+                f"You must provide a pattern to search for files in the directory: '{os.path.abspath(path)}'."
+            fpaths.extend(glob(os.path.join(path, pattern)))
+
+    return fpaths
+
+
+def _has_extension(fpath: Union[os.PathLike, str]) -> bool:
+    "Returns whether the provided path has an extension or not."
+    return bool(os.path.splitext(fpath)[1])
 
 
 def main():
@@ -215,31 +260,31 @@ def main():
 
     parser = argparse.ArgumentParser(description="Run automatic segmentation for an image.")
     parser.add_argument(
-        "-i", "--input_path", required=True,
+        "-i", "--input_path", required=True, type=str, nargs="+",
         help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
         "or elf.io.open_file (e.g. hdf5, zarr, mrc). For the latter you also need to pass the 'key' parameter."
     )
     parser.add_argument(
-        "-o", "--output_path", required=True,
+        "-o", "--output_path", required=True, type=str,
         help="The filepath to store the instance segmentation. The current support stores segmentation in a 'tif' file."
     )
     parser.add_argument(
         "-e", "--embedding_path", default=None, type=str, help="The path where the embeddings will be saved."
     )
     parser.add_argument(
-        "--pattern", help="Pattern / wildcard for selecting files in a folder. To select all files use '*'."
+        "--pattern", type=str, help="Pattern / wildcard for selecting files in a folder. To select all files use '*'."
     )
     parser.add_argument(
-        "-k", "--key",
+        "-k", "--key", default=None, type=str,
         help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
         "for an image stack it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
     )
     parser.add_argument(
-        "-m", "--model_type", default=util._DEFAULT_MODEL,
+        "-m", "--model_type", default=util._DEFAULT_MODEL, type=str,
         help=f"The segment anything model that will be used, one of {available_models}."
     )
     parser.add_argument(
-        "-c", "--checkpoint", default=None, help="Checkpoint from which the SAM model will be loaded."
+        "-c", "--checkpoint", default=None, type=str, help="Checkpoint from which the SAM model will be loaded."
     )
     parser.add_argument(
         "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction.", default=None
@@ -248,11 +293,11 @@ def main():
         "--halo", nargs="+", type=int, help="The halo for using tiled prediction.", default=None
     )
     parser.add_argument(
-        "-n", "--ndim", type=int, default=None,
+        "-n", "--ndim", default=None, type=int,
         help="The number of spatial dimensions in the data. Please specify this if your data has a channel dimension."
     )
     parser.add_argument(
-        "--mode", type=str, default="auto",
+        "--mode", default="auto", type=str,
         help="The choice of automatic segmentation with the Segment Anything models. Either 'auto', 'amg' or 'ais'."
     )
     parser.add_argument(
@@ -260,9 +305,14 @@ def main():
         help="Whether to continue annotation after the automatic segmentation is generated."
     )
     parser.add_argument(
-        "-d", "--device", default=None,
+        "-d", "--device", default=None, type=str,
         help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
         "By default the most performant available device will be selected."
+    )
+    parser.add_argument(
+        "--batch_size", type=int, default=1,
+        help="The batch size for computing image embeddings over tiles or z-plane. "
+        "By default, computes the image embeddings for one tile / z-plane at a time."
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Whether to allow verbosity of outputs."
@@ -309,26 +359,52 @@ def main():
         **amg_kwargs,
     )
 
-    # We perform additional post-processing for AMG-only.
-    # Otherwise, we ignore additional post-processing for AIS.
-    if isinstance(segmenter, InstanceSegmentationWithDecoder):
-        generate_kwargs["output_mode"] = None
+    # Get the filepaths to input images (and other paths to store stuff, eg. segmentations and embeddings)
+    # Check whether the inputs are as expected, otherwise assort them.
+    input_paths = _get_inputs_from_paths(args.input_path, args.pattern)
+    assert len(input_paths) > 0, "'micro-sam' could not extract any image data internally."
 
-    automatic_instance_segmentation(
-        predictor=predictor,
-        segmenter=segmenter,
-        input_path=args.input_path,
-        output_path=args.output_path,
-        embedding_path=args.embedding_path,
-        key=args.key,
-        ndim=args.ndim,
-        tile_shape=args.tile_shape,
-        halo=args.halo,
-        annotate=args.annotate,
-        verbose=args.verbose,
-        **generate_kwargs,
-    )
+    output_path = args.output_path
+    embedding_path = args.embedding_path
+    has_one_input = len(input_paths) == 1
 
+    # Run automatic segmentation per image.
+    for path in tqdm(input_paths, desc="Run automatic segmentation"):
+        if has_one_input:  # if we have one image only.
+            _output_fpath = str(Path(output_path).with_suffix(".tif"))
+            _embedding_fpath = embedding_path
 
-if __name__ == "__main__":
-    main()
+        else:  # if we have multiple image, we need to make the other target filepaths compatible.
+            # Let's check for 'embedding_path'.
+            _embedding_fpath = embedding_path
+            if embedding_path:
+                if _has_extension(embedding_path):  # in this case, use filename as addl. suffix to provided path.
+                    _embedding_fpath = str(Path(embedding_path).with_suffix(".zarr"))
+                    _embedding_fpath = _embedding_fpath.replace(".zarr", f"_{Path(path).stem}.zarr")
+                else:   # otherwise, for directory, use image filename for multiple images.
+                    os.makedirs(embedding_path, exist_ok=True)
+                    _embedding_fpath = os.path.join(embedding_path, Path(os.path.basename(path)).with_suffix(".zarr"))
+
+            # Next, let's check for output file to store segmentation.
+            if _has_extension(output_path):  # in this case, use filename as addl. suffix to provided path.
+                _output_fpath = str(Path(output_path).with_suffix(".tif"))
+                _output_fpath = _output_fpath.replace(".tif", f"_{Path(path).stem}.tif")
+            else:  # otherwise, for directory, use image filename for multiple images.
+                os.makedirs(output_path, exist_ok=True)
+                _output_fpath = os.path.join(output_path, Path(os.path.basename(path)).with_suffix(".tif"))
+
+        automatic_instance_segmentation(
+            predictor=predictor,
+            segmenter=segmenter,
+            input_path=path,
+            output_path=_output_fpath,
+            embedding_path=_embedding_fpath,
+            key=args.key,
+            ndim=args.ndim,
+            tile_shape=args.tile_shape,
+            halo=args.halo,
+            annotate=args.annotate,
+            verbose=args.verbose,
+            batch_size=args.batch_size,
+            **generate_kwargs,
+        )

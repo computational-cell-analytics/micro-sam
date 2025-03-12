@@ -2,9 +2,11 @@
 """
 
 import os
-from typing import Optional, Union, Tuple
+from typing import Dict, List, Optional, Union, Tuple
 
+import networkx as nx
 import numpy as np
+import torch
 from scipy.ndimage import binary_closing
 from skimage.measure import label, regionprops
 from skimage.segmentation import relabel_sequential
@@ -13,6 +15,7 @@ import nifty
 
 import elf.segmentation as seg_utils
 import elf.tracking.tracking_utils as track_utils
+from elf.tracking.motile_tracking import recolor_segmentation
 
 from segment_anything.predictor import SamPredictor
 
@@ -20,6 +23,12 @@ try:
     from napari.utils import progress as tqdm
 except ImportError:
     from tqdm import tqdm
+
+try:
+    from trackastra.model import Trackastra
+    from trackastra.tracking import graph_to_napari_tracks
+except ImportError:
+    Trackastra = None
 
 from . import util
 from .prompt_based_segmentation import segment_from_mask
@@ -358,60 +367,28 @@ def merge_instance_segmentation_3d(
     return segmentation
 
 
-def automatic_3d_segmentation(
-    volume: np.ndarray,
-    predictor: SamPredictor,
-    segmentor: AMGBase,
-    embedding_path: Optional[Union[str, os.PathLike]] = None,
-    with_background: bool = True,
-    gap_closing: Optional[int] = None,
-    min_z_extent: Optional[int] = None,
-    tile_shape: Optional[Tuple[int, int]] = None,
-    halo: Optional[Tuple[int, int]] = None,
-    verbose: bool = True,
-    return_embeddings: bool = False,
-    **kwargs,
-) -> np.ndarray:
-    """Segment volume in 3d.
-
-    First segments slices individually in 2d and then merges them across 3d
-    based on overlap of objects between slices.
-
-    Args:
-        volume: The input volume.
-        predictor: The SAM model.
-        segmentor: The instance segmentation class.
-        embedding_path: The path to save pre-computed embeddings.
-        with_background: Whether the segmentation has background.
-        gap_closing: If given, gaps in the segmentation are closed with a binary closing
-            operation. The value is used to determine the number of iterations for the closing.
-        min_z_extent: Require a minimal extent in z for the segmented objects.
-            This can help to prevent segmentation artifacts.
-        tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
-        halo: Overlap of the tiles for tiled prediction.
-        verbose: Verbosity flag.
-        return_embeddings: Whether to return the precomputed image embeddings.
-        kwargs: Keyword arguments for the 'generate' method of the 'segmentor'.
-
-    Returns:
-        The segmentation.
-    """
-    offset = 0
-    segmentation = np.zeros(volume.shape[:3], dtype="uint32")
+def _segment_slices(
+    data, predictor, segmentor, embedding_path, verbose, tile_shape, halo, with_background=True, batch_size=1, **kwargs
+):
+    assert data.ndim == 3
 
     min_object_size = kwargs.pop("min_object_size", 0)
     image_embeddings = util.precompute_image_embeddings(
         predictor=predictor,
-        input_=volume,
+        input_=data,
         save_path=embedding_path,
         ndim=3,
         tile_shape=tile_shape,
         halo=halo,
         verbose=verbose,
+        batch_size=batch_size,
     )
 
+    offset = 0
+    segmentation = np.zeros(data.shape, dtype="uint32")
+
     for i in tqdm(range(segmentation.shape[0]), desc="Segment slices", disable=not verbose):
-        segmentor.initialize(volume[i], image_embeddings=image_embeddings, verbose=False, i=i)
+        segmentor.initialize(data[i], image_embeddings=image_embeddings, verbose=False, i=i)
         seg = segmentor.generate(**kwargs)
 
         if isinstance(seg, list) and len(seg) == 0:
@@ -431,6 +408,53 @@ def automatic_3d_segmentation(
 
         segmentation[i] = seg
 
+    return segmentation, image_embeddings
+
+
+def automatic_3d_segmentation(
+    volume: np.ndarray,
+    predictor: SamPredictor,
+    segmentor: AMGBase,
+    embedding_path: Optional[Union[str, os.PathLike]] = None,
+    with_background: bool = True,
+    gap_closing: Optional[int] = None,
+    min_z_extent: Optional[int] = None,
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
+    verbose: bool = True,
+    return_embeddings: bool = False,
+    batch_size: int = 1,
+    **kwargs,
+) -> np.ndarray:
+    """Automatically segment objects in a volume.
+
+    First segments slices individually in 2d and then merges them across 3d
+    based on overlap of objects between slices.
+
+    Args:
+        volume: The input volume.
+        predictor: The SAM model.
+        segmentor: The instance segmentation class.
+        embedding_path: The path to save pre-computed embeddings.
+        with_background: Whether the segmentation has background.
+        gap_closing: If given, gaps in the segmentation are closed with a binary closing
+            operation. The value is used to determine the number of iterations for the closing.
+        min_z_extent: Require a minimal extent in z for the segmented objects.
+            This can help to prevent segmentation artifacts.
+        tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
+        halo: Overlap of the tiles for tiled prediction.
+        verbose: Verbosity flag.
+        return_embeddings: Whether to return the precomputed image embeddings.
+        batch_size: The batch size to compute image embeddings over planes.
+        kwargs: Keyword arguments for the 'generate' method of the 'segmentor'.
+
+    Returns:
+        The segmentation.
+    """
+    segmentation, image_embeddings = _segment_slices(
+        volume, predictor, segmentor, embedding_path, verbose,
+        tile_shape=tile_shape, halo=halo, with_background=with_background, **kwargs
+    )
     segmentation = merge_instance_segmentation_3d(
         segmentation,
         beta=0.5,
@@ -439,8 +463,207 @@ def automatic_3d_segmentation(
         min_z_extent=min_z_extent,
         verbose=verbose,
     )
-
     if return_embeddings:
         return segmentation, image_embeddings
     else:
         return segmentation
+
+
+def _filter_tracks(tracking_result, min_track_length):
+    props = regionprops(tracking_result)
+    discard_ids = []
+    for prop in props:
+        label_id = prop.label
+        z_start, z_stop = prop.bbox[0], prop.bbox[3]
+        if z_stop - z_start < min_track_length:
+            discard_ids.append(label_id)
+    tracking_result[np.isin(tracking_result, discard_ids)] = 0
+    tracking_result, _, _ = relabel_sequential(tracking_result)
+    return tracking_result
+
+
+def _extract_tracks_and_lineages(segmentations, track_data, parent_graph):
+    # The track data has the following layout: n_tracks x 4
+    # With the following columns:
+    # track_id - id of the track (= result from trackastra)
+    # timepoint
+    # y coordinate
+    # x coordinate
+
+    # Use the last three columns to index the segmentation and get the segmentation id.
+    index = np.round(track_data[:, 1:], 0).astype("int32")
+    index = tuple(index[:, i] for i in range(index.shape[1]))
+    segmentation_ids = segmentations[index]
+
+    # Find the mapping of nodes (= segmented objects) to track-ids.
+    track_ids = track_data[:, 0].astype("int32")
+    assert len(segmentation_ids) == len(track_ids)
+    node_to_track = {k: v for k, v in zip(segmentation_ids, track_ids)}
+
+    # Find the lineages as connected components in the parent graph.
+    # First, we build a proper graph.
+    lineage_graph = nx.Graph()
+    for k, v in parent_graph.items():
+        lineage_graph.add_edge(k, v)
+
+    # Then, find the connected components, and compute the lineage representation expected by micro-sam from it:
+    # E.g. if we have three lineages, the first consisting of three tracks and the second and third of one track each:
+    # [
+    #   {1: [2, 3]},  lineage with a dividing cell
+    #   {4: []}, lineage with just one cell
+    #   {5: []}, lineage with just one cell
+    # ]
+
+    # First, we fill the lineages which have one or more divisions, i.e. trees with more than one node.
+    lineages = []
+    for component in nx.connected_components(lineage_graph):
+        root = next(iter(component))
+        lineage_dict = {}
+
+        def dfs(node, parent):
+            # Avoid revisiting the parent node
+            children = [n for n in lineage_graph[node] if n != parent]
+            lineage_dict[node] = children
+            for child in children:
+                dfs(child, node)
+
+        dfs(root, None)
+        lineages.append(lineage_dict)
+
+    # Then add single node lineages, which are not reflected in the original graph.
+    all_tracks = set(track_ids.tolist())
+    lineage_tracks = []
+    for lineage in lineages:
+        for k, v in lineage.items():
+            lineage_tracks.append(k)
+            lineage_tracks.extend(v)
+    singleton_tracks = list(all_tracks - set(lineage_tracks))
+    lineages.extend([{track: []} for track in singleton_tracks])
+
+    # Make sure node_to_track contains everything.
+    all_seg_ids = np.unique(segmentations)
+    missing_seg_ids = np.setdiff1d(all_seg_ids, list(node_to_track.keys()))
+    node_to_track.update({seg_id: 0 for seg_id in missing_seg_ids})
+    return node_to_track, lineages
+
+
+def _filter_lineages(lineages, tracking_result):
+    track_ids = set(np.unique(tracking_result)) - {0}
+    filtered_lineages = []
+    for lineage in lineages:
+        filtered_lineage = {k: v for k, v in lineage.items() if k in track_ids}
+        if filtered_lineage:
+            filtered_lineages.append(filtered_lineage)
+    return filtered_lineages
+
+
+def _tracking_impl(timeseries, segmentation, mode, min_time_extent):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = Trackastra.from_pretrained("general_2d", device=device)
+    lineage_graph = model.track(timeseries, segmentation, mode=mode)
+    track_data, parent_graph, _ = graph_to_napari_tracks(lineage_graph)
+    node_to_track, lineages = _extract_tracks_and_lineages(segmentation, track_data, parent_graph)
+    tracking_result = recolor_segmentation(segmentation, node_to_track)
+
+    # TODO
+    # We should check if trackastra supports this already.
+    # Filter out short tracks / lineages.
+    if min_time_extent is not None and min_time_extent > 0:
+        raise NotImplementedError
+
+    # Filter out pruned lineages.
+    # Mmay either be missing due to track filtering or non-consectutive track numbering in trackastra.
+    lineages = _filter_lineages(lineages, tracking_result)
+
+    return tracking_result, lineages
+
+
+def track_across_frames(
+    timeseries: np.ndarray,
+    segmentation: np.ndarray,
+    gap_closing: Optional[int] = None,
+    min_time_extent: Optional[int] = None,
+    verbose: bool = True,
+    pbar_init: Optional[callable] = None,
+    pbar_update: Optional[callable] = None,
+) -> Tuple[np.ndarray, List[Dict]]:
+    """Track segmented objects over time.
+
+    This function uses Trackastra: https://www.ecva.net/papers/eccv_2024/papers_ECCV/papers/09819.pdf
+    for tracking. Please cite it if you use the automated tracking functionality.
+
+    Args:
+        timeseries: The input timeseries of images.
+        segmentation: The segmentation. Expect segmentation results per frame
+            that are relabeled so that segmentation ids don't overlap.
+        gap_closing: If given, gaps in the segmentation are closed with a binary closing
+            operation. The value is used to determine the number of iterations for the closing.
+        min_time_extent: Require a minimal extent in time for the tracked objects.
+        verbose: Verbosity flag.
+        pbar_init: Function to initialize the progress bar.
+        pbar_update: Function to update the progress bar.
+
+    Returns:
+        The tracking result. Each object is colored by its track id.
+        The lineages, which correspond to the cell divisions. Lineages are represented by a list of dicts,
+            with each dict encoding a lineage, where keys correspond to parent track ids.
+            Each key either maps to a list with two child track ids (cell division) or to an empty list (no division).
+    """
+    _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init=pbar_init, pbar_update=pbar_update)
+
+    if gap_closing is not None and gap_closing > 0:
+        segmentation = _preprocess_closing(segmentation, gap_closing, pbar_update)
+
+    segmentation, lineage = _tracking_impl(timeseries, segmentation, mode="greedy", min_time_extent=min_time_extent)
+    return segmentation, lineage
+
+
+def automatic_tracking(
+    timeseries: np.ndarray,
+    predictor: SamPredictor,
+    segmentor: AMGBase,
+    embedding_path: Optional[Union[str, os.PathLike]] = None,
+    gap_closing: Optional[int] = None,
+    min_time_extent: Optional[int] = None,
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
+    verbose: bool = True,
+    **kwargs,
+) -> Tuple[np.ndarray, List[Dict]]:
+    """Automatically track objects in a timesries based on per-frame automatic segmentation.
+
+    This function uses Trackastra: https://www.ecva.net/papers/eccv_2024/papers_ECCV/papers/09819.pdf
+    for tracking. Please cite it if you use the automated tracking functionality.
+
+    Args:
+        timeseries: The input timeseries of images.
+        predictor: The SAM model.
+        segmentor: The instance segmentation class.
+        embedding_path: The path to save pre-computed embeddings.
+        gap_closing: If given, gaps in the segmentation are closed with a binary closing
+            operation. The value is used to determine the number of iterations for the closing.
+        min_time_extent: Require a minimal extent in time for the tracked objects.
+        tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
+        halo: Overlap of the tiles for tiled prediction.
+        verbose: Verbosity flag.
+        kwargs: Keyword arguments for the 'generate' method of the 'segmentor'.
+
+    Returns:
+        The tracking result. Each object is colored by its track id.
+        The lineages, which correspond to the cell divisions. Lineages are represented by a list of dicts,
+            with each dict encoding a lineage, where keys correspond to parent track ids.
+            Each key either maps to a list with two child track ids (cell division) or to an empty list (no division).
+    """
+    if Trackastra is None:
+        raise RuntimeError(
+            "Automatic tracking requires trackastra. You can install it via 'pip install trackastra'."
+        )
+    segmentation, _ = _segment_slices(
+        timeseries, predictor, segmentor, embedding_path, verbose,
+        tile_shape=tile_shape, halo=halo,
+        **kwargs,
+    )
+    segmentation, lineage = track_across_frames(
+        timeseries, segmentation, gap_closing=gap_closing, min_time_extent=min_time_extent, verbose=verbose,
+    )
+    return segmentation, lineage

@@ -129,7 +129,8 @@ class TestUtil(unittest.TestCase):
         input_ = np.random.rand(3, 512, 512).astype("float32")
 
         # Compute the image embeddings without save path.
-        embeddings = precompute_image_embeddings(predictor, input_, ndim=3)
+        # We run this test with a batch size of 2.
+        embeddings = precompute_image_embeddings(predictor, input_, ndim=3, batch_size=2)
         for i in range(input_.shape[0]):
             self._check_predictor_initialization(predictor, embeddings, i=i)
 
@@ -159,7 +160,8 @@ class TestUtil(unittest.TestCase):
         input_ = np.random.rand(512, 512).astype("float32")
 
         # Compute the image embeddings without save path.
-        embeddings = precompute_image_embeddings(predictor, input_, tile_shape=tile_shape, halo=halo)
+        # We run this test with a batch size of 2.
+        embeddings = precompute_image_embeddings(predictor, input_, tile_shape=tile_shape, halo=halo, batch_size=2)
         for tile_id in range(4):
             self._check_predictor_initialization(predictor, embeddings, tile_id=tile_id)
 
@@ -189,7 +191,8 @@ class TestUtil(unittest.TestCase):
         input_ = np.random.rand(2, 512, 512).astype("float32")
 
         # Compute the image embeddings without save path.
-        embeddings = precompute_image_embeddings(predictor, input_, tile_shape=tile_shape, halo=halo)
+        # We run this test with a batch size of 2.
+        embeddings = precompute_image_embeddings(predictor, input_, tile_shape=tile_shape, halo=halo, batch_size=2)
         for i in range(2):
             for tile_id in range(4):
                 self._check_predictor_initialization(predictor, embeddings, i=i, tile_id=tile_id)

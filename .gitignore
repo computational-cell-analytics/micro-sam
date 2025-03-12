@@ -178,6 +178,8 @@ examples/data/*
 # Torch-em stuff
 checkpoints/
 logs/
+*.pth
+*.pt
 
 # And some other stuff to avoid tracking as well.
 gpu_jobs/
@@ -189,6 +191,10 @@ iterative_prompting_results/
 *.sh
 *.svg
 *.csv
+*.tiff
+*.tif
+*.zip
+*MACOSX
 
 # Related to i2k workshop folders.
 data/
