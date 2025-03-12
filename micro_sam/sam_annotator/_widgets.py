@@ -921,8 +921,9 @@ class EmbeddingWidget(_WidgetBase):
         return image_section
 
     def _update_model(self, state):
-        _model_type = state.predictor.model_type
+        _model_type = state.predictor.model_type if self.custom_weights else self.model_type
         print("Computed embeddings for", _model_type)
+
         state = AnnotatorState()
         # Update the widget itself. This is necessary because we may have loaded
         # some settings from the embedding file and have to reflect them in the widget.

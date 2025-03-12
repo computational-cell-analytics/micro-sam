@@ -103,9 +103,13 @@ def annotator_3d(
     # Add the annotator widget to the viewer and sync widgets.
     viewer.window.add_dock_widget(annotator)
     _sync_embedding_widget(
-        state.widgets["embeddings"], state.predictor.model_type,
-        save_path=embedding_path, checkpoint_path=checkpoint_path,
-        device=device, tile_shape=tile_shape, halo=halo
+        widget=state.widgets["embeddings"],
+        model_type=model_type if checkpoint_path is None else state.predictor.model_type,
+        save_path=embedding_path,
+        checkpoint_path=checkpoint_path,
+        device=device,
+        tile_shape=tile_shape,
+        halo=halo
     )
 
     if return_viewer:
