@@ -1,6 +1,7 @@
 import os
 from math import ceil, floor
-from typing import Dict, List, Optional, Union
+from functools import partial
+from typing import Dict, List, Optional, Union, Tuple, Callable
 
 import numpy as np
 
@@ -18,6 +19,7 @@ from .trainable_sam import TrainableSAM
 
 from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.transform.raw import normalize_percentile, normalize
+from torch_em.data.datasets.light_microscopy.neurips_cell_seg import to_rgb
 
 
 def identity(x):
@@ -38,6 +40,40 @@ def require_8bit(x):
     return x
 
 
+def _raw_transform(image: np.ndarray, raw_trafo: Callable) -> np.ndarray:
+    return raw_trafo(image) * 255
+
+
+def _normalize_percentile(image: np.ndarray) -> np.ndarray:
+    image = normalize_percentile(image)  # Use 1st and 99th percentile values for min-max normalization.
+    image = np.clip(image, 0, 1)  # Clip the values to be in range [0, 1].
+    return image
+
+
+def get_raw_transform(preprocess: Optional[str] = None) -> Optional[Callable]:
+    """Transformation functions to normalize inputs.
+
+    Args:
+        preprocess: By default, the transformation function is set to 'None'.
+            The user can choose from 'normalize_minmax' / 'normalize_percentile'.
+
+    Returns:
+        The transformation function.
+    """
+
+    if preprocess is None:  # Ensures that inputs are 8-bit.
+        return require_8bit
+    else:
+        if preprocess == "normalize_minmax":
+            raw_trafo = normalize
+        elif preprocess == "normalize_percentile":
+            raw_trafo = _normalize_percentile
+        else:
+            raise ValueError(f"'{preprocess}' is not a supported preprocessing.")
+
+        return partial(_raw_transform, raw_trafo=raw_trafo)
+
+
 def get_trainable_sam_model(
     model_type: str = _DEFAULT_MODEL,
     device: Optional[Union[str, torch.device]] = None,
@@ -51,13 +87,12 @@ def get_trainable_sam_model(
     """Get the trainable sam model.
 
     Args:
-        model_type: The segment anything model that should be finetuned.
-            The weights of this model will be used for initialization, unless a
-            custom weight file is passed via `checkpoint_path`.
+        model_type: The segment anything model that should be finetuned. The weights of this model
+            will be used for initialization, unless a custom weight file is passed via `checkpoint_path`.
         device: The device to use for training.
         checkpoint_path: Path to a custom checkpoint from which to load the model weights.
-        freeze: Specify parts of the model that should be frozen, namely: image_encoder, prompt_encoder and mask_decoder
-            By default nothing is frozen and the full model is updated.
+        freeze: Specify parts of the model that should be frozen, namely: `image_encoder`, `prompt_encoder` and
+            `mask_decoder`. By default nothing is frozen and the full model is updated.
         return_state: Whether to return the full checkpoint state.
         peft_kwargs: Keyword arguments for the PEFT wrapper class.
         flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
@@ -185,11 +220,13 @@ class ConvertToSamInputs:
             get_points = True
 
         # keeping the solution open by checking for deterministic/dynamic choice of point prompts
-        prompt_generator = PointAndBoxPromptGenerator(n_positive_points=n_pos,
-                                                      n_negative_points=n_neg,
-                                                      dilation_strength=self.dilation_strength,
-                                                      get_box_prompts=get_boxes,
-                                                      get_point_prompts=get_points)
+        prompt_generator = PointAndBoxPromptGenerator(
+            n_positive_points=n_pos,
+            n_negative_points=n_neg,
+            dilation_strength=self.dilation_strength,
+            get_box_prompts=get_boxes,
+            get_point_prompts=get_points
+        )
 
         batched_inputs = []
         batched_sampled_cell_ids_list = []
@@ -215,6 +252,7 @@ class ConvertToSamInputs:
                 batched_input["boxes"] = self.transform.apply_boxes_torch(
                     box_prompts, original_size=gt.shape[-2:]
                 ) if self.transform is not None else box_prompts
+
             if get_points:
                 batched_input["point_coords"] = self.transform.apply_coords_torch(
                     point_prompts, original_size=gt.shape[-2:]
@@ -227,14 +265,14 @@ class ConvertToSamInputs:
 
 
 class ConvertToSemanticSamInputs:
-    """Convert outputs of data loader to the expected batched inputs of the SegmentAnything model
+    """Convert outputs of data loader to the expected batched inputs of the Segment Anything model
     for semantic segmentation.
     """
     def __call__(self, x, y):
         """Convert the outputs of dataloader to the batched format of inputs expected by SAM.
         """
         batched_inputs = []
-        for image, gt in zip(x, y):
+        for image in x:
             batched_input = {"image": image, "original_size": image.shape[-2:]}
             batched_inputs.append(batched_input)
 
@@ -252,39 +290,52 @@ def normalize_to_8bit(raw):
 
 
 class ResizeRawTrafo:
-    def __init__(self, desired_shape, do_rescaling=False, padding="constant"):
+    def __init__(
+        self,
+        desired_shape: Tuple[int, ...],
+        do_rescaling: bool = False,
+        valid_channels: Optional[Union[int, Tuple[int, ...]]] = None,
+        padding: str = "constant"
+    ):
         self.desired_shape = desired_shape
-        self.padding = padding
         self.do_rescaling = do_rescaling
+        self.valid_channels = valid_channels
+        self.padding = padding
 
     def __call__(self, raw):
+        raw = to_rgb(raw)  # Ensure all images are in 3-channels: triplicate one channel to three channels.
+
         if self.do_rescaling:
-            raw = normalize_percentile(raw, axis=(1, 2))
-            raw = np.mean(raw, axis=0)
+            raw = normalize_percentile(raw, axis=self.valid_channels)
             raw = normalize(raw)
             raw = raw * 255
 
-        tmp_ddim = (self.desired_shape[0] - raw.shape[0], self.desired_shape[1] - raw.shape[1])
-        ddim = (tmp_ddim[0] / 2, tmp_ddim[1] / 2)
-        raw = np.pad(
-            raw,
-            pad_width=((ceil(ddim[0]), floor(ddim[0])), (ceil(ddim[1]), floor(ddim[1]))),
-            mode=self.padding
-        )
+        # Pad the inputs to the desired shape.
+        tmp_ddim = [desired - curr for desired, curr in zip(self.desired_shape, raw.shape)]
+        ddim = [(per_dim / 2) for per_dim in tmp_ddim]
+        pad_width = [(ceil(d), floor(d)) for d in ddim]
+        raw = np.pad(raw, pad_width=pad_width, mode=self.padding)
+
         assert raw.shape == self.desired_shape
         return raw
 
 
 class ResizeLabelTrafo:
-    def __init__(self, desired_shape, padding="constant", min_size=0):
+    def __init__(
+        self, desired_shape: Tuple[int, ...], min_size: int = 0, padding: str = "constant",
+    ):
         self.desired_shape = desired_shape
-        self.padding = padding
         self.min_size = min_size
+        self.padding = padding
 
     def __call__(self, labels):
         distance_trafo = PerObjectDistanceTransform(
-            distances=True, boundary_distances=True, directed_distances=False,
-            foreground=True, instances=True, min_size=self.min_size
+            distances=True,
+            boundary_distances=True,
+            directed_distances=False,
+            foreground=True,
+            instances=True,
+            min_size=self.min_size
         )
         labels = distance_trafo(labels)
 

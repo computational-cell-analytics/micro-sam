@@ -17,7 +17,7 @@ The installer should work out-of-the-box on Windows and Linux platforms. Please 
 
 ### 3. What is the minimum system requirement for `micro_sam`?
 From our experience, the `micro_sam` annotation tools work seamlessly on most laptop or workstation CPUs and with > 8GB RAM.
-You might encounter some slowness for $\leq$ 8GB RAM. The resources `micro_sam`'s annotation tools have been tested on are:
+You might encounter some slowness for >= 8GB RAM. The resources `micro_sam`'s annotation tools have been tested on are:
 - Windows:
     - Windows 10 Pro, Intel i5 7th Gen, 8GB RAM
     - Windows 10 Enterprise LTSC, Intel i7 13th Gen, 32GB RAM
@@ -160,6 +160,14 @@ NOTE: It is important to choose the correct model type when you opt for the abov
 
 ### 16. Some parameters in the annotator / finetuning widget are unclear to me.
 `micro-sam` has tooltips for menu options across all widgets (i.e. an information window will appear if you hover over name of the menu), which briefly describe the utility of the specific menu option.
+
+
+### 17. I want to use an older version of the pretrained models.
+The older model versions are still available on zenodo. You can find the download links for all of them [here](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#other-models).
+You can then use those models with the custom checkpoint option, see answer 15 for details.
+
+### 18. I would like to evaluate the instance segmentation quantitatively. Can you suggest how to do that?
+`micro-sam` supports a `micro_sam.evaluate` CLI, which computes the mean segmentation accuracy (introduced in the Pascal VOC challenge) of the predicted instance segmentation with the corresponding ground-truth annotations. Please see our paper (`Methods` -> `Inference and Evaluation` for more details about it) and `$ micro_sam.evaluate -h` for more details about the evaluation CLI.
 
 
 ## Fine-tuning questions

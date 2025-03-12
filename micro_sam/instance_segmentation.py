@@ -12,8 +12,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import vigra
 import numpy as np
-import elf.parallel as parallel
-from elf.parallel.filters import apply_filter
 from skimage.measure import label, regionprops
 from skimage.segmentation import relabel_sequential
 
@@ -22,6 +20,9 @@ from torchvision.ops.boxes import batched_nms, box_area
 
 from torch_em.model import UNETR
 from torch_em.util.segmentation import watershed_from_center_and_boundary_distances
+
+import elf.parallel as parallel
+from elf.parallel.filters import apply_filter
 
 from nifty.tools import blocking
 
@@ -561,12 +562,12 @@ class AutomaticMaskGenerator(AMGBase):
 
 
 # Helper function for tiled embedding computation and checking consistent state.
-def _process_tiled_embeddings(predictor, image, image_embeddings, tile_shape, halo, verbose):
+def _process_tiled_embeddings(predictor, image, image_embeddings, tile_shape, halo, verbose, batch_size):
     if image_embeddings is None:
         if tile_shape is None or halo is None:
             raise ValueError("To compute tiled embeddings the parameters tile_shape and halo have to be passed.")
         image_embeddings = util.precompute_image_embeddings(
-            predictor, image, tile_shape=tile_shape, halo=halo, verbose=verbose
+            predictor, image, tile_shape=tile_shape, halo=halo, verbose=verbose, batch_size=batch_size
         )
 
     # Use tile shape and halo from the precomputed embeddings if not given.
@@ -633,6 +634,7 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         verbose: bool = False,
         pbar_init: Optional[callable] = None,
         pbar_update: Optional[callable] = None,
+        batch_size: int = 1,
     ) -> None:
         """Initialize image embeddings and masks for an image.
 
@@ -649,12 +651,13 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
                 Can be used together with pbar_update to handle napari progress bar in other thread.
                 To enables using this function within a threadworker.
             pbar_update: Callback to update an external progress bar.
+            batch_size: The batch size for image embedding prediction.
         """
         original_size = image.shape[:2]
         self._original_size = original_size
 
         image_embeddings, tile_shape, halo = _process_tiled_embeddings(
-            self._predictor, image, image_embeddings, tile_shape, halo, verbose=verbose,
+            self._predictor, image, image_embeddings, tile_shape, halo, verbose=verbose, batch_size=batch_size
         )
 
         tiling = blocking([0, 0], original_size, tile_shape)
@@ -722,7 +725,7 @@ class DecoderAdapter(torch.nn.Module):
         self.deconv3 = unetr.deconv3
         self.deconv4 = unetr.deconv4
 
-    def forward(self, input_, input_shape, original_shape):
+    def _forward_impl(self, input_):
         z12 = input_
 
         z9 = self.deconv1(z12)
@@ -742,7 +745,10 @@ class DecoderAdapter(torch.nn.Module):
         x = self.out_conv(x)
         if self.final_activation is not None:
             x = self.final_activation(x)
+        return x
 
+    def forward(self, input_, input_shape, original_shape):
+        x = self._forward_impl(input_)
         x = self.postprocess_masks(x, input_shape, original_shape)
         return x
 
@@ -1077,7 +1083,9 @@ class InstanceSegmentationWithDecoder:
 
         if tile_shape is None:
             segmentation = watershed_from_center_and_boundary_distances(
-                self._center_distances, self._boundary_distances, foreground,
+                center_distances=self._center_distances,
+                boundary_distances=self._boundary_distances,
+                foreground_map=foreground,
                 center_distance_threshold=center_distance_threshold,
                 boundary_distance_threshold=boundary_distance_threshold,
                 foreground_threshold=foreground_threshold,
@@ -1088,13 +1096,18 @@ class InstanceSegmentationWithDecoder:
             if halo is None:
                 raise ValueError("You must pass a value for halo if tile_shape is given.")
             segmentation = _watershed_from_center_and_boundary_distances_parallel(
-                self._center_distances, self._boundary_distances, foreground,
+                center_distances=self._center_distances,
+                boundary_distances=self._boundary_distances,
+                foreground_map=foreground,
                 center_distance_threshold=center_distance_threshold,
                 boundary_distance_threshold=boundary_distance_threshold,
                 foreground_threshold=foreground_threshold,
                 distance_smoothing=distance_smoothing,
-                min_size=min_size, tile_shape=tile_shape,
-                halo=halo, n_threads=n_threads, verbose=False,
+                min_size=min_size,
+                tile_shape=tile_shape,
+                halo=halo,
+                n_threads=n_threads,
+                verbose=False,
             )
 
         if output_mode is not None:
@@ -1140,6 +1153,18 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
     """Same as `InstanceSegmentationWithDecoder` but for tiled image embeddings.
     """
 
+    # Apply the decoder in a batched fashion, and then perform the resizing independently per output.
+    # This is necessary, because the individual tiles may have different tile shapes due to border tiles.
+    def _predict_decoder(self, batched_embeddings, input_shapes, original_shapes):
+        batched_embeddings = torch.cat(batched_embeddings)
+        output = self._decoder._forward_impl(batched_embeddings)
+
+        batched_output = []
+        for x, input_shape, original_shape in zip(output, input_shapes, original_shapes):
+            x = self._decoder.postprocess_masks(x.unsqueeze(0), input_shape, original_shape).squeeze(0)
+            batched_output.append(x.cpu().numpy())
+        return batched_output
+
     @torch.no_grad()
     def initialize(
         self,
@@ -1151,6 +1176,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         verbose: bool = False,
         pbar_init: Optional[callable] = None,
         pbar_update: Optional[callable] = None,
+        batch_size: int = 1,
     ) -> None:
         """Initialize image embeddings and decoder predictions for an image.
 
@@ -1167,10 +1193,11 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
                 Can be used together with pbar_update to handle napari progress bar in other thread.
                 To enables using this function within a threadworker.
             pbar_update: Callback to update an external progress bar.
+            batch_size: The batch size for image embedding computation and segmentation decoder prediction.
         """
         original_size = image.shape[:2]
         image_embeddings, tile_shape, halo = _process_tiled_embeddings(
-            self._predictor, image, image_embeddings, tile_shape, halo, verbose=verbose,
+            self._predictor, image, image_embeddings, tile_shape, halo, verbose=verbose, batch_size=batch_size
         )
         tiling = blocking([0, 0], original_size, tile_shape)
 
@@ -1181,29 +1208,39 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         center_distances = np.zeros(original_size, dtype="float32")
         boundary_distances = np.zeros(original_size, dtype="float32")
 
-        for tile_id in range(tiling.numberOfBlocks):
+        n_tiles = tiling.numberOfBlocks
+        n_batches = int(np.ceil(n_tiles / batch_size))
 
-            # Get the image embeddings from the predictor for this tile.
-            self._predictor = util.set_precomputed(self._predictor, image_embeddings, i=i, tile_id=tile_id)
-            embeddings = self._predictor.features
-            input_shape = tuple(self._predictor.input_size)
-            original_shape = tuple(self._predictor.original_size)
+        for batch_id in range(n_batches):
+            tile_start = batch_id * batch_size
+            tile_stop = min(tile_start + batch_size, n_tiles)
 
-            # Predict with the UNETR decoder for this tile.
-            output = self._decoder(embeddings, input_shape, original_shape).cpu().numpy().squeeze(0)
-            assert output.shape[0] == 3, f"{output.shape}"
+            batched_embeddings, input_shapes, original_shapes = [], [], []
+            for tile_id in range(tile_start, tile_stop):
+                # Get the image embeddings from the predictor for this tile.
+                self._predictor = util.set_precomputed(self._predictor, image_embeddings, i=i, tile_id=tile_id)
 
-            # Set the predictions in the output for this tile.
-            block = tiling.getBlockWithHalo(tile_id, halo=list(halo))
-            local_bb = tuple(
-                slice(beg, end) for beg, end in zip(block.innerBlockLocal.begin, block.innerBlockLocal.end)
-            )
-            inner_bb = tuple(slice(beg, end) for beg, end in zip(block.innerBlock.begin, block.innerBlock.end))
+                batched_embeddings.append(self._predictor.features)
+                input_shapes.append(tuple(self._predictor.input_size))
+                original_shapes.append(tuple(self._predictor.original_size))
 
-            foreground[inner_bb] = output[0][local_bb]
-            center_distances[inner_bb] = output[1][local_bb]
-            boundary_distances[inner_bb] = output[2][local_bb]
-            pbar_update(1)
+            batched_output = self._predict_decoder(batched_embeddings, input_shapes, original_shapes)
+
+            for output_id, tile_id in enumerate(range(tile_start, tile_stop)):
+                output = batched_output[output_id]
+                assert output.shape[0] == 3
+
+                # Set the predictions in the output for this tile.
+                block = tiling.getBlockWithHalo(tile_id, halo=list(halo))
+                local_bb = tuple(
+                    slice(beg, end) for beg, end in zip(block.innerBlockLocal.begin, block.innerBlockLocal.end)
+                )
+                inner_bb = tuple(slice(beg, end) for beg, end in zip(block.innerBlock.begin, block.innerBlock.end))
+
+                foreground[inner_bb] = output[0][local_bb]
+                center_distances[inner_bb] = output[1][local_bb]
+                boundary_distances[inner_bb] = output[2][local_bb]
+                pbar_update(1)
 
         pbar_close()
 

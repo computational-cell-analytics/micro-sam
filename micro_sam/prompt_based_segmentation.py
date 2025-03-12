@@ -76,10 +76,7 @@ def _compute_points_from_mask(mask, original_size, box_extension, use_single_poi
 
     # get the point labels
     point_labels = np.concatenate(
-        [
-            np.ones(len(inner_maxima), dtype="uint8"),
-            np.zeros(len(outer_maxima), dtype="uint8"),
-        ]
+        [np.ones(len(inner_maxima), dtype="uint8"), np.zeros(len(outer_maxima), dtype="uint8")]
     )
     return point_coords[:, ::-1], point_labels
 

@@ -12,11 +12,29 @@
 # - downstream applications (eg. updating the "num_multimask_outputs" for multi-class semantic segmentation)
 #
 
+from typing import OrderedDict
+
 import torch
 
 from functools import partial
 
 from segment_anything.modeling import Sam, ImageEncoderViT, PromptEncoder, MaskDecoder, TwoWayTransformer
+
+
+def _validate_model_type(state: OrderedDict) -> str:
+    # We compare the 'embed_dim' values in the patch embedding stage.
+    if "image_encoder.patch_embed.proj.weight" in state:  # for all OG SAM models.
+        embed_dim_size = state["image_encoder.patch_embed.proj.weight"].shape[0]
+
+        # Mapping for SAM models based on 'embed_dim'.
+        # NOTE: We can make this more flexible to subject this to the 'depth' as well.
+        embed_dim_combinations = {768: "vit_b", 1024: "vit_l", 1280: "vit_h"}
+        _provided_model_type = embed_dim_combinations[embed_dim_size]
+
+    else:  # for MobileSAM (vit-tiny) models.
+        _provided_model_type = "vit_t"
+
+    return _provided_model_type
 
 
 def build_sam_vit_h(checkpoint=None, num_multimask_outputs=3, image_size=1024):
@@ -114,9 +132,11 @@ def _build_sam(
         pixel_mean=[123.675, 116.28, 103.53],
         pixel_std=[58.395, 57.12, 57.375],
     )
+
     sam.eval()
     if checkpoint is not None:
         with open(checkpoint, "rb") as f:
             state_dict = torch.load(f)
         sam.load_state_dict(state_dict)
+
     return sam

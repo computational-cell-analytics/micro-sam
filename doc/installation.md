@@ -13,11 +13,9 @@ We do **not support** installing `micro_sam` with pip.
 
 `conda` is a python package manager. If you don't have it installed yet you can follow the instructions [here](https://conda-forge.org/download/) to set it up on your system.
 Please make sure that you are using an up-to-date version of conda to install `micro_sam`.
-You can also use [mamba](https://mamba.readthedocs.io/en/latest/), which is a drop-in replacement for conda, to install it. In this case, just replace the `conda` command below with `mamba`.
+You can also use [mamba](https://mamba.readthedocs.io/en/latest/), which is a drop-in replacement for conda, to install it. In this case, just replace the `conda` commands below with `mamba`.
 
 **IMPORTANT**: Do not install `micro_sam` in the base conda environment.
-
-**Installation on Linux and Mac OS:**
 
 `micro_sam` can be installed in an existing environment via:
 ```bash
@@ -33,30 +31,16 @@ conda activate micro-sam
 ```
 
 This will also install `pytorch` from the `conda-forge` channel. If you have a recent enough operating system, it will automatically install the best suitable `pytorch` version on your system.
-This means it will install the CPU version if you don't have a nVidia GPU, and will install a GPU version if you have.
+This means it will install the CPU version if you don't have a nvidia GPU, and will install a GPU version if you have.
 However, if you have an older operating system, or a CUDA version older than 12, than it may not install the correct version. In this case you will have to specify you're CUDA version, for example for CUDA 11, like this:
 ```bash
 conda install -c conda-forge micro_sam "libtorch=*=cuda11*"
 ```
 
-**Installation on Windows:**
-
-`pytorch` is currently not available on conda-forge for windows. Thus, you have to install it from the `pytorch` conda channel. In addition, you have to specify two specific dependencies to avoid incompatibilities.
-This can be done with the following commands:
-```bash
-conda install -c pytorch -c conda-forge micro_sam "nifty=1.2.1=*_4" "protobuf<5"
-```
-to install `micro_sam` in an existing environment and
-```bash
-conda create -c pytorch -c conda-forge -n micro-sam micro_sam "nifty=1.2.1=*_4" "protobuf<5"
-```
-
 ## From source
 
 To install `micro_sam` from source, we recommend to first set up an environment with the necessary requirements:
-- [environment.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/master/environment.yaml): to set up an environment on Linux or Mac OS.
-- [environment_cpu_win.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/master/environment_cpu_win.yaml): to set up an environment on windows with CPU support.
-- [environment_gpu_win.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/master/environment_gpu_win.yaml): to set up an environment on windows with GPU support.
+- [environment.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/master/environment.yaml): to set up an environment on Windows, Linux or Mac OS.
 
 To create one of these environments and install `micro_sam` into it follow these steps
 
@@ -75,7 +59,7 @@ cd micro-sam
 3. Create the respective environment:
 
 ```bash
-conda env create -f <ENV_FILE>.yaml
+conda env create -f environment.yaml
 ```
 
 4. Activate the environment:

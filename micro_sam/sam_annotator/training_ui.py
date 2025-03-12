@@ -4,37 +4,15 @@ import warnings
 from qtpy import QtWidgets
 # from napari.qt.threading import thread_worker
 
-import torch
-from torch.utils.data import random_split
-
 import torch_em
+from torch.utils.data import random_split
 
 import micro_sam.util as util
 import micro_sam.sam_annotator._widgets as widgets
+from micro_sam.training.training import _find_best_configuration, _export_helper
 from micro_sam.training import default_sam_dataset, train_sam_for_configuration, CONFIGURATIONS
 
 from ._tooltips import get_tooltip
-
-
-def _find_best_configuration():
-    if torch.cuda.is_available():
-
-        # Check how much memory we have and select the best matching GPU
-        # for the available VRAM size.
-        _, vram = torch.cuda.mem_get_info()
-        vram = vram / 1e9  # in GB
-
-        # Maybe we can get more configurations in the future.
-        if vram > 80:  # More than 80 GB: use the A100 configurations.
-            return "A100"
-        elif vram > 30:  # More than 30 GB: use the V100 configurations.
-            return "V100"
-        elif vram > 14:  # More than 14 GB: use the RTX5000 configurations.
-            return "rtx5000"
-        else:  # Otherwise: not enough memory to train on the GPU, use CPU instead.
-            return "CPU"
-    else:
-        return "CPU"
 
 
 class TrainingWidget(widgets._WidgetBase):
@@ -171,8 +149,12 @@ class TrainingWidget(widgets._WidgetBase):
 
         patch_shape = (self.patch_x, self.patch_y)
         dataset = default_sam_dataset(
-            str(self.raw_path), self.raw_key, str(self.label_path), self.label_key,
-            patch_shape=patch_shape, with_segmentation_decoder=self.with_segmentation_decoder,
+            raw_paths=str(self.raw_path),
+            raw_key=self.raw_key,
+            label_paths=str(self.label_path),
+            label_key=self.label_key,
+            patch_shape=patch_shape,
+            with_segmentation_decoder=self.with_segmentation_decoder,
         )
 
         raw_path_val, label_path_val = self.raw_path_val, self.label_path_val
@@ -183,8 +165,12 @@ class TrainingWidget(widgets._WidgetBase):
         else:
             train_dataset = dataset
             val_dataset = default_sam_dataset(
-                str(raw_path_val), self.raw_key, str(label_path_val), self.label_key,
-                patch_shape=patch_shape, with_segmentation_decoder=self.with_segmentation_decoder,
+                raw_paths=str(raw_path_val),
+                raw_key=self.raw_key,
+                label_paths=str(label_path_val),
+                label_key=self.label_key,
+                patch_shape=patch_shape,
+                with_segmentation_decoder=self.with_segmentation_decoder,
             )
 
         train_loader = torch_em.segmentation.get_data_loader(
@@ -255,47 +241,11 @@ class TrainingWidget(widgets._WidgetBase):
             export_checkpoint = os.path.join("checkpoints", self.name, "best.pt")
             assert os.path.exists(export_checkpoint), export_checkpoint
 
-            # Export the model if an output path was given.
-            if self.output_path:
-
-                # If the output path has a pytorch specific ending then
-                # we just export the checkpoint.
-                if os.path.splitext(self.output_path)[1] in (".pt", ".pth"):
-                    util.export_custom_sam_model(
-                        checkpoint_path=export_checkpoint, model_type=model_type, save_path=self.output_path,
-                    )
-
-                # Otherwise we export it as bioimage.io model.
-                else:
-                    from micro_sam.bioimageio import export_sam_model
-
-                    # Load image and label image from the val loader.
-                    with torch.no_grad():
-                        image, label_image = next(iter(val_loader))
-                        image, label_image = image.cpu().numpy().squeeze(), label_image.cpu().numpy().squeeze()
-
-                    # Select the last channel of the label image if we have a channel axis.
-                    # (This contains the labels.)
-                    if label_image.ndim == 3:
-                        label_image = label_image[0]
-                    assert image.shape == label_image.shape
-                    label_image = label_image.astype("uint32")
-
-                    export_sam_model(
-                        image=image,
-                        label_image=label_image,
-                        model_type=model_type,
-                        name=self.name,
-                        output_path=self.output_path,
-                        checkpoint_path=export_checkpoint,
-                    )
-
-                pbar_signals.pbar_stop.emit()
-                return self.output_path
-
-            else:
-                pbar_signals.pbar_stop.emit()
-                return export_checkpoint
+            output_path = _export_helper(
+                "", self.name, self.output_path, model_type, self.with_segmentation_decoder, val_loader
+            )
+            pbar_signals.pbar_stop.emit()
+            return output_path
 
         path = run_training()
         print(f"Training has finished. The trained model is saved at {path}.")

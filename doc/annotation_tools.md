@@ -146,3 +146,7 @@ You can select the image data via `Path to images`. You can either load images f
 You can select the label data via `Path to labels` and `Label data key`, following the same logic as for the image data. The label masks are expected to have the same size as the image data. You can for example use annotations created with one of the `micro_sam` annotation tools for this, they are stored in the correct format. See [the FAQ](#fine-tuning-questions) for more details on the expected label data.
 
 The `Configuration` option allows you to choose the hardware configuration for training. We try to automatically select the correct setting for your system, but it can also be changed. Details on the configurations can be found [here](#training-your-own-model).
+
+NOTE: We recommend to fine-tune Segment Anything models on your data by
+- running `$ micro_sam.train` in the command line.
+- calling `micro_sam.training.train_sam` in a python script. Check out [examples/finetuning/finetune_hela.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/finetuning/finetune_hela.py) OR [notebooks/sam_finetuning.ipynb](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb) for details.

@@ -40,7 +40,7 @@ class Annotator3d(_AnnotatorBase):
 
 def annotator_3d(
     image: np.ndarray,
-    embedding_path: Optional[str] = None,
+    embedding_path: Optional[Union[str, util.ImageEmbeddings]] = None,
     segmentation_result: Optional[np.ndarray] = None,
     model_type: str = util._DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
@@ -56,7 +56,8 @@ def annotator_3d(
 
     Args:
         image: The volumetric image data.
-        embedding_path: Filepath for saving the precomputed embeddings.
+        embedding_path: Filepath where to save the embeddings
+            or the precompted image embeddings computed by `precompute_image_embeddings`.
         segmentation_result: An initial segmentation to load.
             This can be used to correct segmentations with Segment Anything or to save and load progress.
             The segmentation will be loaded as the 'committed_objects' layer.
@@ -102,9 +103,13 @@ def annotator_3d(
     # Add the annotator widget to the viewer and sync widgets.
     viewer.window.add_dock_widget(annotator)
     _sync_embedding_widget(
-        state.widgets["embeddings"], model_type,
-        save_path=embedding_path, checkpoint_path=checkpoint_path,
-        device=device, tile_shape=tile_shape, halo=halo
+        widget=state.widgets["embeddings"],
+        model_type=model_type if checkpoint_path is None else state.predictor.model_type,
+        save_path=embedding_path,
+        checkpoint_path=checkpoint_path,
+        device=device,
+        tile_shape=tile_shape,
+        halo=halo
     )
 
     if return_viewer:
