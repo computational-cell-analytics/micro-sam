@@ -141,12 +141,16 @@ def automatic_instance_segmentation(
             verbose=verbose,
             batch_size=batch_size,
         )
+        initialize_kwargs = dict(image=image_data, image_embeddings=image_embeddings, verbose=verbose)
 
         # If we run AIS with tiling then we use the same tile shape for the watershed postprocessing.
+        # In this case, we also add the batch size to the initialize kwargs,
+        # so that the segmentation decoder can be applied in a batched fashion.
         if isinstance(segmenter, InstanceSegmentationWithDecoder) and tile_shape is not None:
             generate_kwargs.update({"tile_shape": tile_shape, "halo": halo})
+            initialize_kwargs["batch_size"] = batch_size
 
-        segmenter.initialize(image=image_data, image_embeddings=image_embeddings, verbose=verbose)
+        segmenter.initialize(**initialize_kwargs)
         masks = segmenter.generate(**generate_kwargs)
 
         if isinstance(masks, list):
