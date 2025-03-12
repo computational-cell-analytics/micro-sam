@@ -954,7 +954,60 @@ class EmbeddingWidget(_WidgetBase):
             vutil._sync_ndsegment_widget(state.widgets["segment_nd"], self.model_type, self.custom_weights)
 
     def _update_model_type(self):
-        self.model_type = "vit_" + self.model_size[0] + self.supported_dropdown_maps[self.model_family]
+        # Get currently selected model size (before clearing dropdown)
+        current_selection = self.model_size_dropdown.currentText()
+        self._get_model_size_options()  # Update model size options dynamically
+
+        # NOTE: We prevent recursive updates for this step temporarily.
+        self.model_size_dropdown.blockSignals(True)
+
+        # Let's clear and recreate the dropdown.
+        self.model_size_dropdown.clear()
+        self.model_size_dropdown.addItems(self.model_size_options)
+
+        # Restore previous selection, if still valid.
+        if current_selection in self.model_size_options:
+            self.model_size = current_selection
+        else:
+            if self.model_size_options:  # Default to the first available model size
+                self.model_size = self.model_size_options[0]
+
+        # Let's map the selection to the correct model type (e.g., "tiny" -> "vit_t")
+        size_key = next(
+            (k for k, v in {"t": "tiny", "b": "base", "l": "large", "h": "huge"}.items() if v == self.model_size), "b"
+        )
+        self.model_type = f"vit_{size_key}" + self.supported_dropdown_maps[self.model_family]
+
+        self.model_size_dropdown.setCurrentText(self.model_size)  # Apply the selected text to the dropdown
+
+        # We need to force a refresh for UI.
+        self.model_size_dropdown.update()
+
+        # NOTE: We should re-enable signals again.
+        self.model_size_dropdown.blockSignals(False)
+
+    def _get_model_size_options(self):
+        size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
+        self.model_size_mapping = {}  # We store the actual model names mapped to UI labels.
+
+        if self.model_family == "Default":
+            self.model_size_options = list(size_map.values())
+            self.model_size_mapping = {size_map[k]: f"vit_{k}" for k in size_map.keys()}
+        else:
+            model_suffix = self.supported_dropdown_maps[self.model_family]
+            self.model_size_options = []
+
+            for option in self.model_options:
+                if option.endswith(model_suffix):
+                    # Extract model size character on-the-fly.
+                    key = next((k for k in size_map.keys() if f"vit_{k}" in option), None)
+                    if key:
+                        size_label = size_map[key]
+                        self.model_size_options.append(size_label)
+                        self.model_size_mapping[size_label] = option  # Store the actual model name.
+
+        # We ensure an assorted order of model sizes ('tiny' to 'huge')
+        self.model_size_options.sort(key=lambda x: ["tiny", "base", "large", "huge"].index(x))
 
     def _create_model_section(self):
         self.model_family = "Default"
@@ -996,15 +1049,7 @@ class EmbeddingWidget(_WidgetBase):
         self.model_options = [model for model in self.model_options if not model.endswith("decoder")]
 
         # Now, we get the available sizes per model family.
-        size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
-
-        if self.model_family == "Default":  # for this, we have models for all sizes
-            self.model_size_options = list(size_map.values())
-        else:
-            model_suffix = self.supported_dropdown_maps[self.model_family]
-            self.model_size_options = [
-                size_map[option[4]] for option in self.model_options if option.endswith(model_suffix)
-            ]
+        self._get_model_size_options()
 
         self.model_size_dropdown, layout = self._add_choice_param(
             "model_size", self.model_size, self.model_size_options,
