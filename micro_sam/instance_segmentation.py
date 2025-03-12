@@ -725,7 +725,7 @@ class DecoderAdapter(torch.nn.Module):
         self.deconv3 = unetr.deconv3
         self.deconv4 = unetr.deconv4
 
-    def forward(self, input_, input_shape, original_shape):
+    def _forward_impl(self, input_):
         z12 = input_
 
         z9 = self.deconv1(z12)
@@ -745,7 +745,10 @@ class DecoderAdapter(torch.nn.Module):
         x = self.out_conv(x)
         if self.final_activation is not None:
             x = self.final_activation(x)
+        return x
 
+    def forward(self, input_, input_shape, original_shape):
+        x = self._forward_impl(input_)
         x = self.postprocess_masks(x, input_shape, original_shape)
         return x
 
@@ -1150,6 +1153,18 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
     """Same as `InstanceSegmentationWithDecoder` but for tiled image embeddings.
     """
 
+    # Apply the decoder in a batched fashion, and then perform the resizing independently per output.
+    # This is necessary, because the individual tiles may have different tile shapes due to border tiles.
+    def _predict_decoder(self, batched_embeddings, input_shapes, original_shapes):
+        batched_embeddings = torch.cat(batched_embeddings)
+        output = self._decoder._forward_impl(batched_embeddings)
+
+        batched_output = []
+        for x, input_shape, original_shape in zip(output, input_shapes, original_shapes):
+            x = self._decoder.postprocess_masks(x.unsqueeze(0), input_shape, original_shape).squeeze(0)
+            batched_output.append(x.cpu().numpy())
+        return batched_output
+
     @torch.no_grad()
     def initialize(
         self,
@@ -1200,24 +1215,20 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
             tile_start = batch_id * batch_size
             tile_stop = min(tile_start + batch_size, n_tiles)
 
-            batched_embeddings = []
+            batched_embeddings, input_shapes, original_shapes = [], [], []
             for tile_id in range(tile_start, tile_stop):
                 # Get the image embeddings from the predictor for this tile.
                 self._predictor = util.set_precomputed(self._predictor, image_embeddings, i=i, tile_id=tile_id)
-                embeddings = self._predictor.features
-                input_shape = tuple(self._predictor.input_size)
-                original_shape = tuple(self._predictor.original_size)
 
-                batched_embeddings.append(embeddings)
+                batched_embeddings.append(self._predictor.features)
+                input_shapes.append(tuple(self._predictor.input_size))
+                original_shapes.append(tuple(self._predictor.original_size))
 
-            batched_embeddings = torch.cat(batched_embeddings)
-            # Predict with the UNETR decoder for this batch.
-            batched_output = self._decoder(batched_embeddings, input_shape, original_shape).cpu().numpy()
-            assert batched_output.shape[0] == batch_size, f"{batched_output.shape}"
-            assert batched_output.shape[1] == 3, f"{batched_output.shape}"
+            batched_output = self._predict_decoder(batched_embeddings, input_shapes, original_shapes)
 
             for output_id, tile_id in enumerate(range(tile_start, tile_stop)):
                 output = batched_output[output_id]
+                assert output.shape[0] == 3
 
                 # Set the predictions in the output for this tile.
                 block = tiling.getBlockWithHalo(tile_id, halo=list(halo))
