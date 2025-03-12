@@ -1216,8 +1216,8 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
             assert batched_output.shape[0] == batch_size, f"{batched_output.shape}"
             assert batched_output.shape[1] == 3, f"{batched_output.shape}"
 
-            for i, tile_id in enumerate(range(tile_start, tile_stop)):
-                output = batched_output[i]
+            for output_id, tile_id in enumerate(range(tile_start, tile_stop)):
+                output = batched_output[output_id]
 
                 # Set the predictions in the output for this tile.
                 block = tiling.getBlockWithHalo(tile_id, halo=list(halo))
