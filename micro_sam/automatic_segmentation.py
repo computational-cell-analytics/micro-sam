@@ -65,6 +65,12 @@ def get_predictor_and_segmenter(
     return predictor, segmenter
 
 
+def _add_suffix_to_output_path(output_path: Union[str, os.PathLike], suffix: str) -> str:
+    fpath = Path(output_path).resolve()
+    fext = fpath.suffix if fpath.suffix else ".tif"
+    return str(fpath.with_name(f"{fpath.stem}{suffix}{fext}"))
+
+
 def automatic_instance_segmentation(
     predictor: util.SamPredictor,
     segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
@@ -181,6 +187,12 @@ def automatic_instance_segmentation(
             **generate_kwargs
         )
 
+    # Before starting to annotate, if at all desired, store the automatic segmentations in the first stage.
+    if output_path is not None:
+        _output_path = _add_suffix_to_output_path(output_path, "_automatic") if annotate else output_path
+        imageio.imwrite(_output_path, instances, compression="zlib")
+        print(f"The automatic segmentation results are stored at '{os.path.abspath(_output_path)}'.")
+
     # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
     if annotate:
         from micro_sam.sam_annotator import annotator_2d, annotator_3d
@@ -205,10 +217,10 @@ def automatic_instance_segmentation(
         # b) Did not do anything and closed the annotator, i.e. keeps the segmentations as it is.
         instances = viewer.layers["committed_objects"].data
 
-    # Save the instance segmentation, if 'output_path' provided.
-    if output_path is not None:
-        imageio.imwrite(output_path, instances, compression="zlib")
-        print(f"The segmentation results are stored at '{os.path.abspath(output_path)}'.")
+        # Save the instance segmentation, if 'output_path' provided.
+        if output_path is not None:
+            imageio.imwrite(output_path, instances, compression="zlib")
+            print(f"The final segmentation results are stored at '{os.path.abspath(output_path)}'.")
 
     if return_embeddings:
         return instances, image_embeddings
