@@ -920,14 +920,16 @@ class EmbeddingWidget(_WidgetBase):
 
         return image_section
 
-    def _update_model(self):
-        print("Computed embeddings for", self.model_type)
+    def _update_model(self, state):
+        _model_type = state.predictor.model_type if self.custom_weights else self.model_type
+        print("Computed embeddings for", _model_type)
+
         state = AnnotatorState()
         # Update the widget itself. This is necessary because we may have loaded
         # some settings from the embedding file and have to reflect them in the widget.
         vutil._sync_embedding_widget(
             self,
-            model_type=self.model_type,
+            model_type=_model_type,
             save_path=self.embeddings_save_path,
             checkpoint_path=self.custom_weights,
             device=self.device,
@@ -940,7 +942,7 @@ class EmbeddingWidget(_WidgetBase):
         if "autosegment" in state.widgets:
             with_decoder = state.decoder is not None
             vutil._sync_autosegment_widget(
-                state.widgets["autosegment"], self.model_type, self.custom_weights, update_decoder=with_decoder
+                state.widgets["autosegment"], _model_type, self.custom_weights, update_decoder=with_decoder
             )
             # Load the AMG/AIS state if we have a 3d segmentation plugin.
             if state.widgets["autosegment"].volumetric and with_decoder:
@@ -951,7 +953,7 @@ class EmbeddingWidget(_WidgetBase):
         # Set the default settings for this model in the nd-segmentation widget if it is part of
         # the currently used plugin.
         if "segment_nd" in state.widgets:
-            vutil._sync_ndsegment_widget(state.widgets["segment_nd"], self.model_type, self.custom_weights)
+            vutil._sync_ndsegment_widget(state.widgets["segment_nd"], _model_type, self.custom_weights)
 
     def _update_model_type(self):
         # Get currently selected model size (before clearing dropdown)
@@ -1200,6 +1202,14 @@ class EmbeddingWidget(_WidgetBase):
         if not skip_validate and self._validate_inputs():
             return
 
+        # For 'custom_weights', we remove the displayed text on top of the drop-down menu.
+        if self.custom_weights:
+            # NOTE: We prevent recursive updates for this step temporarily.
+            self.model_family_dropdown.blockSignals(True)
+            self.model_family_dropdown.setCurrentText("Default")
+            # NOTE: And re-enable signals again.
+            self.model_family_dropdown.blockSignals(False)
+
         # Get the image.
         image = self.image_selection.get_value()
 
@@ -1249,7 +1259,7 @@ class EmbeddingWidget(_WidgetBase):
             pbar_signals.pbar_stop.emit()
 
         compute_image_embedding()
-        self._update_model()
+        self._update_model(state)
         # worker = compute_image_embedding()
         # worker.returned.connect(self._update_model)
         # worker.start()
