@@ -685,6 +685,7 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
     for k, v in supported_dropdown_maps.items():
         if model_type.endswith(k):
             model_family = v
+            break
 
     index = widget.model_family_dropdown.findText(model_family)
     if index > 0:
