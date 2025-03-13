@@ -355,6 +355,7 @@ def get_sam_model(
             progress_bar = progress_bar_factory(model_type)
 
         checkpoint_path = model_registry.fetch(model_type, progressbar=progress_bar)
+        progress_bar.close()  # Close the progress bar when the task finishes.
         model_hash = model_registry.registry[model_type]
 
         # If we have a custom model then we may also have a decoder checkpoint.
