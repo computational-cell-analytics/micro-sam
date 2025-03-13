@@ -294,6 +294,7 @@ def get_sam_model(
     return_state: bool = False,
     peft_kwargs: Optional[Dict] = None,
     flexible_load_checkpoint: bool = False,
+    progress_bar_factory: Optional[Callable] = None,
     **model_kwargs,
 ) -> SamPredictor:
     r"""Get the SegmentAnything Predictor.
@@ -330,6 +331,7 @@ def get_sam_model(
         peft_kwargs: Keyword arguments for th PEFT wrapper class.
         flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
         model_kwargs: Additional parameters necessary to initialize the Segment Anything model.
+        progress_bar_factory: A function to create a progress bar for the model download.
 
     Returns:
         The segment anything predictor.
@@ -345,7 +347,13 @@ def get_sam_model(
     _provided_checkpoint_path = checkpoint_path is not None
     if checkpoint_path is None:
         model_registry = models()
-        checkpoint_path = model_registry.fetch(model_type, progressbar=True)
+ 
+        progress_bar = True
+        # Check if we have to download the model. If we do and have a progress bar factory, then we over-write the progress bar.
+        if not os.path.exists(get_cache_directory(), model_type) and progress_bar_factory is not None:
+            progress_bar = progress_bar_factory(model_type)
+
+        checkpoint_path = model_registry.fetch(model_type, progressbar=progress_bar)
         model_hash = model_registry.registry[model_type]
 
         # If we have a custom model then we may also have a decoder checkpoint.
