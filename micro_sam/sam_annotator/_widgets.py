@@ -20,6 +20,7 @@ import elf.parallel
 from qtpy import QtWidgets
 from qtpy.QtCore import QObject, Signal
 from superqt import QCollapsible
+from napari.utils.notifications import show_info
 from magicgui import magic_factory
 from magicgui.widgets import ComboBox, Container, create_widget
 # We have disabled the thread workers for now because they result in a
@@ -922,7 +923,11 @@ class EmbeddingWidget(_WidgetBase):
 
     def _update_model(self, state):
         _model_type = state.predictor.model_type if self.custom_weights else self.model_type
-        print("Computed embeddings for", _model_type)
+        # TODO: update the message:
+        # - give the familiy and size model name
+        # - for custom models give size and the file path
+        show_info(f"Computed embeddings for {_model_type}")
+        # print("Computed embeddings for", _model_type)
 
         state = AnnotatorState()
         # Update the widget itself. This is necessary because we may have loaded
