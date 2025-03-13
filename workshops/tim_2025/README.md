@@ -50,9 +50,8 @@ TODO 2: Check if `git` is available, otherwise installing it is easy on PowerShe
 
 If you already have an installation of `micro_sam` please update it by running the last command in your respective environment. You can find more information about the installation [here](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation).
 
-### Download Models
-
-TODO: Adding a script is easy. Just run the `get_sam_model` for all models ;). Or, set the cache directory to somewhere else for users by updating the environment variable (?)
+TODO:
+Check if I can avoid all (data and embedding) downloads and store them on HIVE, without all users needing to download them!
 
 ### Download Embeddings for 3D EM Segmentation
 
@@ -73,6 +72,8 @@ and run the script:
 ```bash
 python download_models.py
 ```
+
+TODO: Can we set the cache directory to somewhere else for users by updating the environment variable (?) (so that all participants do not have a slight overhead)
 
 We also provide a script to download the image embeddings for the 3D segmentation problem in part 2.
 The image embeddings are necessary to run interactive segmentation. Computing them on the CPU can take some time for volumetric data, but we support precomputing them and have done this for this data already.
@@ -109,16 +110,19 @@ For cell segmentation you can either use `vit_b` (the original model) or `vit_b_
 You can use the [3D annotation tool](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#annotator-3d) to run interactive segmentation for cells or nuclei in volume light microscopy. We have prepared an example dataset for the workshop that you can use. It consists of a volume with nuclei imaged in light microscopy from the [EmbedSeg publication](https://github.com/juglab/EmbedSeg).
 
 You can download the data with the script `download_dataset.py`:
+
 ```bash
 python download_datasets.py -i data -d nuclei_3d
 ```
 
 After this please download the precomputed embeddings:
+
 ```bash
 python download_embeddings.py -e embeddings -d nuclei_3d
 ```
 
-You can then start the 3d annotation tool, either via the napari plugin (we will show this in the workshop) or the command line: 
+You can then start the 3d annotation tool, either via the napari plugin (we will show this in the workshop) or the command line:
+
 ```bash
 micro_sam.annotator_3d -i data/nuclei_3d/images/X1.tif -e embeddings/nuclei_3d/vit_b_lm/embedseg_Mouse-Skull-Nuclei-CBG_train_X1.zarr -m vit_b_lm
 ```
@@ -127,7 +131,6 @@ Note: You can use `micro_sam` with different models: the original models from Se
 For cell or nucleus segmentation you can either use `vit_b` (the original model) or `vit_b_lm` (our model). Our `vit_b_lm` model will be better for most segmentation problems in light microscopy but there may be cases where `vit_b` is better, so it makes sense to test both before annotating your data. Please refer to [our documentation](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models) for details on the models.
 
 **If you want to bring your own data for annotation please store it in a similar format to the example data. You DO NOT have to provide segmentation masks; we include them here only for reference and they are not needed for annotation with micro_sam. Please also precompute the embeddings for your data, see [Precompute Embeddings](#precompute-embeddings) for details.**
-
 
 ### 3D EM Segmentation
 
