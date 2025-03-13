@@ -920,14 +920,16 @@ class EmbeddingWidget(_WidgetBase):
 
         return image_section
 
-    def _update_model(self):
-        print("Computed embeddings for", self.model_type)
+    def _update_model(self, state):
+        _model_type = state.predictor.model_type if self.custom_weights else self.model_type
+        print("Computed embeddings for", _model_type)
+
         state = AnnotatorState()
         # Update the widget itself. This is necessary because we may have loaded
         # some settings from the embedding file and have to reflect them in the widget.
         vutil._sync_embedding_widget(
             self,
-            model_type=self.model_type,
+            model_type=_model_type,
             save_path=self.embeddings_save_path,
             checkpoint_path=self.custom_weights,
             device=self.device,
@@ -940,7 +942,7 @@ class EmbeddingWidget(_WidgetBase):
         if "autosegment" in state.widgets:
             with_decoder = state.decoder is not None
             vutil._sync_autosegment_widget(
-                state.widgets["autosegment"], self.model_type, self.custom_weights, update_decoder=with_decoder
+                state.widgets["autosegment"], _model_type, self.custom_weights, update_decoder=with_decoder
             )
             # Load the AMG/AIS state if we have a 3d segmentation plugin.
             if state.widgets["autosegment"].volumetric and with_decoder:
@@ -951,23 +953,87 @@ class EmbeddingWidget(_WidgetBase):
         # Set the default settings for this model in the nd-segmentation widget if it is part of
         # the currently used plugin.
         if "segment_nd" in state.widgets:
-            vutil._sync_ndsegment_widget(state.widgets["segment_nd"], self.model_type, self.custom_weights)
+            vutil._sync_ndsegment_widget(state.widgets["segment_nd"], _model_type, self.custom_weights)
+
+    def _update_model_type(self):
+        # Get currently selected model size (before clearing dropdown)
+        current_selection = self.model_size_dropdown.currentText()
+        self._get_model_size_options()  # Update model size options dynamically
+
+        # NOTE: We need to prevent recursive updates for this step temporarily.
+        self.model_size_dropdown.blockSignals(True)
+
+        # Let's clear and recreate the dropdown.
+        self.model_size_dropdown.clear()
+        self.model_size_dropdown.addItems(self.model_size_options)
+
+        # We restore the previous selection, if still valid.
+        if current_selection in self.model_size_options:
+            self.model_size = current_selection
+        else:
+            if self.model_size_options:  # Default to the first available model size
+                self.model_size = self.model_size_options[0]
+
+        # Let's map the selection to the correct model type (eg. "tiny" -> "vit_t")
+        size_key = next(
+            (k for k, v in {"t": "tiny", "b": "base", "l": "large", "h": "huge"}.items() if v == self.model_size), "b"
+        )
+        self.model_type = f"vit_{size_key}" + self.supported_dropdown_maps[self.model_family]
+
+        self.model_size_dropdown.setCurrentText(self.model_size)  # Apply the selected text to the dropdown
+
+        # We force a refresh for UI here.
+        self.model_size_dropdown.update()
+
+        # NOTE: And finally, we should re-enable signals again.
+        self.model_size_dropdown.blockSignals(False)
+
+    def _get_model_size_options(self):
+        size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
+
+        # We store the actual model names mapped to UI labels.
+        self.model_size_mapping = {}
+        if self.model_family == "Default":
+            self.model_size_options = list(size_map.values())
+            self.model_size_mapping = {size_map[k]: f"vit_{k}" for k in size_map.keys()}
+        else:
+            model_suffix = self.supported_dropdown_maps[self.model_family]
+            self.model_size_options = []
+
+            for option in self.model_options:
+                if option.endswith(model_suffix):
+                    # Extract model size character on-the-fly.
+                    key = next((k for k in size_map.keys() if f"vit_{k}" in option), None)
+                    if key:
+                        size_label = size_map[key]
+                        self.model_size_options.append(size_label)
+                        self.model_size_mapping[size_label] = option  # Store the actual model name.
+
+        # We ensure an assorted order of model sizes ('tiny' to 'huge')
+        self.model_size_options.sort(key=lambda x: ["tiny", "base", "large", "huge"].index(x))
 
     def _create_model_section(self):
-        self.model_type = util._DEFAULT_MODEL
-
-        self.model_options = list(util.models().urls.keys())
-        # Filter out the decoders from the model list.
-        self.model_options = [model for model in self.model_options if not model.endswith("decoder")]
-
-        # NOTE: We currently remove the medical imaging model from displaying it as an option.
-        self.model_options = [model for model in self.model_options if not model.endswith("medical_imaging")]
+        self.model_family = "Default"
 
         layout = QtWidgets.QVBoxLayout()
-        self.model_dropdown, layout = self._add_choice_param(
-            "model_type", self.model_type, self.model_options, title="Model:", layout=layout,
-            tooltip=get_tooltip("embedding", "model")
+
+        # NOTE: We stick to the base variant for each model family.
+        # i.e. 'Default', 'Light Microscopy', 'Electron Microscopy', 'Medical_Imaging', 'Histopathology'.
+
+        # Create a list of support dropdown values and correspond them to suffixes.
+        self.supported_dropdown_maps = {
+            "Default": "",
+            "Light Microscopy": "_lm",
+            "Electron Microscopy": "_em_organelles",
+            "Medical Imaging": "_medical_imaging",
+            "Histopathology": "_histopathology",
+        }
+
+        self.model_family_dropdown, layout = self._add_choice_param(
+            "model_family", self.model_family, list(self.supported_dropdown_maps.keys()),
+            title="Model:", layout=layout, tooltip=get_tooltip("embedding", "model")
         )
+        self.model_family_dropdown.currentTextChanged.connect(self._update_model_type)
         return layout
 
     def _create_settings_widget(self):
@@ -975,12 +1041,36 @@ class EmbeddingWidget(_WidgetBase):
         setting_values.setToolTip(get_tooltip("embedding", "settings"))
         setting_values.setLayout(QtWidgets.QVBoxLayout())
 
+        # Create UI for the model size.
+        # NOTE: The available options for all are either 'tiny', 'base', 'large' or 'huge'.
+        # This would depend on the chosen 'self.model_family'.
+        self.model_size = "base"
+
+        # Get all model options.
+        self.model_options = list(util.models().urls.keys())
+        # Filter out the decoders from the model list.
+        self.model_options = [model for model in self.model_options if not model.endswith("decoder")]
+
+        # Now, we get the available sizes per model family.
+        self._get_model_size_options()
+
+        self.model_size_dropdown, layout = self._add_choice_param(
+            "model_size", self.model_size, self.model_size_options,
+            title="model size:", tooltip=get_tooltip("embedding", "model"),
+        )
+        self.model_size_dropdown.currentTextChanged.connect(self._update_model_type)
+        setting_values.layout().addLayout(layout)
+
+        # Now that all parameters in place, let's get them all into one `model_type`.
+        self.model_type = "vit_" + self.model_size[0] + self.supported_dropdown_maps[self.model_family]
+
         # Create UI for the device.
         self.device = "auto"
         device_options = ["auto"] + util._available_devices()
 
-        self.device_dropdown, layout = self._add_choice_param("device", self.device, device_options,
-                                                              tooltip=get_tooltip("embedding", "device"))
+        self.device_dropdown, layout = self._add_choice_param(
+            "device", self.device, device_options, tooltip=get_tooltip("embedding", "device")
+        )
         setting_values.layout().addLayout(layout)
 
         # Create UI for the save path.
@@ -1112,6 +1202,14 @@ class EmbeddingWidget(_WidgetBase):
         if not skip_validate and self._validate_inputs():
             return
 
+        # For 'custom_weights', we remove the displayed text on top of the drop-down menu.
+        if self.custom_weights:
+            # NOTE: We prevent recursive updates for this step temporarily.
+            self.model_family_dropdown.blockSignals(True)
+            self.model_family_dropdown.setCurrentText("Default")
+            # NOTE: And re-enable signals again.
+            self.model_family_dropdown.blockSignals(False)
+
         # Get the image.
         image = self.image_selection.get_value()
 
@@ -1161,7 +1259,7 @@ class EmbeddingWidget(_WidgetBase):
             pbar_signals.pbar_stop.emit()
 
         compute_image_embedding()
-        self._update_model()
+        self._update_model(state)
         # worker = compute_image_embedding()
         # worker.returned.connect(self._update_model)
         # worker.start()

@@ -65,6 +65,12 @@ def get_predictor_and_segmenter(
     return predictor, segmenter
 
 
+def _add_suffix_to_output_path(output_path: Union[str, os.PathLike], suffix: str) -> str:
+    fpath = Path(output_path).resolve()
+    fext = fpath.suffix if fpath.suffix else ".tif"
+    return str(fpath.with_name(f"{fpath.stem}{suffix}{fext}"))
+
+
 def automatic_instance_segmentation(
     predictor: util.SamPredictor,
     segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
@@ -78,6 +84,7 @@ def automatic_instance_segmentation(
     verbose: bool = True,
     return_embeddings: bool = False,
     annotate: bool = False,
+    batch_size: int = 1,
     **generate_kwargs
 ) -> np.ndarray:
     """Run automatic segmentation for the input image.
@@ -98,6 +105,8 @@ def automatic_instance_segmentation(
         verbose: Verbosity flag.
         return_embeddings: Whether to return the precomputed image embeddings.
         annotate: Whether to activate the annotator for continue annotation process.
+        batch_size: The batch size to compute image embeddings over tiles / z-planes.
+            By default, does it sequentially, i.e. one after the other.
         generate_kwargs: optional keyword arguments for the generate function of the AMG or AIS class.
 
     Returns:
@@ -136,13 +145,18 @@ def automatic_instance_segmentation(
             tile_shape=tile_shape,
             halo=halo,
             verbose=verbose,
+            batch_size=batch_size,
         )
+        initialize_kwargs = dict(image=image_data, image_embeddings=image_embeddings, verbose=verbose)
 
         # If we run AIS with tiling then we use the same tile shape for the watershed postprocessing.
+        # In this case, we also add the batch size to the initialize kwargs,
+        # so that the segmentation decoder can be applied in a batched fashion.
         if isinstance(segmenter, InstanceSegmentationWithDecoder) and tile_shape is not None:
             generate_kwargs.update({"tile_shape": tile_shape, "halo": halo})
+            initialize_kwargs["batch_size"] = batch_size
 
-        segmenter.initialize(image=image_data, image_embeddings=image_embeddings, verbose=verbose)
+        segmenter.initialize(**initialize_kwargs)
         masks = segmenter.generate(**generate_kwargs)
 
         if isinstance(masks, list):
@@ -169,8 +183,15 @@ def automatic_instance_segmentation(
             halo=halo,
             verbose=verbose,
             return_embeddings=True,
+            batch_size=batch_size,
             **generate_kwargs
         )
+
+    # Before starting to annotate, if at all desired, store the automatic segmentations in the first stage.
+    if output_path is not None:
+        _output_path = _add_suffix_to_output_path(output_path, "_automatic") if annotate else output_path
+        imageio.imwrite(_output_path, instances, compression="zlib")
+        print(f"The automatic segmentation results are stored at '{os.path.abspath(_output_path)}'.")
 
     # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
     if annotate:
@@ -196,10 +217,10 @@ def automatic_instance_segmentation(
         # b) Did not do anything and closed the annotator, i.e. keeps the segmentations as it is.
         instances = viewer.layers["committed_objects"].data
 
-    # Save the instance segmentation, if 'output_path' provided.
-    if output_path is not None:
-        imageio.imwrite(output_path, instances, compression="zlib")
-        print(f"The segmentation results are stored at '{os.path.abspath(output_path)}'.")
+        # Save the instance segmentation, if 'output_path' provided.
+        if output_path is not None:
+            imageio.imwrite(output_path, instances, compression="zlib")
+            print(f"The final segmentation results are stored at '{os.path.abspath(output_path)}'.")
 
     if return_embeddings:
         return instances, image_embeddings
@@ -287,6 +308,11 @@ def main():
         "-d", "--device", default=None, type=str,
         help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
         "By default the most performant available device will be selected."
+    )
+    parser.add_argument(
+        "--batch_size", type=int, default=1,
+        help="The batch size for computing image embeddings over tiles or z-plane. "
+        "By default, computes the image embeddings for one tile / z-plane at a time."
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Whether to allow verbosity of outputs."
@@ -379,5 +405,6 @@ def main():
             halo=args.halo,
             annotate=args.annotate,
             verbose=args.verbose,
+            batch_size=args.batch_size,
             **generate_kwargs,
         )
