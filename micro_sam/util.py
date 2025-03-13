@@ -8,7 +8,7 @@ import hashlib
 import warnings
 from pathlib import Path
 from collections import OrderedDict
-from typing import Any, Dict, Iterable, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, Optional, Tuple, Union, Callable
 
 import zarr
 import vigra
@@ -347,10 +347,11 @@ def get_sam_model(
     _provided_checkpoint_path = checkpoint_path is not None
     if checkpoint_path is None:
         model_registry = models()
- 
+
         progress_bar = True
-        # Check if we have to download the model. If we do and have a progress bar factory, then we over-write the progress bar.
-        if not os.path.exists(get_cache_directory(), model_type) and progress_bar_factory is not None:
+        # Check if we have to download the model.
+        # If we do and have a progress bar factory, then we over-write the progress bar.
+        if not os.path.exists(os.path.join(get_cache_directory(), model_type)) and progress_bar_factory is not None:
             progress_bar = progress_bar_factory(model_type)
 
         checkpoint_path = model_registry.fetch(model_type, progressbar=progress_bar)

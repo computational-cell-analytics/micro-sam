@@ -91,7 +91,7 @@ class AnnotatorState(metaclass=Singleton):
         # Initialize the model if necessary.
         if predictor is None:
             def progress_bar_factory(model_type):
-                pbar = tqdm(desc=f"Downloading {model_type}. This may take a while.")
+                pbar = tqdm(desc=f"Downloading '{model_type}'. This may take a while.")
                 return pbar
 
             self.predictor, state = util.get_sam_model(

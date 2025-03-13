@@ -923,11 +923,15 @@ class EmbeddingWidget(_WidgetBase):
 
     def _update_model(self, state):
         _model_type = state.predictor.model_type if self.custom_weights else self.model_type
-        # TODO: update the message:
-        # - give the familiy and size model name
-        # - for custom models give size and the file path
-        show_info(f"Computed embeddings for {_model_type}")
-        # print("Computed embeddings for", _model_type)
+
+        # Provide a detailed message for the model family and model size per chosen combination.
+        msg = "Computed embeddings for "
+        if self.custom_weights:  # Whether the user provided a filepath to custom finetuned model weights.
+            msg += f"the model located at {os.path.abspath(self.custom_weights)} of size '{self.model_size}'."
+        else:
+            msg += f"the '{self.model_family}' model of size '{self.model_size}'."
+
+        show_info(msg)
 
         state = AnnotatorState()
         # Update the widget itself. This is necessary because we may have loaded
