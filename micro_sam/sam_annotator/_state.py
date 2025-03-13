@@ -48,6 +48,7 @@ class AnnotatorState(metaclass=Singleton):
     image_name: Optional[str] = None
     embedding_path: Optional[str] = None
     data_signature: Optional[str] = None
+    _embeddings_are_same: Optional[bool] = None
 
     # amg: needs to be initialized for the automatic segmentation functionality.
     # amg_state: for storing the instance segmentation state for the 3d segmentation tool.
