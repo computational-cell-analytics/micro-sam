@@ -21,7 +21,7 @@ And finally, we have an open discussion on your experience and expectations from
 
 To get started for the workshop, please do the following:
 - Install the latest version of `micro_sam`, see [Installation](#installation) for details
-    - TODO: Me and Tom are still deciding on local or global environments. We try out some stuff on Friday to finalize this.
+    - TODO: Me and Tom are still deciding on local or global environments. We try out some stuff on Friday, once HIVE is online again, to finalize this.
 - Download the models and pre-computed embeddings for the common 3D segmentation, see [here](#download-embeddings-for-3d-segmentation).
 - Decide what you want to do in the 4th part of the workshop (or maybe all) and follow the respective preparation steps. You have the following options:
     - High-throughput annotation of cells (or other structures) in 2D images, see [high-throughput-annotation](#high-throughput-image-annotation).
