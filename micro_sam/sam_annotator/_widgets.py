@@ -1226,10 +1226,11 @@ class EmbeddingWidget(_WidgetBase):
         # Update the image embeddings:
         state = AnnotatorState()
         if self._validate_existing_embeddings(state):
-            state._embeddings_are_same = True  # Whether embeddings already exist to control existing objects in layers.
+            # Whether embeddings already exist to control existing objects in layers.
+            state.skip_recomputing_embeddings = True
             return
 
-        state._embeddings_are_same = False
+        state.skip_recomputing_embeddings = False
         # Reset the state.
         state.reset_state()
 

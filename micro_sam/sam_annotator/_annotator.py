@@ -161,7 +161,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         state = AnnotatorState()
 
         # Whether embeddings already exist and avoid clearing objects in layers.
-        if state._embeddings_are_same:
+        if state.skip_recomputing_embeddings:
             return
 
         # This is encountered when there is no image layer available / selected.
