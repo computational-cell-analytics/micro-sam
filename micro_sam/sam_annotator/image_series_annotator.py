@@ -165,7 +165,8 @@ def image_series_annotator(
         prefer_decoder: Whether to use decoder based instance segmentation if
             the model used has an additional decoder for instance segmentation.
         skip_segmented: Whether to skip images that were already segmented.
-            If set to False, then segmentations that
+            If set to False, then segmentations that already exist will be loaded
+            and used to populate the 'committed_objects' layer.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
