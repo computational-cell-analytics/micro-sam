@@ -33,7 +33,7 @@ from . import util as vutil
 from ._tooltips import get_tooltip
 from .. import instance_segmentation, util
 from ..multi_dimensional_segmentation import (
-    segment_mask_in_volume, merge_instance_segmentation_3d, track_across_frames, PROJECTION_MODES
+    segment_mask_in_volume, merge_instance_segmentation_3d, track_across_frames, PROJECTION_MODES, get_napari_track_data
 )
 
 
@@ -575,7 +575,7 @@ def commit_track(
 
     # Create / update the tracking layer.
     layer_name = "tracks"
-    track_data, parent_graph = _derive_track_data(seg, state.committed_lineages)
+    track_data, parent_graph = get_napari_track_data(seg, state.committed_lineages)
     if layer_name in viewer.layers:
         pass
     else:
