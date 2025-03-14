@@ -985,7 +985,7 @@ class EmbeddingWidget(_WidgetBase):
 
         # Let's map the selection to the correct model type (eg. "tiny" -> "vit_t")
         size_key = next(
-            (k for k, v in {"t": "tiny", "b": "base", "l": "large", "h": "huge"}.items() if v == self.model_size), "b"
+            (k for k, v in self._model_size_map.items() if v == self.model_size), "b"
         )
         self.model_type = f"vit_{size_key}" + self.supported_dropdown_maps[self.model_family]
 
@@ -998,13 +998,11 @@ class EmbeddingWidget(_WidgetBase):
         self.model_size_dropdown.blockSignals(False)
 
     def _get_model_size_options(self):
-        size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
-
         # We store the actual model names mapped to UI labels.
         self.model_size_mapping = {}
         if self.model_family == "Default":
-            self.model_size_options = list(size_map.values())
-            self.model_size_mapping = {size_map[k]: f"vit_{k}" for k in size_map.keys()}
+            self.model_size_options = list(self._model_size_map .values())
+            self.model_size_mapping = {self._model_size_map[k]: f"vit_{k}" for k in self._model_size_map.keys()}
         else:
             model_suffix = self.supported_dropdown_maps[self.model_family]
             self.model_size_options = []
@@ -1012,9 +1010,9 @@ class EmbeddingWidget(_WidgetBase):
             for option in self.model_options:
                 if option.endswith(model_suffix):
                     # Extract model size character on-the-fly.
-                    key = next((k for k in size_map.keys() if f"vit_{k}" in option), None)
+                    key = next((k for k in self._model_size_map .keys() if f"vit_{k}" in option), None)
                     if key:
-                        size_label = size_map[key]
+                        size_label = self._model_size_map[key]
                         self.model_size_options.append(size_label)
                         self.model_size_mapping[size_label] = option  # Store the actual model name.
 
@@ -1022,13 +1020,6 @@ class EmbeddingWidget(_WidgetBase):
         self.model_size_options.sort(key=lambda x: ["tiny", "base", "large", "huge"].index(x))
 
     def _create_model_section(self):
-        self.model_family = "Default"
-
-        layout = QtWidgets.QVBoxLayout()
-
-        # NOTE: We stick to the base variant for each model family.
-        # i.e. 'Default', 'Light Microscopy', 'Electron Microscopy', 'Medical_Imaging', 'Histopathology'.
-
         # Create a list of support dropdown values and correspond them to suffixes.
         self.supported_dropdown_maps = {
             "Default": "",
@@ -1038,6 +1029,17 @@ class EmbeddingWidget(_WidgetBase):
             "Histopathology": "_histopathology",
         }
 
+        # NOTE: The available options for all are either 'tiny', 'base', 'large' or 'huge'.
+        self._model_size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
+
+        self._default_model_choice = util._DEFAULT_MODEL
+        # Let's set the literally default model choice depending on 'micro-sam'.
+        self.model_family = {v: k for k, v in self.supported_dropdown_maps.items()}[self._default_model_choice[5:]]
+
+        layout = QtWidgets.QVBoxLayout()
+
+        # NOTE: We stick to the base variant for each model family.
+        # i.e. 'Default', 'Light Microscopy', 'Electron Microscopy', 'Medical_Imaging', 'Histopathology'.
         self.model_family_dropdown, layout = self._add_choice_param(
             "model_family", self.model_family, list(self.supported_dropdown_maps.keys()),
             title="Model:", layout=layout, tooltip=get_tooltip("embedding", "model")
@@ -1051,9 +1053,8 @@ class EmbeddingWidget(_WidgetBase):
         setting_values.setLayout(QtWidgets.QVBoxLayout())
 
         # Create UI for the model size.
-        # NOTE: The available options for all are either 'tiny', 'base', 'large' or 'huge'.
-        # This would depend on the chosen 'self.model_family'.
-        self.model_size = "base"
+        # This would combine with the chosen 'self.model_family' and depend on 'self._default_model_choice'.
+        self.model_size = self._model_size_map[self._default_model_choice[4]]
 
         # Get all model options.
         self.model_options = list(util.models().urls.keys())
@@ -1206,6 +1207,16 @@ class EmbeddingWidget(_WidgetBase):
         # Otherwise we either don't have an embedding path or it is empty. We can proceed in both cases.
         return False
 
+    def _validate_existing_embeddings(self, state):
+        if state.image_embeddings is None:
+            return False
+        else:
+            val_results = {
+                "message_type": "info",
+                "message": "Embeddings have already been precomputed. Press OK to recompute the embeddings."
+            }
+            return _generate_message(val_results["message_type"], val_results["message"])
+
     def __call__(self, skip_validate=False):
         # Validate user inputs.
         if not skip_validate and self._validate_inputs():
@@ -1223,8 +1234,14 @@ class EmbeddingWidget(_WidgetBase):
         image = self.image_selection.get_value()
 
         # Update the image embeddings:
-        # Reset the state.
         state = AnnotatorState()
+        if self._validate_existing_embeddings(state):
+            # Whether embeddings already exist to control existing objects in layers.
+            state.skip_recomputing_embeddings = True
+            return
+
+        state.skip_recomputing_embeddings = False
+        # Reset the state.
         state.reset_state()
 
         # Get image dimensions.

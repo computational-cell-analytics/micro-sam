@@ -160,6 +160,10 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
     def _update_image(self, segmentation_result=None):
         state = AnnotatorState()
 
+        # Whether embeddings already exist and avoid clearing objects in layers.
+        if state.skip_recomputing_embeddings:
+            return
+
         # This is encountered when there is no image layer available / selected.
         # In this case, we need not update the image shape or check for changes.
         # NOTE: On code-level, this happens when '__init__' method is called by '_AnnotatorBase',
