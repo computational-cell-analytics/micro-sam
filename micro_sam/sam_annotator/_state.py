@@ -91,8 +91,14 @@ class AnnotatorState(metaclass=Singleton):
 
         # Initialize the model if necessary.
         if predictor is None:
+            def progress_bar_factory(model_type):
+                pbar = tqdm(desc=f"Downloading '{model_type}'. This may take a while")
+                return pbar
+
             self.predictor, state = util.get_sam_model(
-                device=device, model_type=model_type, checkpoint_path=checkpoint_path, return_state=True
+                device=device, model_type=model_type,
+                checkpoint_path=checkpoint_path, return_state=True,
+                progress_bar_factory=progress_bar_factory
             )
             if prefer_decoder and "decoder_state" in state:
                 self.decoder = get_decoder(
