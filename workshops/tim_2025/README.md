@@ -13,7 +13,7 @@ The workshop will be three hours and will be divided into three parts:
 
 We will walk through how to use the `micro_sam` plugin for interactive segmentation in part 3, so that you can then apply it to your own data (or the example data that is most similar to your targeted application) in part 4.
 Alternatively, you can also work on model finetuning or an advanced application, such as using the `micro_sam` in part 4.
-And finally, we have an open discussion on your experience and expectations from `micro_sam` in part 5, and the take home segmentation workflow for you all.
+And finally, we have a discussion on your experience and feedback / possible improvements in part 5. We will also try to formulate a segmentation workflow applicable for your data "at home".
 
 **Please read the [Workshop Preparation](#workshop-preparation) section carefully and follow the relevant steps to get started.**
 
