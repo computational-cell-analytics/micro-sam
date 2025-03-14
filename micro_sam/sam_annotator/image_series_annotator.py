@@ -83,6 +83,7 @@ def _initialize_annotator(
     viewer, image, image_embedding_path,
     model_type, halo, tile_shape, predictor, decoder, is_volumetric,
     precompute_amg_state, checkpoint_path, device, embedding_path,
+    segmentation_path,
 ):
     if viewer is None:
         viewer = napari.Viewer()
@@ -106,7 +107,11 @@ def _initialize_annotator(
             raise ValueError(f"Invalid image dimensions for 2d annotator, expect 2 or 3 dimensions, got {image.ndim}")
         annotator = Annotator2d(viewer)
 
-    annotator._update_image()
+    if os.path.exists(segmentation_path):
+        segmentation_result = imageio.imread(segmentation_path)
+    else:
+        segmentation_result = None
+    annotator._update_image(segmentation_result=segmentation_result)
 
     # Add the annotator widget to the viewer and sync widgets.
     viewer.window.add_dock_widget(annotator)
@@ -160,6 +165,7 @@ def image_series_annotator(
         prefer_decoder: Whether to use decoder based instance segmentation if
             the model used has an additional decoder for instance segmentation.
         skip_segmented: Whether to skip images that were already segmented.
+            If set to False, then segmentations that
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -186,24 +192,31 @@ def image_series_annotator(
             fname = os.path.splitext(fname)[0] + ".tif"
         return os.path.join(output_folder, fname)
 
+    def _load_image(image_id):
+        image = images[next_image_id]
+        if not have_inputs_as_arrays:
+            image = imageio.imread(image)
+        image_embedding_path = embedding_paths[next_image_id]
+        return image, image_embedding_path
+
     # Check which image to load next if we skip segmented images.
-    image_embedding_path = None
     if skip_segmented:
         while True:
             if next_image_id == len(images):
-                print(end_msg)
+                print("All images have already been annotated and you have set 'skip_segmented=True'. Nothing to do.")
                 return
 
             save_path = _get_save_path(images[next_image_id], next_image_id)
             if not os.path.exists(save_path):
                 print("The first image to annotate is image number", next_image_id)
-                image = images[next_image_id]
-                if not have_inputs_as_arrays:
-                    image = imageio.imread(image)
-                image_embedding_path = embedding_paths[next_image_id]
+                image, image_embedding_path = _load_image(next_image_id)
                 break
 
             next_image_id += 1
+
+    else:
+        save_path = _get_save_path(images[next_image_id], next_image_id)
+        image, image_embedding_path = _load_image(next_image_id)
 
     # Initialize the viewer and annotator for this image.
     state = AnnotatorState()
@@ -211,6 +224,7 @@ def image_series_annotator(
         viewer, image, image_embedding_path,
         model_type, halo, tile_shape, predictor, decoder, is_volumetric,
         precompute_amg_state, checkpoint_path, device, embedding_path,
+        save_path,
     )
 
     def _save_segmentation(image_path, current_idx, segmentation):
@@ -236,23 +250,38 @@ def image_series_annotator(
         # Clear the segmentation already to avoid lagging removal.
         viewer.layers["committed_objects"].data = np.zeros_like(viewer.layers["committed_objects"].data)
 
-        # Go to the next images, if skipping images that are already segmented check if we have to load it.
+        # Go to the next image.
         next_image_id += 1
-        if skip_segmented:
-            save_path = _get_save_path(images[next_image_id], next_image_id)
-            while os.path.exists(save_path):
-                next_image_id += 1
-                if next_image_id == len(images):
-                    break
-                save_path = _get_save_path(images[next_image_id], next_image_id)
 
-        # Load the next image.
+        # Check if we are done.
         if next_image_id == len(images):
             # Inform the user via dialog.
             abort = widgets._generate_message("info", end_msg)
             if not abort:
                 viewer.close()
             return
+
+        # If we are skipping images that are already segmented, then check if we have to load the next image.
+        save_path = _get_save_path(images[next_image_id], next_image_id)
+        if skip_segmented:
+            segmentation_result = None
+            while os.path.exists(save_path):
+                next_image_id += 1
+
+                # Check if we are done.
+                if next_image_id == len(images):
+                    # Inform the user via dialog.
+                    abort = widgets._generate_message("info", end_msg)
+                    if not abort:
+                        viewer.close()
+                    return
+
+                save_path = _get_save_path(images[next_image_id], next_image_id)
+        else:
+            if os.path.exists(save_path):
+                segmentation_result = imageio.imread(save_path)
+            else:
+                segmentation_result = None
 
         print(
             "Loading next image:", images[next_image_id] if not have_inputs_as_arrays else f"at index {next_image_id}"
@@ -281,7 +310,7 @@ def image_series_annotator(
         )
         state.image_shape = _get_input_shape(image, is_volumetric)
 
-        annotator._update_image()
+        annotator._update_image(segmentation_result=segmentation_result)
 
     viewer.window.add_dock_widget(next_image)
 

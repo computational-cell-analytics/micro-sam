@@ -202,10 +202,11 @@ def _precompute_state_for_files(
     decoder: Optional["nn.Module"] = None,
 ):
     os.makedirs(output_path, exist_ok=True)
-    for i, file_path in enumerate(tqdm(input_files, total=len(input_files), desc="Precompute state for files")):
+    idx = 0
+    for file_path in tqdm(input_files, total=len(input_files), desc="Precompute state for files"):
 
         if isinstance(file_path, np.ndarray):
-            out_path = os.path.join(output_path, f"embedding_{i:05}.tif")
+            out_path = os.path.join(output_path, f"embedding_{idx:05}.tif")
         else:
             out_path = os.path.join(output_path, os.path.basename(file_path))
 
@@ -215,6 +216,7 @@ def _precompute_state_for_files(
             precompute_amg_state=precompute_amg_state, decoder=decoder,
             verbose=False,
         )
+        idx += 1
 
 
 def precompute_state(
