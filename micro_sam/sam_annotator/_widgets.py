@@ -938,7 +938,8 @@ class EmbeddingWidget(_WidgetBase):
         # Provide a detailed message for the model family and model size per chosen combination.
         msg = "Computed embeddings for "
         if self.custom_weights:  # Whether the user provided a filepath to custom finetuned model weights.
-            msg += f"the model located at {os.path.abspath(self.custom_weights)} of size '{self.model_size}'."
+            msg += f"the model located at '{os.path.abspath(self.custom_weights)}' "
+            msg += f"of size '{self._model_size_map[_model_type[4]]}'."
         else:
             msg += f"the '{self.model_family}' model of size '{self.model_size}'."
 
@@ -1237,7 +1238,7 @@ class EmbeddingWidget(_WidgetBase):
         if self.custom_weights:
             # NOTE: We prevent recursive updates for this step temporarily.
             self.model_family_dropdown.blockSignals(True)
-            self.model_family_dropdown.setCurrentText("Natural Images (SAM)")
+            self.model_family_dropdown.setCurrentText("Custom")
             # NOTE: And re-enable signals again.
             self.model_family_dropdown.blockSignals(False)
 
