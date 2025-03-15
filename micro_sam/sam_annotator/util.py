@@ -673,7 +673,7 @@ def track_from_prompts(
 
 def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, device, tile_shape, halo):
 
-    # Update the index for model family, eg. 'Default', 'Light Microscopy', etc.
+    # Update the index for model family, eg. 'Natural Images (SAM)', 'Light Microscopy', etc.
     supported_dropdown_maps = {
         "lm": "Light Microscopy",
         "em_organelles": "Electron Microscopy",
@@ -681,7 +681,7 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
         "histopathology": "Histopathology",
     }
 
-    model_family = "Natural Images (SAM)"  # If no suffix patterns match, stick to the model being 'Default'.
+    model_family = "Natural Images (SAM)"  # If no suffix patterns match, stick to 'Natural Images (SAM)' family.
     for k, v in supported_dropdown_maps.items():
         if model_type.endswith(k):
             model_family = v

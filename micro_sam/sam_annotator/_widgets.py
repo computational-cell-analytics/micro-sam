@@ -1050,7 +1050,7 @@ class EmbeddingWidget(_WidgetBase):
         layout = QtWidgets.QVBoxLayout()
 
         # NOTE: We stick to the base variant for each model family.
-        # i.e. 'Default', 'Light Microscopy', 'Electron Microscopy', 'Medical_Imaging', 'Histopathology'.
+        # i.e. 'Natural Images (SAM)', 'Light Microscopy', 'Electron Microscopy', 'Medical_Imaging', 'Histopathology'.
         self.model_family_dropdown, layout = self._add_choice_param(
             "model_family", self.model_family, list(self.supported_dropdown_maps.keys()),
             title="Model:", layout=layout, tooltip=get_tooltip("embedding", "model")
