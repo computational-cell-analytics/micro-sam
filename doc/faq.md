@@ -166,6 +166,9 @@ NOTE: It is important to choose the correct model type when you opt for the abov
 The older model versions are still available on zenodo. You can find the download links for all of them [here](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#other-models).
 You can then use those models with the custom checkpoint option, see answer 15 for details.
 
+### 18. I would like to evaluate the instance segmentation quantitatively. Can you suggest how to do that?
+`micro-sam` supports a `micro_sam.evaluate` CLI, which computes the mean segmentation accuracy (introduced in the Pascal VOC challenge) of the predicted instance segmentation with the corresponding ground-truth annotations. Please see our paper (`Methods` -> `Inference and Evaluation` for more details about it) and `$ micro_sam.evaluate -h` for more details about the evaluation CLI.
+
 
 ## Fine-tuning questions
 

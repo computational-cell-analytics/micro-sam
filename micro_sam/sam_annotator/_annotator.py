@@ -15,34 +15,44 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
     Implements the logic for the 2d, 3d and tracking annotator.
     The annotators differ in their data dimensionality and the widgets.
     """
+
     def _create_layers(self):
         # Add the label layers for the current object, the automatic segmentation and the committed segmentation.
         dummy_data = np.zeros(self._shape, dtype="uint32")
-        self._viewer.add_labels(data=dummy_data, name="current_object")
-        self._viewer.add_labels(data=dummy_data, name="auto_segmentation")
-        self._viewer.add_labels(data=dummy_data, name="committed_objects")
-        # Randomize colors so it is easy to see when object committed.
-        self._viewer.layers["committed_objects"].new_colormap()
+
+        # Before adding new layers, we always check whether a layer with this name already exists or not.
+        if "current_object" not in self._viewer.layers:
+            self._viewer.add_labels(data=dummy_data, name="current_object")
+        if "auto_segmentation" not in self._viewer.layers:
+            self._viewer.add_labels(data=dummy_data, name="auto_segmentation")
+        if "committed_objects" not in self._viewer.layers:
+            self._viewer.add_labels(data=dummy_data, name="committed_objects")
+            # Randomize colors so it is easy to see when object committed.
+            self._viewer.layers["committed_objects"].new_colormap()
 
         # Add the point layer for point prompts.
         self._point_labels = ["positive", "negative"]
-        self._point_prompt_layer = self._viewer.add_points(
-            name="point_prompts",
-            property_choices={"label": self._point_labels},
-            border_color="label",
-            border_color_cycle=vutil.LABEL_COLOR_CYCLE,
-            symbol="o",
-            face_color="transparent",
-            border_width=0.5,
-            size=12,
-            ndim=self._ndim,
-        )
-        self._point_prompt_layer.border_color_mode = "cycle"
+        if "point_prompts" in self._viewer.layers:
+            self._point_prompt_layer = self._viewer.layers["point_prompts"]
+        else:
+            self._point_prompt_layer = self._viewer.add_points(
+                name="point_prompts",
+                property_choices={"label": self._point_labels},
+                border_color="label",
+                border_color_cycle=vutil.LABEL_COLOR_CYCLE,
+                symbol="o",
+                face_color="transparent",
+                border_width=0.5,
+                size=12,
+                ndim=self._ndim,
+            )
+            self._point_prompt_layer.border_color_mode = "cycle"
 
-        # Add the shape layer for box and other shape prompts.
-        self._viewer.add_shapes(
-            face_color="transparent", edge_color="green", edge_width=4, name="prompts", ndim=self._ndim,
-        )
+        if "prompts" not in self._viewer.layers:
+            # Add the shape layer for box and other shape prompts.
+            self._viewer.add_shapes(
+                face_color="transparent", edge_color="green", edge_width=4, name="prompts", ndim=self._ndim,
+            )
 
     # Child classes have to implement this function and create a dictionary with the widgets.
     def _get_widgets(self):
@@ -149,6 +159,10 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
 
     def _update_image(self, segmentation_result=None):
         state = AnnotatorState()
+
+        # Whether embeddings already exist and avoid clearing objects in layers.
+        if state.skip_recomputing_embeddings:
+            return
 
         # This is encountered when there is no image layer available / selected.
         # In this case, we need not update the image shape or check for changes.

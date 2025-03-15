@@ -191,6 +191,7 @@ def train_sam(
     ignore_warnings: bool = True,
     verify_n_labels_in_loader: Optional[int] = 50,
     box_distortion_factor: Optional[float] = 0.025,
+    overwrite_training: bool = True,
     **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
@@ -229,6 +230,9 @@ def train_sam(
         verify_n_labels_in_loader: The number of labels to verify out of the train and validation dataloaders.
             By default, 50 batches of labels are verified from the dataloaders.
         box_distortion_factor: The factor for distorting the box annotations derived from the ground-truth masks.
+        overwrite_training: Whether to overwrite the trained model stored at the same location.
+            By default, overwrites the trained model at each run.
+            If set to 'False', it will avoid retraining the model if the previous run was completed.
         model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
     """
     with _filter_warnings(ignore_warnings):
@@ -337,6 +341,9 @@ def train_sam(
         if pbar_signals is not None:
             progress_bar_wrapper = _ProgressBarWrapper(pbar_signals)
             trainer_fit_params["progress"] = progress_bar_wrapper
+
+        # Avoid overwriting a trained model, if desired by the user.
+        trainer_fit_params["overwrite_training"] = overwrite_training
 
         trainer.fit(**trainer_fit_params)
 
