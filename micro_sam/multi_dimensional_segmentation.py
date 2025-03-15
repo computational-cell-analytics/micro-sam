@@ -670,15 +670,17 @@ def automatic_tracking(
 
 def get_napari_track_data(
     segmentation: np.ndarray, lineages: List[Dict], n_threads: Optional[int] = None
-) -> Tuple[np.ndarray, ]:
+) -> Tuple[np.ndarray, Dict[int, List]]:
     """Derive the inputs for the napari tracking layer from a tracking result.
 
     Args:
-        segmentation:
-        lineages:
-        n_threads:
+        segmentation: The segmentation, after relabeling with track ids.
+        lineages: The lineage information.
+        n_threads: Number of threads for extracting the track data from the segmentation.
 
     Returns:
+        The array with the track data expected by napari.
+        The parent dictionary for napari.
     """
     if n_threads is None:
         n_threads = mp.cpu_count()
@@ -692,8 +694,14 @@ def get_napari_track_data(
 
     with futures.ThreadPoolExecutor(n_threads) as tp:
         track_data = list(tp.map(compute_props, range(segmentation.shape[0])))
-    track_data = np.array(track_data)
+    track_data = [data for data in track_data if data.size > 0]
+    track_data = np.concatenate(track_data)
 
-    # TODO
-    parent_graph = None
+    # The graph representation of napari uses the children as keys and the parents as values,
+    # whereas our representation uses parents as keys and children as values.
+    # Hence, we need to translate the representation.
+    parent_graph = {
+        child: [parent] for lineage in lineages for parent, children in lineage.items() for child in children
+    }
+
     return track_data, parent_graph

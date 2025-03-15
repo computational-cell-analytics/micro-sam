@@ -575,9 +575,12 @@ def commit_track(
 
     # Create / update the tracking layer.
     layer_name = "tracks"
-    track_data, parent_graph = get_napari_track_data(seg, state.committed_lineages)
+    segmentation = viewer.layers["committed_objects"].data
+    track_data, parent_graph = get_napari_track_data(segmentation, state.committed_lineages)
     if layer_name in viewer.layers:
-        pass
+        layer = viewer.layers[layer_name]
+        layer.data = track_data
+        layer.graph = parent_graph
     else:
         viewer.add_tracks(track_data, name=layer_name, graph=parent_graph)
 
