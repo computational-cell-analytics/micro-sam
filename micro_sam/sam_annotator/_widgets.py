@@ -1238,7 +1238,8 @@ class EmbeddingWidget(_WidgetBase):
         if self.custom_weights:
             # NOTE: We prevent recursive updates for this step temporarily.
             self.model_family_dropdown.blockSignals(True)
-            self.model_family_dropdown.setCurrentText("Custom")
+            self.model_family_dropdown.setCurrentIndex(-1)  # This removes the displayed text.
+            self.model_family_dropdown.update()
             # NOTE: And re-enable signals again.
             self.model_family_dropdown.blockSignals(False)
 
