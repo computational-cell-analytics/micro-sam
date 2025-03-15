@@ -67,7 +67,7 @@ class TestMultiDimensionalSegmentation(unittest.TestCase):
 
     @unittest.skipIf(Trackastra is None, "Requires trackastra")
     def test_track_across_frames(self):
-        from micro_sam.multi_dimensional_segmentation import track_across_frames
+        from micro_sam.multi_dimensional_segmentation import track_across_frames, get_napari_track_data
 
         n_slices = 5
         data = binary_blobs(512).astype("uint8")
@@ -91,6 +91,8 @@ class TestMultiDimensionalSegmentation(unittest.TestCase):
         track_ids = set(np.unique(tracks)) - {0}
         lineage_roots = set([next(iter(lin.keys())) for lin in lineages])
         self.assertEqual(track_ids, lineage_roots)
+
+        get_napari_track_data(tracks, lineages)
 
 
 if __name__ == "__main__":

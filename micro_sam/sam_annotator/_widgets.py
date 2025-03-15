@@ -3,10 +3,10 @@
 
 import os
 import gc
+import multiprocessing as mp
 import pickle
 from pathlib import Path
 from typing import Optional
-import multiprocessing as mp
 
 import h5py
 import json
@@ -34,7 +34,7 @@ from . import util as vutil
 from ._tooltips import get_tooltip
 from .. import instance_segmentation, util
 from ..multi_dimensional_segmentation import (
-    segment_mask_in_volume, merge_instance_segmentation_3d, track_across_frames, PROJECTION_MODES
+    segment_mask_in_volume, merge_instance_segmentation_3d, track_across_frames, PROJECTION_MODES, get_napari_track_data
 )
 
 
@@ -574,10 +574,21 @@ def commit_track(
     if layer == "current_object":
         vutil.clear_annotations(viewer)
 
+    # Create / update the tracking layer.
+    layer_name = "tracks"
+    segmentation = viewer.layers["committed_objects"].data
+    track_data, parent_graph = get_napari_track_data(segmentation, state.committed_lineages)
+    if layer_name in viewer.layers:
+        layer = viewer.layers[layer_name]
+        layer.data = track_data
+        layer.graph = parent_graph
+    else:
+        viewer.add_tracks(track_data, name=layer_name, graph=parent_graph)
+
     # Reset the tracking state.
     _reset_tracking_state(viewer)
 
-    # Perform garbage collection
+    # Perform garbage collection.
     gc.collect()
 
 
