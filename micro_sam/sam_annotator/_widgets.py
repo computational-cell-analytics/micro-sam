@@ -1011,7 +1011,7 @@ class EmbeddingWidget(_WidgetBase):
     def _get_model_size_options(self):
         # We store the actual model names mapped to UI labels.
         self.model_size_mapping = {}
-        if self.model_family == "Default":
+        if self.model_family == "Natural Images (SAM)":
             self.model_size_options = list(self._model_size_map .values())
             self.model_size_mapping = {self._model_size_map[k]: f"vit_{k}" for k in self._model_size_map.keys()}
         else:
@@ -1033,7 +1033,7 @@ class EmbeddingWidget(_WidgetBase):
     def _create_model_section(self):
         # Create a list of support dropdown values and correspond them to suffixes.
         self.supported_dropdown_maps = {
-            "Default": "",
+            "Natural Images (SAM)": "",
             "Light Microscopy": "_lm",
             "Electron Microscopy": "_em_organelles",
             "Medical Imaging": "_medical_imaging",
@@ -1237,7 +1237,7 @@ class EmbeddingWidget(_WidgetBase):
         if self.custom_weights:
             # NOTE: We prevent recursive updates for this step temporarily.
             self.model_family_dropdown.blockSignals(True)
-            self.model_family_dropdown.setCurrentText("Default")
+            self.model_family_dropdown.setCurrentText("Natural Images (SAM)")
             # NOTE: And re-enable signals again.
             self.model_family_dropdown.blockSignals(False)
 

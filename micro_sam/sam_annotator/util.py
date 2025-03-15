@@ -681,7 +681,7 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
         "histopathology": "Histopathology",
     }
 
-    model_family = "Default"  # If no suffix patterns match, stick to the model being 'Default'.
+    model_family = "Natural Images (SAM)"  # If no suffix patterns match, stick to the model being 'Default'.
     for k, v in supported_dropdown_maps.items():
         if model_type.endswith(k):
             model_family = v
