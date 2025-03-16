@@ -938,7 +938,8 @@ class EmbeddingWidget(_WidgetBase):
         # Provide a detailed message for the model family and model size per chosen combination.
         msg = "Computed embeddings for "
         if self.custom_weights:  # Whether the user provided a filepath to custom finetuned model weights.
-            msg += f"the model located at {os.path.abspath(self.custom_weights)} of size '{self.model_size}'."
+            msg += f"the model located at '{os.path.abspath(self.custom_weights)}' "
+            msg += f"of size '{self._model_size_map[_model_type[4]]}'."
         else:
             msg += f"the '{self.model_family}' model of size '{self.model_size}'."
 
@@ -1011,7 +1012,7 @@ class EmbeddingWidget(_WidgetBase):
     def _get_model_size_options(self):
         # We store the actual model names mapped to UI labels.
         self.model_size_mapping = {}
-        if self.model_family == "Default":
+        if self.model_family == "Natural Images (SAM)":
             self.model_size_options = list(self._model_size_map .values())
             self.model_size_mapping = {self._model_size_map[k]: f"vit_{k}" for k in self._model_size_map.keys()}
         else:
@@ -1033,7 +1034,7 @@ class EmbeddingWidget(_WidgetBase):
     def _create_model_section(self):
         # Create a list of support dropdown values and correspond them to suffixes.
         self.supported_dropdown_maps = {
-            "Default": "",
+            "Natural Images (SAM)": "",
             "Light Microscopy": "_lm",
             "Electron Microscopy": "_em_organelles",
             "Medical Imaging": "_medical_imaging",
@@ -1050,7 +1051,7 @@ class EmbeddingWidget(_WidgetBase):
         layout = QtWidgets.QVBoxLayout()
 
         # NOTE: We stick to the base variant for each model family.
-        # i.e. 'Default', 'Light Microscopy', 'Electron Microscopy', 'Medical_Imaging', 'Histopathology'.
+        # i.e. 'Natural Images (SAM)', 'Light Microscopy', 'Electron Microscopy', 'Medical_Imaging', 'Histopathology'.
         self.model_family_dropdown, layout = self._add_choice_param(
             "model_family", self.model_family, list(self.supported_dropdown_maps.keys()),
             title="Model:", layout=layout, tooltip=get_tooltip("embedding", "model")
@@ -1237,7 +1238,8 @@ class EmbeddingWidget(_WidgetBase):
         if self.custom_weights:
             # NOTE: We prevent recursive updates for this step temporarily.
             self.model_family_dropdown.blockSignals(True)
-            self.model_family_dropdown.setCurrentText("Default")
+            self.model_family_dropdown.setCurrentIndex(-1)  # This removes the displayed text.
+            self.model_family_dropdown.update()
             # NOTE: And re-enable signals again.
             self.model_family_dropdown.blockSignals(False)
 
