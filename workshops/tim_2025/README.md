@@ -5,14 +5,14 @@ This document walks you through the preparation for the upcoming TIM 2025 worksh
 ## Workshop Overview
 
 The workshop will be three hours and will be divided into three parts:
-1. Step 0: Install `micro-sam` on HIVE and discuss instructions for installing `micro-sam` in your facility (30 minutes).
+1. Step 0: Install `micro-sam` on your laptop or HIVE and discuss instructions for installing `micro-sam` in your facility (30 minutes).
 2. Short introduction (15 minutes, you can find the slides [here](https://docs.google.com/presentation/d/1jEmjHLOCMefzU8W3hBMGh7ooseEIfoe-/edit?usp=sharing&ouid=113044948772353505255&rtpof=true&sd=true))
-3. Using the `micro_sam` napari plugin (on HIVE) for interactive (and automatic) 2d and 3d segmentation (30 minutes).
-4. Using the plugin on your own or on example data or data imaged in another TIM workshop, finetuning a custom model or an advanced application (60 minutes).
+3. Using the `micro_sam` napari plugin for interactive (and automatic) 2d and 3d segmentation (30 minutes).
+4. Using the plugin on your own or on example data or data imaged in another TIM workshop, finetuning a custom model , or following an advanced example application (60 minutes).
 5. Discussion on "What you can do next" (30 minutes)
 
 We will walk through how to use the `micro_sam` plugin for interactive segmentation in part 3, so that you can then apply it to your own data (or the example data that is most similar to your targeted application) in part 4.
-Alternatively, you can also work on model finetuning or an advanced application, such as using the `micro_sam` in part 4.
+Alternatively, you can also work on model finetuning or an advanced application, such as using the `micro_sam` pythhon library in part 4.
 And finally, we have a discussion on your experience and feedback / possible improvements in part 5. We will also try to formulate a segmentation workflow applicable for your data "at home".
 
 **Please read the [Workshop Preparation](#workshop-preparation) section carefully and follow the relevant steps to get started.**
@@ -21,7 +21,7 @@ And finally, we have a discussion on your experience and feedback / possible imp
 
 To get started for the workshop, please do the following:
 - Install the latest version of `micro_sam`, see [Installation](#installation) for details
-- Download the models and pre-computed embeddings for the common 3D segmentation, see [here](#download-embeddings-for-3d-segmentation).
+- Download the models and pre-computed embeddings for the 3D segmentation problems, see [here](#download-embeddings-for-3d-segmentation).
 - Decide what you want to do in the 4th part of the workshop (or maybe all) and follow the respective preparation steps. You have the following options:
     - High-throughput annotation of cells (or other structures) in 2D images, see [high-throughput-annotation](#high-throughput-image-annotation).
     - 3D segmentation in light or electron microscopy, see [3D LM segmentation](#3d-lm-segmentation) and [3D EM segmentation](#3d-em-segmentation).
@@ -59,7 +59,7 @@ If you already have an installation of `micro_sam` please update it by running t
 
 ### Download Embeddings for 3D EM Segmentation
 
-We provide a script to download the models used in the workshop. To run the script you first need to use `git` to download this repository:
+We provide a script to download the models used in the workshop. To run the script you first need to download this repository. If you haven't done this already, then please use `git` to download it:
 
 ```bash
 git clone https://github.com/computational-cell-analytics/micro-sam
@@ -103,7 +103,7 @@ micro_sam.image_series_annotator -i data/cells/images -o annotations/cells -e em
 ```
 
 Note: You can use `micro_sam` with different models: the original models from Segment Anything and models finetuned for different microscopy segmentation tasks by us.
-For cell segmentation you can either use `vit_b` (the original model) or `vit_b_lm` (our model). Our `vit_b_lm` model will be better for most cell segmentation tasks but there may be cases where `vit_b` is better, so it makes sense to test both before annotating your data. Please refer to [our documentation](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models) for details on the models.
+For cell segmentation you can either use `vit_b` (the original SAM) or `vit_b_lm` (our model; the default model used by `micro_sam`). Our `vit_b_lm` model will be better for most cell segmentation tasks but there may be cases where `vit_b` is better, so it makes sense to test both before annotating your data. Please refer to [our documentation](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models) for details on the models.
 
 **If you want to bring your own data for annotation please store it in a similar format to the example data. Note that we also support tif images and that you DO NOT have to provide segmentation masks; we include them here only for reference and they are not needed for annotation with `micro_sam`.**
 
