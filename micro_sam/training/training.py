@@ -754,7 +754,7 @@ def main():
         return value
 
     parser.add_argument(
-        "--segmentation_decoder", type=none_or_str, default="instances", choices=("instances", None),
+        "--segmentation_decoder", type=none_or_str, default="instances",
         # TODO: in future, we can extend this to semantic seg / or even more advanced stuff.
         help="Whether to finetune Segment Anything Model with additional segmentation decoder for desired targets. "
         "By default, it uses the 'instances' option, i.e. trains with the additional segmentation decoder for "
@@ -825,7 +825,7 @@ def main():
     save_root = args.save_root
     output_path = args.output_path
 
-    if args.segmentation_decoder and args.segmentation_deocder != ["instances"]:
+    if args.segmentation_decoder and args.segmentation_deocder != "instances":
         raise ValueError(
             "The 'segmentation_decoder' argument currently supports 'instances' as input argument only."
         )
