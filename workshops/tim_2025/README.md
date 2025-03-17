@@ -6,7 +6,7 @@ This document walks you through the preparation for the upcoming TIM 2025 worksh
 
 The workshop will be three hours and will be divided into three parts:
 1. Step 0: Install `micro-sam` on HIVE and discuss instructions for installing `micro-sam` in your facility (30 minutes).
-2. Short introduction (30 minutes, you can find the slides [here](TODO))
+2. Short introduction (15 minutes, you can find the slides [here](https://docs.google.com/presentation/d/1jEmjHLOCMefzU8W3hBMGh7ooseEIfoe-/edit?usp=sharing&ouid=113044948772353505255&rtpof=true&sd=true))
 3. Using the `micro_sam` napari plugin (on HIVE) for interactive (and automatic) 2d and 3d segmentation (30 minutes).
 4. Using the plugin on your own or on example data or data imaged in another TIM workshop, finetuning a custom model or an advanced application (60 minutes).
 5. Discussion on "What you can do next" (30 minutes)
@@ -21,7 +21,6 @@ And finally, we have a discussion on your experience and feedback / possible imp
 
 To get started for the workshop, please do the following:
 - Install the latest version of `micro_sam`, see [Installation](#installation) for details
-    - TODO: Me and Tom are still deciding on local or global environments. We try out some stuff on Friday, once HIVE is online again, to finalize this.
 - Download the models and pre-computed embeddings for the common 3D segmentation, see [here](#download-embeddings-for-3d-segmentation).
 - Decide what you want to do in the 4th part of the workshop (or maybe all) and follow the respective preparation steps. You have the following options:
     - High-throughput annotation of cells (or other structures) in 2D images, see [high-throughput-annotation](#high-throughput-image-annotation).
@@ -44,14 +43,19 @@ conda activate micro_sam
 conda install -c conda-forge "micro_sam>=1.3.1" "pytorch>=2.5" "protobuf<5" "nifty=1.2.1=*_4"
 ```
 
-TODO 1: Need to check if we can add the instructions for HIVE here. There are only two directions: 1) either use the `miniforge` executable to get custom setup and install `micro-sam`, or 2) use the global environment to set your own prefix, activate the environment and start playing.
-
-TODO 2: Check if `git` is available, otherwise installing it is easy on PowerShell.
-
 If you already have an installation of `micro_sam` please update it by running the last command in your respective environment. You can find more information about the installation [here](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation).
 
-TODO:
-Check if I can avoid all (data and embedding) downloads and store them on HIVE, without all users needing to download them!
+<details>
+    <summary>HIVE Installation Instructions</summary>
+    To install "micro-sam" on HIVE, please follow the instructions below:
+    <ol>
+        <li>Open PowerShell</li>
+        <li>Run `E:\TiM2025-Software\Miniforge3-Windows-x86_64.exe` in your termnial to install MiniForge. It will guide you through all instructions. Please follow along to install MiniForge successfully.</li>
+        <li>Once the installation is done, you need to initialize your conda environments using `.\miniforge3\Scripts\conda.exe init powershell`.</li>
+        <li>And here onwards, follow the installation instructions above.</li>
+    </ol>
+</details>
+
 
 ### Download Embeddings for 3D EM Segmentation
 
@@ -72,8 +76,6 @@ and run the script:
 ```bash
 python download_models.py
 ```
-
-TODO: Can we set the cache directory to somewhere else for users by updating the environment variable (?) (so that all participants do not have a slight overhead)
 
 We also provide a script to download the image embeddings for the 3D segmentation problem in part 2.
 The image embeddings are necessary to run interactive segmentation. Computing them on the CPU can take some time for volumetric data, but we support precomputing them and have done this for this data already.
@@ -182,9 +184,6 @@ If you want to develop applications based on `micro_sam` you can use
 the [micro_sam python library](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#using-the-python-library) to implement your own functionality.
 For example, you could implement a script to segment cells based on prompts derived from a nucleus segmentation via [batched inference](https://computational-cell-analytics.github.io/micro-sam/micro_sam/inference.html#batched_inference).
 Or a script to automatically segment data with a finetuned model using [automatic segmentation](https://computational-cell-analytics.github.io/micro-sam/micro_sam/automatic_segmentation.html).
-
-
-TODO: Add finetuning via CLI scripts as well.
 
 ### Precompute Embeddings
 
