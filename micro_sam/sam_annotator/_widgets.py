@@ -509,6 +509,10 @@ def commit(
         commit_path: Select a file path where the committed results and prompts will be saved.
             This feature is still experimental.
     """
+
+    # Validate all layers.
+    viewer = _validate_layers(viewer, layer)
+
     _, seg, mask, bb = _commit_impl(viewer, layer, preserve_committed)
 
     if commit_path is not None:
@@ -715,7 +719,7 @@ def _validate_embeddings(viewer: "napari.viewer.Viewer"):
     #     return False
 
 
-def _validate_layers(viewer):
+def _validate_layers(viewer, layer_choice=None):
 
     # Let's find the first image layer to use as our reference for getting the shape.
     image_layers = [layer for layer in viewer.layers if isinstance(layer, napari.layers.Image)]
@@ -727,12 +731,23 @@ def _validate_layers(viewer):
     # Add the label layers for the current object, the automatic segmentation and the committed segmentation.
     dummy_data = np.zeros(_shape, dtype="uint32")
 
-    # Validate whether the layers pre-exist as expected or not.
-    # Otherwise, create them!
+    def _validation_window_for_missing_layer():
+        return _generate_message(
+            message_type="error",
+            message=f"The '{layer_choice}' layer to commit is missing. Please re-annotate and try again."
+        )
+
+    # Validate whether the layers pre-exist as expected or not. Otherwise, create them!
     if "current_object" not in viewer.layers:
+        if "current_object" == layer_choice:
+            _validation_window_for_missing_layer()
         viewer.add_labels(data=dummy_data, name="current_object")
+
     if "auto_segmentation" not in viewer.layers:
+        if "auto_segmentation" == layer_choice:
+            _validation_window_for_missing_layer()
         viewer.add_labels(data=dummy_data, name="auto_segmentation")
+
     if "committed_objects" not in viewer.layers:
         viewer.add_labels(data=dummy_data, name="committed_objects")
         # Randomize colors so it is easy to see when object committed.
