@@ -35,19 +35,19 @@ If you want to learn more about the `micro_sam` napari plugin or python library 
 ### Installation
 
 Please make sure to install the latest version of `micro_sam` before the workshop using `conda` (or `mamba`).
-You can create a new environment and install it like this:
+Follow the insructions [here](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-source). Please be aware of the different environment files for Windows and Mac/Linux.
 
-```bash
-conda create -n micro_sam -c conda-forge python=3.11 natsort
-conda activate micro_sam
-conda install -c conda-forge "micro_sam>=1.3.1" "pytorch>=2.5" "protobuf<5" "nifty=1.2.1=*_4"
+If you already have an installation of `micro_sam` please update it by activating the conda environment in which you have installed it,
+the downloading the repository via git and installing the package with pip:
 ```
-
-If you already have an installation of `micro_sam` please update it by running the last command in your respective environment. You can find more information about the installation [here](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation).
+git clone https://github.com/computational-cell-analytics/micro-sam
+cd micro-sam
+pip install -e .
+```
 
 <details>
     <summary>HIVE Installation Instructions</summary>
-    To install "micro-sam" on HIVE, please follow the instructions below:
+    Below are the instruction for installing "micro-sam" on HIVE instead of your laptop:
     <ol>
         <li>Open PowerShell</li>
         <li>Run `E:\TiM2025-Software\Miniforge3-Windows-x86_64.exe` in your termnial to install MiniForge. It will guide you through all instructions. Please follow along to install MiniForge successfully.</li>
@@ -59,16 +59,19 @@ If you already have an installation of `micro_sam` please update it by running t
 
 ### Download Embeddings for 3D EM Segmentation
 
-We provide a script to download the models used in the workshop. To run the script you first need to download this repository. If you haven't done this already, then please use `git` to download it:
+We provide a script to download the models used in the workshop. To run the script you first need to activate the conda environment in which `micro_sam` is installed (see previous section).
+Then, if you have not done so already, you need to download this repository via git, and switch to the `dev` branch:
 
 ```bash
 git clone https://github.com/computational-cell-analytics/micro-sam
+cd micro-sam
+git checkout dev
 ```
 
 then go to this directory:
 
 ```bash
-cd micro-sam/workshops/tim_2025
+cd workshops/tim_2025
 ```
 
 and run the script:
