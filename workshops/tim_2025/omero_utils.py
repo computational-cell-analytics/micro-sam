@@ -1,14 +1,8 @@
 import argparse
+import omero
 from omero.gateway import BlitzGateway
 
 from elf.io import open_file
-
-
-def get_dataset(conn, dataset_name):
-    dataset = [ds for ds in conn.getObjects("Dataset") if ds.getName() == dataset_name]
-    assert len(dataset) == 1, f"{dataset_name}: {len(dataset)}"
-    dataset = dataset[0]
-    return dataset
 
 
 def connect_to_omero(args):
@@ -29,35 +23,59 @@ def connect_to_omero(args):
     return conn
 
 
-def upload_lucchi(conn, dataset_name):
-    dataset = get_dataset(conn, dataset_name)
+def upload_lucchi(conn, args):
+    dataset = conn.getObject("Dataset", args.dataset_id)
     file_path = "/home/pape/.cache/micro_sam/sample_data/lucchi_pp.zip.unzip/Lucchi++/Test_In"
     with open_file(file_path, "r") as f:
         x = f["*.png"][:]
     print(x.shape)
-    conn.createImageFromNumpySeq(
+    image = conn.createImageFromNumpySeq(
         (plane for plane in x),
         dataset=dataset,
         imageName="Mitochondria in EM",
         description="FIBSEM volume of neural tissue with mitochondria and other organalles",
     )
 
+    print(f"Created image with ID: {image.id}")
+
 
 def omero_credential_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("-u", "--username", required=True)
     parser.add_argument("-p", "--password", required=True)
-    parser.add_argument("-d", "--dataset", default="WS_51")
+    # This is the ID of the omero test dataset.
+    parser.add_argument("-d", "--dataset_id", default=25780, type=int)
+    # This is the ID of the Lucchi data in omero.
+    parser.add_argument("--image_id", default=108133, type=int)
     return parser
+
+
+def create_dataset(conn):
+    # Create a new dataset
+    dataset_name = "WS_51_Test"
+    dataset_description = "Dataset for testing data transfer for the workshop."
+
+    new_dataset = omero.model.DatasetI()
+    new_dataset.setName(omero.rtypes.rstring(dataset_name))
+    new_dataset.setDescription(omero.rtypes.rstring(dataset_description))
+
+    # Save dataset to the server
+    update_service = conn.getUpdateService()
+    new_dataset = update_service.saveAndReturnObject(new_dataset)
+
+    print(f"Created dataset '{dataset_name}' with ID: {new_dataset.id.val}")
 
 
 def main():
     parser = omero_credential_parser()
+    parser.add_argument("--create_dataset", "-c", action="store_true")
     args = parser.parse_args()
 
     conn = connect_to_omero(args)
-    dataset_name = args.dataset
-    upload_lucchi(conn, dataset_name)
+    if args.create_dataset:
+        create_dataset(conn)
+    else:
+        upload_lucchi(conn, args)
     conn.close()
 
 

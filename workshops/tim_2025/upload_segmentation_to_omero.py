@@ -12,6 +12,7 @@ def upload_segmentation(conn, args):
     segmentation = imageio.imread(args.input)
     segmentation_ids = np.unique(segmentation)[1:]
 
+    print("Uploading", len(segmentation_ids), "masks to omero")
     # TODO give some more specific metadata?
     for seg_id in segmentation_ids:
         binary_mask = (segmentation == seg_id).astype("uint8")
@@ -37,13 +38,12 @@ def upload_segmentation(conn, args):
         roi.addShape(mask_shape)
 
         roi = conn.getUpdateService().saveAndReturnObject(roi)
+        print("Uploaded the mask for id", seg_id, "to omero with ID", roi.id.val)
 
 
 def main():
     parser = omero_credential_parser()
     parser.add_argument("-i", "--input", required=True)
-    # TODO set the image id of our sample lucchi data
-    parser.add_argument("--image_id", default="", type=int)
     args = parser.parse_args()
 
     conn = connect_to_omero(args)
