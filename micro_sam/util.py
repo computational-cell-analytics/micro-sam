@@ -601,7 +601,9 @@ def _to_image(input_):
     else:
         raise ValueError(f"Invalid input image of shape {input_.shape}. Expect either 2D grayscale or 3D RGB image.")
 
-    return image
+    # explicitly return a numpy array for compatibility with torchvision
+    # because the input_ array could be something like dask array
+    return np.array(image)
 
 
 @torch.no_grad
