@@ -73,6 +73,7 @@ def upload_segmentation(conn, args):
         print("Uploaded the mask for id", seg_id, "to omero with ID", roi.id.val)
 
 
+# Example segmentation uploaded for the livecell image: ID 1327744
 def main():
     parser = omero_credential_parser()
     parser.add_argument("-i", "--input", required=True)

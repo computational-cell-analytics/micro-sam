@@ -2,6 +2,7 @@ import argparse
 import omero
 from omero.gateway import BlitzGateway
 
+import imageio.v3 as imageio
 from elf.io import open_file
 
 
@@ -39,6 +40,20 @@ def upload_lucchi(conn, args):
     print(f"Created image with ID: {image.id}")
 
 
+def upload_livecell(conn, args):
+    dataset = conn.getObject("Dataset", args.dataset_id)
+    file_path = "/home/pape/.cache/micro_sam/sample_data/livecell-2d-image.png"
+    images = [imageio.imread(file_path)]
+    image = conn.createImageFromNumpySeq(
+        (im for im in images),
+        dataset=dataset,
+        imageName="LiveCell Data",
+        description="Cells imaged in phase-contrast microscopy",
+    )
+
+    print(f"Created image with ID: {image.id}")
+
+
 def omero_credential_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("-u", "--username", required=True)
@@ -46,7 +61,9 @@ def omero_credential_parser():
     # This is the ID of the omero test dataset.
     parser.add_argument("-d", "--dataset_id", default=25780, type=int)
     # This is the ID of the Lucchi data in omero.
-    parser.add_argument("--image_id", default=108133, type=int)
+    # parser.add_argument("--image_id", default=108133, type=int)
+    # This is the ID of the Livecell data in omero.
+    parser.add_argument("--image_id", default=108177, type=int)
     return parser
 
 
@@ -75,7 +92,8 @@ def main():
     if args.create_dataset:
         create_dataset(conn)
     else:
-        upload_lucchi(conn, args)
+        # upload_lucchi(conn, args)
+        upload_livecell(conn, args)
     conn.close()
 
 
