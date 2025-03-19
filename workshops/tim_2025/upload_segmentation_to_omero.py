@@ -3,7 +3,7 @@ import numpy as np
 from skimage.measure import find_contours
 
 from omero.model import RoiI, MaskI, PolygonI
-from omero.rtypes import rint, rstring
+from omero.rtypes import rint, rstring, rdouble
 from omero_utils import omero_credential_parser, connect_to_omero
 
 
@@ -37,10 +37,10 @@ def upload_as_mask(conn, binary_mask, image, seg_id):
 
     # Create Mask shape
     mask_shape = MaskI()
-    mask_shape.setX(rint(0))  # X offset of mask
-    mask_shape.setY(rint(0))  # Y offset of mask
-    mask_shape.setWidth(rint(binary_mask.shape[1]))
-    mask_shape.setHeight(rint(binary_mask.shape[0]))
+    mask_shape.setX(rdouble(0))  # X offset of mask
+    mask_shape.setY(rdouble(0))  # Y offset of mask
+    mask_shape.setWidth(rdouble(binary_mask.shape[1]))
+    mask_shape.setHeight(rdouble(binary_mask.shape[0]))
     mask_shape.setBytes(mask_bytes)
     mask_shape.setTheZ(rint(0))
     mask_shape.setTheT(rint(0))
@@ -73,7 +73,8 @@ def upload_segmentation(conn, args):
         print("Uploaded the mask for id", seg_id, "to omero with ID", roi.id.val)
 
 
-# Example segmentation uploaded for the livecell image: ID 1327744
+# Example segmentation uploaded for the livecell image as polygon: ID 1327744
+# Example segmentation uploaded for the livecell image as mask: ID 1327745
 def main():
     parser = omero_credential_parser()
     parser.add_argument("-i", "--input", required=True)
