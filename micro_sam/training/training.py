@@ -769,7 +769,7 @@ def main():
     )
     parser.add_argument(
         "--patch_shape", type=int, nargs="*", default=(512, 512),
-        help="The choice of patch shape for training Segment Anything Model."
+        help="The choice of patch shape for training Segment Anything Model. By default, a patch size of 512x512 is used."
     )
     parser.add_argument(
         "-m", "--model_type", type=str, default=None,
@@ -802,7 +802,7 @@ def main():
     )
     parser.add_argument(
         "--batch_size", type=int, default=1,
-        help="The choice of batch size for training the Segment Anything Model. By default, trains on batch size 1."
+        help="The choice of batch size for training the Segment Anything Model. By default the batch size is set to 1."
     )
     parser.add_argument(
         "--preprocess", type=str, default=None, choices=("normalize_minmax", "normalize_percentile"),
