@@ -44,11 +44,11 @@ conda install -c conda-forge micro_sam "libtorch=*=cuda11*"
 `pytorch` is currently not available on conda-forge for windows. Thus, you have to install it from the `pytorch` conda channel. In addition, you have to specify two specific dependencies to avoid incompatibilities.
 This can be done with the following commands:
 ```bash
-conda install -c pytorch -c conda-forge micro_sam "nifty=1.2.1=*_4" "protobuf<5"
+conda install -c conda-forge micro_sam "nifty=1.2.1=*_4" "protobuf<5"
 ```
 to install `micro_sam` in an existing environment and
 ```bash
-conda create -c pytorch -c conda-forge -n micro-sam micro_sam "nifty=1.2.1=*_4" "protobuf<5"
+conda create -c conda-forge -n micro-sam micro_sam "nifty=1.2.1=*_4" "protobuf<5"
 ```
 
 ## From source
