@@ -2,7 +2,7 @@ name: sam
 channels:
     - conda-forge
 dependencies:
-    - nifty >=1.2.2
+    - nifty >=1.2.3
     - imagecodecs
     - magicgui
     - napari >=0.5.0
@@ -26,5 +26,6 @@ dependencies:
     - torch_em >=0.7.7
     - tqdm
     - timm
+    - xarray <2025.3.0
     - pip:
         - git+https://github.com/ChaoningZhang/MobileSAM.git
