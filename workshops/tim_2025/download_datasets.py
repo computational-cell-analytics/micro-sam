@@ -40,7 +40,7 @@ def _get_cells_sample_data_paths(path, download, downloader):
     return raw_paths, label_paths
 
 
-def _get_hpa_data_paths(path, split, download, downloader):
+def _get_hpa_data_paths(path, split, download, downloader="owncloud"):
     splits = ["train", "val", "test"]
     assert split in splits, f"'{split}' is not a valid split."
 
