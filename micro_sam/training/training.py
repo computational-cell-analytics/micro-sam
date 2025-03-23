@@ -769,7 +769,8 @@ def main():
     )
     parser.add_argument(
         "--patch_shape", type=int, nargs="*", default=(512, 512),
-        help="The choice of patch shape for training Segment Anything Model. By default, a patch size of 512x512 is used."
+        help="The choice of patch shape for training Segment Anything Model. "
+        "By default, a patch size of 512x512 is used."
     )
     parser.add_argument(
         "-m", "--model_type", type=str, default=None,
