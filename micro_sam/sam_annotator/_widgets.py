@@ -400,6 +400,43 @@ def _commit_impl(viewer, layer, preserve_committed):
     return id_offset, seg, mask, bb
 
 
+def _get_auto_segmentation_options(state, object_ids):
+    widget = state.widgets["autosegment"]
+
+    segmentation_options = {"object_ids": [int(object_id) for object_id in object_ids]}
+    if widget.with_decoder:
+        segmentation_options["boundary_distance_thresh"] = widget.boundary_distance_thresh
+        segmentation_options["center_distance_thresh"] = widget.center_distance_thresh
+    else:
+        segmentation_options["pred_iou_thresh"] = widget.pred_iou_thresh
+        segmentation_options["stability_score_thresh"] = widget.stability_score_thresh
+        segmentation_options["box_nms_thresh"] = widget.box_nms_thresh
+
+    segmentation_options["min_object_size"] = widget.min_object_size
+    segmentation_options["with_background"] = widget.with_background
+
+    if widget.volumetric:
+        segmentation_options["apply_to_volume"] = widget.apply_to_volume
+        segmentation_options["gap_closing"] = widget.gap_closing
+        segmentation_options["min_extent"] = widget.min_extent
+
+    return segmentation_options
+
+
+def _get_promptable_segmentation_options(state, object_ids):
+    segmentation_options = {"object_ids": [int(object_id) for object_id in object_ids]}
+    is_tracking = False
+    if "segment_nd" in state.widgets:
+        widget = state.widgets["segment_nd"]
+        segmentation_options["projection"] = widget.projection
+        segmentation_options["iou_threshold"] = widget.iou_threshold
+        segmentation_options["box_extension"] = widget.box_extension
+        if widget.tracking:
+            segmentation_options["motion_smoothing"] = widget.motion_smoothing
+            is_tracking = True
+    return segmentation_options, is_tracking
+
+
 def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
 
     # NOTE: zarr-python is quite inefficient and writes empty blocks.
@@ -413,11 +450,9 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
                 json.dump({"zarr_format": 2}, f)
 
     f = z5py.ZarrFile(path, "a")
+    state = AnnotatorState()
 
-    # Write metadata about the model that's being used etc.
-    # Only if it's not written to the file yet.
-    if "data_signature" not in f.attrs:
-        state = AnnotatorState()
+    def _save_signature(f, data_signature):
         embeds = state.widgets["embeddings"]
         tile_shape, halo = _process_tiling_inputs(embeds.tile_x, embeds.tile_y, embeds.halo_x, embeds.halo_y)
         signature = util._get_embedding_signature(
@@ -425,10 +460,31 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
             predictor=state.predictor,
             tile_shape=tile_shape,
             halo=halo,
-            data_signature=state.data_signature,
+            data_signature=data_signature,
         )
         for key, val in signature.items():
             f.attrs[key] = val
+
+    # If the data signature is saved in the file already,
+    # then we check if saved data signature and data signature of our image agree.
+    # If not, this file was used for committing objects from another file.
+    if "data_signature" in f.attrs:
+        saved_signature = f.attrs["data_signature"]
+        current_signature = state.data_signature
+        if saved_signature != current_signature:  # Signatures disagree.
+            msg = f"The commit_path {path} was already used for saving annotations for different image data:\n"
+            msg += f"The data signatures are different: {saved_signature} != {current_signature}.\n"
+            msg += "Press 'Ok' to remove the data already stored in that file and continue annotation.\n"
+            msg += "Otherwise please select a different file path."
+            skip_clear = _generate_message("info", msg)
+            if skip_clear:
+                return
+            else:
+                f = z5py.ZarrFile(path, "w")
+                _save_signature(f, current_signature)
+    # Otherwise (data signature not saved yet), write the current signature.
+    else:
+        _save_signature(f, state.data_signature)
 
     # Write the segmentation.
     full_shape = viewer.layers["committed_objects"].data.shape
@@ -445,47 +501,81 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
     if extra_attrs is not None:
         f.attrs.update(extra_attrs)
 
-    # If we run commit from the automatic segmentation we don't have
-    # any prompts and so don't need to commit anything else.
+    # Get the commit history and the objects that are being commited.
+    commit_history = f.attrs.get("commit_history", [])
+    object_ids = np.unique(seg[mask])
+
+    # We committed an automatic segmentation.
     if layer == "auto_segmentation":
-        # TODO write the settings for the auto segmentation widget.
+        # Save the settings of the segmentation widget.
+        segmentation_options = _get_auto_segmentation_options(state, object_ids)
+        commit_history.append({"auto_segmentation": segmentation_options})
+
+        # Write the commit history.
+        f.attrs["commit_history"] = commit_history
+
+        # If we run commit from the automatic segmentation we don't have
+        # any prompts and so don't need to commit anything else.
         return
 
-    def write_prompts(object_id, prompts, point_prompts):
+    segmentation_options, is_tracking = _get_promptable_segmentation_options(state, object_ids)
+    commit_history.append({"current_object": segmentation_options})
+
+    def write_prompts(object_id, prompts, point_prompts, point_labels, track_state=None):
         g = f.create_group(f"prompts/{object_id}")
         if prompts is not None and len(prompts) > 0:
             data = np.array(prompts)
             g.create_dataset("prompts", data=data, chunks=data.shape)
         if point_prompts is not None and len(point_prompts) > 0:
             g.create_dataset("point_prompts", data=point_prompts, chunks=point_prompts.shape)
+            ds = g.create_dataset("point_labels", data=point_labels, chunks=point_labels.shape)
+            if track_state is not None:
+                ds.attrs["track_state"] = track_state.tolist()
 
-    # TODO write the settings for the segmentation widget if necessary.
+    # Get the prompts from the layers.
+    prompts = viewer.layers["prompts"].data
+    point_layer = viewer.layers["point_prompts"]
+    point_prompts = point_layer.data
+    point_labels = point_layer.properties["label"]
+    if len(point_prompts) > 0:
+        point_labels = np.array([1 if label == "positive" else 0 for label in point_labels])
+        assert len(point_prompts) == len(point_labels), \
+            f"Number of point prompts and labels disagree: {len(point_prompts)} != {len(point_labels)}"
+
     # Commit the prompts for all the objects in the commit.
-    object_ids = np.unique(seg[mask])
     if len(object_ids) == 1:  # We only have a single object.
-        write_prompts(object_ids[0], viewer.layers["prompts"].data, viewer.layers["point_prompts"].data)
-    else:
-        # TODO this logic has to be updated to be compatible with the new batched prompting
-        have_prompts = len(viewer.layers["prompts"].data) > 0
-        have_point_prompts = len(viewer.layers["point_prompts"].data) > 0
-        if have_prompts and not have_point_prompts:
-            prompts = viewer.layers["prompts"].data
-            point_prompts = None
-        elif not have_prompts and have_point_prompts:
-            prompts = None
-            point_prompts = viewer.layers["point_prompts"].data
-        else:
-            msg = "Got multiple objects from interactive segmentation with box and point prompts." if (
-                have_prompts and have_point_prompts
-            ) else "Got multiple objects from interactive segmentation with neither box or point prompts."
-            raise RuntimeError(msg)
+        write_prompts(object_ids[0], prompts, point_prompts, point_labels)
 
+    elif is_tracking:  # We have multiple objects from tracking a lineage with divisions.
+        track_ids_points = np.array(point_layer.properties["track_id"])
+        track_ids_prompts = np.array(viewer.layers["prompts"].properties["track_id"])
+
+        unique_track_ids = np.unique(track_ids_points)
+        assert len(unique_track_ids) == len(object_ids)
+        track_state = np.array(point_layer.properties["state"])
+        for track_id, object_id in zip(unique_track_ids, object_ids):
+            this_prompts = None if len(prompts) == 0 else prompts[track_ids_prompts == track_id]
+            point_mask = track_ids_points == track_id
+            this_points, this_labels, this_track_state = \
+                point_prompts[point_mask], point_labels[point_mask], track_state[point_mask]
+            write_prompts(object_id, this_prompts, this_points, this_labels, track_state=this_track_state)
+
+    else:  # We have multiple objects, which are the result from batched interactive segmentation.
+        # Note: we can't match exact object ids to their prompts, for batched segmentation.
+        # We first write the objects from box prompts, then from point prompts.
+        n_prompts, n_points = len(prompts), len(point_prompts)
+        assert n_prompts + n_points == len(object_ids), \
+            f"Number of prompts and objects disagree: {n_prompts} + {n_points} != {len(object_ids)}"
         for i, object_id in enumerate(object_ids):
-            write_prompts(
-                object_id,
-                None if prompts is None else prompts[i:i+1],
-                None if point_prompts is None else point_prompts[i:i+1]
-            )
+            if i < n_prompts:
+                this_prompts, this_points, this_labels = prompts[i:i+1], None, None
+            else:
+                j = i - n_prompts
+                this_prompts, this_points, this_labels = None, point_prompts[j:j+1], point_labels[j:j+1]
+            write_prompts(object_id, this_prompts, this_points, this_labels)
+
+    # Write the commit history.
+    f.attrs["commit_history"] = commit_history
 
 
 @magic_factory(
@@ -629,21 +719,21 @@ def settings_widget(cache_directory: Optional[Path] = util.get_cache_directory()
     print(f"micro-sam cache directory set to: {cache_directory}")
 
 
-def _generate_message(message_type, message) -> bool:
+def _generate_message(message_type: str, message: str) -> bool:
     """
     Displays a message dialog based on the provided message type.
 
     Args:
-        message_type (str): The type of message to display. Valid options are:
+        message_type: The type of message to display. Valid options are:
             - "error": Displays a critical error message with an "Ok" button.
             - "info": Displays an informational message in a separate dialog box.
                  The user can dismiss it by either clicking "Ok" or closing the dialog.
-        message (str): The message content to be displayed in the dialog.
+        message: The message content to be displayed in the dialog.
 
     Returns:
-        bool: A flag indicating whether the user aborted the operation based on the
-              message type. This flag is only set for "info" messages where the user
-              can choose to cancel (rejected).
+        A flag indicating whether the user aborted the operation based on the
+        message type. This flag is only set for "info" messages where the user
+        can choose to cancel (rejected).
 
     Raises:
         ValueError: If an invalid message type is provided.
@@ -659,6 +749,8 @@ def _generate_message(message_type, message) -> bool:
         if result == QtWidgets.QDialog.Rejected:  # Check for cancel
             abort = True  # Set flag directly in calling function
             return abort
+    else:
+        raise ValueError(f"Invalid message type {message_type}")
 
 
 def _validate_embeddings(viewer: "napari.viewer.Viewer"):
@@ -1140,8 +1232,7 @@ class EmbeddingWidget(_WidgetBase):
         return settings
 
     def _validate_inputs(self):
-        """
-        Validates the inputs for the annotation process and returns a dictionary
+        """Validates the inputs for the annotation process and returns a dictionary
         containing information for message generation, or False if no messages are needed.
 
         This function performs the following checks:
