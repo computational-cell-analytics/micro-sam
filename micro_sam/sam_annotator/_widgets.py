@@ -510,8 +510,9 @@ def commit(
             This feature is still experimental.
     """
 
-    # Validate all layers.
-    viewer = _validate_layers(viewer, layer)
+    # Check whether all layers exist as expected or create new ones automatically.
+    state = AnnotatorState()
+    state.annotator_class._require_layers(layer_choice=layer)
 
     _, seg, mask, bb = _commit_impl(viewer, layer, preserve_committed)
 
@@ -719,69 +720,19 @@ def _validate_embeddings(viewer: "napari.viewer.Viewer"):
     #     return False
 
 
-def _validate_layers(viewer, layer_choice=None):
-
-    # Let's find the first image layer to use as our reference for getting the shape.
-    image_layers = [layer for layer in viewer.layers if isinstance(layer, napari.layers.Image)]
-    if image_layers:
-        _shape = image_layers[0].data.shape
-    else:
-        raise RuntimeError("Seems like there is no image available for segmentation.")
-
-    # Add the label layers for the current object, the automatic segmentation and the committed segmentation.
-    dummy_data = np.zeros(_shape, dtype="uint32")
-
-    def _validation_window_for_missing_layer():
-        return _generate_message(
-            message_type="error",
-            message=f"The '{layer_choice}' layer to commit is missing. Please re-annotate and try again."
-        )
-
-    # Validate whether the layers pre-exist as expected or not. Otherwise, create them!
-    if "current_object" not in viewer.layers:
-        if "current_object" == layer_choice:
-            _validation_window_for_missing_layer()
-        viewer.add_labels(data=dummy_data, name="current_object")
-
-    if "auto_segmentation" not in viewer.layers:
-        if "auto_segmentation" == layer_choice:
-            _validation_window_for_missing_layer()
-        viewer.add_labels(data=dummy_data, name="auto_segmentation")
-
-    if "committed_objects" not in viewer.layers:
-        viewer.add_labels(data=dummy_data, name="committed_objects")
-        # Randomize colors so it is easy to see when object committed.
-        viewer.layers["committed_objects"].new_colormap()
-
-    if "point_prompts" not in viewer.layers:
-        _point_labels = ["positive", "negative"]
-        _point_prompt_layer = viewer.add_points(
-            name="point_prompts",
-            property_choices={"label": _point_labels},
-            border_color="label",
-            border_color_cycle=vutil.LABEL_COLOR_CYCLE,
-            symbol="o",
-            face_color="transparent",
-            border_width=0.5,
-            size=12,
-            ndim=viewer.dims.ndim,
-        )
-        _point_prompt_layer.border_color_mode = "cycle"
-
-    if "prompts" not in viewer.layers:
-        # Add the shape layer for box and other shape prompts.
-        viewer.add_shapes(
-            face_color="transparent", edge_color="green", edge_width=4, name="prompts", ndim=viewer.dims.ndim,
-        )
-
-    return viewer
+def _validation_window_for_missing_layer(layer_choice):
+    return _generate_message(
+        message_type="error",
+        message=f"The '{layer_choice}' layer to commit is missing. Please re-annotate and try again."
+    )
 
 
-def _validate_prompts(viewer: "napari.viewer.Viewer") -> bool:
-
+def _validate_layers(viewer: "napari.viewer.Viewer") -> bool:
     # Check whether all layers exist as expected or create new ones automatically.
-    viewer = _validate_layers(viewer)
+    state = AnnotatorState()
+    state.annotator_class._require_layers()
 
+    # Check prompts layer.
     if len(viewer.layers["prompts"].data) == 0 and len(viewer.layers["point_prompts"].data) == 0:
         msg = "No prompts were given. Please provide prompts to run interactive segmentation."
         return _generate_message("error", msg)
@@ -799,7 +750,7 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
     """
     if _validate_embeddings(viewer):
         return None
-    if _validate_prompts(viewer):
+    if _validate_layers(viewer):
         return None
 
     shape = viewer.layers["current_object"].data.shape
@@ -833,7 +784,7 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
     """
     if _validate_embeddings(viewer):
         return None
-    if _validate_prompts(viewer):
+    if _validate_layers(viewer):
         return None
 
     shape = viewer.layers["current_object"].data.shape[1:]
@@ -874,8 +825,9 @@ def segment_frame(viewer: "napari.viewer.Viewer") -> None:
     """
     if _validate_embeddings(viewer):
         return None
-    if _validate_prompts(viewer):
+    if _validate_layers(viewer):
         return None
+
     state = AnnotatorState()
     shape = state.image_shape[1:]
     position = viewer.dims.point
@@ -1552,8 +1504,9 @@ class SegmentNDWidget(_WidgetBase):
     def __call__(self):
         if _validate_embeddings(self._viewer):
             return None
-        if _validate_prompts(self._viewer):
+        if _validate_layers(self._viewer):
             return None
+
         if self.tracking:
             return self._run_tracking()
         else:

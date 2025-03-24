@@ -27,6 +27,13 @@ class Annotator2d(_AnnotatorBase):
     def __init__(self, viewer: "napari.viewer.Viewer") -> None:
         super().__init__(viewer=viewer, ndim=2)
 
+        # Set the expected annotator class to the state.
+        state = AnnotatorState()
+        state.annotator_class = self
+
+        # Reset the state.
+        state.reset_state()
+
 
 def annotator_2d(
     image: np.ndarray,

@@ -14,6 +14,7 @@ from qtpy.QtWidgets import QWidget
 
 import torch.nn as nn
 
+import micro_sam
 import micro_sam.util as util
 from micro_sam.instance_segmentation import AMGBase, get_decoder
 from micro_sam.precompute_state import cache_amg_state, cache_is_state
@@ -68,6 +69,9 @@ class AnnotatorState(metaclass=Singleton):
 
     # z-range to limit the data being committed in 3d / tracking.
     z_range: Optional[Tuple[int, int]] = None
+
+    # annotator_class
+    annotator_class: Optional["micro_sam.sam_annotator._annotator._AnnotatorBase"] = None
 
     def initialize_predictor(
         self,

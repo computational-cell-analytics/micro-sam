@@ -28,6 +28,13 @@ class Annotator3d(_AnnotatorBase):
         self._with_decoder = AnnotatorState().decoder is not None
         super().__init__(viewer=viewer, ndim=3)
 
+        # Set the expected annotator class to the state.
+        state = AnnotatorState()
+        state.annotator_class = self
+
+        # Reset the state.
+        state.reset_state()
+
     def _update_image(self, segmentation_result=None):
         super()._update_image(segmentation_result=segmentation_result)
         # Load the amg state from the embedding path.

@@ -101,7 +101,7 @@ class AnnotatorTracking(_AnnotatorBase):
     # The tracking annotator needs different settings for the prompt layers
     # to support the additional tracking state.
     # That's why we over-ride this function.
-    def _create_layers(self):
+    def _require_layers(self):
         self._point_labels = ["positive", "negative"]
         self._track_state_labels = ["track", "division"]
 
@@ -172,6 +172,13 @@ class AnnotatorTracking(_AnnotatorBase):
         super().__init__(viewer=viewer, ndim=3)
         # Go to t=0.
         self._viewer.dims.current_step = (0, 0, 0) + tuple(sh // 2 for sh in self._shape[1:])
+
+        # Set the expected annotator class to the state.
+        state = AnnotatorState()
+        state.annotator_class = self
+
+        # Reset the state.
+        state.reset_state()
 
     def _init_track_state(self):
         state = AnnotatorState()

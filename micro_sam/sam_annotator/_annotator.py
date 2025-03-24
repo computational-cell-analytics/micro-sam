@@ -16,15 +16,21 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
     The annotators differ in their data dimensionality and the widgets.
     """
 
-    def _create_layers(self):
+    def _require_layers(self, layer_choice=None, shape=None):
         # Add the label layers for the current object, the automatic segmentation and the committed segmentation.
-        dummy_data = np.zeros(self._shape, dtype="uint32")
+        dummy_data = np.zeros(self._shape if shape is None else shape, dtype="uint32")
 
         # Before adding new layers, we always check whether a layer with this name already exists or not.
         if "current_object" not in self._viewer.layers:
+            if "current_object" == layer_choice:  # Check at 'commit' call button.
+                widgets._validation_window_for_missing_layer(layer_choice)
             self._viewer.add_labels(data=dummy_data, name="current_object")
+
         if "auto_segmentation" not in self._viewer.layers:
+            if "auto_segmentation" == layer_choice:  # Check at 'commit' call button situation.
+                widgets._validation_window_for_missing_layer(layer_choice)
             self._viewer.add_labels(data=dummy_data, name="auto_segmentation")
+
         if "committed_objects" not in self._viewer.layers:
             self._viewer.add_labels(data=dummy_data, name="committed_objects")
             # Randomize colors so it is easy to see when object committed.
@@ -131,7 +137,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         # Initialize with a dummy shape, which is reset to the correct shape once an image is set.
         self._ndim = ndim
         self._shape = (256, 256) if ndim == 2 else (16, 256, 256)
-        self._create_layers()
+        self._require_layers()
 
         # Create all the widgets and add them to the layout.
         self._create_widgets()
@@ -180,7 +186,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
             self._shape = state.image_shape
 
         # Before we reset the layers, we ensure all expected layers exist.
-        self._create_layers()
+        self._require_layers()
 
         # Update the image scale.
         scale = state.image_scale
