@@ -727,17 +727,18 @@ def _validation_window_for_missing_layer(layer_choice):
     )
 
 
-def _validate_layers(viewer: "napari.viewer.Viewer") -> bool:
+def _validate_layers(viewer: "napari.viewer.Viewer", automatic_segmentation: bool = False) -> bool:
     # Check whether all layers exist as expected or create new ones automatically.
     state = AnnotatorState()
     state.annotator_class._require_layers()
 
-    # Check prompts layer.
-    if len(viewer.layers["prompts"].data) == 0 and len(viewer.layers["point_prompts"].data) == 0:
-        msg = "No prompts were given. Please provide prompts to run interactive segmentation."
-        return _generate_message("error", msg)
-    else:
-        return False
+    if not automatic_segmentation:
+        # Check prompts layer.
+        if len(viewer.layers["prompts"].data) == 0 and len(viewer.layers["point_prompts"].data) == 0:
+            msg = "No prompts were given. Please provide prompts to run interactive segmentation."
+            return _generate_message("error", msg)
+        else:
+            return False
 
 
 @magic_factory(call_button="Segment Object [S]")
@@ -1769,7 +1770,7 @@ class AutoSegmentWidget(_WidgetBase):
             self._viewer.layers["auto_segmentation"].refresh()
 
         # Validate all layers.
-        _validate_layers(self._viewer)
+        _validate_layers(self._viewer, automatic_segmentation=True)
 
         seg = seg_impl()
         update_segmentation(seg)
