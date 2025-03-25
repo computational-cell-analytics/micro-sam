@@ -24,16 +24,18 @@ class Annotator3d(_AnnotatorBase):
             "clear": widgets.clear_volume(),
         }
 
-    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
+    def __init__(self, viewer: "napari.viewer.Viewer", reset_state: bool = True) -> None:
         self._with_decoder = AnnotatorState().decoder is not None
         super().__init__(viewer=viewer, ndim=3)
 
         # Set the expected annotator class to the state.
         state = AnnotatorState()
-        state.annotator_class = self
 
         # Reset the state.
-        state.reset_state()
+        if reset_state:
+            state.reset_state()
+
+        state.annotator = self
 
     def _update_image(self, segmentation_result=None):
         super()._update_image(segmentation_result=segmentation_result)
@@ -101,7 +103,7 @@ def annotator_3d(
         viewer = napari.Viewer()
 
     viewer.add_image(image, name="image")
-    annotator = Annotator3d(viewer)
+    annotator = Annotator3d(viewer, reset_state=False)
 
     # Trigger layer update of the annotator so that layers have the correct shape.
     # And initialize the 'committed_objects' with the segmentation result if it was given.

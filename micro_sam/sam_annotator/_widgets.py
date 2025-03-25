@@ -512,7 +512,7 @@ def commit(
 
     # Check whether all layers exist as expected or create new ones automatically.
     state = AnnotatorState()
-    state.annotator_class._require_layers(layer_choice=layer)
+    state.annotator._require_layers(layer_choice=layer)
 
     _, seg, mask, bb = _commit_impl(viewer, layer, preserve_committed)
 
@@ -555,6 +555,10 @@ def commit_track(
     """
     # Commit the segmentation layer.
     id_offset, seg, mask, bb = _commit_impl(viewer, layer, preserve_committed)
+
+    # Check whether all layers exist as expected or create new ones automatically.
+    if _validate_layers(viewer):
+        return None
 
     # Update the lineages.
     state = AnnotatorState()
@@ -730,7 +734,7 @@ def _validation_window_for_missing_layer(layer_choice):
 def _validate_layers(viewer: "napari.viewer.Viewer", automatic_segmentation: bool = False) -> bool:
     # Check whether all layers exist as expected or create new ones automatically.
     state = AnnotatorState()
-    state.annotator_class._require_layers()
+    state.annotator._require_layers()
 
     if not automatic_segmentation:
         # Check prompts layer.

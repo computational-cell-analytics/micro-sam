@@ -71,7 +71,7 @@ class AnnotatorState(metaclass=Singleton):
     z_range: Optional[Tuple[int, int]] = None
 
     # annotator_class
-    annotator_class: Optional["micro_sam.sam_annotator._annotator._AnnotatorBase"] = None
+    annotator: Optional["micro_sam.sam_annotator._annotator._AnnotatorBase"] = None
 
     def initialize_predictor(
         self,

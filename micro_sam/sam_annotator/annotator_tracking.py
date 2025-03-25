@@ -101,7 +101,43 @@ class AnnotatorTracking(_AnnotatorBase):
     # The tracking annotator needs different settings for the prompt layers
     # to support the additional tracking state.
     # That's why we over-ride this function.
-    def _require_layers(self):
+    def _require_layers(self, layer_choice=None):
+
+        # Check whether the image is initialized already. And use the image shape and scale for the layers.
+        state = AnnotatorState()
+        shape = self._shape if state.image_shape is None else state.image_shape
+
+        # Add the label layers for the current object, the automatic segmentation and the committed segmentation.
+        dummy_data = np.zeros(shape, dtype="uint32")
+        image_scale = state.image_scale
+
+        # Before adding new layers, we always check whether a layer with this name already exists or not.
+        if "current_object" not in self._viewer.layers:
+            if "current_object" == layer_choice:  # Check at 'commit' call button.
+                widgets._validation_window_for_missing_layer(layer_choice)
+            self._viewer.add_labels(data=dummy_data, name="current_object")
+            if image_scale is not None:
+                self.layers["current_objects"].scale = image_scale
+
+        if "auto_segmentation" not in self._viewer.layers:
+            if "auto_segmentation" == layer_choice:  # Check at 'commit' call button situation.
+                widgets._validation_window_for_missing_layer(layer_choice)
+            self._viewer.add_labels(data=dummy_data, name="auto_segmentation")
+            if image_scale is not None:
+                self.layers["auto_segmentation"].scale = image_scale
+
+        if "committed_objects" not in self._viewer.layers:
+            self._viewer.add_labels(data=dummy_data, name="committed_objects")
+            # Randomize colors so it is easy to see when object committed.
+            self._viewer.layers["committed_objects"].new_colormap()
+            if image_scale is not None:
+                self.layers["committed_objects"].scale = image_scale
+
+        # Add the point prompts layer.
+        # NOTE: The lines below ensure that there is no existing 'point_prompts' layer with same name, and remove them.
+        if "point_prompts" in self._viewer.layers:
+            self._viewer.remove(self._viewer.layers["point_prompts"])
+
         self._point_labels = ["positive", "negative"]
         self._track_state_labels = ["track", "division"]
 
@@ -124,6 +160,11 @@ class AnnotatorTracking(_AnnotatorBase):
         self._point_prompt_layer.border_color_mode = "cycle"
         self._point_prompt_layer.face_color_mode = "cycle"
 
+        # Add the point prompts layer.
+        # NOTE: The lines below ensure that there is no existing 'prompts' layer with same name, and remove them.
+        if "prompts" in self._viewer.layers:
+            self._viewer.remove(self._viewer.layers["prompts"])
+
         # Using the box layer to set divisions currently doesn't work.
         # That's why some of the code below is commented out.
         self._box_prompt_layer = self._viewer.add_shapes(
@@ -138,14 +179,6 @@ class AnnotatorTracking(_AnnotatorBase):
             # edge_color_cycle=STATE_COLOR_CYCLE,
         )
         # self._box_prompt_layer.edge_color_mode = "cycle"
-
-        # Add the label layers for the current object, the automatic segmentation and the committed segmentation.
-        dummy_data = np.zeros(self._shape, dtype="uint32")
-        self._viewer.add_labels(data=dummy_data, name="current_object")
-        self._viewer.add_labels(data=dummy_data, name="auto_segmentation")
-        self._viewer.add_labels(data=dummy_data, name="committed_objects")
-        # Randomize colors so it is easy to see when object committed.
-        self._viewer.layers["committed_objects"].new_colormap()
 
     def _get_widgets(self):
         state = AnnotatorState()
@@ -165,7 +198,7 @@ class AnnotatorTracking(_AnnotatorBase):
             "clear": widgets.clear_track(),
         }
 
-    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
+    def __init__(self, viewer: "napari.viewer.Viewer", reset_state: bool = True) -> None:
         # Initialize the state for tracking.
         self._init_track_state()
         self._with_decoder = AnnotatorState().decoder is not None
@@ -175,10 +208,12 @@ class AnnotatorTracking(_AnnotatorBase):
 
         # Set the expected annotator class to the state.
         state = AnnotatorState()
-        state.annotator_class = self
 
         # Reset the state.
-        state.reset_state()
+        if reset_state:
+            state.reset_state()
+
+        state.annotator = self
 
     def _init_track_state(self):
         state = AnnotatorState()

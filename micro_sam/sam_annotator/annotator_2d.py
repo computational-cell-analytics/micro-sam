@@ -24,15 +24,17 @@ class Annotator2d(_AnnotatorBase):
             "clear": widgets.clear(),
         }
 
-    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
+    def __init__(self, viewer: "napari.viewer.Viewer", reset_state: bool = True) -> None:
         super().__init__(viewer=viewer, ndim=2)
 
         # Set the expected annotator class to the state.
         state = AnnotatorState()
-        state.annotator_class = self
 
         # Reset the state.
-        state.reset_state()
+        if reset_state:
+            state.reset_state()
+
+        state.annotator = self
 
 
 def annotator_2d(
@@ -92,7 +94,7 @@ def annotator_2d(
         viewer = napari.Viewer()
 
     viewer.add_image(image, name="image")
-    annotator = Annotator2d(viewer)
+    annotator = Annotator2d(viewer, reset_state=False)
 
     # Trigger layer update of the annotator so that layers have the correct shape.
     # And initialize the 'committed_objects' with the segmentation result if it was given.

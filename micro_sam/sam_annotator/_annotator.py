@@ -16,25 +16,37 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
     The annotators differ in their data dimensionality and the widgets.
     """
 
-    def _require_layers(self, layer_choice=None, shape=None):
+    def _require_layers(self, layer_choice=None):
+
+        # Check whether the image is initialized already. And use the image shape and scale for the layers.
+        state = AnnotatorState()
+        shape = self._shape if state.image_shape is None else state.image_shape
+
         # Add the label layers for the current object, the automatic segmentation and the committed segmentation.
-        dummy_data = np.zeros(self._shape if shape is None else shape, dtype="uint32")
+        dummy_data = np.zeros(shape, dtype="uint32")
+        image_scale = state.image_scale
 
         # Before adding new layers, we always check whether a layer with this name already exists or not.
         if "current_object" not in self._viewer.layers:
             if "current_object" == layer_choice:  # Check at 'commit' call button.
                 widgets._validation_window_for_missing_layer(layer_choice)
             self._viewer.add_labels(data=dummy_data, name="current_object")
+            if image_scale is not None:
+                self.layers["current_objects"].scale = image_scale
 
         if "auto_segmentation" not in self._viewer.layers:
             if "auto_segmentation" == layer_choice:  # Check at 'commit' call button situation.
                 widgets._validation_window_for_missing_layer(layer_choice)
             self._viewer.add_labels(data=dummy_data, name="auto_segmentation")
+            if image_scale is not None:
+                self.layers["auto_segmentation"].scale = image_scale
 
         if "committed_objects" not in self._viewer.layers:
             self._viewer.add_labels(data=dummy_data, name="committed_objects")
             # Randomize colors so it is easy to see when object committed.
             self._viewer.layers["committed_objects"].new_colormap()
+            if image_scale is not None:
+                self.layers["committed_objects"].scale = image_scale
 
         # Add the point layer for point prompts.
         self._point_labels = ["positive", "negative"]
