@@ -359,8 +359,13 @@ def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None
 
 
 def _commit_impl(viewer, layer, preserve_committed):
-    # Check if we have a z_range. If yes, use it to set a bounding box.
+
     state = AnnotatorState()
+
+    # Check whether all layers exist as expected or create new ones automatically.
+    state.annotator._require_layers(layer_choices=[layer, "committed_objects"])
+
+    # Check if we have a z_range. If yes, use it to set a bounding box.
     if state.z_range is None:
         bb = np.s_[:]
     else:
@@ -510,10 +515,7 @@ def commit(
             This feature is still experimental.
     """
 
-    # Check whether all layers exist as expected or create new ones automatically.
-    state = AnnotatorState()
-    state.annotator._require_layers(layer_choice=layer)
-
+    # Commit the segmentation layer.
     _, seg, mask, bb = _commit_impl(viewer, layer, preserve_committed)
 
     if commit_path is not None:
@@ -555,10 +557,6 @@ def commit_track(
     """
     # Commit the segmentation layer.
     id_offset, seg, mask, bb = _commit_impl(viewer, layer, preserve_committed)
-
-    # Check whether all layers exist as expected or create new ones automatically.
-    if _validate_layers(viewer):
-        return None
 
     # Update the lineages.
     state = AnnotatorState()
@@ -725,10 +723,12 @@ def _validate_embeddings(viewer: "napari.viewer.Viewer"):
 
 
 def _validation_window_for_missing_layer(layer_choice):
-    return _generate_message(
-        message_type="error",
-        message=f"The '{layer_choice}' layer to commit is missing. Please re-annotate and try again."
-    )
+    if layer_choice == "committed_objects":
+        msg = "The 'committed_objects' layer to commit masks is missing. Please try to commit again."
+    else:
+        msg = f"The '{layer_choice}' layer to commit is missing. Please re-annotate and try again."
+
+    return _generate_message(message_type="error", message=msg)
 
 
 def _validate_layers(viewer: "napari.viewer.Viewer", automatic_segmentation: bool = False) -> bool:
