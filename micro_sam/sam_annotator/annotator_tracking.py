@@ -138,7 +138,7 @@ class AnnotatorTracking(_AnnotatorBase):
         # Add the point prompts layer.
         # NOTE: The lines below ensure that there is no existing 'point_prompts' layer with same name, and remove them.
         if "point_prompts" in self._viewer.layers:
-            self._viewer.remove(self._viewer.layers["point_prompts"])
+            del self._viewer.layers["point_prompts"]
 
         self._point_labels = ["positive", "negative"]
         self._track_state_labels = ["track", "division"]
@@ -165,7 +165,7 @@ class AnnotatorTracking(_AnnotatorBase):
         # Add the point prompts layer.
         # NOTE: The lines below ensure that there is no existing 'prompts' layer with same name, and remove them.
         if "prompts" in self._viewer.layers:
-            self._viewer.remove(self._viewer.layers["prompts"])
+            del self._viewer.layers["prompts"]
 
         # Using the box layer to set divisions currently doesn't work.
         # That's why some of the code below is commented out.
