@@ -136,51 +136,48 @@ class AnnotatorTracking(_AnnotatorBase):
                 self.layers["committed_objects"].scale = image_scale
 
         # Add the point prompts layer.
-        # NOTE: The lines below ensure that there is no existing 'point_prompts' layer with same name, and remove them.
-        if "point_prompts" in self._viewer.layers:
-            del self._viewer.layers["point_prompts"]
-
         self._point_labels = ["positive", "negative"]
         self._track_state_labels = ["track", "division"]
-
-        self._point_prompt_layer = self._viewer.add_points(
-            name="point_prompts",
-            property_choices={
-                "label": self._point_labels,
-                "state": self._track_state_labels,
-                "track_id": ["1"],  # we use string to avoid pandas warning
-            },
-            border_color="label",
-            border_color_cycle=vutil.LABEL_COLOR_CYCLE,
-            symbol="o",
-            face_color="state",
-            face_color_cycle=STATE_COLOR_CYCLE,
-            border_width=0.4,
-            size=12,
-            ndim=self._ndim,
-        )
-        self._point_prompt_layer.border_color_mode = "cycle"
-        self._point_prompt_layer.face_color_mode = "cycle"
+        if "point_prompts" in self._viewer.layers:
+            self._point_prompt_layer = self._viewer.layers["point_prompts"]
+        else:
+            self._point_prompt_layer = self._viewer.add_points(
+                name="point_prompts",
+                property_choices={
+                    "label": self._point_labels,
+                    "state": self._track_state_labels,
+                    "track_id": ["1"],  # we use string to avoid pandas warning
+                },
+                border_color="label",
+                border_color_cycle=vutil.LABEL_COLOR_CYCLE,
+                symbol="o",
+                face_color="state",
+                face_color_cycle=STATE_COLOR_CYCLE,
+                border_width=0.4,
+                size=12,
+                ndim=self._ndim,
+            )
+            self._point_prompt_layer.border_color_mode = "cycle"
+            self._point_prompt_layer.face_color_mode = "cycle"
 
         # Add the point prompts layer.
-        # NOTE: The lines below ensure that there is no existing 'prompts' layer with same name, and remove them.
         if "prompts" in self._viewer.layers:
-            del self._viewer.layers["prompts"]
-
-        # Using the box layer to set divisions currently doesn't work.
-        # That's why some of the code below is commented out.
-        self._box_prompt_layer = self._viewer.add_shapes(
-            shape_type="rectangle",
-            edge_width=4,
-            ndim=self._ndim,
-            face_color="transparent",
-            name="prompts",
-            edge_color="green",
-            property_choices={"track_id": ["1"]},
-            # property_choces={"track_id": ["1"], "state": self._track_state_labels},
-            # edge_color_cycle=STATE_COLOR_CYCLE,
-        )
-        # self._box_prompt_layer.edge_color_mode = "cycle"
+            self._point_prompt_layer = self._viewer.layers["prompts"]
+        else:
+            # Using the box layer to set divisions currently doesn't work.
+            # That's why some of the code below is commented out.
+            self._box_prompt_layer = self._viewer.add_shapes(
+                shape_type="rectangle",
+                edge_width=4,
+                ndim=self._ndim,
+                face_color="transparent",
+                name="prompts",
+                edge_color="green",
+                property_choices={"track_id": ["1"]},
+                # property_choces={"track_id": ["1"], "state": self._track_state_labels},
+                # edge_color_cycle=STATE_COLOR_CYCLE,
+            )
+            # self._box_prompt_layer.edge_color_mode = "cycle"
 
     def _get_widgets(self):
         state = AnnotatorState()

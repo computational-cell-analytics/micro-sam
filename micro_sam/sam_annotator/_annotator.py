@@ -92,7 +92,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         # Create the prompt widget. (The same for all plugins.)
         self._prompt_widget = widgets.create_prompt_menu(self._point_prompt_layer, self._point_labels)
 
-        # Create the dictionray for the widgets and get the widgets of the child plugin.
+        # Create the dictionary for the widgets and get the widgets of the child plugin.
         self._widgets = {"embeddings": self._embedding_widget, "prompts": self._prompt_widget}
         self._widgets.update(self._get_widgets())
 
