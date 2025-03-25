@@ -370,7 +370,28 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         self.run_button.clicked.connect(self.__call__)
         self.layout().addWidget(self.run_button)
 
-    # model_type: str = util._DEFAULT_MODEL,
+    def _get_model_size_options(self):
+        # We store the actual model names mapped to UI labels.
+        self.model_size_mapping = {}
+        if self.model_family == "Natural Images (SAM)":
+            self.model_size_options = list(self._model_size_map .values())
+            self.model_size_mapping = {self._model_size_map[k]: f"vit_{k}" for k in self._model_size_map.keys()}
+        else:
+            model_suffix = self.supported_dropdown_maps[self.model_family]
+            self.model_size_options = []
+
+            for option in self.model_options:
+                if option.endswith(model_suffix):
+                    # Extract model size character on-the-fly.
+                    key = next((k for k in self._model_size_map .keys() if f"vit_{k}" in option), None)
+                    if key:
+                        size_label = self._model_size_map[key]
+                        self.model_size_options.append(size_label)
+                        self.model_size_mapping[size_label] = option  # Store the actual model name.
+
+        # We ensure an assorted order of model sizes ('tiny' to 'huge')
+        self.model_size_options.sort(key=lambda x: ["tiny", "base", "large", "huge"].index(x))
+
     def _create_options(self):
         self.folder = None
         _, layout = self._add_path_param(
@@ -388,18 +409,87 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         )
         self.layout().addLayout(layout)
 
-        self.model_type = util._DEFAULT_MODEL
-        model_options = list(util.models().urls.keys())
-        model_options = [model for model in model_options if not model.endswith("decoder")]
-        _, layout = self._add_choice_param(
-            "model_type", self.model_type, model_options, title="Model:",
-            tooltip=get_tooltip("embedding", "model")
+        # Add the model family and model size combination.
+
+        # Create a list of support dropdown values and correspond them to suffixes.
+        self.supported_dropdown_maps = {
+            "Natural Images (SAM)": "",
+            "Light Microscopy": "_lm",
+            "Electron Microscopy": "_em_organelles",
+            "Medical Imaging": "_medical_imaging",
+            "Histopathology": "_histopathology",
+        }
+
+        self._model_size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
+
+        self._default_model_choice = util._DEFAULT_MODEL
+        # Let's set the literally default model choice depending on 'micro-sam'.
+        self.model_family = {v: k for k, v in self.supported_dropdown_maps.items()}[self._default_model_choice[5:]]
+
+        # NOTE: We stick to the base variant for each model family.
+        # i.e. 'Natural Images (SAM)', 'Light Microscopy', 'Electron Microscopy', 'Medical_Imaging', 'Histopathology'.
+        self.model_family_dropdown, layout = self._add_choice_param(
+            "model_family", self.model_family, list(self.supported_dropdown_maps.keys()),
+            title="Model:", tooltip=get_tooltip("embedding", "model_family")
         )
+        self.model_family_dropdown.currentTextChanged.connect(self._update_model_type)
         self.layout().addLayout(layout)
+
+    def _update_model_type(self):
+        # Get currently selected model size (before clearing dropdown)
+        current_selection = self.model_size_dropdown.currentText()
+        self._get_model_size_options()  # Update model size options dynamically
+
+        # NOTE: We need to prevent recursive updates for this step temporarily.
+        self.model_size_dropdown.blockSignals(True)
+
+        # Let's clear and recreate the dropdown.
+        self.model_size_dropdown.clear()
+        self.model_size_dropdown.addItems(self.model_size_options)
+
+        # We restore the previous selection, if still valid.
+        if current_selection in self.model_size_options:
+            self.model_size = current_selection
+        else:
+            if self.model_size_options:  # Default to the first available model size
+                self.model_size = self.model_size_options[0]
+
+        # Let's map the selection to the correct model type (eg. "tiny" -> "vit_t")
+        size_key = next(
+            (k for k, v in self._model_size_map.items() if v == self.model_size), "b"
+        )
+        self.model_type = f"vit_{size_key}" + self.supported_dropdown_maps[self.model_family]
+
+        self.model_size_dropdown.setCurrentText(self.model_size)  # Apply the selected text to the dropdown
+
+        # We force a refresh for UI here.
+        self.model_size_dropdown.update()
+
+        # NOTE: And finally, we should re-enable signals again.
+        self.model_size_dropdown.blockSignals(False)
 
     def _create_settings(self):
         setting_values = QtWidgets.QWidget()
         setting_values.setLayout(QtWidgets.QVBoxLayout())
+
+        # Create UI for the model size.
+        # This would combine with the chosen 'self.model_family' and depend on 'self._default_model_choice'.
+        self.model_size = self._model_size_map[self._default_model_choice[4]]
+
+        # Get all model options.
+        self.model_options = list(util.models().urls.keys())
+        # Filter out the decoders from the model list.
+        self.model_options = [model for model in self.model_options if not model.endswith("decoder")]
+
+        # Now, we get the available sizes per model family.
+        self._get_model_size_options()
+
+        self.model_size_dropdown, layout = self._add_choice_param(
+            "model_size", self.model_size, self.model_size_options,
+            title="model size:", tooltip=get_tooltip("embedding", "model_size"),
+        )
+        self.model_size_dropdown.currentTextChanged.connect(self._update_model_type)
+        setting_values.layout().addLayout(layout)
 
         self.pattern = "*"
         _, layout = self._add_string_param(
@@ -466,6 +556,18 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         if not skip_validate and self._validate_inputs():
             return
         tile_shape, halo = widgets._process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
+
+        # Let's get them all into one `model_type`.
+        self.model_type = "vit_" + self.model_size[0] + self.supported_dropdown_maps[self.model_family]
+
+        # For 'custom_weights', we remove the displayed text on top of the drop-down menu.
+        if self.custom_weights:
+            # NOTE: We prevent recursive updates for this step temporarily.
+            self.model_family_dropdown.blockSignals(True)
+            self.model_family_dropdown.setCurrentIndex(-1)  # This removes the displayed text.
+            self.model_family_dropdown.update()
+            # NOTE: And re-enable signals again.
+            self.model_family_dropdown.blockSignals(False)
 
         image_folder_annotator(
             self.folder, self.output_folder, self.pattern,

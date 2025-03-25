@@ -1146,7 +1146,7 @@ class EmbeddingWidget(_WidgetBase):
         # i.e. 'Natural Images (SAM)', 'Light Microscopy', 'Electron Microscopy', 'Medical_Imaging', 'Histopathology'.
         self.model_family_dropdown, layout = self._add_choice_param(
             "model_family", self.model_family, list(self.supported_dropdown_maps.keys()),
-            title="Model:", layout=layout, tooltip=get_tooltip("embedding", "model")
+            title="Model:", layout=layout, tooltip=get_tooltip("embedding", "model_family")
         )
         self.model_family_dropdown.currentTextChanged.connect(self._update_model_type)
         return layout
@@ -1170,7 +1170,7 @@ class EmbeddingWidget(_WidgetBase):
 
         self.model_size_dropdown, layout = self._add_choice_param(
             "model_size", self.model_size, self.model_size_options,
-            title="model size:", tooltip=get_tooltip("embedding", "model"),
+            title="model size:", tooltip=get_tooltip("embedding", "model_size"),
         )
         self.model_size_dropdown.currentTextChanged.connect(self._update_model_type)
         setting_values.layout().addLayout(layout)
