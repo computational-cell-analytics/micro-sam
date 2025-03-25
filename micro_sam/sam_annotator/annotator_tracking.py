@@ -32,15 +32,17 @@ def create_tracking_menu(points_layer, box_layer, states, track_ids):
     tracking_widget = Container(widgets=[state_menu, track_id_menu])
 
     def update_state(event):
-        new_state = str(points_layer.current_properties["state"][0])
-        if new_state != state_menu.value:
-            state_menu.value = new_state
+        if "state" in points_layer.current_properties:
+            new_state = str(points_layer.current_properties["state"][0])
+            if new_state != state_menu.value:
+                state_menu.value = new_state
 
     def update_track_id(event):
-        new_id = str(points_layer.current_properties["track_id"][0])
-        if new_id != track_id_menu.value:
-            track_id_menu.value = new_id
-            state.current_track_id = int(new_id)
+        if "track_id" in points_layer.current_properties:
+            new_id = str(points_layer.current_properties["track_id"][0])
+            if new_id != track_id_menu.value:
+                track_id_menu.value = new_id
+                state.current_track_id = int(new_id)
 
     # def update_state_boxes(event):
     #     new_state = str(box_layer.current_properties["state"][0])
@@ -48,10 +50,11 @@ def create_tracking_menu(points_layer, box_layer, states, track_ids):
     #         state_menu.value = new_state
 
     def update_track_id_boxes(event):
-        new_id = str(box_layer.current_properties["track_id"][0])
-        if new_id != track_id_menu.value:
-            track_id_menu.value = new_id
-            state.current_track_id = int(new_id)
+        if "track_id" in points_layer.current_properties:
+            new_id = str(box_layer.current_properties["track_id"][0])
+            if new_id != track_id_menu.value:
+                track_id_menu.value = new_id
+                state.current_track_id = int(new_id)
 
     points_layer.events.current_properties.connect(update_state)
     points_layer.events.current_properties.connect(update_track_id)
@@ -138,16 +141,22 @@ class AnnotatorTracking(_AnnotatorBase):
         # Add the point prompts layer.
         self._point_labels = ["positive", "negative"]
         self._track_state_labels = ["track", "division"]
+        _point_prompt_property_choices = {
+            "label": self._point_labels,
+            "state": self._track_state_labels,
+            "track_id": ["1"],  # we use string to avoid pandas warning
+        }
+
+        layer_mismatch = True
         if "point_prompts" in self._viewer.layers:
-            self._point_prompt_layer = self._viewer.layers["point_prompts"]
-        else:
+            # Check whether the 'property_choices' match or not.
+            curr_property_choices = self._viewer.layers["point_prompts"].property_choices
+            layer_mismatch = all(curr_property_choices.keys()) != all(_point_prompt_property_choices.keys())
+
+        if layer_mismatch:
             self._point_prompt_layer = self._viewer.add_points(
                 name="point_prompts",
-                property_choices={
-                    "label": self._point_labels,
-                    "state": self._track_state_labels,
-                    "track_id": ["1"],  # we use string to avoid pandas warning
-                },
+                property_choices=_point_prompt_property_choices,
                 border_color="label",
                 border_color_cycle=vutil.LABEL_COLOR_CYCLE,
                 symbol="o",
@@ -159,11 +168,18 @@ class AnnotatorTracking(_AnnotatorBase):
             )
             self._point_prompt_layer.border_color_mode = "cycle"
             self._point_prompt_layer.face_color_mode = "cycle"
+        else:
+            self._point_prompt_layer = self._viewer.layers["point_prompts"]
 
         # Add the point prompts layer.
+        _box_prompt_property_choices = {"track_id": ["1"]}
+
         if "prompts" in self._viewer.layers:
-            self._point_prompt_layer = self._viewer.layers["prompts"]
-        else:
+            # Check whether the 'property_choices' match or not.
+            curr_property_choices = self._viewer.layers["prompts"].property_choices
+            layer_mismatch = all(curr_property_choices.keys()) != all(_box_prompt_property_choices.keys())
+
+        if layer_mismatch:
             # Using the box layer to set divisions currently doesn't work.
             # That's why some of the code below is commented out.
             self._box_prompt_layer = self._viewer.add_shapes(
@@ -173,14 +189,18 @@ class AnnotatorTracking(_AnnotatorBase):
                 face_color="transparent",
                 name="prompts",
                 edge_color="green",
-                property_choices={"track_id": ["1"]},
-                # property_choces={"track_id": ["1"], "state": self._track_state_labels},
+                property_choices=_box_prompt_property_choices,
+                # property_choices={"track_id": ["1"], "state": self._track_state_labels},
                 # edge_color_cycle=STATE_COLOR_CYCLE,
             )
             # self._box_prompt_layer.edge_color_mode = "cycle"
+        else:
+            self._box_prompt_layer = self._viewer.layers["prompts"]
 
     def _get_widgets(self):
         state = AnnotatorState()
+        self._require_layers()
+
         # Create the tracking state menu.
         self._tracking_widget = create_tracking_menu(
             self._point_prompt_layer, self._box_prompt_layer,
