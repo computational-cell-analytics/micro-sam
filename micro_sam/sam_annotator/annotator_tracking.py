@@ -21,15 +21,27 @@ STATE_COLOR_CYCLE = ["#00FFFF", "#FF00FF", ]
 
 
 # This solution is a bit hacky, so I won't move it to _widgets.py yet.
-def create_tracking_menu(points_layer, box_layer, states, track_ids):
+def create_tracking_menu(points_layer, box_layer, states, track_ids, tracking_widget=None):
     """@private"""
     state = AnnotatorState()
 
-    state_menu = ComboBox(label="track_state", choices=states, tooltip=get_tooltip("annotator_tracking", "track_state"))
-    track_id_menu = ComboBox(
-        label="track_id", choices=list(map(str, track_ids)), tooltip=get_tooltip("annotator_tracking", "track_id")
-    )
-    tracking_widget = Container(widgets=[state_menu, track_id_menu])
+    def _get_widget_menu(container, label):
+        for w in container:
+            if isinstance(w, ComboBox) and w.label == label:
+                return w
+        raise ValueError(f"ComboBox with label '{label}' not found.")
+
+    if tracking_widget is None:
+        state_menu = ComboBox(
+            label="track_state", choices=states, tooltip=get_tooltip("annotator_tracking", "track_state")
+        )
+        track_id_menu = ComboBox(
+            label="track_id", choices=list(map(str, track_ids)), tooltip=get_tooltip("annotator_tracking", "track_id")
+        )
+        tracking_widget = Container(widgets=[state_menu, track_id_menu])
+    else:
+        state_menu = _get_widget_menu(tracking_widget, "track_state")
+        track_id_menu = _get_widget_menu(tracking_widget, "track_id")
 
     def update_state(event):
         if "state" in points_layer.current_properties:
@@ -50,7 +62,7 @@ def create_tracking_menu(points_layer, box_layer, states, track_ids):
     #         state_menu.value = new_state
 
     def update_track_id_boxes(event):
-        if "track_id" in points_layer.current_properties:
+        if "track_id" in box_layer.current_properties:
             new_id = str(box_layer.current_properties["track_id"][0])
             if new_id != track_id_menu.value:
                 track_id_menu.value = new_id
@@ -147,13 +159,13 @@ class AnnotatorTracking(_AnnotatorBase):
             "track_id": ["1"],  # we use string to avoid pandas warning
         }
 
-        layer_mismatch = True
+        point_layer_mismatch = True
         if "point_prompts" in self._viewer.layers:
             # Check whether the 'property_choices' match or not.
             curr_property_choices = self._viewer.layers["point_prompts"].property_choices
-            layer_mismatch = all(curr_property_choices.keys()) != all(_point_prompt_property_choices.keys())
+            point_layer_mismatch = set(curr_property_choices.keys()) != set(_point_prompt_property_choices.keys())
 
-        if layer_mismatch:
+        if point_layer_mismatch and "point_prompts" not in self._viewer.layers:
             self._point_prompt_layer = self._viewer.add_points(
                 name="point_prompts",
                 property_choices=_point_prompt_property_choices,
@@ -168,18 +180,21 @@ class AnnotatorTracking(_AnnotatorBase):
             )
             self._point_prompt_layer.border_color_mode = "cycle"
             self._point_prompt_layer.face_color_mode = "cycle"
+            _new_point_layer = True
         else:
             self._point_prompt_layer = self._viewer.layers["point_prompts"]
+            _new_point_layer = False
 
         # Add the point prompts layer.
         _box_prompt_property_choices = {"track_id": ["1"]}
 
+        box_layer_mismatch = True
         if "prompts" in self._viewer.layers:
             # Check whether the 'property_choices' match or not.
             curr_property_choices = self._viewer.layers["prompts"].property_choices
-            layer_mismatch = all(curr_property_choices.keys()) != all(_box_prompt_property_choices.keys())
+            box_layer_mismatch = set(curr_property_choices.keys()) != set(_box_prompt_property_choices.keys())
 
-        if layer_mismatch:
+        if box_layer_mismatch and "prompts" not in self._viewer.layers:
             # Using the box layer to set divisions currently doesn't work.
             # That's why some of the code below is commented out.
             self._box_prompt_layer = self._viewer.add_shapes(
@@ -194,18 +209,36 @@ class AnnotatorTracking(_AnnotatorBase):
                 # edge_color_cycle=STATE_COLOR_CYCLE,
             )
             # self._box_prompt_layer.edge_color_mode = "cycle"
+            _new_box_layer = True
         else:
             self._box_prompt_layer = self._viewer.layers["prompts"]
+            _new_box_layer = False
+
+        # Trigger a new connection for the tracking state menu only when a new layer is (re)created.
+        if _new_point_layer or _new_box_layer:
+            self._tracking_widget = create_tracking_menu(
+                points_layer=self._point_prompt_layer,
+                box_layer=self._box_prompt_layer,
+                states=self._track_state_labels,
+                track_ids=list(state.lineage.keys()),
+                tracking_widget=state.widgets.get("tracking"),
+            )
+            state.widgets["tracking"] = self._tracking_widget
 
     def _get_widgets(self):
         state = AnnotatorState()
         self._require_layers()
 
         # Create the tracking state menu.
-        self._tracking_widget = create_tracking_menu(
-            self._point_prompt_layer, self._box_prompt_layer,
-            states=self._track_state_labels, track_ids=list(state.lineage.keys()),
-        )
+        # NOTE: Check whether it exists already from `_require_layers` or needs to be created.
+        if state.widgets.get("tracking") is None:
+            self._tracking_widget = create_tracking_menu(
+                self._point_prompt_layer, self._box_prompt_layer,
+                states=self._track_state_labels, track_ids=list(state.lineage.keys()),
+            )
+        else:
+            self._tracking_widget = state.widgets.get("tracking")
+
         segment_nd = widgets.SegmentNDWidget(self._viewer, tracking=True)
         autotrack = widgets.AutoTrackWidget(self._viewer, with_decoder=self._with_decoder, volumetric=True)
         return {
