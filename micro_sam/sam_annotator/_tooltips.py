@@ -69,6 +69,11 @@ tooltips = {
     "n_epochs": "Define the number of training epochs for your model.",
     "configuration": "Specifiy the hardware configuration to use for training.",
   },
+  "commit": {
+      "layer": "The layer to commit. Either 'current_object' to commit results from prompt-based segmentation or 'auto_segmentation' to commit results from automatic segmentation.",  # noqa
+      "preserve_mode": "The mode for preserving already committed objects. Either 'objects' to preserve on a per-object level, 'pixels' to preserve on a per-pixel level, or 'none' to not preserve.",  # noqa
+      "commit_path": "The path to a zarr file for saving committed objects, prompts and other segmentation settings.",
+  }
 }
 
 
