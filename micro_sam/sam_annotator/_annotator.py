@@ -1,6 +1,8 @@
-import napari
+from typing import Optional, List
+
 import numpy as np
 
+import napari
 from qtpy import QtWidgets
 from magicgui.widgets import Widget, Container, FunctionGui
 
@@ -16,19 +18,39 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
     The annotators differ in their data dimensionality and the widgets.
     """
 
-    def _create_layers(self):
+    def _require_layers(self, layer_choices: Optional[List[str]] = None):
+
+        # Check whether the image is initialized already. And use the image shape and scale for the layers.
+        state = AnnotatorState()
+        shape = self._shape if state.image_shape is None else state.image_shape
+
         # Add the label layers for the current object, the automatic segmentation and the committed segmentation.
-        dummy_data = np.zeros(self._shape, dtype="uint32")
+        dummy_data = np.zeros(shape, dtype="uint32")
+        image_scale = state.image_scale
 
         # Before adding new layers, we always check whether a layer with this name already exists or not.
         if "current_object" not in self._viewer.layers:
+            if layer_choices and "current_object" in layer_choices:  # Check at 'commit' call button.
+                widgets._validation_window_for_missing_layer("current_object")
             self._viewer.add_labels(data=dummy_data, name="current_object")
+            if image_scale is not None:
+                self.layers["current_objects"].scale = image_scale
+
         if "auto_segmentation" not in self._viewer.layers:
+            if layer_choices and "auto_segmentation" in layer_choices:  # Check at 'commit' call button.
+                widgets._validation_window_for_missing_layer("auto_segmentation")
             self._viewer.add_labels(data=dummy_data, name="auto_segmentation")
+            if image_scale is not None:
+                self.layers["auto_segmentation"].scale = image_scale
+
         if "committed_objects" not in self._viewer.layers:
+            if layer_choices and "committed_objects" in layer_choices:  # Check at 'commit' call button.
+                widgets._validation_window_for_missing_layer("committed_objects")
             self._viewer.add_labels(data=dummy_data, name="committed_objects")
             # Randomize colors so it is easy to see when object committed.
             self._viewer.layers["committed_objects"].new_colormap()
+            if image_scale is not None:
+                self.layers["committed_objects"].scale = image_scale
 
         # Add the point layer for point prompts.
         self._point_labels = ["positive", "negative"]
@@ -70,7 +92,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         # Create the prompt widget. (The same for all plugins.)
         self._prompt_widget = widgets.create_prompt_menu(self._point_prompt_layer, self._point_labels)
 
-        # Create the dictionray for the widgets and get the widgets of the child plugin.
+        # Create the dictionary for the widgets and get the widgets of the child plugin.
         self._widgets = {"embeddings": self._embedding_widget, "prompts": self._prompt_widget}
         self._widgets.update(self._get_widgets())
 
@@ -131,7 +153,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         # Initialize with a dummy shape, which is reset to the correct shape once an image is set.
         self._ndim = ndim
         self._shape = (256, 256) if ndim == 2 else (16, 256, 256)
-        self._create_layers()
+        self._require_layers()
 
         # Create all the widgets and add them to the layout.
         self._create_widgets()
@@ -179,6 +201,9 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
                 )
             self._shape = state.image_shape
 
+        # Before we reset the layers, we ensure all expected layers exist.
+        self._require_layers()
+
         # Update the image scale.
         scale = state.image_scale
 
@@ -187,12 +212,15 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         self._viewer.layers["current_object"].scale = scale
         self._viewer.layers["auto_segmentation"].data = np.zeros(self._shape, dtype="uint32")
         self._viewer.layers["auto_segmentation"].scale = scale
+
         if segmentation_result is None or segmentation_result is False:
             self._viewer.layers["committed_objects"].data = np.zeros(self._shape, dtype="uint32")
         else:
             assert segmentation_result.shape == self._shape
             self._viewer.layers["committed_objects"].data = segmentation_result
         self._viewer.layers["committed_objects"].scale = scale
+
         self._viewer.layers["point_prompts"].scale = scale
         self._viewer.layers["prompts"].scale = scale
+
         vutil.clear_annotations(self._viewer, clear_segmentations=False)
