@@ -14,6 +14,7 @@ import zarr
 import z5py
 import napari
 import numpy as np
+import nifty.ground_truth as ngt
 
 import elf.parallel
 
@@ -358,7 +359,22 @@ def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None
     gc.collect()
 
 
-def _commit_impl(viewer, layer, preserve_committed):
+def _mask_matched_objects(seg, prev_seg, preservation_threshold):
+    prev_ids = np.unique(prev_seg)
+    ovlp = ngt.overlap(prev_seg, seg)
+
+    mask_ids, prev_mask_ids = [], []
+    for prev_id in prev_ids:
+        seg_ids, overlaps = ovlp.overlapArrays(prev_id, True)
+        if seg_ids[0] != 0 and overlaps[0] >= preservation_threshold:
+            mask_ids.append(seg_ids[0])
+            prev_mask_ids.append(prev_id)
+
+    preserve_mask = np.logical_or(np.isin(seg, mask_ids), np.isin(prev_seg, prev_mask_ids))
+    return preserve_mask
+
+
+def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
     # Check if we have a z_range. If yes, use it to set a bounding box.
     state = AnnotatorState()
     if state.z_range is None:
@@ -373,7 +389,7 @@ def _commit_impl(viewer, layer, preserve_committed):
     seg = viewer.layers[layer].data[bb].astype(dtype)
     shape = seg.shape
 
-    # We parallelize these operatios because they take quite long for large volumes.
+    # We parallelize these operations because they take quite long for large volumes.
 
     # Compute the max id in the commited objects.
     # id_offset = int(viewer.layers["committed_objects"].data.max())
@@ -388,9 +404,16 @@ def _commit_impl(viewer, layer, preserve_committed):
     mask = elf.parallel.apply_operation(
         seg, 0, np.not_equal, out=mask, block_shape=util.get_block_shape(shape)
     )
-    if preserve_committed:
+    if preserve_mode != "none":
         prev_seg = viewer.layers["committed_objects"].data[bb]
-        mask[prev_seg != 0] = 0
+        # The mode 'pixels' corresponds to a naive implementation where only committed pixels are preserved.
+        if preserve_mode == "pixels":
+            preserve_mask = prev_seg != 0
+        # In the other mode 'objects' we preserve committed objects instead, by comparing the overlaps
+        # of already committed and newly committed objects.
+        else:
+            preserve_mask = _mask_matched_objects(seg, prev_seg, preservation_threshold)
+        mask[preserve_mask] = 0
 
     # Write the current object to committed objects.
     seg[mask] += id_offset
@@ -580,13 +603,15 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
 
 @magic_factory(
     call_button="Commit [C]",
-    layer={"choices": ["current_object", "auto_segmentation"]},
-    commit_path={"mode": "d"},  # choose a directory
+    layer={"choices": ["current_object", "auto_segmentation"], "tooltip": get_tooltip("commit", "layer")},
+    preserve_mode={"choices": ["objects", "pixels", "none"], "tooltip": get_tooltip("commit", "preserve_mode")},
+    commit_path={"mode": "d", "tooltip": get_tooltip("commit", "commit_path")},
 )
 def commit(
     viewer: "napari.viewer.Viewer",
     layer: str = "current_object",
-    preserve_committed: bool = True,
+    preserve_mode: str = "objects",
+    preservation_threshold: float = 0.75,
     commit_path: Optional[Path] = None,
 ) -> None:
     """Widget for committing the segmented objects from automatic or interactive segmentation.
@@ -595,11 +620,15 @@ def commit(
         viewer: The napari viewer.
         layer: Select the layer to commit. Can be either 'current_object' to commit interacitve segmentation results.
             Or 'auto_segmentation' to commit automatic segmentation results.
-        preserve_committed: If active already committted objects are not over-written by new commits.
+        preserve_mode: The mode for preserving already committed objects, in order to prevent over-writing
+            them by a new commit. Supports the modes 'objects', which preserves on the object level and is the default,
+            'pixels', which preserves on the pixel-level, or 'none', which does not preserve commited objects.
+        preservation_threshold: The overlap threshold for preserving objects. This is only used if
+            preservation_mode is set to 'objects'.
         commit_path: Select a file path where the committed results and prompts will be saved.
             This feature is still experimental.
     """
-    _, seg, mask, bb = _commit_impl(viewer, layer, preserve_committed)
+    _, seg, mask, bb = _commit_impl(viewer, layer, preserve_mode, preservation_threshold)
 
     if commit_path is not None:
         _commit_to_file(commit_path, viewer, layer, seg, mask, bb)
@@ -620,12 +649,14 @@ def commit(
 @magic_factory(
     call_button="Commit [C]",
     layer={"choices": ["current_object", "auto_segmentation"]},
+    preserve_mode={"choices": ["objects", "pixels", "none"]},
     commit_path={"mode": "d"},  # choose a directory
 )
 def commit_track(
     viewer: "napari.viewer.Viewer",
     layer: str = "current_object",
-    preserve_committed: bool = True,
+    preserve_mode: str = "objects",
+    preservation_threshold: float = 0.75,
     commit_path: Optional[Path] = None,
 ) -> None:
     """Widget for committing the objects from interactive tracking.
@@ -634,12 +665,16 @@ def commit_track(
         viewer: The napari viewer.
         layer: Select the layer to commit. Can be either 'current_object' to commit interacitve segmentation results.
             Or 'auto_segmentation' to commit automatic segmentation results.
-        preserve_committed: If active already committted objects are not over-written by new commits.
+        preserve_mode: The mode for preserving already committed objects, in order to prevent over-writing
+            them by a new commit. Supports the modes 'objects', which preserves on the object level and is the default,
+            'pixels', which preserves on the pixel-level, or 'none', which does not preserve commited objects.
+        preservation_threshold: The overlap threshold for preserving objects. This is only used if
+            preservation_mode is set to 'objects'.
         commit_path: Select a file path where the committed results and prompts will be saved.
             This feature is still experimental.
     """
     # Commit the segmentation layer.
-    id_offset, seg, mask, bb = _commit_impl(viewer, layer, preserve_committed)
+    id_offset, seg, mask, bb = _commit_impl(viewer, layer, preserve_mode, preservation_threshold)
 
     # Update the lineages.
     state = AnnotatorState()
