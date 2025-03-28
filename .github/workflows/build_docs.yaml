@@ -24,17 +24,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup miniconda
-        uses: conda-incubator/setup-miniconda@v2
+      - name: Setup micromamba
+        uses: mamba-org/setup-micromamba@v1
         with:
-          activate-environment: sam
-          mamba-version: "*"
-          auto-update-conda: true
           environment-file: .github/doc_env.yaml
-          python-version: ${{ matrix.python-version }}
-          auto-activate-base: false
-        env:
-          ACTIONS_ALLOW_UNSECURE_COMMANDS: true
 
       - name: Install package
         shell: bash -l {0}
