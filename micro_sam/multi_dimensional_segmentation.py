@@ -616,7 +616,9 @@ def track_across_frames(
     if gap_closing is not None and gap_closing > 0:
         segmentation = _preprocess_closing(segmentation, gap_closing, pbar_update)
 
-    segmentation, lineage = _tracking_impl(timeseries, segmentation, mode="greedy", min_time_extent=min_time_extent)
+    segmentation, lineage = _tracking_impl(
+        np.asarray(timeseries), segmentation, mode="greedy", min_time_extent=min_time_extent
+    )
     return segmentation, lineage
 
 
