@@ -5,7 +5,7 @@ dependencies:
     - nifty >=1.2.3
     - imagecodecs
     - magicgui
-    - napari >=0.5.0,<=0.5.6 
+    - napari >=0.5.0,<0.6.0
     - natsort
     - pip
     - pooch
