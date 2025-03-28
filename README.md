@@ -19,7 +19,7 @@ We implement napari applications for:
 <img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/dfca3d9b-dba5-440b-b0f9-72a0683ac410" width="256">
 <img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/aefbf99f-e73a-4125-bb49-2e6592367a64" width="256">
 
-If you run into any problems or have questions regarding our tool please open an issue on Github or reach out via [image.sc](https://forum.image.sc/) using the tag `micro-sam` and tagging @constantinpape.
+If you run into any problems or have questions regarding our tool please open an [issue](https://github.com/computational-cell-analytics/micro-sam/issues/new/choose) on Github or reach out via [image.sc](https://forum.image.sc/) using the tag `micro-sam`, and tagging [@constantinpape](https://forum.image.sc/u/constantinpape/summary) and [@anwai98](https://forum.image.sc/u/anwai98/summary).
 
 
 ## Installation and Usage
@@ -31,7 +31,7 @@ Please check [the documentation](https://computational-cell-analytics.github.io/
 
 We welcome new contributions!
 
-If you are interested in contributing to micro-sam, please see the [contributing guide](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#contribution-guide). The first step is to [discuss your idea in a new issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) with the current developers.
+If you are interested in contributing to `micro-sam`, please see the [contributing guide](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#contribution-guide). The first step is to [discuss your idea in a new issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) with the current developers.
 
 
 ## Citation
@@ -50,12 +50,12 @@ There are a few other napari plugins build around Segment Anything:
 - https://github.com/hiroalchem/napari-SAM4IS
 
 Compared to these we support more applications (2d, 3d and tracking), and provide finetuning methods and finetuned models for microscopy data.
-[WebKnossos](https://webknossos.org/) also offers integration of SegmentAnything for interactive segmentation.
+[WebKnossos](https://webknossos.org/) and [QuPath](https://qupath.github.io/) also offer integration of Segment Anything for interactive segmentation.
 
 We have also built follow-up work that is based on `micro_sam`:
-- https://github.com/computational-cell-analytics/patho-sam - improves SAM for histopathology
-- https://github.com/computational-cell-analytics/medico-sam - improves it for medical imaging
-- https://github.com/computational-cell-analytics/peft-sam - studies parameter efficient fine-tuning for SAM
+- https://github.com/computational-cell-analytics/patho-sam - improves SAM for histopathology.
+- https://github.com/computational-cell-analytics/medico-sam - improves SAM for medical imaging.
+- https://github.com/computational-cell-analytics/peft-sam - studies parameter efficient fine-tuning for SAM.
 
 ## Release Oveverview
 

@@ -672,12 +672,34 @@ def track_from_prompts(
 
 
 def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, device, tile_shape, halo):
-    widget.model_type = model_type
-    index = widget.model_dropdown.findText(model_type)
-    if index > 0:
-        widget.model_dropdown.setCurrentIndex(index)
 
-    if save_path is not None:
+    # Update the index for model family, eg. 'Natural Images (SAM)', 'Light Microscopy', etc.
+    supported_dropdown_maps = {
+        "lm": "Light Microscopy",
+        "em_organelles": "Electron Microscopy",
+        "medical_imaging": "Medical Imaging",
+        "histopathology": "Histopathology",
+    }
+
+    model_family = "Natural Images (SAM)"  # If no suffix patterns match, stick to 'Natural Images (SAM)' family.
+    for k, v in supported_dropdown_maps.items():
+        if model_type.endswith(k):
+            model_family = v
+            break
+
+    index = widget.model_family_dropdown.findText(model_family)
+    if index > 0:
+        widget.model_family_dropdown.setCurrentIndex(index)
+
+    # Update the index for model size, eg. 'base', 'tiny', etc.
+    size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
+    model_size = size_map[model_type[4]]
+
+    index = widget.model_size_dropdown.findText(model_size)
+    if index > 0:
+        widget.model_size_dropdown.setCurrentIndex(index)
+
+    if save_path is not None and isinstance(save_path, str):
         widget.embeddings_save_path_param.setText(str(save_path))
 
     if checkpoint_path is not None:

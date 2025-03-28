@@ -18,10 +18,10 @@ def cell_segmentation():
     predictor = util.get_sam_model()
     embeddings = util.precompute_image_embeddings(predictor, image, save_path=embedding_path)
 
-    # Use the instance segmentation logic of SegmentAnything.
+    # Use the instance segmentation logic of Segment Anything.
     # This works by covering the image with a grid of points, getting the masks for all the poitns
     # and only keeping the plausible ones (according to the model predictions).
-    # While the functionality here does the same as the implementation from SegmentAnything,
+    # While the functionality here does the same as the implementation from Segment Anything,
     # we enable changing the hyperparameters, e.g. 'pred_iou_thresh', without recomputing masks and embeddings,
     # to support (interactive) evaluation of different hyperparameters.
 
@@ -60,7 +60,7 @@ def cell_segmentation_with_tiling():
         predictor, image, save_path=embedding_path, tile_shape=(1024, 1024), halo=(256, 256)
     )
 
-    # Use the instance segmentation logic of SegmentAnything.
+    # Use the instance segmentation logic of Segment Anything.
     # This works by covering the image with a grid of points, getting the masks for all the poitns
     # and only keeping the plausible ones (according to the model predictions).
     # The functionality here is similar to the instance segmentation in Segment Anything,

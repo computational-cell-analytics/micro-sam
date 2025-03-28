@@ -83,6 +83,7 @@ def _initialize_annotator(
     viewer, image, image_embedding_path,
     model_type, halo, tile_shape, predictor, decoder, is_volumetric,
     precompute_amg_state, checkpoint_path, device, embedding_path,
+    segmentation_path,
 ):
     if viewer is None:
         viewer = napari.Viewer()
@@ -106,14 +107,22 @@ def _initialize_annotator(
             raise ValueError(f"Invalid image dimensions for 2d annotator, expect 2 or 3 dimensions, got {image.ndim}")
         annotator = Annotator2d(viewer)
 
-    annotator._update_image()
+    if os.path.exists(segmentation_path):
+        segmentation_result = imageio.imread(segmentation_path)
+    else:
+        segmentation_result = None
+    annotator._update_image(segmentation_result=segmentation_result)
 
     # Add the annotator widget to the viewer and sync widgets.
     viewer.window.add_dock_widget(annotator)
     _sync_embedding_widget(
-        state.widgets["embeddings"], model_type,
-        save_path=embedding_path, checkpoint_path=checkpoint_path,
-        device=device, tile_shape=tile_shape, halo=halo
+        widget=state.widgets["embeddings"],
+        model_type=model_type if checkpoint_path is None else state.predictor.model_type,
+        save_path=embedding_path,
+        checkpoint_path=checkpoint_path,
+        device=device,
+        tile_shape=tile_shape,
+        halo=halo,
     )
     return viewer, annotator
 
@@ -145,7 +154,7 @@ def image_series_annotator(
         tile_shape: Shape of tiles for tiled embedding prediction.
             If `None` then the whole image is passed to Segment Anything.
         halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
-        viewer: The viewer to which the SegmentAnything functionality should be added.
+        viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
@@ -156,6 +165,8 @@ def image_series_annotator(
         prefer_decoder: Whether to use decoder based instance segmentation if
             the model used has an additional decoder for instance segmentation.
         skip_segmented: Whether to skip images that were already segmented.
+            If set to False, then segmentations that already exist will be loaded
+            and used to populate the 'committed_objects' layer.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -182,24 +193,31 @@ def image_series_annotator(
             fname = os.path.splitext(fname)[0] + ".tif"
         return os.path.join(output_folder, fname)
 
+    def _load_image(image_id):
+        image = images[next_image_id]
+        if not have_inputs_as_arrays:
+            image = imageio.imread(image)
+        image_embedding_path = embedding_paths[next_image_id]
+        return image, image_embedding_path
+
     # Check which image to load next if we skip segmented images.
-    image_embedding_path = None
     if skip_segmented:
         while True:
             if next_image_id == len(images):
-                print(end_msg)
+                print("All images have already been annotated and you have set 'skip_segmented=True'. Nothing to do.")
                 return
 
             save_path = _get_save_path(images[next_image_id], next_image_id)
             if not os.path.exists(save_path):
                 print("The first image to annotate is image number", next_image_id)
-                image = images[next_image_id]
-                if not have_inputs_as_arrays:
-                    image = imageio.imread(image)
-                image_embedding_path = embedding_paths[next_image_id]
+                image, image_embedding_path = _load_image(next_image_id)
                 break
 
             next_image_id += 1
+
+    else:
+        save_path = _get_save_path(images[next_image_id], next_image_id)
+        image, image_embedding_path = _load_image(next_image_id)
 
     # Initialize the viewer and annotator for this image.
     state = AnnotatorState()
@@ -207,6 +225,7 @@ def image_series_annotator(
         viewer, image, image_embedding_path,
         model_type, halo, tile_shape, predictor, decoder, is_volumetric,
         precompute_amg_state, checkpoint_path, device, embedding_path,
+        save_path,
     )
 
     def _save_segmentation(image_path, current_idx, segmentation):
@@ -232,23 +251,38 @@ def image_series_annotator(
         # Clear the segmentation already to avoid lagging removal.
         viewer.layers["committed_objects"].data = np.zeros_like(viewer.layers["committed_objects"].data)
 
-        # Go to the next images, if skipping images that are already segmented check if we have to load it.
+        # Go to the next image.
         next_image_id += 1
-        if skip_segmented:
-            save_path = _get_save_path(images[next_image_id], next_image_id)
-            while os.path.exists(save_path):
-                next_image_id += 1
-                if next_image_id == len(images):
-                    break
-                save_path = _get_save_path(images[next_image_id], next_image_id)
 
-        # Load the next image.
+        # Check if we are done.
         if next_image_id == len(images):
             # Inform the user via dialog.
             abort = widgets._generate_message("info", end_msg)
             if not abort:
                 viewer.close()
             return
+
+        # If we are skipping images that are already segmented, then check if we have to load the next image.
+        save_path = _get_save_path(images[next_image_id], next_image_id)
+        if skip_segmented:
+            segmentation_result = None
+            while os.path.exists(save_path):
+                next_image_id += 1
+
+                # Check if we are done.
+                if next_image_id == len(images):
+                    # Inform the user via dialog.
+                    abort = widgets._generate_message("info", end_msg)
+                    if not abort:
+                        viewer.close()
+                    return
+
+                save_path = _get_save_path(images[next_image_id], next_image_id)
+        else:
+            if os.path.exists(save_path):
+                segmentation_result = imageio.imread(save_path)
+            else:
+                segmentation_result = None
 
         print(
             "Loading next image:", images[next_image_id] if not have_inputs_as_arrays else f"at index {next_image_id}"
@@ -277,7 +311,7 @@ def image_series_annotator(
         )
         state.image_shape = _get_input_shape(image, is_volumetric)
 
-        annotator._update_image()
+        annotator._update_image(segmentation_result=segmentation_result)
 
     viewer.window.add_dock_widget(next_image)
 
@@ -305,7 +339,7 @@ def image_folder_annotator(
         output_folder: The folder where the segmentation results are saved.
         pattern: The glob patter for loading files from `input_folder`.
             By default all files will be loaded.
-        viewer: The viewer to which the SegmentAnything functionality should be added.
+        viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
         kwargs: The keyword arguments for `micro_sam.sam_annotator.image_series_annotator`.
@@ -336,7 +370,6 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         self.run_button.clicked.connect(self.__call__)
         self.layout().addWidget(self.run_button)
 
-    # model_type: str = util._DEFAULT_MODEL,
     def _create_options(self):
         self.folder = None
         _, layout = self._add_path_param(
@@ -354,18 +387,17 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         )
         self.layout().addLayout(layout)
 
-        self.model_type = util._DEFAULT_MODEL
-        model_options = list(util.models().urls.keys())
-        model_options = [model for model in model_options if not model.endswith("decoder")]
-        _, layout = self._add_choice_param(
-            "model_type", self.model_type, model_options, title="Model:",
-            tooltip=get_tooltip("embedding", "model")
-        )
+        # Add the model family widget section.
+        layout = self._create_model_section(create_layout=False)
         self.layout().addLayout(layout)
 
     def _create_settings(self):
         setting_values = QtWidgets.QWidget()
         setting_values.setLayout(QtWidgets.QVBoxLayout())
+
+        # Add the model size widget section.
+        layout = self._create_model_size_section()
+        setting_values.layout().addLayout(layout)
 
         self.pattern = "*"
         _, layout = self._add_string_param(
@@ -429,12 +461,16 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         return False
 
     def __call__(self, skip_validate=False):
+        self._validate_model_type_and_custom_weights()
+
         if not skip_validate and self._validate_inputs():
             return
         tile_shape, halo = widgets._process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
 
         image_folder_annotator(
-            self.folder, self.output_folder, self.pattern,
+            input_folder=self.folder,
+            output_folder=self.output_folder,
+            pattern=self.pattern,
             model_type=self.model_type,
             embedding_path=self.embeddings_save_path,
             tile_shape=tile_shape, halo=halo, checkpoint_path=self.custom_weights,

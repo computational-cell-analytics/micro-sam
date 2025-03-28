@@ -18,6 +18,7 @@ import micro_sam.util as util
 from micro_sam.instance_segmentation import AMGBase, get_decoder
 from micro_sam.precompute_state import cache_amg_state, cache_is_state
 
+from napari.layers import Image
 from segment_anything import SamPredictor
 
 try:
@@ -44,8 +45,10 @@ class AnnotatorState(metaclass=Singleton):
     predictor: Optional[SamPredictor] = None
     image_shape: Optional[Tuple[int, int]] = None
     image_scale: Optional[Tuple[float, ...]] = None
+    image_name: Optional[str] = None
     embedding_path: Optional[str] = None
     data_signature: Optional[str] = None
+    skip_recomputing_embeddings: Optional[bool] = None
 
     # amg: needs to be initialized for the automatic segmentation functionality.
     # amg_state: for storing the instance segmentation state for the 3d segmentation tool.
@@ -88,9 +91,14 @@ class AnnotatorState(metaclass=Singleton):
 
         # Initialize the model if necessary.
         if predictor is None:
+            def progress_bar_factory(model_type):
+                pbar = tqdm(desc=f"Downloading '{model_type}'. This may take a while")
+                return pbar
+
             self.predictor, state = util.get_sam_model(
                 device=device, model_type=model_type,
-                checkpoint_path=checkpoint_path, return_state=True
+                checkpoint_path=checkpoint_path, return_state=True,
+                progress_bar_factory=progress_bar_factory
             )
             if prefer_decoder and "decoder_state" in state:
                 self.decoder = get_decoder(
@@ -104,23 +112,30 @@ class AnnotatorState(metaclass=Singleton):
             self.decoder = decoder
 
         # Compute the image embeddings.
-        self.image_embeddings = util.precompute_image_embeddings(
-            predictor=self.predictor,
-            input_=image_data,
-            save_path=save_path,
-            ndim=ndim,
-            tile_shape=tile_shape,
-            halo=halo,
-            verbose=True,
-            pbar_init=pbar_init,
-            pbar_update=pbar_update,
-        )
-        self.embedding_path = save_path
+        if isinstance(save_path, dict) and "features" in save_path:  # i.e. embeddings are precomputed
+            self.image_embeddings = save_path
+            self.embedding_path = None  # setting this to 'None' as we do not have embeddings cached.
+
+        else:  # otherwise, compute the image embeddings.
+            self.image_embeddings = util.precompute_image_embeddings(
+                predictor=self.predictor,
+                input_=image_data,
+                save_path=save_path,
+                ndim=ndim,
+                tile_shape=tile_shape,
+                halo=halo,
+                verbose=True,
+                pbar_init=pbar_init,
+                pbar_update=pbar_update,
+            )
+            self.embedding_path = save_path
+
         # If we have an embedding path the data signature has already been computed,
         # and we can read it from there.
-        if save_path is not None:
+        if save_path is not None and isinstance(save_path, str):
             with zarr.open(save_path, "r") as f:
                 self.data_signature = f.attrs["data_signature"]
+
         # Otherwise we compute it here.
         else:
             self.data_signature = util._compute_data_signature(image_data)
@@ -151,6 +166,24 @@ class AnnotatorState(metaclass=Singleton):
                         image_embeddings=self.image_embeddings,
                         save_path=save_path, i=i, verbose=False,
                     )
+
+    # Get the name of the image layer used to compute the embeddings.
+    # If the 'image_name' attribute exists we can just use it.
+    # Otherwise, we use the first image layer in the viewer.
+    # Note that this case might happen if we load pre-computed embeddings.
+    def get_image_name(self, viewer=None):
+        if self.image_name is not None:
+            return self.image_name
+        if viewer is None:
+            raise RuntimeError("Did not find the 'image_name' attribute and the viewer was not passed.")
+        image_name = None
+        for layer in viewer.layers:
+            if isinstance(layer, Image):
+                image_name = layer.name
+                break
+        if image_name is None:
+            raise RuntimeError("Did not find the 'image_name' attribute and the viewer did not contain an image layer.")
+        return image_name
 
     def initialized_for_interactive_segmentation(self):
         have_image_embeddings = self.image_embeddings is not None
@@ -201,6 +234,7 @@ class AnnotatorState(metaclass=Singleton):
         self.predictor = None
         self.image_shape = None
         self.image_scale = None
+        self.image_name = None
         self.embedding_path = None
         self.amg = None
         self.amg_state = None

@@ -191,6 +191,7 @@ def train_sam(
     ignore_warnings: bool = True,
     verify_n_labels_in_loader: Optional[int] = 50,
     box_distortion_factor: Optional[float] = 0.025,
+    overwrite_training: bool = True,
     **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
@@ -229,6 +230,9 @@ def train_sam(
         verify_n_labels_in_loader: The number of labels to verify out of the train and validation dataloaders.
             By default, 50 batches of labels are verified from the dataloaders.
         box_distortion_factor: The factor for distorting the box annotations derived from the ground-truth masks.
+        overwrite_training: Whether to overwrite the trained model stored at the same location.
+            By default, overwrites the trained model at each run.
+            If set to 'False', it will avoid retraining the model if the previous run was completed.
         model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
     """
     with _filter_warnings(ignore_warnings):
@@ -337,6 +341,9 @@ def train_sam(
         if pbar_signals is not None:
             progress_bar_wrapper = _ProgressBarWrapper(pbar_signals)
             trainer_fit_params["progress"] = progress_bar_wrapper
+
+        # Avoid overwriting a trained model, if desired by the user.
+        trainer_fit_params["overwrite_training"] = overwrite_training
 
         trainer.fit(**trainer_fit_params)
 
@@ -740,10 +747,18 @@ def main():
         "--configuration", type=str, default=_find_best_configuration(),
         help=f"The configuration for finetuning the Segment Anything Model, one of {available_configurations}."
     )
+
+    def none_or_str(value):
+        if value.lower() == 'none':
+            return None
+        return value
+
     parser.add_argument(
-        "--segmentation_decoder", type=str, default="instances",  # TODO: in future, we can extend this to semantic seg.
+        "--segmentation_decoder", type=none_or_str, default="instances",
+        # TODO: in future, we can extend this to semantic seg / or even more advanced stuff.
         help="Whether to finetune Segment Anything Model with additional segmentation decoder for desired targets. "
-        "By default, it trains with the additional segmentation decoder for instance segmentation."
+        "By default, it uses the 'instances' option, i.e. trains with the additional segmentation decoder for "
+        "instance segmentation, otherwise pass 'None' for training without the additional segmentation decoder at all."
     )
 
     # Optional advanced settings a user can opt to change the values for.
@@ -754,7 +769,8 @@ def main():
     )
     parser.add_argument(
         "--patch_shape", type=int, nargs="*", default=(512, 512),
-        help="The choice of patch shape for training Segment Anything."
+        help="The choice of patch shape for training Segment Anything Model. "
+        "By default, a patch size of 512x512 is used."
     )
     parser.add_argument(
         "-m", "--model_type", type=str, default=None,
@@ -771,7 +787,8 @@ def main():
     )
     parser.add_argument(
         "--trained_model_name", type=str, default="sam_model",
-        help="The custom name of trained model. Allows users to have several trained models under the same 'save_root'."
+        help="The custom name of trained model sub-folder. Allows users to have several trained models "
+        "under the same 'save_root'."
     )
     parser.add_argument(
         "--output_path", type=str, default=None,
@@ -786,7 +803,7 @@ def main():
     )
     parser.add_argument(
         "--batch_size", type=int, default=1,
-        help="The choice of batch size for training the Segment Anything Model. By default, trains on batch size 1."
+        help="The choice of batch size for training the Segment Anything Model. By default the batch size is set to 1."
     )
     parser.add_argument(
         "--preprocess", type=str, default=None, choices=("normalize_minmax", "normalize_percentile"),
@@ -808,7 +825,12 @@ def main():
     device = args.device
     save_root = args.save_root
     output_path = args.output_path
-    with_segmentation_decoder = (args.segmentation_decoder == "instances")
+
+    if args.segmentation_decoder and args.segmentation_deocder != "instances":
+        raise ValueError(
+            "The 'segmentation_decoder' argument currently supports 'instances' as input argument only."
+        )
+    with_segmentation_decoder = (args.segmentation_decoder is not None)
 
     # Get image paths and corresponding keys.
     train_images, train_gt, train_image_key, train_gt_key = args.images, args.labels, args.image_key, args.label_key
