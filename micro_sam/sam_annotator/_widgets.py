@@ -528,13 +528,14 @@ def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
     if preserve_mode != "none":
         prev_seg = viewer.layers["committed_objects"].data[bb]
         # The mode 'pixels' corresponds to a naive implementation where only committed pixels are preserved.
-        if preserve_mode == "pixels":
-            preserve_mask = prev_seg != 0
-        # In the other mode 'objects' we preserve committed objects instead, by comparing the overlaps
-        # of already committed and newly committed objects.
-        else:
-            preserve_mask = _mask_matched_objects(seg, prev_seg, preservation_threshold)
-        mask[preserve_mask] = 0
+        preserve_mask = prev_seg != 0
+        # If the preserve mask is empty we don't need to do anything else here, because we don't have prev objects.
+        if preserve_mask.sum() != 0:
+            # In the mode 'objects' we preserve committed objects instead, by comparing the overlaps
+            # of already committed and newly committed objects.
+            if preserve_mode == "objects":
+                preserve_mask = _mask_matched_objects(seg, prev_seg, preservation_threshold)
+            mask[preserve_mask] = 0
 
     # Write the current object to committed objects.
     seg[mask] += id_offset
