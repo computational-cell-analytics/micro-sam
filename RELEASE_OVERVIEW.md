@@ -3,7 +3,7 @@
 **New in version 1.4.0**
 
 This release includes three main changes:
-- Preliminary support for automatic tracking via [Trackastra] integration.
+- Preliminary support for automatic tracking via [Trackastra](https://github.com/weigertlab/trackastra) integration.
 - Changes in the GUI to make the model names more informative.
 - Much easier installation on Windows.
 
