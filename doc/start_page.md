@@ -14,7 +14,6 @@ Based on these components `micro_sam` enables fast interactive and automatic ann
 We are still working on improving and extending its functionality. The current roadmap includes:
 - Releasing more and better finetuned models for the biomedical imaging domain.
 - Integrating parameter efficient training and compressed models for efficient fine-tuning and faster inference.
-- Improving the 3D segmentation and tracking functionality.
 - Support for [SAM2](https://ai.meta.com/sam2/).
 
 If you run into any problems or have questions please [open an issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) or reach out via [image.sc](https://forum.image.sc/) using the tag `micro-sam`.
