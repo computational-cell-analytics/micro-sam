@@ -4,7 +4,7 @@ In addition to the original Segment Anything models, we provide models that are 
 They are available in the [BioImage.IO Model Zoo](https://bioimage.io/#/) and are also hosted on Zenodo.
 
 In the [annotation tools](#annotation-tools), you can select the model from the top widget:
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/model-selector.png" width="512">
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/model-type-selector.png" width="512">
 
 You can use the `Model` dropdown (left side) to select which kind of model to use and the `model size` dropdown (right side, available after opening the `Embedding Settings` menu) to select the size of the model.
 By default, the `base` size is used.
