@@ -1,6 +1,6 @@
-## 📝 Pull Request (PR) Summary
+## 📝 Description
 
-Please describe the changes this PR introduces.
+Please include a summary of the changes this PR introduces. Please also include relevant motivation and context. And list any (new) dependencies that are required for this change.
 
 ## 🚦 Status
 
