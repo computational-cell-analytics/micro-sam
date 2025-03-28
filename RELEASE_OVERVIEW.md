@@ -1,5 +1,16 @@
 # Release Overview
 
+**New in version 1.4.0**
+
+This release includes three main changes:
+- Preliminary support for automatic tracking via [Trackastra] integration.
+- Changes in the GUI to make the model names more informative.
+- Much easier installation on Windows.
+
+**New in version 1.3.1**
+
+Fixing minor issues with 1.3.0 and adding new section in documentation for our data submission initiative.
+
 **New in version 1.3.0**
 
 This release introduces a new light microscopy model that was trained on a larger dataset and clearly improves automatic segmentation.
