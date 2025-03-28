@@ -154,7 +154,7 @@ def image_series_annotator(
         tile_shape: Shape of tiles for tiled embedding prediction.
             If `None` then the whole image is passed to Segment Anything.
         halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
-        viewer: The viewer to which the SegmentAnything functionality should be added.
+        viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
@@ -339,7 +339,7 @@ def image_folder_annotator(
         output_folder: The folder where the segmentation results are saved.
         pattern: The glob patter for loading files from `input_folder`.
             By default all files will be loaded.
-        viewer: The viewer to which the SegmentAnything functionality should be added.
+        viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
         kwargs: The keyword arguments for `micro_sam.sam_annotator.image_series_annotator`.

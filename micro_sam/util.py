@@ -297,7 +297,7 @@ def get_sam_model(
     progress_bar_factory: Optional[Callable] = None,
     **model_kwargs,
 ) -> SamPredictor:
-    r"""Get the SegmentAnything Predictor.
+    r"""Get the Segment Anything Predictor.
 
     This function will download the required model or load it from the cached weight file.
     This location of the cache can be changed by setting the environment variable: MICROSAM_CACHEDIR.
@@ -973,7 +973,7 @@ def precompute_image_embeddings(
     If 'save_path' is given the embeddings will be loaded/saved in a zarr container.
 
     Args:
-        predictor: The SegmentAnything predictor.
+        predictor: The Segment Anything predictor.
         input_: The input data. Can be 2 or 3 dimensional, corresponding to an image, volume or timeseries.
         save_path: Path to save the embeddings in a zarr container.
         lazy_loading: Whether to load all embeddings into memory or return an
@@ -1033,7 +1033,7 @@ def set_precomputed(
     """Set the precomputed image embeddings for a predictor.
 
     Args:
-        predictor: The SegmentAnything predictor.
+        predictor: The Segment Anything predictor.
         image_embeddings: The precomputed image embeddings computed by `precompute_image_embeddings`.
         i: Index for the image data. Required if `image` has three spatial dimensions
             or a time dimension and two spatial dimensions.
