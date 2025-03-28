@@ -138,7 +138,7 @@ def precompute_all_embeddings(
     To enable running different inference tasks in parallel afterwards.
 
     Args:
-        predictor: The SegmentAnything predictor.
+        predictor: The Segment Anything predictor.
         image_paths: The image file paths.
         embedding_dir: The directory where the embeddings will be saved.
     """
@@ -267,7 +267,7 @@ def run_inference_with_prompts(
     """Run segment anything inference for multiple images using prompts derived from groundtruth.
 
     Args:
-        predictor: The SegmentAnything predictor.
+        predictor: The Segment Anything predictor.
         image_paths: The image file paths.
         gt_paths: The ground-truth segmentation file paths.
         embedding_dir: The directory where the image embddings will be saved or are already saved.

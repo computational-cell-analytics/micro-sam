@@ -213,7 +213,7 @@ def annotator_tracking(
             If `None` then the whole image is passed to Segment Anything.
         halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
-        viewer: The viewer to which the SegmentAnything functionality should be added.
+        viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
             This will take more time when precomputing embeddings, but will then make
