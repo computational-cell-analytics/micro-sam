@@ -85,6 +85,8 @@ pip install trackastra
 
 ## From installer
 
+**Note: The installers are not yet up-to-date with the latest version of microsam (v1.4.0). We will update them in the next few days.**
+
 We also provide installers for Linux and Windows:
 - [Linux](https://owncloud.gwdg.de/index.php/s/Fyf57WZuiX1NyXs)
 - [Windows](https://owncloud.gwdg.de/index.php/s/ZWrY68hl7xE3kGP)
