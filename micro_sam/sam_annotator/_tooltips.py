@@ -8,7 +8,8 @@ tooltips = {
     "embeddings_save_path": "Select path to save or load the computed image embeddings.",
     "halo": "Enter overlap values for computing tiled embeddings. Enter only x-value for quadratic size.\n Only active when tiling is used.",  # noqa
     "image": "Select the napari image layer.",
-    "model": "Select the segment anything model.",
+    "model_family": "Select the segment anything model family.",
+    "model_size": "Select the image encoder size of the segment anything model.",
     "automatic_segmentation_mode": "Select the automatic segmentation mode.",
     "run_button": "Compute embeddings or load embeddings if embedding_save_path is specified.",
     "tiling": "Enter tile size for computing tiled embeddings. Enter only x-value for quadratic size or both for non-quadratic.",  # noqa

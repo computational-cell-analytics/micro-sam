@@ -370,7 +370,6 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         self.run_button.clicked.connect(self.__call__)
         self.layout().addWidget(self.run_button)
 
-    # model_type: str = util._DEFAULT_MODEL,
     def _create_options(self):
         self.folder = None
         _, layout = self._add_path_param(
@@ -388,18 +387,17 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         )
         self.layout().addLayout(layout)
 
-        self.model_type = util._DEFAULT_MODEL
-        model_options = list(util.models().urls.keys())
-        model_options = [model for model in model_options if not model.endswith("decoder")]
-        _, layout = self._add_choice_param(
-            "model_type", self.model_type, model_options, title="Model:",
-            tooltip=get_tooltip("embedding", "model")
-        )
+        # Add the model family widget section.
+        layout = self._create_model_section(create_layout=False)
         self.layout().addLayout(layout)
 
     def _create_settings(self):
         setting_values = QtWidgets.QWidget()
         setting_values.setLayout(QtWidgets.QVBoxLayout())
+
+        # Add the model size widget section.
+        layout = self._create_model_size_section()
+        setting_values.layout().addLayout(layout)
 
         self.pattern = "*"
         _, layout = self._add_string_param(
@@ -463,12 +461,16 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         return False
 
     def __call__(self, skip_validate=False):
+        self._validate_model_type_and_custom_weights()
+
         if not skip_validate and self._validate_inputs():
             return
         tile_shape, halo = widgets._process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
 
         image_folder_annotator(
-            self.folder, self.output_folder, self.pattern,
+            input_folder=self.folder,
+            output_folder=self.output_folder,
+            pattern=self.pattern,
             model_type=self.model_type,
             embedding_path=self.embeddings_save_path,
             tile_shape=tile_shape, halo=halo, checkpoint_path=self.custom_weights,
