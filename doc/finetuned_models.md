@@ -20,7 +20,7 @@ Specifically, we provide the following model types and sizes:
     - `vit_l_lm`: Model for cells and nuclei in light microscopy data with ViT Large image encoder. ([Zenodo](https://doi.org/10.5281/zenodo.11111176)) ([idealistic-rat on BioImage.IO](https://bioimage.io/#/?id=idealistic-rat))
     - `vit_b_lm`: Model for cells and nuclei in light microscopy data with ViT Base image encoder. ([Zenodo](https://zenodo.org/doi/10.5281/zenodo.11103797)) ([diplomatic-bug on BioImage.IO](https://bioimage.io/#/?id=diplomatic-bug))
     - `vit_t_lm`: Model for cells and nuclei in light microscopy data with ViT Tiny image encoder. ([Zenodo](https://doi.org/10.5281/zenodo.11111328)) ([faithful-chicken BioImage.IO](https://bioimage.io/#/?id=faithful-chicken))
-- The electron microscopy generalist models from [Segment Anything for Microscopy](https://www.nature.com/articles/s41592-024-02580-4).
+- The electron microscopy generalist models from [Segment Anything for Microscopy](https://www.nature.com/articles/s41592-024-02580-4) (`Electron Microscopy`).
     - `vit_l_em_organelles`: Model for mitochodria and nuclei in electron microscopy data with ViT Large image encoder. ([Zenodo](https://doi.org/10.5281/zenodo.11111054)) ([humorous-crab on BioImage.IO](https://bioimage.io/#/?id=humorous-crab))
     - `vit_b_em_organelles`: Model for mitochodria and nuclei in electron microscopy data with ViT Base image encoder. ([Zenodo](https://doi.org/10.5281/zenodo.11111293)) ([noisy-ox on BioImage.IO](https://bioimage.io/#/?id=noisy-ox))
     - `vit_t_em_organelles`: Model for mitochodria and nuclei in electron microscopy data with ViT Tiny image encoder. ([Zenodo](https://doi.org/10.5281/zenodo.11110950)) ([greedy-whale on BioImage.IO](https://bioimage.io/#/?id=greedy-whale))
