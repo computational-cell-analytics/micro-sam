@@ -44,9 +44,9 @@ Note: if you have a `micro_sam` version older than v1.4.0, then the model select
 
 As a rule of thumb:
 - Use the `Light Microscopy` model (`vit_b_lm`) for segmenting cells or nuclei in light microscopy. The larger model (`vit_l_lm`) yields a bit better segmentation quality, especially for automatic segmentation, but needs more computational resources.
-- Use the `Electron Microscopy` models (`vit_b_em_organelles` or `vit_l_em_organelles`) for segmenting mitochondria, nuclei or other  roundish organelles in electron microscopy.
-- Use the `Medical Imaging` model (`vit_b_medical_imaging`) for interactive segmentation of medical imaging data (X-Ray, CT, Ultrasound, etc.).
-- Use the `Histopathology` models (`vit_b_histopathology` of `vit_h_histopathology`) for segmenting nuclei in histopathology images.
+- Use the `Electron Microscopy` models (`vit_b_em_organelles` or `vit_l_em_organelles`) for segmenting mitochondria, nuclei or other roundish organelles in electron microscopy.
+- Use the `Medical Imaging` model (`vit_b_medical_imaging`) for interactive segmentation of medical imaging data (X-Ray, CT, MRI, Ultrasound, etc.).
+- Use the `Histopathology` models (`vit_b_histopathology` or `vit_l_histopathology`) for segmenting nuclei in histopathology images.
 - For other use-cases, use one of the original SAM models (`SAM (Natural Images)`, `vit_b` or `vit_l`).
 - We have not seen any advantages of using the largest model (`vit_h`), so in general don't recommend to use it as it needs significantly more resources to run.
 - The `vit_t_...` models run much faster than other models, but yield inferior quality for many applications. It can still make sense to try them for your use-case if your working on a laptop and want to annotate many images or volumetric data. 
