@@ -20,7 +20,7 @@ dependencies:
     # - libtorch=*=cuda11*
     # or, to enforce a CPU installation, change to
     # - "pytorch=*=cpu*"
-    - pytorch >=2.6
+    - pytorch >=2.5
     - segment-anything
     - torchvision
     - torch_em >=0.7.8
