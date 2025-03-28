@@ -15,6 +15,7 @@ We are still working on improving and extending its functionality. The current r
 - Releasing more and better finetuned models for the biomedical imaging domain.
 - Integrating parameter efficient training and compressed models for efficient fine-tuning and faster inference.
 - Improving the 3D segmentation and tracking functionality.
+- Support for [SAM2](https://ai.meta.com/sam2/).
 
 If you run into any problems or have questions please [open an issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) or reach out via [image.sc](https://forum.image.sc/) using the tag `micro-sam`.
 
@@ -30,7 +31,7 @@ We also provide installers for Windows and Linux. For more details on the availa
 After installing `micro_sam`, you can start napari from within your environment using
 
 ```bash
-$ napari
+napari
 ```
 After starting napari, you can select the annotation tool you want to use from `Plugins -> Segment Anything for Microscopy`. Check out the [quickstart tutorial video](https://youtu.be/gcv0fa84mCc) for a short introduction, the video of our [virtual I2K tutorial](https://www.youtube.com/watch?v=dxjU4W7bCis&list=PLdA9Vgd1gxTbvxmtk9CASftUOl_XItjDN&index=33) for an in-depth explanation and [the annotation tool section](#annotation-tools) for details.
 
@@ -51,3 +52,4 @@ If you are using `micro_sam` in your research please cite
 - our [paper](https://www.nature.com/articles/s41592-024-02580-4) (now published in Nature Methods!)
 - and the original [Segment Anything publication](https://arxiv.org/abs/2304.02643).
 - If you use a `vit-tiny` models, please also cite [Mobile SAM](https://arxiv.org/abs/2306.14289).
+- If you use automatic tracking, please also cite [Trackastra](https://arxiv.org/abs/2405.15700).

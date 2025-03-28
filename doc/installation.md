@@ -71,7 +71,16 @@ conda activate sam
 5. Install `micro_sam`:
 
 ```bash
-$ pip install -e .
+pip install -e .
+```
+
+## Trackastra installation
+
+To use [automatic tracking](#annotator-tracking), you have to install [trackastra](https://github.com/weigertlab/trackastra) in the conda environment where `micro_sam` is installed.
+You can install it with pip:
+```bash
+conda activate sam
+pip install trackastra
 ```
 
 ## From installer
