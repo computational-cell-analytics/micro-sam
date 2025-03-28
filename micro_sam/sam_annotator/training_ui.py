@@ -72,61 +72,6 @@ class TrainingWidget(widgets._WidgetBase):
             tooltip=get_tooltip("training", "segmentation_decoder")
         ))
 
-    def _get_model_size_options(self):
-        # We store the actual model names mapped to UI labels.
-        self.model_size_mapping = {}
-        if self.model_family == "Natural Images (SAM)":
-            self.model_size_options = list(self._model_size_map .values())
-            self.model_size_mapping = {self._model_size_map[k]: f"vit_{k}" for k in self._model_size_map.keys()}
-        else:
-            model_suffix = self.supported_dropdown_maps[self.model_family]
-            self.model_size_options = []
-
-            for option in self.model_options:
-                if option.endswith(model_suffix):
-                    # Extract model size character on-the-fly.
-                    key = next((k for k in self._model_size_map .keys() if f"vit_{k}" in option), None)
-                    if key:
-                        size_label = self._model_size_map[key]
-                        self.model_size_options.append(size_label)
-                        self.model_size_mapping[size_label] = option  # Store the actual model name.
-
-        # We ensure an assorted order of model sizes ('tiny' to 'huge')
-        self.model_size_options.sort(key=lambda x: ["tiny", "base", "large", "huge"].index(x))
-
-    def _update_model_type(self):
-        # Get currently selected model size (before clearing dropdown)
-        current_selection = self.model_size_dropdown.currentText()
-        self._get_model_size_options()  # Update model size options dynamically
-
-        # NOTE: We need to prevent recursive updates for this step temporarily.
-        self.model_size_dropdown.blockSignals(True)
-
-        # Let's clear and recreate the dropdown.
-        self.model_size_dropdown.clear()
-        self.model_size_dropdown.addItems(self.model_size_options)
-
-        # We restore the previous selection, if still valid.
-        if current_selection in self.model_size_options:
-            self.model_size = current_selection
-        else:
-            if self.model_size_options:  # Default to the first available model size
-                self.model_size = self.model_size_options[0]
-
-        # Let's map the selection to the correct model type (eg. "tiny" -> "vit_t")
-        size_key = next(
-            (k for k, v in self._model_size_map.items() if v == self.model_size), "b"
-        )
-        self.model_type = f"vit_{size_key}" + self.supported_dropdown_maps[self.model_family]
-
-        self.model_size_dropdown.setCurrentText(self.model_size)  # Apply the selected text to the dropdown
-
-        # We force a refresh for UI here.
-        self.model_size_dropdown.update()
-
-        # NOTE: And finally, we should re-enable signals again.
-        self.model_size_dropdown.blockSignals(False)
-
     def _create_settings(self):
         setting_values = QtWidgets.QWidget()
         setting_values.setLayout(QtWidgets.QVBoxLayout())
@@ -166,58 +111,21 @@ class TrainingWidget(widgets._WidgetBase):
         # on top of which the finetuning is run.
         self.name = "sam_model"
         self.name_param, layout = self._add_string_param(
-            "name", self.name, title="Model name", tooltip=get_tooltip("training", "name")
+            "name", self.name, title="Name of Trained Model", tooltip=get_tooltip("training", "name")
         )
         setting_values.layout().addLayout(layout)
 
-        # Add the model family and model size combination.
-
-        # Create a UI with a list of support dropdown values and correspond them to suffixes.
-        self.supported_dropdown_maps = {
-            "Natural Images (SAM)": "",
-            "Light Microscopy": "_lm",
-            "Electron Microscopy": "_em_organelles",
-            "Medical Imaging": "_medical_imaging",
-            "Histopathology": "_histopathology",
-        }
-
-        self._model_size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
-
-        self._default_model_choice = "vit_b"  # NOTE: for finetuning, we set the default to "vit_b"
-        # Let's set the literally default model choice depending on 'micro-sam'.
-        self.model_family = {v: k for k, v in self.supported_dropdown_maps.items()}[self._default_model_choice[5:]]
-
-        # NOTE: We stick to the base variant for each model family.
-        # i.e. 'Natural Images (SAM)', 'Light Microscopy', 'Electron Microscopy', 'Medical_Imaging', 'Histopathology'.
-        self.model_family_dropdown, layout = self._add_choice_param(
-            "model_family", self.model_family, list(self.supported_dropdown_maps.keys()),
-            title="Model Family", tooltip=get_tooltip("embedding", "model_family")
-        )
-        self.model_family_dropdown.currentTextChanged.connect(self._update_model_type)
+        # Add the model family widget section.
+        layout = self._create_model_section(default_model="vit_b", create_layout=False)
         setting_values.layout().addLayout(layout)
 
-        # Create UI for the model size.
-        # This would combine with the chosen 'self.model_family' and depend on 'self._default_model_choice'.
-        self.model_size = self._model_size_map[self._default_model_choice[4]]
-
-        # Get all model options.
-        self.model_options = list(util.models().urls.keys())
-        # Filter out the decoders from the model list.
-        self.model_options = [model for model in self.model_options if not model.endswith("decoder")]
-
-        # Now, we get the available sizes per model family.
-        self._get_model_size_options()
-
-        self.model_size_dropdown, layout = self._add_choice_param(
-            "model_size", self.model_size, self.model_size_options,
-            title="Model Size", tooltip=get_tooltip("embedding", "model_size"),
-        )
-        self.model_size_dropdown.currentTextChanged.connect(self._update_model_type)
+        # Add the model size widget section.
+        layout = self._create_model_size_section()
         setting_values.layout().addLayout(layout)
 
-        self.checkpoint = None
-        self.checkpoint_param, layout = self._add_string_param(
-            "checkpoint", self.name, title="Checkpoint", tooltip=get_tooltip("training", "checkpoint")
+        self.custom_weights = None
+        self.custom_weights_param, layout = self._add_string_param(
+            "custom_weights", self.custom_weights, title="Custom Weights", tooltip=get_tooltip("training", "checkpoint")
         )
         setting_values.layout().addLayout(layout)
 
@@ -276,20 +184,18 @@ class TrainingWidget(widgets._WidgetBase):
         return train_loader, val_loader
 
     def _get_model_type(self):
-        # Let's get them all into one `model_type`.
-        self.initial_model = "vit_" + self.model_size[0] + self.supported_dropdown_maps[self.model_family]
-
         # Consolidate initial model name, the checkpoint path and the model type according to the configuration.
-        model_type = CONFIGURATIONS[self.configuration]["model_type"]
-        if self.initial_model[:5] != model_type:
+        suitable_model_type = CONFIGURATIONS[self.configuration]["model_type"]
+        if self.model_type[:5] == suitable_model_type:
+            self.model_type = suitable_model_type
+        else:
             warnings.warn(
-                f"You have changed the model type for your chosen configuration {self.configuration} "
-                f"from {CONFIGURATIONS[self.configuration]['model_type']} to {model_type}. "
+                f"You have changed the model type for your chosen configuration '{self.configuration}' "
+                f"from '{suitable_model_type}' to '{self.model_type}'. "
                 "The training may be extremely slow. Please be aware of your custom model choice."
             )
 
-        assert model_type is not None
-        return model_type
+        assert self.model_type is not None
 
     # Make sure that raw and label path have been passed.
     # If they haven't raise an error message.
@@ -307,26 +213,20 @@ class TrainingWidget(widgets._WidgetBase):
         return False
 
     def __call__(self, skip_validate=False):
+        self._validate_model_type_and_custom_weights()
+
         if not skip_validate and self._validate_inputs():
             return
 
         # Set up progress bar and signals for using it within a threadworker.
         pbar, pbar_signals = widgets._create_pbar_for_threadworker()
 
-        model_type = self._get_model_type()
-        if self.checkpoint is None:
+        self._get_model_type()
+        if self.custom_weights is None:
             model_registry = util.models()
-            checkpoint_path = model_registry.fetch(model_type)
+            checkpoint_path = model_registry.fetch(self.model_type)
         else:
-            checkpoint_path = self.checkpoint
-
-            # For provided checkpoint path, we remove the displayed text on top of the drop-down menu.
-            # NOTE: We prevent recursive updates for this step temporarily.
-            self.model_family_dropdown.blockSignals(True)
-            self.model_family_dropdown.setCurrentIndex(-1)  # This removes the displayed text.
-            self.model_family_dropdown.update()
-            # NOTE: And re-enable signals again.
-            self.model_family_dropdown.blockSignals(False)
+            checkpoint_path = self.custom_weights
 
         # @thread_worker()
         def run_training():
@@ -338,7 +238,7 @@ class TrainingWidget(widgets._WidgetBase):
                 val_loader=val_loader,
                 checkpoint_path=checkpoint_path,
                 with_segmentation_decoder=self.with_segmentation_decoder,
-                model_type=model_type,
+                model_type=self.model_type,
                 device=self.device,
                 n_epochs=self.n_epochs,
                 pbar_signals=pbar_signals,
@@ -349,7 +249,7 @@ class TrainingWidget(widgets._WidgetBase):
             assert os.path.exists(export_checkpoint), export_checkpoint
 
             output_path = _export_helper(
-                "", self.name, self.output_path, model_type, self.with_segmentation_decoder, val_loader
+                "", self.name, self.output_path, self.model_type, self.with_segmentation_decoder, val_loader
             )
             pbar_signals.pbar_stop.emit()
             return output_path
