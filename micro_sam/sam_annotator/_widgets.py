@@ -550,8 +550,8 @@ def _get_auto_segmentation_options(state, object_ids):
 
     segmentation_options = {"object_ids": [int(object_id) for object_id in object_ids]}
     if widget.with_decoder:
-        segmentation_options["boundary_distance_thresh"] = widget.boundary_distance_thresh
-        segmentation_options["center_distance_thresh"] = widget.center_distance_thresh
+        segmentation_options["boundary_distance_threshold"] = widget.boundary_distance_thresh
+        segmentation_options["center_distance_threshold"] = widget.center_distance_thresh
     else:
         segmentation_options["pred_iou_thresh"] = widget.pred_iou_thresh
         segmentation_options["stability_score_thresh"] = widget.stability_score_thresh
@@ -582,18 +582,28 @@ def _get_promptable_segmentation_options(state, object_ids):
     return segmentation_options, is_tracking
 
 
-def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
+def _get_preservation_settings(state):
+    widget = state.widgets["commit"]
+    return {
+        "preserve_mode": widget.preserve_mode.value,
+        "preservation_threshold": widget.preservation_threshold.value,
+    }
 
-    # NOTE: zarr-python is quite inefficient and writes empty blocks.
-    # So we have to use z5py here.
 
-    # Deal with issues z5py has with empty folders and require the json.
-    if os.path.exists(path):
-        required_json = os.path.join(path, ".zgroup")
+# Deal with issues z5py has with empty folders and require the json with zarr group metadata.
+def _require_zarr_group_metadata(path, group_name=None):
+    path_ = path if group_name is None else os.path.join(path, group_name)
+    if os.path.exists(path_):
+        required_json = os.path.join(path_, ".zgroup")
         if not os.path.exists(required_json):
             with open(required_json, "w") as f:
                 json.dump({"zarr_format": 2}, f)
 
+
+def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
+
+    # NOTE: zarr-python is quite inefficient and writes empty blocks. So we have to use z5py here.
+    _require_zarr_group_metadata(path)
     f = z5py.ZarrFile(path, "a")
     state = AnnotatorState()
 
@@ -609,6 +619,10 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
         )
         for key, val in signature.items():
             f.attrs[key] = val
+        # Add the annotator type to the signature.
+        # TODO need to merge the latest dev / master for this.
+        f.attrs["annotator_class"] = "Annotator2d"
+        # f.attrs["annotator_class"] = state.
 
     # If the data signature is saved in the file already,
     # then we check if saved data signature and data signature of our image agree.
@@ -650,10 +664,14 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
     commit_history = f.attrs.get("commit_history", [])
     object_ids = np.unique(seg[mask])
 
+    # Get the preservation settings from the commit widget.
+    preservation_settings = _get_preservation_settings(state)
+
     # We committed an automatic segmentation.
     if layer == "auto_segmentation":
         # Save the settings of the segmentation widget.
         segmentation_options = _get_auto_segmentation_options(state, object_ids)
+        segmentation_options.update(**preservation_settings)
         commit_history.append({"auto_segmentation": segmentation_options})
 
         # Write the commit history.
@@ -664,10 +682,14 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
         return
 
     segmentation_options, is_tracking = _get_promptable_segmentation_options(state, object_ids)
+    segmentation_options.update(**preservation_settings)
     commit_history.append({"current_object": segmentation_options})
 
+    # TODO add support for mask prompt (e.g. from polygon layer)
     def write_prompts(object_id, prompts, point_prompts, point_labels, track_state=None):
-        g = f.create_group(f"prompts/{object_id}")
+        group_name = f"prompts/{object_id}"
+        g = f.create_group(group_name)
+        _require_zarr_group_metadata(path, group_name)
         if prompts is not None and len(prompts) > 0:
             data = np.array(prompts)
             g.create_dataset("prompts", data=data, chunks=data.shape)
