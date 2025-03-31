@@ -3,7 +3,7 @@
 `micro-sam` extends access to a bunch of functionalities using the command line interface (CLI) scripts via terminal.
 
 The supported CLIs can be used by
-- Running `$ micro_sam.info` for getting information on getting necessary information about `micro-sam`.
+- Running `$ micro_sam.info` for getting `micro-sam` package information and other necessary system-level information to use `micro-sam`.
 - Running `$ micro_sam.precompute_embeddings` for precomputing and caching the image embeddings.
 - Running `$ micro_sam.annotator_2d` for starting the 2d annotator.
 - Running `$ micro_sam.annotator_3d` for starting the 3d annotator.
