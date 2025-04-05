@@ -826,7 +826,7 @@ def main():
     save_root = args.save_root
     output_path = args.output_path
 
-    if args.segmentation_decoder and args.segmentation_deocder != "instances":
+    if args.segmentation_decoder and args.segmentation_decoder != "instances":
         raise ValueError(
             "The 'segmentation_decoder' argument currently supports 'instances' as input argument only."
         )
