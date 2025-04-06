@@ -231,7 +231,7 @@ def annotator_tracking(
         image, model_type=model_type, save_path=embedding_path,
         halo=halo, tile_shape=tile_shape, prefer_decoder=True,
         ndim=3, checkpoint_path=checkpoint_path, device=device,
-        precompute_amg_state=precompute_amg_state,
+        precompute_amg_state=precompute_amg_state, use_cli=True,
     )
     state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
 

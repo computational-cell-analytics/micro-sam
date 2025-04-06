@@ -88,6 +88,7 @@ def annotator_3d(
         image, model_type=model_type, save_path=embedding_path,
         halo=halo, tile_shape=tile_shape, ndim=3, precompute_amg_state=precompute_amg_state,
         checkpoint_path=checkpoint_path, device=device, prefer_decoder=prefer_decoder,
+        use_cli=True,
     )
 
     if viewer is None:
