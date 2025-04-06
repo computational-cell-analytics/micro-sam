@@ -29,19 +29,23 @@ def cell_segmentation(use_finetuned_model):
     # Load the image, the SAM Model, and the pre-computed embeddings.
     image = imageio.imread(image_path)
 
-    # Use the instance segmentation logic of Segment Anything.
+    # There are two choices of the automatic segmentation:
+    # 1. AMG (automatic mask generation): Use the instance segmentation logic of Segment Anything.
     # This works by covering the image with a grid of points, getting the masks for all the poitns
     # and only keeping the plausible ones (according to the model predictions).
     # While the functionality here does the same as the implementation from Segment Anything,
     # we enable changing the hyperparameters, e.g. 'pred_iou_thresh', without recomputing masks and embeddings,
     # to support (interactive) evaluation of different hyperparameters.
+    # 2. AIS (automatic instance segmentation): Use the instance segmentation oofic of 'micro-sam'.
+    # This works by predicting three output channels: distance to the object center,
+    # distance to the object boundary and foreground probabilities (per image).
+    # Then, we compute an instance segmentation based on them using a seeded watershed.
 
-    # Step 1: Get the 'predictor' and 'segmenter' to perform automatic instance segmentation.
+    # Step 1: Get the 'predictor' and 'segmenter' to perform automatic segmentation.
     predictor, segmenter = get_predictor_and_segmenter(
         model_type=model_type,  # choice of the Segment Anything model
         checkpoint=None,  # overwrite to pass your own finetuned model.
         device=None,  # overwrite to pass device to run the model inference. by default, chooses best supported device.
-        amg=True,  # set the automatic segmentation mode to AMG.
     )
 
     # Step 2: Get the instance segmentation for the given image.
@@ -76,18 +80,23 @@ def cell_segmentation_with_tiling(use_finetuned_model):
     # Load the image, the SAM Model, and the pre-computed embeddings.
     image = imageio.imread(image_path)
 
-    # Use the instance segmentation logic of Segment Anything.
+    # There are two choices of the automatic segmentation:
+    # 1. AMG (automatic mask generation): Use the instance segmentation logic of Segment Anything.
     # This works by covering the image with a grid of points, getting the masks for all the poitns
     # and only keeping the plausible ones (according to the model predictions).
-    # The functionality here is similar to the instance segmentation in Segment Anything,
-    # but uses the pre-computed tiled embeddings.
+    # While the functionality here does the same as the implementation from Segment Anything,
+    # we enable changing the hyperparameters, e.g. 'pred_iou_thresh', without recomputing masks and embeddings,
+    # to support (interactive) evaluation of different hyperparameters.
+    # 2. AIS (automatic instance segmentation): Use the instance segmentation oofic of 'micro-sam'.
+    # This works by predicting three output channels: distance to the object center,
+    # distance to the object boundary and foreground probabilities (per image).
+    # Then, we compute an instance segmentation based on them using a seeded watershed.
 
-    # Step 1: Get the 'predictor' and 'segmenter' to perform automatic instance segmentation.
+    # Step 1: Get the 'predictor' and 'segmenter' to perform automatic segmentation.
     predictor, segmenter = get_predictor_and_segmenter(
         model_type=model_type,  # choice of the Segment Anything model
         checkpoint=None,  # overwrite to pass your own finetuned model.
         device=None,  # overwrite to pass device to run the model inference. by default, chooses best supported device.
-        amg=True,  # set the automatic segmentation mode to AMG.
         is_tiled=True,  # whether to run automatic segmentation with tiling.
     )
 
@@ -123,12 +132,11 @@ def segmentation_in_3d(use_finetuned_model):
     model_type = "vit_b_lm"  # The model-type to use: vit_h, vit_l, vit_b etc.
     embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-3d.zarr")  # The embeddings will be cached here.
 
-    # Step 1: Get the 'predictor' and 'segmenter' to perform automatic instance segmentation.
+    # Step 1: Get the 'predictor' and 'segmenter' to perform automatic segmentation.
     predictor, segmenter = get_predictor_and_segmenter(
         model_type=model_type,  # choice of the Segment Anything model
         checkpoint=None,  # overwrite to pass your own finetuned model.
         device=None,  # overwrite to pass device to run the model inference. by default, chooses best supported device.
-        amg=False,  # set the automatic segmentation mode to AMG.
         is_tiled=False,  # whether to run automatic segmentation with tiling.
     )
 
