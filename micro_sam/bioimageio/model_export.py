@@ -225,12 +225,14 @@ def _check_model(model_description, input_paths, result_paths):
         # because this was used to generate the test data.
         sample = create_sample_for_model(
             model=model_description,
-            image=image,
-            box_prompts=box_prompts,
-            point_prompts=point_prompts,
-            point_labels=point_labels,
-            mask_prompts=mask_prompts,
-            embeddings=embeddings,
+            inputs={
+                "image": image,
+                "box_prompts": box_prompts,
+                "point_prompts": point_prompts,
+                "point_labels": point_labels,
+                "mask_prompts": mask_prompts,
+                "embeddings": embeddings,
+            }
         ).as_single_block()
         prediction = pp.predict_sample_block(sample)
 
@@ -256,7 +258,7 @@ def _check_model(model_description, input_paths, result_paths):
 
         for kwargs in prompt_kwargs:
             sample = create_sample_for_model(
-                model=model_description, image=image, embeddings=embeddings, **kwargs
+                model=model_description, inputs={"image": image, "embeddings": embeddings, **kwargs},
             ).as_single_block()
             prediction = pp.predict_sample_block(sample)
             predicted_mask = prediction.blocks["masks"].data.data
