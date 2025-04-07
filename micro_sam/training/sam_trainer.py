@@ -245,7 +245,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             # NOTE:
             #   - "only" need to transform the point prompts from the iterative prompting
             #   - the `logits` are the low res masks (256, 256), hence do not need the transform
-            net_coords = self.model.transform.apply_coords_torch(net_coords, _inp["original_size"])
+            net_coords = self.model.transform.apply_coords_torch(net_coords, y_one_hot.shape[-2:])
 
             updated_point_coords = torch.cat([_inp["point_coords"], net_coords], dim=1) \
                 if "point_coords" in _inp.keys() else net_coords
