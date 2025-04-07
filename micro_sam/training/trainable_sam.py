@@ -16,9 +16,10 @@ class TrainableSAM(nn.Module):
         sam: The Segment Anything Model.
     """
 
-    def __init__(self, sam: Sam) -> None:
+    def __init__(self, sam: Sam, upsample_masks: bool = False) -> None:
         super().__init__()
         self.sam = sam
+        self.upsample_masks = upsample_masks
         self.transform = ResizeLongestSide(sam.image_encoder.img_size)
 
     def preprocess(self, x: torch.Tensor) -> Tuple[torch.Tensor, Tuple[int, int]]:
@@ -103,9 +104,14 @@ class TrainableSAM(nn.Module):
                 multimask_output=multimask_output,
             )
 
-            masks = self.sam.postprocess_masks(
-                masks=low_res_masks, input_size=image_record["input_size"], original_size=image_record["original_size"],
-            )
+            curr_outputs = {"low_res_masks": low_res_masks, "iou_predictions": iou_predictions}
+            if self.upsample_masks:
+                masks = self.sam.postprocess_masks(
+                    masks=low_res_masks,
+                    input_size=image_record["input_size"],
+                    original_size=image_record["original_size"],
+                )
+                curr_outputs["masks"] = masks
 
             outputs.append(
                 {"low_res_masks": low_res_masks, "masks": masks, "iou_predictions": iou_predictions}
