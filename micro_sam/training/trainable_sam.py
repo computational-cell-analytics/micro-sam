@@ -95,6 +95,9 @@ class TrainableSAM(nn.Module):
 
             sparse_embeddings, dense_embeddings = self.sam.prompt_encoder(points=points, boxes=boxes, masks=masks)
 
+            print(masks is not None, dense_embeddings.shape)
+            breakpoint()
+
             low_res_masks, iou_predictions = self.sam.mask_decoder(
                 image_embeddings=curr_embedding.unsqueeze(0),
                 image_pe=self.sam.prompt_encoder.get_dense_pe(),
