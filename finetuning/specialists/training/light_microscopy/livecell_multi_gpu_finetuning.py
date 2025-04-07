@@ -5,7 +5,6 @@ import torch
 from torch_em.data import MinInstanceSampler
 from torch_em.data.datasets import get_livecell_dataset
 from torch_em.multi_gpu_training import train_multi_gpu
-from torch_em.transform.label import PerObjectDistanceTransform
 
 import micro_sam.training as sam_training
 
