@@ -126,8 +126,8 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
     def _compute_loss(self, batched_outputs, y_one_hot):
         """Compute the loss for one iteration. The loss is made up of two components:
-        - The mask loss: dice score between the predicted masks and targets.
-        - The IOU loss: L2 loss between the predicted IOU and the actual IOU of prediction and target.
+        - The mask loss: dice score between the predicted logits masks and targets.
+        - The IOU loss: L2 loss between the predicted IOU and the actual IOU of prediction (logits masks) and target.
         """
         mask_loss, iou_regression_loss = 0.0, 0.0
 
@@ -135,7 +135,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         for batch_output, targets in zip(batched_outputs, y_one_hot):
 
             predicted_objects = torch.sigmoid(batch_output["low_res_masks"])
-            # Compute the dice scores for the 1 or 3 predicted masks per true object (outer loop).
+            # Compute the dice scores for the 1 or 3 predicted (logits) masks per true object (outer loop).
             # We swap the axes that go into the dice loss so that the object axis
             # corresponds to the channel axes. This ensures that the dice is computed
             # independetly per channel. We do not reduce the channel axis in the dice,
@@ -147,7 +147,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             dice_scores, _ = torch.min(dice_scores, dim=0)
 
             # Compute the actual IOU between the predicted and true objects.
-            # The outer loop is for the 1 or 3 predicted masks per true object.
+            # The outer loop is for the 1 or 3 predicted (logits) masks per true object.
             with torch.no_grad():
                 true_iou = torch.stack([
                     self._compute_iou(predicted_objects[:, i:i+1], targets) for i in range(predicted_objects.shape[1])
