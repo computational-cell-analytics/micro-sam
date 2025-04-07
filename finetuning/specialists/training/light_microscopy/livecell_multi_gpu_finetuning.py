@@ -30,9 +30,6 @@ def finetune_livecell(args):
 
     # let's get the transforms, dataset class and respective kwargs.
     raw_transform = sam_training.identity  # the current workflow avoids rescaling the inputs to [-1, 1]
-    label_transform = PerObjectDistanceTransform(
-        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=25
-    )
 
     train_dataset_class = get_livecell_dataset
     val_dataset_class = get_livecell_dataset
@@ -40,9 +37,7 @@ def finetune_livecell(args):
         "path": args.input_path,
         "patch_shape": patch_shape,
         "split": "train",
-        "resize_inputs": True,
         "raw_transform": raw_transform,
-        "label_transform": label_transform,
         "sampler": MinInstanceSampler(),
         "label_dtype": torch.float32,
     }
