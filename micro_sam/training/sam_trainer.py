@@ -7,7 +7,6 @@ from typing import Optional
 import numpy as np
 
 import torch
-from torchvision.utils import make_grid
 
 import torch_em
 from torch_em.trainer.logger_base import TorchEmLogger
@@ -126,16 +125,16 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
     def _compute_loss(self, batched_outputs, y_one_hot):
         """Compute the loss for one iteration. The loss is made up of two components:
-        - The mask loss: dice score between the predicted masks and targets.
-        - The IOU loss: L2 loss between the predicted IOU and the actual IOU of prediction and target.
+        - The mask loss: dice score between the predicted logits masks and targets.
+        - The IOU loss: L2 loss between the predicted IOU and the actual IOU of prediction (logits masks) and target.
         """
         mask_loss, iou_regression_loss = 0.0, 0.0
 
         # Loop over the batch.
         for batch_output, targets in zip(batched_outputs, y_one_hot):
 
-            predicted_objects = torch.sigmoid(batch_output["masks"])
-            # Compute the dice scores for the 1 or 3 predicted masks per true object (outer loop).
+            predicted_objects = torch.sigmoid(batch_output["low_res_masks"])
+            # Compute the dice scores for the 1 or 3 predicted (logits) masks per true object (outer loop).
             # We swap the axes that go into the dice loss so that the object axis
             # corresponds to the channel axes. This ensures that the dice is computed
             # independetly per channel. We do not reduce the channel axis in the dice,
@@ -147,7 +146,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             dice_scores, _ = torch.min(dice_scores, dim=0)
 
             # Compute the actual IOU between the predicted and true objects.
-            # The outer loop is for the 1 or 3 predicted masks per true object.
+            # The outer loop is for the 1 or 3 predicted (logits) masks per true object.
             with torch.no_grad():
                 true_iou = torch.stack([
                     self._compute_iou(predicted_objects[:, i:i+1], targets) for i in range(predicted_objects.shape[1])
@@ -168,8 +167,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
     #
 
     def _get_best_masks(self, batched_outputs, batched_iou_predictions):
-        # Batched mask and logit (low-res mask) predictions.
-        masks = torch.stack([m["masks"] for m in batched_outputs])
+        # Batched logit (low-res mask) predictions.
         logits = torch.stack([m["low_res_masks"] for m in batched_outputs])
 
         # Determine the best IOU across the multi-object prediction axis
@@ -183,17 +181,13 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         # Note that we squash the first two axes (batch x objects) into one when indexing.
         # That's why we need to reshape bax into (batch x objects) using a view.
         # We also keep the multi object axis as a singleton, that's why the view has (batch_size, n_objects, 1, ...)
-        batch_size, n_objects = masks.shape[:2]
-        h, w = masks.shape[-2:]
-        masks = masks[best_iou_idx].view(batch_size, n_objects, 1, h, w)
-
+        batch_size, n_objects = logits.shape[:2]
         h, w = logits.shape[-2:]
         logits = logits[best_iou_idx].view(batch_size, n_objects, 1, h, w)
 
-        # Binarize the mask. Note that the mask here also contains logits, so we use 0.0
-        # as threshold instead of using 0.5. (Hence we don't need to apply a sigmoid)
-        masks = (masks > 0.0).float()
-        return masks, logits
+        # Binarize the logits.
+        logits = (logits > 0.0).float()
+        return logits
 
     def _compute_iterative_loss(self, batched_inputs, y_one_hot, num_subiter, multimask_output):
         """Compute the loss for several (sub-)iterations of iterative prompting.
@@ -228,10 +222,10 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             if i < (num_subiter - 1):   # We need not update the prompts for the last iteration.
                 # Determine the next prompts based on current predictions.
                 with torch.no_grad():
-                    # Get the mask and logit predictions corresponding to the predicted object
+                    # Get the logit predictions corresponding to the predicted object
                     # (per actual object) with the best IOU.
-                    masks, logits = self._get_best_masks(batched_outputs, batched_iou_predictions)
-                    batched_inputs = self._update_prompts(batched_inputs, y_one_hot, masks, logits)
+                    logits = self._get_best_masks(batched_outputs, batched_iou_predictions)
+                    batched_inputs = self._update_prompts(batched_inputs, y_one_hot, logits)
 
         loss = loss / num_subiter
         mask_loss = mask_loss / num_subiter
@@ -240,11 +234,11 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
         return loss, mask_loss, iou_regression_loss, mean_model_iou
 
-    def _update_prompts(self, batched_inputs, y_one_hot, masks, logits_masks):
+    def _update_prompts(self, batched_inputs, y_one_hot, logits_masks):
         # here, we get the pair-per-batch of predicted and true elements (and also the "batched_inputs")
-        for x1, x2, _inp, logits in zip(masks, y_one_hot, batched_inputs, logits_masks):
+        for y_, _inp, logits in zip(y_one_hot, batched_inputs, logits_masks):
             # here, we get each object in the pairs and do the point choices per-object
-            net_coords, net_labels, _, _ = self.prompt_generator(x2, x1)
+            net_coords, net_labels, _, _ = self.prompt_generator(segmentation=y_, prediction=logits)
 
             # convert the point coordinates to the expected resolution for iterative prompting
             # NOTE:
@@ -278,7 +272,12 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         """Compute one hot target (one mask per channel) for the sampled ids
         and restrict the number of sampled objects to the minimal number in the batch.
         """
-        assert len(y) == len(sampled_ids)
+        # Get the downsampled masks.
+        y_downsampled = torch.from_numpy(
+            np.stack([bi["gt_downsampled"][None] for bi in batched_inputs])
+        ).to(y.dtype)
+
+        assert len(y) == len(y_downsampled) == len(sampled_ids)
 
         # Get the minimal number of objects in this batch.
         # The number of objects in a patch might be < n_objects_per_batch.
@@ -286,11 +285,11 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         # number of objects across the batch.
         n_objects = min(len(ids) for ids in sampled_ids)
 
-        y = y.to(self.device, non_blocking=True)
+        y_downsampled = y_downsampled.to(self.device, non_blocking=True)
         # Compute the one hot targets for the seg-id.
         y_one_hot = torch.stack([
             torch.stack([target == seg_id for seg_id in ids[:n_objects]])
-            for target, ids in zip(y, sampled_ids)
+            for target, ids in zip(y_downsampled, sampled_ids)
         ]).float()
 
         # Also restrict the prompts to the number of objects.
@@ -306,13 +305,16 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         batched_inputs, sampled_ids = self.convert_inputs(x, y, n_pos, n_neg, get_boxes, self.n_objects_per_batch)
         batched_inputs, y_one_hot = self._preprocess_batch(batched_inputs, y, sampled_ids)
 
+        # This step checks whether all foreground objects have valid masks.
+        assert all(len(torch.unique(curr_by)) > 1 for by in y_one_hot for curr_by in by)
+
         loss, mask_loss, iou_regression_loss, model_iou = self._compute_iterative_loss(
             batched_inputs=batched_inputs,
             y_one_hot=y_one_hot,
             num_subiter=self.n_sub_iteration,
             multimask_output=multimask_output
         )
-        return loss, mask_loss, iou_regression_loss, model_iou, y_one_hot
+        return loss, mask_loss, iou_regression_loss, model_iou
 
     def _check_input_normalization(self, x, input_check_done):
         # The expected data range of the SAM model is 8bit (0-255).
@@ -347,16 +349,14 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             self.optimizer.zero_grad()
 
             with forward_context():
-                (loss, mask_loss, iou_regression_loss, model_iou,
-                 sampled_binary_y) = self._interactive_train_iteration(x, y)
+                loss, mask_loss, iou_regression_loss, model_iou = self._interactive_train_iteration(x, y)
 
             backprop(loss)
 
             if self.logger is not None:
                 lr = [pm["lr"] for pm in self.optimizer.param_groups][0]
-                samples = sampled_binary_y if self._iteration % self.log_image_interval == 0 else None
                 self.logger.log_train(
-                    self._iteration, loss, lr, x, y, samples, mask_loss, iou_regression_loss, model_iou
+                    self._iteration, loss, lr, x, y, mask_loss, iou_regression_loss, model_iou
                 )
 
             self._iteration += 1
@@ -387,7 +387,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         metric = mask_loss
         model_iou = torch.mean(torch.stack([m["iou_predictions"] for m in batched_outputs]))
 
-        return loss, mask_loss, iou_regression_loss, model_iou, y_one_hot, metric
+        return loss, mask_loss, iou_regression_loss, model_iou, metric
 
     def _validate_impl(self, forward_context):
         self.model.eval()
@@ -403,7 +403,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
                 with forward_context():
                     (loss, mask_loss, iou_regression_loss, model_iou,
-                     sampled_binary_y, metric) = self._interactive_val_iteration(x, y, val_iteration)
+                     metric) = self._interactive_val_iteration(x, y, val_iteration)
 
                 loss_val += loss.item()
                 metric_val += metric.item()
@@ -418,8 +418,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
         if self.logger is not None:
             self.logger.log_validation(
-                self._iteration, metric_val, loss_val, x, y,
-                sampled_binary_y, mask_loss, iou_regression_loss, model_iou_val
+                self._iteration, metric_val, loss_val, x, y, mask_loss, iou_regression_loss, model_iou_val,
             )
 
         return metric_val
@@ -435,20 +434,18 @@ class SamLogger(TorchEmLogger):
         self.tb = torch.utils.tensorboard.SummaryWriter(self.log_dir)
         self.log_image_interval = trainer.log_image_interval
 
-    def add_image(self, x, y, samples, name, step):
+    def add_image(self, x, y, name, step):
         self.tb.add_image(tag=f"{name}/input", img_tensor=x[0], global_step=step)
         self.tb.add_image(tag=f"{name}/target", img_tensor=y[0], global_step=step)
-        sample_grid = make_grid([sample[0] for sample in samples], nrow=4, padding=4)
-        self.tb.add_image(tag=f"{name}/samples", img_tensor=sample_grid, global_step=step)
 
-    def log_train(self, step, loss, lr, x, y, samples, mask_loss, iou_regression_loss, model_iou):
+    def log_train(self, step, loss, lr, x, y, mask_loss, iou_regression_loss, model_iou):
         self.tb.add_scalar(tag="train/loss", scalar_value=loss, global_step=step)
         self.tb.add_scalar(tag="train/mask_loss", scalar_value=mask_loss, global_step=step)
         self.tb.add_scalar(tag="train/iou_loss", scalar_value=iou_regression_loss, global_step=step)
         self.tb.add_scalar(tag="train/model_iou", scalar_value=model_iou, global_step=step)
         self.tb.add_scalar(tag="train/learning_rate", scalar_value=lr, global_step=step)
         if step % self.log_image_interval == 0:
-            self.add_image(x, y, samples, "train", step)
+            self.add_image(x, y, "train", step)
 
     def log_validation(self, step, metric, loss, x, y, samples, mask_loss, iou_regression_loss, model_iou):
         self.tb.add_scalar(tag="validation/loss", scalar_value=loss, global_step=step)
@@ -456,4 +453,4 @@ class SamLogger(TorchEmLogger):
         self.tb.add_scalar(tag="validation/iou_loss", scalar_value=iou_regression_loss, global_step=step)
         self.tb.add_scalar(tag="validation/model_iou", scalar_value=model_iou, global_step=step)
         self.tb.add_scalar(tag="validation/metric", scalar_value=metric, global_step=step)
-        self.add_image(x, y, samples, "validation", step)
+        self.add_image(x, y, "validation", step)

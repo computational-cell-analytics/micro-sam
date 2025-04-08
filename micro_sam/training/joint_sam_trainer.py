@@ -5,7 +5,6 @@ from collections import OrderedDict
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
-from torchvision.utils import make_grid
 
 from .sam_trainer import SamTrainer
 
@@ -99,8 +98,7 @@ class JointSamTrainer(SamTrainer):
 
             with forward_context():
                 # 1. train for the interactive segmentation
-                (loss, mask_loss, iou_regression_loss, model_iou,
-                 sampled_binary_y) = self._interactive_train_iteration(x, labels_instances)
+                loss, mask_loss, iou_regression_loss, model_iou = self._interactive_train_iteration(x, labels_instances)
 
             backprop(loss)
 
@@ -114,9 +112,8 @@ class JointSamTrainer(SamTrainer):
 
             if self.logger is not None:
                 lr = [pm["lr"] for pm in self.optimizer.param_groups][0]
-                samples = sampled_binary_y if self._iteration % self.log_image_interval == 0 else None
                 self.logger.log_train(
-                    self._iteration, loss, lr, x, labels_instances, samples,
+                    self._iteration, loss, lr, x, labels_instances,
                     mask_loss, iou_regression_loss, model_iou, unetr_loss
                 )
 
@@ -147,7 +144,7 @@ class JointSamTrainer(SamTrainer):
                 with forward_context():
                     # 1. validate for the interactive segmentation
                     (loss, mask_loss, iou_regression_loss, model_iou,
-                     sampled_binary_y, metric) = self._interactive_val_iteration(x, labels_instances, val_iteration)
+                     metric) = self._interactive_val_iteration(x, labels_instances, val_iteration)
 
                 with forward_context():
                     # 2. validate for the automatic instance segmentation
@@ -164,7 +161,7 @@ class JointSamTrainer(SamTrainer):
 
         if self.logger is not None:
             self.logger.log_validation(
-                self._iteration, metric_val, loss_val, x, labels_instances, sampled_binary_y,
+                self._iteration, metric_val, loss_val, x, labels_instances,
                 mask_loss, iou_regression_loss, model_iou_val, unetr_loss
             )
 
@@ -175,25 +172,22 @@ class JointSamLogger(TorchEmLogger):
     """@private"""
     def __init__(self, trainer, save_root, **unused_kwargs):
         super().__init__(trainer, save_root)
-        self.log_dir = f"./logs/{trainer.name}" if save_root is None else\
-            os.path.join(save_root, "logs", trainer.name)
+        self.log_dir = f"./logs/{trainer.name}" if save_root is None else os.path.join(save_root, "logs", trainer.name)
         os.makedirs(self.log_dir, exist_ok=True)
 
         self.tb = SummaryWriter(self.log_dir)
         self.log_image_interval = trainer.log_image_interval
 
-    def add_image(self, x, y, samples, name, step):
+    def add_image(self, x, y, name, step):
         selection = np.s_[0] if x.ndim == 4 else np.s_[0, :, x.shape[2] // 2]
 
         image = normalize_im(x[selection].cpu())
 
         self.tb.add_image(tag=f"{name}/input", img_tensor=image, global_step=step)
         self.tb.add_image(tag=f"{name}/target", img_tensor=y[selection], global_step=step)
-        sample_grid = make_grid([sample[0] for sample in samples], nrow=4, padding=4)
-        self.tb.add_image(tag=f"{name}/samples", img_tensor=sample_grid, global_step=step)
 
     def log_train(
-        self, step, loss, lr, x, y, samples, mask_loss, iou_regression_loss, model_iou, instance_loss
+        self, step, loss, lr, x, y, mask_loss, iou_regression_loss, model_iou, instance_loss
     ):
         self.tb.add_scalar(tag="train/loss", scalar_value=loss, global_step=step)
         self.tb.add_scalar(tag="train/mask_loss", scalar_value=mask_loss, global_step=step)
@@ -202,10 +196,10 @@ class JointSamLogger(TorchEmLogger):
         self.tb.add_scalar(tag="train/instance_loss", scalar_value=instance_loss, global_step=step)
         self.tb.add_scalar(tag="train/learning_rate", scalar_value=lr, global_step=step)
         if step % self.log_image_interval == 0:
-            self.add_image(x, y, samples, "train", step)
+            self.add_image(x, y, "train", step)
 
     def log_validation(
-        self, step, metric, loss, x, y, samples, mask_loss, iou_regression_loss, model_iou, instance_loss
+        self, step, metric, loss, x, y, mask_loss, iou_regression_loss, model_iou, instance_loss
     ):
         self.tb.add_scalar(tag="validation/loss", scalar_value=loss, global_step=step)
         self.tb.add_scalar(tag="validation/mask_loss", scalar_value=mask_loss, global_step=step)
@@ -213,4 +207,4 @@ class JointSamLogger(TorchEmLogger):
         self.tb.add_scalar(tag="validation/model_iou", scalar_value=model_iou, global_step=step)
         self.tb.add_scalar(tag="train/instance_loss", scalar_value=instance_loss, global_step=step)
         self.tb.add_scalar(tag="validation/metric", scalar_value=metric, global_step=step)
-        self.add_image(x, y, samples, "validation", step)
+        self.add_image(x, y, "validation", step)
