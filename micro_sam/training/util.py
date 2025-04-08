@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Union, Tuple, Callable
 import numpy as np
 
 import torch
+from torch.nn import functional as F
 
 from segment_anything.utils.transforms import ResizeLongestSide
 
@@ -183,13 +184,12 @@ class ConvertToSamInputs:
             distorted_boxes.append([y0, x0, y1, x1])
         return distorted_boxes
 
-    def _get_prompt_lists(self, gt, n_samples, prompt_generator):
+    def _get_prompt_lists(self, gt, cell_ids, n_samples, prompt_generator):
         """Returns a list of "expected" prompts subjected to the random input attributes for prompting."""
 
         _, bbox_coordinates = get_centers_and_bounding_boxes(gt, mode="p")
 
         # get the segment ids
-        cell_ids = np.unique(gt)[1:]
         if n_samples is None:  # n-samples is set to None, so we use all ids
             sampled_cell_ids = cell_ids
 
@@ -208,6 +208,27 @@ class ConvertToSamInputs:
         # derive and return the prompts
         point_prompts, point_label_prompts, box_prompts, _ = prompt_generator(object_masks, bbox_coordinates)
         return box_prompts, point_prompts, point_label_prompts, sampled_cell_ids
+
+    def _downsample_labels(self, y):
+        """Converts the masks to match the shape of "low_res_masks".
+        """
+
+        # Convert the labels to "low_res_mask" shape
+        # First step is to use the logic from `ResizeLongestSide` to resize the longest side.
+        target_length = self.transform.target_length
+        target_shape = self.transform.get_preprocess_shape(y.shape[2], y.shape[3], target_length)
+        y = F.interpolate(input=y, size=target_shape)
+
+        # Next, we pad the remaining region to (1024, 1024)
+        h, w = y.shape[-2:]
+        padh = target_length - h
+        padw = target_length - w
+        y = F.pad(input=y, pad=(0, padw, 0, padh))
+
+        # Finally, let's resize the labels to the desired shape (i.e. (256, 256))
+        y = F.interpolate(input=y, size=(256, 256))
+
+        return y
 
     def __call__(self, x, y, n_pos, n_neg, get_boxes=False, n_samples=None):
         """Convert the outputs of dataloader and prompt settings to the batch format expected by SAM.
@@ -228,13 +249,21 @@ class ConvertToSamInputs:
             get_point_prompts=get_points
         )
 
+        # Downsample the labels.
+        y_downsampled = self._downsample_labels(y)
+
         batched_inputs = []
         batched_sampled_cell_ids_list = []
 
-        for image, gt in zip(x, y):
+        for image, gt, gt_downsampled in zip(x, y, y_downsampled):
             gt = gt.squeeze().numpy().astype(np.int64)
+            gt_downsampled = gt_downsampled.squeeze().numpy().astype(np.int64)
+
+            # Get the cell ids from the downsampled labels.
+            cell_ids = np.unique(gt_downsampled)[1:]
+
             box_prompts, point_prompts, point_label_prompts, sampled_cell_ids = self._get_prompt_lists(
-                gt, n_samples, prompt_generator,
+                gt=gt, cell_ids=cell_ids, n_samples=n_samples, prompt_generator=prompt_generator,
             )
 
             # check to be sure about the expected size of the no. of elements in different settings
@@ -247,7 +276,7 @@ class ConvertToSamInputs:
 
             batched_sampled_cell_ids_list.append(sampled_cell_ids)
 
-            batched_input = {"image": image, "original_size": image.shape[1:]}
+            batched_input = {"image": image, "original_size": image.shape[1:], "gt_downsampled": gt_downsampled}
             if get_boxes:
                 batched_input["boxes"] = self.transform.apply_boxes_torch(
                     box_prompts, original_size=gt.shape[-2:]

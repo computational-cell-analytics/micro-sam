@@ -3,7 +3,6 @@ import argparse
 
 import torch
 
-from torch_em.data import MinInstanceSampler
 from torch_em.data.datasets import get_livecell_loader
 from torch_em.transform.label import PerObjectDistanceTransform
 
@@ -29,12 +28,12 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
     train_loader = get_livecell_loader(
         path=data_path, patch_shape=patch_shape, split="train", batch_size=2, num_workers=16,
         cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform, label_dtype=torch.float32, sampler=MinInstanceSampler(min_size=25),
+        raw_transform=raw_transform, label_dtype=torch.float32,
     )
     val_loader = get_livecell_loader(
         path=data_path, patch_shape=patch_shape, split="val", batch_size=1, num_workers=16,
         cell_types=cell_type, download=True, shuffle=True, label_transform=label_transform,
-        raw_transform=raw_transform, label_dtype=torch.float32, sampler=MinInstanceSampler(min_size=25),
+        raw_transform=raw_transform, label_dtype=torch.float32,
     )
 
     return train_loader, val_loader
@@ -62,6 +61,14 @@ def finetune_livecell(args):
     # late FT 50%: 42.87 GB
     # lora classic: 48.46 GB
     # full ft: 49.35
+
+    # NOTE: for default settings
+    # loss over logits: 47.89 GB
+    # loss over masks: 49.42 GB
+
+    # for resource-efficient setting (i.e. n_objects=5 for 'vit_b')
+    # loss over logits: 24.01 GB
+    # loss over masks: 24.38 GB
 
     # Run training.
     sam_training.train_sam(

@@ -7,7 +7,6 @@ from typing import Optional
 import numpy as np
 
 import torch
-from torch.nn import functional as F
 
 import torch_em
 from torch_em.trainer.logger_base import TorchEmLogger
@@ -269,32 +268,16 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
     # Training Loop
     #
 
-    def _preprocess_labels(self, y):
-        """Converts the masks to match the shape of "low_res_masks".
-        """
-
-        # Convert the labels to "low_res_mask" shape
-        # First step is to use the logic from `ResizeLongestSide` to resize the longest side.
-        target_length = self.model.transform.target_length
-        target_shape = self.model.transform.get_preprocess_shape(y.shape[2], y.shape[3], target_length)
-        y = F.interpolate(input=y, size=target_shape)
-
-        # Next, we pad the remaining region to (1024, 1024)
-        h, w = y.shape[-2:]
-        padh = self.model.sam.image_encoder.img_size - h
-        padw = self.model.sam.image_encoder.img_size - w
-        y = F.pad(input=y, pad=(0, padw, 0, padh))
-
-        # Finally, let's resize the labels to the desired shape (i.e. (256, 256))
-        y = F.interpolate(input=y, size=(256, 256))
-
-        return y
-
     def _preprocess_batch(self, batched_inputs, y, sampled_ids):
         """Compute one hot target (one mask per channel) for the sampled ids
         and restrict the number of sampled objects to the minimal number in the batch.
         """
-        assert len(y) == len(sampled_ids)
+        # Get the downsampled masks.
+        y_downsampled = torch.from_numpy(
+            np.stack([bi["gt_downsampled"][None] for bi in batched_inputs])
+        ).to(y.dtype)
+
+        assert len(y) == len(y_downsampled) == len(sampled_ids)
 
         # Get the minimal number of objects in this batch.
         # The number of objects in a patch might be < n_objects_per_batch.
@@ -302,12 +285,11 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         # number of objects across the batch.
         n_objects = min(len(ids) for ids in sampled_ids)
 
-        y = self._preprocess_labels(y)
-        y = y.to(self.device, non_blocking=True)
+        y_downsampled = y_downsampled.to(self.device, non_blocking=True)
         # Compute the one hot targets for the seg-id.
         y_one_hot = torch.stack([
             torch.stack([target == seg_id for seg_id in ids[:n_objects]])
-            for target, ids in zip(y, sampled_ids)
+            for target, ids in zip(y_downsampled, sampled_ids)
         ]).float()
 
         # Also restrict the prompts to the number of objects.
@@ -322,6 +304,9 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
         batched_inputs, sampled_ids = self.convert_inputs(x, y, n_pos, n_neg, get_boxes, self.n_objects_per_batch)
         batched_inputs, y_one_hot = self._preprocess_batch(batched_inputs, y, sampled_ids)
+
+        # This step checks whether all foreground objects have valid masks.
+        assert all(len(torch.unique(curr_by)) > 1 for by in y_one_hot for curr_by in by)
 
         loss, mask_loss, iou_regression_loss, model_iou = self._compute_iterative_loss(
             batched_inputs=batched_inputs,
