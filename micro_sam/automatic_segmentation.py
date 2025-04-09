@@ -170,6 +170,7 @@ def automatic_instance_segmentation(
             # if (raw) predictions provided, store them as it is w/o further post-processing.
             instances = masks
 
+    # TODO also support tracking here?
     else:
         if (image_data.ndim != 3) and (image_data.ndim != 4 and image_data.shape[-1] != 3):
             raise ValueError(f"The inputs does not match the shape expectation of 3d inputs: {image_data.shape}")
@@ -258,7 +259,11 @@ def main():
     available_models = list(util.get_model_names())
     available_models = ", ".join(available_models)
 
-    parser = argparse.ArgumentParser(description="Run automatic segmentation for an image.")
+    # TODO describe more about additional kwargs, e.g. boundary_distance_thresh etc. for AIS and corresponding for AMG
+    # TODO support automatic tracking?
+    parser = argparse.ArgumentParser(
+        description="Run automatic segmentation for an image."
+    )
     parser.add_argument(
         "-i", "--input_path", required=True, type=str, nargs="+",
         help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
