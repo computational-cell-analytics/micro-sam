@@ -203,6 +203,41 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
         loss, mask_loss, iou_regression_loss, mean_model_iou = 0.0, 0.0, 0.0, 0.0
 
+        # Whether to use masks per training top-iteration.
+        use_mask_inputs = False  # determines if each sub-iteration will use mask inputs as prompts or not.
+        use_zero_mask = False  # determines if the zeroth iteration will use zeros as mask inputs.
+        is_data_parallel = torch.distributed.is_available() and torch.distributed.is_initialized()
+
+        if self.mask_prob == 1:  # i.e. always use masks.
+            use_mask_inputs = True  # we would like to use mask inputs in all sub-iterations.
+            use_zero_mask = is_data_parallel  # we would like to use zeros as mask inputs for zeroth iteration.
+
+        elif self.mask_prob > 0:  # i.e. if we use mask inputs with a probability.
+            if is_data_parallel:  # if training on multiple GPUs.
+                if torch.distributed.get_rank() == 0:  # device with rank 0.
+                    use_mask_inputs_tensor = torch.tensor(
+                        random.random() > self.mask_prob, dtype=torch.uint8, device=self.device,
+                    )
+                else:  # on other devices, we do not need this parameter at this stage.
+                    use_mask_inputs_tensor = torch.tensor(0, dtype=torch.uint8, device=self.device)
+
+                # Broadcast the value to all devices (ranks).
+                torch.distributed.broadcast(use_mask_inputs_tensor, src=0)
+
+                # And convert it back to our desired boolean value.
+                use_mask_inputs = bool(use_mask_inputs_tensor.item())
+                use_zero_mask = use_mask_inputs  # provides zeros as mask inputs.
+            else:  # training on a single GPU.
+                use_mask_inputs = random.random() > self.mask_prob
+
+        if use_zero_mask:
+            # We use zeros as mask inputs for the zeroth iteration.
+            y_zeros = torch.zeros((*y_one_hot.shape[:3], 256, 256))
+
+            # Add zeros as mask inputs to batched inputs.
+            for bi, curr_masks in zip(batched_inputs, y_zeros):
+                bi["mask_inputs"] = curr_masks
+
         for i in range(0, num_subiter):
             # We do multimasking only in the first sub-iteration as we then pass single prompt
             # after the first sub-iteration, we don't do multimasking because we get multiple prompts.
@@ -212,7 +247,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
                 multimask_output=multimask_output if i == 0 else False,
             )
 
-            # Compute loss for tis sub-iteration.
+            # Compute loss for this sub-iteration.
             net_loss, net_mask_loss, net_iou_regression_loss = self._compute_loss(batched_outputs, y_one_hot)
 
             # Compute the mean IOU predicted by the model. We keep track of this in the logger.
@@ -231,7 +266,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
                     # Get the mask and logit predictions corresponding to the predicted object
                     # (per actual object) with the best IOU.
                     masks, logits = self._get_best_masks(batched_outputs, batched_iou_predictions)
-                    batched_inputs = self._update_prompts(batched_inputs, y_one_hot, masks, logits)
+                    batched_inputs = self._update_prompts(batched_inputs, y_one_hot, masks, logits, use_mask_inputs)
 
         loss = loss / num_subiter
         mask_loss = mask_loss / num_subiter
@@ -240,7 +275,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
         return loss, mask_loss, iou_regression_loss, mean_model_iou
 
-    def _update_prompts(self, batched_inputs, y_one_hot, masks, logits_masks):
+    def _update_prompts(self, batched_inputs, y_one_hot, masks, logits_masks, use_mask_inputs):
         # here, we get the pair-per-batch of predicted and true elements (and also the "batched_inputs")
         for x1, x2, _inp, logits in zip(masks, y_one_hot, batched_inputs, logits_masks):
             # here, we get each object in the pairs and do the point choices per-object
@@ -260,13 +295,10 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             _inp["point_coords"] = updated_point_coords
             _inp["point_labels"] = updated_point_labels
 
-            if self.mask_prob > 0:
-                # using mask inputs for iterative prompting while training, with a probability
-                use_mask_inputs = (random.random() < self.mask_prob)
-                if use_mask_inputs:
-                    _inp["mask_inputs"] = logits
-                else:  # remove  previously existing mask inputs to avoid using them in next sub-iteration
-                    _inp.pop("mask_inputs", None)
+            if use_mask_inputs:
+                _inp["mask_inputs"] = logits
+            else:  # remove previously existing mask inputs to avoid using them in next sub-iteration.
+                _inp.pop("mask_inputs", None)
 
         return batched_inputs
 
