@@ -76,7 +76,7 @@ def finetune_livecell(args):
         n_objects_per_batch=n_objects_per_batch,
         n_sub_iteration=8,
         compile_model=False,
-        mask_prob=0,  # (optional) overwrite to provide the probability of using mask inputs while training
+        mask_prob=0.5,  # (optional) overwrite to provide the probability of using mask inputs while training
     )
 
 
