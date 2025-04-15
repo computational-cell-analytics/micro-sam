@@ -27,5 +27,6 @@ dependencies:
     - tqdm
     - timm
     - xarray <2025.3.0
+    - zarr <3.0
     - pip:
         - git+https://github.com/ChaoningZhang/MobileSAM.git
