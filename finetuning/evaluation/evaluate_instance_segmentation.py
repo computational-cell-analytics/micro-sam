@@ -10,7 +10,7 @@ from util import (
 
 
 def run_instance_segmentation_with_decoder_inference(
-    dataset_name, model_type, checkpoint, experiment_folder, peft_kwargs,
+    dataset_name, model_type, checkpoint, experiment_folder,
 ):
     val_image_paths, val_gt_paths = get_paths(dataset_name, split="val")
     test_image_paths, _ = get_paths(dataset_name, split="test")
@@ -21,7 +21,6 @@ def run_instance_segmentation_with_decoder_inference(
         val_image_paths=val_image_paths,
         val_gt_paths=val_gt_paths,
         test_image_paths=test_image_paths,
-        peft_kwargs=peft_kwargs,
     )
     return prediction_folder
 
@@ -37,9 +36,8 @@ def eval_instance_segmentation_with_decoder(dataset_name, prediction_folder, exp
 
 def main():
     args = get_default_arguments()
-    peft_kwargs = {"rank": args.peft_rank, "module": args.peft_module}
     prediction_folder = run_instance_segmentation_with_decoder_inference(
-        args.dataset, args.model, args.checkpoint, args.experiment_folder, peft_kwargs,
+        args.dataset, args.model, args.checkpoint, args.experiment_folder,
     )
     eval_instance_segmentation_with_decoder(args.dataset, prediction_folder, args.experiment_folder)
 

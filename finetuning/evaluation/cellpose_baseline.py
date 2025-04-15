@@ -9,7 +9,7 @@ import imageio.v3 as imageio
 from micro_sam.evaluation.evaluation import run_evaluation
 
 # from util import get_paths   # for hlrn
-from util import get_pred_paths 
+from util import get_pred_paths
 
 
 # EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/benchmarking/cellpose"  # for hlrn
