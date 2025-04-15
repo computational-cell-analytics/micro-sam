@@ -8,7 +8,8 @@ from torch_em.data import datasets
 from micro_sam.evaluation.livecell import _get_livecell_paths
 
 
-ROOT = "/scratch/projects/nim00007/sam/data/"
+# ROOT = "/scratch/projects/nim00007/sam/data/"
+ROOT = "/mnt/vast-nhr/projects/cidas/cca/data"
 
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/new_models"
 
