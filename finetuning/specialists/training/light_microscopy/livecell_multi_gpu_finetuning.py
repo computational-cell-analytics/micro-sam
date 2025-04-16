@@ -110,6 +110,10 @@ def main():
         help="For how many iterations should the model be trained? By default 100k."
     )
     parser.add_argument(
+        "--export_path", "-e",
+        help="Where to export the finetuned model to. The exported model can be used in the annotation tools."
+    )
+    parser.add_argument(
         "--freeze", type=str, nargs="+", default=None,
         help="Which parts of the model to freeze for finetuning."
     )
