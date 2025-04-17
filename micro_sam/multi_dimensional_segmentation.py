@@ -622,7 +622,7 @@ def track_across_frames(
     return segmentation, lineage
 
 
-def automatic_tracking(
+def automatic_tracking_implementation(
     timeseries: np.ndarray,
     predictor: SamPredictor,
     segmentor: AMGBase,
@@ -632,6 +632,8 @@ def automatic_tracking(
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
+    return_embeddings: bool = False,
+    batch_size: int = 1,
     **kwargs,
 ) -> Tuple[np.ndarray, List[Dict]]:
     """Automatically track objects in a timesries based on per-frame automatic segmentation.
@@ -650,6 +652,8 @@ def automatic_tracking(
         tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
         halo: Overlap of the tiles for tiled prediction.
         verbose: Verbosity flag.
+        return_embeddings: Whether to return the precomputed image embeddings.
+        batch_size: The batch size to compute image embeddings over planes.
         kwargs: Keyword arguments for the 'generate' method of the 'segmentor'.
 
     Returns:
@@ -662,15 +666,18 @@ def automatic_tracking(
         raise RuntimeError(
             "Automatic tracking requires trackastra. You can install it via 'pip install trackastra'."
         )
-    segmentation, _ = _segment_slices(
+    segmentation, image_embeddings = _segment_slices(
         timeseries, predictor, segmentor, embedding_path, verbose,
-        tile_shape=tile_shape, halo=halo,
+        tile_shape=tile_shape, halo=halo, batch_size=batch_size,
         **kwargs,
     )
     segmentation, lineage = track_across_frames(
         timeseries, segmentation, gap_closing=gap_closing, min_time_extent=min_time_extent, verbose=verbose,
     )
-    return segmentation, lineage
+    if return_embeddings:
+        return segmentation, lineage, image_embeddings
+    else:
+        return segmentation, lineage
 
 
 def get_napari_track_data(
