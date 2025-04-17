@@ -6,6 +6,24 @@ If you encounter a problem or question not addressed here feel free to [open an 
 ## Installation questions
 
 
+### 0. I am not familiar with `conda` / `mamba` / `micromamba` and would like to get started with a python package manager.
+If you are getting started from scratch, we recommend using `micromamba` to setup your own package manager and creating a new environment with the required dependencies. You can install `micromamba` by following the instructions [here](https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html) under the `Automatic install` section. If you are using Linux, macOS, or Git Bash on Windows, the simplest way to of installing `micromamba` is to simply execute the installation script below in your preferred shell:
+
+```bash
+"${SHELL}" <(curl -L micro.mamba.pm/install.sh)
+```
+
+If you are using Windows PowerShell, you should be able to install `micromamba` by running the following command:
+
+```bash
+Invoke-Expression ((Invoke-WebRequest -Uri https://micro.mamba.pm/install.ps1 -UseBasicParsing).Content)
+```
+
+Once you have `micromamba` installed, you can create a new environment with the required dependencies by following the [installation](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation) instructions for `micro_sam` (remember to replace `conda` by `micromamba` in the installation commands. For example: to check the list of available environments, `conda env list` becomes `micromamba env list`).
+
+If you have any troubles in the aforementioned steps, remember to first check the [official documentation](https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html) for troubleshooting details.
+
+
 ### 1. How to install `micro_sam`?
 The [installation](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation) for `micro_sam` is supported in three ways: [from conda](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-conda) (recommended), [from source](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-source) and [from installers](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-installer). Check out our [tutorial video](https://youtu.be/gcv0fa84mCc) to get started with `micro_sam`, briefly walking you through the installation process and how to start the tool.
 
