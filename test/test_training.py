@@ -10,8 +10,6 @@ from micro_sam.sample_data import synthetic_data
 from micro_sam.util import VIT_T_SUPPORT, get_sam_model, SamPredictor
 
 
-# FIXME this now hangs on github not sure why
-@unittest.skip("Test hangs on CI")
 @unittest.skipUnless(VIT_T_SUPPORT, "Integration test is only run with vit_t support, otherwise it takes too long.")
 class TestTraining(unittest.TestCase):
     """Integration test for training a SAM model.
@@ -55,7 +53,7 @@ class TestTraining(unittest.TestCase):
         except OSError:
             pass
 
-    def _get_dataloader(self, split, patch_shape, batch_size):
+    def _get_dataloader(self, split, patch_shape, batch_size, train_instance_segmentation_only=False):
         import micro_sam.training as sam_training
 
         # Create the synthetic training data and get the corresponding folders.
@@ -67,9 +65,10 @@ class TestTraining(unittest.TestCase):
             raw_paths=image_root, raw_key=raw_key,
             label_paths=label_root, label_key=label_key,
             patch_shape=patch_shape, batch_size=batch_size,
-            with_segmentation_decoder=False,
+            with_segmentation_decoder=train_instance_segmentation_only,
             shuffle=True, num_workers=1,
-            n_samples=self.n_images_train if split == "train" else self.n_images_val
+            n_samples=self.n_images_train if split == "train" else self.n_images_val,
+            train_instance_segmentation_only=train_instance_segmentation_only,
         )
         return loader
 
@@ -95,8 +94,9 @@ class TestTraining(unittest.TestCase):
             n_objects_per_batch=n_objects_per_batch,
             n_sub_iteration=n_sub_iteration,
             with_segmentation_decoder=False,
+            freeze=["image_encoder"],
             device=device,
-            save_root=self.tmp_folder
+            save_root=self.tmp_folder,
         )
 
     def _export_model(self, checkpoint_path, export_path, model_type):
@@ -134,8 +134,7 @@ class TestTraining(unittest.TestCase):
     def test_training(self):
         import micro_sam.evaluation as evaluation
 
-        model_type = "vit_t"
-        device = "cpu"
+        model_type, device = "vit_t", "cpu"
 
         # Fine-tune the model.
         self._train_model(model_type=model_type, device=device)
@@ -162,6 +161,45 @@ class TestTraining(unittest.TestCase):
             export_path, model_type, prediction_dir=prediction_dir,
             inference_function=iterative_inference, expected_sa=0.8,
         )
+
+    def test_train_instance_segmentation(self):
+        from micro_sam.training.training import train_instance_segmentation, export_instance_segmentation_model
+        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+
+        model_type, device = "vit_t", "cpu"
+        batch_size, patch_shape = 1, (512, 512)
+
+        # Get the dataloaders.
+        train_loader = self._get_dataloader("train", patch_shape, batch_size, train_instance_segmentation_only=True)
+        val_loader = self._get_dataloader("val", patch_shape, batch_size, train_instance_segmentation_only=True)
+
+        # Run the training.
+        # We freeze the image encoder to speed up the training process.
+        name = "test-instance-seg-only"
+        train_instance_segmentation(
+            name=name,
+            model_type=model_type,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            n_epochs=1,
+            device=device,
+            save_root=self.tmp_folder,
+            freeze=["image_encoder"],
+        )
+
+        checkpoint_path = os.path.join(self.tmp_folder, "checkpoints", name, "best.pt")
+        self.assertTrue(os.path.exists(checkpoint_path))
+
+        export_path = os.path.join(self.tmp_folder, "instance_segmentation_model.pt")
+        export_instance_segmentation_model(checkpoint_path, export_path, model_type)
+        self.assertTrue(os.path.exists(export_path))
+
+        # Check that this model works for AIS.
+        predictor, segmenter = get_predictor_and_segmenter(model_type, export_path, amg=False)
+        image_path = os.path.join(self.tmp_folder, "synthetic-data", "images", "test", "data-0.tif")
+        segmentation = automatic_instance_segmentation(predictor, segmenter, image_path)
+        expected_shape = imageio.imread(image_path).shape
+        self.assertEqual(segmentation.shape, expected_shape)
 
 
 if __name__ == "__main__":
