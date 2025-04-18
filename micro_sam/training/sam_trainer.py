@@ -195,14 +195,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         masks = (masks > 0.0).float()
         return masks, logits
 
-    def _compute_iterative_loss(self, batched_inputs, y_one_hot, num_subiter, multimask_output):
-        """Compute the loss for several (sub-)iterations of iterative prompting.
-        In each iterations the prompts are updated based on the previous predictions.
-        """
-        image_embeddings, batched_inputs = self.model.image_embeddings_oft(batched_inputs)
-
-        loss, mask_loss, iou_regression_loss, mean_model_iou = 0.0, 0.0, 0.0, 0.0
-
+    def _use_mask_inputs(self, batched_inputs, y_one_hot):
         # Whether to use masks per training top-iteration.
         use_mask_inputs = False  # determines if each sub-iteration will use mask inputs as prompts or not.
         use_zero_mask = False  # determines if the zeroth iteration will use zeros as mask inputs.
@@ -228,7 +221,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
                 use_mask_inputs = bool(use_mask_inputs_tensor.item())
                 use_zero_mask = use_mask_inputs  # provides zeros as mask inputs.
             else:  # training on a single GPU.
-                use_mask_inputs = random.random() > self.mask_prob
+                use_mask_inputs = None
 
         if use_zero_mask:
             # We use zeros as mask inputs for the zeroth iteration.
@@ -237,6 +230,19 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             # Add zeros as mask inputs to batched inputs.
             for bi, curr_masks in zip(batched_inputs, y_zeros):
                 bi["mask_inputs"] = curr_masks
+
+        return batched_inputs, use_mask_inputs
+
+    def _compute_iterative_loss(self, batched_inputs, y_one_hot, num_subiter, multimask_output):
+        """Compute the loss for several (sub-)iterations of iterative prompting.
+        In each iterations the prompts are updated based on the previous predictions.
+        """
+        image_embeddings, batched_inputs = self.model.image_embeddings_oft(batched_inputs)
+
+        loss, mask_loss, iou_regression_loss, mean_model_iou = 0.0, 0.0, 0.0, 0.0
+
+        # Whether to use mask inputs in each sub-iteration.
+        batched_inputs, use_mask_inputs = self._use_mask_inputs(batched_inputs, y_one_hot)
 
         for i in range(0, num_subiter):
             # We do multimasking only in the first sub-iteration as we then pass single prompt
@@ -294,6 +300,13 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
             _inp["point_coords"] = updated_point_coords
             _inp["point_labels"] = updated_point_labels
+
+            if use_mask_inputs is None:  # i.e. the default setting on single-GPU.
+                if self.mask_prob > 0:
+                    # using mask inputs for iterative prompting while training, with a probability
+                    use_mask_inputs = (random.random() < self.mask_prob)
+                else:  # otherwise we assume it is 0 and do not need the generator to decide.
+                    use_mask_inputs = False
 
             if use_mask_inputs:
                 _inp["mask_inputs"] = logits
