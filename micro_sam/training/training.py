@@ -619,7 +619,7 @@ def default_sam_dataset(
     # However, if we train only the automatic instance segmentation decoder, then this sampler is not required
     # and we do not set a default sampler.
     if sampler is None and not train_instance_segmentation_only:
-        sampler = torch_em.data.sampler.MinInstanceSampler(3, min_size=min_size)
+        sampler = torch_em.data.sampler.MinInstanceSampler(2, min_size=min_size)
 
     # By default, let the 'default_segmentation_dataset' heuristic decide for itself.
     is_seg_dataset = kwargs.pop("is_seg_dataset", None)
