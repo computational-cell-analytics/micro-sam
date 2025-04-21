@@ -209,12 +209,14 @@ def _generate_covers(input_paths, result_paths, tmp_dir):
 
 def _check_model(model_description, input_paths, result_paths):
     # Load inputs.
-    image = xarray.DataArray(np.load(input_paths["image"]), dims=tuple("bcyx"))
-    embeddings = xarray.DataArray(np.load(result_paths["embeddings"]), dims=tuple("bcyx"))
-    box_prompts = xarray.DataArray(np.load(input_paths["box_prompts"]), dims=tuple("bic"))
-    point_prompts = xarray.DataArray(np.load(input_paths["point_prompts"]), dims=tuple("bhwc"))
-    point_labels = xarray.DataArray(np.load(input_paths["point_labels"]), dims=tuple("bic"))
-    mask_prompts = xarray.DataArray(np.load(input_paths["mask_prompts"]), dims=tuple("bicyx"))
+    image = xarray.DataArray(np.load(input_paths["image"]), dims=("batch", "channel", "y", "x"))
+    embeddings = xarray.DataArray(np.load(result_paths["embeddings"]), dims=("batch", "channel", "y", "x"))
+    box_prompts = xarray.DataArray(np.load(input_paths["box_prompts"]), dims=("batch", "object", "channel"))
+    point_prompts = xarray.DataArray(
+        np.load(input_paths["point_prompts"]), dims=("batch", "object", "point", "channel")
+    )
+    point_labels = xarray.DataArray(np.load(input_paths["point_labels"]), dims=("batch", "object", "point"))
+    mask_prompts = xarray.DataArray(np.load(input_paths["mask_prompts"]), dims=("batch", "object", "channel", "y", "x"))
 
     # Load outputs.
     mask = np.load(result_paths["mask"])
@@ -225,12 +227,14 @@ def _check_model(model_description, input_paths, result_paths):
         # because this was used to generate the test data.
         sample = create_sample_for_model(
             model=model_description,
-            image=image,
-            box_prompts=box_prompts,
-            point_prompts=point_prompts,
-            point_labels=point_labels,
-            mask_prompts=mask_prompts,
-            embeddings=embeddings,
+            inputs={
+                "image": image,
+                "box_prompts": box_prompts,
+                "point_prompts": point_prompts,
+                "point_labels": point_labels,
+                "mask_prompts": mask_prompts,
+                "embeddings": embeddings,
+            },
         ).as_single_block()
         prediction = pp.predict_sample_block(sample)
 
@@ -256,7 +260,7 @@ def _check_model(model_description, input_paths, result_paths):
 
         for kwargs in prompt_kwargs:
             sample = create_sample_for_model(
-                model=model_description, image=image, embeddings=embeddings, **kwargs
+                model=model_description, inputs={"image": image, "embeddings": embeddings, **kwargs},
             ).as_single_block()
             prediction = pp.predict_sample_block(sample)
             predicted_mask = prediction.blocks["masks"].data.data

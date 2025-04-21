@@ -1,41 +1,60 @@
+import os
+
 import imageio.v3 as imageio
+
 import napari
 
-from micro_sam import instance_segmentation, util
-from micro_sam.multi_dimensional_segmentation import automatic_3d_segmentation
+from micro_sam import util
+from micro_sam.sample_data import fetch_hela_2d_example_data, fetch_wholeslide_example_data
+from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
 
-def cell_segmentation():
-    """Run the instance segmentation functionality from micro_sam for segmentation of
-    HeLA cells. You need to run examples/annotator_2d.py:hela_2d_annotator once before
-    running this script so that all required data is downloaded and pre-computed.
+DATA_CACHE = os.path.join(util.get_cache_directory(), "sample_data")
+EMBEDDING_CACHE = os.path.join(util.get_cache_directory(), "embeddings")
+os.makedirs(EMBEDDING_CACHE, exist_ok=True)
+
+
+def cell_segmentation(use_finetuned_model):
+    """Run the instance segmentation functionality from micro_sam for segmentation of HeLA cells.
     """
-    image_path = "../data/hela-2d-image.png"
-    embedding_path = "../embeddings/embeddings-hela2d.zarr"
+    image_path = fetch_hela_2d_example_data(DATA_CACHE)
+
+    if use_finetuned_model:
+        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-hela2d-vit_b_lm.zarr")
+        model_type = "vit_b_lm"
+    else:
+        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-hela2d.zarr")
+        model_type = "vit_h"
 
     # Load the image, the SAM Model, and the pre-computed embeddings.
     image = imageio.imread(image_path)
-    predictor = util.get_sam_model()
-    embeddings = util.precompute_image_embeddings(predictor, image, save_path=embedding_path)
 
-    # Use the instance segmentation logic of Segment Anything.
+    # There are two choices of the automatic segmentation:
+    # 1. AMG (automatic mask generation): Use the instance segmentation logic of Segment Anything.
     # This works by covering the image with a grid of points, getting the masks for all the poitns
     # and only keeping the plausible ones (according to the model predictions).
     # While the functionality here does the same as the implementation from Segment Anything,
     # we enable changing the hyperparameters, e.g. 'pred_iou_thresh', without recomputing masks and embeddings,
     # to support (interactive) evaluation of different hyperparameters.
+    # 2. AIS (automatic instance segmentation): Use the instance segmentation oofic of 'micro-sam'.
+    # This works by predicting three output channels: distance to the object center,
+    # distance to the object boundary and foreground probabilities (per image).
+    # Then, we compute an instance segmentation based on them using a seeded watershed.
 
-    # Create the automatic mask generator class.
-    amg = instance_segmentation.AutomaticMaskGenerator(predictor)
+    # Step 1: Get the 'predictor' and 'segmenter' to perform automatic segmentation.
+    predictor, segmenter = get_predictor_and_segmenter(
+        model_type=model_type,  # choice of the Segment Anything model
+        checkpoint=None,  # overwrite to pass your own finetuned model.
+        device=None,  # overwrite to pass device to run the model inference. by default, chooses best supported device.
+    )
 
-    # Initialize the mask generator with the image and the pre-computed embeddings.
-    amg.initialize(image, embeddings, verbose=True)
-
-    # Generate the instance segmentation. You can call this again for different values of 'pred_iou_thresh'
-    # without having to call initialize again.
-    instances = amg.generate(pred_iou_thresh=0.88)
-    instances = instance_segmentation.mask_data_to_segmentation(
-        instances, shape=image.shape, with_background=True
+    # Step 2: Get the instance segmentation for the given image.
+    instances = automatic_instance_segmentation(
+        predictor=predictor,  # the predictor for the Segment Anything model.
+        segmenter=segmenter,  # the segmenter class responsible for generating predictions.
+        input_path=image,  # the filepath to image or the input array for automatic segmentation.
+        embedding_path=embedding_path,  # the filepath where the computed embeddings are / will be stored.
+        ndim=2,  # the number of input dimensions.
     )
 
     # Show the results.
@@ -45,87 +64,105 @@ def cell_segmentation():
     napari.run()
 
 
-def cell_segmentation_with_tiling():
+def cell_segmentation_with_tiling(use_finetuned_model):
     """Run the instance segmentation functionality from micro_sam for segmentation of
-    cells in a large image. You need to run examples/annotator_2d.py:wholeslide_annotator once before
-    running this script so that all required data is downloaded and pre-computed.
+    cells in a large image.
     """
-    image_path = "../data/whole-slide-example-image.tif"
-    embedding_path = "../embeddings/whole-slide-embeddings.zarr"
+    image_path = fetch_wholeslide_example_data(DATA_CACHE)
+
+    if use_finetuned_model:
+        embedding_path = os.path.join(EMBEDDING_CACHE, "whole-slide-embeddings-vit_b_lm.zarr")
+        model_type = "vit_b_lm"
+    else:
+        embedding_path = os.path.join(EMBEDDING_CACHE, "whole-slide-embeddings.zarr")
+        model_type = "vit_h"
 
     # Load the image, the SAM Model, and the pre-computed embeddings.
     image = imageio.imread(image_path)
-    predictor = util.get_sam_model()
-    embeddings = util.precompute_image_embeddings(
-        predictor, image, save_path=embedding_path, tile_shape=(1024, 1024), halo=(256, 256)
-    )
 
-    # Use the instance segmentation logic of Segment Anything.
+    # There are two choices of the automatic segmentation:
+    # 1. AMG (automatic mask generation): Use the instance segmentation logic of Segment Anything.
     # This works by covering the image with a grid of points, getting the masks for all the poitns
     # and only keeping the plausible ones (according to the model predictions).
-    # The functionality here is similar to the instance segmentation in Segment Anything,
-    # but uses the pre-computed tiled embeddings.
+    # While the functionality here does the same as the implementation from Segment Anything,
+    # we enable changing the hyperparameters, e.g. 'pred_iou_thresh', without recomputing masks and embeddings,
+    # to support (interactive) evaluation of different hyperparameters.
+    # 2. AIS (automatic instance segmentation): Use the instance segmentation oofic of 'micro-sam'.
+    # This works by predicting three output channels: distance to the object center,
+    # distance to the object boundary and foreground probabilities (per image).
+    # Then, we compute an instance segmentation based on them using a seeded watershed.
 
-    # Create the automatic mask generator class.
-    amg = instance_segmentation.TiledAutomaticMaskGenerator(predictor)
+    # Step 1: Get the 'predictor' and 'segmenter' to perform automatic segmentation.
+    predictor, segmenter = get_predictor_and_segmenter(
+        model_type=model_type,  # choice of the Segment Anything model
+        checkpoint=None,  # overwrite to pass your own finetuned model.
+        device=None,  # overwrite to pass device to run the model inference. by default, chooses best supported device.
+        is_tiled=True,  # whether to run automatic segmentation with tiling.
+    )
 
-    # Initialize the mask generator with the image and the pre-computed embeddings.
-    amg.initialize(image, embeddings, verbose=True)
-
-    # Generate the instance segmentation. You can call this again for different values of 'pred_iou_thresh'
-    # without having to call initialize again.
-    instances = amg.generate(pred_iou_thresh=0.88)
-    instances = instance_segmentation.mask_data_to_segmentation(
-        instances, shape=image.shape, with_background=True
+    # Step 2: Get the instance segmentation for the given image.
+    instances = automatic_instance_segmentation(
+        predictor=predictor,  # the predictor for the Segment Anything model.
+        segmenter=segmenter,  # the segmenter class responsible for generating predictions.
+        input_path=image,  # the filepath to image or the input array for automatic segmentation.
+        embedding_path=embedding_path,  # the filepath where the computed embeddings are / will be stored.
+        ndim=2,  # the number of input dimensions.
+        tile_shape=(1024, 1024),  # the tile shape for tiling-based prediction.
+        halo=(256, 256),  # the overlap shape for tiling-based prediction.
     )
 
     # Show the results.
     v = napari.Viewer()
     v.add_image(image)
     v.add_labels(instances)
-    v.add_labels(instances)
     napari.run()
 
 
-def segmentation_in_3d():
+def segmentation_in_3d(use_finetuned_model):
     """Run instance segmentation in 3d.
     """
     import imageio.v3 as imageio
     from micro_sam.sample_data import fetch_nucleus_3d_example_data
 
     # Load the example image data: 3d nucleus segmentation.
-    path = fetch_nucleus_3d_example_data("./data")
-    data = imageio.imread(path)
+    image_path = fetch_nucleus_3d_example_data(DATA_CACHE)
+    image = imageio.imread(image_path)
 
     # Load the SAM model and segmentation decoder.
-    # TODO update this to just use vit_b_lm once it's properly released.
-    model_type = "vit_b"  # The model-type to use: vit_h, vit_l, vit_b etc.
-    checkpoint_path = "./vit_b_lm.pt"  # You can specifiy the path to a custom (fine-tuned) model here.
-    embedding_path = "./embeddings-3d.zarr"  # The embeddings will be cached here. (Optional)
+    model_type = "vit_b_lm"  # The model-type to use: vit_h, vit_l, vit_b etc.
+    embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-3d.zarr")  # The embeddings will be cached here.
 
-    # Load the model and create segmentation functionality.
-    predictor, decoder = instance_segmentation.get_predictor_and_decoder(model_type, checkpoint_path)
-    segmentor = instance_segmentation.InstanceSegmentationWithDecoder(predictor, decoder)
+    # Step 1: Get the 'predictor' and 'segmenter' to perform automatic segmentation.
+    predictor, segmenter = get_predictor_and_segmenter(
+        model_type=model_type,  # choice of the Segment Anything model
+        checkpoint=None,  # overwrite to pass your own finetuned model.
+        device=None,  # overwrite to pass device to run the model inference. by default, chooses best supported device.
+        is_tiled=False,  # whether to run automatic segmentation with tiling.
+    )
 
-    # Run the automatic instance segmentation.
-    instances = automatic_3d_segmentation(
-        data, predictor, segmentor, embedding_path=embedding_path,
-        gap_closing=2,  # This option closes small gaps (here of size 2) in the initial segmentation.
-        min_object_size=100,  # The minimal object size per slice.
-        center_distance_threshold=0.5,  # We can pass additional arguments for the generate function of the segmenter.
+    # Step 2: Get the instance segmentation for the given image.
+    instances = automatic_instance_segmentation(
+        predictor=predictor,  # the predictor for the Segment Anything model.
+        segmenter=segmenter,  # the segmenter class responsible for generating predictions.
+        input_path=image,  # the filepath to image or the input array for automatic segmentation.
+        embedding_path=embedding_path,  # the filepath where the computed embeddings are / will be stored.
+        ndim=3,  # the number of input dimensions.
     )
 
     # Show the results.
     v = napari.Viewer()
-    v.add_image(data)
+    v.add_image(image)
     v.add_labels(instances)
     napari.run()
 
 
 def main():
-    # cell_segmentation()
-    # cell_segmentation_with_tiling()
-    segmentation_in_3d()
+    # Whether to use the fine-tuned SAM model for light microscopy data.
+    use_finetuned_model = True
+
+    # cell_segmentation(use_finetuned_model)
+    # cell_segmentation_with_tiling(use_finetuned_model)
+    segmentation_in_3d(use_finetuned_model)
 
 
 if __name__ == "__main__":

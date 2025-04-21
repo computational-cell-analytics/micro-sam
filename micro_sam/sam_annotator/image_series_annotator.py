@@ -94,7 +94,7 @@ def _initialize_annotator(
         image, model_type=model_type, save_path=image_embedding_path, halo=halo, tile_shape=tile_shape,
         predictor=predictor, decoder=decoder,
         ndim=3 if is_volumetric else 2, precompute_amg_state=precompute_amg_state,
-        checkpoint_path=checkpoint_path, device=device, skip_load=False,
+        checkpoint_path=checkpoint_path, device=device, skip_load=False, use_cli=True,
     )
     state.image_shape = _get_input_shape(image, is_volumetric)
 
