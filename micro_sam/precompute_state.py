@@ -241,7 +241,7 @@ def precompute_state(
         output_path: The output path where the embeddings and other state will be saved.
         pattern: Glob pattern to select files in a folder. The embeddings will be computed
             for each of these files. To select all files in a folder pass "*".
-        model_type: The SegmentAnything model to use. Will use the standard vit_l model by default.
+        model_type: The Segment Anything model to use. Will use the `vit_b_lm` model by default.
         checkpoint_path: Path to a checkpoint for a custom model.
         key: The key to the input file. This is needed for contaner files (e.g. hdf5 or zarr)
             or to load several images as 3d volume. Provide a glob pattern, e.g. "*.tif", for this case.

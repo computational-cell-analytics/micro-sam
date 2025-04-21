@@ -14,6 +14,7 @@ import zarr
 import z5py
 import napari
 import numpy as np
+import nifty.ground_truth as ngt
 
 import elf.parallel
 
@@ -231,6 +232,127 @@ class _WidgetBase(QtWidgets.QWidget):
             # Handle the case where the selected path is not a file
             print("Invalid file selected. Please try again.")
 
+    def _get_model_size_options(self):
+        # We store the actual model names mapped to UI labels.
+        self.model_size_mapping = {}
+        if self.model_family == "Natural Images (SAM)":
+            self.model_size_options = list(self._model_size_map .values())
+            self.model_size_mapping = {self._model_size_map[k]: f"vit_{k}" for k in self._model_size_map.keys()}
+        else:
+            model_suffix = self.supported_dropdown_maps[self.model_family]
+            self.model_size_options = []
+
+            for option in self.model_options:
+                if option.endswith(model_suffix):
+                    # Extract model size character on-the-fly.
+                    key = next((k for k in self._model_size_map .keys() if f"vit_{k}" in option), None)
+                    if key:
+                        size_label = self._model_size_map[key]
+                        self.model_size_options.append(size_label)
+                        self.model_size_mapping[size_label] = option  # Store the actual model name.
+
+        # We ensure an assorted order of model sizes ('tiny' to 'huge')
+        self.model_size_options.sort(key=lambda x: ["tiny", "base", "large", "huge"].index(x))
+
+    def _update_model_type(self):
+        # Get currently selected model size (before clearing dropdown)
+        current_selection = self.model_size_dropdown.currentText()
+        self._get_model_size_options()  # Update model size options dynamically
+
+        # NOTE: We need to prevent recursive updates for this step temporarily.
+        self.model_size_dropdown.blockSignals(True)
+
+        # Let's clear and recreate the dropdown.
+        self.model_size_dropdown.clear()
+        self.model_size_dropdown.addItems(self.model_size_options)
+
+        # We restore the previous selection, if still valid.
+        if current_selection in self.model_size_options:
+            self.model_size = current_selection
+        else:
+            if self.model_size_options:  # Default to the first available model size
+                self.model_size = self.model_size_options[0]
+
+        # Let's map the selection to the correct model type (eg. "tiny" -> "vit_t")
+        size_key = next(
+            (k for k, v in self._model_size_map.items() if v == self.model_size), "b"
+        )
+        self.model_type = f"vit_{size_key}" + self.supported_dropdown_maps[self.model_family]
+
+        self.model_size_dropdown.setCurrentText(self.model_size)  # Apply the selected text to the dropdown
+
+        # We force a refresh for UI here.
+        self.model_size_dropdown.update()
+
+        # NOTE: And finally, we should re-enable signals again.
+        self.model_size_dropdown.blockSignals(False)
+
+    def _create_model_section(self, default_model: str = util._DEFAULT_MODEL, create_layout: bool = True):
+
+        # Create a list of support dropdown values and correspond them to suffixes.
+        self.supported_dropdown_maps = {
+            "Natural Images (SAM)": "",
+            "Light Microscopy": "_lm",
+            "Electron Microscopy": "_em_organelles",
+            "Medical Imaging": "_medical_imaging",
+            "Histopathology": "_histopathology",
+        }
+
+        # NOTE: The available options for all are either 'tiny', 'base', 'large' or 'huge'.
+        self._model_size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
+
+        self._default_model_choice = default_model
+        # Let's set the literally default model choice depending on 'micro-sam'.
+        self.model_family = {v: k for k, v in self.supported_dropdown_maps.items()}[self._default_model_choice[5:]]
+
+        kwargs = {}
+        if create_layout:
+            layout = QtWidgets.QVBoxLayout()
+            kwargs["layout"] = layout
+
+        # NOTE: We stick to the base variant for each model family.
+        # i.e. 'Natural Images (SAM)', 'Light Microscopy', 'Electron Microscopy', 'Medical_Imaging', 'Histopathology'.
+        self.model_family_dropdown, layout = self._add_choice_param(
+            "model_family", self.model_family, list(self.supported_dropdown_maps.keys()),
+            title="Model:", tooltip=get_tooltip("embedding", "model_family"), **kwargs,
+        )
+        self.model_family_dropdown.currentTextChanged.connect(self._update_model_type)
+        return layout
+
+    def _create_model_size_section(self):
+
+        # Create UI for the model size.
+        # This would combine with the chosen 'self.model_family' and depend on 'self._default_model_choice'.
+        self.model_size = self._model_size_map[self._default_model_choice[4]]
+
+        # Get all model options.
+        self.model_options = list(util.models().urls.keys())
+        # Filter out the decoders from the model list.
+        self.model_options = [model for model in self.model_options if not model.endswith("decoder")]
+
+        # Now, we get the available sizes per model family.
+        self._get_model_size_options()
+
+        self.model_size_dropdown, layout = self._add_choice_param(
+            "model_size", self.model_size, self.model_size_options,
+            title="model size:", tooltip=get_tooltip("embedding", "model_size"),
+        )
+        self.model_size_dropdown.currentTextChanged.connect(self._update_model_type)
+        return layout
+
+    def _validate_model_type_and_custom_weights(self):
+        # Let's get all model combination stuff into the desired `model_type` structure.
+        self.model_type = "vit_" + self.model_size[0] + self.supported_dropdown_maps[self.model_family]
+
+        # For 'custom_weights', we remove the displayed text on top of the drop-down menu.
+        if self.custom_weights:
+            # NOTE: We prevent recursive updates for this step temporarily.
+            self.model_family_dropdown.blockSignals(True)
+            self.model_family_dropdown.setCurrentIndex(-1)  # This removes the displayed text.
+            self.model_family_dropdown.update()
+            # NOTE: And re-enable signals again.
+            self.model_family_dropdown.blockSignals(False)
+
 
 # Custom signals for managing progress updates.
 class PBarSignals(QObject):
@@ -358,8 +480,22 @@ def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None
     gc.collect()
 
 
-def _commit_impl(viewer, layer, preserve_committed):
+def _mask_matched_objects(seg, prev_seg, preservation_threshold):
+    prev_ids = np.unique(prev_seg)
+    ovlp = ngt.overlap(prev_seg, seg)
 
+    mask_ids, prev_mask_ids = [], []
+    for prev_id in prev_ids:
+        seg_ids, overlaps = ovlp.overlapArrays(prev_id, True)
+        if seg_ids[0] != 0 and overlaps[0] >= preservation_threshold:
+            mask_ids.append(seg_ids[0])
+            prev_mask_ids.append(prev_id)
+
+    preserve_mask = np.logical_or(np.isin(seg, mask_ids), np.isin(prev_seg, prev_mask_ids))
+    return preserve_mask
+
+
+def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
     state = AnnotatorState()
 
     # Check whether all layers exist as expected or create new ones automatically.
@@ -378,7 +514,7 @@ def _commit_impl(viewer, layer, preserve_committed):
     seg = viewer.layers[layer].data[bb].astype(dtype)
     shape = seg.shape
 
-    # We parallelize these operatios because they take quite long for large volumes.
+    # We parallelize these operations because they take quite long for large volumes.
 
     # Compute the max id in the commited objects.
     # id_offset = int(viewer.layers["committed_objects"].data.max())
@@ -393,9 +529,17 @@ def _commit_impl(viewer, layer, preserve_committed):
     mask = elf.parallel.apply_operation(
         seg, 0, np.not_equal, out=mask, block_shape=util.get_block_shape(shape)
     )
-    if preserve_committed:
+    if preserve_mode != "none":
         prev_seg = viewer.layers["committed_objects"].data[bb]
-        mask[prev_seg != 0] = 0
+        # The mode 'pixels' corresponds to a naive implementation where only committed pixels are preserved.
+        preserve_mask = prev_seg != 0
+        # If the preserve mask is empty we don't need to do anything else here, because we don't have prev objects.
+        if preserve_mask.sum() != 0:
+            # In the mode 'objects' we preserve committed objects instead, by comparing the overlaps
+            # of already committed and newly committed objects.
+            if preserve_mode == "objects":
+                preserve_mask = _mask_matched_objects(seg, prev_seg, preservation_threshold)
+            mask[preserve_mask] = 0
 
     # Write the current object to committed objects.
     seg[mask] += id_offset
@@ -403,6 +547,43 @@ def _commit_impl(viewer, layer, preserve_committed):
     viewer.layers["committed_objects"].refresh()
 
     return id_offset, seg, mask, bb
+
+
+def _get_auto_segmentation_options(state, object_ids):
+    widget = state.widgets["autosegment"]
+
+    segmentation_options = {"object_ids": [int(object_id) for object_id in object_ids]}
+    if widget.with_decoder:
+        segmentation_options["boundary_distance_thresh"] = widget.boundary_distance_thresh
+        segmentation_options["center_distance_thresh"] = widget.center_distance_thresh
+    else:
+        segmentation_options["pred_iou_thresh"] = widget.pred_iou_thresh
+        segmentation_options["stability_score_thresh"] = widget.stability_score_thresh
+        segmentation_options["box_nms_thresh"] = widget.box_nms_thresh
+
+    segmentation_options["min_object_size"] = widget.min_object_size
+    segmentation_options["with_background"] = widget.with_background
+
+    if widget.volumetric:
+        segmentation_options["apply_to_volume"] = widget.apply_to_volume
+        segmentation_options["gap_closing"] = widget.gap_closing
+        segmentation_options["min_extent"] = widget.min_extent
+
+    return segmentation_options
+
+
+def _get_promptable_segmentation_options(state, object_ids):
+    segmentation_options = {"object_ids": [int(object_id) for object_id in object_ids]}
+    is_tracking = False
+    if "segment_nd" in state.widgets:
+        widget = state.widgets["segment_nd"]
+        segmentation_options["projection"] = widget.projection
+        segmentation_options["iou_threshold"] = widget.iou_threshold
+        segmentation_options["box_extension"] = widget.box_extension
+        if widget.tracking:
+            segmentation_options["motion_smoothing"] = widget.motion_smoothing
+            is_tracking = True
+    return segmentation_options, is_tracking
 
 
 def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
@@ -418,11 +599,9 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
                 json.dump({"zarr_format": 2}, f)
 
     f = z5py.ZarrFile(path, "a")
+    state = AnnotatorState()
 
-    # Write metadata about the model that's being used etc.
-    # Only if it's not written to the file yet.
-    if "data_signature" not in f.attrs:
-        state = AnnotatorState()
+    def _save_signature(f, data_signature):
         embeds = state.widgets["embeddings"]
         tile_shape, halo = _process_tiling_inputs(embeds.tile_x, embeds.tile_y, embeds.halo_x, embeds.halo_y)
         signature = util._get_embedding_signature(
@@ -430,10 +609,31 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
             predictor=state.predictor,
             tile_shape=tile_shape,
             halo=halo,
-            data_signature=state.data_signature,
+            data_signature=data_signature,
         )
         for key, val in signature.items():
             f.attrs[key] = val
+
+    # If the data signature is saved in the file already,
+    # then we check if saved data signature and data signature of our image agree.
+    # If not, this file was used for committing objects from another file.
+    if "data_signature" in f.attrs:
+        saved_signature = f.attrs["data_signature"]
+        current_signature = state.data_signature
+        if saved_signature != current_signature:  # Signatures disagree.
+            msg = f"The commit_path {path} was already used for saving annotations for different image data:\n"
+            msg += f"The data signatures are different: {saved_signature} != {current_signature}.\n"
+            msg += "Press 'Ok' to remove the data already stored in that file and continue annotation.\n"
+            msg += "Otherwise please select a different file path."
+            skip_clear = _generate_message("info", msg)
+            if skip_clear:
+                return
+            else:
+                f = z5py.ZarrFile(path, "w")
+                _save_signature(f, current_signature)
+    # Otherwise (data signature not saved yet), write the current signature.
+    else:
+        _save_signature(f, state.data_signature)
 
     # Write the segmentation.
     full_shape = viewer.layers["committed_objects"].data.shape
@@ -450,58 +650,94 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
     if extra_attrs is not None:
         f.attrs.update(extra_attrs)
 
-    # If we run commit from the automatic segmentation we don't have
-    # any prompts and so don't need to commit anything else.
+    # Get the commit history and the objects that are being commited.
+    commit_history = f.attrs.get("commit_history", [])
+    object_ids = np.unique(seg[mask])
+
+    # We committed an automatic segmentation.
     if layer == "auto_segmentation":
-        # TODO write the settings for the auto segmentation widget.
+        # Save the settings of the segmentation widget.
+        segmentation_options = _get_auto_segmentation_options(state, object_ids)
+        commit_history.append({"auto_segmentation": segmentation_options})
+
+        # Write the commit history.
+        f.attrs["commit_history"] = commit_history
+
+        # If we run commit from the automatic segmentation we don't have
+        # any prompts and so don't need to commit anything else.
         return
 
-    def write_prompts(object_id, prompts, point_prompts):
+    segmentation_options, is_tracking = _get_promptable_segmentation_options(state, object_ids)
+    commit_history.append({"current_object": segmentation_options})
+
+    def write_prompts(object_id, prompts, point_prompts, point_labels, track_state=None):
         g = f.create_group(f"prompts/{object_id}")
         if prompts is not None and len(prompts) > 0:
             data = np.array(prompts)
             g.create_dataset("prompts", data=data, chunks=data.shape)
         if point_prompts is not None and len(point_prompts) > 0:
             g.create_dataset("point_prompts", data=point_prompts, chunks=point_prompts.shape)
+            ds = g.create_dataset("point_labels", data=point_labels, chunks=point_labels.shape)
+            if track_state is not None:
+                ds.attrs["track_state"] = track_state.tolist()
 
-    # TODO write the settings for the segmentation widget if necessary.
+    # Get the prompts from the layers.
+    prompts = viewer.layers["prompts"].data
+    point_layer = viewer.layers["point_prompts"]
+    point_prompts = point_layer.data
+    point_labels = point_layer.properties["label"]
+    if len(point_prompts) > 0:
+        point_labels = np.array([1 if label == "positive" else 0 for label in point_labels])
+        assert len(point_prompts) == len(point_labels), \
+            f"Number of point prompts and labels disagree: {len(point_prompts)} != {len(point_labels)}"
+
     # Commit the prompts for all the objects in the commit.
-    object_ids = np.unique(seg[mask])
     if len(object_ids) == 1:  # We only have a single object.
-        write_prompts(object_ids[0], viewer.layers["prompts"].data, viewer.layers["point_prompts"].data)
-    else:
-        # TODO this logic has to be updated to be compatible with the new batched prompting
-        have_prompts = len(viewer.layers["prompts"].data) > 0
-        have_point_prompts = len(viewer.layers["point_prompts"].data) > 0
-        if have_prompts and not have_point_prompts:
-            prompts = viewer.layers["prompts"].data
-            point_prompts = None
-        elif not have_prompts and have_point_prompts:
-            prompts = None
-            point_prompts = viewer.layers["point_prompts"].data
-        else:
-            msg = "Got multiple objects from interactive segmentation with box and point prompts." if (
-                have_prompts and have_point_prompts
-            ) else "Got multiple objects from interactive segmentation with neither box or point prompts."
-            raise RuntimeError(msg)
+        write_prompts(object_ids[0], prompts, point_prompts, point_labels)
 
+    elif is_tracking:  # We have multiple objects from tracking a lineage with divisions.
+        track_ids_points = np.array(point_layer.properties["track_id"])
+        track_ids_prompts = np.array(viewer.layers["prompts"].properties["track_id"])
+
+        unique_track_ids = np.unique(track_ids_points)
+        assert len(unique_track_ids) == len(object_ids)
+        track_state = np.array(point_layer.properties["state"])
+        for track_id, object_id in zip(unique_track_ids, object_ids):
+            this_prompts = None if len(prompts) == 0 else prompts[track_ids_prompts == track_id]
+            point_mask = track_ids_points == track_id
+            this_points, this_labels, this_track_state = \
+                point_prompts[point_mask], point_labels[point_mask], track_state[point_mask]
+            write_prompts(object_id, this_prompts, this_points, this_labels, track_state=this_track_state)
+
+    else:  # We have multiple objects, which are the result from batched interactive segmentation.
+        # Note: we can't match exact object ids to their prompts, for batched segmentation.
+        # We first write the objects from box prompts, then from point prompts.
+        n_prompts, n_points = len(prompts), len(point_prompts)
+        assert n_prompts + n_points == len(object_ids), \
+            f"Number of prompts and objects disagree: {n_prompts} + {n_points} != {len(object_ids)}"
         for i, object_id in enumerate(object_ids):
-            write_prompts(
-                object_id,
-                None if prompts is None else prompts[i:i+1],
-                None if point_prompts is None else point_prompts[i:i+1]
-            )
+            if i < n_prompts:
+                this_prompts, this_points, this_labels = prompts[i:i+1], None, None
+            else:
+                j = i - n_prompts
+                this_prompts, this_points, this_labels = None, point_prompts[j:j+1], point_labels[j:j+1]
+            write_prompts(object_id, this_prompts, this_points, this_labels)
+
+    # Write the commit history.
+    f.attrs["commit_history"] = commit_history
 
 
 @magic_factory(
     call_button="Commit [C]",
-    layer={"choices": ["current_object", "auto_segmentation"]},
-    commit_path={"mode": "d"},  # choose a directory
+    layer={"choices": ["current_object", "auto_segmentation"], "tooltip": get_tooltip("commit", "layer")},
+    preserve_mode={"choices": ["objects", "pixels", "none"], "tooltip": get_tooltip("commit", "preserve_mode")},
+    commit_path={"mode": "d", "tooltip": get_tooltip("commit", "commit_path")},
 )
 def commit(
     viewer: "napari.viewer.Viewer",
     layer: str = "current_object",
-    preserve_committed: bool = True,
+    preserve_mode: str = "objects",
+    preservation_threshold: float = 0.75,
     commit_path: Optional[Path] = None,
 ) -> None:
     """Widget for committing the segmented objects from automatic or interactive segmentation.
@@ -510,13 +746,16 @@ def commit(
         viewer: The napari viewer.
         layer: Select the layer to commit. Can be either 'current_object' to commit interacitve segmentation results.
             Or 'auto_segmentation' to commit automatic segmentation results.
-        preserve_committed: If active already committted objects are not over-written by new commits.
+        preserve_mode: The mode for preserving already committed objects, in order to prevent over-writing
+            them by a new commit. Supports the modes 'objects', which preserves on the object level and is the default,
+            'pixels', which preserves on the pixel-level, or 'none', which does not preserve commited objects.
+        preservation_threshold: The overlap threshold for preserving objects. This is only used if
+            preservation_mode is set to 'objects'.
         commit_path: Select a file path where the committed results and prompts will be saved.
             This feature is still experimental.
     """
-
     # Commit the segmentation layer.
-    _, seg, mask, bb = _commit_impl(viewer, layer, preserve_committed)
+    _, seg, mask, bb = _commit_impl(viewer, layer, preserve_mode, preservation_threshold)
 
     if commit_path is not None:
         _commit_to_file(commit_path, viewer, layer, seg, mask, bb)
@@ -537,12 +776,14 @@ def commit(
 @magic_factory(
     call_button="Commit [C]",
     layer={"choices": ["current_object", "auto_segmentation"]},
+    preserve_mode={"choices": ["objects", "pixels", "none"]},
     commit_path={"mode": "d"},  # choose a directory
 )
 def commit_track(
     viewer: "napari.viewer.Viewer",
     layer: str = "current_object",
-    preserve_committed: bool = True,
+    preserve_mode: str = "objects",
+    preservation_threshold: float = 0.75,
     commit_path: Optional[Path] = None,
 ) -> None:
     """Widget for committing the objects from interactive tracking.
@@ -551,12 +792,16 @@ def commit_track(
         viewer: The napari viewer.
         layer: Select the layer to commit. Can be either 'current_object' to commit interacitve segmentation results.
             Or 'auto_segmentation' to commit automatic segmentation results.
-        preserve_committed: If active already committted objects are not over-written by new commits.
+        preserve_mode: The mode for preserving already committed objects, in order to prevent over-writing
+            them by a new commit. Supports the modes 'objects', which preserves on the object level and is the default,
+            'pixels', which preserves on the pixel-level, or 'none', which does not preserve commited objects.
+        preservation_threshold: The overlap threshold for preserving objects. This is only used if
+            preservation_mode is set to 'objects'.
         commit_path: Select a file path where the committed results and prompts will be saved.
             This feature is still experimental.
     """
     # Commit the segmentation layer.
-    id_offset, seg, mask, bb = _commit_impl(viewer, layer, preserve_committed)
+    id_offset, seg, mask, bb = _commit_impl(viewer, layer, preserve_mode, preservation_threshold)
 
     # Update the lineages.
     state = AnnotatorState()
@@ -636,21 +881,21 @@ def settings_widget(cache_directory: Optional[Path] = util.get_cache_directory()
     print(f"micro-sam cache directory set to: {cache_directory}")
 
 
-def _generate_message(message_type, message) -> bool:
+def _generate_message(message_type: str, message: str) -> bool:
     """
     Displays a message dialog based on the provided message type.
 
     Args:
-        message_type (str): The type of message to display. Valid options are:
+        message_type: The type of message to display. Valid options are:
             - "error": Displays a critical error message with an "Ok" button.
             - "info": Displays an informational message in a separate dialog box.
                  The user can dismiss it by either clicking "Ok" or closing the dialog.
-        message (str): The message content to be displayed in the dialog.
+        message: The message content to be displayed in the dialog.
 
     Returns:
-        bool: A flag indicating whether the user aborted the operation based on the
-              message type. This flag is only set for "info" messages where the user
-              can choose to cancel (rejected).
+        A flag indicating whether the user aborted the operation based on the
+        message type. This flag is only set for "info" messages where the user
+        can choose to cancel (rejected).
 
     Raises:
         ValueError: If an invalid message type is provided.
@@ -666,6 +911,8 @@ def _generate_message(message_type, message) -> bool:
         if result == QtWidgets.QDialog.Rejected:  # Check for cancel
             abort = True  # Set flag directly in calling function
             return abort
+    else:
+        raise ValueError(f"Invalid message type {message_type}")
 
 
 def _validate_embeddings(viewer: "napari.viewer.Viewer"):
@@ -912,7 +1159,7 @@ class EmbeddingWidget(_WidgetBase):
         # Section 1: Image and Model.
         section1_layout = QtWidgets.QHBoxLayout()
         section1_layout.addLayout(self._create_image_section())
-        section1_layout.addLayout(self._create_model_section())
+        section1_layout.addLayout(self._create_model_section())  # Creates the model family widget section.
         self.layout().addLayout(section1_layout)
 
         # Section 2: Settings (collapsible).
@@ -999,115 +1246,14 @@ class EmbeddingWidget(_WidgetBase):
         if "segment_nd" in state.widgets:
             vutil._sync_ndsegment_widget(state.widgets["segment_nd"], _model_type, self.custom_weights)
 
-    def _update_model_type(self):
-        # Get currently selected model size (before clearing dropdown)
-        current_selection = self.model_size_dropdown.currentText()
-        self._get_model_size_options()  # Update model size options dynamically
-
-        # NOTE: We need to prevent recursive updates for this step temporarily.
-        self.model_size_dropdown.blockSignals(True)
-
-        # Let's clear and recreate the dropdown.
-        self.model_size_dropdown.clear()
-        self.model_size_dropdown.addItems(self.model_size_options)
-
-        # We restore the previous selection, if still valid.
-        if current_selection in self.model_size_options:
-            self.model_size = current_selection
-        else:
-            if self.model_size_options:  # Default to the first available model size
-                self.model_size = self.model_size_options[0]
-
-        # Let's map the selection to the correct model type (eg. "tiny" -> "vit_t")
-        size_key = next(
-            (k for k, v in self._model_size_map.items() if v == self.model_size), "b"
-        )
-        self.model_type = f"vit_{size_key}" + self.supported_dropdown_maps[self.model_family]
-
-        self.model_size_dropdown.setCurrentText(self.model_size)  # Apply the selected text to the dropdown
-
-        # We force a refresh for UI here.
-        self.model_size_dropdown.update()
-
-        # NOTE: And finally, we should re-enable signals again.
-        self.model_size_dropdown.blockSignals(False)
-
-    def _get_model_size_options(self):
-        # We store the actual model names mapped to UI labels.
-        self.model_size_mapping = {}
-        if self.model_family == "Natural Images (SAM)":
-            self.model_size_options = list(self._model_size_map .values())
-            self.model_size_mapping = {self._model_size_map[k]: f"vit_{k}" for k in self._model_size_map.keys()}
-        else:
-            model_suffix = self.supported_dropdown_maps[self.model_family]
-            self.model_size_options = []
-
-            for option in self.model_options:
-                if option.endswith(model_suffix):
-                    # Extract model size character on-the-fly.
-                    key = next((k for k in self._model_size_map .keys() if f"vit_{k}" in option), None)
-                    if key:
-                        size_label = self._model_size_map[key]
-                        self.model_size_options.append(size_label)
-                        self.model_size_mapping[size_label] = option  # Store the actual model name.
-
-        # We ensure an assorted order of model sizes ('tiny' to 'huge')
-        self.model_size_options.sort(key=lambda x: ["tiny", "base", "large", "huge"].index(x))
-
-    def _create_model_section(self):
-        # Create a list of support dropdown values and correspond them to suffixes.
-        self.supported_dropdown_maps = {
-            "Natural Images (SAM)": "",
-            "Light Microscopy": "_lm",
-            "Electron Microscopy": "_em_organelles",
-            "Medical Imaging": "_medical_imaging",
-            "Histopathology": "_histopathology",
-        }
-
-        # NOTE: The available options for all are either 'tiny', 'base', 'large' or 'huge'.
-        self._model_size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
-
-        self._default_model_choice = util._DEFAULT_MODEL
-        # Let's set the literally default model choice depending on 'micro-sam'.
-        self.model_family = {v: k for k, v in self.supported_dropdown_maps.items()}[self._default_model_choice[5:]]
-
-        layout = QtWidgets.QVBoxLayout()
-
-        # NOTE: We stick to the base variant for each model family.
-        # i.e. 'Natural Images (SAM)', 'Light Microscopy', 'Electron Microscopy', 'Medical_Imaging', 'Histopathology'.
-        self.model_family_dropdown, layout = self._add_choice_param(
-            "model_family", self.model_family, list(self.supported_dropdown_maps.keys()),
-            title="Model:", layout=layout, tooltip=get_tooltip("embedding", "model")
-        )
-        self.model_family_dropdown.currentTextChanged.connect(self._update_model_type)
-        return layout
-
     def _create_settings_widget(self):
         setting_values = QtWidgets.QWidget()
         setting_values.setToolTip(get_tooltip("embedding", "settings"))
         setting_values.setLayout(QtWidgets.QVBoxLayout())
 
-        # Create UI for the model size.
-        # This would combine with the chosen 'self.model_family' and depend on 'self._default_model_choice'.
-        self.model_size = self._model_size_map[self._default_model_choice[4]]
-
-        # Get all model options.
-        self.model_options = list(util.models().urls.keys())
-        # Filter out the decoders from the model list.
-        self.model_options = [model for model in self.model_options if not model.endswith("decoder")]
-
-        # Now, we get the available sizes per model family.
-        self._get_model_size_options()
-
-        self.model_size_dropdown, layout = self._add_choice_param(
-            "model_size", self.model_size, self.model_size_options,
-            title="model size:", tooltip=get_tooltip("embedding", "model"),
-        )
-        self.model_size_dropdown.currentTextChanged.connect(self._update_model_type)
+        # Add the model size widget section.
+        layout = self._create_model_size_section()
         setting_values.layout().addLayout(layout)
-
-        # Now that all parameters in place, let's get them all into one `model_type`.
-        self.model_type = "vit_" + self.model_size[0] + self.supported_dropdown_maps[self.model_family]
 
         # Create UI for the device.
         self.device = "auto"
@@ -1163,8 +1309,7 @@ class EmbeddingWidget(_WidgetBase):
         return settings
 
     def _validate_inputs(self):
-        """
-        Validates the inputs for the annotation process and returns a dictionary
+        """Validates the inputs for the annotation process and returns a dictionary
         containing information for message generation, or False if no messages are needed.
 
         This function performs the following checks:
@@ -1253,18 +1398,11 @@ class EmbeddingWidget(_WidgetBase):
             return _generate_message(val_results["message_type"], val_results["message"])
 
     def __call__(self, skip_validate=False):
+        self._validate_model_type_and_custom_weights()
+
         # Validate user inputs.
         if not skip_validate and self._validate_inputs():
             return
-
-        # For 'custom_weights', we remove the displayed text on top of the drop-down menu.
-        if self.custom_weights:
-            # NOTE: We prevent recursive updates for this step temporarily.
-            self.model_family_dropdown.blockSignals(True)
-            self.model_family_dropdown.setCurrentIndex(-1)  # This removes the displayed text.
-            self.model_family_dropdown.update()
-            # NOTE: And re-enable signals again.
-            self.model_family_dropdown.blockSignals(False)
 
         # Get the image.
         image = self.image_selection.get_value()

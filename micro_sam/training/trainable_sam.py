@@ -10,10 +10,10 @@ from segment_anything.utils.transforms import ResizeLongestSide
 
 # simple wrapper around SAM in order to keep things trainable
 class TrainableSAM(nn.Module):
-    """Wrapper to make the SegmentAnything model trainable.
+    """Wrapper to make the Segment Anything model trainable.
 
     Args:
-        sam: The SegmentAnything Model.
+        sam: The Segment Anything Model.
     """
 
     def __init__(self, sam: Sam) -> None:

@@ -1,5 +1,5 @@
 name: micro-sam
-display_name: SegmentAnything for Microscopy
+display_name: Segment Anything for Microscopy
 # see https://napari.org/stable/plugins/manifest.html for valid categories
 categories: ["Segmentation", "Annotation"]
 contributions:

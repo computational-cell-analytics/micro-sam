@@ -150,7 +150,7 @@ def get_trainable_sam_model(
 
 
 class ConvertToSamInputs:
-    """Convert outputs of data loader to the expected batched inputs of the SegmentAnything model.
+    """Convert outputs of data loader to the expected batched inputs of the Segment Anything model.
 
     Args:
         transform: The transformation to resize the prompts. Should be the same transform used in the

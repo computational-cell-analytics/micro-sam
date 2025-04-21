@@ -1,10 +1,3 @@
-"""
-How to install Miniforge on HIVE?
-1. PS C:\Users\architan> E:\TiM2025-Software\Miniforge3-Windows-x86_64.exe
-2. Follow instructions and install the package.
-3. .\miniforge3\Scripts\conda.exe init powershell (from your home directory)
-"""  # noqa
-
 import numpy as np
 from shapely import LineString
 from skimage.measure import find_contours
@@ -14,7 +7,7 @@ import ezomero as ez
 from micro_sam.sam_annotator import annotator_2d
 
 
-def _load_image(conn):
+def _load_image(conn, upload_segmentation_to_omero):
     # Step 1: Use the connecton to access files.
     # NOTE: The "project_id" info is located inside the metadata section of your project.
     # eg. the "project_id" for "example_data_test" is set to 46.
@@ -49,41 +42,60 @@ def _load_image(conn):
     import napari
     napari.run()
 
-    # Store the segmentations locally for storing them either as polygons or something else.
-    segmentation = viewer.layers["committed_objects"].data
+    if upload_segmentation_to_omero:
 
-    # Let's try converting them as polygons, store them as a list of polygons and put it back.
-    contours = find_contours(segmentation)[0]  # Get contours
-    contour_as_line = LineString(contours)  # Convert contours to line structure.
-    simple_line = contour_as_line.simplify(tolerance=1.0)  # Adjust tolerance to make the polygon.
-    simple_coords = np.array(simple_line.coords)
+        # Store the segmentations locally for storing them either as polygons or something else.
+        segmentation = viewer.layers["committed_objects"].data
 
-    # Now, let's post a single ROI and see if it worked.
-    ez.post_roi(conn, image_id=image_id, shapes=[ez.rois.Polygon(simple_coords)], name="test_micro_sam_seg")
+        # Let's try converting them as polygons, store them as a list of polygons and put it back.
+        contours = find_contours(segmentation)[0]  # Get contours
+        contour_as_line = LineString(contours)  # Convert contours to line structure.
+        simple_line = contour_as_line.simplify(tolerance=1.0)  # Adjust tolerance to make the polygon.
+        simple_coords = np.array(simple_line.coords)
+
+        # Now, let's post a single ROI and see if it worked.
+        ez.post_roi(conn, image_id=image_id, shapes=[ez.rois.Polygon(simple_coords, z=40)], name="test_micro_sam_seg")
 
 
-def main():
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Run `micro-sam` on OMERO data")
+    parser.add_argument(
+        "--host", default="omero-training.gerbi-gmb.de", type=str, help="The host server URL",
+    )
+
+    # NOTE: If the default port below is blocked, use the one below.
+    # host = "wss://omero-training.gerbi-gmb.de/omero-wss"
+    # port = 443  # the default port (4064) seems to work for me.
+    parser.add_argument(
+        "--port", default=4064, type=int, help="The choice of port for connecting to the server",
+    )
+    parser.add_argument(
+        "--username", default="tim2025_test", type=str, help="The username.",
+    )
+    parser.add_argument(
+        "--password", default="tim2025_test", type=str, help="The correspond user's password."
+    )
+    parser.add_argument(
+        "--omero_group", default="TiM2025_preparation", type=str, help="The OMERO-level group name."
+    )
+    parser.add_argument(
+        "--upload_segmentation", action="store_true", help="Whether to load segmentation as polygons to OMERO."
+    )
+    args = parser.parse_args()
 
     # Inspired by https://github.com/I3D-bio/omero_python_workshop.
 
     # Check connection to the test account.
-    user = "tim2025_test"
-    password = "tim2025_test"
-    omero_group = "TiM2025_preparation"  # NOTE: This is always the top-level group name in hierarchy.
-
-    host = "omero-training.gerbi-gmb.de"
-    port = 4064
-
-    # NOTE: If the default port above is blocked, use the one below.
-    # host = "wss://omero-training.gerbi-gmb.de/omero-wss"
-    # port = 443  # the default port (4064) seems to work for me.
-
-    conn = ez.connect(user, password, group=omero_group, host=host, port=port, secure=True)
+    conn = ez.connect(
+        user=args.username,
+        password=args.password,
+        group=args.omero_group,
+        host=args.host,
+        port=args.port,
+        secure=True
+    )
     print(f"Is connected: {conn.isConnected()}")
 
     # Visualize the image from the OMERO server.
-    _load_image(conn)
-
-
-if __name__ == "__main__":
-    main()
+    _load_image(conn, upload_segmentation_to_omero=args.upload_segmentation)

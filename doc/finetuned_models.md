@@ -1,41 +1,55 @@
 # Finetuned Models
 
-In addition to the original Segment Anything models, we provide models that are finetuned on microscopy data.
+In addition to the original Segment Anything models, we provide models that are finetuned on microscopy data, histopathology data and medical imaging.
 They are available in the [BioImage.IO Model Zoo](https://bioimage.io/#/) and are also hosted on Zenodo.
 
-We currently offer the following models:
+In the [annotation tools](#annotation-tools), you can select the model from the top widget:
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/model-type-selector.png" width="512">
 
-- `vit_h`: Default Segment Anything model with ViT Huge backbone.
-- `vit_l`: Default Segment Anything model with ViT Large backbone.
-- `vit_b`: Default Segment Anything model with ViT Base backbone.
-- `vit_t`: Segment Anything model with ViT Tiny backbone. From the [Mobile SAM publication](https://arxiv.org/abs/2306.14289).
-- `vit_l_lm`: Finetuned Segment Anything model for cells and nuclei in light microscopy data with ViT Large backbone. ([Zenodo](https://doi.org/10.5281/zenodo.11111176)) ([idealistic-rat on BioImage.IO](https://bioimage.io/#/?id=idealistic-rat))
-- `vit_b_lm`: Finetuned Segment Anything model for cells and nuclei in light microscopy data with ViT Base backbone. ([Zenodo](https://zenodo.org/doi/10.5281/zenodo.11103797)) ([diplomatic-bug on BioImage.IO](https://bioimage.io/#/?id=diplomatic-bug))
-- `vit_t_lm`: Finetuned Segment Anything model for cells and nuclei in light microscopy data with ViT Tiny backbone. ([Zenodo](https://doi.org/10.5281/zenodo.11111328)) ([faithful-chicken BioImage.IO](https://bioimage.io/#/?id=faithful-chicken))
-- `vit_l_em_organelles`: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with ViT Large backbone. ([Zenodo](https://doi.org/10.5281/zenodo.11111054)) ([humorous-crab on BioImage.IO](https://bioimage.io/#/?id=humorous-crab))
-- `vit_b_em_organelles`: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with ViT Base backbone. ([Zenodo](https://doi.org/10.5281/zenodo.11111293)) ([noisy-ox on BioImage.IO](https://bioimage.io/#/?id=noisy-ox))
-- `vit_t_em_organelles`: Finetuned Segment Anything model for mitochodria and nuclei in electron microscopy data with ViT Tiny backbone. ([Zenodo](https://doi.org/10.5281/zenodo.11110950)) ([greedy-whale on BioImage.IO](https://bioimage.io/#/?id=greedy-whale))
+You can use the `Model` dropdown (left side) to select which kind of model to use and the `model size` dropdown (right side, available after opening the `Embedding Settings` menu) to select the size of the model.
+By default, the `base` size is used.
 
-See the two figures below of the improvements through the finetuned model for LM and EM data. 
+If you are using the [CLI](#using-the-command-line-interface-cli) or the [python library](#using-the-python-library), then you can specify the model to use via the `model_type` parameter, which consists of a single name composed of model type and size. See for example the [2d annotator example](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py#L62).
+
+Specifically, we provide the following model types and sizes:
+- The original Segment Anything Models (`Natural Images (SAM)`):
+    - `vit_h`: Segment Anything model with ViT Huge image encoder.
+    - `vit_l`: Segment Anything model with ViT Large image encoder.
+    - `vit_b`: Segment Anything model with ViT Base image encoder.
+    - `vit_t`: Segment Anything model with ViT Tiny image encoder. From [Mobile SAM](https://arxiv.org/abs/2306.14289).
+- The light microscopy generalist models from [Segment Anything for Microscopy](https://www.nature.com/articles/s41592-024-02580-4) (`Light Microscopy`).
+    - `vit_l_lm`: Model for cells and nuclei in light microscopy data with ViT Large image encoder. ([Zenodo](https://doi.org/10.5281/zenodo.11111176)) ([idealistic-rat on BioImage.IO](https://bioimage.io/#/?id=idealistic-rat))
+    - `vit_b_lm`: Model for cells and nuclei in light microscopy data with ViT Base image encoder. ([Zenodo](https://zenodo.org/doi/10.5281/zenodo.11103797)) ([diplomatic-bug on BioImage.IO](https://bioimage.io/#/?id=diplomatic-bug))
+    - `vit_t_lm`: Model for cells and nuclei in light microscopy data with ViT Tiny image encoder. ([Zenodo](https://doi.org/10.5281/zenodo.11111328)) ([faithful-chicken BioImage.IO](https://bioimage.io/#/?id=faithful-chicken))
+- The electron microscopy generalist models from [Segment Anything for Microscopy](https://www.nature.com/articles/s41592-024-02580-4) (`Electron Microscopy`).
+    - `vit_l_em_organelles`: Model for mitochodria and nuclei in electron microscopy data with ViT Large image encoder. ([Zenodo](https://doi.org/10.5281/zenodo.11111054)) ([humorous-crab on BioImage.IO](https://bioimage.io/#/?id=humorous-crab))
+    - `vit_b_em_organelles`: Model for mitochodria and nuclei in electron microscopy data with ViT Base image encoder. ([Zenodo](https://doi.org/10.5281/zenodo.11111293)) ([noisy-ox on BioImage.IO](https://bioimage.io/#/?id=noisy-ox))
+    - `vit_t_em_organelles`: Model for mitochodria and nuclei in electron microscopy data with ViT Tiny image encoder. ([Zenodo](https://doi.org/10.5281/zenodo.11110950)) ([greedy-whale on BioImage.IO](https://bioimage.io/#/?id=greedy-whale))
+- The medical imaging generalist models from [MedicoSAM](https://arxiv.org/abs/2501.11734) (`Medical Imaging`).
+    - `vit_b_medical_imaging`: Model for medical imaging data with ViT Base image encoder.
+- The histopathology generalist models from [PathoSAM](https://arxiv.org/abs/2502.00408) (`Histopathology`).
+    - `vit_h_histopathology`: Model for nuclei in histopathology with ViT Huge image encoder.
+    - `vit_l_histopathology`: Model for nuclei in histopathology with ViT Large image encoder.
+    - `vit_b_histopathology`: Model for nuclei in histopathology with ViT Base image encoder.
+
+See the two figures below of the improvements through the finetuned models for LM and EM data. 
 
 <img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/lm_comparison.png" width="768">
 
 <img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/em_comparison.png" width="768">
 
-You can select which model to use in the [annotation tools](#annotation-tools) by selecting the corresponding name in the `Model:` drop-down menu in the embedding menu:
-
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/model-type-selector.png" width="256">
-
-To use a specific model in the python library you need to pass the corresponding name as value to the `model_type` parameter exposed by all relevant functions.
-See for example the [2d annotator example](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py#L62).
-
+Note: if you have a `micro_sam` version older than v1.4.0, then the model selection dialogue in the [annotation tools](#annotation-tools) looks differently. In these versions, you have to select the model by its full name:
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/model-type-selector-old.png" width="384">
 
 ## Choosing a Model 
 
 As a rule of thumb:
-- Use the `vit_l_lm` or `vit_b_lm` model for segmenting cells or nuclei in light microscopy. The larger model (`vit_l_lm`) yields a bit better segmentation quality, especially for automatic segmentation, but needs more computational resources.
-- Use the `vit_l_em_organelles` or `vit_b_em_organelles` models for segmenting mitochondria, nuclei or other  roundish organelles in electron microscopy.
-- For other use-cases use one of the default models.
+- Use the `Light Microscopy` model (`vit_b_lm`) for segmenting cells or nuclei in light microscopy. The larger model (`vit_l_lm`) yields a bit better segmentation quality, especially for automatic segmentation, but needs more computational resources.
+- Use the `Electron Microscopy` models (`vit_b_em_organelles` or `vit_l_em_organelles`) for segmenting mitochondria, nuclei or other roundish organelles in electron microscopy.
+- Use the `Medical Imaging` model (`vit_b_medical_imaging`) for interactive segmentation of medical imaging data (X-Ray, CT, MRI, Ultrasound, etc.).
+- Use the `Histopathology` models (`vit_b_histopathology` or `vit_l_histopathology`) for segmenting nuclei in histopathology images.
+- For other use-cases, use one of the original SAM models (`SAM (Natural Images)`, `vit_b` or `vit_l`).
+- We have not seen any advantages of using the largest model (`vit_h`), so in general don't recommend to use it as it needs significantly more resources to run.
 - The `vit_t_...` models run much faster than other models, but yield inferior quality for many applications. It can still make sense to try them for your use-case if your working on a laptop and want to annotate many images or volumetric data. 
 
 See also the figures above for examples where the finetuned models work better than the default models.

@@ -3,7 +3,6 @@ channels:
 name:
     sam
 dependencies:
-    - cpuonly
     - napari
     - pdoc
     - pooch

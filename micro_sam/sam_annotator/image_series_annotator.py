@@ -94,7 +94,7 @@ def _initialize_annotator(
         image, model_type=model_type, save_path=image_embedding_path, halo=halo, tile_shape=tile_shape,
         predictor=predictor, decoder=decoder,
         ndim=3 if is_volumetric else 2, precompute_amg_state=precompute_amg_state,
-        checkpoint_path=checkpoint_path, device=device, skip_load=False,
+        checkpoint_path=checkpoint_path, device=device, skip_load=False, use_cli=True,
     )
     state.image_shape = _get_input_shape(image, is_volumetric)
 
@@ -154,7 +154,7 @@ def image_series_annotator(
         tile_shape: Shape of tiles for tiled embedding prediction.
             If `None` then the whole image is passed to Segment Anything.
         halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
-        viewer: The viewer to which the SegmentAnything functionality should be added.
+        viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
@@ -339,7 +339,7 @@ def image_folder_annotator(
         output_folder: The folder where the segmentation results are saved.
         pattern: The glob patter for loading files from `input_folder`.
             By default all files will be loaded.
-        viewer: The viewer to which the SegmentAnything functionality should be added.
+        viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
         kwargs: The keyword arguments for `micro_sam.sam_annotator.image_series_annotator`.
@@ -370,7 +370,6 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         self.run_button.clicked.connect(self.__call__)
         self.layout().addWidget(self.run_button)
 
-    # model_type: str = util._DEFAULT_MODEL,
     def _create_options(self):
         self.folder = None
         _, layout = self._add_path_param(
@@ -388,18 +387,17 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         )
         self.layout().addLayout(layout)
 
-        self.model_type = util._DEFAULT_MODEL
-        model_options = list(util.models().urls.keys())
-        model_options = [model for model in model_options if not model.endswith("decoder")]
-        _, layout = self._add_choice_param(
-            "model_type", self.model_type, model_options, title="Model:",
-            tooltip=get_tooltip("embedding", "model")
-        )
+        # Add the model family widget section.
+        layout = self._create_model_section(create_layout=False)
         self.layout().addLayout(layout)
 
     def _create_settings(self):
         setting_values = QtWidgets.QWidget()
         setting_values.setLayout(QtWidgets.QVBoxLayout())
+
+        # Add the model size widget section.
+        layout = self._create_model_size_section()
+        setting_values.layout().addLayout(layout)
 
         self.pattern = "*"
         _, layout = self._add_string_param(
@@ -463,12 +461,16 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         return False
 
     def __call__(self, skip_validate=False):
+        self._validate_model_type_and_custom_weights()
+
         if not skip_validate and self._validate_inputs():
             return
         tile_shape, halo = widgets._process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
 
         image_folder_annotator(
-            self.folder, self.output_folder, self.pattern,
+            input_folder=self.folder,
+            output_folder=self.output_folder,
+            pattern=self.pattern,
             model_type=self.model_type,
             embedding_path=self.embeddings_save_path,
             tile_shape=tile_shape, halo=halo, checkpoint_path=self.custom_weights,
