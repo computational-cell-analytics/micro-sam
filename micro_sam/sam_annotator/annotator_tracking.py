@@ -233,8 +233,10 @@ class AnnotatorTracking(_AnnotatorBase):
         # NOTE: Check whether it exists already from `_require_layers` or needs to be created.
         if state.widgets.get("tracking") is None:
             self._tracking_widget = create_tracking_menu(
-                self._point_prompt_layer, self._box_prompt_layer,
-                states=self._track_state_labels, track_ids=list(state.lineage.keys()),
+                ponts_layer=self._point_prompt_layer,
+                box_layer=self._box_prompt_layer,
+                states=self._track_state_labels,
+                track_ids=list(state.lineage.keys()),
             )
         else:
             self._tracking_widget = state.widgets.get("tracking")
