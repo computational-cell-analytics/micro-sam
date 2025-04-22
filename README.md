@@ -58,6 +58,6 @@ We have also built follow-up work that is based on `micro_sam`:
 - https://github.com/computational-cell-analytics/medico-sam - improves SAM for medical imaging.
 - https://github.com/computational-cell-analytics/peft-sam - studies parameter efficient fine-tuning for SAM.
 
-## Release Oveverview
+## Release Overview
 
 You can find an overview of changes introduced in previous releases [here](https://github.com/computational-cell-analytics/micro-sam/blob/master/RELEASE_OVERVIEW.md).
