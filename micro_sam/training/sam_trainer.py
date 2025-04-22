@@ -209,7 +209,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             if self.is_data_parallel:  # if training on multiple GPUs.
                 if torch.distributed.get_rank() == 0:  # device with rank 0.
                     use_mask_inputs_tensor = torch.tensor(
-                        random.random() > self.mask_prob, dtype=torch.uint8, device=self.device,
+                        random.random() < self.mask_prob, dtype=torch.uint8, device=self.device,
                     )
                 else:  # on other devices, we do not need this parameter at this stage.
                     use_mask_inputs_tensor = torch.tensor(0, dtype=torch.uint8, device=self.device)
