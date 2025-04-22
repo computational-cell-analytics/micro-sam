@@ -199,7 +199,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         # Whether to use masks per training top-iteration.
         use_mask_inputs = False  # determines if each sub-iteration will use mask inputs as prompts or not.
         use_zero_mask = False  # determines if the zeroth iteration will use zeros as mask inputs.
-        is_data_parallel = torch.distributed.is_available() and torch.distributed.is_initialized()
+        self.is_data_parallel = torch.distributed.is_available() and torch.distributed.is_initialized()
 
         if self.mask_prob == 1:  # i.e. always use masks.
             use_mask_inputs = True  # we would like to use mask inputs in all sub-iterations.
@@ -301,14 +301,19 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             _inp["point_coords"] = updated_point_coords
             _inp["point_labels"] = updated_point_labels
 
-            if use_mask_inputs is None:  # i.e. the default setting on single-GPU.
+            # HACK
+            if self.is_data_parallel:  # multi-GPU training
+                use_mask_inputs_this_iter = use_mask_inputs
+            else:  # single GPU training
                 if self.mask_prob > 0:
                     # using mask inputs for iterative prompting while training, with a probability
                     use_mask_inputs = (random.random() < self.mask_prob)
                 else:  # otherwise we assume it is 0 and do not need the generator to decide.
                     use_mask_inputs = False
 
-            if use_mask_inputs:
+                use_mask_inputs_this_iter = use_mask_inputs
+
+            if use_mask_inputs_this_iter:
                 _inp["mask_inputs"] = logits
             else:  # remove previously existing mask inputs to avoid using them in next sub-iteration.
                 _inp.pop("mask_inputs", None)
