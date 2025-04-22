@@ -373,7 +373,7 @@ def get_sam_model(
         # We can't check any hashes here, and we don't check if the file is actually a valid weight file.
         # (If it isn't the model creation will fail below.)
         if not os.path.exists(checkpoint_path):
-            raise ValueError(f"Checkpoint at {checkpoint_path} could not be found.")
+            raise ValueError(f"Checkpoint at '{checkpoint_path}' could not be found.")
         model_hash = _compute_hash(checkpoint_path)
         decoder_path = None
 
@@ -493,6 +493,7 @@ def export_custom_sam_model(
     model_type: str,
     save_path: Union[str, os.PathLike],
     with_segmentation_decoder: bool = False,
+    prefix: str = "sam.",
 ) -> None:
     """Export a finetuned Segment Anything Model to the standard model format.
 
@@ -504,15 +505,10 @@ def export_custom_sam_model(
         save_path: Where to save the exported model.
         with_segmentation_decoder: Whether to store the decoder state in the model checkpoint as well.
             If set to 'True', the model checkpoint will not be compatible with other tools besides 'micro-sam'.
+        prefix: The prefix to remove from the model parameter keys.
     """
-    _, state = get_sam_model(
-        model_type=model_type, checkpoint_path=checkpoint_path, return_state=True, device="cpu",
-    )
-    model_state = state["model_state"]
-    prefix = "sam."
-    model_state = OrderedDict(
-        [(k[len(prefix):] if k.startswith(prefix) else k, v) for k, v in model_state.items()]
-    )
+    state, model_state = _load_checkpoint(checkpoint_path=checkpoint_path)
+    model_state = OrderedDict([(k[len(prefix):] if k.startswith(prefix) else k, v) for k, v in model_state.items()])
 
     # Store the 'decoder_state' as well, if desired.
     if with_segmentation_decoder:
