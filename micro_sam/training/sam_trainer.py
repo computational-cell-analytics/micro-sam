@@ -61,6 +61,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         self.n_sub_iteration = n_sub_iteration
         self.prompt_generator = prompt_generator
         self.mask_prob = mask_prob
+        self.is_data_parallel = torch.distributed.is_available() and torch.distributed.is_initialized()
         self._kwargs = kwargs
 
     def _get_prompt_and_multimasking_choices(self, current_iteration):
@@ -199,14 +200,13 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         # Whether to use masks per training top-iteration.
         use_mask_inputs = False  # determines if each sub-iteration will use mask inputs as prompts or not.
         use_zero_mask = False  # determines if the zeroth iteration will use zeros as mask inputs.
-        self.is_data_parallel = torch.distributed.is_available() and torch.distributed.is_initialized()
 
         if self.mask_prob == 1:  # i.e. always use masks.
             use_mask_inputs = True  # we would like to use mask inputs in all sub-iterations.
-            use_zero_mask = is_data_parallel  # we would like to use zeros as mask inputs for zeroth iteration.
+            use_zero_mask = self.is_data_parallel  # we would like to use zeros as mask inputs for zeroth iteration.
 
         elif self.mask_prob > 0:  # i.e. if we use mask inputs with a probability.
-            if is_data_parallel:  # if training on multiple GPUs.
+            if self.is_data_parallel:  # if training on multiple GPUs.
                 if torch.distributed.get_rank() == 0:  # device with rank 0.
                     use_mask_inputs_tensor = torch.tensor(
                         random.random() > self.mask_prob, dtype=torch.uint8, device=self.device,
@@ -301,7 +301,6 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             _inp["point_coords"] = updated_point_coords
             _inp["point_labels"] = updated_point_labels
 
-            # HACK
             if self.is_data_parallel:  # multi-GPU training
                 use_mask_inputs_this_iter = use_mask_inputs
             else:  # single GPU training
