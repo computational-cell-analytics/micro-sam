@@ -623,10 +623,9 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
         )
         for key, val in signature.items():
             f.attrs[key] = val
+
         # Add the annotator type to the signature.
-        # TODO need to merge the latest dev / master for this.
-        f.attrs["annotator_class"] = "Annotator2d"
-        # f.attrs["annotator_class"] = state.
+        f.attrs["annotator_class"] = state.annotator.__class__.__name__
 
     # If the data signature is saved in the file already,
     # then we check if saved data signature and data signature of our image agree.

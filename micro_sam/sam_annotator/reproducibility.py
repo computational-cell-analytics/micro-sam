@@ -11,6 +11,9 @@ from ..automatic_segmentation import get_predictor_and_segmenter
 from ..instance_segmentation import mask_data_to_segmentation
 
 from ._widgets import _mask_matched_objects
+from .annotator_2d import annotator_2d
+from .annotator_3d import annotator_3d
+# from .annotator_tracking import annotator_tracking
 from .util import prompt_segmentation
 
 
@@ -87,22 +90,27 @@ def _rerun_interactive_segmentation(segmentation, f, predictor, image_embeddings
                 labels.append(prompt_group["point_labels"][:])
             if "prompts" in prompt_group:
                 boxes.append(prompt_group["prompts"][:])
-            if "mask" in prompt_group:
-                masks.append(prompt_group["mask"][:])
+                # We can only have a mask if we also have a box prompt.
+                if "mask" in prompt_group:
+                    masks.append(prompt_group["mask"][:])
+                else:
+                    masks.append(None)
 
-        # TODO
-        if not masks:
-            masks = None
         if points:
-            points, labels = np.array(points), np.array(labels)
-        # else:
-        #     points, labels = None, None
+            points = np.concatenate(points, axis=0)
+            labels = np.concatenate(labels, axis=0)
+        if boxes:
+            # Map boxes to the correct input format.
+            boxes = np.concatenate(boxes, axis=0)
+            boxes = [
+                np.array([box[:, 0].min(), box[:, 1].min(), box[:, 0].max(), box[:, 1].max()]) for box in boxes
+            ]
 
         batched = len(object_ids) > 1
         seg = prompt_segmentation(
             predictor, points, labels, boxes, masks, segmentation.shape, image_embeddings=image_embeddings,
             multiple_box_prompts=True, batched=batched, previous_segmentation=segmentation,
-        )
+        ).astype("uint32")
 
     # TODO implement batched segmentation for these cases.
     elif annotator_class == "AnnotatorTracking":
@@ -147,13 +155,16 @@ def rerun_segmentation_from_commit_file(
     input_key: Optional[str] = None,
     embedding_path: Optional[Union[str, os.PathLike]] = None,
 ) -> np.ndarray:
-    """
+    """Rerun a segmentation from the commit history of a commit file.
 
     Args:
-        commit_file:
-        input_path:
-        input_key:
-        embedding_path:
+        commit_file: The path to the zarr file storing the commit history.
+        input_path: The path to the image data for the respective micro_sam commit history.
+        input_key: The key for the image data, in case it is a zarr, n5, hdf5 file or similar.
+        embedding_path: The path to precomputed embeddings for this project.
+
+    Returns:
+        The segmentation recreated from the commit history.
     """
     # Load the image data and open the zarr commit file.
     input_data = util.load_image_data(input_path, key=input_key)
@@ -212,38 +223,71 @@ def rerun_segmentation_from_commit_file(
 def load_committed_objects_from_commit_file(commit_file: Union[str, os.PathLike]) -> np.ndarray:
     """
     Args:
-        commit_file
+        commit_file: The path to the zarr file storing the commit history.
 
     Returns:
-        AAA
+        The committed segmentation.
     """
     with open_file(commit_file, mode="r") as f:
         return f["committed_objects"][:]
 
 
-# TODO
-def continue_annotation_from_commit_file(
+def continue_annotation(
     commit_file: Union[str, os.PathLike],
     input_path: Union[str, os.PathLike],
     input_key: Optional[str] = None,
     embedding_path: Optional[Union[str, os.PathLike]] = None,
 ) -> None:
-    """
+    """Start an annotator from a commit file and set it to the commited state.
+
+    This currently does not support files committed with annotator_tracking.
+
     Args:
-        commit_file:
-        input_path:
-        input_key:
-        embedding_path:
+        commit_file: The path to the zarr file storing the commit history.
+        input_path: The path to the image data for the respective micro_sam commit history.
+        input_key: The key for the image data, in case it is a zarr, n5, hdf5 file or similar.
+        embedding_path: The path to precomputed embeddings for this project.
     """
     committed_objects = load_committed_objects_from_commit_file(commit_file)
     with open_file(commit_file, mode="r") as f:
         if "annotator_class" not in f.attrs:
             raise RuntimeError(
-                f"You have saved the {commit_file} in a version that does not yet support rerunning the segmentation."
+                f"You have saved {commit_file} in a version that does not support continuing the annotation."
             )
         annotator_class = f.attrs["annotator_class"]
+        model_type = f.attrs["model_name"]
+        tile_shape = f.attrs["tile_shape"]
+        halo = f.attrs["halo"]
+
+    input_data = util.load_image_data(input_path, key=input_key)
+    if annotator_class == "Annotator2d":
+        annotator_2d(
+            input_data, embedding_path=embedding_path, segmentation_result=committed_objects,
+            model_type=model_type, tile_shape=tile_shape, halo=halo,
+        )
+    elif annotator_class == "Annotator3d":
+        annotator_3d(
+            input_data, embedding_path=embedding_path, segmentation_result=committed_objects,
+            model_type=model_type, tile_shape=tile_shape, halo=halo,
+        )
+    # We need to implement initialization of the tracking annotator with a segmentation + tracking state for this.
+    elif annotator_class == "AnnotatorTracking":
+        raise NotImplementedError("'continue_annotation_from_commit_file' is not yet supported for AnnotatorTracking.")
+    else:
+        raise RuntimeError(f"Unsupported annotator class {annotator_class}.")
 
 
-# TODO CLI for 'continue_annotation_from_commit_file'
 def main():
-    pass
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Start an annotator from a commit file and set it to the commited state."
+    )
+    parser.add_argument("-c", "--commit_file", required=True, help="The zarr file with the commit history.")
+    parser.add_argument("-i", "--input_path", required=True, help="The file path of the image data.")
+    parser.add_argument(
+        "-k", "--input_key", help="The input key for the image data. Required for zarr, n5 or hdf5 files."
+    )
+    parser.add_argument("-e", "--embedding_path", help="Optional file path for precomputed embeddings.")
+    args = parser.parse_args()
+    continue_annotation(args.commit_file, args.input_path, args.input_key, args.embedding_path)
