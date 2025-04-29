@@ -1,50 +1,58 @@
 name: build_documentation
 
-# build the documentation for a new release
 on:
-  release:
-    types: created
-
-# # for debugging
-# on: [push, pull_request]
+  push:
+    paths:
+      - "doc/*.md"  # Trigger on changes to any markdown file
+      - "micro_sam/**/*.py"  # Optionally include changes in Python files
+    branches:
+      - master  # Run the workflow only on pushes to the main branch
+  workflow_dispatch:
 
 # security: restrict permissions for CI jobs.
 permissions:
   contents: read
 
-# NOTE: importing of napari fails with CI and I am not quite sure why
-# I tried to adjust it based on the napari CI tests, but that didn't seem to help
-
-# https://github.com/napari/napari/blob/main/.github/workflows/test_comprehensive.yml
 jobs:
-  # Build the documentation and upload the static HTML files as an artifact.
   build:
+    name: Build Documentation
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Checkout Code
+      uses: actions/checkout@v4
 
-      - name: Setup micromamba
-        uses: mamba-org/setup-micromamba@v1
-        with:
-          environment-file: .github/doc_env.yaml
+    - name: Set up Micromamba
+      uses: mamba-org/setup-micromamba@v2
+      with:
+        micromamba-version: "latest"
+        environment-file: environment.yaml
+        init-shell: bash
+        cache-environment: true
+        post-cleanup: 'all'
 
-      - name: Install package
-        shell: bash -l {0}
-        run: pip install --no-deps -e .
+    - name: Install package
+      shell: bash -l {0}
+      run: pip install -e .
 
-      # We use a custom build script for pdoc itself, ideally you just run `pdoc -o docs/ ...` here.
-      - name: Run pdoc
-        shell: bash -l {0}
-        run: python build_doc.py --out
+    - name: Install pdoc
+      shell: bash -l {0}
+      run: pip install pdoc
 
-      - uses: actions/upload-pages-artifact@v1
-        with:
-          path: tmp/
+    - name: Generate Documentation
+      shell: bash -l {0}
+      run: pdoc micro_sam/ -d google -o doc/
 
-  # Deploy the artifact to GitHub pages.
-  # This is a separate job so that only actions/deploy-pages has the necessary permissions.
+    - name: Verify Documentation Output
+      run: ls -la doc/
+
+    - name: Upload Documentation Artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: doc/
+
   deploy:
+    name: Deploy Documentation
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -54,5 +62,5 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - id: deployment
-        uses: actions/deploy-pages@v2
+      - name: Deploy to GiHub Pages
+        uses: actions/deploy-pages@v4
