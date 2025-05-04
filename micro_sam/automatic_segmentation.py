@@ -77,7 +77,7 @@ def automatic_tracking(
     segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
     input_path: Union[Union[os.PathLike, str], np.ndarray],
     output_path: Optional[Union[os.PathLike, str]] = None,
-    embedding_path: Optional[Union[os.PathLike, str]] = None,
+    embedding_path: Optional[Union[os.PathLike, str, util.ImageEmbeddings]] = None,
     key: Optional[str] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
@@ -96,6 +96,7 @@ def automatic_tracking(
             or a container file (e.g. hdf5 or zarr).
         output_path: The output path where the instance segmentations will be saved.
         embedding_path: The path where the embeddings are cached already / will be saved.
+            This argument also accepts already deserialized embeddings.
         key: The key to the input file. This is needed for container files (eg. hdf5 or zarr)
             or to load several images as 3d volume. Provide a glob patterm, eg. "*.tif", for this case.
         tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
@@ -158,7 +159,7 @@ def automatic_instance_segmentation(
     segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
     input_path: Union[Union[os.PathLike, str], np.ndarray],
     output_path: Optional[Union[os.PathLike, str]] = None,
-    embedding_path: Optional[Union[os.PathLike, str]] = None,
+    embedding_path: Optional[Union[os.PathLike, str, util.ImageEmbeddings]] = None,
     key: Optional[str] = None,
     ndim: Optional[int] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
@@ -178,6 +179,7 @@ def automatic_instance_segmentation(
             or a container file (e.g. hdf5 or zarr).
         output_path: The output path where the instance segmentations will be saved.
         embedding_path: The path where the embeddings are cached already / will be saved.
+            This argument also accepts already deserialized embeddings.
         key: The key to the input file. This is needed for container files (eg. hdf5 or zarr)
             or to load several images as 3d volume. Provide a glob patterm, eg. "*.tif", for this case.
         ndim: The dimensionality of the data. By default the dimensionality of the data will be used.
@@ -219,16 +221,19 @@ def automatic_instance_segmentation(
             raise ValueError(f"The inputs does not match the shape expectation of 2d inputs: {image_data.shape}")
 
         # Precompute the image embeddings.
-        image_embeddings = util.precompute_image_embeddings(
-            predictor=predictor,
-            input_=image_data,
-            save_path=embedding_path,
-            ndim=ndim,
-            tile_shape=tile_shape,
-            halo=halo,
-            verbose=verbose,
-            batch_size=batch_size,
-        )
+        if embedding_path is None or isinstance(embedding_path, (str, os.PathLike)):
+            image_embeddings = util.precompute_image_embeddings(
+                predictor=predictor,
+                input_=image_data,
+                save_path=embedding_path,
+                ndim=ndim,
+                tile_shape=tile_shape,
+                halo=halo,
+                verbose=verbose,
+                batch_size=batch_size,
+            )
+        else:
+            image_embeddings = embedding_path
         initialize_kwargs = dict(image=image_data, image_embeddings=image_embeddings, verbose=verbose)
 
         # If we run AIS with tiling then we use the same tile shape for the watershed postprocessing.
@@ -242,14 +247,14 @@ def automatic_instance_segmentation(
         masks = segmenter.generate(**generate_kwargs)
 
         if isinstance(masks, list):
-            # whether the predictions from 'generate' are list of dict,
+            # Whether the predictions from 'generate' are list of dict,
             # which contains additional info req. for post-processing, eg. area per object.
             if len(masks) == 0:
                 instances = np.zeros(image_data.shape[:2], dtype="uint32")
             else:
                 instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=0)
         else:
-            # if (raw) predictions provided, store them as it is w/o further post-processing.
+            # If (raw) predictions provided, store them as it is w/o further post-processing.
             instances = masks
 
     else:

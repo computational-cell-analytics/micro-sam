@@ -7,14 +7,14 @@ from elf.io import open_file
 from tqdm import tqdm
 
 from .. import util
-from ..automatic_segmentation import get_predictor_and_segmenter
-from ..instance_segmentation import mask_data_to_segmentation
+from ..automatic_segmentation import automatic_tracking, automatic_instance_segmentation, get_predictor_and_segmenter
+from ..multi_dimensional_segmentation import segment_mask_in_volume
 
 from ._widgets import _mask_matched_objects
 from .annotator_2d import annotator_2d
 from .annotator_3d import annotator_3d
 # from .annotator_tracking import annotator_tracking
-from .util import prompt_segmentation
+from .util import prompt_segmentation, segment_slices_with_prompts
 
 
 def _load_model_from_commit_file(f):
@@ -79,26 +79,28 @@ def _rerun_interactive_segmentation(segmentation, f, predictor, image_embeddings
     preserve_mode, preservation_threshold = options.pop("preserve_mode"), options.pop("preservation_threshold")
     g = f["prompts"]
 
-    if annotator_class == "Annotator2d":
-        # Load the serialized prompts for all objects in this commit.
-        boxes, masks = [], []
-        points, labels = [], []
-        for object_id in object_ids:
-            prompt_group = g[str(object_id)]
-            if "point_prompts" in prompt_group:
-                points.append(prompt_group["point_prompts"][:])
-                labels.append(prompt_group["point_labels"][:])
-            if "prompts" in prompt_group:
-                boxes.append(prompt_group["prompts"][:])
-                # We can only have a mask if we also have a box prompt.
-                if "mask" in prompt_group:
-                    masks.append(prompt_group["mask"][:])
-                else:
-                    masks.append(None)
+    # Load the serialized prompts for all objects in this commit.
+    boxes, masks = [], []
+    points, labels = [], []
+    for object_id in object_ids:
+        prompt_group = g[str(object_id)]
+        if "point_prompts" in prompt_group:
+            points.append(prompt_group["point_prompts"][:])
+            labels.append(prompt_group["point_labels"][:])
+        if "prompts" in prompt_group:
+            boxes.append(prompt_group["prompts"][:])
+            # We can only have a mask if we also have a box prompt.
+            if "mask" in prompt_group:
+                masks.append(prompt_group["mask"][:])
+            else:
+                masks.append(None)
 
-        if points:
-            points = np.concatenate(points, axis=0)
-            labels = np.concatenate(labels, axis=0)
+    if points:
+        points = np.concatenate(points, axis=0)
+        labels = np.concatenate(labels, axis=0)
+
+    if annotator_class == "Annotator2d":
+
         if boxes:
             # Map boxes to the correct input format.
             boxes = np.concatenate(boxes, axis=0)
@@ -112,11 +114,24 @@ def _rerun_interactive_segmentation(segmentation, f, predictor, image_embeddings
             multiple_box_prompts=True, batched=batched, previous_segmentation=segmentation,
         ).astype("uint32")
 
-    # TODO implement batched segmentation for these cases.
-    elif annotator_class == "AnnotatorTracking":
-        pass
     elif annotator_class == "Annotator3d":
         pass
+        # TODO this needs to be updated
+        # seg, slices, stop_lower, stop_upper = segment_slices_with_prompts(
+        #     state.predictor, self._viewer.layers["point_prompts"], self._viewer.layers["prompts"],
+        #     image_embeddings, shape,
+        # )
+        # seg, (z_min, z_max) = segment_mask_in_volume(
+        #     seg, predictor, image_embeddings, slices,
+        #     stop_lower, stop_upper,
+        #     iou_threshold=self.iou_threshold, projection=self.projection,
+        #     box_extension=self.box_extension,
+        #     update_progress=lambda update: pbar_signals.pbar_update.emit(update),
+        # )
+
+    elif annotator_class == "AnnotatorTracking":
+        raise NotImplementedError("Not yet implemented for AnnotatorTracking.")
+
     else:
         raise RuntimeError(f"Invalid annotator class {annotator_class}.")
 
@@ -124,25 +139,31 @@ def _rerun_interactive_segmentation(segmentation, f, predictor, image_embeddings
 
 
 def _rerun_automatic_segmentation(
-    image, segmentation, predictor, segmenter, image_embeddings, annotator_class, options
+    image, segmentation, predictor, segmenter, image_embeddings, annotator_class, tile_shape, halo, options
 ):
     object_ids = options.pop("object_ids")
     preserve_mode, preservation_threshold = options.pop("preserve_mode"), options.pop("preservation_threshold")
-    with_background, min_object_size = options.pop("with_background"), options.pop("min_object_size")
 
     # If there was nothing committed then we don't need to rerun the automatic segmentation.
     if len(object_ids) == 0:
         return segmentation
 
-    if annotator_class == "Annotator2d":
-        segmenter.initialize(image=image, image_embeddings=image_embeddings)
-        seg = segmenter.generate(**options)
-        seg = mask_data_to_segmentation(seg, with_background=with_background, min_object_size=min_object_size)
-    # TODO implement auto segmentation for these cases.
+    if annotator_class in ("Annotator2d", "Annotator3d"):
+        ndim = 2 if annotator_class == "Annotator2d" else 3
+        seg = automatic_instance_segmentation(
+            predictor, segmenter, image,
+            embedding_path=image_embeddings,
+            tile_shape=tile_shape, halo=halo, ndim=ndim,
+            **options
+        )
     elif annotator_class == "AnnotatorTracking":
-        pass
-    elif annotator_class == "Annotator3d":
-        pass
+        seg, lineages = automatic_tracking(
+            predictor, segmenter, image,
+            embedding_path=image_embeddings,
+            tile_shape=tile_shape, halo=halo, ndim=ndim,
+            **options
+        )
+
     else:
         raise RuntimeError(f"Invalid annotator class {annotator_class}.")
 
@@ -178,6 +199,9 @@ def rerun_segmentation_from_commit_file(
         annotator_class = f.attrs["annotator_class"]
         ndim = 2 if annotator_class == "Annotator2d" else 3
 
+        # Get the tile shape and halo from the attributes.
+        tile_shape, halo = f.attrs["tile_shape"], f.attrs["halo"]
+
         # Check that the stored data hash and the input data hash match.
         _check_data_hash(f, input_data, input_path)
 
@@ -190,8 +214,8 @@ def rerun_segmentation_from_commit_file(
             input_=input_data,
             save_path=embedding_path,
             ndim=ndim,
-            tile_shape=f.attrs["tile_shape"],
-            halo=f.attrs["halo"],
+            tile_shape=tile_shape,
+            halo=halo,
         )
 
         # Go through the commit history and redo the action of each commit.
@@ -208,11 +232,12 @@ def rerun_segmentation_from_commit_file(
             layer, options = next(iter(commit.items()))
             if layer == "current_object":
                 segmentation = _rerun_interactive_segmentation(
-                    segmentation, f, predictor, image_embeddings, annotator_class, options
+                    segmentation, f, predictor, image_embeddings, annotator_class, tile_shape, halo, options
                 )
             elif layer == "auto_segmentation":
                 segmentation = _rerun_automatic_segmentation(
-                    input_data, segmentation, predictor, segmenter, image_embeddings, annotator_class, options
+                    input_data, segmentation, predictor, segmenter, image_embeddings,
+                    annotator_class, tile_shape, halo, options
                 )
             else:
                 raise RuntimeError(f"Invalid layer {layer} in commit_historty.")
@@ -274,7 +299,7 @@ def continue_annotation(
     elif annotator_class == "AnnotatorTracking":
         raise NotImplementedError("'continue_annotation_from_commit_file' is not yet supported for AnnotatorTracking.")
     else:
-        raise RuntimeError(f"Unsupported annotator class {annotator_class}.")
+        raise RuntimeError(f"Invalid annotator class {annotator_class}.")
 
 
 def main():

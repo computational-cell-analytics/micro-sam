@@ -375,16 +375,20 @@ def _segment_slices(
     assert data.ndim == 3
 
     min_object_size = kwargs.pop("min_object_size", 0)
-    image_embeddings = util.precompute_image_embeddings(
-        predictor=predictor,
-        input_=data,
-        save_path=embedding_path,
-        ndim=3,
-        tile_shape=tile_shape,
-        halo=halo,
-        verbose=verbose,
-        batch_size=batch_size,
-    )
+    # Check if the embeddings still have to be computed.
+    if embedding_path is None or isinstance(embedding_path, (str, os.PathLike)):
+        image_embeddings = util.precompute_image_embeddings(
+            predictor=predictor,
+            input_=data,
+            save_path=embedding_path,
+            ndim=3,
+            tile_shape=tile_shape,
+            halo=halo,
+            verbose=verbose,
+            batch_size=batch_size,
+        )
+    else:  # Otherwise the deserialized embeddings were passed.
+        image_embeddings = embedding_path
 
     offset = 0
     segmentation = np.zeros(data.shape, dtype="uint32")
@@ -417,7 +421,7 @@ def automatic_3d_segmentation(
     volume: np.ndarray,
     predictor: SamPredictor,
     segmentor: AMGBase,
-    embedding_path: Optional[Union[str, os.PathLike]] = None,
+    embedding_path: Optional[Union[str, os.PathLike, util.ImageEmbeddings]] = None,
     with_background: bool = True,
     gap_closing: Optional[int] = None,
     min_z_extent: Optional[int] = None,
@@ -438,6 +442,7 @@ def automatic_3d_segmentation(
         predictor: The SAM model.
         segmentor: The instance segmentation class.
         embedding_path: The path to save pre-computed embeddings.
+            This argument also accepts already deserialized embeddings.
         with_background: Whether the segmentation has background.
         gap_closing: If given, gaps in the segmentation are closed with a binary closing
             operation. The value is used to determine the number of iterations for the closing.
@@ -626,7 +631,7 @@ def automatic_tracking_implementation(
     timeseries: np.ndarray,
     predictor: SamPredictor,
     segmentor: AMGBase,
-    embedding_path: Optional[Union[str, os.PathLike]] = None,
+    embedding_path: Optional[Union[str, os.PathLike, util.ImageEmbeddings]] = None,
     gap_closing: Optional[int] = None,
     min_time_extent: Optional[int] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
@@ -646,6 +651,7 @@ def automatic_tracking_implementation(
         predictor: The SAM model.
         segmentor: The instance segmentation class.
         embedding_path: The path to save pre-computed embeddings.
+            This argument also accepts already deserialized embeddings.
         gap_closing: If given, gaps in the segmentation are closed with a binary closing
             operation. The value is used to determine the number of iterations for the closing.
         min_time_extent: Require a minimal extent in time for the tracked objects.
