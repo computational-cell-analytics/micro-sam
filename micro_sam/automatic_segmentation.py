@@ -1,8 +1,9 @@
 import os
+from functools import partial
 from glob import glob
 from tqdm import tqdm
 from pathlib import Path
-from typing import Optional, Union, Tuple
+from typing import Dict, List, Optional, Union, Tuple
 
 import numpy as np
 import imageio.v3 as imageio
@@ -14,7 +15,7 @@ from .instance_segmentation import (
     get_amg, get_decoder, mask_data_to_segmentation, InstanceSegmentationWithDecoder,
     AMGBase, AutomaticMaskGenerator, TiledAutomaticMaskGenerator
 )
-from .multi_dimensional_segmentation import automatic_3d_segmentation
+from .multi_dimensional_segmentation import automatic_3d_segmentation, automatic_tracking_implementation
 
 
 def get_predictor_and_segmenter(
@@ -71,12 +72,94 @@ def _add_suffix_to_output_path(output_path: Union[str, os.PathLike], suffix: str
     return str(fpath.with_name(f"{fpath.stem}{suffix}{fext}"))
 
 
+def automatic_tracking(
+    predictor: util.SamPredictor,
+    segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
+    input_path: Union[Union[os.PathLike, str], np.ndarray],
+    output_path: Optional[Union[os.PathLike, str]] = None,
+    embedding_path: Optional[Union[os.PathLike, str, util.ImageEmbeddings]] = None,
+    key: Optional[str] = None,
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
+    verbose: bool = True,
+    return_embeddings: bool = False,
+    annotate: bool = False,
+    batch_size: int = 1,
+    **generate_kwargs
+) -> Tuple[np.ndarray, List[Dict]]:
+    """Run automatic tracking for the input timeseries.
+
+    Args:
+        predictor: The Segment Anything model.
+        segmenter: The automatic instance segmentation class.
+        input_path: input_path: The input image file(s). Can either be a single image file (e.g. tif or png),
+            or a container file (e.g. hdf5 or zarr).
+        output_path: The output path where the instance segmentations will be saved.
+        embedding_path: The path where the embeddings are cached already / will be saved.
+            This argument also accepts already deserialized embeddings.
+        key: The key to the input file. This is needed for container files (eg. hdf5 or zarr)
+            or to load several images as 3d volume. Provide a glob patterm, eg. "*.tif", for this case.
+        tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
+        halo: Overlap of the tiles for tiled prediction.
+        verbose: Verbosity flag.
+        return_embeddings: Whether to return the precomputed image embeddings.
+        annotate: Whether to activate the annotator for continue annotation process.
+        batch_size: The batch size to compute image embeddings over tiles / z-planes.
+            By default, does it sequentially, i.e. one after the other.
+        generate_kwargs: optional keyword arguments for the generate function of the AMG or AIS class.
+
+    Returns:
+    """
+    if output_path is not None:
+        # TODO implement saving tracking results in CTC format and use it to save the result here.
+        raise NotImplementedError("Saving the tracking result to file is currently not supported.")
+
+    # Load the input image file.
+    if isinstance(input_path, np.ndarray):
+        image_data = input_path
+    else:
+        image_data = util.load_image_data(input_path, key)
+
+    # We perform additional post-processing for AMG-only.
+    # Otherwise, we ignore additional post-processing for AIS.
+    if isinstance(segmenter, InstanceSegmentationWithDecoder):
+        generate_kwargs["output_mode"] = None
+
+    if (image_data.ndim != 3) and (image_data.ndim != 4 and image_data.shape[-1] != 3):
+        raise ValueError(f"The inputs does not match the shape expectation of 3d inputs: {image_data.shape}")
+
+    gap_closing, min_time_extent = generate_kwargs.get("gap_closing"), generate_kwargs.get("min_time_extent")
+    segmentation, lineage, image_embeddings = automatic_tracking_implementation(
+        image_data,
+        predictor,
+        segmenter,
+        embedding_path=embedding_path,
+        gap_closing=gap_closing,
+        min_time_extent=min_time_extent,
+        tile_shape=tile_shape,
+        halo=halo,
+        verbose=verbose,
+        batch_size=batch_size,
+        return_image_embeddings=True,
+        **generate_kwargs,
+    )
+
+    if annotate:
+        # TODO We need to support initialization of the tracking annotator with the tracking result for this.
+        raise NotImplementedError("Annotation after running the automated tracking is currently not supported.")
+
+    if return_embeddings:
+        return segmentation, lineage, image_embeddings
+    else:
+        return segmentation, lineage
+
+
 def automatic_instance_segmentation(
     predictor: util.SamPredictor,
     segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
     input_path: Union[Union[os.PathLike, str], np.ndarray],
     output_path: Optional[Union[os.PathLike, str]] = None,
-    embedding_path: Optional[Union[os.PathLike, str]] = None,
+    embedding_path: Optional[Union[os.PathLike, str, util.ImageEmbeddings]] = None,
     key: Optional[str] = None,
     ndim: Optional[int] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
@@ -96,6 +179,7 @@ def automatic_instance_segmentation(
             or a container file (e.g. hdf5 or zarr).
         output_path: The output path where the instance segmentations will be saved.
         embedding_path: The path where the embeddings are cached already / will be saved.
+            This argument also accepts already deserialized embeddings.
         key: The key to the input file. This is needed for container files (eg. hdf5 or zarr)
             or to load several images as 3d volume. Provide a glob patterm, eg. "*.tif", for this case.
         ndim: The dimensionality of the data. By default the dimensionality of the data will be used.
@@ -137,16 +221,19 @@ def automatic_instance_segmentation(
             raise ValueError(f"The inputs does not match the shape expectation of 2d inputs: {image_data.shape}")
 
         # Precompute the image embeddings.
-        image_embeddings = util.precompute_image_embeddings(
-            predictor=predictor,
-            input_=image_data,
-            save_path=embedding_path,
-            ndim=ndim,
-            tile_shape=tile_shape,
-            halo=halo,
-            verbose=verbose,
-            batch_size=batch_size,
-        )
+        if embedding_path is None or isinstance(embedding_path, (str, os.PathLike)):
+            image_embeddings = util.precompute_image_embeddings(
+                predictor=predictor,
+                input_=image_data,
+                save_path=embedding_path,
+                ndim=ndim,
+                tile_shape=tile_shape,
+                halo=halo,
+                verbose=verbose,
+                batch_size=batch_size,
+            )
+        else:
+            image_embeddings = embedding_path
         initialize_kwargs = dict(image=image_data, image_embeddings=image_embeddings, verbose=verbose)
 
         # If we run AIS with tiling then we use the same tile shape for the watershed postprocessing.
@@ -160,14 +247,14 @@ def automatic_instance_segmentation(
         masks = segmenter.generate(**generate_kwargs)
 
         if isinstance(masks, list):
-            # whether the predictions from 'generate' are list of dict,
+            # Whether the predictions from 'generate' are list of dict,
             # which contains additional info req. for post-processing, eg. area per object.
             if len(masks) == 0:
                 instances = np.zeros(image_data.shape[:2], dtype="uint32")
             else:
                 instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=0)
         else:
-            # if (raw) predictions provided, store them as it is w/o further post-processing.
+            # If (raw) predictions provided, store them as it is w/o further post-processing.
             instances = masks
 
     else:
@@ -258,7 +345,13 @@ def main():
     available_models = list(util.get_model_names())
     available_models = ", ".join(available_models)
 
-    parser = argparse.ArgumentParser(description="Run automatic segmentation for an image.")
+    parser = argparse.ArgumentParser(
+        description="Run automatic segmentation for an image using either automatic instance segmentation (AIS) \n"
+        "or automatic mask generation (AMG). In addition to the arguments explained below,\n"
+        "you can also passed additional arguments for these two segmentation modes:\n"
+        "For AIS: '--center_distance_threshold', '--boundary_distance_threshold' and other arguments of `InstanceSegmentationWithDecoder.generate`."  # noqa
+        "For AMG: '--pred_iou_thresh', '--stability_score_thresh' and other arguments of `AutomaticMaskGenerator.generate`."  # noqa
+    )
     parser.add_argument(
         "-i", "--input_path", required=True, type=str, nargs="+",
         help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
@@ -315,6 +408,10 @@ def main():
         "By default, computes the image embeddings for one tile / z-plane at a time."
     )
     parser.add_argument(
+        "--tracking", action="store_true", help="Run tracking instead of instance segmentation. "
+        "Only supported for timeseries inputs.."
+    )
+    parser.add_argument(
         "-v", "--verbose", action="store_true", help="Whether to allow verbosity of outputs."
     )
 
@@ -368,6 +465,10 @@ def main():
     embedding_path = args.embedding_path
     has_one_input = len(input_paths) == 1
 
+    instance_seg_function = automatic_tracking if args.tracking else partial(
+        automatic_instance_segmentation, ndim=args.ndim
+    )
+
     # Run automatic segmentation per image.
     for path in tqdm(input_paths, desc="Run automatic segmentation"):
         if has_one_input:  # if we have one image only.
@@ -393,14 +494,13 @@ def main():
                 os.makedirs(output_path, exist_ok=True)
                 _output_fpath = os.path.join(output_path, Path(os.path.basename(path)).with_suffix(".tif"))
 
-        automatic_instance_segmentation(
+        instance_seg_function(
             predictor=predictor,
             segmenter=segmenter,
             input_path=path,
             output_path=_output_fpath,
             embedding_path=_embedding_fpath,
             key=args.key,
-            ndim=args.ndim,
             tile_shape=args.tile_shape,
             halo=args.halo,
             annotate=args.annotate,

@@ -30,9 +30,9 @@ from magicgui.widgets import ComboBox, Container, create_widget
 # from napari.qt.threading import thread_worker
 from napari.utils import progress
 
-from ._state import AnnotatorState
 from . import util as vutil
 from ._tooltips import get_tooltip
+from ._state import AnnotatorState
 from .. import instance_segmentation, util
 from ..multi_dimensional_segmentation import (
     segment_mask_in_volume, merge_instance_segmentation_3d, track_across_frames, PROJECTION_MODES, get_napari_track_data
@@ -496,8 +496,12 @@ def _mask_matched_objects(seg, prev_seg, preservation_threshold):
 
 
 def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
-    # Check if we have a z_range. If yes, use it to set a bounding box.
     state = AnnotatorState()
+
+    # Check whether all layers exist as expected or create new ones automatically.
+    state.annotator._require_layers(layer_choices=[layer, "committed_objects"])
+
+    # Check if we have a z_range. If yes, use it to set a bounding box.
     if state.z_range is None:
         bb = np.s_[:]
     else:
@@ -550,8 +554,8 @@ def _get_auto_segmentation_options(state, object_ids):
 
     segmentation_options = {"object_ids": [int(object_id) for object_id in object_ids]}
     if widget.with_decoder:
-        segmentation_options["boundary_distance_thresh"] = widget.boundary_distance_thresh
-        segmentation_options["center_distance_thresh"] = widget.center_distance_thresh
+        segmentation_options["boundary_distance_threshold"] = widget.boundary_distance_thresh
+        segmentation_options["center_distance_threshold"] = widget.center_distance_thresh
     else:
         segmentation_options["pred_iou_thresh"] = widget.pred_iou_thresh
         segmentation_options["stability_score_thresh"] = widget.stability_score_thresh
@@ -582,18 +586,28 @@ def _get_promptable_segmentation_options(state, object_ids):
     return segmentation_options, is_tracking
 
 
-def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
+def _get_preservation_settings(state):
+    widget = state.widgets["commit"]
+    return {
+        "preserve_mode": widget.preserve_mode.value,
+        "preservation_threshold": widget.preservation_threshold.value,
+    }
 
-    # NOTE: zarr-python is quite inefficient and writes empty blocks.
-    # So we have to use z5py here.
 
-    # Deal with issues z5py has with empty folders and require the json.
-    if os.path.exists(path):
-        required_json = os.path.join(path, ".zgroup")
+# Deal with issues z5py has with empty folders and require the json with zarr group metadata.
+def _require_zarr_group_metadata(path, group_name=None):
+    path_ = path if group_name is None else os.path.join(path, group_name)
+    if os.path.exists(path_):
+        required_json = os.path.join(path_, ".zgroup")
         if not os.path.exists(required_json):
             with open(required_json, "w") as f:
                 json.dump({"zarr_format": 2}, f)
 
+
+def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
+
+    # NOTE: zarr-python is quite inefficient and writes empty blocks. So we have to use z5py here.
+    _require_zarr_group_metadata(path)
     f = z5py.ZarrFile(path, "a")
     state = AnnotatorState()
 
@@ -609,6 +623,9 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
         )
         for key, val in signature.items():
             f.attrs[key] = val
+
+        # Add the annotator type to the signature.
+        f.attrs["annotator_class"] = state.annotator.__class__.__name__
 
     # If the data signature is saved in the file already,
     # then we check if saved data signature and data signature of our image agree.
@@ -650,10 +667,14 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
     commit_history = f.attrs.get("commit_history", [])
     object_ids = np.unique(seg[mask])
 
+    # Get the preservation settings from the commit widget.
+    preservation_settings = _get_preservation_settings(state)
+
     # We committed an automatic segmentation.
     if layer == "auto_segmentation":
         # Save the settings of the segmentation widget.
         segmentation_options = _get_auto_segmentation_options(state, object_ids)
+        segmentation_options.update(**preservation_settings)
         commit_history.append({"auto_segmentation": segmentation_options})
 
         # Write the commit history.
@@ -664,10 +685,14 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
         return
 
     segmentation_options, is_tracking = _get_promptable_segmentation_options(state, object_ids)
+    segmentation_options.update(**preservation_settings)
     commit_history.append({"current_object": segmentation_options})
 
+    # TODO add support for mask prompt (e.g. from polygon layer)
     def write_prompts(object_id, prompts, point_prompts, point_labels, track_state=None):
-        g = f.create_group(f"prompts/{object_id}")
+        group_name = f"prompts/{object_id}"
+        g = f.create_group(group_name)
+        _require_zarr_group_metadata(path, group_name)
         if prompts is not None and len(prompts) > 0:
             data = np.array(prompts)
             g.create_dataset("prompts", data=data, chunks=data.shape)
@@ -750,6 +775,7 @@ def commit(
         commit_path: Select a file path where the committed results and prompts will be saved.
             This feature is still experimental.
     """
+    # Commit the segmentation layer.
     _, seg, mask, bb = _commit_impl(viewer, layer, preserve_mode, preservation_threshold)
 
     if commit_path is not None:
@@ -964,12 +990,27 @@ def _validate_embeddings(viewer: "napari.viewer.Viewer"):
     #     return False
 
 
-def _validate_prompts(viewer: "napari.viewer.Viewer") -> bool:
-    if len(viewer.layers["prompts"].data) == 0 and len(viewer.layers["point_prompts"].data) == 0:
-        msg = "No prompts were given. Please provide prompts to run interactive segmentation."
-        return _generate_message("error", msg)
+def _validation_window_for_missing_layer(layer_choice):
+    if layer_choice == "committed_objects":
+        msg = "The 'committed_objects' layer to commit masks is missing. Please try to commit again."
     else:
-        return False
+        msg = f"The '{layer_choice}' layer to commit is missing. Please re-annotate and try again."
+
+    return _generate_message(message_type="error", message=msg)
+
+
+def _validate_layers(viewer: "napari.viewer.Viewer", automatic_segmentation: bool = False) -> bool:
+    # Check whether all layers exist as expected or create new ones automatically.
+    state = AnnotatorState()
+    state.annotator._require_layers()
+
+    if not automatic_segmentation:
+        # Check prompts layer.
+        if len(viewer.layers["prompts"].data) == 0 and len(viewer.layers["point_prompts"].data) == 0:
+            msg = "No prompts were given. Please provide prompts to run interactive segmentation."
+            return _generate_message("error", msg)
+        else:
+            return False
 
 
 @magic_factory(call_button="Segment Object [S]")
@@ -982,7 +1023,7 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
     """
     if _validate_embeddings(viewer):
         return None
-    if _validate_prompts(viewer):
+    if _validate_layers(viewer):
         return None
 
     shape = viewer.layers["current_object"].data.shape
@@ -1016,7 +1057,7 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
     """
     if _validate_embeddings(viewer):
         return None
-    if _validate_prompts(viewer):
+    if _validate_layers(viewer):
         return None
 
     shape = viewer.layers["current_object"].data.shape[1:]
@@ -1057,8 +1098,9 @@ def segment_frame(viewer: "napari.viewer.Viewer") -> None:
     """
     if _validate_embeddings(viewer):
         return None
-    if _validate_prompts(viewer):
+    if _validate_layers(viewer):
         return None
+
     state = AnnotatorState()
     shape = state.image_shape[1:]
     position = viewer.dims.point
@@ -1626,8 +1668,9 @@ class SegmentNDWidget(_WidgetBase):
     def __call__(self):
         if _validate_embeddings(self._viewer):
             return None
-        if _validate_prompts(self._viewer):
+        if _validate_layers(self._viewer):
             return None
+
         if self.tracking:
             return self._run_tracking()
         else:
@@ -1888,6 +1931,9 @@ class AutoSegmentWidget(_WidgetBase):
             else:
                 self._viewer.layers["auto_segmentation"].data[i] = seg
             self._viewer.layers["auto_segmentation"].refresh()
+
+        # Validate all layers.
+        _validate_layers(self._viewer, automatic_segmentation=True)
 
         seg = seg_impl()
         update_segmentation(seg)
