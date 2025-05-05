@@ -82,8 +82,8 @@ class PointAndBoxPromptGenerator(PromptGeneratorBase):
         n_positive_points: The number of positive point prompts to generate per mask.
         n_negative_points: The number of negative point prompts to generate per mask.
         dilation_strength: The factor by which the mask is dilated before generating prompts.
-        get_point_prompts: Whether to generate point prompts.
-        get_box_prompts: Whether to generate box prompts.
+        get_point_prompts: Whether to generate point prompts. By default, set to 'True'.
+        get_box_prompts: Whether to generate box prompts. By default, set to 'False'.
     """
     def __init__(
         self,

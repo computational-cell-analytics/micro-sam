@@ -59,7 +59,7 @@ contributions:
       display_name: WholeSlide example data
       key: micro-sam-wholeslide
     - command: micro-sam.sample_data_livecell
-      display_name: LiveCell example data
+      display_name: LiveCell 2d example data
       key: micro-sam-livecell
     - command: micro-sam.sample_data_hela_2d
       display_name: HeLa 2d example data
