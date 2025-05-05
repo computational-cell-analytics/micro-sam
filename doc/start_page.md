@@ -42,6 +42,8 @@ import micro_sam
 
 It is explained in more detail [here](#using-the-python-library).
 
+We also have a quick start notebook [here](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/quick_start.ipynb).
+
 We provide different finetuned models for microscopy that can be used within our tools or any other tool that supports Segment Anything. See [finetuned models](#finetuned-models) for details on the available models.
 You can also train models on your own data, see [here for details](#training-your-own-model).
 
