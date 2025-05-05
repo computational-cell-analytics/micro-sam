@@ -86,7 +86,7 @@ def finetune_covid_if(args):
     train_loader, val_loader = get_dataloaders(
         patch_shape=patch_shape, data_path=args.input_path, n_images=args.n_images
     )
-    scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
+    scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3}
 
     # Run training
     sam_training.train_sam(
