@@ -54,7 +54,7 @@ def finetune_mito_nuc_em_generalist(args):
 
     # all the stuff we need for training
     optimizer = torch.optim.Adam(joint_model_params, lr=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=15, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.9, patience=15)
     train_loader, val_loader = get_generalist_mito_nuc_loaders(input_path=args.input_path, patch_shape=patch_shape)
 
     # this class creates all the training data for a batch (inputs, prompts and labels)

@@ -17,7 +17,7 @@ def run_semantic_training(path, save_root, iterations, model, device, for_sam, n
     # all the stuff we need for training
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.9, verbose=True, patience=10 if dataset.startswith("covid_if") else 5,
+        optimizer, mode="min", factor=0.9, patience=10 if dataset.startswith("covid_if") else 5,
     )
 
     patch_shape = (512, 512)

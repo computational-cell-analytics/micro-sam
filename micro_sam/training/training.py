@@ -280,7 +280,7 @@ def train_sam(
         optimizer = optimizer_class(model_params, lr=lr)
 
         if scheduler_kwargs is None:
-            scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
+            scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3}
 
         scheduler = scheduler_class(optimizer=optimizer, **scheduler_kwargs)
 
