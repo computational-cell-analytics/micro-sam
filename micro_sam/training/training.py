@@ -2,6 +2,7 @@ import os
 import time
 import warnings
 from glob import glob
+from tqdm import tqdm
 from collections import OrderedDict
 from contextlib import contextmanager, nullcontext
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -13,7 +14,6 @@ from torch.optim import Optimizer
 from torch.utils.data import random_split
 from torch.utils.data import DataLoader, Dataset
 from torch.optim.lr_scheduler import _LRScheduler
-from tqdm import tqdm
 
 import torch_em
 from torch_em.util import load_data
@@ -230,36 +230,41 @@ def train_sam(
         val_loader: The dataloader for validation.
         n_epochs: The number of epochs to train for.
         early_stopping: Enable early stopping after this number of epochs without improvement.
+            By default, the value is set to '10' epochs.
         n_objects_per_batch: The number of objects per batch used to compute
             the loss for interative segmentation. If None all objects will be used,
-            if given objects will be randomly sub-sampled.
+            if given objects will be randomly sub-sampled. By default, the number of objects per batch are '25'.
         checkpoint_path: Path to checkpoint for initializing the SAM model.
         with_segmentation_decoder: Whether to train additional UNETR decoder for automatic instance segmentation.
+            By default, trains with the additional instance segmentation decoder.
         freeze: Specify parts of the model that should be frozen, namely: image_encoder, prompt_encoder and mask_decoder
             By default nothing is frozen and the full model is updated.
-        device: The device to use for training.
-        lr: The learning rate.
+        device: The device to use for training. By default, automatically chooses the best available device to train.
+        lr: The learning rate. By default, set to '1e-5'.
         n_sub_iteration: The number of iterative prompts per training iteration.
+            By default, the number of iterations is set to '8'.
         save_root: Optional root directory for saving the checkpoints and logs.
             If not given the current working directory is used.
         mask_prob: The probability for using a mask as input in a given training sub-iteration.
-        n_iterations: The number of iterations to use for training. This will over-ride n_epochs if given.
+            By default, set to '0.5'.
+        n_iterations: The number of iterations to use for training. This will over-ride `n_epochs` if given.
         scheduler_class: The learning rate scheduler to update the learning rate.
-            By default, torch.optim.lr_scheduler.ReduceLROnPlateau is used.
+            By default, `torch.optim.lr_scheduler.ReduceLROnPlateau` is used.
         scheduler_kwargs: The learning rate scheduler parameters.
-            If passed None, the chosen default parameters are used in ReduceLROnPlateau.
+            If passed 'None', the chosen default parameters are used in `ReduceLROnPlateau`.
         save_every_kth_epoch: Save checkpoints after every kth epoch separately.
         pbar_signals: Controls for napari progress bar.
-        optimizer_class: The optimizer class. By default, torch.optim.AdamW is used.
+        optimizer_class: The optimizer class. By default, `torch.optim.AdamW` is used.
         peft_kwargs: Keyword arguments for the PEFT wrapper class.
-        ignore_warnings: Whether to ignore raised warnings.
+        ignore_warnings: Whether to ignore raised warnings. By default, set to 'True'.
         verify_n_labels_in_loader: The number of labels to verify out of the train and validation dataloaders.
             By default, 50 batches of labels are verified from the dataloaders.
         box_distortion_factor: The factor for distorting the box annotations derived from the ground-truth masks.
+            By default, the distortion factor is set to '0.025'.
         overwrite_training: Whether to overwrite the trained model stored at the same location.
             By default, overwrites the trained model at each run.
             If set to 'False', it will avoid retraining the model if the previous run was completed.
-        model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
+        model_kwargs: Additional keyword arguments for the `micro_sam.util.get_sam_model`.
     """
     with _filter_warnings(ignore_warnings):
 
@@ -450,27 +455,28 @@ def train_instance_segmentation(
         val_loader: The dataloader for validation.
         n_epochs: The number of epochs to train for.
         early_stopping: Enable early stopping after this number of epochs without improvement.
+            By default, the value is set to '10' epochs.
         checkpoint_path: Path to checkpoint for initializing the SAM model.
         freeze: Specify parts of the model that should be frozen. Here, only the image_encoder can be frozen.
             By default nothing is frozen and the full model is updated.
-        device: The device to use for training.
-        lr: The learning rate.
+        device: The device to use for training. By default, automatically chooses the best available device to train.
+        lr: The learning rate. By default, set to '1e-5'.
         save_root: Optional root directory for saving the checkpoints and logs.
             If not given the current working directory is used.
-        n_iterations: The number of iterations to use for training. This will over-ride n_epochs if given.
+        n_iterations: The number of iterations to use for training. This will over-ride `n_epochs` if given.
         scheduler_class: The learning rate scheduler to update the learning rate.
-            By default, torch.optim.lr_scheduler.ReduceLROnPlateau is used.
+            By default, `torch.optim.lr_scheduler.ReduceLROnPlateau` is used.
         scheduler_kwargs: The learning rate scheduler parameters.
-            If passed None, the chosen default parameters are used in ReduceLROnPlateau.
+            If passed 'None', the chosen default parameters are used in `ReduceLROnPlateau`.
         save_every_kth_epoch: Save checkpoints after every kth epoch separately.
         pbar_signals: Controls for napari progress bar.
-        optimizer_class: The optimizer class. By default, torch.optim.AdamW is used.
+        optimizer_class: The optimizer class. By default, `torch.optim.AdamW` is used.
         peft_kwargs: Keyword arguments for the PEFT wrapper class.
-        ignore_warnings: Whether to ignore raised warnings.
+        ignore_warnings: Whether to ignore raised warnings. By default, set to 'True'.
         overwrite_training: Whether to overwrite the trained model stored at the same location.
             By default, overwrites the trained model at each run.
             If set to 'False', it will avoid retraining the model if the previous run was completed.
-        model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
+        model_kwargs: Additional keyword arguments for the `micro_sam.util.get_sam_model`.
     """
 
     with _filter_warnings(ignore_warnings):
@@ -510,6 +516,7 @@ def train_instance_segmentation(
             metric=loss,
             optimizer=optimizer,
             lr_scheduler=scheduler,
+            early_stopping=early_stopping,
         )
 
         trainer_fit_params = _get_trainer_fit_params(
@@ -589,13 +596,13 @@ def default_sam_dataset(
         with_segmentation_decoder: Whether to train with additional segmentation decoder.
         with_channels: Whether the image data has channels. By default, it makes the decision based on inputs.
         train_instance_segmentation_only: Set this argument to True in order to
-            pass the dataset to `train_instance_segmentation`.
+            pass the dataset to `train_instance_segmentation`. By default, set to 'False'.
         sampler: A sampler to reject batches according to a given criterion.
         raw_transform: Transformation applied to the image data.
             If not given the data will be cast to 8bit.
         n_samples: The number of samples for this dataset.
-        is_train: Whether this dataset is used for training or validation.
-        min_size: Minimal object size. Smaller objects will be filtered.
+        is_train: Whether this dataset is used for training or validation. By default, set to 'True'.
+        min_size: Minimal object size. Smaller objects will be filtered. By default, set to '25'.
         max_sampling_attempts: Number of sampling attempts to make from a dataset.
         kwargs: Additional keyword arguments for `torch_em.default_segmentation_dataset`.
 
@@ -785,14 +792,13 @@ def train_sam_for_configuration(
     The available configurations are listed in `CONFIGURATIONS`.
 
     Args:
-        name: The name of the model to be trained.
-            The checkpoint and logs wil have this name.
+        name: The name of the model to be trained. The checkpoint and logs folder will have this name.
         configuration: The configuration (= name of hardware resource).
         train_loader: The dataloader for training.
         val_loader: The dataloader for validation.
         checkpoint_path: Path to checkpoint for initializing the SAM model.
-        with_segmentation_decoder: Whether to train additional UNETR decoder
-            for automatic instance segmentation.
+        with_segmentation_decoder: Whether to train additional UNETR decoder for automatic instance segmentation.
+            By default, trains with the additional instance segmentation decoder.
         train_instance_segmentation_only: Whether to train a model only for automatic instance segmentation
             using the training implementation `train_instance_segmentation`. By default, `train_sam` is used.
         model_type: Over-ride the default model type.

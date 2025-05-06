@@ -31,11 +31,12 @@ def get_predictor_and_segmenter(
     Args:
         model_type: The Segment Anything model choice.
         checkpoint: The filepath to the stored model checkpoints.
-        device: The torch device.
+        device: The torch device. By default, automatically chooses the best available device.
         amg: Whether to perform automatic segmentation in AMG mode.
             Otherwise AIS will be used, which requires a special segmentation decoder.
             If not specified AIS will be used if it is available and otherwise AMG will be used.
         is_tiled: Whether to return segmenter for performing segmentation in tiling window style.
+            By default, set to 'False'.
         kwargs: Keyword arguments for the automatic mask generation class.
 
     Returns:
@@ -99,10 +100,12 @@ def automatic_tracking(
         key: The key to the input file. This is needed for container files (eg. hdf5 or zarr)
             or to load several images as 3d volume. Provide a glob patterm, eg. "*.tif", for this case.
         tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
-        halo: Overlap of the tiles for tiled prediction.
-        verbose: Verbosity flag.
+        halo: Overlap of the tiles for tiled prediction. By default prediction is run without tiling.
+        verbose: Verbosity flag. By default, set to 'True'.
         return_embeddings: Whether to return the precomputed image embeddings.
+            By default, does not return the embeddings.
         annotate: Whether to activate the annotator for continue annotation process.
+            By default, does not activate the annotator.
         batch_size: The batch size to compute image embeddings over tiles / z-planes.
             By default, does it sequentially, i.e. one after the other.
         generate_kwargs: optional keyword arguments for the generate function of the AMG or AIS class.
@@ -183,10 +186,12 @@ def automatic_instance_segmentation(
         ndim: The dimensionality of the data. By default the dimensionality of the data will be used.
             If you have RGB data you have to specify this explicitly, e.g. pass ndim=2 for 2d segmentation of RGB.
         tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
-        halo: Overlap of the tiles for tiled prediction.
-        verbose: Verbosity flag.
+        halo: Overlap of the tiles for tiled prediction. By default prediction is run without tiling.
+        verbose: Verbosity flag. By default, set to 'True'.
         return_embeddings: Whether to return the precomputed image embeddings.
+            By default, does not return the embeddings.
         annotate: Whether to activate the annotator for continue annotation process.
+            By default, does not activate the annotator.
         batch_size: The batch size to compute image embeddings over tiles / z-planes.
             By default, does it sequentially, i.e. one after the other.
         generate_kwargs: optional keyword arguments for the generate function of the AMG or AIS class.

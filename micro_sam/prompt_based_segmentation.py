@@ -273,10 +273,10 @@ def segment_from_points(
         labels: The labels (positive or negative) associated with the points.
         image_embeddings: Optional precomputed image embeddings.
             Has to be passed if the predictor is not yet initialized.
-         i: Index for the image data. Required if the input data has three spatial dimensions
-             or a time dimension and two spatial dimensions.
-        multimask_output: Whether to return multiple or just a single mask.
-        return_all: Whether to return the score and logits in addition to the mask.
+        i: Index for the image data. Required if the input data has three spatial dimensions
+            or a time dimension and two spatial dimensions.
+        multimask_output: Whether to return multiple or just a single mask. By default, set to 'False'.
+        return_all: Whether to return the score and logits in addition to the mask. By default, set to 'False'.
         use_best_multimask: Whether to use multimask output and then choose the best mask.
             By default this is used for a single positive point and not otherwise.
 
@@ -338,15 +338,16 @@ def segment_from_mask(
         image_embeddings: Optional precomputed image embeddings.
             Has to be passed if the predictor is not yet initialized.
         i: Index for the image data. Required if the input data has three spatial dimensions
-             or a time dimension and two spatial dimensions.
-        use_box: Whether to derive the bounding box prompt from the mask.
-        use_mask: Whether to use the mask itself as prompt.
-        use_points: Whether to derive point prompts from the mask.
+            or a time dimension and two spatial dimensions.
+        use_box: Whether to derive the bounding box prompt from the mask. By default, set to 'True'.
+        use_mask: Whether to use the mask itself as prompt. By default, set to 'True'.
+        use_points: Whether to derive point prompts from the mask. By default, set to 'False'.
         original_size: Full image shape. Use this if the mask that is being passed
             downsampled compared to the original image.
-        multimask_output: Whether to return multiple or just a single mask.
-        return_all: Whether to return the score and logits in addition to the mask.
+        multimask_output: Whether to return multiple or just a single mask. By default, set to 'False'.
+        return_all: Whether to return the score and logits in addition to the mask. By default, set to 'False'.
         box_extension: Relative factor used to enlarge the bounding box prompt.
+            By default, does not enlarge the bounding box.
         box: Precomputed bounding box.
         points: Precomputed point prompts.
         labels: Positive/negative labels corresponding to the point prompts.
@@ -429,11 +430,12 @@ def segment_from_box(
         box: The box prompt.
         image_embeddings: Optional precomputed image embeddings.
             Has to be passed if the predictor is not yet initialized.
-         i: Index for the image data. Required if the input data has three spatial dimensions
-             or a time dimension and two spatial dimensions.
-        multimask_output: Whether to return multiple or just a single mask.
-        return_all: Whether to return the score and logits in addition to the mask.
+        i: Index for the image data. Required if the input data has three spatial dimensions
+            or a time dimension and two spatial dimensions.
+        multimask_output: Whether to return multiple or just a single mask. By default, set to 'False'.
+        return_all: Whether to return the score and logits in addition to the mask. By default, set to 'False'.
         box_extension: Relative factor used to enlarge the bounding box prompt.
+            By default, does not enlarge the bounding box.
 
     Returns:
         The binary segmentation mask.
@@ -473,10 +475,10 @@ def segment_from_box_and_points(
         labels: The point labels, either positive or negative.
         image_embeddings: Optional precomputed image embeddings.
             Has to be passed if the predictor is not yet initialized.
-         i: Index for the image data. Required if the input data has three spatial dimensions
-             or a time dimension and two spatial dimensions.
-        multimask_output: Whether to return multiple or just a single mask.
-        return_all: Whether to return the score and logits in addition to the mask.
+        i: Index for the image data. Required if the input data has three spatial dimensions
+            or a time dimension and two spatial dimensions.
+        multimask_output: Whether to return multiple or just a single mask. By default, set to 'False'.
+        return_all: Whether to return the score and logits in addition to the mask. By default, set to 'False'.
 
     Returns:
         The binary segmentation mask.
