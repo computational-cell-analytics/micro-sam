@@ -89,6 +89,7 @@ def _3d_interactive_instance_segmentation(
         verbose=False,
         grid_search_values=best_params,
         min_size=min_size,
+        store_segmentation=True,
     )
 
 
