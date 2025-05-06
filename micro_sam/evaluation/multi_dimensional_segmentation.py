@@ -275,6 +275,7 @@ def run_multi_dimensional_segmentation_grid_search(
     grid_search_values: Optional[Dict[str, List]] = None,
     min_size: int = 0,
     evaluation_metric: Literal["sa", "dice"] = "sa",
+    store_segmentation: bool = False,
 ) -> str:
     """Run grid search for prompt-based multi-dimensional instance segmentation.
 
@@ -305,6 +306,7 @@ def run_multi_dimensional_segmentation_grid_search(
         min_size: The minimal size for evaluating an object in the ground-truth.
             The size is measured within the central slice.
         evaluation_metric: The choice of metric for evaluating predictions.
+        store_segmentation: Whether to store the segmentations per grid-search locally.
 
     Returns:
         Filepath where the best parameters are saved.
@@ -331,9 +333,16 @@ def run_multi_dimensional_segmentation_grid_search(
         {k: v for k, v in zip(grid_search_values.keys(), vals)} for vals in gs_combinations
     ]
 
+    prediction_dir = os.path.join(result_dir, "predictions")
+    os.makedirs(prediction_dir, exist_ok=True)
+
     net_list = []
-    for gs_kwargs in tqdm(gs_combinations, desc="Run grid-search for multi-dimensional segmentation"):
-        results = segment_slices_from_ground_truth(
+    for i, gs_kwargs in tqdm(
+        enumerate(gs_combinations),
+        total=len(gs_combinations),
+        desc="Run grid-search for multi-dimensional segmentation",
+    ):
+        results, segmentation = segment_slices_from_ground_truth(
             volume=volume,
             ground_truth=ground_truth,
             model_type=model_type,
@@ -341,11 +350,17 @@ def run_multi_dimensional_segmentation_grid_search(
             embedding_path=embedding_path,
             interactive_seg_mode=interactive_seg_mode,
             verbose=verbose,
-            return_segmentation=False,
+            return_segmentation=True,
             min_size=min_size,
             evaluation_metric=evaluation_metric,
             **gs_kwargs
         )
+
+        # Store the segmentations for each grid search combination, if desired by the user.
+        if store_segmentation:
+            imageio.imwrite(
+                os.path.join(prediction_dir, f"grid_search_result_{i:05}.tif"), segmentation, compression="zlib"
+            )
 
         result_dict = {**results, **gs_kwargs}
         tmp_df = pd.DataFrame([result_dict])
