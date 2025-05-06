@@ -2,7 +2,7 @@ import os
 import time
 import random
 import warnings
-from typing import Optional
+from typing import Optional, Callable
 
 import numpy as np
 
@@ -30,15 +30,18 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         n_objects_per_batch: If not given, we compute the loss for all objects in a sample.
             Otherwise the loss computation is limited to n_objects_per_batch, and the objects are randomly sampled.
         mse_loss: The regression loss to compare the IoU predicted by the model with the true IoU.
-        prompt_generator: The iterative prompt generator which takes care of the iterative prompting logic for training
-        mask_prob: The probability of using the mask inputs in the iterative prompting (per `n_sub_iteration`)
-        mask_loss: The loss to compare the predicted masks and the targets.
-        kwargs: The keyword arguments of the DefaultTrainer super class.
+            By default, set to the expected mse loss function.
+        prompt_generator: The iterative prompt generator which takes care of the iterative prompting logic for training.
+            Already allocated with the desired prompt generator by default.
+        mask_prob: The probability of using the mask inputs in the iterative prompting (per `n_sub_iteration`).
+            By default, set to '0.5'.
+        mask_loss: The loss to compare the predicted masks and the targets. By default, set to the dice loss function.
+        kwargs: The keyword arguments of the `DefaultTrainer` super class.
     """
 
     def __init__(
         self,
-        convert_inputs,
+        convert_inputs: Callable,
         n_sub_iteration: int,
         n_objects_per_batch: Optional[int] = None,
         mse_loss: torch.nn.Module = torch.nn.MSELoss(),

@@ -11,17 +11,13 @@ class SimpleSamTrainer(SamTrainer):
     for details on its implementation.
 
     Args:
-        use_points: Whether to use point prompts for interactive segmentation.
-        use_box: Whether to use box prompts for interactive segmentation.
+        use_points: Whether to use point prompts for interactive segmentation. By default, set to 'True'.
+        use_box: Whether to use box prompts for interactive segmentation. By default, set to 'True'.
         kwargs: The keyword arguments of the `SamTrainer` (and `DefaultTrainer`) class.
     """
 
     def __init__(self, use_points: bool = True, use_box: bool = True, **kwargs):
-        super().__init__(
-            n_sub_iteration=1,
-            mask_prob=0,
-            **kwargs
-        )
+        super().__init__(n_sub_iteration=1, mask_prob=0, **kwargs)
         self.use_points = use_points
         self.use_box = use_box
 

@@ -157,13 +157,15 @@ def image_series_annotator(
         viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
+            By default, does not return the napari viewer.
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
             This will take more time when precomputing embeddings, but will then make
-            automatic mask generation much faster.
+            automatic mask generation much faster. By default, set to 'False'.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
-        is_volumetric: Whether to use the 3d annotator.
+        is_volumetric: Whether to use the 3d annotator. By default, set to 'False'.
         prefer_decoder: Whether to use decoder based instance segmentation if
             the model used has an additional decoder for instance segmentation.
+            By default, set to 'True'.
         skip_segmented: Whether to skip images that were already segmented.
             If set to False, then segmentations that already exist will be loaded
             and used to populate the 'committed_objects' layer.
@@ -342,6 +344,7 @@ def image_folder_annotator(
         viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
+            By default, does not return the napari viewer.
         kwargs: The keyword arguments for `micro_sam.sam_annotator.image_series_annotator`.
 
     Returns:

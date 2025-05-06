@@ -201,7 +201,7 @@ def get_device(device: Optional[Union[str, torch.device]] = None) -> Union[str, 
     Else it will be checked if the device you have passed is supported.
 
     Args:
-        device: The input device.
+        device: The input device. By default, selects the best available device supports.
 
     Returns:
         The device.
@@ -219,10 +219,7 @@ def get_device(device: Optional[Union[str, torch.device]] = None) -> Union[str, 
         elif device_type.lower() == "cpu":
             pass  # cpu is always available
         else:
-            raise RuntimeError(
-                f"Unsupported device: {device}\n"
-                "Please choose from 'cpu', 'cuda', or 'mps'."
-            )
+            raise RuntimeError(f"Unsupported device: '{device}'. Please choose from 'cpu', 'cuda', or 'mps'.")
 
     return device
 
@@ -319,22 +316,24 @@ def get_sam_model(
     https://www.fatiando.org/pooch/latest/api/generated/pooch.os_cache.html
 
     Args:
-        model_type: The Segment Anything model to use. Will use the standard `vit_l` model by default.
-            To get a list of all available model names you can call `get_model_names`.
-        device: The device for the model. If none is given will use GPU if available.
+        model_type: The Segment Anything model to use. Will use the 'vit_b_lm' model by default.
+            To get a list of all available model names you can call `micro_sam.util.get_model_names`.
+        device: The device for the model. If 'None' is provided, will use GPU if available.
         checkpoint_path: The path to a file with weights that should be used instead of using the
             weights corresponding to `model_type`. If given, `model_type` must match the architecture
             corresponding to the weight file. e.g. if you use weights for SAM with `vit_b` encoder
-            then `model_type` must be given as "vit_b".
-        return_sam: Return the sam model object as well as the predictor.
-        return_state: Return the unpickled checkpoint state.
+            then `model_type` must be given as 'vit_b'.
+        return_sam: Return the sam model object as well as the predictor. By default, set to 'False'.
+        return_state: Return the unpickled checkpoint state. By default, set to 'False'.
         peft_kwargs: Keyword arguments for th PEFT wrapper class.
+            If passed 'None', it does not initialize any parameter efficient finetuning.
         flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
-        model_kwargs: Additional parameters necessary to initialize the Segment Anything model.
+            By default, set to 'False'.
         progress_bar_factory: A function to create a progress bar for the model download.
+        model_kwargs: Additional parameters necessary to initialize the Segment Anything model.
 
     Returns:
-        The segment anything predictor.
+        The Segment Anything predictor.
     """
     device = get_device(device)
 
@@ -972,14 +971,16 @@ def precompute_image_embeddings(
         predictor: The Segment Anything predictor.
         input_: The input data. Can be 2 or 3 dimensional, corresponding to an image, volume or timeseries.
         save_path: Path to save the embeddings in a zarr container.
+            By default, set to 'None', i.e. the computed embeddings will not be stored locally.
         lazy_loading: Whether to load all embeddings into memory or return an
             object to load them on demand when required. This only has an effect if 'save_path' is given
-            and if the input is 3 dimensional.
+            and if the input is 3 dimensional. By default, set to 'False'.
         ndim: The dimensionality of the data. If not given will be deduced from the input data.
+            By default, set to 'None', i.e. will be computed from the provided `input_`.
         tile_shape: Shape of tiles for tiled prediction. By default prediction is run without tiling.
-        halo: Overlap of the tiles for tiled prediction.
-        verbose: Whether to be verbose in the computation.
-        batch_size: The batch size for precomputing image embeddings over tiles (or planes).
+        halo: Overlap of the tiles for tiled prediction. By default prediction is run without tiling.
+        verbose: Whether to be verbose in the computation. By default, set to 'True'.
+        batch_size: The batch size for precomputing image embeddings over tiles (or planes). By default, set to '1'.
         pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
             Can be used together with pbar_update to handle napari progress bar in other thread.
             To enables using this function within a threadworker.
@@ -1150,6 +1151,7 @@ def segmentation_to_one_hot(segmentation: np.ndarray, segmentation_ids: Optional
     Args:
         segmentation: The segmentation.
         segmentation_ids: Optional subset of ids that will be used to subsample the masks.
+            By default, computes the number of ids from the provided `segmentation` masks.
 
     Returns:
         The one-hot encoded masks.
