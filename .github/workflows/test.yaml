@@ -20,9 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        # 3.12 currently not supported due to issues with nifty.
-        # python-version: ["3.11", "3.12"]
-        python-version: ["3.11"]
+        python-version: ["3.11", "3.12"]
 
     steps:
       - name: Checkout
