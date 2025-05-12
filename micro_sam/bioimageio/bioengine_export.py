@@ -12,7 +12,7 @@ try:
 except ImportError:
     onnxruntime_exists = False
 
-from ..util import get_sam_model, get_device
+from ..util import get_sam_model
 
 
 ENCODER_CONFIG = """name: "%s"
@@ -89,11 +89,11 @@ def export_image_encoder(
     weight_output_folder = os.path.join(output_folder, "1")
     os.makedirs(weight_output_folder, exist_ok=True)
 
-    predictor = get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path)
+    predictor = get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path, device="cpu")
     encoder = predictor.model.image_encoder
 
     encoder.eval()
-    input_ = torch.rand(1, 3, 1024, 1024).to(get_device())
+    input_ = torch.rand(1, 3, 1024, 1024)
     traced_model = torch.jit.trace(encoder, input_)
     weight_path = os.path.join(weight_output_folder, "model.pt")
     traced_model.save(weight_path)
@@ -143,7 +143,8 @@ def export_onnx_model(
     weight_output_folder = os.path.join(output_folder, "1")
     os.makedirs(weight_output_folder, exist_ok=True)
 
-    _, sam = get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path, return_sam=True)
+    _, sam = get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path, return_sam=True, device="cpu")
+
     weight_path = os.path.join(weight_output_folder, "model.onnx")
 
     onnx_model = SamOnnxModel(
