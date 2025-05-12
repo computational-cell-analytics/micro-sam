@@ -12,7 +12,7 @@ try:
 except ImportError:
     onnxruntime_exists = False
 
-from ..util import get_sam_model
+from ..util import get_sam_model, get_device
 
 
 ENCODER_CONFIG = """name: "%s"
@@ -93,7 +93,7 @@ def export_image_encoder(
     encoder = predictor.model.image_encoder
 
     encoder.eval()
-    input_ = torch.rand(1, 3, 1024, 1024)
+    input_ = torch.rand(1, 3, 1024, 1024).to(get_device())
     traced_model = torch.jit.trace(encoder, input_)
     weight_path = os.path.join(weight_output_folder, "model.pt")
     traced_model.save(weight_path)
