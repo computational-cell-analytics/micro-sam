@@ -821,6 +821,8 @@ def get_decoder(
     image_encoder: torch.nn.Module,
     decoder_state: OrderedDict[str, torch.Tensor],
     device: Optional[Union[str, torch.device]] = None,
+    out_channels: int = 3,
+    flexible_load_checkpoint: bool = False
 ) -> DecoderAdapter:
     """Get decoder to predict outputs for automatic instance segmentation
 
@@ -828,11 +830,20 @@ def get_decoder(
         image_encoder: The image encoder of the SAM model.
         decoder_state: State to initialize the weights of the UNETR decoder.
         device: The device. By default, automatically chooses the best available device.
+        out_channels: The number of output channels. By default, set to '3'.
+        flexible_load_checkpoint: Whether to allow reinitialization of parameters
+            which could not be found in the provided decoder state. By default, set to 'False'.
 
     Returns:
         The decoder for instance segmentation.
     """
-    unetr = get_unetr(image_encoder, decoder_state, device)
+    unetr = get_unetr(
+        image_encoder=image_encoder,
+        decoder_state=decoder_state,
+        device=device,
+        out_channels=out_channels,
+        flexible_load_checkpoint=flexible_load_checkpoint,
+    )
     return DecoderAdapter(unetr)
 
 

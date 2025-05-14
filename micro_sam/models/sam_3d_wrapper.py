@@ -7,25 +7,34 @@ import torch.nn as nn
 from segment_anything.modeling import Sam
 from segment_anything.modeling.image_encoder import window_partition, window_unpartition
 
-from ..util import get_sam_model
-from .peft_sam import LoRASurgery
+from ..util import get_sam_model, _DEFAULT_MODEL
 
 
 def get_sam_3d_model(
-    device: Union[str, torch.device],
-    n_classes: int,
     image_size: int,
-    lora_rank: Optional[int] = None,
-    freeze_encoder: bool = False,
-    model_type: str = "vit_b",
+    model_type: str = _DEFAULT_MODEL,
+    n_classes: Optional[int] = None,
+    decoder: Optional[nn.Module] = None,
+    device: Optional[Union[str, torch.device]] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
 ) -> nn.Module:
+    """Get the SAM 3D model for semantic segmentation.
+
+    Args:
+        image_size: The size of height / width of the input image.
+        model_type: The choice of SAM model.
+        n_classes: The number of output classes (including the background class).
+            This is only relevant for the default decoder selection, otherwise 'None' by default.
+        decoder: Optional, whether to use a custom mask decoder instead of SAM mask decoder.
+        device: The torch device.
+        checkpoint_path: Optional, whether to load a finetuned model.
+
+    Returns:
+        The SAM 3D model.
     """
-    """
-    if lora_rank is None:
-        peft_kwargs = {}
-    else:
-        peft_kwargs = {"rank": lora_rank, "peft_module": LoRASurgery}
+    kwargs = {}
+    if n_classes is not None:
+        kwargs["num_multimask_outputs"] = n_classes
 
     _, sam = get_sam_model(
         model_type=model_type,
@@ -33,31 +42,29 @@ def get_sam_3d_model(
         checkpoint_path=checkpoint_path,
         return_sam=True,
         flexible_load_checkpoint=True,
-        num_multimask_outputs=n_classes,
         image_size=image_size,
-        peft_kwargs=peft_kwargs,
+        **kwargs
     )
 
-    # Make sure not to freeze the encoder when using LoRA.
-    _freeze_encoder = freeze_encoder if lora_rank is None else False
-    # sam_3d = Sam3DWrapper(sam, freeze_encoder=_freeze_encoder, model_type=model_type)
-
-    # HACK:
-    from medico_sam.models.sam3d import SamUNETR3DWrapper
-    sam_3d = SamUNETR3DWrapper(sam, freeze_encoder=_freeze_encoder, model_type=model_type)
+    sam_3d = Sam3DWrapper(sam, model_type=model_type, decoder=decoder)
     sam_3d.to(device)
 
     return sam_3d
 
 
 class Sam3DWrapper(nn.Module):
-    def __init__(self, sam_model: Sam, freeze_encoder: bool, model_type: str = "vit_b"):
+    def __init__(
+        self,
+        sam_model: Sam,
+        model_type: str = "vit_b",
+        decoder: Optional[nn.Module] = None,
+    ):
         """Initializes the Sam3DWrapper object.
 
         Args:
-            sam_model: The Sam model to be wrapped.
-            freeze_encoder: Whether to freeze the image encoder.
+            sam_model: The SAM model to be wrapped.
             model_type: The choice of segment anything model to wrap adapters for respective model configuration.
+            decoder: Optional, whether to use a custom mask decoder instead of SAM mask decoder.
         """
         super().__init__()
 
@@ -76,12 +83,12 @@ class Sam3DWrapper(nn.Module):
         )
         self.sam_model = sam_model
 
-        self.freeze_encoder = freeze_encoder
-        if self.freeze_encoder:
-            for param in self.sam_model.image_encoder.parameters():
-                param.requires_grad = False
+        # Get a custom decoder, which overtakes the SAM mask decoder.
+        self.decoder = decoder
 
-    def forward(self, batched_input: List[Dict[str, Any]], multimask_output: bool) -> List[Dict[str, torch.Tensor]]:
+    def forward(
+        self, batched_input: List[Dict[str, Any]], multimask_output: bool = False
+    ) -> List[Dict[str, torch.Tensor]]:
         """Predict 3D masks for the current inputs.
 
         Unlike original SAM this model only supports automatic segmentation and does not support prompts.
@@ -90,13 +97,13 @@ class Sam3DWrapper(nn.Module):
             batched_input: A list over input images, each a dictionary with the following keys.
                 'image': The image as a torch tensor in 3xDxHxW format. Already transformed for the input to the model.
                 'original_size': The original size of the image (HxW) before transformation.
-            multimask_output: Wheterh to predict with the multi- or single-mask head of the maks decoder.
+            multimask_output: Whether to predict with the multi- or single-mask head of the maks decoder.
 
         Returns:
             A list over input images, where each element is as dictionary with the following keys:
                 'masks': Mask prediction for this object.
-                'iou_predictions': IOU score prediction for this object.
-                'low_res_masks': Low resolution mask prediction for this object.
+                'iou_predictions': IOU score prediction for this object for the default mask decoder.
+                'low_res_masks': Low resolution mask prediction for this object for the default mask decoder.
         """
         batched_images = torch.stack([inp["image"] for inp in batched_input], dim=0)
         original_size = batched_input[0]["original_size"]
@@ -114,21 +121,25 @@ class Sam3DWrapper(nn.Module):
 
         input_images = self.sam_model.preprocess(batched_images)
         image_embeddings = self.sam_model.image_encoder(input_images, d_size)
-        sparse_embeddings, dense_embeddings = self.sam_model.prompt_encoder(
-            points=None, boxes=None, masks=None
-        )
-        low_res_masks, iou_predictions = self.sam_model.mask_decoder(
-            image_embeddings=image_embeddings,
-            image_pe=self.sam_model.prompt_encoder.get_dense_pe(),
-            sparse_prompt_embeddings=sparse_embeddings,
-            dense_prompt_embeddings=dense_embeddings,
-            multimask_output=multimask_output
-        )
-        masks = self.sam_model.postprocess_masks(
-            low_res_masks,
-            input_size=batched_images.shape[-2:],
-            original_size=original_size,
-        )
+
+        if self.decoder is None:  # i.e. use SAM mask decoder.
+            sparse_embeddings, dense_embeddings = self.sam_model.prompt_encoder(
+                points=None, boxes=None, masks=None
+            )
+            low_res_masks, iou_predictions = self.sam_model.mask_decoder(
+                image_embeddings=image_embeddings,
+                image_pe=self.sam_model.prompt_encoder.get_dense_pe(),
+                sparse_prompt_embeddings=sparse_embeddings,
+                dense_prompt_embeddings=dense_embeddings,
+                multimask_output=multimask_output
+            )
+            masks = self.sam_model.postprocess_masks(
+                low_res_masks,
+                input_size=batched_images.shape[-2:],
+                original_size=original_size,
+            )
+        else:  # otherwise, use the custom provided decoder (eg. UNETR decoder)
+            masks = self.decoder(image_embeddings, batched_images.shape[-2:], original_size)
 
         # Bring the masks and low-res masks into the correct shape:
         # - disentangle batches and z-slices
@@ -136,19 +147,22 @@ class Sam3DWrapper(nn.Module):
 
         n_channels = masks.shape[1]
         masks = masks.view(*(batch_size, d_size, n_channels, masks.shape[-2], masks.shape[-1]))
-        low_res_masks = low_res_masks.view(
-            *(batch_size, d_size, n_channels, low_res_masks.shape[-2], low_res_masks.shape[-1])
-        )
-
         masks = masks.transpose(1, 2)
-        low_res_masks = low_res_masks.transpose(1, 2)
 
-        # Make the output compatable with the SAM output.
-        outputs = [{
-            "masks": mask.unsqueeze(0),
-            "iou_predictions": iou_pred,
-            "low_res_logits": low_res_mask.unsqueeze(0)
-        } for mask, iou_pred, low_res_mask in zip(masks, iou_predictions, low_res_masks)]
+        if self.decoder is None:
+            low_res_masks = low_res_masks.view(
+                *(batch_size, d_size, n_channels, low_res_masks.shape[-2], low_res_masks.shape[-1])
+            )
+            low_res_masks = low_res_masks.transpose(1, 2)
+
+            # Make the output compatable with the SAM output.
+            outputs = [{
+                "masks": mask.unsqueeze(0), "iou_predictions": iou_pred, "low_res_logits": low_res_mask.unsqueeze(0)
+            } for mask, iou_pred, low_res_mask in zip(masks, iou_predictions, low_res_masks)]
+
+        else:
+            # Make the output compatable with the SAM output.
+            outputs = [{"masks": mask.unsqueeze(0)} for mask in masks]
 
         return outputs
 
