@@ -19,7 +19,9 @@ def get_sam_3d_model(
     freeze_encoder: bool = False,
     model_type: str = "vit_b",
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
-):
+) -> nn.Module:
+    """
+    """
     if lora_rank is None:
         peft_kwargs = {}
     else:
@@ -38,7 +40,11 @@ def get_sam_3d_model(
 
     # Make sure not to freeze the encoder when using LoRA.
     _freeze_encoder = freeze_encoder if lora_rank is None else False
-    sam_3d = Sam3DWrapper(sam, freeze_encoder=_freeze_encoder, model_type=model_type)
+    # sam_3d = Sam3DWrapper(sam, freeze_encoder=_freeze_encoder, model_type=model_type)
+
+    # HACK:
+    from medico_sam.models.sam3d import SamUNETR3DWrapper
+    sam_3d = SamUNETR3DWrapper(sam, freeze_encoder=_freeze_encoder, model_type=model_type)
     sam_3d.to(device)
 
     return sam_3d
