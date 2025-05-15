@@ -78,7 +78,7 @@ def _get_livecell_paths(input_folder, split="test", n_val_per_cell_type=None):
 
 
 def livecell_inference(
-    checkpoint: Union[str, os.PathLike],
+    checkpoint: Optional[Union[str, os.PathLike]],
     input_folder: Union[str, os.PathLike],
     model_type: str,
     experiment_folder: Union[str, os.PathLike],
@@ -145,7 +145,7 @@ def livecell_inference(
 
 
 def run_livecell_precompute_embeddings(
-    checkpoint: Union[str, os.PathLike],
+    checkpoint: Optional[Union[str, os.PathLike]],
     input_folder: Union[str, os.PathLike],
     model_type: str,
     experiment_folder: Union[str, os.PathLike],
@@ -173,7 +173,7 @@ def run_livecell_precompute_embeddings(
 
 
 def run_livecell_iterative_prompting(
-    checkpoint: Union[str, os.PathLike],
+    checkpoint: Optional[Union[str, os.PathLike]],
     input_folder: Union[str, os.PathLike],
     model_type: str,
     experiment_folder: Union[str, os.PathLike],
@@ -216,7 +216,7 @@ def run_livecell_iterative_prompting(
 
 
 def run_livecell_amg(
-    checkpoint: Union[str, os.PathLike],
+    checkpoint: Optional[Union[str, os.PathLike]],
     input_folder: Union[str, os.PathLike],
     model_type: str,
     experiment_folder: Union[str, os.PathLike],
@@ -273,7 +273,7 @@ def run_livecell_amg(
 
 
 def run_livecell_instance_segmentation_with_decoder(
-    checkpoint: Union[str, os.PathLike],
+    checkpoint: Optional[Union[str, os.PathLike]],
     input_folder: Union[str, os.PathLike],
     model_type: str,
     experiment_folder: Union[str, os.PathLike],
@@ -343,7 +343,7 @@ def run_livecell_inference() -> None:
 
     # the checkpoint, input and experiment folder
     parser.add_argument(
-        "-c", "--ckpt", type=str, required=True,
+        "-c", "--ckpt", type=str, default=None,
         help="Provide model checkpoints (vanilla / finetuned)."
     )
     parser.add_argument(
