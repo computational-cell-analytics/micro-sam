@@ -1,5 +1,6 @@
 import os
-from typing import Any, List, Dict, Type, Union, Optional, OrderedDict, Literal
+from collections import OrderedDict
+from typing import Any, List, Dict, Type, Union, Optional, Literal
 
 import torch
 import torch.nn as nn
@@ -7,6 +8,7 @@ import torch.nn as nn
 from segment_anything.modeling import Sam
 from segment_anything.modeling.image_encoder import window_partition, window_unpartition
 
+from .peft_sam import LoRASurgery
 from ..instance_segmentation import get_decoder
 from ..util import get_sam_model, _DEFAULT_MODEL
 
@@ -15,6 +17,7 @@ def get_sam_3d_model(
     image_size: int,
     n_classes: int,
     model_type: str = _DEFAULT_MODEL,
+    lora_rank: Optional[int] = None,
     decoder_choice: Literal["default", "unetr"] = "default",
     device: Optional[Union[str, torch.device]] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
@@ -42,6 +45,11 @@ def get_sam_3d_model(
     if decoder_choice == "default":
         kwargs["num_multimask_outputs"] = n_classes
 
+    peft_kwargs = {}
+    if lora_rank is not None:
+        peft_kwargs["rank"] = lora_rank
+        peft_kwargs["peft_module"] = LoRASurgery
+
     _, sam, state = get_sam_model(
         model_type=model_type,
         device=device,
@@ -50,6 +58,7 @@ def get_sam_3d_model(
         return_state=True,
         flexible_load_checkpoint=True,
         image_size=image_size,
+        peft_kwargs=peft_kwargs,
         **kwargs
     )
 
@@ -218,11 +227,18 @@ class Sam3DUNETRWrapper(Sam3DWrapperBase):
         )
         self._preprocess = sam_model.preprocess
 
+        # NOTE: Remove the output layer weights as we have new target class for the new task.
+        if decoder_state is not None:
+            decoder_state = OrderedDict(
+                [(k, v) for k, v in decoder_state.items() if not k.startswith("out_conv.")]
+            )
+
         # Get a custom decoder, which overtakes the SAM mask decoder.
         self.decoder = get_decoder(
             image_encoder=sam_model.image_encoder,
             decoder_state=decoder_state,
             out_channels=output_channels,
+            flexible_load_checkpoint=True,
         )
 
     def forward(
