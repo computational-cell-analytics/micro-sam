@@ -5,7 +5,7 @@ https://itnext.io/deciding-the-best-singleton-approach-in-python-65c61e90cdc4
 
 from functools import partial
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import zarr
 import numpy as np
@@ -72,6 +72,14 @@ class AnnotatorState(metaclass=Singleton):
 
     # annotator_class
     annotator: Optional["micro_sam.sam_annotator._annotator._AnnotatorBase"] = None
+
+    # Extra options for object classification.
+    object_features: Optional[np.ndarray] = None
+    seg_ids: Optional[np.ndarray] = None
+    # TODO use RF class
+    object_rf: Optional[Any] = None
+    # TODO use proper class
+    segmentation_selection: Optional[Any] = None
 
     def initialize_predictor(
         self,

@@ -44,6 +44,9 @@ contributions:
     - id: micro-sam.image_series_annotator
       python_name: micro_sam.sam_annotator.image_series_annotator:ImageSeriesAnnotator
       title: Run the annotator for multiple images in a folder
+    - id: micro-sam.object_classifier
+      python_name: micro_sam.sam_annotator.object_classifier:ObjectClassifier
+      title: Start the SAM based object classifier
     - id: micro-sam.training
       python_name: micro_sam.sam_annotator.training_ui:TrainingWidget
       title: Finetune SAM model
@@ -83,6 +86,8 @@ contributions:
       display_name: Annotator Tracking
     - command: micro-sam.image_series_annotator
       display_name: Image Series Annotator
+    - command: micro-sam.object_classifier
+      display_name: Object Classifier
     - command: micro-sam.training
       display_name: Finetuning
     - command: micro-sam.settings
