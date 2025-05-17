@@ -228,6 +228,7 @@ def _project_prediction(segmentation, object_prediction):
 def _train_and_predict_rf_widget(viewer: "napari.viewer.Viewer") -> None:
     # Get the object features and the annotations.
     state = AnnotatorState()
+    state.annotator._require_layers()
     annotations = viewer.layers["annotations"].data
     segmentation = state.segmentation_selection.get_value().data
 
@@ -288,9 +289,12 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         if "annotations" not in self._viewer.layers:
             if layer_choices and "annotations" in layer_choices:
                 widgets._validation_window_for_missing_layer("annotations")
-            self._viewer.add_labels(data=dummy_data, name="annotations")
+            annotation_layer = self._viewer.add_labels(data=dummy_data, name="annotations")
             if image_scale is not None:
                 self.layers["annotations"].scale = image_scale
+            # Reduce the brush size and set the default mode to "paint" brush mode.
+            annotation_layer.brush_size = 1
+            annotation_layer.mode = "paint"
 
         if "prediction" not in self._viewer.layers:
             if layer_choices and "prediction" in layer_choices:
@@ -360,7 +364,7 @@ class ObjectClassifier(QtWidgets.QScrollArea):
             if isinstance(widget, (Container, FunctionGui, Widget)):
                 # This is a magicgui type and we need to get the native qt widget.
                 widget_layout.addWidget(widget.native)
-            elif widget_name == "segmentation_selection":  # This is a hack, we should check the type instead.
+            elif isinstance(widget, QtWidgets.QLayout):
                 widget_layout.addLayout(widget)
             else:
                 # This is a qt type and we add the widget directly.
@@ -368,8 +372,12 @@ class ObjectClassifier(QtWidgets.QScrollArea):
             widget_frame.setLayout(widget_layout)
             self._annotator_widget.layout().addWidget(widget_frame)
 
+        # Set the expected annotator class to the state.
+        state = AnnotatorState()
+        state.annotator = self
+
         # Add the widgets to the state.
-        AnnotatorState().widgets = self._widgets
+        state.widgets = self._widgets
 
         # Add the widget to the scroll area.
         self.setWidgetResizable(True)  # Allow widget to resize within scroll area.
