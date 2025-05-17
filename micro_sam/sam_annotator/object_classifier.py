@@ -133,7 +133,7 @@ def compute_object_features(
 
     Returns:
         The segmentation ids.
-        Thr object features.
+        The object features.
     """
     is_tiled = image_embeddings["input_size"] is None
     is_3d = segmentation.ndim == 3
