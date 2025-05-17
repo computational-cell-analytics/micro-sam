@@ -194,7 +194,7 @@ def histopathology_annotator():
 
     for i, image_path in enumerate(image_paths):
         image = imageio.imread(image_path)
-        embedding_path = f"embeddings_nuclick_{i}.zarr"
+        embedding_path = f"./clf-test-data/embeddings_nuclick_{i}.zarr"
 
         segmentation = automatic_instance_segmentation(
             predictor, segmenter, embedding_path=embedding_path, input_path=image, ndim=2,
@@ -210,8 +210,8 @@ def main():
     # livecell_annotator()
     # wholeslide_annotator()
     # lucchi_annotator()
-    # tiled_3d_annotator()
-    histopathology_annotator()
+    tiled_3d_annotator()
+    # histopathology_annotator()
 
     # annotator_devel()
 
