@@ -138,7 +138,7 @@ def annotator_devel():
     from micro_sam.sam_annotator import object_classifier as clf
     from micro_sam.util import precompute_image_embeddings, get_sam_model
 
-    # image, segmentation, annotations, embedding_path, tile_shape, halo = _get_livecell_data()
+    # image, segmentation, annotations, model_type, embedding_path, tile_shape, halo = _get_livecell_data()
     # image, segmentation, annotations, model_type, embedding_path, tile_shape, halo = _get_wholeslide_data()
     # image, segmentation, annotations, model_type, embedding_path, tile_shape, halo = _get_lucchi_data()
     image, segmentation, annotations, model_type, embedding_path, tile_shape, halo = _get_3d_tiled_data()
@@ -182,11 +182,39 @@ def create_3d_data_with_tiling():
     napari.run()
 
 
-# create_3d_data_with_tiling()
+def histopathology_annotator():
+    from torch_em.data.datasets.histopathology.lynsec import get_lynsec_paths
 
-# livecell_annotator()
-# wholeslide_annotator()
-# lucchi_annotator()
-tiled_3d_annotator()
+    from micro_sam.sam_annotator import object_classifier as clf
+    from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
-# annotator_devel()
+    image_paths, gt_paths = get_lynsec_paths(path="./clf-test-data/nuclick", choice="ihc", download=True)
+
+    predictor, segmenter = get_predictor_and_segmenter(model_type="vit_b_histopathology")
+
+    for i, image_path in enumerate(image_paths):
+        image = imageio.imread(image_path)
+        embedding_path = f"embeddings_nuclick_{i}.zarr"
+
+        segmentation = automatic_instance_segmentation(
+            predictor, segmenter, embedding_path=embedding_path, input_path=image, ndim=2,
+        )
+        clf.object_classifier(
+            image, segmentation, embedding_path=embedding_path, model_type="vit_b_histopathology", ndim=2,
+        )
+
+
+def main():
+    # create_3d_data_with_tiling()
+
+    # livecell_annotator()
+    # wholeslide_annotator()
+    # lucchi_annotator()
+    # tiled_3d_annotator()
+    histopathology_annotator()
+
+    # annotator_devel()
+
+
+if __name__ == "__main__":
+    main()

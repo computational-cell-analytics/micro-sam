@@ -45,10 +45,11 @@ def _compute_object_features_impl(embeddings, segmentation):
 
     # Resize the segmentation and embeddings to be of the same size.
     # For now we resize the segmentation to the embedding size.
-    # Note: this is more efficient, but we may loose small objects.
-    # Maybe we first resize the embeddings to something intermediate, like 256 x 256?
 
-    # embeddings = resize(embeddings, (256, 256, embeddings.shape[-1]), preserve_range=True).astype(embeddings.dtype)
+    # NOTE: this is more efficient, but we loose small objects.
+    # Maybe we first resize the embeddings to something intermediate, like 256 x 256?
+    embeddings = resize(embeddings, (256, 256, embeddings.shape[-1]), preserve_range=True).astype(embeddings.dtype)
+
     segmentation_rescaled = resize(
         segmentation_rescaled, embeddings.shape[:2], order=0, anti_aliasing=False, preserve_range=True
     ).astype(segmentation.dtype)
@@ -161,7 +162,7 @@ def _compute_object_features(image_embeddings, segmentation, verbose=True):
             [this_seg_ids.index(seg_id) for seg_id in this_seg_ids if visited[seg_id]], dtype="int"
         )
 
-        # New featutres can be written directly.
+        # New features can be written directly.
         features[new_idx] = this_features[this_new_idx]
 
         # Features that were already visited can be merged.
