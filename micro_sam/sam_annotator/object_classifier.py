@@ -1,3 +1,5 @@
+from joblib import dump
+from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 import napari
@@ -199,12 +201,11 @@ def _accumulate_labels(segmentation, annotations):
     return all_features["majority_label"].astype("int")
 
 
-def _train_rf(features, labels):
+def _train_rf(features, labels, **rf_kwargs):
     assert len(features) == len(labels)
     valid = labels != 0
     X, y = features[valid], labels[valid]
-    # TODO other settings than default?
-    rf = RandomForestClassifier()
+    rf = RandomForestClassifier(**rf_kwargs)
     rf.fit(X, y)
     return rf
 
@@ -244,6 +245,7 @@ def _train_and_predict_rf_widget(viewer: "napari.viewer.Viewer") -> None:
         return widgets._generate_message("error", "You have not provided any annotations.")
 
     # Run RF training and store it in the state.
+    # TODO should we over-ride any defaults here?
     rf = _train_rf(features, labels)
     state.object_rf = rf
 
@@ -253,9 +255,22 @@ def _train_and_predict_rf_widget(viewer: "napari.viewer.Viewer") -> None:
     viewer.layers["prediction"].data = prediction_data
 
 
+@magic_factory(call_button="Export Classifier")
+def _create_export_rf_widget(export_path: Optional[Path] = None) -> None:
+    state = AnnotatorState()
+    rf = state.object_rf
+    if rf is None:
+        return widgets._generate_message("error", "You have not run training yet.")
+    if export_path is None or export_path == "":
+        return widgets._generate_message("error", "You have to provide an export path.")
+    # Do we add an extension? .joblib?
+    dump(rf, export_path)
+    # TODO show an info method about the export
+
 #
 # Object classifier implementation.
 #
+
 
 class ObjectClassifier(QtWidgets.QScrollArea):
 
@@ -293,10 +308,6 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         segmentation_selection.addWidget(self.segmentation_selection.native)
         return segmentation_selection
 
-    # TODO
-    def _create_export_rf_widget(self):
-        pass
-
     def _create_widgets(self):
         # Create the embedding widget and connect all events related to it.
         self._embedding_widget = widgets.EmbeddingWidget()
@@ -313,7 +324,7 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         self._seg_selection_widget = self._create_segmentation_layer_section()
 
         # Cretate the widget for exporting the RF.
-        self._export_rf_widget = self._create_export_rf_widget()
+        self._export_rf_widget = _create_export_rf_widget()
 
         self._widgets = {
             "embeddings": self._embedding_widget,
