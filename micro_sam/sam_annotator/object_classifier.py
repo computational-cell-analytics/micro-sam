@@ -29,7 +29,7 @@ from .util import _sync_embedding_widget
 #
 
 
-def _compute_object_features_impl(embeddings, segmentation):
+def _compute_object_features_impl(embeddings, segmentation, resize_embedding_shape):
     # Get the embeddings and put the channel axis last.
     embeddings = embeddings.transpose(1, 2, 0)
 
@@ -44,11 +44,13 @@ def _compute_object_features_impl(embeddings, segmentation):
     assert segmentation_rescaled.shape[0] == segmentation_rescaled.shape[1]
 
     # Resize the segmentation and embeddings to be of the same size.
-    # For now we resize the segmentation to the embedding size.
 
-    # NOTE: this is more efficient, but we loose small objects.
-    # Maybe we first resize the embeddings to something intermediate, like 256 x 256?
-    embeddings = resize(embeddings, (256, 256, embeddings.shape[-1]), preserve_range=True).astype(embeddings.dtype)
+    # We first resize the embedding, to an intermediate shape (passed as parameter).
+    # The motivation for this is to avoid loosing smaller segmented objects when resizing the segmentation
+    # to the original embedding shape. On the other hand, we avoid resizing the embeddings to the full segmentation
+    # shape for efficiency reasons.
+    resize_shape = resize_embedding_shape + (embeddings.shape[-1],)
+    embeddings = resize(embeddings, resize_shape, preserve_range=True).astype(embeddings.dtype)
 
     segmentation_rescaled = resize(
         segmentation_rescaled, embeddings.shape[:2], order=0, anti_aliasing=False, preserve_range=True
@@ -115,14 +117,31 @@ def _create_seg_and_embed_generator(segmentation, image_embeddings, is_tiled, is
     return generator, length
 
 
-def _compute_object_features(image_embeddings, segmentation, verbose=True):
+def compute_object_features(
+    image_embeddings: util.ImageEmbeddings,
+    segmentation: np.ndarray,
+    resize_embedding_shape: Tuple[int, int] = (256, 256),
+    verbose: bool = True,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Compute object features based on SAM embeddings.
+
+    Args:
+        image_embeddings: The precomputed image embeddings.
+        segmentation: The segmentation for which to compute the features.
+        resize_embedding_shape: Shape for intermediate resizing of the embeddings.
+        verbose: Whether to print a progressbar for the computation.
+
+    Returns:
+        The segmentation ids.
+        Thr object features.
+    """
     is_tiled = image_embeddings["input_size"] is None
     is_3d = segmentation.ndim == 3
 
     # If we have simple embeddings, i.e. 2d without tiling, then we can directly compute the features.
     if not is_tiled and not is_3d:
         embeddings = image_embeddings["features"].squeeze()
-        return _compute_object_features_impl(embeddings, segmentation)
+        return _compute_object_features_impl(embeddings, segmentation, resize_embedding_shape)
 
     # Otherwise, we compute the features by iterating over slices and/or tiles,
     # compute the features for each slice / tile and accumulate them.
@@ -146,7 +165,7 @@ def _compute_object_features(image_embeddings, segmentation, verbose=True):
         seg_embed_generator(), total=n_gen, disable=not verbose, desc="Compute object features"
     ):
         # Compute this seg ids and features.
-        this_seg_ids, this_features = _compute_object_features_impl(embeds, seg)
+        this_seg_ids, this_features = _compute_object_features_impl(embeds, seg, resize_embedding_shape)
         this_seg_ids = this_seg_ids.tolist()
 
         # Find which of the seg ids are new (= processed for the first time).
@@ -236,7 +255,7 @@ def _train_and_predict_rf_widget(viewer: "napari.viewer.Viewer") -> None:
         if widgets._validate_embeddings(viewer):
             return None
         image_embeddings = state.image_embeddings
-        seg_ids, features = _compute_object_features(image_embeddings, segmentation)
+        seg_ids, features = compute_object_features(image_embeddings, segmentation)
         state.seg_ids = seg_ids
         state.object_features = features
     else:
@@ -293,7 +312,7 @@ class ObjectClassifier(QtWidgets.QScrollArea):
             if image_scale is not None:
                 self._viewer.layers["annotations"].scale = image_scale
             # Reduce the brush size and set the default mode to "paint" brush mode.
-            annotation_layer.brush_size = 1
+            annotation_layer.brush_size = 3
             annotation_layer.mode = "paint"
 
         if "prediction" not in self._viewer.layers:
