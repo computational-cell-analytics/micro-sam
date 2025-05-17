@@ -9,7 +9,8 @@ from magicgui import magic_factory
 from magicgui.widgets import Widget, Container, FunctionGui, create_widget
 from qtpy import QtWidgets
 
-from nifty.tools import takeDict
+from napari.utils import progress
+from nifty.tools import takeDict, blocking
 from skimage.transform import resize
 from skimage.measure import regionprops_table
 from sklearn.ensemble import RandomForestClassifier
@@ -26,20 +27,31 @@ from .util import _sync_embedding_widget
 #
 
 
-def _compute_object_features(image_embeddings, segmentation):
-    assert segmentation.ndim == 2, "3D support is not yet implemented"
-    embeddings = image_embeddings["features"].squeeze()
-    # Put channel last.
+def _compute_object_features_impl(embeddings, segmentation):
+    # Get the embeddings and put the channel axis last.
     embeddings = embeddings.transpose(1, 2, 0)
 
-    # TODO proper rescaling !!!
-    # TODO is this direction of rescaling ok?
-    # Probably not, because we loose small segmented objects.
+    # Pad the segmentation to be square shape.
+    shape = segmentation.shape
+    if shape[0] == shape[1]:
+        segmentation_rescaled = segmentation
+    elif shape[0] > shape[1]:
+        segmentation_rescaled = np.pad(segmentation, ((0, 0), (0, shape[0] - shape[1])))
+    elif shape[1] > shape[0]:
+        segmentation_rescaled = np.pad(segmentation, ((0, shape[1] - shape[0]), (0, 0)))
+    assert segmentation_rescaled.shape[0] == segmentation_rescaled.shape[1]
+
+    # Resize the segmentation and embeddings to be of the same size.
+    # For now we resize the segmentation to the embedding size.
+    # Note: this is more efficient, but we may loose small objects.
+    # Maybe we first resize the embeddings to something intermediate, like 256 x 256?
+
+    # embeddings = resize(embeddings, (256, 256, embeddings.shape[-1]), preserve_range=True).astype(embeddings.dtype)
     segmentation_rescaled = resize(
-        segmentation, embeddings.shape[:2], order=0, anti_aliasing=False, preserve_range=True
+        segmentation_rescaled, embeddings.shape[:2], order=0, anti_aliasing=False, preserve_range=True
     ).astype(segmentation.dtype)
 
-    # TODO which features do we use?
+    # Which features do we use?
     all_features = regionprops_table(
         segmentation_rescaled, intensity_image=embeddings, properties=("label", "area", "mean_intensity"),
     )
@@ -49,6 +61,125 @@ def _compute_object_features(image_embeddings, segmentation):
     ].values
 
     return seg_ids, features
+
+
+def _create_seg_and_embed_generator(segmentation, image_embeddings, is_tiled, is_3d):
+    assert is_tiled or is_3d
+
+    if is_tiled:
+        tile_embeds = image_embeddings["features"]
+        tile_shape, halo = tile_embeds.attrs["tile_shape"], tile_embeds.attrs["halo"]
+        tiling = blocking([0, 0], tile_embeds.attrs["shape"], tile_shape)
+        length = tiling.numberOfBlocks * segmentation.shape[0] if is_3d else tiling.numberOfBlocks
+    else:
+        tiling = None
+        length = segmentation.shape[0]
+
+    if is_3d and is_tiled:  # 3d data with tiling
+        def generator():
+            for z in range(segmentation.shape[0]):
+                seg_z = segmentation[z]
+                for block_id in range(tiling.numberOfBlocks):
+                    block = tiling.getBlockWithHalo(block_id, halo)
+
+                    # Get the embeddings and segmentation for this block and slice.
+                    embeds = tile_embeds[str(block_id)][z].squeeze()
+
+                    bb = tuple(slice(beg, end) for beg, end in zip(block.outerBlock.begin, block.outerBlock.end))
+                    seg = seg_z[bb]
+
+                    yield seg, embeds
+
+    elif is_3d:  # 3d data no tiling
+        def generator():
+            for z in range(length):
+                seg = segmentation[z]
+                embeds = image_embeddings["features"][z].squeeze()
+                yield seg, embeds
+
+    else:  # 2d data with tiling
+        def generator():
+            for block_id in range(length):
+                block = tiling.getBlockWithHalo(block_id, halo)
+
+                # Get the embeddings and segmentation for this block.
+                embeds = tile_embeds[str(block_id)][:].squeeze()
+                bb = tuple(slice(beg, end) for beg, end in zip(block.outerBlock.begin, block.outerBlock.end))
+                seg = segmentation[bb]
+
+                yield seg, embeds
+
+    return generator, length
+
+
+def _compute_object_features(image_embeddings, segmentation, verbose=True):
+    is_tiled = image_embeddings["input_size"] is None
+    is_3d = segmentation.ndim == 3
+
+    # If we have simple embeddings, i.e. 2d without tiling, then we can directly compute the features.
+    if not is_tiled and not is_3d:
+        embeddings = image_embeddings["features"].squeeze()
+        return _compute_object_features_impl(embeddings, segmentation)
+
+    # Otherwise, we compute the features by iterating over slices and/or tiles,
+    # compute the features for each slice / tile and accumulate them.
+
+    # Fist, we compute the segmentation ids and initialize the required data structures.
+    seg_ids = np.unique(segmentation).tolist()
+    if seg_ids[0] == 0:
+        seg_ids = seg_ids[1:]
+    visited = {seg_id: False for seg_id in seg_ids}
+
+    n_features = 257  # Don't hard-code?
+    features = np.zeros((len(seg_ids), n_features), dtype="float32")
+
+    # Then, we create a generator for iterating over the slices and / or tile.
+    # This generator returns the respective segmentation and embeddings.
+    seg_embed_generator, n_gen = _create_seg_and_embed_generator(
+        segmentation, image_embeddings, is_tiled=is_tiled, is_3d=is_3d
+    )
+
+    for seg, embeds in progress(
+        seg_embed_generator(), total=n_gen, disable=not verbose, desc="Compute object features"
+    ):
+        # Compute this seg ids and features.
+        this_seg_ids, this_features = _compute_object_features_impl(embeds, seg)
+        this_seg_ids = this_seg_ids.tolist()
+
+        # Find which of the seg ids are new (= processed for the first time).
+        # And the seg ids that were already visited.
+        new_idx = np.array([seg_ids.index(seg_id) for seg_id in this_seg_ids if not visited[seg_id]], dtype="int")
+        visited_idx = np.array([seg_ids.index(seg_id) for seg_id in this_seg_ids if visited[seg_id]], dtype="int")
+
+        # Get the corresponding feature indices.
+        this_new_idx = np.array(
+            [this_seg_ids.index(seg_id) for seg_id in this_seg_ids if not visited[seg_id]], dtype="int"
+        )
+        this_visited_idx = np.array(
+            [this_seg_ids.index(seg_id) for seg_id in this_seg_ids if visited[seg_id]], dtype="int"
+        )
+
+        # New featutres can be written directly.
+        features[new_idx] = this_features[this_new_idx]
+
+        # Features that were already visited can be merged.
+        if len(visited_idx) > 0:
+            # Get ths sizes, which are needed for computing the mean.
+            prev_size = features[visited_idx, 0:1]
+            this_size = this_features[this_visited_idx, 0:1]
+
+            # The sizes themselve are merged by addition.
+            features[visited_idx, 0] += this_features[this_visited_idx, 0]
+
+            # Mean values are merged via weighted sum.
+            features[visited_idx, 1:] = (
+                prev_size * features[visited_idx, 1:] + this_size * this_features[this_visited_idx, 1:]
+            ) / (prev_size + this_size)
+
+        # Set all seg ids from this block to visited.
+        visited.update({seg_id: True for seg_id in this_seg_ids})
+
+    return np.array(seg_ids), features
 
 
 def _accumulate_labels(segmentation, annotations):
@@ -99,7 +230,8 @@ def _train_and_predict_rf_widget(viewer: "napari.viewer.Viewer") -> None:
     segmentation = state.segmentation_selection.get_value().data
 
     if state.object_features is None:
-        # TODO check here that the image embeddings are computed!
+        if widgets._validate_embeddings(viewer):
+            return None
         image_embeddings = state.image_embeddings
         seg_ids, features = _compute_object_features(image_embeddings, segmentation)
         state.seg_ids = seg_ids
@@ -108,9 +240,8 @@ def _train_and_predict_rf_widget(viewer: "napari.viewer.Viewer") -> None:
         features, seg_ids = state.object_features, state.seg_ids
 
     labels = _accumulate_labels(segmentation, annotations)
-    # TODO: raise a warining and return as this is not valid
     if (labels == 0).all():
-        pass
+        return widgets._generate_message("error", "You have not provided any annotations.")
 
     # Run RF training and store it in the state.
     rf = _train_rf(features, labels)
@@ -162,6 +293,10 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         segmentation_selection.addWidget(self.segmentation_selection.native)
         return segmentation_selection
 
+    # TODO
+    def _create_export_rf_widget(self):
+        pass
+
     def _create_widgets(self):
         # Create the embedding widget and connect all events related to it.
         self._embedding_widget = widgets.EmbeddingWidget()
@@ -177,12 +312,14 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         # Create the widget for segmentation selection.
         self._seg_selection_widget = self._create_segmentation_layer_section()
 
-        # TODO widget for exporting the RF.
+        # Cretate the widget for exporting the RF.
+        self._export_rf_widget = self._create_export_rf_widget()
 
         self._widgets = {
             "embeddings": self._embedding_widget,
             "segmentation_selection": self._seg_selection_widget,
             "train_and_predict": self._train_and_predict_widget,
+            "export_rf": self._export_rf_widget,
         }
 
     def __init__(self, viewer: "napari.viewer.Viewer") -> None:
@@ -196,7 +333,6 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         self._annotator_widget = QtWidgets.QWidget()
         self._annotator_widget.setLayout(QtWidgets.QVBoxLayout())
 
-        # TODO this needs to be more dynamic
         # Add the layers for prompts and segmented obejcts.
         # Initialize with a dummy shape, which is reset to the correct shape once an image is set.
         self._shape = (256, 256)
@@ -237,12 +373,9 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         if state.image_shape is None:
             return
 
-        # Update the image shape if it has changed.
+        # Update the dimension and image shape if it has changed.
         if state.image_shape != self._shape:
-            if len(state.image_shape) != self._ndim:
-                raise RuntimeError(
-                    f"The dim of the annotator {self._ndim} does not match the image data of shape {state.image_shape}."
-                )
+            self._ndim = len(state.image_shape)
             self._shape = state.image_shape
 
         # Before we reset the layers, we ensure all expected layers exist.
@@ -269,6 +402,7 @@ def object_classifier(
     viewer: Optional["napari.viewer.Viewer"] = None,
     checkpoint_path: Optional[str] = None,
     device: Optional[Union[str, torch.device]] = None,
+    ndim: Optional[int] = None,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the object classifier for a given image and segmentation.
 
@@ -289,14 +423,16 @@ def object_classifier(
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
         device: The computational device to use for the SAM model.
             By default, automatically chooses the best available device.
+        ndim: The dimensionality of the data. If not given will be derived from the data.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
     """
-    # TODO handle multi-dim / multi-channel data.
+    if ndim is None:
+        ndim = image.ndim - 1 if image.shape[-1] == 3 and image.ndim in (3, 4) else image.ndim
+
     state = AnnotatorState()
-    state.image_shape = image.shape
-    ndim = 2
+    state.image_shape = image.shape[:ndim]
 
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path,

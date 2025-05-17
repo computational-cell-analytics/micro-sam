@@ -323,7 +323,7 @@ def _get_inputs_from_paths(paths, pattern):
 
     fpaths = []
     for path in paths:
-        if _has_extension(path):  # It is just one filepath.
+        if os.path.isfile(path):  # It is just one filepath.
             fpaths.append(path)
         else:  # Otherwise, if the path is a directory, fetch all inputs provided with a pattern.
             assert pattern is not None, \
@@ -335,6 +335,7 @@ def _get_inputs_from_paths(paths, pattern):
 
 def _has_extension(fpath: Union[os.PathLike, str]) -> bool:
     "Returns whether the provided path has an extension or not."
+    breakpoint()
     return bool(os.path.splitext(fpath)[1])
 
 
