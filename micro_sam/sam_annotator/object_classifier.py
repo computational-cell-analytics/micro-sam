@@ -291,7 +291,7 @@ class ObjectClassifier(QtWidgets.QScrollArea):
                 widgets._validation_window_for_missing_layer("annotations")
             annotation_layer = self._viewer.add_labels(data=dummy_data, name="annotations")
             if image_scale is not None:
-                self.layers["annotations"].scale = image_scale
+                self._viewer.layers["annotations"].scale = image_scale
             # Reduce the brush size and set the default mode to "paint" brush mode.
             annotation_layer.brush_size = 1
             annotation_layer.mode = "paint"
@@ -301,7 +301,7 @@ class ObjectClassifier(QtWidgets.QScrollArea):
                 widgets._validation_window_for_missing_layer("prediction")
             self._viewer.add_labels(data=dummy_data, name="prediction")
             if image_scale is not None:
-                self.layers["prediction"].scale = image_scale
+                self._viewer.layers["prediction"].scale = image_scale
 
     def _create_segmentation_layer_section(self):
         segmentation_selection = QtWidgets.QVBoxLayout()
