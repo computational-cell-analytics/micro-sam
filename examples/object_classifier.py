@@ -218,6 +218,39 @@ def histopathology_annotator():
     )
 
 
+def batch_prediction():
+    import napari
+    from torch_em.data.datasets.histopathology.lynsec import get_lynsec_paths
+    from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+    from micro_sam.object_classification import run_prediction_with_object_classifier
+    from tqdm import tqdm
+
+    predictor, segmenter = get_predictor_and_segmenter(model_type="vit_b_histopathology")
+
+    image_paths, _ = get_lynsec_paths(path="./clf-test-data/nuclick", choice="ihc", download=True)
+    # Test the batch prediction on the next 5 images.
+    image_paths = image_paths[10:12]
+
+    images, segmentations = [], []
+    # Prepare images and segmentations
+    for image_path in tqdm(image_paths, desc="Segment images"):
+        image = imageio.imread(image_path)
+        segmentation = automatic_instance_segmentation(predictor, segmenter, input_path=image, ndim=2, verbose=False)
+        images.append(image)
+        segmentations.append(segmentation)
+
+    rf_path = "clf-test-data/histo-results/rf.joblib"
+    print("Start object clf")
+    predictions = run_prediction_with_object_classifier(images, segmentations, predictor, rf_path, ndim=2)
+
+    for im, seg, pred in zip(images, segmentations, predictions):
+        v = napari.Viewer()
+        v.add_image(im)
+        v.add_labels(seg)
+        v.add_labels(pred)
+        napari.run()
+
+
 def main():
     # create_3d_data_with_tiling()
 
@@ -225,7 +258,8 @@ def main():
     # wholeslide_annotator()
     # lucchi_annotator()
     # tiled_3d_annotator()
-    histopathology_annotator()
+    # histopathology_annotator()
+    batch_prediction()
 
     # annotator_devel()
 
