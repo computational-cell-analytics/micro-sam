@@ -80,6 +80,9 @@ class AnnotatorState(metaclass=Singleton):
     object_rf: Optional[Any] = None
     # TODO use proper class
     segmentation_selection: Optional[Any] = None
+    # For image_series_object_classifier
+    previous_features: Optional[np.ndarray] = None
+    previous_labels: Optional[np.ndarray] = None
 
     def initialize_predictor(
         self,

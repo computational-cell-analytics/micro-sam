@@ -184,24 +184,38 @@ def create_3d_data_with_tiling():
 
 def histopathology_annotator():
     from torch_em.data.datasets.histopathology.lynsec import get_lynsec_paths
-
     from micro_sam.sam_annotator import object_classifier as clf
     from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
-    image_paths, gt_paths = get_lynsec_paths(path="./clf-test-data/nuclick", choice="ihc", download=True)
-
     predictor, segmenter = get_predictor_and_segmenter(model_type="vit_b_histopathology")
+
+    image_paths, _ = get_lynsec_paths(path="./clf-test-data/nuclick", choice="ihc", download=True)
+    image_paths = image_paths[:10]
+
+    images, segmentations = [], []
+    embedding_paths = []
 
     for i, image_path in enumerate(image_paths):
         image = imageio.imread(image_path)
         embedding_path = f"./clf-test-data/embeddings_nuclick_{i}.zarr"
+        seg_path = f"./clf-test-data/seg-nuclick_{i}.tif"
 
-        segmentation = automatic_instance_segmentation(
-            predictor, segmenter, embedding_path=embedding_path, input_path=image, ndim=2,
-        )
-        clf.object_classifier(
-            image, segmentation, embedding_path=embedding_path, model_type="vit_b_histopathology", ndim=2,
-        )
+        if os.path.exists(seg_path):
+            segmentation = imageio.imread(seg_path)
+        else:
+            segmentation = automatic_instance_segmentation(
+                predictor, segmenter, embedding_path=embedding_path, input_path=image, ndim=2,
+            )
+            imageio.imwrite(seg_path, segmentation, compression="zlib")
+
+        images.append(image)
+        segmentations.append(segmentation)
+        embedding_paths.append(embedding_path)
+
+    clf.image_series_object_classifier(
+        images, segmentations, output_folder="./clf-test-data/histo-results",
+        embedding_paths=embedding_paths, model_type="vit_b_histopathology", ndim=2,
+    )
 
 
 def main():
@@ -210,8 +224,8 @@ def main():
     # livecell_annotator()
     # wholeslide_annotator()
     # lucchi_annotator()
-    tiled_3d_annotator()
-    # histopathology_annotator()
+    # tiled_3d_annotator()
+    histopathology_annotator()
 
     # annotator_devel()
 

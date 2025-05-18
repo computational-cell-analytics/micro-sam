@@ -1,13 +1,15 @@
+import os
 from joblib import dump
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
+import imageio.v3 as imageio
 import napari
 import numpy as np
 import pandas as pd
 import torch
 
-from magicgui import magic_factory
+from magicgui import magic_factory, magicgui
 from magicgui.widgets import Widget, Container, FunctionGui, create_widget
 from qtpy import QtWidgets
 
@@ -221,10 +223,16 @@ def _accumulate_labels(segmentation, annotations):
     return all_features["majority_label"].astype("int")
 
 
-def _train_rf(features, labels, **rf_kwargs):
+def _train_rf(features, labels, previous_features=None, previous_labels=None, **rf_kwargs):
     assert len(features) == len(labels)
     valid = labels != 0
     X, y = features[valid], labels[valid]
+
+    if previous_features is not None:
+        assert previous_labels is not None and len(previous_features) == len(previous_labels)
+        X = np.concatenate([previous_features, X], axis=0)
+        y = np.concatenate([previous_labels, y], axis=0)
+
     rf = RandomForestClassifier(**rf_kwargs)
     rf.fit(X, y)
     return rf
@@ -261,13 +269,14 @@ def _train_and_predict_rf_widget(viewer: "napari.viewer.Viewer") -> None:
     else:
         features, seg_ids = state.object_features, state.seg_ids
 
+    previous_features, previous_labels = state.previous_features, state.previous_labels
     labels = _accumulate_labels(segmentation, annotations)
-    if (labels == 0).all():
+    if (labels == 0).all() and (previous_labels is None):
         return widgets._generate_message("error", "You have not provided any annotations.")
 
     # Run RF training and store it in the state.
     # TODO should we over-ride any defaults here?
-    rf = _train_rf(features, labels)
+    rf = _train_rf(features, labels, previous_features=previous_features, previous_labels=previous_labels)
     state.object_rf = rf
 
     # Run and set the prediction.
@@ -510,4 +519,135 @@ def object_classifier(
     napari.run()
 
 
+def image_series_object_classifier(
+    images: List[np.ndarray],
+    segmentations: List[np.ndarray],
+    output_folder: str,
+    embedding_paths: Optional[List[Union[str, util.ImageEmbeddings]]] = None,
+    model_type: str = util._DEFAULT_MODEL,
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
+    checkpoint_path: Optional[str] = None,
+    device: Optional[Union[str, torch.device]] = None,
+    ndim: Optional[int] = None,
+) -> None:
+    """Start the object classifier for a list of images and segmentations.
+
+    This function will save the all features and labels for annotated objects,
+    to enable training a random forest on multiple images.
+
+    Args:
+        images: The input images.
+        segmentations: The input segmentations.
+        output_folder: The folder where segmentation results, trained random forest
+            and the features, labels aggregated during training will be saved.
+        embedding_paths: Filepaths where to save the embeddings
+            or the precompted image embeddings computed by `precompute_image_embeddings`.
+        model_type: The Segment Anything model to use. For details on the available models check out
+            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
+        tile_shape: Shape of tiles for tiled embedding prediction.
+            If `None` then the whole image is passed to Segment Anything.
+        halo: Shape of the overlap between tiles, which is needed to segment objects on tile borders.
+        checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
+        device: The computational device to use for the SAM model.
+            By default, automatically chooses the best available device.
+        ndim: The dimensionality of the data. If not given will be derived from the data.
+    """
+    # TODO precompute the embeddings if not computed, can re-use 'precompute' from image series annotator.
+    # TODO support file paths as inputs
+    # TODO option to skip segmented
+    if len(images) != len(segmentations):
+        raise ValueError(
+            f"Expect the same number of images and segmentations, got {len(images)}, {len(segmentations)}."
+        )
+
+    end_msg = "You have annotated the last image. Do you wish to close napari?"
+
+    # Initialize the object classifier on the fist image / segmentation.
+    viewer = object_classifier(
+        image=images[0], segmentation=segmentations[0],
+        embedding_path=None if embedding_paths is None else embedding_paths[0],
+        model_type=model_type, tile_shape=tile_shape, halo=halo,
+        return_viewer=True, checkpoint_path=checkpoint_path,
+        device=device, ndim=ndim,
+    )
+
+    os.makedirs(output_folder, exist_ok=True)
+    next_image_id = 0
+
+    def _save_prediction(image, pred, image_id):
+        fname = f"{Path(image).stem}_prediction.tif" if isinstance(image, str) else f"prediction_{image_id}.tif"
+        save_path = os.path.join(output_folder, fname)
+        imageio.imwrite(save_path, pred, compression="zlib")
+
+    # Add functionality for going to the next image.
+    @magicgui(call_button="Next Image [N]")
+    def next_image(*args):
+        nonlocal next_image_id
+
+        # Get the state and the current segmentation (note that next image id has not yet been increased)
+        state = AnnotatorState()
+        segmentation = segmentations[next_image_id]
+
+        # Keep track of the previous features and labels.
+        labels = _accumulate_labels(segmentation, viewer.layers["annotations"].data)
+        valid = labels != 0
+        if valid.sum() > 0:
+            features, labels = state.object_features[valid], labels[valid]
+            if state.previous_features is None:
+                state.previous_features, state.previous_labels = features, labels
+            else:
+                state.previous_features = np.concatenate([state.previous_features, features], axis=0)
+                state.previous_labels = np.concatenate([state.previous_labels, labels], axis=0)
+            # Save the accumulated features and labels.
+            np.save(os.path.join(output_folder, "features.npy"), state.previous_features)
+            np.save(os.path.join(output_folder, "labels.npy"), state.previous_labels)
+
+        # Save the current prediction and RF.
+        _save_prediction(images[next_image_id], viewer.layers["prediction"].data, next_image_id)
+        dump(state.object_rf, os.path.join(output_folder, "rf.joblib"))
+
+        # Go to the next image.
+        next_image_id += 1
+
+        # Check if we are done.
+        if next_image_id == len(images):
+            # Inform the user via dialog.
+            abort = widgets._generate_message("info", end_msg)
+            if not abort:
+                viewer.close()
+            return
+
+        # Get the next image, segmentation and embedding_path.
+        image = images[next_image_id]
+        segmentation = segmentations[next_image_id]
+        embedding_path = None if embedding_paths is None else embedding_paths[next_image_id]
+
+        # Set the new image in the viewer, state and annotator.
+        viewer.layers["image"].data = image
+        viewer.layers["segmentation"].data = segmentation
+
+        state.initialize_predictor(
+            image, model_type=model_type, ndim=ndim,
+            save_path=embedding_path,
+            tile_shape=tile_shape, halo=halo,
+            predictor=state.predictor, device=device,
+        )
+        state.image_shape = image.shape if image.ndim == ndim else image.shape[:-1]
+        state.annotator._update_image()
+
+        # Clear the object features and seg-ids from the state.
+        state.object_features = None
+        state.seg_ids = None
+
+    viewer.window.add_dock_widget(next_image)
+
+    @viewer.bind_key("n", overwrite=True)
+    def _next_image(viewer):
+        next_image(viewer)
+
+    napari.run()
+
+
+# TODO: folder annotator
 # TODO: main function
