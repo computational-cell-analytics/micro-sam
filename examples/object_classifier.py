@@ -135,6 +135,7 @@ def _get_3d_tiled_data():
 
 
 def annotator_devel():
+    from micro_sam import object_classification as core_clf
     from micro_sam.sam_annotator import object_classifier as clf
     from micro_sam.util import precompute_image_embeddings, get_sam_model
 
@@ -147,11 +148,11 @@ def annotator_devel():
     image_embeddings = precompute_image_embeddings(
         predictor, image, save_path=embedding_path, tile_shape=tile_shape, halo=halo
     )
-    seg_ids, features = clf._compute_object_features(image_embeddings, segmentation)
+    seg_ids, features = core_clf.compute_object_features(image_embeddings, segmentation)
     labels = clf._accumulate_labels(segmentation, annotations)
-    rf = clf._train_rf(features, labels)
-    object_prediction = clf._predict_rf(rf, features, seg_ids)
-    prediction = clf._project_prediction(segmentation, object_prediction)
+    rf = clf._train_rf(features, labels, n_estimators=200, max_depth=10)
+    object_prediction = rf.predict(features)
+    prediction = core_clf.project_prediction_to_segmentation(segmentation, object_prediction, seg_ids)
 
     import napari
     v = napari.Viewer()
