@@ -144,14 +144,21 @@ def annotator_devel():
     # image, segmentation, annotations, model_type, embedding_path, tile_shape, halo = _get_lucchi_data()
     image, segmentation, annotations, model_type, embedding_path, tile_shape, halo = _get_3d_tiled_data()
 
+    # 1. Get the SAM model
     predictor = get_sam_model(model_type)
+    # 2. Precompute the image embeddings.
     image_embeddings = precompute_image_embeddings(
         predictor, image, save_path=embedding_path, tile_shape=tile_shape, halo=halo
     )
+    # 3. Get the segmentation ids and the extracted features for the segmentations.
     seg_ids, features = core_clf.compute_object_features(image_embeddings, segmentation)
+    # 4. Points to the objects we would like to select for training RF.
     labels = clf._accumulate_labels(segmentation, annotations)
+    # 5. Traint the RF model.
     rf = clf._train_rf(features, labels, n_estimators=200, max_depth=10)
+    # 6. Run the trained RF prediction on new images.
     object_prediction = rf.predict(features)
+    # 7. Map the predictions back to the instance segmentation.
     prediction = core_clf.project_prediction_to_segmentation(segmentation, object_prediction, seg_ids)
 
     import napari
