@@ -132,7 +132,6 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
             def _seg_nd(viewer):
                 self._widgets["segment_nd"]()
 
-    # TODO
     # We could implement a better way of initializing the segmentation result,
     # so that instead of just passing a numpy array an existing layer from the napari
     # viewer can be chosen.
