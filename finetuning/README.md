@@ -1,10 +1,15 @@
 # Segment Anything Finetuning
 
-**Important:** 
+**Important!!!!!! Read this before using this code or creating an issue** 
+
 This folder contains finetuning and evaluation code for applying Segment Anything model to microscopy data using the `micro_sam` library.
 This code was used for our experiments in the publication, but it may become outdated due to changes in function signatures etc., and often does not use the functionality that we recommend
 to users. We also don't actively maintain the code here.
 Please refer to the [example notebooks](https://github.com/computational-cell-analytics/micro-sam/tree/master/notebooks) and [example scripts](https://github.com/computational-cell-analytics/micro-sam/tree/master/examples) for well maintained and documented `micro_sam` examples. 
+
+
+**Important!!!!!! Read this before using this code or creating an issue**
+
 
 ## Example: LIVECell
 
