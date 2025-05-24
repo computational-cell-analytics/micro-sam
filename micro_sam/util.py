@@ -545,27 +545,44 @@ def export_custom_qlora_model(
     # Step 2: Load the QLoRA-style finetuned model.
     ft_state, ft_model_state = _load_checkpoint(finetuned_path)
 
-    # Step 3: Get LoRA weights from QLoRA and retain all original parameters from the base SAM model.
+    # Step 3: Identify LoRA layers from QLoRA model 
+    # - differentiate between LoRA applied to the attention matrices and LoRA applied to the MLP layers.
+    # - then copy the LoRA layers from the QLoRA model to the new state dict
     updated_model_state = {}
 
-    # - At first, we get all LoRA layers from the QLoRA-style finetuned model checkpoint.
-    for k, v in ft_model_state.items():
-        if k.find("w_b_linear") != -1 or k.find("w_a_linear") != -1:
+    modified_attn_layers = set()
+    modified_mlp_layers = set()
+
+    for k,v in ft_model_state.items():
+        if "blocks." in k:
+            layer_id = int(k.split("blocks.")[1].split(".")[0])
+        if k.find("qkv.w_a_linear") != -1 or k.find("qkv.w_b_linear") != -1:
+            modified_attn_layers.add(layer_id)
+            updated_model_state[k] = v
+        if k.find("mlp.w_a_linear") != -1 or k.find("mlp.w_b_linear") != -1:
+            modified_mlp_layers.add(layer_id)
             updated_model_state[k] = v
 
-    # - Next, we get all the remaining parameters from the base SAM model.
+
+    # Step 4: Next, we get all the remaining parameters from the base SAM model.
     for k, v in sam.state_dict().items():
+        if "blocks." in k:
+            layer_id = int(k.split("blocks.")[1].split(".")[0])
         if k.find("attn.qkv.") != -1:
-            k = k.replace("qkv", "qkv.qkv_proj")
+            if layer_id in modified_attn_layers:
+                # We have a LoRA layer, so we need to modify the key
+                k = k.replace("qkv", "qkv.qkv_proj")
+            updated_model_state[k] = v
+        elif k.find("mlp") != -1 and k.find("image_encoder") != -1:
+            if layer_id in modified_mlp_layers:
+                # We have a LoRA layer, so we need to modify the key
+                k = k.replace("mlp.", "mlp.mlp_layer.")
             updated_model_state[k] = v
         else:
-
             updated_model_state[k] = v
 
-    # - Finally, we replace the old model state with the new one (to retain other relevant stuff)
+    # Step 5: Update state and save
     ft_state['model_state'] = updated_model_state
-
-    # Step 4: Store the new "state" to "save_path"
     torch.save(ft_state, save_path)
 
 
