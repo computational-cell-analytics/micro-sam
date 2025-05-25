@@ -420,6 +420,8 @@ def train_instance_segmentation(
     val_loader: DataLoader,
     n_epochs: int = 100,
     early_stopping: Optional[int] = 10,
+    loss: torch.nn.Module = torch_em.loss.DiceBasedDistanceLoss(mask_distances_in_bg=True),
+    metric: Optional[torch.nn.Module] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     freeze: Optional[List[str]] = None,
     device: Optional[Union[str, torch.device]] = None,
@@ -456,6 +458,10 @@ def train_instance_segmentation(
         n_epochs: The number of epochs to train for.
         early_stopping: Enable early stopping after this number of epochs without improvement.
             By default, the value is set to '10' epochs.
+        loss: The loss function to train the instance segmentation model.
+            By default, the value is set to 'torch_em.loss.DiceBasedDistanceLoss'
+        metric: The metric for the instance segmentation training.
+            By default the loss function is used as the metric.
         checkpoint_path: Path to checkpoint for initializing the SAM model.
         freeze: Specify parts of the model that should be frozen. Here, only the image_encoder can be frozen.
             By default nothing is frozen and the full model is updated.
@@ -498,7 +504,6 @@ def train_instance_segmentation(
             device=device,
         )
 
-        loss = torch_em.loss.DiceBasedDistanceLoss(mask_distances_in_bg=True)
         optimizer, scheduler = _get_optimizer_and_scheduler(
             model.parameters(), lr, optimizer_class, scheduler_class, scheduler_kwargs
         )
@@ -513,7 +518,7 @@ def train_instance_segmentation(
             compile_model=False,
             save_root=save_root,
             loss=loss,
-            metric=loss,
+            metric=loss if metric is None else metric,
             optimizer=optimizer,
             lr_scheduler=scheduler,
             early_stopping=early_stopping,
