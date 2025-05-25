@@ -545,7 +545,7 @@ def export_custom_qlora_model(
     # Step 2: Load the QLoRA-style finetuned model.
     ft_state, ft_model_state = _load_checkpoint(finetuned_path)
 
-    # Step 3: Identify LoRA layers from QLoRA model 
+    # Step 3: Identify LoRA layers from QLoRA model.
     # - differentiate between LoRA applied to the attention matrices and LoRA applied to the MLP layers.
     # - then copy the LoRA layers from the QLoRA model to the new state dict
     updated_model_state = {}
@@ -553,7 +553,7 @@ def export_custom_qlora_model(
     modified_attn_layers = set()
     modified_mlp_layers = set()
 
-    for k,v in ft_model_state.items():
+    for k, v in ft_model_state.items():
         if "blocks." in k:
             layer_id = int(k.split("blocks.")[1].split(".")[0])
         if k.find("qkv.w_a_linear") != -1 or k.find("qkv.w_b_linear") != -1:
@@ -562,7 +562,6 @@ def export_custom_qlora_model(
         if k.find("mlp.w_a_linear") != -1 or k.find("mlp.w_b_linear") != -1:
             modified_mlp_layers.add(layer_id)
             updated_model_state[k] = v
-
 
     # Step 4: Next, we get all the remaining parameters from the base SAM model.
     for k, v in sam.state_dict().items():
@@ -581,8 +580,10 @@ def export_custom_qlora_model(
         else:
             updated_model_state[k] = v
 
-    # Step 5: Update state and save
+    # Step 5: Finally, we replace the old model state with the new one (to retain other relevant stuff)
     ft_state['model_state'] = updated_model_state
+
+    # Step 6: Store the new "state" to "save_path"
     torch.save(ft_state, save_path)
 
 
