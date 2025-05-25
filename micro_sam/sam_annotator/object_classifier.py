@@ -94,6 +94,8 @@ def _train_and_predict_rf_widget(viewer: "napari.viewer.Viewer") -> None:
     prediction_data = project_prediction_to_segmentation(segmentation, pred, seg_ids)
     viewer.layers["prediction"].data = prediction_data
 
+    state.annotator._refresh_label_widget()
+
 
 @magic_factory(call_button="Export Classifier")
 def _create_export_rf_widget(export_path: Optional[Path] = None) -> None:
@@ -153,6 +155,50 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         segmentation_selection.addWidget(self.segmentation_selection.native)
         return segmentation_selection
 
+    def _create_label_widget(self):
+        self._label_form = QtWidgets.QFormLayout()
+        scroll_area = QtWidgets.QScrollArea()
+        inner = QtWidgets.QWidget()
+        inner.setLayout(self._label_form)
+        scroll_area.setWidget(inner)
+        scroll_area.setWidgetResizable(True)
+
+        layout = QtWidgets.QVBoxLayout()
+        layout.addWidget(QtWidgets.QLabel("Object label names:"))
+        layout.addWidget(scroll_area)
+
+        return layout
+
+    def _refresh_label_widget(self):
+        state = AnnotatorState()
+
+        # Get the current label ids.
+        ids = np.unique(self._viewer.layers["annotations"].data)[1:]
+        if state.previous_labels is not None:
+            ids = np.union1d(ids, np.unique(state.previous_labels))
+
+        # Add new rows.
+        for lbl in ids:
+            if lbl in self._label_names:
+                continue
+            line = QtWidgets.QLineEdit(self._label_names.get(lbl, ""))
+            self._label_names[lbl] = ""
+            self._label_form.addRow(f"ID {lbl}", line)
+            line.textChanged.connect(lambda txt, lbl=lbl: self._label_names.__setitem__(lbl, txt))
+
+        # Remove rows whose label vanished.
+        for row in reversed(range(self._label_form.rowCount())):
+            lbl_text = self._label_form.itemAt(row, QtWidgets.QFormLayout.LabelRole).widget().text()
+            lbl_id = int(lbl_text.split()[1])
+            if lbl_id not in ids:
+                # Remove label+field widgets completely.
+                w_label = self._label_form.itemAt(row, QtWidgets.QFormLayout.LabelRole).widget()
+                w_edit = self._label_form.itemAt(row, QtWidgets.QFormLayout.FieldRole).widget()
+                self._label_form.removeRow(row)
+                w_label.deleteLater()
+                w_edit.deleteLater()
+                self.names.pop(lbl_id, None)
+
     def _create_widgets(self):
         # Create the embedding widget and connect all events related to it.
         self._embedding_widget = widgets.EmbeddingWidget()
@@ -168,6 +214,9 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         # Create the widget for segmentation selection.
         self._seg_selection_widget = self._create_segmentation_layer_section()
 
+        # Create the widget for displaying the current label state.
+        self._label_widget = self._create_label_widget()
+
         # Cretate the widget for exporting the RF.
         self._export_rf_widget = _create_export_rf_widget()
 
@@ -175,6 +224,7 @@ class ObjectClassifier(QtWidgets.QScrollArea):
             "embeddings": self._embedding_widget,
             "segmentation_selection": self._seg_selection_widget,
             "train_and_predict": self._train_and_predict_widget,
+            "label_widget": self._label_widget,
             "export_rf": self._export_rf_widget,
         }
 
@@ -196,8 +246,10 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         self._ndim = len(self._shape)
 
         # Create all the widgets and add them to the layout.
+        self._label_names = {}  # The names for the object labels.
         self._create_widgets()
-        # Could refactor this.
+
+        # We could refactor this.
         for widget_name, widget in self._widgets.items():
             widget_frame = QtWidgets.QGroupBox()
             widget_layout = QtWidgets.QVBoxLayout()
@@ -211,6 +263,9 @@ class ObjectClassifier(QtWidgets.QScrollArea):
                 widget_layout.addWidget(widget)
             widget_frame.setLayout(widget_layout)
             self._annotator_widget.layout().addWidget(widget_frame)
+
+        # Connect the label layer and the refresh function.
+        self._refresh_label_widget()
 
         # Set the expected annotator class to the state.
         state = AnnotatorState()

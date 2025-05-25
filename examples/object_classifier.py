@@ -258,8 +258,8 @@ def main():
     # wholeslide_annotator()
     # lucchi_annotator()
     # tiled_3d_annotator()
-    # histopathology_annotator()
-    batch_prediction()
+    histopathology_annotator()
+    # batch_prediction()
 
     # annotator_devel()
 
