@@ -660,7 +660,8 @@ def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init
             # Unsqueeze the channel axis of the tile embeddings.
             tile_embeddings = tile_embeddings.unsqueeze(0)
             ds = features.create_dataset(
-                str(tile_id), data=tile_embeddings.cpu().numpy(), compression="gzip", chunks=tile_embeddings.shape
+                str(tile_id), data=tile_embeddings.cpu().numpy(), shape=tile_embeddings.shape,
+                compression="gzip", chunks=tile_embeddings.shape
             )
             ds.attrs["original_size"] = original_size
             ds.attrs["input_size"] = input_size
@@ -745,7 +746,7 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
 
     # Save the embeddings if we have a save_path.
     if save_path is not None:
-        f.create_dataset("features", data=features, compression="gzip", chunks=features.shape)
+        f.create_dataset("features", data=features, shape=features.shape, compression="gzip", chunks=features.shape)
         _write_embedding_signature(
             f, input_, predictor, tile_shape=None, halo=None, input_size=input_size, original_size=original_size,
         )
