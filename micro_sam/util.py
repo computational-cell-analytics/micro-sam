@@ -568,13 +568,11 @@ def export_custom_qlora_model(
         if "blocks." in k:
             layer_id = int(k.split("blocks.")[1].split(".")[0])
         if k.find("attn.qkv.") != -1:
-            if layer_id in modified_attn_layers:
-                # We have a LoRA layer, so we need to modify the key
+            if layer_id in modified_attn_layers:  # We have LoRA in QKV layers, so we need to modify the key
                 k = k.replace("qkv", "qkv.qkv_proj")
             updated_model_state[k] = v
         elif k.find("mlp") != -1 and k.find("image_encoder") != -1:
-            if layer_id in modified_mlp_layers:
-                # We have a LoRA layer, so we need to modify the key
+            if layer_id in modified_mlp_layers:  # We have LoRA in MLP layers, so we need to modify the key
                 k = k.replace("mlp.", "mlp.mlp_layer.")
             updated_model_state[k] = v
         else:
