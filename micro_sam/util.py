@@ -642,8 +642,9 @@ def _create_dataset_with_data(group, name, data, chunks=None):
         )
     elif zarr_major_version == 3:
         ds = group.create_array(
-            name, data=data, shape=data.shape, compressors=[zarr.codecs.GzipCodec()], chunks=chunks
+            name, shape=data.shape, compressors=[zarr.codecs.GzipCodec()], chunks=chunks
         )
+        ds[:] = data
     else:
         raise RuntimeError(f"Unsupported zarr version: {zarr_major_version}")
     return ds
