@@ -113,7 +113,7 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        f = zarr.open(save_path, "r")
+        f = zarr.open(save_path, mode="r")
         self.assertIn("features", f)
         self.assertEqual(f["features"].shape, (1, 256, 64, 64))
 
@@ -142,7 +142,7 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        f = zarr.open(save_path, "r")
+        f = zarr.open(save_path, mode="r")
         self.assertIn("features", f)
         self.assertEqual(f["features"].shape, (3, 1, 256, 64, 64))
 
@@ -173,7 +173,7 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        f = zarr.open(save_path, "r")
+        f = zarr.open(save_path, mode="r")
         self.assertIn("features", f)
         self.assertEqual(len(f["features"]), 4)
 
@@ -208,7 +208,7 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        f = zarr.open(save_path, "r")
+        f = zarr.open(save_path, mode="r")
         self.assertIn("features", f)
         self.assertEqual(len(f["features"]), 4)
 

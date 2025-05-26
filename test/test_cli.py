@@ -56,7 +56,7 @@ class TestCLI(unittest.TestCase):
             "-m", self.model_type, "--precompute_amg_state"
         ])
         self.assertTrue(os.path.exists(emb_path1))
-        f = zarr.open(emb_path1, "r")
+        f = zarr.open(emb_path1, mode="r")
         self.assertIn("features", f)
 
         ais_path = os.path.join(emb_path1, "is_state.h5")
@@ -69,7 +69,7 @@ class TestCLI(unittest.TestCase):
             "-m", self.model_type, "-k", "*.tif", "--precompute_amg_state"
         ])
         self.assertTrue(os.path.exists(emb_path2))
-        f = zarr.open(emb_path2, "r")
+        f = zarr.open(emb_path2, mode="r")
         self.assertIn("features", f)
         self.assertEqual(f["features"].shape[0], n_images)
 
