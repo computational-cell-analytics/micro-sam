@@ -113,9 +113,9 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        with zarr.open(save_path, "r") as f:
-            self.assertIn("features", f)
-            self.assertEqual(f["features"].shape, (1, 256, 64, 64))
+        f = zarr.open(save_path, mode="r")
+        self.assertIn("features", f)
+        self.assertEqual(f["features"].shape, (1, 256, 64, 64))
 
         # Check that everything still works when we load the image embeddings from file.
         embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path)
@@ -142,9 +142,9 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        with zarr.open(save_path, "r") as f:
-            self.assertIn("features", f)
-            self.assertEqual(f["features"].shape, (3, 1, 256, 64, 64))
+        f = zarr.open(save_path, mode="r")
+        self.assertIn("features", f)
+        self.assertEqual(f["features"].shape, (3, 1, 256, 64, 64))
 
         # Check that everything still works when we load the image embeddings from file.
         embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=3)
@@ -173,9 +173,9 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        with zarr.open(save_path, "r") as f:
-            self.assertIn("features", f)
-            self.assertEqual(len(f["features"]), 4)
+        f = zarr.open(save_path, mode="r")
+        self.assertIn("features", f)
+        self.assertEqual(len(f["features"]), 4)
 
         # Check that everything still works when we load the image embeddings from file.
         precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=tile_shape, halo=halo)
@@ -208,9 +208,9 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        with zarr.open(save_path, "r") as f:
-            self.assertIn("features", f)
-            self.assertEqual(len(f["features"]), 4)
+        f = zarr.open(save_path, mode="r")
+        self.assertIn("features", f)
+        self.assertEqual(len(f["features"]), 4)
 
         # Check that everything still works when we load the image embeddings from file.
         embeddings = precompute_image_embeddings(
