@@ -149,7 +149,7 @@ class AnnotatorState(metaclass=Singleton):
         # If we have an embedding path the data signature has already been computed,
         # and we can read it from there.
         if save_path is not None and isinstance(save_path, str):
-            f = zarr.open(save_path, "r")
+            f = zarr.open(save_path, mode="r")
             self.data_signature = f.attrs["data_signature"]
 
         # Otherwise we compute it here.

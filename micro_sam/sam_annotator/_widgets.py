@@ -1340,7 +1340,7 @@ class EmbeddingWidget(_WidgetBase):
         # and we ask the user if they want to load these embeddings.
         if self.embeddings_save_path and os.listdir(self.embeddings_save_path):
             try:
-                f = zarr.open(self.embeddings_save_path, "a")
+                f = zarr.open(self.embeddings_save_path, mode="a")
 
                 # Validate that the embeddings are complete.
                 # Note: 'input_size' is the last value set in the attrs of f,
