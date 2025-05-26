@@ -685,7 +685,7 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         mask_data = []
         for tile_id in range(n_tiles):
             # set the pre-computed embeddings for this tile
-            features = image_embeddings["features"][tile_id]
+            features = image_embeddings["features"][str(tile_id)]
             tile_embeddings = {
                 "features": features,
                 "input_size": features.attrs["input_size"],

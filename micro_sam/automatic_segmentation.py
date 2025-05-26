@@ -278,7 +278,8 @@ def automatic_instance_segmentation(
     if output_path is not None:
         _output_path = _add_suffix_to_output_path(output_path, "_automatic") if annotate else output_path
         imageio.imwrite(_output_path, instances, compression="zlib")
-        print(f"The automatic segmentation results are stored at '{os.path.abspath(_output_path)}'.")
+        if verbose:
+            print(f"The automatic segmentation results are stored at '{os.path.abspath(_output_path)}'.")
 
     # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
     if annotate:
@@ -307,7 +308,8 @@ def automatic_instance_segmentation(
         # Save the instance segmentation, if 'output_path' provided.
         if output_path is not None:
             imageio.imwrite(output_path, instances, compression="zlib")
-            print(f"The final segmentation results are stored at '{os.path.abspath(output_path)}'.")
+            if verbose:
+                print(f"The final segmentation results are stored at '{os.path.abspath(output_path)}'.")
 
     if return_embeddings:
         return instances, image_embeddings
