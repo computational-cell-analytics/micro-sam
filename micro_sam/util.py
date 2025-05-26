@@ -1072,7 +1072,7 @@ def set_precomputed(
         The predictor with set features.
     """
     if tile_id is not None:
-        tile_features = image_embeddings["features"][tile_id]
+        tile_features = image_embeddings["features"][str(tile_id)]
         tile_image_embeddings = {
             "features": tile_features,
             "input_size": tile_features.attrs["input_size"],
