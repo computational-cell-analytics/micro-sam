@@ -10,6 +10,8 @@ import imageio.v3 as imageio
 
 from torch_em.data.datasets.util import split_kwargs
 
+from elf.io import open_file
+
 from . import util
 from .instance_segmentation import (
     get_amg, get_decoder, mask_data_to_segmentation, InstanceSegmentationWithDecoder,
@@ -95,7 +97,7 @@ def automatic_tracking(
         segmenter: The automatic instance segmentation class.
         input_path: input_path: The input image file(s). Can either be a single image file (e.g. tif or png),
             or a container file (e.g. hdf5 or zarr).
-        output_path: The output path where the instance segmentations will be saved.
+        output_path: The folder where the tracking outputs will be saved in CTC format.
         embedding_path: The path where the embeddings are cached already / will be saved.
         key: The key to the input file. This is needed for container files (eg. hdf5 or zarr)
             or to load several images as 3d volume. Provide a glob patterm, eg. "*.tif", for this case.
@@ -112,10 +114,6 @@ def automatic_tracking(
 
     Returns:
     """
-    if output_path is not None:
-        # TODO implement saving tracking results in CTC format and use it to save the result here.
-        raise NotImplementedError("Saving the tracking result to file is currently not supported.")
-
     # Load the input image file.
     if isinstance(input_path, np.ndarray):
         image_data = input_path
@@ -142,7 +140,8 @@ def automatic_tracking(
         halo=halo,
         verbose=verbose,
         batch_size=batch_size,
-        return_image_embeddings=True,
+        return_embeddings=True,
+        output_folder=output_path,
         **generate_kwargs,
     )
 
@@ -317,7 +316,7 @@ def automatic_instance_segmentation(
         return instances
 
 
-def _get_inputs_from_paths(paths, pattern):
+def _get_inputs_from_paths(paths, pattern, tracking=False):
     "Function to get all filepaths in a directory."
 
     if isinstance(paths, str):
@@ -330,7 +329,14 @@ def _get_inputs_from_paths(paths, pattern):
         else:  # Otherwise, if the path is a directory, fetch all inputs provided with a pattern.
             assert pattern is not None, \
                 f"You must provide a pattern to search for files in the directory: '{os.path.abspath(path)}'."
-            fpaths.extend(glob(os.path.join(path, pattern)))
+
+            if tracking:  # Create an image stack.
+                with open_file(path, "r") as f:
+                    tracking_inputs = f[pattern]
+                fpaths.append(tracking_inputs[:])
+
+            else:  # Otherwise, return a list of images.
+                fpaths.extend(glob(os.path.join(path, pattern)))
 
     return fpaths
 
@@ -460,7 +466,7 @@ def main():
 
     # Get the filepaths to input images (and other paths to store stuff, eg. segmentations and embeddings)
     # Check whether the inputs are as expected, otherwise assort them.
-    input_paths = _get_inputs_from_paths(args.input_path, args.pattern)
+    input_paths = _get_inputs_from_paths(args.input_path, args.pattern, args.tracking)
     assert len(input_paths) > 0, "'micro-sam' could not extract any image data internally."
 
     output_path = args.output_path
@@ -472,10 +478,13 @@ def main():
     )
 
     # Run automatic segmentation per image.
-    for path in tqdm(input_paths, desc="Run automatic segmentation"):
-        if has_one_input:  # if we have one image only.
-            _output_fpath = str(Path(output_path).with_suffix(".tif"))
+    for input_path in tqdm(input_paths, desc="Run automatic segmentation"):
+        if has_one_input:  # if we have only one image / volume.
             _embedding_fpath = embedding_path
+            if args.tracking:
+                _output_fpath = output_path
+            else:
+                _output_fpath = str(Path(output_path).with_suffix(".tif"))
 
         else:  # if we have multiple image, we need to make the other target filepaths compatible.
             # Let's check for 'embedding_path'.
@@ -483,23 +492,28 @@ def main():
             if embedding_path:
                 if _has_extension(embedding_path):  # in this case, use filename as addl. suffix to provided path.
                     _embedding_fpath = str(Path(embedding_path).with_suffix(".zarr"))
-                    _embedding_fpath = _embedding_fpath.replace(".zarr", f"_{Path(path).stem}.zarr")
+                    _embedding_fpath = _embedding_fpath.replace(".zarr", f"_{Path(input_path).stem}.zarr")
                 else:   # otherwise, for directory, use image filename for multiple images.
                     os.makedirs(embedding_path, exist_ok=True)
-                    _embedding_fpath = os.path.join(embedding_path, Path(os.path.basename(path)).with_suffix(".zarr"))
+                    _embedding_fpath = os.path.join(
+                        embedding_path, Path(os.path.basename(input_path)).with_suffix(".zarr")
+                    )
 
             # Next, let's check for output file to store segmentation.
-            if _has_extension(output_path):  # in this case, use filename as addl. suffix to provided path.
-                _output_fpath = str(Path(output_path).with_suffix(".tif"))
-                _output_fpath = _output_fpath.replace(".tif", f"_{Path(path).stem}.tif")
-            else:  # otherwise, for directory, use image filename for multiple images.
-                os.makedirs(output_path, exist_ok=True)
-                _output_fpath = os.path.join(output_path, Path(os.path.basename(path)).with_suffix(".tif"))
+            if args.tracking:
+                _output_fpath = output_path
+            else:
+                if _has_extension(output_path):  # in this case, use filename as addl. suffix to provided path.
+                    _output_fpath = str(Path(output_path).with_suffix(".tif"))
+                    _output_fpath = _output_fpath.replace(".tif", f"_{Path(input_path).stem}.tif")
+                else:  # otherwise, for directory, use image filename for multiple images.
+                    os.makedirs(output_path, exist_ok=True)
+                    _output_fpath = os.path.join(output_path, Path(os.path.basename(input_path)).with_suffix(".tif"))
 
         instance_seg_function(
             predictor=predictor,
             segmenter=segmenter,
-            input_path=path,
+            input_path=input_path,
             output_path=_output_fpath,
             embedding_path=_embedding_fpath,
             key=args.key,
