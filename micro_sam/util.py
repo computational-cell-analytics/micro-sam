@@ -642,7 +642,7 @@ def _create_dataset_with_data(group, name, data, chunks=None):
         )
     elif zarr_major_version == 3:
         ds = group.create_array(
-            name, shape=data.shape, compressors=[zarr.codecs.GzipCodec()], chunks=chunks
+            name, shape=data.shape, compressors=[zarr.codecs.GzipCodec()], chunks=chunks, dtype=data.dtype,
         )
         ds[:] = data
     else:
