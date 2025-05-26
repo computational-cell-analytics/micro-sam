@@ -43,7 +43,6 @@ def example_automatic_tracking(use_finetuned_model):
     v = napari.Viewer()
     v.add_image(timeseries)
     v.add_labels(masks_tracked)
-    v.add_tracks(lineage)
     napari.run()
 
 
