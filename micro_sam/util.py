@@ -570,13 +570,10 @@ def export_custom_qlora_model(
         if k.find("attn.qkv.") != -1:
             if layer_id in modified_attn_layers:  # We have LoRA in QKV layers, so we need to modify the key
                 k = k.replace("qkv", "qkv.qkv_proj")
-            updated_model_state[k] = v
         elif k.find("mlp") != -1 and k.find("image_encoder") != -1:
             if layer_id in modified_mlp_layers:  # We have LoRA in MLP layers, so we need to modify the key
                 k = k.replace("mlp.", "mlp.mlp_layer.")
-            updated_model_state[k] = v
-        else:
-            updated_model_state[k] = v
+        updated_model_state[k] = v
 
     # Step 5: Finally, we replace the old model state with the new one (to retain other relevant stuff)
     ft_state['model_state'] = updated_model_state
