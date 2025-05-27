@@ -478,37 +478,36 @@ def main():
     )
 
     # Run automatic segmentation per image.
-    for input_path in tqdm(input_paths, desc="Run automatic segmentation"):
+    for i, input_path in tqdm(enumerate(input_paths), total=len(input_paths), desc="Run automatic segmentation"):
         if has_one_input:  # if we have only one image / volume.
             _embedding_fpath = embedding_path
-            if args.tracking:
-                _output_fpath = output_path
-            else:
-                _output_fpath = str(Path(output_path).with_suffix(".tif"))
+            _output_fpath = output_path if args.tracking else str(Path(output_path).with_suffix(".tif"))
 
         else:  # if we have multiple image, we need to make the other target filepaths compatible.
+
+            # Decide on the input filename.
+            input_name = f"embeddings_{i:05d}" if args.tracking else Path(input_path).stem
+
             # Let's check for 'embedding_path'.
             _embedding_fpath = embedding_path
             if embedding_path:
-                if _has_extension(embedding_path):  # in this case, use filename as addl. suffix to provided path.
-                    _embedding_fpath = str(Path(embedding_path).with_suffix(".zarr"))
-                    _embedding_fpath = _embedding_fpath.replace(".zarr", f"_{Path(input_path).stem}.zarr")
-                else:   # otherwise, for directory, use image filename for multiple images.
+                if _has_extension(embedding_path):  # Use input filename as addl. suffix to embedding path.
+                    _embedding_fpath = Path(embedding_path).with_suffix(".zarr")  # Ensuring file has '.zarr' extension.
+                    _embedding_fpath = str(_embedding_fpath).replace(".zarr", f"_{input_name}.zarr")
+                else:   # Otherwise, for a folder, use image filename for storing multiple embeddings inside it.
                     os.makedirs(embedding_path, exist_ok=True)
-                    _embedding_fpath = os.path.join(
-                        embedding_path, Path(os.path.basename(input_path)).with_suffix(".zarr")
-                    )
+                    _embedding_fpath = os.path.join(embedding_path, f"{input_name}.zarr")
 
-            # Next, let's check for output file to store segmentation.
+            # Next, let's check for output file to store segmentation (or tracks).
             if args.tracking:
-                _output_fpath = output_path
+                _output_fpath = os.path.join(output_path, f"{i:05d}")  # Set individual out folders for each timeseries.
             else:
-                if _has_extension(output_path):  # in this case, use filename as addl. suffix to provided path.
-                    _output_fpath = str(Path(output_path).with_suffix(".tif"))
-                    _output_fpath = _output_fpath.replace(".tif", f"_{Path(input_path).stem}.tif")
-                else:  # otherwise, for directory, use image filename for multiple images.
+                if _has_extension(output_path):  # Use the input filename as addl. suffix to output path.
+                    _output_fpath = Path(output_path).with_suffix(".tif")  # Ensuring file has '.tif' extension.
+                    _output_fpath = str(_output_fpath).replace(".tif", f"_{input_name}.tif")
+                else:  # Otherwise, for a folder, use the image filename for storing multiple images inside it.
                     os.makedirs(output_path, exist_ok=True)
-                    _output_fpath = os.path.join(output_path, Path(os.path.basename(input_path)).with_suffix(".tif"))
+                    _output_fpath = os.path.join(output_path, f"{input_name}.tif")
 
         instance_seg_function(
             predictor=predictor,
