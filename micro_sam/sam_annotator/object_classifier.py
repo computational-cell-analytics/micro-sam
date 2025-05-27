@@ -1,5 +1,6 @@
 import os
 from joblib import dump
+from multiprocessing import cpu_count
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
@@ -85,8 +86,10 @@ def _train_and_predict_rf_widget(viewer: "napari.viewer.Viewer") -> None:
         return widgets._generate_message("error", "You have not provided any annotations.")
 
     # Run RF training and store it in the state.
-    # TODO should we over-ride any defaults here?
-    rf = _train_rf(features, labels, previous_features=previous_features, previous_labels=previous_labels)
+    rf = _train_rf(
+        features, labels, previous_features=previous_features, previous_labels=previous_labels,
+        n_estimators=200, max_depth=10, n_jobs=cpu_count(),
+    )
     state.object_rf = rf
 
     # Run and set the prediction.

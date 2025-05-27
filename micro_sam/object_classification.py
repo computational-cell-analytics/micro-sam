@@ -228,14 +228,20 @@ def run_prediction_with_object_classifier(
     project_prediction: bool = True,
     ndim: Optional[int] = None,
 ) -> List[np.ndarray]:
-    """Lorem ipsum
+    """Run prediction with a pretrained object classifier on a series of images.
 
     Args:
-        images:
-        segmentations:
+        images: The images, either given as a list of numpy array or filepaths.
+        segmentations: The segmentaitons, either given as a list of numpy array or filepaths.
+        predictor:
+        rf_path:
+        image_key:
+        segmentation_key:
+        project_prediction:
+        ndim:
 
     Returns:
-        The predictions
+        The predictions.
     """
     assert len(images) == len(segmentations)
     rf = load(rf_path)
