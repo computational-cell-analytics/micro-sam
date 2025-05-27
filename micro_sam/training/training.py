@@ -28,6 +28,7 @@ except Exception:
 
 from . import sam_trainer as trainers
 from ..instance_segmentation import get_unetr
+from ..models.peft_sam import ClassicalSurgery
 from . import joint_sam_trainer as joint_trainers
 from ..util import get_device, get_model_names, export_custom_sam_model, get_sam_model
 from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit, get_raw_transform
@@ -751,6 +752,10 @@ CONFIGURATIONS = {
     "Minimal": {"model_type": "vit_t", "n_objects_per_batch": 4, "n_sub_iteration": 4},
     "CPU": {"model_type": "vit_b", "n_objects_per_batch": 10},
     "gtx1080": {"model_type": "vit_t", "n_objects_per_batch": 5},
+    "gtx3080": {
+        "model_type": "vit_b", "n_objects_per_batch": 5,
+        "peft_kwargs": {"attention_layers_to_update": [11], "peft_module": ClassicalSurgery}
+    },
     "rtx5000": {"model_type": "vit_b", "n_objects_per_batch": 10},
     "V100": {"model_type": "vit_b"},
     "A100": {"model_type": "vit_h"},
@@ -774,6 +779,8 @@ def _find_best_configuration():
             return "V100"
         elif vram > 14:  # More than 14 GB: use the RTX5000 configurations.
             return "rtx5000"
+        elif vram > 8:  # More than 8 GB: use the GTX3080 configurations.
+            return "gtx3080"
         else:  # Otherwise: not enough memory to train on the GPU, use CPU instead.
             return "CPU"
     else:
@@ -782,9 +789,9 @@ def _find_best_configuration():
 
 def train_sam_for_configuration(
     name: str,
-    configuration: str,
     train_loader: DataLoader,
     val_loader: DataLoader,
+    configuration: Optional[str] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     with_segmentation_decoder: bool = True,
     train_instance_segmentation_only: bool = False,
@@ -798,9 +805,10 @@ def train_sam_for_configuration(
 
     Args:
         name: The name of the model to be trained. The checkpoint and logs folder will have this name.
-        configuration: The configuration (= name of hardware resource).
         train_loader: The dataloader for training.
         val_loader: The dataloader for validation.
+        configuration: The configuration (= name of hardware resource).
+            By default, it is automatically selected for the best VRAM combination.
         checkpoint_path: Path to checkpoint for initializing the SAM model.
         with_segmentation_decoder: Whether to train additional UNETR decoder for automatic instance segmentation.
             By default, trains with the additional instance segmentation decoder.
@@ -811,6 +819,9 @@ def train_sam_for_configuration(
             instead of a default sam model.
         kwargs: Additional keyword parameters that will be passed to `train_sam`.
     """
+    if configuration is None:  # Automatically choose based on available VRAM combination.
+        configuration = _find_best_configuration()
+
     if configuration in CONFIGURATIONS:
         train_kwargs = CONFIGURATIONS[configuration]
     else:
