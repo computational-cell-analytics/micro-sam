@@ -210,7 +210,10 @@ def project_prediction_to_segmentation(
     """
     assert len(object_prediction) == len(seg_ids)
     prediction = {seg_id: class_pred for seg_id, class_pred in zip(seg_ids, object_prediction)}
-    prediction[0] = 0
+    # Find missing segmentation ids. This will include the background id, but may include other ids of small objects.
+    # Such objects may get removed in the resizing operations.
+    missing_ids = np.setdiff1d(np.unique(segmentation), seg_ids)
+    prediction.update({missing_id: 0 for missing_id in missing_ids})
     return takeDict(prediction, segmentation)
 
 
