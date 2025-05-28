@@ -490,7 +490,7 @@ def main():
 
         else:  # When we have multiple images.
             # Get the input filename, without the extension.
-            input_name = os.path.basename(input_path).split(".")[0]  # TODO: check for tracking example.
+            input_name = str(Path(input_path).stem)
 
             # Let's check the 'embedding_path'.
             if embedding_path is None:  # For computing embeddings on-the-fly, we don't care about the path logic.
