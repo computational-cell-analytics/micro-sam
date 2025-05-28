@@ -1,16 +1,15 @@
 import os
-from functools import partial
+import warnings
 from glob import glob
 from tqdm import tqdm
 from pathlib import Path
+from functools import partial
 from typing import Dict, List, Optional, Union, Tuple
 
 import numpy as np
 import imageio.v3 as imageio
 
 from torch_em.data.datasets.util import split_kwargs
-
-from elf.io import open_file
 
 from . import util
 from .instance_segmentation import (
@@ -316,7 +315,7 @@ def automatic_instance_segmentation(
         return instances
 
 
-def _get_inputs_from_paths(paths, pattern, tracking=False):
+def _get_inputs_from_paths(paths, pattern):
     "Function to get all filepaths in a directory."
 
     if isinstance(paths, str):
@@ -324,26 +323,14 @@ def _get_inputs_from_paths(paths, pattern, tracking=False):
 
     fpaths = []
     for path in paths:
-        if _has_extension(path):  # It is just one filepath.
+        if os.path.splitext(path)[-1]:  # It is just one filepath with a valid extension.
             fpaths.append(path)
         else:  # Otherwise, if the path is a directory, fetch all inputs provided with a pattern.
             assert pattern is not None, \
                 f"You must provide a pattern to search for files in the directory: '{os.path.abspath(path)}'."
-
-            if tracking:  # Create an image stack.
-                with open_file(path, "r") as f:
-                    tracking_inputs = f[pattern]
-                fpaths.append(tracking_inputs[:])
-
-            else:  # Otherwise, return a list of images.
-                fpaths.extend(glob(os.path.join(path, pattern)))
+            fpaths.extend(glob(os.path.join(path, pattern)))
 
     return fpaths
-
-
-def _has_extension(fpath: Union[os.PathLike, str]) -> bool:
-    "Returns whether the provided path has an extension or not."
-    return bool(os.path.splitext(fpath)[1])
 
 
 def main():
@@ -367,10 +354,14 @@ def main():
     )
     parser.add_argument(
         "-o", "--output_path", required=True, type=str,
-        help="The filepath to store the instance segmentation. The current support stores segmentation in a 'tif' file."
+        help="The filepath to store the instance segmentation. If multiple inputs are provied, "
+        "this should be a folder. Otherwise you cal store outputs in a single tif file for segmentation. "
+        "NOTE: The current saving mode support storing segmentations as 'tif' files."
     )
     parser.add_argument(
-        "-e", "--embedding_path", default=None, type=str, help="The path where the embeddings will be saved."
+        "-e", "--embedding_path", default=None, type=str,
+        help="The path where the embeddings will be saved. If multiple inputs are provided, "
+        "this should be a folder. Otherwise you can store embeddings in single zarr file."
     )
     parser.add_argument(
         "--pattern", type=str, help="Pattern / wildcard for selecting files in a folder. To select all files use '*'."
@@ -416,8 +407,8 @@ def main():
         "By default, computes the image embeddings for one tile / z-plane at a time."
     )
     parser.add_argument(
-        "--tracking", action="store_true", help="Run tracking instead of instance segmentation. "
-        "Only supported for timeseries inputs.."
+        "--tracking", action="store_true", help="Run automatic tracking instead of instance segmentation. "
+        "NOTE: It is only supported for timeseries inputs."
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Whether to allow verbosity of outputs."
@@ -466,7 +457,7 @@ def main():
 
     # Get the filepaths to input images (and other paths to store stuff, eg. segmentations and embeddings)
     # Check whether the inputs are as expected, otherwise assort them.
-    input_paths = _get_inputs_from_paths(args.input_path, args.pattern, args.tracking)
+    input_paths = _get_inputs_from_paths(args.input_path, args.pattern)
     assert len(input_paths) > 0, "'micro-sam' could not extract any image data internally."
 
     output_path = args.output_path
@@ -478,36 +469,46 @@ def main():
     )
 
     # Run automatic segmentation per image.
-    for i, input_path in tqdm(enumerate(input_paths), total=len(input_paths), desc="Run automatic segmentation"):
-        if has_one_input:  # if we have only one image / volume.
-            _embedding_fpath = embedding_path
-            _output_fpath = output_path if args.tracking else str(Path(output_path).with_suffix(".tif"))
+    for input_path in tqdm(input_paths, total=len(input_paths), desc="Run automatic segmentation"):
+        if has_one_input:  # When we have only one image / volume.
+            _embedding_fpath = embedding_path  # Either folder or zarr file, would work for both.
 
-        else:  # if we have multiple image, we need to make the other target filepaths compatible.
+            output_fdir = os.path.splitext(output_path)[0]
+            os.makedirs(output_fdir, exist_ok=True)
 
-            # Decide on the input filename.
-            input_name = f"embeddings_{i:05d}" if args.tracking else Path(input_path).stem
+            # For tracking, we ensure that the output path is a folder,
+            # i.e. does not have an extension. We throw a warning if the user provided an extension.
+            if args.tracking:
+                if os.path.splitext(output_path)[-1]:
+                    warnings.warn(
+                        f"The output folder has an extension '{os.path.splitext(output_path)[-1]}'. "
+                        "We remove it and treat it as a folder to store tracking outputs in CTC format."
+                    )
+                _output_fpath = output_fdir
+            else:  # Otherwise, we can store outputs for user directly in the provided filepath, ensuring extension .tif
+                _output_fpath = f"{output_fdir}.tif"
 
-            # Let's check for 'embedding_path'.
-            _embedding_fpath = embedding_path
-            if embedding_path:
-                if _has_extension(embedding_path):  # Use input filename as addl. suffix to embedding path.
-                    _embedding_fpath = Path(embedding_path).with_suffix(".zarr")  # Ensuring file has '.zarr' extension.
-                    _embedding_fpath = str(_embedding_fpath).replace(".zarr", f"_{input_name}.zarr")
-                else:   # Otherwise, for a folder, use image filename for storing multiple embeddings inside it.
-                    os.makedirs(embedding_path, exist_ok=True)
-                    _embedding_fpath = os.path.join(embedding_path, f"{input_name}.zarr")
+        else:  # When we have multiple images.
+            # Get the input filename, without the extension.
+            input_name = os.path.basename(input_path).split(".")[0]  # TODO: check for tracking example.
+
+            # Let's check the 'embedding_path'.
+            if embedding_path is None:  # For computing embeddings on-the-fly, we don't care about the path logic.
+                _embedding_fpath = embedding_path
+            else:  # Otherwise, store each embeddings inside a folder.
+                embedding_folder = os.path.splitext(embedding_path)[0]  # Treat the provided embedding path as folder.
+                os.makedirs(embedding_folder, exist_ok=True)
+                _embedding_fpath = os.path.join(embedding_folder, f"{input_name}.zarr")  # Create each embedding file.
+
+            # Get the output folder name.
+            output_folder = os.path.splitext(output_path)[0]
+            os.makedirs(output_folder, exist_ok=True)
 
             # Next, let's check for output file to store segmentation (or tracks).
-            if args.tracking:
-                _output_fpath = os.path.join(output_path, f"{i:05d}")  # Set individual out folders for each timeseries.
-            else:
-                if _has_extension(output_path):  # Use the input filename as addl. suffix to output path.
-                    _output_fpath = Path(output_path).with_suffix(".tif")  # Ensuring file has '.tif' extension.
-                    _output_fpath = str(_output_fpath).replace(".tif", f"_{input_name}.tif")
-                else:  # Otherwise, for a folder, use the image filename for storing multiple images inside it.
-                    os.makedirs(output_path, exist_ok=True)
-                    _output_fpath = os.path.join(output_path, f"{input_name}.tif")
+            if args.tracking:  # For tracking, we store CTC outputs in subfolders, with input_name as folder.
+                _output_fpath = os.path.join(output_folder, input_name)
+            else:  # Otherwise, store each result inside a folder.
+                _output_fpath = os.path.join(output_folder, f"{input_name}.tif")
 
         instance_seg_function(
             predictor=predictor,
