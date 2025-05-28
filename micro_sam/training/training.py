@@ -188,7 +188,7 @@ def _get_trainer_fit_params(n_epochs, n_iterations, save_every_kth_epoch, pbar_s
 def _get_optimizer_and_scheduler(model_params, lr, optimizer_class, scheduler_class, scheduler_kwargs):
     optimizer = optimizer_class(model_params, lr=lr)
     if scheduler_kwargs is None:
-        scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
+        scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3}
     scheduler = scheduler_class(optimizer=optimizer, **scheduler_kwargs)
     return optimizer, scheduler
 

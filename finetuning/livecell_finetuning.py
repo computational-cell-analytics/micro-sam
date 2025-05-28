@@ -54,7 +54,7 @@ def finetune_livecell(args):
 
     # all the stuff we need for training
     train_loader, val_loader = get_dataloaders(patch_shape=patch_shape, data_path=args.input_path)
-    scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10, "verbose": True}
+    scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10}
 
     # freeze encoder: 35.02 GB
     # late lora 50% classic: 43.142 GB

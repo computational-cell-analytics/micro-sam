@@ -23,7 +23,7 @@ def finetune_lm_generalist(args):
 
     # all the stuff we need for training
     train_loader, val_loader = get_generalist_lm_loaders(input_path=args.input_path, patch_shape=patch_shape)
-    scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 5, "verbose": True}
+    scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 5}
 
     # Run training.
     sam_training.train_sam(
