@@ -469,7 +469,7 @@ def main():
     )
 
     # Run automatic segmentation per image.
-    for input_path in tqdm(input_paths, total=len(input_paths), desc="Run automatic segmentation"):
+    for input_path in tqdm(input_paths, desc="Run automatic " + ("tracking" if args.tracking else "segmentation")):
         if has_one_input:  # When we have only one image / volume.
             _embedding_fpath = embedding_path  # Either folder or zarr file, would work for both.
 

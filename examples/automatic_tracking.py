@@ -31,7 +31,7 @@ def example_automatic_tracking(use_finetuned_model):
 
     predictor, segmenter = get_predictor_and_segmenter(model_type=model_type, amg=False)
 
-    masks_tracked, lineage = automatic_tracking(
+    masks_tracked, _ = automatic_tracking(
         predictor=predictor,
         segmenter=segmenter,
         input_path=timeseries[:],
@@ -52,8 +52,5 @@ def main():
     example_automatic_tracking(use_finetuned_model)
 
 
-# The corresponding CLI call for track_ctc_data:
-# (replace with cache directory on your machine)
-# $ micro_sam.automatic_segmentation --tracking -i /home/anwai/.cache/micro_sam/sample_data/DIC-C2DH-HeLa.zip.unzip/DIC-C2DH-HeLa/01 --pattern *.tif -e /home/anwai/.cache/micro_sam/embeddings/embeddings-ctc-vit_b_lm.zarr -o hela_ctc  # noqa
 if __name__ == "__main__":
     main()
