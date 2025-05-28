@@ -112,6 +112,8 @@ def automatic_tracking(
         generate_kwargs: optional keyword arguments for the generate function of the AMG or AIS class.
 
     Returns:
+        The tracking result as a timeseries, where each object is labeled by its track id.
+        The lineages representing cell divisions, stored as a dictionary.
     """
     # Load the input image file.
     if isinstance(input_path, np.ndarray):
@@ -341,22 +343,29 @@ def main():
     available_models = ", ".join(available_models)
 
     parser = argparse.ArgumentParser(
-        description="Run automatic segmentation for an image using either automatic instance segmentation (AIS) \n"
-        "or automatic mask generation (AMG). In addition to the arguments explained below,\n"
+        description="Run automatic segmentation or tracking for 2d, 3d or timeseries data.\n"
+        "Either a single input file or multiple input files are supported. You can specify multiple files "
+        "by either providing multiple filepaths to the '--i/--input_paths' argument, or by providing an argument "
+        "to '--pattern' to use a wildcard pattern ('*') for selecting multiple files.\n"
+        "NOTE: for automatic 3d segmentation or tracking the data has to be stored as volume / timeseries, "
+        "stacking individual tif images is not supported.\n"
+        "Segmentation is performed using one of the two modes supported by micro_sam: \n"
+        "automatic instance segmentation (AIS) or automatic mask generation (AMG).\n"
+        "In addition to the options listed below, "
         "you can also passed additional arguments for these two segmentation modes:\n"
         "For AIS: '--center_distance_threshold', '--boundary_distance_threshold' and other arguments of `InstanceSegmentationWithDecoder.generate`."  # noqa
         "For AMG: '--pred_iou_thresh', '--stability_score_thresh' and other arguments of `AutomaticMaskGenerator.generate`."  # noqa
     )
     parser.add_argument(
         "-i", "--input_path", required=True, type=str, nargs="+",
-        help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
+        help="The filepath(s) to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "  # noqa
         "or elf.io.open_file (e.g. hdf5, zarr, mrc). For the latter you also need to pass the 'key' parameter."
     )
     parser.add_argument(
         "-o", "--output_path", required=True, type=str,
-        help="The filepath to store the instance segmentation. If multiple inputs are provied, "
-        "this should be a folder. For a single image, you should provide the path to a tif file for the output segmentation"
-        "NOTE: The current saving mode support storing segmentations as 'tif' files."
+        help="The filepath to store the results. If multiple inputs are provied, "
+        "this should be a folder. For a single image, you should provide the path to a tif file for the output segmentation."  # noqa
+        "NOTE: Segmentation results are stored as tif files, tracking results in the CTC fil format ."
     )
     parser.add_argument(
         "-e", "--embedding_path", default=None, type=str,
