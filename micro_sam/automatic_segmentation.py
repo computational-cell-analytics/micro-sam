@@ -323,7 +323,7 @@ def _get_inputs_from_paths(paths, pattern):
 
     fpaths = []
     for path in paths:
-        if os.path.splitext(path)[-1]:  # It is just one filepath with a valid extension.
+        if os.path.isfile(path):  # It is just one filepath.
             fpaths.append(path)
         else:  # Otherwise, if the path is a directory, fetch all inputs provided with a pattern.
             assert pattern is not None, \
