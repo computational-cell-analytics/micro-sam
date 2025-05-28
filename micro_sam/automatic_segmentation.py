@@ -360,7 +360,7 @@ def main():
     )
     parser.add_argument(
         "-e", "--embedding_path", default=None, type=str,
-        help="The path where the embeddings will be saved. If multiple inputs are provided, "
+        help="An optional path where the embeddings will be saved. If multiple inputs are provided, "
         "this should be a folder. Otherwise you can store embeddings in single zarr file."
     )
     parser.add_argument(
