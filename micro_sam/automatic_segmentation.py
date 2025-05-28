@@ -355,7 +355,7 @@ def main():
     parser.add_argument(
         "-o", "--output_path", required=True, type=str,
         help="The filepath to store the instance segmentation. If multiple inputs are provied, "
-        "this should be a folder. Otherwise you cal store outputs in a single tif file for segmentation. "
+        "this should be a folder. For a single image, you should provide the path to a tif file for the output segmentation"
         "NOTE: The current saving mode support storing segmentations as 'tif' files."
     )
     parser.add_argument(
