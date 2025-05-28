@@ -210,7 +210,14 @@ def project_prediction_to_segmentation(
     """
     assert len(object_prediction) == len(seg_ids)
     prediction = {seg_id: class_pred for seg_id, class_pred in zip(seg_ids, object_prediction)}
-    prediction[0] = 0
+    # prediction[0] = 0
+    # Due to resizing in the acquisition of seg_ids it could happen that seg_ids is not ordered, e.g. [1, 2, 4, 5]
+    # because instance 3 was removed by the resizing process.
+    # In this case, we need to add the missing id with a prediction of 0.
+    for i in np.unique(segmentation):
+        if i not in seg_ids:
+            prediction[i] = 0
+
     return takeDict(prediction, segmentation)
 
 
