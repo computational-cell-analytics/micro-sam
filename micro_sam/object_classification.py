@@ -40,7 +40,6 @@ def _compute_object_features_impl(embeddings, segmentation, resize_embedding_sha
     # shape for efficiency reasons.
     resize_shape = tuple(min(rsh, sh) for rsh, sh in zip(resize_embedding_shape, shape)) + (embeddings.shape[-1],)
     embeddings = resize(embeddings, resize_shape, preserve_range=True).astype(embeddings.dtype)
-
     segmentation_rescaled = resize(
         segmentation_rescaled, embeddings.shape[:2], order=0, anti_aliasing=False, preserve_range=True
     ).astype(segmentation.dtype)
@@ -53,7 +52,6 @@ def _compute_object_features_impl(embeddings, segmentation, resize_embedding_sha
     features = pd.DataFrame(all_features)[
         ["area"] + [f"mean_intensity-{i}" for i in range(embeddings.shape[-1])]
     ].values
-
     return seg_ids, features
 
 
@@ -210,7 +208,14 @@ def project_prediction_to_segmentation(
     """
     assert len(object_prediction) == len(seg_ids)
     prediction = {seg_id: class_pred for seg_id, class_pred in zip(seg_ids, object_prediction)}
-    prediction[0] = 0
+    # prediction[0] = 0
+    # Due to resizing in the acquisition of seg_ids it could happen that seg_ids is not ordered, e.g. [1, 2, 4, 5]
+    # because instance 3 was removed by the resizing process.
+    # In this case, we need to add the missing id with a prediction of 0.
+    for i in np.unique(segmentation):
+        if i not in seg_ids:
+            prediction[i] = 0
+
     return takeDict(prediction, segmentation)
 
 
