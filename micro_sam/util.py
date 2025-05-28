@@ -545,27 +545,40 @@ def export_custom_qlora_model(
     # Step 2: Load the QLoRA-style finetuned model.
     ft_state, ft_model_state = _load_checkpoint(finetuned_path)
 
-    # Step 3: Get LoRA weights from QLoRA and retain all original parameters from the base SAM model.
+    # Step 3: Identify LoRA layers from QLoRA model.
+    # - differentiate between LoRA applied to the attention matrices and LoRA applied to the MLP layers.
+    # - then copy the LoRA layers from the QLoRA model to the new state dict
     updated_model_state = {}
 
-    # - At first, we get all LoRA layers from the QLoRA-style finetuned model checkpoint.
+    modified_attn_layers = set()
+    modified_mlp_layers = set()
+
     for k, v in ft_model_state.items():
-        if k.find("w_b_linear") != -1 or k.find("w_a_linear") != -1:
+        if "blocks." in k:
+            layer_id = int(k.split("blocks.")[1].split(".")[0])
+        if k.find("qkv.w_a_linear") != -1 or k.find("qkv.w_b_linear") != -1:
+            modified_attn_layers.add(layer_id)
+            updated_model_state[k] = v
+        if k.find("mlp.w_a_linear") != -1 or k.find("mlp.w_b_linear") != -1:
+            modified_mlp_layers.add(layer_id)
             updated_model_state[k] = v
 
-    # - Next, we get all the remaining parameters from the base SAM model.
+    # Step 4: Next, we get all the remaining parameters from the base SAM model.
     for k, v in sam.state_dict().items():
+        if "blocks." in k:
+            layer_id = int(k.split("blocks.")[1].split(".")[0])
         if k.find("attn.qkv.") != -1:
-            k = k.replace("qkv", "qkv.qkv_proj")
-            updated_model_state[k] = v
-        else:
+            if layer_id in modified_attn_layers:  # We have LoRA in QKV layers, so we need to modify the key
+                k = k.replace("qkv", "qkv.qkv_proj")
+        elif k.find("mlp") != -1 and k.find("image_encoder") != -1:
+            if layer_id in modified_mlp_layers:  # We have LoRA in MLP layers, so we need to modify the key
+                k = k.replace("mlp.", "mlp.mlp_layer.")
+        updated_model_state[k] = v
 
-            updated_model_state[k] = v
-
-    # - Finally, we replace the old model state with the new one (to retain other relevant stuff)
+    # Step 5: Finally, we replace the old model state with the new one (to retain other relevant stuff)
     ft_state['model_state'] = updated_model_state
 
-    # Step 4: Store the new "state" to "save_path"
+    # Step 6: Store the new "state" to "save_path"
     torch.save(ft_state, save_path)
 
 
@@ -631,6 +644,40 @@ def _compute_embeddings_batched(predictor, batched_images):
     return features, original_sizes, input_sizes
 
 
+# Wrapper of zarr.create dataset to support zarr v2 and zarr v3.
+def _create_dataset_with_data(group, name, data, chunks=None):
+    zarr_major_version = int(zarr.__version__.split(".")[0])
+    if chunks is None:
+        chunks = data.shape
+    if zarr_major_version == 2:
+        ds = group.create_dataset(
+            name, data=data, shape=data.shape, compression="gzip", chunks=chunks
+        )
+    elif zarr_major_version == 3:
+        ds = group.create_array(
+            name, shape=data.shape, compressors=[zarr.codecs.GzipCodec()], chunks=chunks, dtype=data.dtype,
+        )
+        ds[:] = data
+    else:
+        raise RuntimeError(f"Unsupported zarr version: {zarr_major_version}")
+    return ds
+
+
+def _create_dataset_without_data(group, name, shape, dtype, chunks):
+    zarr_major_version = int(zarr.__version__.split(".")[0])
+    if zarr_major_version == 2:
+        ds = group.create_dataset(
+            name, shape=shape, dtype=dtype, compression="gzip", chunks=chunks
+        )
+    elif zarr_major_version == 3:
+        ds = group.create_array(
+            name, shape=shape, compressors=[zarr.codecs.GzipCodec()], chunks=chunks, dtype=dtype
+        )
+    else:
+        raise RuntimeError(f"Unsupported zarr version: {zarr_major_version}")
+    return ds
+
+
 def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update, batch_size):
     tiling = blocking([0, 0], input_.shape[:2], tile_shape)
     n_tiles = tiling.numberOfBlocks
@@ -659,9 +706,7 @@ def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init
             tile_embeddings, original_size, input_size = batched_embeddings[i], original_sizes[i], input_sizes[i]
             # Unsqueeze the channel axis of the tile embeddings.
             tile_embeddings = tile_embeddings.unsqueeze(0)
-            ds = features.create_dataset(
-                str(tile_id), data=tile_embeddings.cpu().numpy(), compression="gzip", chunks=tile_embeddings.shape
-            )
+            ds = _create_dataset_with_data(features, str(tile_id), data=tile_embeddings.cpu().numpy())
             ds.attrs["original_size"] = original_size
             ds.attrs["input_size"] = input_size
             pbar_update(1)
@@ -708,8 +753,8 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init
                 if ds is None:
                     shape = (n_slices,) + tile_embeddings.shape
                     chunks = (1,) + tile_embeddings.shape
-                    ds = features.create_dataset(
-                        str(tile_id), shape=shape, dtype="float32", compression="gzip", chunks=chunks
+                    ds = _create_dataset_without_data(
+                        features, str(tile_id), shape=shape, dtype="float32", chunks=chunks
                     )
 
                 ds[z] = tile_embeddings.cpu().numpy()
@@ -745,7 +790,7 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
 
     # Save the embeddings if we have a save_path.
     if save_path is not None:
-        f.create_dataset("features", data=features, compression="gzip", chunks=features.shape)
+        _create_dataset_with_data(f, "features", data=features)
         _write_embedding_signature(
             f, input_, predictor, tile_shape=None, halo=None, input_size=input_size, original_size=original_size,
         )
@@ -797,7 +842,7 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_u
                 raise RuntimeError("Invalid partial features")
         else:
             partial_features = False
-            features = f.create_dataset("features", shape=shape, chunks=chunks, dtype="float32")
+            features = _create_dataset_without_data(f, "features", shape=shape, chunks=chunks, dtype="float32")
 
     # Initialize the pbar and batches.
     n_slices = input_.shape[0]
@@ -999,13 +1044,13 @@ def precompute_image_embeddings(
     # We have a save path and it already exists. Embeddings will be loaded from it,
     # check that the saved embeddings in there match the parameters of the function call.
     elif os.path.exists(save_path):
-        f = zarr.open(save_path, "a")
+        f = zarr.open(save_path, mode="a")
         _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo)
 
     # We have a save path and it does not exist yet. Create the zarr file to which the
     # embeddings will then be saved.
     else:
-        f = zarr.open(save_path, "a")
+        f = zarr.open(save_path, mode="a")
 
     _, pbar_init, pbar_update, pbar_close = handle_pbar(verbose, pbar_init, pbar_update)
 
@@ -1040,7 +1085,7 @@ def set_precomputed(
         The predictor with set features.
     """
     if tile_id is not None:
-        tile_features = image_embeddings["features"][tile_id]
+        tile_features = image_embeddings["features"][str(tile_id)]
         tile_image_embeddings = {
             "features": tile_features,
             "input_size": tile_features.attrs["input_size"],

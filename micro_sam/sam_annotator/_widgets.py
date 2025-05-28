@@ -675,10 +675,10 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
         g = f.create_group(f"prompts/{object_id}")
         if prompts is not None and len(prompts) > 0:
             data = np.array(prompts)
-            g.create_dataset("prompts", data=data, chunks=data.shape)
+            g.create_dataset("prompts", data=data, shape=data.shape, chunks=data.shape)
         if point_prompts is not None and len(point_prompts) > 0:
-            g.create_dataset("point_prompts", data=point_prompts, chunks=point_prompts.shape)
-            ds = g.create_dataset("point_labels", data=point_labels, chunks=point_labels.shape)
+            g.create_dataset("point_prompts", data=point_prompts, shape=data.shape, chunks=point_prompts.shape)
+            ds = g.create_dataset("point_labels", data=point_labels, shape=data.shape, chunks=point_labels.shape)
             if track_state is not None:
                 ds.attrs["track_state"] = track_state.tolist()
 
@@ -1340,7 +1340,7 @@ class EmbeddingWidget(_WidgetBase):
         # and we ask the user if they want to load these embeddings.
         if self.embeddings_save_path and os.listdir(self.embeddings_save_path):
             try:
-                f = zarr.open(self.embeddings_save_path, "a")
+                f = zarr.open(self.embeddings_save_path, mode="a")
 
                 # Validate that the embeddings are complete.
                 # Note: 'input_size' is the last value set in the attrs of f,

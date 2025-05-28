@@ -378,8 +378,8 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             data_min, data_max = x.min(), x.max()
             if (data_min < 0) or (data_max < 1):
                 warnings.warn(
-                    "It looks like you are normalizing the training data."
-                    "The SAM model takes care of normalization, so it is better to not do this."
+                    "It looks like you are normalizing the training data. "
+                    "The SAM model takes care of normalization, so it is better to not do this. "
                     "We recommend to remove data normalization and input data in the range [0, 255]."
                 )
             input_check_done = True
