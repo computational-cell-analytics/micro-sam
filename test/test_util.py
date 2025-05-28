@@ -113,9 +113,9 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        with zarr.open(save_path, "r") as f:
-            self.assertIn("features", f)
-            self.assertEqual(f["features"].shape, (1, 256, 64, 64))
+        f = zarr.open(save_path, mode="r")
+        self.assertIn("features", f)
+        self.assertEqual(f["features"].shape, (1, 256, 64, 64))
 
         # Check that everything still works when we load the image embeddings from file.
         embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path)
@@ -129,7 +129,8 @@ class TestUtil(unittest.TestCase):
         input_ = np.random.rand(3, 512, 512).astype("float32")
 
         # Compute the image embeddings without save path.
-        embeddings = precompute_image_embeddings(predictor, input_, ndim=3)
+        # We run this test with a batch size of 2.
+        embeddings = precompute_image_embeddings(predictor, input_, ndim=3, batch_size=2)
         for i in range(input_.shape[0]):
             self._check_predictor_initialization(predictor, embeddings, i=i)
 
@@ -141,9 +142,9 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        with zarr.open(save_path, "r") as f:
-            self.assertIn("features", f)
-            self.assertEqual(f["features"].shape, (3, 1, 256, 64, 64))
+        f = zarr.open(save_path, mode="r")
+        self.assertIn("features", f)
+        self.assertEqual(f["features"].shape, (3, 1, 256, 64, 64))
 
         # Check that everything still works when we load the image embeddings from file.
         embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=3)
@@ -159,7 +160,8 @@ class TestUtil(unittest.TestCase):
         input_ = np.random.rand(512, 512).astype("float32")
 
         # Compute the image embeddings without save path.
-        embeddings = precompute_image_embeddings(predictor, input_, tile_shape=tile_shape, halo=halo)
+        # We run this test with a batch size of 2.
+        embeddings = precompute_image_embeddings(predictor, input_, tile_shape=tile_shape, halo=halo, batch_size=2)
         for tile_id in range(4):
             self._check_predictor_initialization(predictor, embeddings, tile_id=tile_id)
 
@@ -171,9 +173,9 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        with zarr.open(save_path, "r") as f:
-            self.assertIn("features", f)
-            self.assertEqual(len(f["features"]), 4)
+        f = zarr.open(save_path, mode="r")
+        self.assertIn("features", f)
+        self.assertEqual(len(f["features"]), 4)
 
         # Check that everything still works when we load the image embeddings from file.
         precompute_image_embeddings(predictor, input_, save_path=save_path, tile_shape=tile_shape, halo=halo)
@@ -189,7 +191,8 @@ class TestUtil(unittest.TestCase):
         input_ = np.random.rand(2, 512, 512).astype("float32")
 
         # Compute the image embeddings without save path.
-        embeddings = precompute_image_embeddings(predictor, input_, tile_shape=tile_shape, halo=halo)
+        # We run this test with a batch size of 2.
+        embeddings = precompute_image_embeddings(predictor, input_, tile_shape=tile_shape, halo=halo, batch_size=2)
         for i in range(2):
             for tile_id in range(4):
                 self._check_predictor_initialization(predictor, embeddings, i=i, tile_id=tile_id)
@@ -205,9 +208,9 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        with zarr.open(save_path, "r") as f:
-            self.assertIn("features", f)
-            self.assertEqual(len(f["features"]), 4)
+        f = zarr.open(save_path, mode="r")
+        self.assertIn("features", f)
+        self.assertEqual(len(f["features"]), 4)
 
         # Check that everything still works when we load the image embeddings from file.
         embeddings = precompute_image_embeddings(

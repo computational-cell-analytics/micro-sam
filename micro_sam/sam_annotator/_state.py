@@ -5,7 +5,7 @@ https://itnext.io/deciding-the-best-singleton-approach-in-python-65c61e90cdc4
 
 from functools import partial
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import zarr
 import numpy as np
@@ -14,6 +14,7 @@ from qtpy.QtWidgets import QWidget
 
 import torch.nn as nn
 
+import micro_sam
 import micro_sam.util as util
 from micro_sam.instance_segmentation import AMGBase, get_decoder
 from micro_sam.precompute_state import cache_amg_state, cache_is_state
@@ -48,6 +49,7 @@ class AnnotatorState(metaclass=Singleton):
     image_name: Optional[str] = None
     embedding_path: Optional[str] = None
     data_signature: Optional[str] = None
+    skip_recomputing_embeddings: Optional[bool] = None
 
     # amg: needs to be initialized for the automatic segmentation functionality.
     # amg_state: for storing the instance segmentation state for the 3d segmentation tool.
@@ -68,6 +70,20 @@ class AnnotatorState(metaclass=Singleton):
     # z-range to limit the data being committed in 3d / tracking.
     z_range: Optional[Tuple[int, int]] = None
 
+    # annotator_class
+    annotator: Optional["micro_sam.sam_annotator._annotator._AnnotatorBase"] = None
+
+    # Extra options for object classification.
+    object_features: Optional[np.ndarray] = None
+    seg_ids: Optional[np.ndarray] = None
+    # TODO use RF class
+    object_rf: Optional[Any] = None
+    # TODO use proper class
+    segmentation_selection: Optional[Any] = None
+    # For image_series_object_classifier
+    previous_features: Optional[np.ndarray] = None
+    previous_labels: Optional[np.ndarray] = None
+
     def initialize_predictor(
         self,
         image_data,
@@ -85,14 +101,20 @@ class AnnotatorState(metaclass=Singleton):
         pbar_init=None,
         pbar_update=None,
         skip_load=True,
+        use_cli=False,
     ):
         assert ndim in (2, 3)
 
         # Initialize the model if necessary.
         if predictor is None:
+            def progress_bar_factory(model_type):
+                pbar = tqdm(desc=f"Downloading '{model_type}'. This may take a while")
+                return pbar
+
             self.predictor, state = util.get_sam_model(
                 device=device, model_type=model_type,
-                checkpoint_path=checkpoint_path, return_state=True
+                checkpoint_path=checkpoint_path, return_state=True,
+                progress_bar_factory=None if use_cli else progress_bar_factory,
             )
             if prefer_decoder and "decoder_state" in state:
                 self.decoder = get_decoder(
@@ -127,8 +149,8 @@ class AnnotatorState(metaclass=Singleton):
         # If we have an embedding path the data signature has already been computed,
         # and we can read it from there.
         if save_path is not None and isinstance(save_path, str):
-            with zarr.open(save_path, "r") as f:
-                self.data_signature = f.attrs["data_signature"]
+            f = zarr.open(save_path, mode="r")
+            self.data_signature = f.attrs["data_signature"]
 
         # Otherwise we compute it here.
         else:

@@ -36,11 +36,11 @@ def cache_amg_state(
     """Compute and cache or load the state for the automatic mask generator.
 
     Args:
-        predictor: The segment anything predictor.
+        predictor: The Segment Anything predictor.
         raw: The image data.
         image_embeddings: The image embeddings.
         save_path: The embedding save path. The AMG state will be stored in 'save_path/amg_state.pickle'.
-        verbose: Whether to run the computation verbose.
+        verbose: Whether to run the computation verbose. By default, set to 'True'.
         i: The index for which to cache the state.
         kwargs: The keyword arguments for the amg class.
 
@@ -101,14 +101,14 @@ def cache_is_state(
     """Compute and cache or load the state for the automatic mask generator.
 
     Args:
-        predictor: The segment anything predictor.
+        predictor: The Segment Anything predictor.
         decoder: The instance segmentation decoder.
         raw: The image data.
         image_embeddings: The image embeddings.
         save_path: The embedding save path. The AMG state will be stored in 'save_path/amg_state.pickle'.
-        verbose: Whether to run the computation verbose.
+        verbose: Whether to run the computation verbose. By default, set to 'True'.
         i: The index for which to cache the state.
-        skip_load: Skip loading the state if it is precomputed.
+        skip_load: Skip loading the state if it is precomputed. By default, set to 'False'.
         kwargs: The keyword arguments for the amg class.
 
     Returns:
@@ -202,10 +202,11 @@ def _precompute_state_for_files(
     decoder: Optional["nn.Module"] = None,
 ):
     os.makedirs(output_path, exist_ok=True)
-    for i, file_path in enumerate(tqdm(input_files, total=len(input_files), desc="Precompute state for files")):
+    idx = 0
+    for file_path in tqdm(input_files, total=len(input_files), desc="Precompute state for files"):
 
         if isinstance(file_path, np.ndarray):
-            out_path = os.path.join(output_path, f"embedding_{i:05}.tif")
+            out_path = os.path.join(output_path, f"embedding_{idx:05}.tif")
         else:
             out_path = os.path.join(output_path, os.path.basename(file_path))
 
@@ -215,6 +216,7 @@ def _precompute_state_for_files(
             precompute_amg_state=precompute_amg_state, decoder=decoder,
             verbose=False,
         )
+        idx += 1
 
 
 def precompute_state(
@@ -239,13 +241,13 @@ def precompute_state(
         output_path: The output path where the embeddings and other state will be saved.
         pattern: Glob pattern to select files in a folder. The embeddings will be computed
             for each of these files. To select all files in a folder pass "*".
-        model_type: The SegmentAnything model to use. Will use the standard vit_l model by default.
+        model_type: The Segment Anything model to use. Will use the `vit_b_lm` model by default.
         checkpoint_path: Path to a checkpoint for a custom model.
         key: The key to the input file. This is needed for contaner files (e.g. hdf5 or zarr)
             or to load several images as 3d volume. Provide a glob pattern, e.g. "*.tif", for this case.
-        ndim: The dimensionality of the data.
+        ndim: The dimensionality of the data. By default, computes it from the input data.
         tile_shape: Shape of tiles for tiled prediction. By default prediction is run without tiling.
-        halo: Overlap of the tiles for tiled prediction.
+        halo: Overlap of the tiles for tiled prediction. By default prediction is run without tiling.
         precompute_amg_state: Whether to precompute the state for automatic instance segmentation
             in addition to the image embeddings.
     """

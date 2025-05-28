@@ -1,6 +1,6 @@
 # I2K Workshop: Segment Anything for Microscopy 
 
-This document walks you through the preparation for the upcoming I2K workshops on "Segment Anything for Microscopy". We will give two workshops:
+This document walks you through the preparation for the I2K workshops on "Segment Anything for Microscopy". We will give two workshops:
 1. In person at I2K 2024 (Milan, Italy)
 2. Online at Virtual I2K 2024
 

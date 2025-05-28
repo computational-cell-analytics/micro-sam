@@ -3,6 +3,7 @@ import time
 import warnings
 from glob import glob
 from tqdm import tqdm
+from collections import OrderedDict
 from contextlib import contextmanager, nullcontext
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -27,8 +28,9 @@ except Exception:
 
 from . import sam_trainer as trainers
 from ..instance_segmentation import get_unetr
+from ..models.peft_sam import ClassicalSurgery
 from . import joint_sam_trainer as joint_trainers
-from ..util import get_device, get_model_names, export_custom_sam_model
+from ..util import get_device, get_model_names, export_custom_sam_model, get_sam_model
 from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit, get_raw_transform
 
 
@@ -165,6 +167,32 @@ def _count_parameters(model_parameters):
     print(f"The number of trainable parameters for the provided model is {params} (~{round(params, 2)}M)")
 
 
+def _get_trainer_fit_params(n_epochs, n_iterations, save_every_kth_epoch, pbar_signals, overwrite_training):
+    if n_iterations is None:
+        trainer_fit_params = {"epochs": n_epochs}
+    else:
+        trainer_fit_params = {"iterations": n_iterations}
+
+    if save_every_kth_epoch is not None:
+        trainer_fit_params["save_every_kth_epoch"] = save_every_kth_epoch
+
+    if pbar_signals is not None:
+        progress_bar_wrapper = _ProgressBarWrapper(pbar_signals)
+        trainer_fit_params["progress"] = progress_bar_wrapper
+
+    # Avoid overwriting a trained model, if desired by the user.
+    trainer_fit_params["overwrite_training"] = overwrite_training
+    return trainer_fit_params
+
+
+def _get_optimizer_and_scheduler(model_params, lr, optimizer_class, scheduler_class, scheduler_kwargs):
+    optimizer = optimizer_class(model_params, lr=lr)
+    if scheduler_kwargs is None:
+        scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
+    scheduler = scheduler_class(optimizer=optimizer, **scheduler_kwargs)
+    return optimizer, scheduler
+
+
 def train_sam(
     name: str,
     model_type: str,
@@ -191,6 +219,7 @@ def train_sam(
     ignore_warnings: bool = True,
     verify_n_labels_in_loader: Optional[int] = 50,
     box_distortion_factor: Optional[float] = 0.025,
+    overwrite_training: bool = True,
     **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
@@ -202,34 +231,41 @@ def train_sam(
         val_loader: The dataloader for validation.
         n_epochs: The number of epochs to train for.
         early_stopping: Enable early stopping after this number of epochs without improvement.
+            By default, the value is set to '10' epochs.
         n_objects_per_batch: The number of objects per batch used to compute
             the loss for interative segmentation. If None all objects will be used,
-            if given objects will be randomly sub-sampled.
+            if given objects will be randomly sub-sampled. By default, the number of objects per batch are '25'.
         checkpoint_path: Path to checkpoint for initializing the SAM model.
         with_segmentation_decoder: Whether to train additional UNETR decoder for automatic instance segmentation.
+            By default, trains with the additional instance segmentation decoder.
         freeze: Specify parts of the model that should be frozen, namely: image_encoder, prompt_encoder and mask_decoder
             By default nothing is frozen and the full model is updated.
-        device: The device to use for training.
-        lr: The learning rate.
+        device: The device to use for training. By default, automatically chooses the best available device to train.
+        lr: The learning rate. By default, set to '1e-5'.
         n_sub_iteration: The number of iterative prompts per training iteration.
+            By default, the number of iterations is set to '8'.
         save_root: Optional root directory for saving the checkpoints and logs.
             If not given the current working directory is used.
         mask_prob: The probability for using a mask as input in a given training sub-iteration.
-        n_iterations: The number of iterations to use for training. This will over-ride n_epochs if given.
+            By default, set to '0.5'.
+        n_iterations: The number of iterations to use for training. This will over-ride `n_epochs` if given.
         scheduler_class: The learning rate scheduler to update the learning rate.
-            By default, torch.optim.lr_scheduler.ReduceLROnPlateau is used.
+            By default, `torch.optim.lr_scheduler.ReduceLROnPlateau` is used.
         scheduler_kwargs: The learning rate scheduler parameters.
-            If passed None, the chosen default parameters are used in ReduceLROnPlateau.
+            If passed 'None', the chosen default parameters are used in `ReduceLROnPlateau`.
         save_every_kth_epoch: Save checkpoints after every kth epoch separately.
         pbar_signals: Controls for napari progress bar.
-        optimizer_class: The optimizer class.
-            By default, torch.optim.AdamW is used.
+        optimizer_class: The optimizer class. By default, `torch.optim.AdamW` is used.
         peft_kwargs: Keyword arguments for the PEFT wrapper class.
-        ignore_warnings: Whether to ignore raised warnings.
+        ignore_warnings: Whether to ignore raised warnings. By default, set to 'True'.
         verify_n_labels_in_loader: The number of labels to verify out of the train and validation dataloaders.
             By default, 50 batches of labels are verified from the dataloaders.
         box_distortion_factor: The factor for distorting the box annotations derived from the ground-truth masks.
-        model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
+            By default, the distortion factor is set to '0.025'.
+        overwrite_training: Whether to overwrite the trained model stored at the same location.
+            By default, overwrites the trained model at each run.
+            If set to 'False', it will avoid retraining the model if the previous run was completed.
+        model_kwargs: Additional keyword arguments for the `micro_sam.util.get_sam_model`.
     """
     with _filter_warnings(ignore_warnings):
 
@@ -273,12 +309,9 @@ def train_sam(
         else:
             model_params = model.parameters()
 
-        optimizer = optimizer_class(model_params, lr=lr)
-
-        if scheduler_kwargs is None:
-            scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 3, "verbose": True}
-
-        scheduler = scheduler_class(optimizer=optimizer, **scheduler_kwargs)
+        optimizer, scheduler = _get_optimizer_and_scheduler(
+            model_params, lr, optimizer_class, scheduler_class, scheduler_kwargs
+        )
 
         # The trainer which performs training and validation.
         if with_segmentation_decoder:
@@ -326,18 +359,175 @@ def train_sam(
                 save_root=save_root,
             )
 
-        if n_iterations is None:
-            trainer_fit_params = {"epochs": n_epochs}
-        else:
-            trainer_fit_params = {"iterations": n_iterations}
+        trainer_fit_params = _get_trainer_fit_params(
+            n_epochs, n_iterations, save_every_kth_epoch, pbar_signals, overwrite_training
+        )
+        trainer.fit(**trainer_fit_params)
 
-        if save_every_kth_epoch is not None:
-            trainer_fit_params["save_every_kth_epoch"] = save_every_kth_epoch
+        t_run = time.time() - t_start
+        hours = int(t_run // 3600)
+        minutes = int(t_run // 60)
+        seconds = int(round(t_run % 60, 0))
+        print("Training took", t_run, f"seconds (= {hours:02}:{minutes:02}:{seconds:02} hours)")
 
-        if pbar_signals is not None:
-            progress_bar_wrapper = _ProgressBarWrapper(pbar_signals)
-            trainer_fit_params["progress"] = progress_bar_wrapper
 
+def export_instance_segmentation_model(
+    trained_model_path: Union[str, os.PathLike],
+    output_path: Union[str, os.PathLike],
+    model_type: str,
+    initial_checkpoint_path: Optional[Union[str, os.PathLike]] = None,
+) -> None:
+    """Export a model trained for instance segmentation with `train_instance_segmentation`.
+
+    The exported model will be compatible with the micro_sam functions, CLI and napari plugin.
+    It should only be used for automatic segmentation and may not work well for interactive segmentation.
+
+    Args:
+        trained_model_path: The path to the checkpoint of the model trained for instance segmentation.
+        output_path: The path where the exported model will be saved.
+        model_type: The model type.
+        initial_checkpoint_path: The initial checkpoint path the instance segmentation training was based on (optional).
+    """
+    trained_state = torch.load(trained_model_path, weights_only=False, map_location="cpu")["model_state"]
+
+    # Get the state of the encoder and instance segmentation decoder from the trained checkpoint.
+    encoder_state = OrderedDict([(k, v) for k, v in trained_state.items() if k.startswith("encoder")])
+    decoder_state = OrderedDict([(k, v) for k, v in trained_state.items() if not k.startswith("encoder")])
+
+    # Load the original state of the model that was used as the basis of instance segmentation training.
+    _, model_state = get_sam_model(
+        model_type=model_type, checkpoint_path=initial_checkpoint_path, return_state=True, device="cpu",
+    )
+    # Remove the sam prefix if it's in the model state.
+    prefix = "sam."
+    model_state = OrderedDict(
+        [(k[len(prefix):] if k.startswith(prefix) else k, v) for k, v in model_state.items()]
+    )
+
+    # Replace the image encoder state.
+    model_state = OrderedDict(
+        [(k, encoder_state[k[6:]] if k.startswith("image_encoder") else v)
+         for k, v in model_state.items()]
+    )
+
+    save_state = {"model_state": model_state, "decoder_state": decoder_state}
+    torch.save(save_state, output_path)
+
+
+def train_instance_segmentation(
+    name: str,
+    model_type: str,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    n_epochs: int = 100,
+    early_stopping: Optional[int] = 10,
+    loss: torch.nn.Module = torch_em.loss.DiceBasedDistanceLoss(mask_distances_in_bg=True),
+    metric: Optional[torch.nn.Module] = None,
+    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
+    freeze: Optional[List[str]] = None,
+    device: Optional[Union[str, torch.device]] = None,
+    lr: float = 1e-5,
+    save_root: Optional[Union[str, os.PathLike]] = None,
+    n_iterations: Optional[int] = None,
+    scheduler_class: Optional[_LRScheduler] = torch.optim.lr_scheduler.ReduceLROnPlateau,
+    scheduler_kwargs: Optional[Dict[str, Any]] = None,
+    save_every_kth_epoch: Optional[int] = None,
+    pbar_signals: Optional[QObject] = None,
+    optimizer_class: Optional[Optimizer] = torch.optim.AdamW,
+    peft_kwargs: Optional[Dict] = None,
+    ignore_warnings: bool = True,
+    overwrite_training: bool = True,
+    **model_kwargs,
+) -> None:
+    """Train a UNETR for instance segmentation using the SAM encoder as backbone.
+
+    This setting corresponds to training a SAM model with an instance segmentation decoder,
+    without training the model parts for interactive segmentation,
+    i.e. without training the prompt encoder and mask decoder.
+
+    The checkpoint of the trained model, which will be saved in 'checkpoints/<name>',
+    will not be compatible with the micro_sam functionality.
+    You can call the function `export_instance_segmentation_model` with the path to the checkpoint to export it
+    in a format that is compatible with micro_sam functionality.
+    Note that the exported model should only be used for automatic segmentation via AIS.
+
+    Args:
+        name: The name of the model to be trained. The checkpoint and logs will have this name.
+        model_type: The type of the SAM model.
+        train_loader: The dataloader for training.
+        val_loader: The dataloader for validation.
+        n_epochs: The number of epochs to train for.
+        early_stopping: Enable early stopping after this number of epochs without improvement.
+            By default, the value is set to '10' epochs.
+        loss: The loss function to train the instance segmentation model.
+            By default, the value is set to 'torch_em.loss.DiceBasedDistanceLoss'
+        metric: The metric for the instance segmentation training.
+            By default the loss function is used as the metric.
+        checkpoint_path: Path to checkpoint for initializing the SAM model.
+        freeze: Specify parts of the model that should be frozen. Here, only the image_encoder can be frozen.
+            By default nothing is frozen and the full model is updated.
+        device: The device to use for training. By default, automatically chooses the best available device to train.
+        lr: The learning rate. By default, set to '1e-5'.
+        save_root: Optional root directory for saving the checkpoints and logs.
+            If not given the current working directory is used.
+        n_iterations: The number of iterations to use for training. This will over-ride `n_epochs` if given.
+        scheduler_class: The learning rate scheduler to update the learning rate.
+            By default, `torch.optim.lr_scheduler.ReduceLROnPlateau` is used.
+        scheduler_kwargs: The learning rate scheduler parameters.
+            If passed 'None', the chosen default parameters are used in `ReduceLROnPlateau`.
+        save_every_kth_epoch: Save checkpoints after every kth epoch separately.
+        pbar_signals: Controls for napari progress bar.
+        optimizer_class: The optimizer class. By default, `torch.optim.AdamW` is used.
+        peft_kwargs: Keyword arguments for the PEFT wrapper class.
+        ignore_warnings: Whether to ignore raised warnings. By default, set to 'True'.
+        overwrite_training: Whether to overwrite the trained model stored at the same location.
+            By default, overwrites the trained model at each run.
+            If set to 'False', it will avoid retraining the model if the previous run was completed.
+        model_kwargs: Additional keyword arguments for the `micro_sam.util.get_sam_model`.
+    """
+
+    with _filter_warnings(ignore_warnings):
+        t_start = time.time()
+
+        sam_model, state = get_trainable_sam_model(
+            model_type=model_type,
+            device=device,
+            checkpoint_path=checkpoint_path,
+            return_state=True,
+            peft_kwargs=peft_kwargs,
+            freeze=freeze,
+            **model_kwargs
+        )
+        device = get_device(device)
+        model = get_unetr(
+            image_encoder=sam_model.sam.image_encoder,
+            decoder_state=state.get("decoder_state", None),
+            device=device,
+        )
+
+        optimizer, scheduler = _get_optimizer_and_scheduler(
+            model.parameters(), lr, optimizer_class, scheduler_class, scheduler_kwargs
+        )
+        trainer = torch_em.trainer.DefaultTrainer(
+            name=name,
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            device=device,
+            mixed_precision=True,
+            log_image_interval=50,
+            compile_model=False,
+            save_root=save_root,
+            loss=loss,
+            metric=loss if metric is None else metric,
+            optimizer=optimizer,
+            lr_scheduler=scheduler,
+            early_stopping=early_stopping,
+        )
+
+        trainer_fit_params = _get_trainer_fit_params(
+            n_epochs, n_iterations, save_every_kth_epoch, pbar_signals, overwrite_training
+        )
         trainer.fit(**trainer_fit_params)
 
         t_run = time.time() - t_start
@@ -388,6 +578,7 @@ def default_sam_dataset(
     patch_shape: Tuple[int],
     with_segmentation_decoder: bool,
     with_channels: Optional[bool] = None,
+    train_instance_segmentation_only: bool = False,
     sampler: Optional[Callable] = None,
     raw_transform: Optional[Callable] = None,
     n_samples: Optional[int] = None,
@@ -410,18 +601,38 @@ def default_sam_dataset(
         patch_shape: The shape for training patches.
         with_segmentation_decoder: Whether to train with additional segmentation decoder.
         with_channels: Whether the image data has channels. By default, it makes the decision based on inputs.
+        train_instance_segmentation_only: Set this argument to True in order to
+            pass the dataset to `train_instance_segmentation`. By default, set to 'False'.
         sampler: A sampler to reject batches according to a given criterion.
         raw_transform: Transformation applied to the image data.
             If not given the data will be cast to 8bit.
         n_samples: The number of samples for this dataset.
-        is_train: Whether this dataset is used for training or validation.
-        min_size: Minimal object size. Smaller objects will be filtered.
+        is_train: Whether this dataset is used for training or validation. By default, set to 'True'.
+        min_size: Minimal object size. Smaller objects will be filtered. By default, set to '25'.
         max_sampling_attempts: Number of sampling attempts to make from a dataset.
         kwargs: Additional keyword arguments for `torch_em.default_segmentation_dataset`.
 
     Returns:
         The segmentation dataset.
     """
+
+    # Check if this dataset should be used for instance segmentation only training.
+    # If yes, we set return_instances to False, since the instance channel must not
+    # be passed for this training mode.
+    return_instances = True
+    if train_instance_segmentation_only:
+        if not with_segmentation_decoder:
+            raise ValueError(
+                "If 'train_instance_segmentation_only' is True, then 'with_segmentation_decoder' must also be True."
+            )
+        return_instances = False
+
+    # If a sampler is not passed, then we set a MinInstanceSampler, which requires 3 distinct instances per sample.
+    # This is necessary, because training for interactive segmentation does not work on 'empty' images.
+    # However, if we train only the automatic instance segmentation decoder, then this sampler is not required
+    # and we do not set a default sampler.
+    if sampler is None and not train_instance_segmentation_only:
+        sampler = torch_em.data.sampler.MinInstanceSampler(2, min_size=min_size)
 
     # By default, let the 'default_segmentation_dataset' heuristic decide for itself.
     is_seg_dataset = kwargs.pop("is_seg_dataset", None)
@@ -463,15 +674,11 @@ def default_sam_dataset(
             boundary_distances=True,
             directed_distances=False,
             foreground=True,
-            instances=True,
+            instances=return_instances,
             min_size=min_size,
         )
     else:
         label_transform = torch_em.transform.label.MinSizeLabelTransform(min_size=min_size)
-
-    # Set a default sampler if none was passed.
-    if sampler is None:
-        sampler = torch_em.data.sampler.MinInstanceSampler(3, min_size=min_size)
 
     # Check the patch shape to add a singleton if required.
     patch_shape = _update_patch_shape(
@@ -545,10 +752,16 @@ CONFIGURATIONS = {
     "Minimal": {"model_type": "vit_t", "n_objects_per_batch": 4, "n_sub_iteration": 4},
     "CPU": {"model_type": "vit_b", "n_objects_per_batch": 10},
     "gtx1080": {"model_type": "vit_t", "n_objects_per_batch": 5},
+    "gtx3080": {
+        "model_type": "vit_b", "n_objects_per_batch": 5,
+        "peft_kwargs": {"attention_layers_to_update": [11], "peft_module": ClassicalSurgery}
+    },
     "rtx5000": {"model_type": "vit_b", "n_objects_per_batch": 10},
     "V100": {"model_type": "vit_b"},
     "A100": {"model_type": "vit_h"},
 }
+"""Best training configurations for given hardware resources.
+"""
 
 
 def _find_best_configuration():
@@ -566,23 +779,22 @@ def _find_best_configuration():
             return "V100"
         elif vram > 14:  # More than 14 GB: use the RTX5000 configurations.
             return "rtx5000"
+        elif vram > 8:  # More than 8 GB: use the GTX3080 configurations.
+            return "gtx3080"
         else:  # Otherwise: not enough memory to train on the GPU, use CPU instead.
             return "CPU"
     else:
         return "CPU"
 
 
-"""Best training configurations for given hardware resources.
-"""
-
-
 def train_sam_for_configuration(
     name: str,
-    configuration: str,
     train_loader: DataLoader,
     val_loader: DataLoader,
+    configuration: Optional[str] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     with_segmentation_decoder: bool = True,
+    train_instance_segmentation_only: bool = False,
     model_type: Optional[str] = None,
     **kwargs,
 ) -> None:
@@ -592,19 +804,24 @@ def train_sam_for_configuration(
     The available configurations are listed in `CONFIGURATIONS`.
 
     Args:
-        name: The name of the model to be trained.
-            The checkpoint and logs wil have this name.
-        configuration: The configuration (= name of hardware resource).
+        name: The name of the model to be trained. The checkpoint and logs folder will have this name.
         train_loader: The dataloader for training.
         val_loader: The dataloader for validation.
+        configuration: The configuration (= name of hardware resource).
+            By default, it is automatically selected for the best VRAM combination.
         checkpoint_path: Path to checkpoint for initializing the SAM model.
-        with_segmentation_decoder: Whether to train additional UNETR decoder
-            for automatic instance segmentation.
+        with_segmentation_decoder: Whether to train additional UNETR decoder for automatic instance segmentation.
+            By default, trains with the additional instance segmentation decoder.
+        train_instance_segmentation_only: Whether to train a model only for automatic instance segmentation
+            using the training implementation `train_instance_segmentation`. By default, `train_sam` is used.
         model_type: Over-ride the default model type.
             This can be used to use one of the micro_sam models as starting point
             instead of a default sam model.
         kwargs: Additional keyword parameters that will be passed to `train_sam`.
     """
+    if configuration is None:  # Automatically choose based on available VRAM combination.
+        configuration = _find_best_configuration()
+
     if configuration in CONFIGURATIONS:
         train_kwargs = CONFIGURATIONS[configuration]
     else:
@@ -618,15 +835,26 @@ def train_sam_for_configuration(
             warnings.warn("You have specified a different model type.")
 
     train_kwargs.update(**kwargs)
-    train_sam(
-        name=name,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        checkpoint_path=checkpoint_path,
-        with_segmentation_decoder=with_segmentation_decoder,
-        model_type=model_type,
-        **train_kwargs
-    )
+    if train_instance_segmentation_only:
+        train_instance_segmentation(
+            name=name,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            checkpoint_path=checkpoint_path,
+            with_segmentation_decoder=with_segmentation_decoder,
+            model_type=model_type,
+            **train_kwargs
+        )
+    else:
+        train_sam(
+            name=name,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            checkpoint_path=checkpoint_path,
+            with_segmentation_decoder=with_segmentation_decoder,
+            model_type=model_type,
+            **train_kwargs
+        )
 
 
 def _export_helper(save_root, checkpoint_name, output_path, model_type, with_segmentation_decoder, val_loader):
@@ -685,6 +913,21 @@ def _export_helper(save_root, checkpoint_name, output_path, model_type, with_seg
     return final_path
 
 
+def _parse_segmentation_decoder(segmentation_decoder):
+    if segmentation_decoder in ("None", "none"):
+        with_segmentation_decoder, train_instance_segmentation_only = False, False
+    elif segmentation_decoder == "instances":
+        with_segmentation_decoder, train_instance_segmentation_only = True, False
+    elif segmentation_decoder == "instances_only":
+        with_segmentation_decoder, train_instance_segmentation_only = True, True
+    else:
+        raise ValueError(
+            "The 'segmentation_decoder' argument currently supports the values:\n"
+            f"'instances', 'instances_only', or 'None'. You have passed {segmentation_decoder}."
+        )
+    return with_segmentation_decoder, train_instance_segmentation_only
+
+
 def main():
     """@private"""
     import argparse
@@ -740,10 +983,24 @@ def main():
         "--configuration", type=str, default=_find_best_configuration(),
         help=f"The configuration for finetuning the Segment Anything Model, one of {available_configurations}."
     )
+
+    def none_or_str(value):
+        if value.lower() == 'none':
+            return None
+        return value
+
+    # This could be extended to train for semantic segmentation or other options.
     parser.add_argument(
-        "--segmentation_decoder", type=str, default="instances",  # TODO: in future, we can extend this to semantic seg.
-        help="Whether to finetune Segment Anything Model with additional segmentation decoder for desired targets. "
-        "By default, it trains with the additional segmentation decoder for instance segmentation."
+        "--segmentation_decoder", type=none_or_str, default="instances",
+        help="Whether to finetune Segment Anything Model with an additional segmentation decoder. "
+        "The following options are possible:\n"
+        "- 'instances' to train with an additional decoder for automatic instance segmentation. "
+        "  This option enables using the automatic instance segmentation (AIS) mode.\n"
+        "- 'instances_only' to train only the instance segmentation decoder. "
+        "  In this case the parts of SAM that are used for interactive segmentation will not be trained.\n"
+        "- 'None' to train without an additional segmentation decoder."
+        "  This options trains only the parts of the original SAM.\n"
+        "By default the option 'instances' is used."
     )
 
     # Optional advanced settings a user can opt to change the values for.
@@ -754,7 +1011,8 @@ def main():
     )
     parser.add_argument(
         "--patch_shape", type=int, nargs="*", default=(512, 512),
-        help="The choice of patch shape for training Segment Anything."
+        help="The choice of patch shape for training Segment Anything Model. "
+        "By default, a patch size of 512x512 is used."
     )
     parser.add_argument(
         "-m", "--model_type", type=str, default=None,
@@ -771,7 +1029,8 @@ def main():
     )
     parser.add_argument(
         "--trained_model_name", type=str, default="sam_model",
-        help="The custom name of trained model. Allows users to have several trained models under the same 'save_root'."
+        help="The custom name of trained model sub-folder. Allows users to have several trained models "
+        "under the same 'save_root'."
     )
     parser.add_argument(
         "--output_path", type=str, default=None,
@@ -786,7 +1045,7 @@ def main():
     )
     parser.add_argument(
         "--batch_size", type=int, default=1,
-        help="The choice of batch size for training the Segment Anything Model. By default, trains on batch size 1."
+        help="The choice of batch size for training the Segment Anything Model. By default the batch size is set to 1."
     )
     parser.add_argument(
         "--preprocess", type=str, default=None, choices=("normalize_minmax", "normalize_percentile"),
@@ -808,7 +1067,7 @@ def main():
     device = args.device
     save_root = args.save_root
     output_path = args.output_path
-    with_segmentation_decoder = (args.segmentation_decoder == "instances")
+    with_segmentation_decoder, train_instance_segmentation_only = _parse_segmentation_decoder(args.segmentation_decoder)
 
     # Get image paths and corresponding keys.
     train_images, train_gt, train_image_key, train_gt_key = args.images, args.labels, args.image_key, args.label_key
@@ -828,6 +1087,7 @@ def main():
         patch_shape=patch_shape,
         with_segmentation_decoder=with_segmentation_decoder,
         raw_transform=_raw_transform,
+        train_instance_segmentation_only=train_instance_segmentation_only,
     )
 
     # If val images are not exclusively provided, we create a val split from the training data.
@@ -846,6 +1106,7 @@ def main():
             label_key=val_gt_key,
             patch_shape=patch_shape,
             with_segmentation_decoder=with_segmentation_decoder,
+            train_instance_segmentation_only=train_instance_segmentation_only,
             raw_transform=_raw_transform,
         )
 
@@ -877,11 +1138,17 @@ def main():
         device=device,
         save_root=save_root,
         peft_kwargs=None,  # TODO: Allow for PEFT.
+        train_instance_segmentation_only=train_instance_segmentation_only,
     )
 
     # 4. Export the model, if desired by the user
-    final_path = _export_helper(
-        save_root, checkpoint_name, output_path, model_type, with_segmentation_decoder, val_loader
-    )
+    if train_instance_segmentation_only and output_path:
+        trained_path = os.path.join("" if save_root is None else save_root, "checkpoints", checkpoint_name, "best.pt")
+        export_instance_segmentation_model(trained_path, output_path, model_type, checkpoint_path)
+        final_path = output_path
+    else:
+        final_path = _export_helper(
+            save_root, checkpoint_name, output_path, model_type, with_segmentation_decoder, val_loader,
+        )
 
     print(f"Training has finished. The trained model is saved at {final_path}.")

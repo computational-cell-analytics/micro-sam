@@ -24,9 +24,18 @@ class Annotator3d(_AnnotatorBase):
             "clear": widgets.clear_volume(),
         }
 
-    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
+    def __init__(self, viewer: "napari.viewer.Viewer", reset_state: bool = True) -> None:
         self._with_decoder = AnnotatorState().decoder is not None
         super().__init__(viewer=viewer, ndim=3)
+
+        # Set the expected annotator class to the state.
+        state = AnnotatorState()
+
+        # Reset the state.
+        if reset_state:
+            state.reset_state()
+
+        state.annotator = self
 
     def _update_image(self, segmentation_result=None):
         super()._update_image(segmentation_result=segmentation_result)
@@ -67,15 +76,18 @@ def annotator_3d(
             If `None` then the whole image is passed to Segment Anything.
         halo: Shape of the overlap between tiles, which is needed to segment objects on tile borders.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
+            By default, does not return the napari viewer.
         viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
             This will take more time when precomputing embeddings, but will then make
-            automatic mask generation much faster.
+            automatic mask generation much faster. By default, set to 'False'.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
         device: The computational device to use for the SAM model.
+            By default, automatically chooses the best available device.
         prefer_decoder: Whether to use decoder based instance segmentation if
             the model used has an additional decoder for instance segmentation.
+            By default, set to 'True'.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -88,13 +100,14 @@ def annotator_3d(
         image, model_type=model_type, save_path=embedding_path,
         halo=halo, tile_shape=tile_shape, ndim=3, precompute_amg_state=precompute_amg_state,
         checkpoint_path=checkpoint_path, device=device, prefer_decoder=prefer_decoder,
+        use_cli=True,
     )
 
     if viewer is None:
         viewer = napari.Viewer()
 
     viewer.add_image(image, name="image")
-    annotator = Annotator3d(viewer)
+    annotator = Annotator3d(viewer, reset_state=False)
 
     # Trigger layer update of the annotator so that layers have the correct shape.
     # And initialize the 'committed_objects' with the segmentation result if it was given.
@@ -103,9 +116,13 @@ def annotator_3d(
     # Add the annotator widget to the viewer and sync widgets.
     viewer.window.add_dock_widget(annotator)
     _sync_embedding_widget(
-        state.widgets["embeddings"], model_type,
-        save_path=embedding_path, checkpoint_path=checkpoint_path,
-        device=device, tile_shape=tile_shape, halo=halo
+        widget=state.widgets["embeddings"],
+        model_type=model_type if checkpoint_path is None else state.predictor.model_type,
+        save_path=embedding_path,
+        checkpoint_path=checkpoint_path,
+        device=device,
+        tile_shape=tile_shape,
+        halo=halo
     )
 
     if return_viewer:

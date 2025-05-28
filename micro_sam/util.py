@@ -8,7 +8,7 @@ import hashlib
 import warnings
 from pathlib import Path
 from collections import OrderedDict
-from typing import Any, Dict, Iterable, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, Optional, Tuple, Union, Callable
 
 import zarr
 import vigra
@@ -201,7 +201,7 @@ def get_device(device: Optional[Union[str, torch.device]] = None) -> Union[str, 
     Else it will be checked if the device you have passed is supported.
 
     Args:
-        device: The input device.
+        device: The input device. By default, selects the best available device supports.
 
     Returns:
         The device.
@@ -219,10 +219,7 @@ def get_device(device: Optional[Union[str, torch.device]] = None) -> Union[str, 
         elif device_type.lower() == "cpu":
             pass  # cpu is always available
         else:
-            raise RuntimeError(
-                f"Unsupported device: {device}\n"
-                "Please choose from 'cpu', 'cuda', or 'mps'."
-            )
+            raise RuntimeError(f"Unsupported device: '{device}'. Please choose from 'cpu', 'cuda', or 'mps'.")
 
     return device
 
@@ -294,9 +291,10 @@ def get_sam_model(
     return_state: bool = False,
     peft_kwargs: Optional[Dict] = None,
     flexible_load_checkpoint: bool = False,
+    progress_bar_factory: Optional[Callable] = None,
     **model_kwargs,
 ) -> SamPredictor:
-    r"""Get the SegmentAnything Predictor.
+    r"""Get the Segment Anything Predictor.
 
     This function will download the required model or load it from the cached weight file.
     This location of the cache can be changed by setting the environment variable: MICROSAM_CACHEDIR.
@@ -318,21 +316,24 @@ def get_sam_model(
     https://www.fatiando.org/pooch/latest/api/generated/pooch.os_cache.html
 
     Args:
-        model_type: The Segment Anything model to use. Will use the standard `vit_l` model by default.
-            To get a list of all available model names you can call `get_model_names`.
-        device: The device for the model. If none is given will use GPU if available.
+        model_type: The Segment Anything model to use. Will use the 'vit_b_lm' model by default.
+            To get a list of all available model names you can call `micro_sam.util.get_model_names`.
+        device: The device for the model. If 'None' is provided, will use GPU if available.
         checkpoint_path: The path to a file with weights that should be used instead of using the
             weights corresponding to `model_type`. If given, `model_type` must match the architecture
             corresponding to the weight file. e.g. if you use weights for SAM with `vit_b` encoder
-            then `model_type` must be given as "vit_b".
-        return_sam: Return the sam model object as well as the predictor.
-        return_state: Return the unpickled checkpoint state.
+            then `model_type` must be given as 'vit_b'.
+        return_sam: Return the sam model object as well as the predictor. By default, set to 'False'.
+        return_state: Return the unpickled checkpoint state. By default, set to 'False'.
         peft_kwargs: Keyword arguments for th PEFT wrapper class.
+            If passed 'None', it does not initialize any parameter efficient finetuning.
         flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
+            By default, set to 'False'.
+        progress_bar_factory: A function to create a progress bar for the model download.
         model_kwargs: Additional parameters necessary to initialize the Segment Anything model.
 
     Returns:
-        The segment anything predictor.
+        The Segment Anything predictor.
     """
     device = get_device(device)
 
@@ -342,9 +343,20 @@ def get_sam_model(
 
     # checkpoint_path has not been passed, we download a known model and derive the correct
     # URL from the model_type. If the model_type is invalid pooch will raise an error.
+    _provided_checkpoint_path = checkpoint_path is not None
     if checkpoint_path is None:
         model_registry = models()
-        checkpoint_path = model_registry.fetch(model_type, progressbar=True)
+
+        progress_bar = True
+        # Check if we have to download the model.
+        # If we do and have a progress bar factory, then we over-write the progress bar.
+        if not os.path.exists(os.path.join(get_cache_directory(), model_type)) and progress_bar_factory is not None:
+            progress_bar = progress_bar_factory(model_type)
+
+        checkpoint_path = model_registry.fetch(model_type, progressbar=progress_bar)
+        if not isinstance(progress_bar, bool):  # Close the progress bar when the task finishes.
+            progress_bar.close()
+
         model_hash = model_registry.registry[model_type]
 
         # If we have a custom model then we may also have a decoder checkpoint.
@@ -360,7 +372,7 @@ def get_sam_model(
         # We can't check any hashes here, and we don't check if the file is actually a valid weight file.
         # (If it isn't the model creation will fail below.)
         if not os.path.exists(checkpoint_path):
-            raise ValueError(f"Checkpoint at {checkpoint_path} could not be found.")
+            raise ValueError(f"Checkpoint at '{checkpoint_path}' could not be found.")
         model_hash = _compute_hash(checkpoint_path)
         decoder_path = None
 
@@ -376,6 +388,26 @@ def get_sam_model(
         )
 
     state, model_state = _load_checkpoint(checkpoint_path)
+
+    if _provided_checkpoint_path:
+        # To get the model weights, we prioritize having the correct 'checkpoint_path' over 'model_type'
+        # It is done to avoid strange parameter mismatch issues while incompatible model type and weights combination.
+        from micro_sam.models.build_sam import _validate_model_type
+        _provided_model_type = _validate_model_type(model_state)
+
+        # Verify whether the 'abbreviated_model_type' matches the '_provided_model_type'
+        # Otherwise replace 'abbreviated_model_type' with the later.
+        if abbreviated_model_type != _provided_model_type:
+            # Printing the message below to avoid any filtering of warnings on user's end.
+            print(
+                f"CRITICAL WARNING: The chosen 'model_type' is '{abbreviated_model_type}', "
+                f"however the model checkpoint provided correspond to '{_provided_model_type}', which does not match. "
+                f"We internally switch the model type to the expected value, i.e. '{_provided_model_type}'. "
+                "However, please avoid mismatching combination of 'model_type' and 'checkpoint_path' in future."
+            )
+
+        # Replace the extracted 'abbreviated_model_type' subjected to the model weights.
+        abbreviated_model_type = _provided_model_type
 
     # Whether to update parameters necessary to initialize the model
     if model_kwargs:  # Checks whether model_kwargs have been provided or not
@@ -407,6 +439,7 @@ def get_sam_model(
     predictor.model_type = abbreviated_model_type
     predictor._hash = model_hash
     predictor.model_name = model_type
+    predictor.checkpoint_path = checkpoint_path
 
     # Add the decoder to the state if we have one and if the state is returned.
     if decoder_path is not None and return_state:
@@ -459,6 +492,7 @@ def export_custom_sam_model(
     model_type: str,
     save_path: Union[str, os.PathLike],
     with_segmentation_decoder: bool = False,
+    prefix: str = "sam.",
 ) -> None:
     """Export a finetuned Segment Anything Model to the standard model format.
 
@@ -470,15 +504,10 @@ def export_custom_sam_model(
         save_path: Where to save the exported model.
         with_segmentation_decoder: Whether to store the decoder state in the model checkpoint as well.
             If set to 'True', the model checkpoint will not be compatible with other tools besides 'micro-sam'.
+        prefix: The prefix to remove from the model parameter keys.
     """
-    _, state = get_sam_model(
-        model_type=model_type, checkpoint_path=checkpoint_path, return_state=True, device="cpu",
-    )
-    model_state = state["model_state"]
-    prefix = "sam."
-    model_state = OrderedDict(
-        [(k[len(prefix):] if k.startswith(prefix) else k, v) for k, v in model_state.items()]
-    )
+    state, model_state = _load_checkpoint(checkpoint_path=checkpoint_path)
+    model_state = OrderedDict([(k[len(prefix):] if k.startswith(prefix) else k, v) for k, v in model_state.items()])
 
     # Store the 'decoder_state' as well, if desired.
     if with_segmentation_decoder:
@@ -493,7 +522,7 @@ def export_custom_sam_model(
 
 
 def export_custom_qlora_model(
-    checkpoint_path: Union[str, os.PathLike],
+    checkpoint_path: Optional[Union[str, os.PathLike]],
     finetuned_path: Union[str, os.PathLike],
     model_type: str,
     save_path: Union[str, os.PathLike],
@@ -516,27 +545,40 @@ def export_custom_qlora_model(
     # Step 2: Load the QLoRA-style finetuned model.
     ft_state, ft_model_state = _load_checkpoint(finetuned_path)
 
-    # Step 3: Get LoRA weights from QLoRA and retain all original parameters from the base SAM model.
+    # Step 3: Identify LoRA layers from QLoRA model.
+    # - differentiate between LoRA applied to the attention matrices and LoRA applied to the MLP layers.
+    # - then copy the LoRA layers from the QLoRA model to the new state dict
     updated_model_state = {}
 
-    # - At first, we get all LoRA layers from the QLoRA-style finetuned model checkpoint.
+    modified_attn_layers = set()
+    modified_mlp_layers = set()
+
     for k, v in ft_model_state.items():
-        if k.find("w_b_linear") != -1 or k.find("w_a_linear") != -1:
+        if "blocks." in k:
+            layer_id = int(k.split("blocks.")[1].split(".")[0])
+        if k.find("qkv.w_a_linear") != -1 or k.find("qkv.w_b_linear") != -1:
+            modified_attn_layers.add(layer_id)
+            updated_model_state[k] = v
+        if k.find("mlp.w_a_linear") != -1 or k.find("mlp.w_b_linear") != -1:
+            modified_mlp_layers.add(layer_id)
             updated_model_state[k] = v
 
-    # - Next, we get all the remaining parameters from the base SAM model.
+    # Step 4: Next, we get all the remaining parameters from the base SAM model.
     for k, v in sam.state_dict().items():
+        if "blocks." in k:
+            layer_id = int(k.split("blocks.")[1].split(".")[0])
         if k.find("attn.qkv.") != -1:
-            k = k.replace("qkv", "qkv.qkv_proj")
-            updated_model_state[k] = v
-        else:
+            if layer_id in modified_attn_layers:  # We have LoRA in QKV layers, so we need to modify the key
+                k = k.replace("qkv", "qkv.qkv_proj")
+        elif k.find("mlp") != -1 and k.find("image_encoder") != -1:
+            if layer_id in modified_mlp_layers:  # We have LoRA in MLP layers, so we need to modify the key
+                k = k.replace("mlp.", "mlp.mlp_layer.")
+        updated_model_state[k] = v
 
-            updated_model_state[k] = v
-
-    # - Finally, we replace the old model state with the new one (to retain other relevant stuff)
+    # Step 5: Finally, we replace the old model state with the new one (to retain other relevant stuff)
     ft_state['model_state'] = updated_model_state
 
-    # Step 4: Store the new "state" to "save_path"
+    # Step 6: Store the new "state" to "save_path"
     torch.save(ft_state, save_path)
 
 
@@ -567,10 +609,76 @@ def _to_image(input_):
     else:
         raise ValueError(f"Invalid input image of shape {input_.shape}. Expect either 2D grayscale or 3D RGB image.")
 
-    return image
+    # explicitly return a numpy array for compatibility with torchvision
+    # because the input_ array could be something like dask array
+    return np.array(image)
 
 
-def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update):
+@torch.no_grad
+def _compute_embeddings_batched(predictor, batched_images):
+    predictor.reset_image()
+    batched_tensors, original_sizes, input_sizes = [], [], []
+
+    # Apply proeprocessing to all images in the batch, and then stack them.
+    # Note: after the transformation the images are all of the same size,
+    # so they can be stacked and processed as a batch, even if the input images were of different size.
+    for image in batched_images:
+        tensor = predictor.transform.apply_image(image)
+        tensor = torch.as_tensor(tensor, device=predictor.device)
+        tensor = tensor.permute(2, 0, 1).contiguous()[None, :, :, :]
+
+        original_sizes.append(image.shape[:2])
+        input_sizes.append(tensor.shape[-2:])
+
+        tensor = predictor.model.preprocess(tensor)
+        batched_tensors.append(tensor)
+
+    batched_tensors = torch.cat(batched_tensors)
+    features = predictor.model.image_encoder(batched_tensors)
+
+    predictor.original_size = original_sizes[-1]
+    predictor.input_size = input_sizes[-1]
+    predictor.features = features[-1]
+    predictor.is_image_set = True
+
+    return features, original_sizes, input_sizes
+
+
+# Wrapper of zarr.create dataset to support zarr v2 and zarr v3.
+def _create_dataset_with_data(group, name, data, chunks=None):
+    zarr_major_version = int(zarr.__version__.split(".")[0])
+    if chunks is None:
+        chunks = data.shape
+    if zarr_major_version == 2:
+        ds = group.create_dataset(
+            name, data=data, shape=data.shape, compression="gzip", chunks=chunks
+        )
+    elif zarr_major_version == 3:
+        ds = group.create_array(
+            name, shape=data.shape, compressors=[zarr.codecs.GzipCodec()], chunks=chunks, dtype=data.dtype,
+        )
+        ds[:] = data
+    else:
+        raise RuntimeError(f"Unsupported zarr version: {zarr_major_version}")
+    return ds
+
+
+def _create_dataset_without_data(group, name, shape, dtype, chunks):
+    zarr_major_version = int(zarr.__version__.split(".")[0])
+    if zarr_major_version == 2:
+        ds = group.create_dataset(
+            name, shape=shape, dtype=dtype, compression="gzip", chunks=chunks
+        )
+    elif zarr_major_version == 3:
+        ds = group.create_array(
+            name, shape=shape, compressors=[zarr.codecs.GzipCodec()], chunks=chunks, dtype=dtype
+        )
+    else:
+        raise RuntimeError(f"Unsupported zarr version: {zarr_major_version}")
+    return ds
+
+
+def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update, batch_size):
     tiling = blocking([0, 0], input_.shape[:2], tile_shape)
     n_tiles = tiling.numberOfBlocks
 
@@ -579,31 +687,35 @@ def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init
     features.attrs["tile_shape"] = tile_shape
     features.attrs["halo"] = halo
 
-    pbar_init(n_tiles, "Compute Image Embeddings 2D tiled.")
-    for tile_id in range(n_tiles):
-        tile = tiling.getBlockWithHalo(tile_id, list(halo))
-        outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end))
+    pbar_init(n_tiles, "Compute Image Embeddings 2D tiled")
 
-        predictor.reset_image()
-        tile_input = _to_image(input_[outer_tile])
-        predictor.set_image(tile_input)
-        tile_features = predictor.get_image_embedding()
-        original_size = predictor.original_size
-        input_size = predictor.input_size
+    n_batches = int(np.ceil(n_tiles / batch_size))
+    for batch_id in range(n_batches):
+        tile_start = batch_id * batch_size
+        tile_stop = min(tile_start + batch_size, n_tiles)
 
-        ds = features.create_dataset(
-            str(tile_id), data=tile_features.cpu().numpy(), compression="gzip", chunks=tile_features.shape
-        )
-        ds.attrs["original_size"] = original_size
-        ds.attrs["input_size"] = input_size
-        pbar_update(1)
+        batched_images = []
+        for tile_id in range(tile_start, tile_stop):
+            tile = tiling.getBlockWithHalo(tile_id, list(halo))
+            outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end))
+            tile_input = _to_image(input_[outer_tile])
+            batched_images.append(tile_input)
+
+        batched_embeddings, original_sizes, input_sizes = _compute_embeddings_batched(predictor, batched_images)
+        for i, tile_id in enumerate(range(tile_start, tile_stop)):
+            tile_embeddings, original_size, input_size = batched_embeddings[i], original_sizes[i], input_sizes[i]
+            # Unsqueeze the channel axis of the tile embeddings.
+            tile_embeddings = tile_embeddings.unsqueeze(0)
+            ds = _create_dataset_with_data(features, str(tile_id), data=tile_embeddings.cpu().numpy())
+            ds.attrs["original_size"] = original_size
+            ds.attrs["input_size"] = input_size
+            pbar_update(1)
 
     _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size=None, original_size=None)
-
     return features
 
 
-def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update):
+def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update, batch_size):
     assert input_.ndim == 3
 
     shape = input_.shape[1:]
@@ -616,34 +728,40 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init
     features.attrs["halo"] = halo
 
     n_slices = input_.shape[0]
-    pbar_init(n_tiles * n_slices, "Compute Image Embeddings 3D tiled.")
+    pbar_init(n_tiles * n_slices, "Compute Image Embeddings 3D tiled")
+
+    # We batch across the z axis.
+    n_batches = int(np.ceil(n_slices / batch_size))
 
     for tile_id in range(n_tiles):
         tile = tiling.getBlockWithHalo(tile_id, list(halo))
         outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end))
 
         ds = None
-        for z in range(n_slices):
-            predictor.reset_image()
-            tile_input = _to_image(input_[z][outer_tile])
-            predictor.set_image(tile_input)
-            tile_features = predictor.get_image_embedding()
+        for batch_id in range(n_batches):
+            z_start = batch_id * batch_size
+            z_stop = min(z_start + batch_size, n_slices)
 
-            if ds is None:
-                shape = (input_.shape[0],) + tile_features.shape
-                chunks = (1,) + tile_features.shape
-                ds = features.create_dataset(
-                    str(tile_id), shape=shape, dtype="float32", compression="gzip", chunks=chunks
-                )
+            batched_images = []
+            for z in range(z_start, z_stop):
+                tile_input = _to_image(input_[z][outer_tile])
+                batched_images.append(tile_input)
 
-            ds[z] = tile_features.cpu().numpy()
-            pbar_update(1)
+            batched_embeddings, original_sizes, input_sizes = _compute_embeddings_batched(predictor, batched_images)
+            for i, z in enumerate(range(z_start, z_stop)):
+                tile_embeddings = batched_embeddings[i].unsqueeze(0)
+                if ds is None:
+                    shape = (n_slices,) + tile_embeddings.shape
+                    chunks = (1,) + tile_embeddings.shape
+                    ds = _create_dataset_without_data(
+                        features, str(tile_id), shape=shape, dtype="float32", chunks=chunks
+                    )
 
-        original_size = predictor.original_size
-        input_size = predictor.input_size
+                ds[z] = tile_embeddings.cpu().numpy()
+                pbar_update(1)
 
-        ds.attrs["original_size"] = original_size
-        ds.attrs["input_size"] = input_size
+        ds.attrs["original_size"] = original_sizes[-1]
+        ds.attrs["input_size"] = input_sizes[-1]
 
     _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size=None, original_size=None)
 
@@ -661,7 +779,7 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
         set_precomputed(predictor, image_embeddings)
         return image_embeddings
 
-    pbar_init(1, "Compute Image Embeddings 2D.")
+    pbar_init(1, "Compute Image Embeddings 2D")
     # Otherwise we have to compute the embeddings.
     predictor.reset_image()
     predictor.set_image(_to_image(input_))
@@ -672,7 +790,7 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
 
     # Save the embeddings if we have a save_path.
     if save_path is not None:
-        f.create_dataset("features", data=features, compression="gzip", chunks=features.shape)
+        _create_dataset_with_data(f, "features", data=features)
         _write_embedding_signature(
             f, input_, predictor, tile_shape=None, halo=None, input_size=input_size, original_size=original_size,
         )
@@ -681,7 +799,7 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
     return image_embeddings
 
 
-def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update):
+def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update, batch_size):
     # Check if the features are already computed.
     if "input_size" in f.attrs:
         features = f["features"]
@@ -691,12 +809,12 @@ def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_up
 
     # Otherwise compute them. Note: saving happens automatically because we
     # always write the features to zarr. If no save path is given we use an in-memory zarr.
-    features = _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update)
+    features = _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update, batch_size)
     image_embeddings = {"features": features, "input_size": None, "original_size": None}
     return image_embeddings
 
 
-def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_update):
+def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_update, batch_size):
     # Check if the embeddings are already fully cached.
     if save_path is not None and "input_size" in f.attrs:
         # In this case we load the embeddings.
@@ -724,41 +842,50 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_u
                 raise RuntimeError("Invalid partial features")
         else:
             partial_features = False
-            features = f.create_dataset("features", shape=shape, chunks=chunks, dtype="float32")
+            features = _create_dataset_without_data(f, "features", shape=shape, chunks=chunks, dtype="float32")
 
-    # Initialize the pbar.
-    pbar_init(input_.shape[0], "Compute Image Embeddings 3D")
+    # Initialize the pbar and batches.
+    n_slices = input_.shape[0]
+    pbar_init(n_slices, "Compute Image Embeddings 3D")
+    n_batches = int(np.ceil(n_slices / batch_size))
 
-    # Compute the embeddings for each slice.
-    for z, z_slice in enumerate(input_):
-        # Skip feature computation in case of partial features in non-zero slice.
-        if partial_features and np.count_nonzero(features[z]) != 0:
-            continue
+    for batch_id in range(n_batches):
+        z_start = batch_id * batch_size
+        z_stop = min(z_start + batch_size, n_slices)
 
-        predictor.reset_image()
-        predictor.set_image(_to_image(z_slice))
-        embedding = predictor.get_image_embedding()
-        original_size, input_size = predictor.original_size, predictor.input_size
+        batched_images, batched_z = [], []
+        for z in range(z_start, z_stop):
+            # Skip feature computation in case of partial features in non-zero slice.
+            if partial_features and np.count_nonzero(features[z]) != 0:
+                continue
+            tile_input = _to_image(input_[z])
+            batched_images.append(tile_input)
+            batched_z.append(z)
 
-        if save_features:
-            features[z] = embedding.cpu().numpy()
-        else:
-            features.append(embedding[None])
-        pbar_update(1)
+        batched_embeddings, original_sizes, input_sizes = _compute_embeddings_batched(predictor, batched_images)
+
+        for z, embedding in zip(batched_z, batched_embeddings):
+            embedding = embedding.unsqueeze(0)
+            if save_features:
+                features[z] = embedding.cpu().numpy()
+            else:
+                features.append(embedding.unsqueeze(0))
+            pbar_update(1)
 
     if save_features:
         _write_embedding_signature(
-            f, input_, predictor, tile_shape=None, halo=None, input_size=input_size, original_size=original_size,
+            f, input_, predictor, tile_shape=None, halo=None,
+            input_size=input_sizes[-1], original_size=original_sizes[-1],
         )
     else:
         # Concatenate across the z axis.
         features = torch.cat(features).cpu().numpy()
 
-    image_embeddings = {"features": features, "input_size": input_size, "original_size": original_size}
+    image_embeddings = {"features": features, "input_size": input_sizes[-1], "original_size": original_sizes[-1]}
     return image_embeddings
 
 
-def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update):
+def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update, batch_size):
     # Check if the features are already computed.
     if "input_size" in f.attrs:
         features = f["features"]
@@ -768,7 +895,7 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_up
 
     # Otherwise compute them. Note: saving happens automatically because we
     # always write the features to zarr. If no save path is given we use an in-memory zarr.
-    features = _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update)
+    features = _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update, batch_size)
     image_embeddings = {"features": features, "input_size": None, "original_size": None}
     return image_embeddings
 
@@ -877,6 +1004,7 @@ def precompute_image_embeddings(
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
+    batch_size: int = 1,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
 ) -> ImageEmbeddings:
@@ -885,16 +1013,19 @@ def precompute_image_embeddings(
     If 'save_path' is given the embeddings will be loaded/saved in a zarr container.
 
     Args:
-        predictor: The SegmentAnything predictor.
+        predictor: The Segment Anything predictor.
         input_: The input data. Can be 2 or 3 dimensional, corresponding to an image, volume or timeseries.
         save_path: Path to save the embeddings in a zarr container.
+            By default, set to 'None', i.e. the computed embeddings will not be stored locally.
         lazy_loading: Whether to load all embeddings into memory or return an
             object to load them on demand when required. This only has an effect if 'save_path' is given
-            and if the input is 3 dimensional.
+            and if the input is 3 dimensional. By default, set to 'False'.
         ndim: The dimensionality of the data. If not given will be deduced from the input data.
+            By default, set to 'None', i.e. will be computed from the provided `input_`.
         tile_shape: Shape of tiles for tiled prediction. By default prediction is run without tiling.
-        halo: Overlap of the tiles for tiled prediction.
-        verbose: Whether to be verbose in the computation.
+        halo: Overlap of the tiles for tiled prediction. By default prediction is run without tiling.
+        verbose: Whether to be verbose in the computation. By default, set to 'True'.
+        batch_size: The batch size for precomputing image embeddings over tiles (or planes). By default, set to '1'.
         pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
             Can be used together with pbar_update to handle napari progress bar in other thread.
             To enables using this function within a threadworker.
@@ -913,24 +1044,24 @@ def precompute_image_embeddings(
     # We have a save path and it already exists. Embeddings will be loaded from it,
     # check that the saved embeddings in there match the parameters of the function call.
     elif os.path.exists(save_path):
-        f = zarr.open(save_path, "a")
+        f = zarr.open(save_path, mode="a")
         _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo)
 
     # We have a save path and it does not exist yet. Create the zarr file to which the
     # embeddings will then be saved.
     else:
-        f = zarr.open(save_path, "a")
+        f = zarr.open(save_path, mode="a")
 
     _, pbar_init, pbar_update, pbar_close = handle_pbar(verbose, pbar_init, pbar_update)
 
     if ndim == 2 and tile_shape is None:
         embeddings = _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update)
     elif ndim == 2 and tile_shape is not None:
-        embeddings = _compute_tiled_2d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update)
+        embeddings = _compute_tiled_2d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update, batch_size)
     elif ndim == 3 and tile_shape is None:
-        embeddings = _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_update)
+        embeddings = _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_update, batch_size)
     elif ndim == 3 and tile_shape is not None:
-        embeddings = _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update)
+        embeddings = _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update, batch_size)
     else:
         raise ValueError(f"Invalid dimesionality {input_.ndim}, expect 2 or 3 dim data.")
 
@@ -944,7 +1075,7 @@ def set_precomputed(
     """Set the precomputed image embeddings for a predictor.
 
     Args:
-        predictor: The SegmentAnything predictor.
+        predictor: The Segment Anything predictor.
         image_embeddings: The precomputed image embeddings computed by `precompute_image_embeddings`.
         i: Index for the image data. Required if `image` has three spatial dimensions
             or a time dimension and two spatial dimensions.
@@ -954,7 +1085,7 @@ def set_precomputed(
         The predictor with set features.
     """
     if tile_id is not None:
-        tile_features = image_embeddings["features"][tile_id]
+        tile_features = image_embeddings["features"][str(tile_id)]
         tile_image_embeddings = {
             "features": tile_features,
             "input_size": tile_features.attrs["input_size"],
@@ -1065,6 +1196,7 @@ def segmentation_to_one_hot(segmentation: np.ndarray, segmentation_ids: Optional
     Args:
         segmentation: The segmentation.
         segmentation_ids: Optional subset of ids that will be used to subsample the masks.
+            By default, computes the number of ids from the provided `segmentation` masks.
 
     Returns:
         The one-hot encoded masks.

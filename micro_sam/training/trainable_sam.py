@@ -10,10 +10,10 @@ from segment_anything.utils.transforms import ResizeLongestSide
 
 # simple wrapper around SAM in order to keep things trainable
 class TrainableSAM(nn.Module):
-    """Wrapper to make the SegmentAnything model trainable.
+    """Wrapper to make the Segment Anything model trainable.
 
     Args:
-        sam: The SegmentAnything Model.
+        sam: The Segment Anything Model.
     """
 
     def __init__(self, sam: Sam) -> None:
@@ -68,7 +68,7 @@ class TrainableSAM(nn.Module):
         Args:
             batched_inputs: The batched input images and prompts.
             image_embeddings: The precompute image embeddings. If not passed then they will be computed.
-            multimask_output: Whether to predict mutiple or just a single mask.
+            multimask_output: Whether to predict mutiple or just a single mask. By default, set to 'False'.
 
         Returns:
             The predicted segmentation masks and iou values.

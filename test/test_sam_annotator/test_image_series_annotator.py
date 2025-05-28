@@ -24,7 +24,7 @@ def _create_images(tmpdir, n_images):
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows", "Linux"), reason="Gui test is not working on windows.")
 def test_image_series_annotator(make_napari_viewer_proxy):
-    """Integration test for annotator_tracking.
+    """Integration test for `image_series_annotator`.
     """
     n_images = 3
     model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"
@@ -49,7 +49,7 @@ def test_image_series_annotator(make_napari_viewer_proxy):
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows", "Linux"), reason="Gui test is not working on windows.")
 def test_image_folder_annotator(make_napari_viewer_proxy):
-    """Integration test for annotator_tracking.
+    """Integration test for `image_folder_annotator`.
     """
     n_images = 3
     model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"

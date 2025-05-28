@@ -87,15 +87,16 @@ def get_trainable_sam_model(
     """Get the trainable sam model.
 
     Args:
-        model_type: The segment anything model that should be finetuned. The weights of this model
+        model_type: The Segment Anything model that should be finetuned. The weights of this model
             will be used for initialization, unless a custom weight file is passed via `checkpoint_path`.
-        device: The device to use for training.
+        device: The device to use for training. By default, automatically chooses the best available model.
         checkpoint_path: Path to a custom checkpoint from which to load the model weights.
         freeze: Specify parts of the model that should be frozen, namely: `image_encoder`, `prompt_encoder` and
             `mask_decoder`. By default nothing is frozen and the full model is updated.
-        return_state: Whether to return the full checkpoint state.
+        return_state: Whether to return the full checkpoint state. By default, set to 'False'.
         peft_kwargs: Keyword arguments for the PEFT wrapper class.
         flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
+            By default, set to 'False'.
         model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
 
     Returns:
@@ -150,14 +151,14 @@ def get_trainable_sam_model(
 
 
 class ConvertToSamInputs:
-    """Convert outputs of data loader to the expected batched inputs of the SegmentAnything model.
+    """Convert outputs of data loader to the expected batched inputs of the Segment Anything model.
 
     Args:
         transform: The transformation to resize the prompts. Should be the same transform used in the
             model to resize the inputs. If `None` the prompts will not be resized.
         dilation_strength: The dilation factor.
             It determines a "safety" border from which prompts are not sampled to avoid ambiguous prompts
-            due to imprecise groundtruth masks.
+            due to imprecise groundtruth masks. By default, set to '10'.
         box_distortion_factor: Factor for distorting the box annotations derived from the groundtruth masks.
     """
     def __init__(

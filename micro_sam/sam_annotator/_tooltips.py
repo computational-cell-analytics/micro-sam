@@ -8,7 +8,8 @@ tooltips = {
     "embeddings_save_path": "Select path to save or load the computed image embeddings.",
     "halo": "Enter overlap values for computing tiled embeddings. Enter only x-value for quadratic size.\n Only active when tiling is used.",  # noqa
     "image": "Select the napari image layer.",
-    "model": "Select the segment anything model.",
+    "model_family": "Select the segment anything model family.",
+    "model_size": "Select the image encoder size of the segment anything model.",
     "automatic_segmentation_mode": "Select the automatic segmentation mode.",
     "run_button": "Compute embeddings or load embeddings if embedding_save_path is specified.",
     "tiling": "Enter tile size for computing tiled embeddings. Enter only x-value for quadratic size or both for non-quadratic.",  # noqa
@@ -69,6 +70,11 @@ tooltips = {
     "n_epochs": "Define the number of training epochs for your model.",
     "configuration": "Specifiy the hardware configuration to use for training.",
   },
+  "commit": {
+      "layer": "The layer to commit. Either 'current_object' to commit results from prompt-based segmentation or 'auto_segmentation' to commit results from automatic segmentation.",  # noqa
+      "preserve_mode": "The mode for preserving already committed objects. Either 'objects' to preserve on a per-object level, 'pixels' to preserve on a per-pixel level, or 'none' to not preserve.",  # noqa
+      "commit_path": "The path to a zarr file for saving committed objects, prompts and other segmentation settings.",
+  }
 }
 
 

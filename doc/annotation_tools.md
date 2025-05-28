@@ -76,7 +76,7 @@ Most elements are the same as in [the 2d annotator](#annotator-2d):
 3. The prompt menu.
 4. The menu for interactive segmentation in the current slice.
 5. The menu for interactive 3d segmentation. Clicking `Segment All Slices` (or pressing `Shift + S`) will extend the segmentation of the current object across the volume by projecting prompts across slices. The parameters for prompt projection can be set in `Segmentation Settings`, please refer to the tooltips for details.
-6. The menu for automatic segmentation. The overall functionality is the same as [for the 2d annotator](#annotator-2d). To segment the full volume `Apply to Volume` needs to be checked, otherwise only the current slice will be segmented. Note that 3D segmentation can take quite long without a GPU.
+6. The menu for automatic segmentation. The functionality is similar to [the 2d annotator](#annotator-2d). To segment the full volume `Apply to Volume` needs to be activated, otherwise only the current slice will be segmented. For volumetric segmentation, each slice is first segmented individually and then [Multicut](https://www.nature.com/articles/nmeth.4151) based on object overlap is used to merge objects across slices. Note that 3D segmentation can take quite long without a GPU.
 7. The menu for committing the current object.
 8. The menu for clearing the current annotations. If `all slices` is set all annotations will be cleared, otherwise they are only cleared for the current slice.
 
@@ -103,11 +103,11 @@ Most elements are the same as in [the 2d annotator](#annotator-2d):
 4. The menu with tracking settings: `track_state` is used to indicate that the object you are tracking is dividing in the current frame. `track_id` is used to select which of the tracks after division you are following.
 5. The menu for interactive segmentation in the current frame.
 6. The menu for interactive tracking. Click `Track Object` (or press `Shift + S`) to segment the current object across time.
-7. The menu for committing the current tracking result.
-8. The menu for clearing the current annotations.
+7. The menu for automatic tracking. The functionality is similar to [the 2d annotator](#annotator-2d). To track cells across time `Track Timeseries` needs to be activated, otherwise only the current frame will be segmented. For tracking, each frame is first segmented individually and then tracked with [trackastra](https://github.com/weigertlab/trackastra). You need to [install trackastra](#trackastra-installation) to use this feature. Note that automatic tracking can take quite long without a GPU.
+8. The menu for committing the current tracking result.
+9. The menu for clearing the current annotations.
 
-The tracking annotator only supports 2d image data with a time dimension, volumetric data + time is not supported. We also do not support automatic tracking yet.
-
+The tracking annotator only supports 2d image data with a time dimension, volumetric data + time is not supported.
 Check out [the video tutorial](https://youtu.be/1gg8OPHqOyc) for an in-depth explanation on how to use this tool.
 
 

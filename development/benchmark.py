@@ -33,7 +33,7 @@ from micro_sam.sample_data import fetch_livecell_example_data
 def _get_image_and_predictor(model_type, device):
     example_data = fetch_livecell_example_data("../examples/data")
     image = imageio.imread(example_data)
-    predictor = util.get_sam_model(device, model_type)
+    predictor = util.get_sam_model(device=device, model_type=model_type)
     return image, predictor
 
 

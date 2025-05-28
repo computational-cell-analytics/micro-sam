@@ -11,7 +11,7 @@
 import os
 
 import h5py
-from skimage.measure import label
+from skimage.measure import label as connected_components
 
 from util import (
     _3d_automatic_instance_segmentation_with_decoder,
@@ -36,7 +36,7 @@ def get_raw_and_label_volumes(data_dir, split):
     assert raw.shape == labels.shape
 
     # applying connected components to get instances
-    labels = label(labels)
+    labels = connected_components(labels)
 
     return raw, labels
 
@@ -79,6 +79,7 @@ def for_lucchi(args):
             checkpoint_path=args.checkpoint,
             result_dir=result_dir,
             embedding_dir=embedding_path,
+            interactive_seg_mode=args.prompt_choice,
         )
 
 
@@ -88,5 +89,5 @@ def main(args):
 
 
 if __name__ == "__main__":
-    args = _get_default_args("/scratch/projects/nim00007/sam/data/lucchi")
+    args = _get_default_args("/mnt/vast-nhr/projects/cidas/cca/data/lucchi")
     main(args)

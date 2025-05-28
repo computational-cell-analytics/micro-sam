@@ -153,6 +153,8 @@ def run_evaluation_for_iterative_prompting(
     res_df = pd.concat(list_of_results, ignore_index=True)
     res_df.to_csv(csv_path)
 
+    return res_df
+
 
 def main():
     """@private"""

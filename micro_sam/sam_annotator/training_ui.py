@@ -111,19 +111,21 @@ class TrainingWidget(widgets._WidgetBase):
         # on top of which the finetuning is run.
         self.name = "sam_model"
         self.name_param, layout = self._add_string_param(
-            "name", self.name, title="Model name", tooltip=get_tooltip("training", "name")
+            "name", self.name, title="Name of Trained Model", tooltip=get_tooltip("training", "name")
         )
         setting_values.layout().addLayout(layout)
 
-        self.initial_model = None
-        self.initial_model_param, layout = self._add_string_param(
-            "initial_model", self.initial_model, title="Initial model", tooltip=get_tooltip("training", "initial_model")
-        )
+        # Add the model family widget section.
+        layout = self._create_model_section(default_model="vit_b", create_layout=False)
         setting_values.layout().addLayout(layout)
 
-        self.checkpoint = None
-        self.checkpoint_param, layout = self._add_string_param(
-            "checkpoint", self.name, title="Checkpoint", tooltip=get_tooltip("training", "checkpoint")
+        # Add the model size widget section.
+        layout = self._create_model_size_section()
+        setting_values.layout().addLayout(layout)
+
+        self.custom_weights = None
+        self.custom_weights_param, layout = self._add_string_param(
+            "custom_weights", self.custom_weights, title="Custom Weights", tooltip=get_tooltip("training", "checkpoint")
         )
         setting_values.layout().addLayout(layout)
 
@@ -183,18 +185,17 @@ class TrainingWidget(widgets._WidgetBase):
 
     def _get_model_type(self):
         # Consolidate initial model name, the checkpoint path and the model type according to the configuration.
-        if self.initial_model is None or self.initial_model in ("None", ""):
-            model_type = CONFIGURATIONS[self.configuration]["model_type"]
+        suitable_model_type = CONFIGURATIONS[self.configuration]["model_type"]
+        if self.model_type[:5] == suitable_model_type:
+            self.model_type = suitable_model_type
         else:
-            model_type = self.initial_model[:5]
-            if model_type != CONFIGURATIONS[self.configuration]["model_type"]:
-                warnings.warn(
-                    f"You have changed the model type for your chosen configuration {self.configuration} "
-                    f"from {CONFIGURATIONS[self.configuration]['model_type']} to {model_type}. "
-                    "The training may be very slow or not work at all."
-                )
-        assert model_type is not None
-        return model_type
+            warnings.warn(
+                f"You have changed the model type for your chosen configuration '{self.configuration}' "
+                f"from '{suitable_model_type}' to '{self.model_type}'. "
+                "The training may be extremely slow. Please be aware of your custom model choice."
+            )
+
+        assert self.model_type is not None
 
     # Make sure that raw and label path have been passed.
     # If they haven't raise an error message.
@@ -212,29 +213,35 @@ class TrainingWidget(widgets._WidgetBase):
         return False
 
     def __call__(self, skip_validate=False):
+        self._validate_model_type_and_custom_weights()
+
         if not skip_validate and self._validate_inputs():
             return
 
         # Set up progress bar and signals for using it within a threadworker.
         pbar, pbar_signals = widgets._create_pbar_for_threadworker()
 
-        model_type = self._get_model_type()
-        if self.checkpoint is None:
+        self._get_model_type()
+        if self.custom_weights is None:
             model_registry = util.models()
-            checkpoint_path = model_registry.fetch(model_type)
+            checkpoint_path = model_registry.fetch(self.model_type)
         else:
-            checkpoint_path = self.checkpoint
+            checkpoint_path = self.custom_weights
 
         # @thread_worker()
         def run_training():
             train_loader, val_loader = self._get_loaders()
             train_sam_for_configuration(
-                name=self.name, configuration=self.configuration,
-                train_loader=train_loader, val_loader=val_loader,
+                name=self.name,
+                configuration=self.configuration,
+                train_loader=train_loader,
+                val_loader=val_loader,
                 checkpoint_path=checkpoint_path,
                 with_segmentation_decoder=self.with_segmentation_decoder,
-                model_type=model_type, device=self.device,
-                n_epochs=self.n_epochs, pbar_signals=pbar_signals,
+                model_type=self.model_type,
+                device=self.device,
+                n_epochs=self.n_epochs,
+                pbar_signals=pbar_signals,
             )
 
             # The best checkpoint after training.
@@ -242,7 +249,7 @@ class TrainingWidget(widgets._WidgetBase):
             assert os.path.exists(export_checkpoint), export_checkpoint
 
             output_path = _export_helper(
-                "", self.name, self.output_path, model_type, self.with_segmentation_decoder, val_loader
+                "", self.name, self.output_path, self.model_type, self.with_segmentation_decoder, val_loader
             )
             pbar_signals.pbar_stop.emit()
             return output_path
