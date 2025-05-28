@@ -29,7 +29,7 @@ except ImportError:
 
 try:
     from trackastra.model import Trackastra
-    from trackastra.tracking import graph_to_napari_tracks
+    from trackastra.tracking import graph_to_ctc, graph_to_napari_tracks
 except ImportError:
     Trackastra = None
 
@@ -570,13 +570,16 @@ def _filter_lineages(lineages, tracking_result):
     return filtered_lineages
 
 
-def _tracking_impl(timeseries, segmentation, mode, min_time_extent):
+def _tracking_impl(timeseries, segmentation, mode, min_time_extent, output_folder=None):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = Trackastra.from_pretrained("general_2d", device=device)
     lineage_graph = model.track(timeseries, segmentation, mode=mode)
     track_data, parent_graph, _ = graph_to_napari_tracks(lineage_graph)
     node_to_track, lineages = _extract_tracks_and_lineages(segmentation, track_data, parent_graph)
     tracking_result = recolor_segmentation(segmentation, node_to_track)
+
+    if output_folder is not None:  # Store tracking results in CTC format.
+        graph_to_ctc(lineage_graph, segmentation, outdir=output_folder)
 
     # TODO
     # We should check if trackastra supports this already.
@@ -599,6 +602,7 @@ def track_across_frames(
     verbose: bool = True,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
+    output_folder: Optional[Union[os.PathLike, str]] = None,
 ) -> Tuple[np.ndarray, List[Dict]]:
     """Track segmented objects over time.
 
@@ -615,6 +619,7 @@ def track_across_frames(
         verbose: Verbosity flag. By default, set to 'True'.
         pbar_init: Function to initialize the progress bar.
         pbar_update: Function to update the progress bar.
+        output_folder: The folder where the tracking results are stored in CTC format.
 
     Returns:
         The tracking result. Each object is colored by its track id.
@@ -628,7 +633,11 @@ def track_across_frames(
         segmentation = _preprocess_closing(segmentation, gap_closing, pbar_update)
 
     segmentation, lineage = _tracking_impl(
-        np.asarray(timeseries), segmentation, mode="greedy", min_time_extent=min_time_extent
+        timeseries=np.asarray(timeseries),
+        segmentation=segmentation,
+        mode="greedy",
+        min_time_extent=min_time_extent,
+        output_folder=output_folder,
     )
     return segmentation, lineage
 
@@ -645,6 +654,7 @@ def automatic_tracking_implementation(
     verbose: bool = True,
     return_embeddings: bool = False,
     batch_size: int = 1,
+    output_folder: Optional[Union[os.PathLike, str]] = None,
     **kwargs,
 ) -> Tuple[np.ndarray, List[Dict]]:
     """Automatically track objects in a timesries based on per-frame automatic segmentation.
@@ -665,6 +675,7 @@ def automatic_tracking_implementation(
         verbose: Verbosity flag. By default, set to 'True'.
         return_embeddings: Whether to return the precomputed image embeddings. By default, set to 'False'.
         batch_size: The batch size to compute image embeddings over planes. By default, set to '1'.
+        output_folder: The folder where the tracking results are stored in CTC format.
         kwargs: Keyword arguments for the 'generate' method of the 'segmentor'.
 
     Returns:
@@ -685,7 +696,12 @@ def automatic_tracking_implementation(
     )
 
     segmentation, lineage = track_across_frames(
-        timeseries, segmentation, gap_closing=gap_closing, min_time_extent=min_time_extent, verbose=verbose,
+        timeseries=timeseries,
+        segmentation=segmentation,
+        gap_closing=gap_closing,
+        min_time_extent=min_time_extent,
+        verbose=verbose,
+        output_folder=output_folder,
     )
 
     if return_embeddings:

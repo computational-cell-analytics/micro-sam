@@ -1,8 +1,9 @@
 import os
-from functools import partial
+import warnings
 from glob import glob
 from tqdm import tqdm
 from pathlib import Path
+from functools import partial
 from typing import Dict, List, Optional, Union, Tuple
 
 import numpy as np
@@ -95,7 +96,7 @@ def automatic_tracking(
         segmenter: The automatic instance segmentation class.
         input_path: input_path: The input image file(s). Can either be a single image file (e.g. tif or png),
             or a container file (e.g. hdf5 or zarr).
-        output_path: The output path where the instance segmentations will be saved.
+        output_path: The folder where the tracking outputs will be saved in CTC format.
         embedding_path: The path where the embeddings are cached already / will be saved.
         key: The key to the input file. This is needed for container files (eg. hdf5 or zarr)
             or to load several images as 3d volume. Provide a glob patterm, eg. "*.tif", for this case.
@@ -111,11 +112,9 @@ def automatic_tracking(
         generate_kwargs: optional keyword arguments for the generate function of the AMG or AIS class.
 
     Returns:
+        The tracking result as a timeseries, where each object is labeled by its track id.
+        The lineages representing cell divisions, stored as a dictionary.
     """
-    if output_path is not None:
-        # TODO implement saving tracking results in CTC format and use it to save the result here.
-        raise NotImplementedError("Saving the tracking result to file is currently not supported.")
-
     # Load the input image file.
     if isinstance(input_path, np.ndarray):
         image_data = input_path
@@ -142,7 +141,8 @@ def automatic_tracking(
         halo=halo,
         verbose=verbose,
         batch_size=batch_size,
-        return_image_embeddings=True,
+        return_embeddings=True,
+        output_folder=output_path,
         **generate_kwargs,
     )
 
@@ -335,12 +335,6 @@ def _get_inputs_from_paths(paths, pattern):
     return fpaths
 
 
-def _has_extension(fpath: Union[os.PathLike, str]) -> bool:
-    "Returns whether the provided path has an extension or not."
-    breakpoint()
-    return bool(os.path.splitext(fpath)[1])
-
-
 def main():
     """@private"""
     import argparse
@@ -349,23 +343,34 @@ def main():
     available_models = ", ".join(available_models)
 
     parser = argparse.ArgumentParser(
-        description="Run automatic segmentation for an image using either automatic instance segmentation (AIS) \n"
-        "or automatic mask generation (AMG). In addition to the arguments explained below,\n"
+        description="Run automatic segmentation or tracking for 2d, 3d or timeseries data.\n"
+        "Either a single input file or multiple input files are supported. You can specify multiple files "
+        "by either providing multiple filepaths to the '--i/--input_paths' argument, or by providing an argument "
+        "to '--pattern' to use a wildcard pattern ('*') for selecting multiple files.\n"
+        "NOTE: for automatic 3d segmentation or tracking the data has to be stored as volume / timeseries, "
+        "stacking individual tif images is not supported.\n"
+        "Segmentation is performed using one of the two modes supported by micro_sam: \n"
+        "automatic instance segmentation (AIS) or automatic mask generation (AMG).\n"
+        "In addition to the options listed below, "
         "you can also passed additional arguments for these two segmentation modes:\n"
         "For AIS: '--center_distance_threshold', '--boundary_distance_threshold' and other arguments of `InstanceSegmentationWithDecoder.generate`."  # noqa
         "For AMG: '--pred_iou_thresh', '--stability_score_thresh' and other arguments of `AutomaticMaskGenerator.generate`."  # noqa
     )
     parser.add_argument(
         "-i", "--input_path", required=True, type=str, nargs="+",
-        help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
+        help="The filepath(s) to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "  # noqa
         "or elf.io.open_file (e.g. hdf5, zarr, mrc). For the latter you also need to pass the 'key' parameter."
     )
     parser.add_argument(
         "-o", "--output_path", required=True, type=str,
-        help="The filepath to store the instance segmentation. The current support stores segmentation in a 'tif' file."
+        help="The filepath to store the results. If multiple inputs are provied, "
+        "this should be a folder. For a single image, you should provide the path to a tif file for the output segmentation."  # noqa
+        "NOTE: Segmentation results are stored as tif files, tracking results in the CTC fil format ."
     )
     parser.add_argument(
-        "-e", "--embedding_path", default=None, type=str, help="The path where the embeddings will be saved."
+        "-e", "--embedding_path", default=None, type=str,
+        help="An optional path where the embeddings will be saved. If multiple inputs are provided, "
+        "this should be a folder. Otherwise you can store embeddings in single zarr file."
     )
     parser.add_argument(
         "--pattern", type=str, help="Pattern / wildcard for selecting files in a folder. To select all files use '*'."
@@ -411,8 +416,8 @@ def main():
         "By default, computes the image embeddings for one tile / z-plane at a time."
     )
     parser.add_argument(
-        "--tracking", action="store_true", help="Run tracking instead of instance segmentation. "
-        "Only supported for timeseries inputs.."
+        "--tracking", action="store_true", help="Run automatic tracking instead of instance segmentation. "
+        "NOTE: It is only supported for timeseries inputs."
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Whether to allow verbosity of outputs."
@@ -473,34 +478,51 @@ def main():
     )
 
     # Run automatic segmentation per image.
-    for path in tqdm(input_paths, desc="Run automatic segmentation"):
-        if has_one_input:  # if we have one image only.
-            _output_fpath = str(Path(output_path).with_suffix(".tif"))
-            _embedding_fpath = embedding_path
+    for input_path in tqdm(input_paths, desc="Run automatic " + ("tracking" if args.tracking else "segmentation")):
+        if has_one_input:  # When we have only one image / volume.
+            _embedding_fpath = embedding_path  # Either folder or zarr file, would work for both.
 
-        else:  # if we have multiple image, we need to make the other target filepaths compatible.
-            # Let's check for 'embedding_path'.
-            _embedding_fpath = embedding_path
-            if embedding_path:
-                if _has_extension(embedding_path):  # in this case, use filename as addl. suffix to provided path.
-                    _embedding_fpath = str(Path(embedding_path).with_suffix(".zarr"))
-                    _embedding_fpath = _embedding_fpath.replace(".zarr", f"_{Path(path).stem}.zarr")
-                else:   # otherwise, for directory, use image filename for multiple images.
-                    os.makedirs(embedding_path, exist_ok=True)
-                    _embedding_fpath = os.path.join(embedding_path, Path(os.path.basename(path)).with_suffix(".zarr"))
+            output_fdir = os.path.splitext(output_path)[0]
+            os.makedirs(output_fdir, exist_ok=True)
 
-            # Next, let's check for output file to store segmentation.
-            if _has_extension(output_path):  # in this case, use filename as addl. suffix to provided path.
-                _output_fpath = str(Path(output_path).with_suffix(".tif"))
-                _output_fpath = _output_fpath.replace(".tif", f"_{Path(path).stem}.tif")
-            else:  # otherwise, for directory, use image filename for multiple images.
-                os.makedirs(output_path, exist_ok=True)
-                _output_fpath = os.path.join(output_path, Path(os.path.basename(path)).with_suffix(".tif"))
+            # For tracking, we ensure that the output path is a folder,
+            # i.e. does not have an extension. We throw a warning if the user provided an extension.
+            if args.tracking:
+                if os.path.splitext(output_path)[-1]:
+                    warnings.warn(
+                        f"The output folder has an extension '{os.path.splitext(output_path)[-1]}'. "
+                        "We remove it and treat it as a folder to store tracking outputs in CTC format."
+                    )
+                _output_fpath = output_fdir
+            else:  # Otherwise, we can store outputs for user directly in the provided filepath, ensuring extension .tif
+                _output_fpath = f"{output_fdir}.tif"
+
+        else:  # When we have multiple images.
+            # Get the input filename, without the extension.
+            input_name = str(Path(input_path).stem)
+
+            # Let's check the 'embedding_path'.
+            if embedding_path is None:  # For computing embeddings on-the-fly, we don't care about the path logic.
+                _embedding_fpath = embedding_path
+            else:  # Otherwise, store each embeddings inside a folder.
+                embedding_folder = os.path.splitext(embedding_path)[0]  # Treat the provided embedding path as folder.
+                os.makedirs(embedding_folder, exist_ok=True)
+                _embedding_fpath = os.path.join(embedding_folder, f"{input_name}.zarr")  # Create each embedding file.
+
+            # Get the output folder name.
+            output_folder = os.path.splitext(output_path)[0]
+            os.makedirs(output_folder, exist_ok=True)
+
+            # Next, let's check for output file to store segmentation (or tracks).
+            if args.tracking:  # For tracking, we store CTC outputs in subfolders, with input_name as folder.
+                _output_fpath = os.path.join(output_folder, input_name)
+            else:  # Otherwise, store each result inside a folder.
+                _output_fpath = os.path.join(output_folder, f"{input_name}.tif")
 
         instance_seg_function(
             predictor=predictor,
             segmenter=segmenter,
-            input_path=path,
+            input_path=input_path,
             output_path=_output_fpath,
             embedding_path=_embedding_fpath,
             key=args.key,
