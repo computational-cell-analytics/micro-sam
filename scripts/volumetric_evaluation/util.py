@@ -51,7 +51,7 @@ def _3d_automatic_instance_segmentation_with_decoder(
 
 def _3d_interactive_instance_segmentation(
     val_raw, val_labels, test_raw, test_labels, model_type, checkpoint_path,
-    result_dir, embedding_dir, species=None, min_size=50
+    result_dir, embedding_dir, species=None, min_size=50, interactive_seg_mode="box",
 ):
     # let's do grid-search on the val set
     _val_embedding_path = os.path.join(embedding_dir, "" if species is None else species, "val")
@@ -63,7 +63,7 @@ def _3d_interactive_instance_segmentation(
         checkpoint_path=checkpoint_path,
         embedding_path=_val_embedding_path,
         result_dir=_val_res_dir,
-        interactive_seg_mode="box",
+        interactive_seg_mode=interactive_seg_mode,
         verbose=False,
         min_size=min_size,
     )
@@ -85,10 +85,11 @@ def _3d_interactive_instance_segmentation(
         checkpoint_path=checkpoint_path,
         embedding_path=_test_embedding_path,
         result_dir=_test_res_dir,
-        interactive_seg_mode="box",
+        interactive_seg_mode=interactive_seg_mode,
         verbose=False,
         grid_search_values=best_params,
         min_size=min_size,
+        store_segmentation=True,
     )
 
 
@@ -114,6 +115,9 @@ def _get_default_args(input_path):
     )
     parser.add_argument(
         "--int", action="store_true", help="Whether to perform 3d interactive instance segmentation."
+    )
+    parser.add_argument(
+        "-p", "--prompt_choice", default="box", type=str, help="The choice of prompt to start interactive segmentation."
     )
     parser.add_argument(
         "--species", type=str, default=None, help="Relevant for MitoEM."

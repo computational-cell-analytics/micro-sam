@@ -6,12 +6,13 @@ import multiprocessing as mp
 from concurrent import futures
 from typing import Dict, List, Optional, Union, Tuple
 
-import networkx as nx
 import numpy as np
-import torch
+import networkx as nx
 from scipy.ndimage import binary_closing
 from skimage.measure import label, regionprops
 from skimage.segmentation import relabel_sequential
+
+import torch
 
 import nifty
 
@@ -28,7 +29,7 @@ except ImportError:
 
 try:
     from trackastra.model import Trackastra
-    from trackastra.tracking import graph_to_napari_tracks
+    from trackastra.tracking import graph_to_ctc, graph_to_napari_tracks
 except ImportError:
     Trackastra = None
 
@@ -114,7 +115,7 @@ def segment_mask_in_volume(
 
     Args:
         segmentation: The initial segmentation for the object.
-        predictor: The segment anything predictor.
+        predictor: The Segment Anything predictor.
         image_embeddings: The precomputed image embeddings for the volume.
         segmented_slices: List of slices for which this object has already been segmented.
         stop_lower: Whether to stop at the lowest segmented slice.
@@ -124,7 +125,8 @@ def segment_mask_in_volume(
             Pass a dictionary to choose the excact combination of projection modes.
         update_progress: Callback to update an external progress bar.
         box_extension: Extension factor for increasing the box size after projection.
-        verbose: Whether to print details about the segmentation steps.
+            By default, does not increase the projected box size.
+        verbose: Whether to print details about the segmentation steps. By default, set to 'True'.
 
     Returns:
         Array with the volumetric segmentation.
@@ -308,14 +310,15 @@ def merge_instance_segmentation_3d(
         slice_segmentation: The stacked segmentation across the slices.
             We assume that the segmentation is labeled consecutive across z.
         beta: The bias term for the multicut. Higher values lead to a larger
-            degree of over-segmentation and vice versa.
+            degree of over-segmentation and vice versa. by default, set to '0.5'.
         with_background: Whether this is a segmentation problem with background.
             In that case all edges connecting to the background are set to be repulsive.
+            By default, set to 'True'.
         gap_closing: If given, gaps in the segmentation are closed with a binary closing
             operation. The value is used to determine the number of iterations for the closing.
         min_z_extent: Require a minimal extent in z for the segmented objects.
             This can help to prevent segmentation artifacts.
-        verbose: Verbosity flag.
+        verbose: Verbosity flag. By default, set to 'True'.
         pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
             Can be used together with pbar_update to handle napari progress bar in other thread.
             To enables using this function within a threadworker.
@@ -435,27 +438,35 @@ def automatic_3d_segmentation(
 
     Args:
         volume: The input volume.
-        predictor: The SAM model.
+        predictor: The Segment Anything predictor.
         segmentor: The instance segmentation class.
         embedding_path: The path to save pre-computed embeddings.
-        with_background: Whether the segmentation has background.
+        with_background: Whether the segmentation has background. By default, set to 'True'.
         gap_closing: If given, gaps in the segmentation are closed with a binary closing
             operation. The value is used to determine the number of iterations for the closing.
         min_z_extent: Require a minimal extent in z for the segmented objects.
             This can help to prevent segmentation artifacts.
         tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
-        halo: Overlap of the tiles for tiled prediction.
-        verbose: Verbosity flag.
-        return_embeddings: Whether to return the precomputed image embeddings.
-        batch_size: The batch size to compute image embeddings over planes.
+        halo: Overlap of the tiles for tiled prediction. By default prediction is run without tiling.
+        verbose: Verbosity flag. By default, set to 'True'.
+        return_embeddings: Whether to return the precomputed image embeddings. By default, set to 'False'.
+        batch_size: The batch size to compute image embeddings over planes. By default, set to '1'.
         kwargs: Keyword arguments for the 'generate' method of the 'segmentor'.
 
     Returns:
         The segmentation.
     """
     segmentation, image_embeddings = _segment_slices(
-        volume, predictor, segmentor, embedding_path, verbose,
-        tile_shape=tile_shape, halo=halo, with_background=with_background, **kwargs
+        data=volume,
+        predictor=predictor,
+        segmentor=segmentor,
+        embedding_path=embedding_path,
+        verbose=verbose,
+        tile_shape=tile_shape,
+        halo=halo,
+        with_background=with_background,
+        batch_size=batch_size,
+        **kwargs
     )
     segmentation = merge_instance_segmentation_3d(
         segmentation,
@@ -559,13 +570,16 @@ def _filter_lineages(lineages, tracking_result):
     return filtered_lineages
 
 
-def _tracking_impl(timeseries, segmentation, mode, min_time_extent):
+def _tracking_impl(timeseries, segmentation, mode, min_time_extent, output_folder=None):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = Trackastra.from_pretrained("general_2d", device=device)
     lineage_graph = model.track(timeseries, segmentation, mode=mode)
     track_data, parent_graph, _ = graph_to_napari_tracks(lineage_graph)
     node_to_track, lineages = _extract_tracks_and_lineages(segmentation, track_data, parent_graph)
     tracking_result = recolor_segmentation(segmentation, node_to_track)
+
+    if output_folder is not None:  # Store tracking results in CTC format.
+        graph_to_ctc(lineage_graph, segmentation, outdir=output_folder)
 
     # TODO
     # We should check if trackastra supports this already.
@@ -588,6 +602,7 @@ def track_across_frames(
     verbose: bool = True,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
+    output_folder: Optional[Union[os.PathLike, str]] = None,
 ) -> Tuple[np.ndarray, List[Dict]]:
     """Track segmented objects over time.
 
@@ -601,9 +616,10 @@ def track_across_frames(
         gap_closing: If given, gaps in the segmentation are closed with a binary closing
             operation. The value is used to determine the number of iterations for the closing.
         min_time_extent: Require a minimal extent in time for the tracked objects.
-        verbose: Verbosity flag.
+        verbose: Verbosity flag. By default, set to 'True'.
         pbar_init: Function to initialize the progress bar.
         pbar_update: Function to update the progress bar.
+        output_folder: The folder where the tracking results are stored in CTC format.
 
     Returns:
         The tracking result. Each object is colored by its track id.
@@ -617,12 +633,16 @@ def track_across_frames(
         segmentation = _preprocess_closing(segmentation, gap_closing, pbar_update)
 
     segmentation, lineage = _tracking_impl(
-        np.asarray(timeseries), segmentation, mode="greedy", min_time_extent=min_time_extent
+        timeseries=np.asarray(timeseries),
+        segmentation=segmentation,
+        mode="greedy",
+        min_time_extent=min_time_extent,
+        output_folder=output_folder,
     )
     return segmentation, lineage
 
 
-def automatic_tracking(
+def automatic_tracking_implementation(
     timeseries: np.ndarray,
     predictor: SamPredictor,
     segmentor: AMGBase,
@@ -632,6 +652,9 @@ def automatic_tracking(
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
+    return_embeddings: bool = False,
+    batch_size: int = 1,
+    output_folder: Optional[Union[os.PathLike, str]] = None,
     **kwargs,
 ) -> Tuple[np.ndarray, List[Dict]]:
     """Automatically track objects in a timesries based on per-frame automatic segmentation.
@@ -648,8 +671,11 @@ def automatic_tracking(
             operation. The value is used to determine the number of iterations for the closing.
         min_time_extent: Require a minimal extent in time for the tracked objects.
         tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
-        halo: Overlap of the tiles for tiled prediction.
-        verbose: Verbosity flag.
+        halo: Overlap of the tiles for tiled prediction. By default prediction is run without tiling.
+        verbose: Verbosity flag. By default, set to 'True'.
+        return_embeddings: Whether to return the precomputed image embeddings. By default, set to 'False'.
+        batch_size: The batch size to compute image embeddings over planes. By default, set to '1'.
+        output_folder: The folder where the tracking results are stored in CTC format.
         kwargs: Keyword arguments for the 'generate' method of the 'segmentor'.
 
     Returns:
@@ -662,15 +688,26 @@ def automatic_tracking(
         raise RuntimeError(
             "Automatic tracking requires trackastra. You can install it via 'pip install trackastra'."
         )
-    segmentation, _ = _segment_slices(
+
+    segmentation, image_embeddings = _segment_slices(
         timeseries, predictor, segmentor, embedding_path, verbose,
-        tile_shape=tile_shape, halo=halo,
+        tile_shape=tile_shape, halo=halo, batch_size=batch_size,
         **kwargs,
     )
+
     segmentation, lineage = track_across_frames(
-        timeseries, segmentation, gap_closing=gap_closing, min_time_extent=min_time_extent, verbose=verbose,
+        timeseries=timeseries,
+        segmentation=segmentation,
+        gap_closing=gap_closing,
+        min_time_extent=min_time_extent,
+        verbose=verbose,
+        output_folder=output_folder,
     )
-    return segmentation, lineage
+
+    if return_embeddings:
+        return segmentation, lineage, image_embeddings
+    else:
+        return segmentation, lineage
 
 
 def get_napari_track_data(

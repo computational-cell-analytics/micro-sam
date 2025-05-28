@@ -60,9 +60,10 @@ def mask_data_to_segmentation(
             Only supports output_mode=binary_mask.
         with_background: Whether the segmentation has background. If yes this function assures that the largest
             object in the output will be mapped to zero (the background value).
-        min_object_size: The minimal size of an object in pixels.
+        min_object_size: The minimal size of an object in pixels. By default, set to '0'.
         max_object_size: The maximal size of an object in pixels.
         label_masks: Whether to apply connected components to the result before removing small objects.
+            By default, set to 'True'.
 
     Returns:
         The instance segmentation.
@@ -353,15 +354,19 @@ class AutomaticMaskGenerator(AMGBase):
     Args:
         predictor: The segment anything predictor.
         points_per_side: The number of points to be sampled along one side of the image.
-            If None, `point_grids` must provide explicit point sampling.
+            If None, `point_grids` must provide explicit point sampling. By default, set to '32'.
         points_per_batch: The number of points run simultaneously by the model.
             Higher numbers may be faster but use more GPU memory.
+            By default, selects '64' for all devices except 'mps' (selects '16' for performance reasons).
         crop_n_layers: If >0, the mask prediction will be run again on crops of the image.
-        crop_overlap_ratio: Sets the degree to which crops overlap.
+            By default, set to '0'.
+        crop_overlap_ratio: Sets the degree to which crops overlap. By default, set to '512 / 1500'.
         crop_n_points_downscale_factor: How the number of points is downsampled when predicting with crops.
-        point_grids: A lisst over explicit grids of points used for sampling masks.
+            By default, set to '1'.
+        point_grids: A list over explicit grids of points used for sampling masks.
             Normalized to [0, 1] with respect to the image coordinate system.
         stability_score_offset: The amount to shift the cutoff when calculating the stability score.
+            By default, set to '1.0'.
     """
     def __init__(
         self,
@@ -464,7 +469,7 @@ class AutomaticMaskGenerator(AMGBase):
                 See `util.precompute_image_embeddings` for details.
             i: Index for the image data. Required if `image` has three spatial dimensions
                 or a time dimension and two spatial dimensions.
-            verbose: Whether to print computation progress.
+            verbose: Whether to print computation progress. By default, set to 'False'.
             pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
                 Can be used together with pbar_update to handle napari progress bar in other thread.
                 To enables using this function within a threadworker.
@@ -520,12 +525,15 @@ class AutomaticMaskGenerator(AMGBase):
 
         Args:
             pred_iou_thresh: Filter threshold in [0, 1], using the mask quality predicted by the model.
+                By default, set to '0.88'.
             stability_score_thresh: Filter threshold in [0, 1], using the stability of the mask
-                under changes to the cutoff used to binarize the model prediction.
+                under changes to the cutoff used to binarize the model prediction. By default, set to '0.95'.
             box_nms_thresh: The IoU threshold used by nonmax suppression to filter duplicate masks.
+                By default, set to '0.7'.
             crop_nms_thresh: The IoU threshold used by nonmax suppression to filter duplicate masks between crops.
-            min_mask_region_area: Minimal size for the predicted masks.
-            output_mode: The form masks are returned in.
+                By default, set to '0.7'.
+            min_mask_region_area: Minimal size for the predicted masks. By default, set to '0'.
+            output_mode: The form masks are returned in. By default, set to 'binary_mask'.
 
         Returns:
             The instance segmentation masks.
@@ -594,14 +602,15 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
     Implements the same functionality as `AutomaticMaskGenerator` but for tiled embeddings.
 
     Args:
-        predictor: The segment anything predictor.
+        predictor: The Segment Anything predictor.
         points_per_side: The number of points to be sampled along one side of the image.
-            If None, `point_grids` must provide explicit point sampling.
+            If None, `point_grids` must provide explicit point sampling. By default, set to '32'.
         points_per_batch: The number of points run simultaneously by the model.
-            Higher numbers may be faster but use more GPU memory.
-        point_grids: A lisst over explicit grids of points used for sampling masks.
+            Higher numbers may be faster but use more GPU memory. By default, set to '64'.
+        point_grids: A list over explicit grids of points used for sampling masks.
             Normalized to [0, 1] with respect to the image coordinate system.
         stability_score_offset: The amount to shift the cutoff when calculating the stability score.
+            By default, set to '1.0'.
     """
 
     # We only expose the arguments that make sense for the tiled mask generator.
@@ -646,12 +655,12 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
                 or a time dimension and two spatial dimensions.
             tile_shape: The tile shape for embedding prediction.
             halo: The overlap of between tiles.
-            verbose: Whether to print computation progress.
+            verbose: Whether to print computation progress. By default, set to 'False'.
             pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
                 Can be used together with pbar_update to handle napari progress bar in other thread.
                 To enables using this function within a threadworker.
             pbar_update: Callback to update an external progress bar.
-            batch_size: The batch size for image embedding prediction.
+            batch_size: The batch size for image embedding prediction. By default, set to '1'.
         """
         original_size = image.shape[:2]
         self._original_size = original_size
@@ -676,7 +685,7 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         mask_data = []
         for tile_id in range(n_tiles):
             # set the pre-computed embeddings for this tile
-            features = image_embeddings["features"][tile_id]
+            features = image_embeddings["features"][str(tile_id)]
             tile_embeddings = {
                 "features": features,
                 "input_size": features.attrs["input_size"],
@@ -709,7 +718,7 @@ class DecoderAdapter(torch.nn.Module):
     To apply the decoder on top of pre-computed embeddings for the segmentation functionality.
     See also: https://github.com/constantinpape/torch-em/blob/main/torch_em/model/unetr.py
     """
-    def __init__(self, unetr):
+    def __init__(self, unetr: torch.nn.Module):
         super().__init__()
 
         self.base = unetr.base
@@ -766,10 +775,10 @@ def get_unetr(
         image_encoder: The image encoder of the SAM model.
             This is used as encoder by the UNETR too.
         decoder_state: Optional decoder state to initialize the weights of the UNETR decoder.
-        device: The device.
-        out_channels: The number of output channels.
+        device: The device. By default, automatically chooses the best available device.
+        out_channels: The number of output channels. By default, set to '3'.
         flexible_load_checkpoint: Whether to allow reinitialization of parameters
-            which could not be found in the provided decoder state.
+            which could not be found in the provided decoder state. By default, set to 'False'.
 
     Returns:
         The UNETR model.
@@ -785,6 +794,7 @@ def get_unetr(
         use_skip_connection=False,
         resize_input=True,
     )
+
     if decoder_state is not None:
         unetr_state_dict = unetr.state_dict()
         for k, v in unetr_state_dict.items():
@@ -817,7 +827,7 @@ def get_decoder(
     Args:
         image_encoder: The image encoder of the SAM model.
         decoder_state: State to initialize the weights of the UNETR decoder.
-        device: The device.
+        device: The device. By default, automatically chooses the best available device.
 
     Returns:
         The decoder for instance segmentation.
@@ -840,7 +850,7 @@ def get_predictor_and_decoder(
     Args:
         model_type: The type of the image encoder used in the SAM model.
         checkpoint_path: Path to the checkpoint from which to load the data.
-        device: The device.
+        device: The device. By default, automatically chooses the best available device.
         peft_kwargs: Keyword arguments for the PEFT wrapper class.
 
     Returns:
@@ -855,10 +865,12 @@ def get_predictor_and_decoder(
         return_state=True,
         peft_kwargs=peft_kwargs,
     )
+
     if "decoder_state" not in state:
         raise ValueError(
             f"The checkpoint at '{checkpoint_path}' or the chosen model '{model_type}' does not contain a decoder state"
         )
+
     decoder = get_decoder(predictor.model.image_encoder, state["decoder_state"], device)
     return predictor, decoder
 
@@ -929,11 +941,7 @@ class InstanceSegmentationWithDecoder:
         decoder: The decoder to predict intermediate representations
             for instance segmentation.
     """
-    def __init__(
-        self,
-        predictor: SamPredictor,
-        decoder: torch.nn.Module,
-    ) -> None:
+    def __init__(self, predictor: SamPredictor, decoder: torch.nn.Module) -> None:
         self._predictor = predictor
         self._decoder = decoder
 
@@ -968,7 +976,7 @@ class InstanceSegmentationWithDecoder:
                 See `util.precompute_image_embeddings` for details.
             i: Index for the image data. Required if `image` has three spatial dimensions
                 or a time dimension and two spatial dimensions.
-            verbose: Whether to be verbose.
+            verbose: Whether to be verbose. By default, set to 'False'.
             pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
                 Can be used together with pbar_update to handle napari progress bar in other thread.
                 To enables using this function within a threadworker.
@@ -1056,14 +1064,18 @@ class InstanceSegmentationWithDecoder:
         Args:
             center_distance_threshold: Center distance predictions below this value will be
                 used to find seeds (intersected with thresholded boundary distance predictions).
+                By default, set to '0.5'.
             boundary_distance_threshold: Boundary distance predictions below this value will be
                 used to find seeds (intersected with thresholded center distance predictions).
-            foreground_smoothing: Sigma value for smoothing the foreground predictions, to avoid
-                checkerboard artifacts in the prediction.
+                By default, set to '0.5'.
             foreground_threshold: Foreground predictions above this value will be used as foreground mask.
+                By default, set to '0.5'.
+            foreground_smoothing: Sigma value for smoothing the foreground predictions, to avoid
+                checkerboard artifacts in the prediction. By default, set to '1.0'.
             distance_smoothing: Sigma value for smoothing the distance predictions.
-            min_size: Minimal object size in the segmentation result.
+            min_size: Minimal object size in the segmentation result. By default, set to '0'.
             output_mode: The form masks are returned in. Pass None to directly return the instance segmentation.
+                By default, set to 'binary_mask'.
             tile_shape: Tile shape for parallelizing the instance segmentation post-processing.
                 This parameter is independent from the tile shape for computing the embeddings.
                 If not given then post-processing will not be parallelized.
@@ -1188,7 +1200,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
                 or a time dimension and two spatial dimensions.
             tile_shape: Shape of the tiles for precomputing image embeddings.
             halo: Overlap of the tiles for tiled precomputation of image embeddings.
-            verbose: Dummy input to be compatible with other function signatures.
+            verbose: Dummy input to be compatible with other function signatures. By default, set to 'False'.
             pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
                 Can be used together with pbar_update to handle napari progress bar in other thread.
                 To enables using this function within a threadworker.

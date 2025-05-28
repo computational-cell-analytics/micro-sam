@@ -2,7 +2,7 @@ import os
 import time
 import random
 import warnings
-from typing import Optional
+from typing import Optional, Callable
 
 import numpy as np
 
@@ -30,15 +30,18 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         n_objects_per_batch: If not given, we compute the loss for all objects in a sample.
             Otherwise the loss computation is limited to n_objects_per_batch, and the objects are randomly sampled.
         mse_loss: The regression loss to compare the IoU predicted by the model with the true IoU.
-        prompt_generator: The iterative prompt generator which takes care of the iterative prompting logic for training
-        mask_prob: The probability of using the mask inputs in the iterative prompting (per `n_sub_iteration`)
-        mask_loss: The loss to compare the predicted masks and the targets.
-        kwargs: The keyword arguments of the DefaultTrainer super class.
+            By default, set to the expected mse loss function.
+        prompt_generator: The iterative prompt generator which takes care of the iterative prompting logic for training.
+            Already allocated with the desired prompt generator by default.
+        mask_prob: The probability of using the mask inputs in the iterative prompting (per `n_sub_iteration`).
+            By default, set to '0.5'.
+        mask_loss: The loss to compare the predicted masks and the targets. By default, set to the dice loss function.
+        kwargs: The keyword arguments of the `DefaultTrainer` super class.
     """
 
     def __init__(
         self,
-        convert_inputs,
+        convert_inputs: Callable,
         n_sub_iteration: int,
         n_objects_per_batch: Optional[int] = None,
         mse_loss: torch.nn.Module = torch.nn.MSELoss(),
@@ -61,6 +64,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         self.n_sub_iteration = n_sub_iteration
         self.prompt_generator = prompt_generator
         self.mask_prob = mask_prob
+        self.is_data_parallel = torch.distributed.is_available() and torch.distributed.is_initialized()
         self._kwargs = kwargs
 
     def _get_prompt_and_multimasking_choices(self, current_iteration):
@@ -195,6 +199,43 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         masks = (masks > 0.0).float()
         return masks, logits
 
+    def _use_mask_inputs(self, batched_inputs, y_one_hot):
+        # Whether to use masks per training top-iteration.
+        use_mask_inputs = False  # determines if each sub-iteration will use mask inputs as prompts or not.
+        use_zero_mask = False  # determines if the zeroth iteration will use zeros as mask inputs.
+
+        if self.mask_prob == 1:  # i.e. always use masks.
+            use_mask_inputs = True  # we would like to use mask inputs in all sub-iterations.
+            use_zero_mask = self.is_data_parallel  # we would like to use zeros as mask inputs for zeroth iteration.
+
+        elif self.mask_prob > 0:  # i.e. if we use mask inputs with a probability.
+            if self.is_data_parallel:  # if training on multiple GPUs.
+                if torch.distributed.get_rank() == 0:  # device with rank 0.
+                    use_mask_inputs_tensor = torch.tensor(
+                        random.random() < self.mask_prob, dtype=torch.uint8, device=self.device,
+                    )
+                else:  # on other devices, we do not need this parameter at this stage.
+                    use_mask_inputs_tensor = torch.tensor(0, dtype=torch.uint8, device=self.device)
+
+                # Broadcast the value to all devices (ranks).
+                torch.distributed.broadcast(use_mask_inputs_tensor, src=0)
+
+                # And convert it back to our desired boolean value.
+                use_mask_inputs = bool(use_mask_inputs_tensor.item())
+                use_zero_mask = use_mask_inputs  # provides zeros as mask inputs.
+            else:  # training on a single GPU.
+                use_mask_inputs = None
+
+        if use_zero_mask:
+            # We use zeros as mask inputs for the zeroth iteration.
+            y_zeros = torch.zeros((*y_one_hot.shape[:3], 256, 256))
+
+            # Add zeros as mask inputs to batched inputs.
+            for bi, curr_masks in zip(batched_inputs, y_zeros):
+                bi["mask_inputs"] = curr_masks
+
+        return batched_inputs, use_mask_inputs
+
     def _compute_iterative_loss(self, batched_inputs, y_one_hot, num_subiter, multimask_output):
         """Compute the loss for several (sub-)iterations of iterative prompting.
         In each iterations the prompts are updated based on the previous predictions.
@@ -202,6 +243,9 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         image_embeddings, batched_inputs = self.model.image_embeddings_oft(batched_inputs)
 
         loss, mask_loss, iou_regression_loss, mean_model_iou = 0.0, 0.0, 0.0, 0.0
+
+        # Whether to use mask inputs in each sub-iteration.
+        batched_inputs, use_mask_inputs = self._use_mask_inputs(batched_inputs, y_one_hot)
 
         for i in range(0, num_subiter):
             # We do multimasking only in the first sub-iteration as we then pass single prompt
@@ -212,7 +256,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
                 multimask_output=multimask_output if i == 0 else False,
             )
 
-            # Compute loss for tis sub-iteration.
+            # Compute loss for this sub-iteration.
             net_loss, net_mask_loss, net_iou_regression_loss = self._compute_loss(batched_outputs, y_one_hot)
 
             # Compute the mean IOU predicted by the model. We keep track of this in the logger.
@@ -231,7 +275,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
                     # Get the mask and logit predictions corresponding to the predicted object
                     # (per actual object) with the best IOU.
                     masks, logits = self._get_best_masks(batched_outputs, batched_iou_predictions)
-                    batched_inputs = self._update_prompts(batched_inputs, y_one_hot, masks, logits)
+                    batched_inputs = self._update_prompts(batched_inputs, y_one_hot, masks, logits, use_mask_inputs)
 
         loss = loss / num_subiter
         mask_loss = mask_loss / num_subiter
@@ -240,7 +284,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
         return loss, mask_loss, iou_regression_loss, mean_model_iou
 
-    def _update_prompts(self, batched_inputs, y_one_hot, masks, logits_masks):
+    def _update_prompts(self, batched_inputs, y_one_hot, masks, logits_masks, use_mask_inputs):
         # here, we get the pair-per-batch of predicted and true elements (and also the "batched_inputs")
         for x1, x2, _inp, logits in zip(masks, y_one_hot, batched_inputs, logits_masks):
             # here, we get each object in the pairs and do the point choices per-object
@@ -260,13 +304,21 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             _inp["point_coords"] = updated_point_coords
             _inp["point_labels"] = updated_point_labels
 
-            if self.mask_prob > 0:
-                # using mask inputs for iterative prompting while training, with a probability
-                use_mask_inputs = (random.random() < self.mask_prob)
-                if use_mask_inputs:
-                    _inp["mask_inputs"] = logits
-                else:  # remove  previously existing mask inputs to avoid using them in next sub-iteration
-                    _inp.pop("mask_inputs", None)
+            if self.is_data_parallel:  # multi-GPU training
+                use_mask_inputs_this_iter = use_mask_inputs
+            else:  # single GPU training
+                if self.mask_prob > 0:
+                    # using mask inputs for iterative prompting while training, with a probability
+                    use_mask_inputs = (random.random() < self.mask_prob)
+                else:  # otherwise we assume it is 0 and do not need the generator to decide.
+                    use_mask_inputs = False
+
+                use_mask_inputs_this_iter = use_mask_inputs
+
+            if use_mask_inputs_this_iter:
+                _inp["mask_inputs"] = logits
+            else:  # remove previously existing mask inputs to avoid using them in next sub-iteration.
+                _inp.pop("mask_inputs", None)
 
         return batched_inputs
 
@@ -326,8 +378,8 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             data_min, data_max = x.min(), x.max()
             if (data_min < 0) or (data_max < 1):
                 warnings.warn(
-                    "It looks like you are normalizing the training data."
-                    "The SAM model takes care of normalization, so it is better to not do this."
+                    "It looks like you are normalizing the training data. "
+                    "The SAM model takes care of normalization, so it is better to not do this. "
                     "We recommend to remove data normalization and input data in the range [0, 255]."
                 )
             input_check_done = True

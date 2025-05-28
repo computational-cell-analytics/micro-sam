@@ -36,11 +36,11 @@ def cache_amg_state(
     """Compute and cache or load the state for the automatic mask generator.
 
     Args:
-        predictor: The segment anything predictor.
+        predictor: The Segment Anything predictor.
         raw: The image data.
         image_embeddings: The image embeddings.
         save_path: The embedding save path. The AMG state will be stored in 'save_path/amg_state.pickle'.
-        verbose: Whether to run the computation verbose.
+        verbose: Whether to run the computation verbose. By default, set to 'True'.
         i: The index for which to cache the state.
         kwargs: The keyword arguments for the amg class.
 
@@ -101,14 +101,14 @@ def cache_is_state(
     """Compute and cache or load the state for the automatic mask generator.
 
     Args:
-        predictor: The segment anything predictor.
+        predictor: The Segment Anything predictor.
         decoder: The instance segmentation decoder.
         raw: The image data.
         image_embeddings: The image embeddings.
         save_path: The embedding save path. The AMG state will be stored in 'save_path/amg_state.pickle'.
-        verbose: Whether to run the computation verbose.
+        verbose: Whether to run the computation verbose. By default, set to 'True'.
         i: The index for which to cache the state.
-        skip_load: Skip loading the state if it is precomputed.
+        skip_load: Skip loading the state if it is precomputed. By default, set to 'False'.
         kwargs: The keyword arguments for the amg class.
 
     Returns:
@@ -245,9 +245,9 @@ def precompute_state(
         checkpoint_path: Path to a checkpoint for a custom model.
         key: The key to the input file. This is needed for contaner files (e.g. hdf5 or zarr)
             or to load several images as 3d volume. Provide a glob pattern, e.g. "*.tif", for this case.
-        ndim: The dimensionality of the data.
+        ndim: The dimensionality of the data. By default, computes it from the input data.
         tile_shape: Shape of tiles for tiled prediction. By default prediction is run without tiling.
-        halo: Overlap of the tiles for tiled prediction.
+        halo: Overlap of the tiles for tiled prediction. By default prediction is run without tiling.
         precompute_amg_state: Whether to precompute the state for automatic instance segmentation
             in addition to the image embeddings.
     """

@@ -33,7 +33,7 @@ def batched_inference(
     """Run batched inference for input prompts.
 
     Args:
-        predictor: The segment anything predictor.
+        predictor: The Segment Anything predictor.
         image: The input image.
         batch_size: The batch size to use for inference.
         boxes: The box prompts. Array of shape N_PROMPTS x 4.
@@ -42,17 +42,18 @@ def batched_inference(
             The points are represented by their coordinates [X, Y], which are given in the last dimension.
         point_labels: The point prompt labels. Array of shape N_PROMPTS x 1.
             The labels are either 0 (negative prompt) or 1 (positive prompt).
-        multimasking: Whether to predict with 3 or 1 mask.
-        embedding_path: Cache path for the image embeddings.
+        multimasking: Whether to predict with 3 or 1 mask. By default, set to 'False'.
+        embedding_path: Cache path for the image embeddings. By default, computed on-the-fly.
         return_instance_segmentation: Whether to return a instance segmentation
-            or the individual mask data.
+            or the individual mask data. By default, set to 'True'.
         segmentation_ids: Fixed segmentation ids to assign to the masks
             derived from the prompts.
         reduce_multimasking: Whether to choose the most likely masks with
-            highest ious from multimasking
+            highest ious from multimasking. By default, set to 'True'.
         logits_masks: The logits masks. Array of shape N_PROMPTS x 1 x 256 x 256.
             Whether to use the logits masks from previous segmentation.
         verbose_embeddings: Whether to show progress outputs of computing image embeddings.
+            By default, set to 'True'.
 
     Returns:
         The predicted segmentation masks.

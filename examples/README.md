@@ -1,10 +1,14 @@
 # Examples
 
 Examples for using the `micro_sam` annotation tools:
-- `annotator_2d.py`: run the interactive 2d annotation tool.
-- `annotator_3d.py`: run the interactive 3d annotation tool.
-- `annotator_tracking.py`: run the interactive tracking annotation tool.
-- `image_series_annotator.py`: run the annotation tool for a series of images.
+- `annotator_2d.py`: Run the interactive 2d annotation tool.
+- `annotator_3d.py`: Run the interactive 3d annotation tool.
+- `annotator_tracking.py`: Run the interactive tracking annotation tool.
+- `image_series_annotator.py`: Run the annotation tool for a series of images.
+
+And python scripts for automatic segmentation and tracking:
+- `automatic_segmentation.py`: Run automatic segmentation on 2d images.
+- `automatic_tracking.py`: Run automatic tracking on 2d timeseries images.
 
 And examples for using the `micro_sam` automatic segmentation feature:
 - `quick_start.py`: run the automatic segmentation feature of `micro_sam` on an example 2d image.

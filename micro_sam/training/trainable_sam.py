@@ -68,7 +68,7 @@ class TrainableSAM(nn.Module):
         Args:
             batched_inputs: The batched input images and prompts.
             image_embeddings: The precompute image embeddings. If not passed then they will be computed.
-            multimask_output: Whether to predict mutiple or just a single mask.
+            multimask_output: Whether to predict mutiple or just a single mask. By default, set to 'False'.
 
         Returns:
             The predicted segmentation masks and iou values.

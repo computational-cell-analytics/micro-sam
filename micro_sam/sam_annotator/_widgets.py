@@ -14,6 +14,7 @@ import zarr
 import z5py
 import napari
 import numpy as np
+
 import nifty.ground_truth as ngt
 
 import elf.parallel
@@ -30,9 +31,9 @@ from magicgui.widgets import ComboBox, Container, create_widget
 # from napari.qt.threading import thread_worker
 from napari.utils import progress
 
-from ._state import AnnotatorState
 from . import util as vutil
 from ._tooltips import get_tooltip
+from ._state import AnnotatorState
 from .. import instance_segmentation, util
 from ..multi_dimensional_segmentation import (
     segment_mask_in_volume, merge_instance_segmentation_3d, track_across_frames, PROJECTION_MODES, get_napari_track_data
@@ -496,8 +497,12 @@ def _mask_matched_objects(seg, prev_seg, preservation_threshold):
 
 
 def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
-    # Check if we have a z_range. If yes, use it to set a bounding box.
     state = AnnotatorState()
+
+    # Check whether all layers exist as expected or create new ones automatically.
+    state.annotator._require_layers(layer_choices=[layer, "committed_objects"])
+
+    # Check if we have a z_range. If yes, use it to set a bounding box.
     if state.z_range is None:
         bb = np.s_[:]
     else:
@@ -670,10 +675,10 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
         g = f.create_group(f"prompts/{object_id}")
         if prompts is not None and len(prompts) > 0:
             data = np.array(prompts)
-            g.create_dataset("prompts", data=data, chunks=data.shape)
+            g.create_dataset("prompts", data=data, shape=data.shape, chunks=data.shape)
         if point_prompts is not None and len(point_prompts) > 0:
-            g.create_dataset("point_prompts", data=point_prompts, chunks=point_prompts.shape)
-            ds = g.create_dataset("point_labels", data=point_labels, chunks=point_labels.shape)
+            g.create_dataset("point_prompts", data=point_prompts, shape=data.shape, chunks=point_prompts.shape)
+            ds = g.create_dataset("point_labels", data=point_labels, shape=data.shape, chunks=point_labels.shape)
             if track_state is not None:
                 ds.attrs["track_state"] = track_state.tolist()
 
@@ -750,6 +755,7 @@ def commit(
         commit_path: Select a file path where the committed results and prompts will be saved.
             This feature is still experimental.
     """
+    # Commit the segmentation layer.
     _, seg, mask, bb = _commit_impl(viewer, layer, preserve_mode, preservation_threshold)
 
     if commit_path is not None:
@@ -964,12 +970,27 @@ def _validate_embeddings(viewer: "napari.viewer.Viewer"):
     #     return False
 
 
-def _validate_prompts(viewer: "napari.viewer.Viewer") -> bool:
-    if len(viewer.layers["prompts"].data) == 0 and len(viewer.layers["point_prompts"].data) == 0:
-        msg = "No prompts were given. Please provide prompts to run interactive segmentation."
-        return _generate_message("error", msg)
+def _validation_window_for_missing_layer(layer_choice):
+    if layer_choice == "committed_objects":
+        msg = "The 'committed_objects' layer to commit masks is missing. Please try to commit again."
     else:
-        return False
+        msg = f"The '{layer_choice}' layer to commit is missing. Please re-annotate and try again."
+
+    return _generate_message(message_type="error", message=msg)
+
+
+def _validate_layers(viewer: "napari.viewer.Viewer", automatic_segmentation: bool = False) -> bool:
+    # Check whether all layers exist as expected or create new ones automatically.
+    state = AnnotatorState()
+    state.annotator._require_layers()
+
+    if not automatic_segmentation:
+        # Check prompts layer.
+        if len(viewer.layers["prompts"].data) == 0 and len(viewer.layers["point_prompts"].data) == 0:
+            msg = "No prompts were given. Please provide prompts to run interactive segmentation."
+            return _generate_message("error", msg)
+        else:
+            return False
 
 
 @magic_factory(call_button="Segment Object [S]")
@@ -982,7 +1003,7 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
     """
     if _validate_embeddings(viewer):
         return None
-    if _validate_prompts(viewer):
+    if _validate_layers(viewer):
         return None
 
     shape = viewer.layers["current_object"].data.shape
@@ -1016,7 +1037,7 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
     """
     if _validate_embeddings(viewer):
         return None
-    if _validate_prompts(viewer):
+    if _validate_layers(viewer):
         return None
 
     shape = viewer.layers["current_object"].data.shape[1:]
@@ -1057,8 +1078,9 @@ def segment_frame(viewer: "napari.viewer.Viewer") -> None:
     """
     if _validate_embeddings(viewer):
         return None
-    if _validate_prompts(viewer):
+    if _validate_layers(viewer):
         return None
+
     state = AnnotatorState()
     shape = state.image_shape[1:]
     position = viewer.dims.point
@@ -1318,7 +1340,7 @@ class EmbeddingWidget(_WidgetBase):
         # and we ask the user if they want to load these embeddings.
         if self.embeddings_save_path and os.listdir(self.embeddings_save_path):
             try:
-                f = zarr.open(self.embeddings_save_path, "a")
+                f = zarr.open(self.embeddings_save_path, mode="a")
 
                 # Validate that the embeddings are complete.
                 # Note: 'input_size' is the last value set in the attrs of f,
@@ -1626,8 +1648,9 @@ class SegmentNDWidget(_WidgetBase):
     def __call__(self):
         if _validate_embeddings(self._viewer):
             return None
-        if _validate_prompts(self._viewer):
+        if _validate_layers(self._viewer):
             return None
+
         if self.tracking:
             return self._run_tracking()
         else:
@@ -1888,6 +1911,9 @@ class AutoSegmentWidget(_WidgetBase):
             else:
                 self._viewer.layers["auto_segmentation"].data[i] = seg
             self._viewer.layers["auto_segmentation"].refresh()
+
+        # Validate all layers.
+        _validate_layers(self._viewer, automatic_segmentation=True)
 
         seg = seg_impl()
         update_segmentation(seg)

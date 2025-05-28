@@ -24,8 +24,17 @@ class Annotator2d(_AnnotatorBase):
             "clear": widgets.clear(),
         }
 
-    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
+    def __init__(self, viewer: "napari.viewer.Viewer", reset_state: bool = True) -> None:
         super().__init__(viewer=viewer, ndim=2)
+
+        # Set the expected annotator class to the state.
+        state = AnnotatorState()
+
+        # Reset the state.
+        if reset_state:
+            state.reset_state()
+
+        state.annotator = self
 
 
 def annotator_2d(
@@ -57,15 +66,18 @@ def annotator_2d(
             If `None` then the whole image is passed to Segment Anything.
         halo: Shape of the overlap between tiles, which is needed to segment objects on tile borders.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
+            By default, does not return the napari viewer.
         viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
         precompute_amg_state: Whether to precompute the state for automatic mask generation.
             This will take more time when precomputing embeddings, but will then make
-            automatic mask generation much faster.
+            automatic mask generation much faster. By default, set to 'False'.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
         device: The computational device to use for the SAM model.
+            By default, automatically chooses the best available device.
         prefer_decoder: Whether to use decoder based instance segmentation if
             the model used has an additional decoder for instance segmentation.
+            By default, set to 'True'.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -85,7 +97,7 @@ def annotator_2d(
         viewer = napari.Viewer()
 
     viewer.add_image(image, name="image")
-    annotator = Annotator2d(viewer)
+    annotator = Annotator2d(viewer, reset_state=False)
 
     # Trigger layer update of the annotator so that layers have the correct shape.
     # And initialize the 'committed_objects' with the segmentation result if it was given.

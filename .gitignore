@@ -195,6 +195,8 @@ iterative_prompting_results/
 *.tif
 *.zip
 *MACOSX
+hela_ctc
+clf-test-data
 
 # Related to i2k workshop folders.
 data/
