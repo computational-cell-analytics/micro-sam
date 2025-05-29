@@ -23,7 +23,7 @@ dependencies:
     - pytorch >=2.5
     - segment-anything
     - torchvision
-    - torch_em >=0.7.9
+    - torch_em >=0.7.8
     - tqdm
     - timm
     - xarray
