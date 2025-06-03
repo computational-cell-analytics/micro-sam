@@ -30,10 +30,10 @@ def _check_dataset_available_for_rois(path, patch_shape):
     We do this only for "platynereis - nuclei", "mitoem" datasets - as we expect specific RoIs only from them
     """
     datasets.get_mitoem_dataset(
-        path=os.path.join(path, "mitoem"), patch_shape=patch_shape, download=True, splits="train"
+        path=os.path.join(path, "mitoem"), patch_shape=patch_shape, download=True, splits="train",
     )
     datasets.get_platynereis_nuclei_dataset(
-        path=os.path.join(path, "platynereis"), patch_shape=patch_shape, download=True
+        path=os.path.join(path, "platynereis"), patch_shape=patch_shape, download=True,
     )
     print("All the datasets are available for RoI splitting")
 
@@ -46,29 +46,35 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape):
         distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=0
     )
 
-    # mitoem parameters
+    # MitoEM dataset: ROI values.
     mitoem_train_rois = [np.s_[100:110, :, :], np.s_[100:110, :, :]]
     mitoem_val_rois = [np.s_[0:5, :, :], np.s_[0:5, :, :]]
 
-    # platynereis nuclei dataset parameters
+    # Platynereis (Nuclei) dataset: ROI values.
     platy_root = os.path.join(input_path, "platynereis")
     platy_nuclei_template = "nuclei/train_data_nuclei_%02i.h5"
     platy_nuclei_label_key = "volumes/labels/nucleus_instance_labels"
 
     platy_nuclei_train_samples = [1, 2, 3, 4, 5, 6, 7, 8]
-    platy_nuclei_train_rois = compute_platy_rois(platy_root, platy_nuclei_train_samples, ignore_label=-1,
-                                                 file_template=platy_nuclei_template, label_key=platy_nuclei_label_key)
+    platy_nuclei_train_rois = compute_platy_rois(
+        platy_root, platy_nuclei_train_samples, ignore_label=-1,
+        file_template=platy_nuclei_template, label_key=platy_nuclei_label_key,
+    )
+
     platy_nuclei_val_samples = [9, 10]
-    platy_nuclei_val_rois = compute_platy_rois(platy_root, platy_nuclei_val_samples, ignore_label=-1,
-                                               file_template=platy_nuclei_template, label_key=platy_nuclei_label_key)
+    platy_nuclei_val_rois = compute_platy_rois(
+        platy_root, platy_nuclei_val_samples, ignore_label=-1,
+        file_template=platy_nuclei_template, label_key=platy_nuclei_label_key,
+    )
 
     def mitoem_dataset(split, roi_choice):
         return datasets.get_mitoem_dataset(
             path=os.path.join(input_path, "mitoem"), splits=split, download=True, patch_shape=patch_shape,
             rois=roi_choice, label_transform=standard_label_trafo, ndim=2, raw_transform=identity,
-            sampler=MinInstanceSampler(min_num_instances=5)
+            sampler=MinInstanceSampler(min_num_instances=4),
         )
 
+    # Get MitoEM dataset: mitochondria segmentation in vEM images.
     mitoem_train_dataset = mitoem_dataset("train", mitoem_train_rois)
     mitoem_val_dataset = mitoem_dataset("val", mitoem_val_rois)
 
@@ -79,6 +85,7 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape):
             raw_transform=ResizeRawTrafo(patch_shape[1:], do_rescaling=False), sample_ids=sample_ids
         )
 
+    # Get Platynereis (Nuclei) dataset: nuclei segmentation in vEM images.
     platy_nuclei_train_dataset = platy_nuclei_dataset(platy_nuclei_train_rois, sample_ids=platy_nuclei_train_samples)
     platy_nuclei_val_dataset = platy_nuclei_dataset(platy_nuclei_val_rois, sample_ids=platy_nuclei_val_samples)
 
@@ -91,6 +98,7 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape):
             label_transform=ResizeLabelTrafo(patch_shape[1:]), n_samples=n_samples
         )
 
+    # Get CEM dataset: mitochondria segmentation in vEM images.
     cem_train_dataset = cem_dataset("train")
     cem_val_dataset = cem_dataset("val")
 
@@ -111,14 +119,19 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape):
 
 def get_generalist_mito_nuc_loaders(input_path, patch_shape):
     """This returns the concatenated electron microscopy datasets implemented in torch_em:
-    https://github.com/constantinpape/torch-em/tree/main/torch_em/data/datasets
+    https://github.com/constantinpape/torch-em/tree/main/torch_em/data/datasets/electron_microscopy
     It will automatically download all the datasets
+
     NOTE: to remove / replace the datasets with another dataset, you need to add the datasets (for train and val splits)
     in `get_concat_lm_dataset`. The labels have to be in a label mask instance segmentation format.
     i.e. the tensors (inputs & masks) should be of same spatial shape, with each object in the mask having it's own ID.
     IMPORTANT: the ID 0 is reserved for background, and the IDs must be consecutive.
     """
+    # Get the datasets.
     generalist_train_dataset, generalist_val_dataset = get_concat_mito_nuc_datasets(input_path, patch_shape)
+
+    # Get the dataloaders.
     train_loader = get_data_loader(generalist_train_dataset, batch_size=2, shuffle=True, num_workers=16)
     val_loader = get_data_loader(generalist_val_dataset, batch_size=1, shuffle=True, num_workers=16)
+
     return train_loader, val_loader
