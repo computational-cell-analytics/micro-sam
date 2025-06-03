@@ -25,8 +25,6 @@ def finetune_mito_nuc_em_generalist(args):
     train_loader, val_loader = get_generalist_mito_nuc_loaders(input_path=args.input_path, patch_shape=patch_shape)
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 15}
 
-    breakpoint()
-
     # Run training.
     sam_training.train_sam(
         name=checkpoint_name,

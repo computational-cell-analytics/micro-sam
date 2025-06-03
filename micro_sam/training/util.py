@@ -296,15 +296,18 @@ class ResizeRawTrafo:
         desired_shape: Tuple[int, ...],
         do_rescaling: bool = False,
         valid_channels: Optional[Union[int, Tuple[int, ...]]] = None,
-        padding: str = "constant"
+        padding: str = "constant",
+        ensure_rgb: bool = True,
     ):
         self.desired_shape = desired_shape
         self.do_rescaling = do_rescaling
         self.valid_channels = valid_channels
         self.padding = padding
+        self.ensure_rgb = ensure_rgb
 
     def __call__(self, raw):
-        raw = to_rgb(raw)  # Ensure all images are in 3-channels: triplicate one channel to three channels.
+        if self.ensure_rgb:
+            raw = to_rgb(raw)  # Ensure all images are in 3-channels: triplicate one channel to three channels.
 
         if self.do_rescaling:
             raw = normalize_percentile(raw, axis=self.valid_channels)

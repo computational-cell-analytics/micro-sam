@@ -43,7 +43,7 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape):
 
     sampler = MinInstanceSampler()
     standard_label_trafo = PerObjectDistanceTransform(
-        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=0
+        distances=True, boundary_distances=True, directed_distances=False, foreground=True, instances=True, min_size=0,
     )
 
     # MitoEM dataset: ROI values.
@@ -82,7 +82,7 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape):
         return datasets.get_platynereis_nuclei_dataset(
             path=platy_root, patch_shape=patch_shape, download=True, sampler=sampler, ndim=2,
             label_transform=ResizeLabelTrafo(patch_shape[1:]), rois=roi_choice,
-            raw_transform=ResizeRawTrafo(patch_shape[1:], do_rescaling=False), sample_ids=sample_ids
+            raw_transform=ResizeRawTrafo(patch_shape[1:], do_rescaling=False, ensure_rgb=False), sample_ids=sample_ids
         )
 
     # Get Platynereis (Nuclei) dataset: nuclei segmentation in vEM images.
@@ -94,8 +94,8 @@ def get_concat_mito_nuc_datasets(input_path, patch_shape):
         n_samples = 1620 if split == "train" else 600
         return datasets.cem.get_mitolab_dataset(
             path=os.path.join(input_path, "mitolab"), split=split, val_fraction=0.1, sampler=sampler,
-            raw_transform=ResizeRawTrafo(patch_shape[1:], do_rescaling=False), patch_shape=patch_shape[1:],
-            label_transform=ResizeLabelTrafo(patch_shape[1:]), n_samples=n_samples
+            raw_transform=ResizeRawTrafo(patch_shape[1:], do_rescaling=False, ensure_rgb=False),
+            patch_shape=patch_shape[1:], label_transform=ResizeLabelTrafo(patch_shape[1:]), n_samples=n_samples,
         )
 
     # Get CEM dataset: mitochondria segmentation in vEM images.
