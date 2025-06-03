@@ -25,6 +25,8 @@ def finetune_mito_nuc_em_generalist(args):
     train_loader, val_loader = get_generalist_mito_nuc_loaders(input_path=args.input_path, patch_shape=patch_shape)
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 15}
 
+    breakpoint()
+
     # Run training.
     sam_training.train_sam(
         name=checkpoint_name,
@@ -72,14 +74,6 @@ def main():
     parser.add_argument(
         "--iterations", type=int, default=int(25e4),
         help="For how many iterations should the model be trained? By default 250k."
-    )
-    parser.add_argument(
-        "--export_path", "-e",
-        help="Where to export the finetuned model to. The exported model can be used in the annotation tools."
-    )
-    parser.add_argument(
-        "--freeze", type=str, nargs="+", default=None,
-        help="Which parts of the model to freeze for finetuning."
     )
     parser.add_argument(
         "--export_path", "-e",
