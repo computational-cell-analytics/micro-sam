@@ -294,9 +294,7 @@ def train_sam(
 
             # Get the UNETR.
             unetr = get_unetr(
-                image_encoder=model.sam.image_encoder,
-                decoder_state=state.get("decoder_state", None),
-                device=device,
+                image_encoder=model.sam.image_encoder, decoder_state=state.get("decoder_state", None), device=device,
             )
 
             # Get the parameters for SAM and the decoder from UNETR.
@@ -500,9 +498,7 @@ def train_instance_segmentation(
         )
         device = get_device(device)
         model = get_unetr(
-            image_encoder=sam_model.sam.image_encoder,
-            decoder_state=state.get("decoder_state", None),
-            device=device,
+            image_encoder=sam_model.sam.image_encoder, decoder_state=state.get("decoder_state", None), device=device,
         )
 
         optimizer, scheduler = _get_optimizer_and_scheduler(

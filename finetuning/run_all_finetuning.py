@@ -80,8 +80,8 @@ def submit_slurm(args):
     if args.experiment_name is None:
         experiments = list(script_combinations.keys())
     else:
-        assert args.experiment_name in list(script_combinations.keys()), \
-            f"Choose from {list(script_combinations.keys())}"
+        if args.experiment_name not in list(script_combinations.keys()):
+            raise ValueError(f"Please choose from {list(script_combinations.keys())}")
         experiments = [args.experiment_name]
 
     if args.model_type is None:
@@ -118,7 +118,7 @@ if __name__ == "__main__":
         "-e", "--experiment_name", type=str, default=None, help="The choice of experiment name.",
     )
     parser.add_argument(
-        "-s", "--save_root", type=str, default="/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam",
+        "-s", "--save_root", type=str, default="/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam/v4",
         help="The path where to store the model checkpoints and logs.",
     )
     parser.add_argument(

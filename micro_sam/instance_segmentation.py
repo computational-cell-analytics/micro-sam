@@ -785,6 +785,17 @@ def get_unetr(
     """
     device = util.get_device(device)
 
+    if decoder_state is None:
+        use_conv_transpose = False  # By default, we use interpolation for upsampling.
+    else:
+        # From the provided pretrained 'decoder_state', we check whether it uses transposed convolutions.
+        # NOTE: Explanation to the logic below -
+        # - We do this by looking for parameter names that contain '.block.' within the "decoder.samplers"
+        #   submodules. This naming convention indicates that transposed convolutions are used,
+        #   wrapped inside a custom block module.
+        # - Otherwise '.conv.' appears. It indicates a standard `Conv2d` applied after interpolation for upsampling.
+        use_conv_transpose = any(".block." in k for k in decoder_state.keys() if k.startswith("decoder.samplers"))
+
     unetr = UNETR(
         backbone="sam",
         encoder=image_encoder,
@@ -793,6 +804,7 @@ def get_unetr(
         final_activation="Sigmoid",
         use_skip_connection=False,
         resize_input=True,
+        use_conv_transpose=use_conv_transpose,
     )
 
     if decoder_state is not None:

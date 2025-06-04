@@ -64,7 +64,7 @@ def main():
         help="The model type to use for fine-tuning. Either 'vit_t', 'vit_b', 'vit_l' or 'vit_h'."
     )
     parser.add_argument(
-        "--save_root", "-s", default="/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam",
+        "--save_root", "-s", default="/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam/v4",
         help="Where to save the checkpoint and logs. By default they will be saved where this script is run from."
     )
     parser.add_argument(
