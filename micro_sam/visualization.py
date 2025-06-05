@@ -119,7 +119,7 @@ def _project_tiled_embeddings(image_embeddings):
     }
 
     for tile_id in range(tiling.numberOfBlocks):
-        tile_embeds = features[tile_id][:]
+        tile_embeds = features[str(tile_id)][:]
         assert tile_embeds.ndim in (4, 5)
 
         # extract the embeddings corresponding to the inner tile
@@ -139,8 +139,8 @@ def _project_tiled_embeddings(image_embeddings):
         ], axis=-2
     )
 
-    if features[0].ndim == 5:
-        shape = (features[0].shape[0],) + tuple(shape)
+    if features["0"].ndim == 5:
+        shape = (features["0"].shape[0],) + tuple(shape)
     embedding_vis, scale = _project_embeddings(embeds, shape, apply_crop=False)
     return embedding_vis, scale
 
