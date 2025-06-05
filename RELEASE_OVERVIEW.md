@@ -1,5 +1,10 @@
 # Release Overview
 
+**New in version 1.5.0**
+- Preliminary version of object classification tool.
+- Enabling support for napari v6, zarr v3 and numpy v2.
+- Add support for training models for automatic instance segmentation-only.
+
 **New in version 1.4.0**
 
 This release includes three main changes:
