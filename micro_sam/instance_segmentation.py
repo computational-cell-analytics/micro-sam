@@ -793,6 +793,7 @@ def get_unetr(
         final_activation="Sigmoid",
         use_skip_connection=False,
         resize_input=True,
+        use_conv_transpose=True,
     )
 
     if decoder_state is not None:
