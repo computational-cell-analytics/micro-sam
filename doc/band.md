@@ -8,24 +8,20 @@ In order to use BAND and start `micro_sam` on it follow these steps:
 - Launch a BAND desktop with sufficient resources. It's particularly important to select a GPU. The settings from the image below are a good choice.
 - Go to the desktop by clicking **GO TO DESKTOP** in the **Running Desktops** menu. See also the screenshot below.
 
-![image](https://github.com/computational-cell-analytics/micro-sam/assets/4263537/f965fce2-b924-4fc8-871b-f3201e502138)
-<!-- TODO: Change the screenshot here to match the latest UI -->
+![image](https://github.com/user-attachments/assets/2e615769-b176-4ced-9507-99553aafb1c1)
 
 ## Start `micro_sam` in BAND
 - Select **Applications -> Image Analysis -> microSAM** (see screenshot)
-![image](https://github.com/computational-cell-analytics/micro-sam/assets/4263537/5daeafb3-119b-4104-8708-aab2960cb21c)
-<!-- TODO: Change the screenshot here to match the latest UI -->
+![image](https://github.com/user-attachments/assets/f1e7af0d-5cc6-442d-95c7-9010f5996e2a)
 
 - This will open the napari GUI, where you can select the images and annotator tools you want to use (see screenshot). NOTE: this may take a few minutes.
-![image](https://github.com/computational-cell-analytics/micro-sam/assets/4263537/900ce0b9-4cf8-418c-94f1-e99ac7bc0086)
-<!-- TODO: Change the screenshot here to match the latest UI -->
+![image](https://github.com/user-attachments/assets/23296589-be8d-4f9f-9a38-92d5eea60541)
 
 - For testing if the tool works, it's best to use the **Annotator 2d** first.
   - You can find an example image to use by selection `File` -> `Open Sample` -> `Segment Anything for Microscopy` -> `HeLa 2d example data` (see screenshot)
-![image](https://github.com/computational-cell-analytics/micro-sam/assets/4263537/5fbd1c53-2ba1-47d4-ae50-dfab890ac9d3)
-
-<!-- TODO: Change the screenshot here to match the latest UI -->
+  ![image](https://github.com/user-attachments/assets/ac259787-6238-4b68-8739-48a62f169913)
 - Then select `Plugins` -> `Segment Anything for Microscopy` -> `Annotator 2d`, and the tool will start.
+![image](https://github.com/user-attachments/assets/3062e723-6fe0-48f7-835f-663be7d78b87)
 
 ## Transfering data to BAND
 
