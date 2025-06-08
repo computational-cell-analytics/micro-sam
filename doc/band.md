@@ -1,6 +1,6 @@
 # Using `micro_sam` on BAND
 
-BAND is a service offered by "The German Network for Bioinformatics Infrastructure" (de.NBI) that gives access to a virtual desktop for image analysis tasks. It is free to use and `micro_sam` is installed there.
+BAND is a service offered by EMBL Heidelberg under the "The German Network for Bioinformatics Infrastructure" (de.NBI) that gives access to a virtual desktop for image analysis tasks. It is free to use and `micro_sam` is installed there.
 In order to use BAND and start `micro_sam` on it follow these steps:
 
 ## Start BAND
