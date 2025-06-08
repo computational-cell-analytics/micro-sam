@@ -65,8 +65,20 @@ LM_3D_DATASETS = [
 EM_2D_DATASETS = ["mitolab_tem"]
 
 EM_3D_DATASETS = [
-    "mitoem_rat", "mitoem_human", "platynereis_nuclei", "lucchi", "mitolab", "nuc_mm_mouse",
-    "num_mm_zebrafish", "uro_cell", "sponge_em", "platynereis_cilia", "vnc", "asem_mito",
+    "mitoem_rat",  # mitochondria segmentation in rat vEM
+    "mitoem_human",  # mitochondria segmentation in human vEM
+    "platynereis_nuclei",  # nuclei segmentation (and other structures) in platynereis larvae vEM
+
+    # out-of-domain
+    "lucchi",  # mitochondria segmentation in vEM
+    "mitolab",  # mitochondria segmentation in various
+    "nuc_mm_mouse",  # nuclei segmentation in microCT
+    "num_mm_zebrafish",  # nuclei segmentation in EM
+    "uro_cell",  # mitochondria segmentation (and other organelles) in FIB-SEM
+    "sponge_em",  # microvili segmentation (and other organelles) in sponge chamber vEM
+    "platynereis_cilia",  # cilia segmentation (and other structures) in platynereis larvae vEM
+    "vnc",  # mitochondria segmentation in drosophila brain TEM
+    "asem_mito",  # mitochondria segmentation (and other organelles) in FIB-SEM
 ]
 
 DATASET_RETURNS_FOLDER = {
@@ -74,19 +86,21 @@ DATASET_RETURNS_FOLDER = {
 }
 
 DATASET_CONTAINER_KEYS = {
-    # 2d
+    # 2d (LM)
     "tissuenet": ["raw/rgb", "labels/cell"],
     "covid_if": ["raw/serum_IgG/s0", "labels/cells/s0"],
     "dynamicnuclearnet": ["raw", "labels"],
     "hpa": [["raw/protein", "raw/microtubules", "raw/er"], "labels"],
     "lizard": ["image", "labels/segmentation"],
 
-    # 3d
+    # 3d (LM)
     "plantseg_root": ["raw", "label"],
     "plantseg_ovules": ["raw", "label"],
     "gonuclear": ["raw/nuclei", "labels/nuclei"],
     "mouse_embryo": ["raw", "label"],
     "cellseg_3d": [None, None],
+
+    # 3d (EM)
     "lucchi": ["raw", "labels"],
 }
 
@@ -817,23 +831,26 @@ def main():
     )
     parser.add_argument(
         "-i", "--input_folder", type=str, required=True,
-        help="The path to a directory where the microscopy datasets are / will be stored."
+        help="The path to a directory where the microscopy datasets are and/or will be stored."
     )
     parser.add_argument(
         "-m", "--model_type", type=str, default=util._DEFAULT_MODEL,
-        help=f"The segment anything model that will be used, one of {available_models}."
+        help=f"The segment anything model that will be used, one of '{available_models}'. By default, "
+        f"it uses'{util._DEFAULT_MODEL}'."
     )
     parser.add_argument(
         "-c", "--checkpoint_path", type=str, default=None,
-        help="Checkpoint from which the SAM model will be loaded loaded."
+        help="The filepath to checkpoint from which the SAM model will be loaded."
     )
     parser.add_argument(
         "-d", "--dataset_choice", type=str, nargs='*', default=None,
-        help="The choice(s) of dataset for evaluating SAM models. Multiple datasets can be specified."
+        help="The choice(s) of dataset for evaluating SAM models. Multiple datasets can be specified. "
+        "By default, it evaluates on all datasets."
     )
     parser.add_argument(
         "-o", "--output_folder", type=str, required=True,
-        help="The path where the results for automatic and interactive instance segmentation will be stored as 'csv'."
+        help="The path where the results for (automatic and interactive) instance segmentation results "
+        "will be stored as 'csv' files."
     )
     parser.add_argument(
         "--amg", action="store_true",
@@ -850,8 +867,8 @@ def main():
     parser.add_argument(
         "--evaluate", type=str, default="all", choices=["all", "automatic", "interactive"],
         help="The choice of methods for benchmarking evaluation for reproducibility. "
-        "By default, we run all evaluations with 'all' / 'automatic' runs automatic segmentation only / "
-        "'interactive' runs interactive segmentation (starting from box and single point) with iterative prompting."
+        "By default, we run all evaluations with 'all'. If 'automatic' is chosen, it runs automatic segmentation only "
+        "/ 'interactive' runs interactive segmentation (starting from box and single point) with iterative prompting."
     )
     args = parser.parse_args()
 
