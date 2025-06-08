@@ -65,24 +65,21 @@ LM_3D_DATASETS = [
 EM_2D_DATASETS = ["mitolab_tem"]
 
 EM_3D_DATASETS = [
-    "mitoem_rat",  # mitochondria segmentation in rat vEM
-    "mitoem_human",  # mitochondria segmentation in human vEM
-    "platynereis_nuclei",  # nuclei segmentation (and other structures) in platynereis larvae vEM
-
     # out-of-domain
     "lucchi",  # mitochondria segmentation in vEM
     "mitolab",  # mitochondria segmentation in various
-    "nuc_mm_mouse",  # nuclei segmentation in microCT
-    "num_mm_zebrafish",  # nuclei segmentation in EM
     "uro_cell",  # mitochondria segmentation (and other organelles) in FIB-SEM
     "sponge_em",  # microvili segmentation (and other organelles) in sponge chamber vEM
-    "platynereis_cilia",  # cilia segmentation (and other structures) in platynereis larvae vEM
     "vnc",  # mitochondria segmentation in drosophila brain TEM
+    "nuc_mm_mouse",  # nuclei segmentation in microCT
+    "num_mm_zebrafish",  # nuclei segmentation in EM
+    "platynereis_cilia",  # cilia segmentation (and other structures) in platynereis larvae vEM
     "asem_mito",  # mitochondria segmentation (and other organelles) in FIB-SEM
 ]
 
 DATASET_RETURNS_FOLDER = {
-    "deepbacs": "*.tif"
+    "deepbacs": "*.tif",
+    "mitolab_tem": "*.tiff"
 }
 
 DATASET_CONTAINER_KEYS = {
@@ -102,6 +99,10 @@ DATASET_CONTAINER_KEYS = {
 
     # 3d (EM)
     "lucchi": ["raw", "labels"],
+    "uro_cell": ["raw", "labels/mito"],
+    "mitolab_3d": [None, None],
+    "sponge_em": ["volumes/raw", "volumes/labels/instances"],
+    "vnc": ["raw", "labels/mitochondria"]
 }
 
 
@@ -200,18 +201,13 @@ def _download_benchmark_datasets(path, dataset_choice):
         ),
 
         # Electron Microscopy datasets
-        "mitoem_rat": lambda: datasets.mitoem.get_mitoem_data(
-            path=os.path.join(path, "mitoem"), samples="rat", split="test", download=True,
+
+        # 2d datasets: out-of-domain
+        "mitolab_tem": lambda: datasets.cem.get_benchmark_data(
+            path=os.path.join(path, "mitolab"), dataset_id=7, download=True
         ),
-        "mitoem_human": lambda: datasets.mitoem.get_mitoem_data(
-            path=os.path.join(path, "mitoem"), samples="human", split="test", download=True,
-        ),
-        "platynereis_nuclei": lambda: datasets.platynereis.get_platy_data(
-            path=os.path.join(path, "platynereis"), name="nuclei", download=True,
-        ),
-        "platynereis_cilia": lambda: datasets.platynereis.get_platy_data(
-            path=os.path.join(path, "platynereis"), name="cilia", download=True,
-        ),
+
+        # 3d datasets: out-of-domain
         "lucchi": lambda: datasets.lucchi.get_lucchi_data(
             path=os.path.join(path, "lucchi"), split="test", download=True,
         ),
@@ -220,8 +216,14 @@ def _download_benchmark_datasets(path, dataset_choice):
                 path=os.path.join(path, "mitolab"), dataset_id=dataset_id, download=True,
             ) for dataset_id in range(1, 7)
         ],
-        "mitolab_tem": lambda: datasets.cem.get_benchmark_data(
-            path=os.path.join(path, "mitolab"), dataset_id=7, download=True
+        "uro_cell": lambda: datasets.uro_cell.get_uro_cell_data(
+            path=os.path.join(path, "uro_cell"), download=True,
+        ),
+        "vnc": lambda: datasets.vnc.get_vnc_data(
+            path=os.path.join(path, "vnc"), download=True,
+        ),
+        "sponge_em": lambda: datasets.sponge_em.get_sponge_em_data(
+            path=os.path.join(path, "sponge_em"), download=True,
         ),
         "nuc_mm_mouse": lambda: datasets.nuc_mm.get_nuc_mm_data(
             path=os.path.join(path, "nuc_mm"), sample="mouse", download=True,
@@ -229,18 +231,12 @@ def _download_benchmark_datasets(path, dataset_choice):
         "nuc_mm_zebrafish": lambda: datasets.nuc_mm.get_nuc_mm_data(
             path=os.path.join(path, "nuc_mm"), sample="zebrafish", download=True,
         ),
-        "uro_cell": lambda: datasets.uro_cell.get_uro_cell_data(
-            path=os.path.join(path, "uro_cell"), download=True,
-        ),
-        "sponge_em": lambda: datasets.sponge_em.get_sponge_em_data(
-            path=os.path.join(path, "sponge_em"), download=True,
-        ),
-        "vnc": lambda: datasets.vnc.get_vnc_data(
-            path=os.path.join(path, "vnc"), download=True,
-        ),
         "asem_mito": lambda: datasets.asem.get_asem_data(
             path=os.path.join(path, "asem"), volume_ids=datasets.asem.ORGANELLES["mito"], download=True,
-        )
+        ),
+        "platynereis_cilia": lambda: datasets.platynereis.get_platynereis_data(
+            path=os.path.join(path, "platynereis"), name="cilia", download=True,
+        ),
     }
 
     if dataset_choice is None:
@@ -317,25 +313,35 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
         "cellseg_3d": lambda: datasets.cellseg_3d.get_cellseg_3d_paths(path=path),
 
         # Electron Microscopy datasets
-        "mitoem_rat": lambda: datasets.mitoem.get_mitoem_paths(path=path, splits="test", samples="rat"),
-        "mitem_human": lambda: datasets.mitoem.get_mitoem_paths(path=path, splits="test", samples="human"),
-        "platynereis_nuclei": lambda: datasets.platynereis.get_platynereis_paths(path, sample_ids=None, name="nuclei"),
+
+        # 2d: out-of-domain
+        "mitolab_tem": lambda: datasets.cem.get_benchmark_paths(
+            path=os.path.join(os.path.dirname(path), "mitolab"), dataset_id=7
+        )[:2],
+
+        # 3d: out-of-domain"lucchi": lambda: datasets.lucchi.get_lucchi_paths(path=path, split="test"),
         "platynereis_cilia": lambda: datasets.platynereis.get_platynereis_paths(path, sample_ids=None, name="cilia"),
-        "lucchi": lambda: datasets.lucchi.get_lucchi_paths(path=path, split="test"),
+        "uro_cell": lambda: datasets.uro_cell.get_uro_cell_paths(path=path, target="mito"),
+        "vnc": lambda: datasets.vnc.get_vnc_mito_paths(path=path),
+        "sponge_em": lambda: datasets.sponge_em.get_sponge_em_paths(path=path, sample_ids=None),
         "mitolab_3d": lambda: (
-            [rpath for i in range(1, 7) for rpath in datasets.cem.get_benchmark_paths(path=path, dataset_id=i)[0]],
-            [lpath for i in range(1, 7) for lpath in datasets.cem.get_benchmark_paths(path=path, dataset_id=i)[1]]
+            [
+                datasets.cem.get_benchmark_paths(
+                    path=os.path.join(os.path.dirname(path), "mitolab"), dataset_id=i
+                )[0] for i in range(1, 7)
+            ],
+            [
+                datasets.cem.get_benchmark_paths(
+                    path=os.path.join(os.path.dirname(path), "mitolab"), dataset_id=i
+                )[1] for i in range(1, 7)
+            ]
         ),
-        "mitolab_tem": lambda: datasets.cem.get_benchmark_paths(path=path, dataset_id=7),
         "nuc_mm_mouse": lambda: datasets.nuc_mm.get_nuc_mm_paths(path=path, sample="mouse", split="val"),
         "nuc_mm_zebrafish": lambda: datasets.nuc_mm.get_nuc_mm_paths(path=path, sample="zebrafish", split="val"),
-        "uro_cell": lambda: datasets.uro_cell.get_uro_cell_paths(path=path, target="mito"),
-        "sponge_em": lambda: datasets.sponge_em.get_sponge_em_paths(path=path, sample_ids=None),
-        "vnc": lambda: datasets.vnc.get_vnc_mito_paths(path=path),
         "asem_mito": lambda: datasets.asem.get_asem_paths(path=path, volume_ids=datasets.asem.ORGANELLES["mito"])
     }
 
-    if (ndim == 2 and dataset_choice not in DATASET_CONTAINER_KEYS) or dataset_choice == "cellseg_3d":
+    if (ndim == 2 and dataset_choice not in DATASET_CONTAINER_KEYS) or dataset_choice in ["cellseg_3d", "mitolab_3d"]:
         image_paths, gt_paths = available_datasets[dataset_choice]()
 
         if dataset_choice in DATASET_RETURNS_FOLDER:
@@ -371,9 +377,10 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
     # Logic to extract relevant patches for inference
     image_counter = 1
     for per_paths in tqdm(paths_set, desc=f"Extracting {ndim}d patches for {dataset_choice}"):
-        if (ndim == 2 and dataset_choice not in DATASET_CONTAINER_KEYS) or dataset_choice == "cellseg_3d":
+        if (ndim == 2 and dataset_choice not in DATASET_CONTAINER_KEYS) or dataset_choice in ["cellseg_3d", "mitolab_3d"]:  # noqa
             image_path, gt_path = per_paths
             image, gt = util.load_image_data(image_path), util.load_image_data(gt_path)
+
         else:
             image_path = per_paths
             gt = util.load_image_data(image_path, DATASET_CONTAINER_KEYS[dataset_choice][1])
