@@ -105,11 +105,11 @@ def models():
         "vit_t": "xxh128:8eadbc88aeb9d8c7e0b4b60c3db48bd0",
         # The current version of our models in the modelzoo.
         # LM generalist models:
-        "vit_l_lm": "xxh128:fc32ea6f7fcc7eb02737d1304f81f5f2",
+        "vit_l_lm": "xxh128:017f20677997d628426dec80a8018f9d",
         "vit_b_lm": "xxh128:fe9252a29f3f4ea53c15a06de471e186",
         "vit_t_lm": "xxh128:72ec5074774761a6e5c05a08942f981e",
         # EM models:
-        "vit_l_em_organelles": "xxh128:096c9695966803ca6fde24f4c1e3c3fb",
+        "vit_l_em_organelles": "xxh128:810b084b6e51acdbf760a993d8619f2d",
         "vit_b_em_organelles": "xxh128:bb6398956a6b0132c26b631c14f95ce2",
         "vit_t_em_organelles": "xxh128:253474720c497cce605e57c9b1d18fd9",
         # Histopathology models:
@@ -122,11 +122,11 @@ def models():
     # Additional decoders for instance segmentation.
     decoder_registry = {
         # LM generalist models:
-        "vit_l_lm_decoder": "xxh128:779b5a50ecc6d46d495753fba8717f2f",
+        "vit_l_lm_decoder": "xxh128:2faeafa03819dfe03e7c46a44aaac64a",
         "vit_b_lm_decoder": "xxh128:708b15ac620e235f90bb38612c4929ba",
         "vit_t_lm_decoder": "xxh128:3e914a5f397b0312cdd36813031f8823",
         # EM models:
-        "vit_l_em_organelles_decoder": "xxh128:d60fd96bd6060856f6430f29e42568fb",
+        "vit_l_em_organelles_decoder": "xxh128:334877640bfdaaabce533e3252a17294",
         "vit_b_em_organelles_decoder": "xxh128:bb6398956a6b0132c26b631c14f95ce2",
         "vit_t_em_organelles_decoder": "xxh128:8f897c7bb93174a4d1638827c4dd6f44",
         # Histopathology models:
