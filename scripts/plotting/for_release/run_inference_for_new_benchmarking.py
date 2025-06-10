@@ -39,12 +39,17 @@ DATASET_NAME_MAPPING = {
     "toiam": "TOIAM",
     "vicar": "VICAR",
     "yeaz": r"$\mathit{YeaZ}$",
+    "lucchi": "Lucchi",
+    "mitolab_3d": "MitoLab (vEM)",
+    "mitolab_tem": "MitoLab (TEM)",
+    "uro_cell": "UroCell",
+    "vnc": "VNC",
 }
 
 
-def get_comparison_plot_for_new_models(metric, model_type):
-    old_mfolder = f"{model_type}_old_model"
-    new_mfolder = f"{model_type}_new_model"
+def get_comparison_plot_for_new_lm_models(metric, model_type):
+    old_mfolder = f"{model_type}_v3"
+    new_mfolder = f"{model_type}_v4"
 
     old_results = natsorted(glob(os.path.join(ROOT, old_mfolder, "*", "results", "ais_2d.csv")))
     new_results = natsorted(glob(os.path.join(ROOT, new_mfolder, "*", "results", "ais_2d.csv")))
@@ -64,10 +69,10 @@ def get_comparison_plot_for_new_models(metric, model_type):
     results = pd.concat(results, ignore_index=True)
 
     plt.figure(figsize=(12, 8))
-    plt.plot(results["dataset"], results[f"{model_type}_lm"], marker="o", label="ViT-Base (v2)", linestyle="-")
+    plt.plot(results["dataset"], results[f"{model_type}_lm"], marker="o", label="ViT-Base (v3)", linestyle="-")
     plt.plot(
         results["dataset"], results[f"{model_type}_lm (NEW)"], marker="s",
-        label=r"$\mathit{(NEW)}$ ViT-Base (v3)", linestyle="--"
+        label=r"$\mathit{(NEW)}$ ViT-Base (v4)", linestyle="--"
     )
 
     plt.xticks(rotation=90, fontweight="bold", fontsize=12)
@@ -76,7 +81,46 @@ def get_comparison_plot_for_new_models(metric, model_type):
     plt.title(r"$\mu$SAM LM Generalist Model", fontsize=12)
     plt.legend(loc="upper center", bbox_to_anchor=(0.5, 1), ncol=2, fontsize=12, frameon=False)
 
-    plt.savefig("./test.png", dpi=300, bbox_inches="tight")
+    plt.savefig("./test_lm.png", dpi=300, bbox_inches="tight")
+
+
+def get_comparison_plot_for_new_em_models(metric, model_type):
+    old_mfolder = f"{model_type}_em_organelles_old"
+    new_mfolder = f"{model_type}_em_organelles_v4"
+
+    old_results = natsorted(glob(os.path.join(ROOT, old_mfolder, "*", "results", "ais_2d.csv")))
+    new_results = natsorted(glob(os.path.join(ROOT, new_mfolder, "*", "results", "ais_2d.csv")))
+
+    results = []
+    for old_res_path, new_res_path in zip(old_results, new_results):
+        dname = old_res_path.rsplit("/")[-3]
+        assert dname in new_res_path, (old_res_path, new_res_path)
+
+        res = {
+            "dataset": DATASET_NAME_MAPPING[dname],
+            f"{model_type}_em_organelles": pd.read_csv(old_res_path)[metric][0],
+            f"{model_type}_em_organelles (NEW)": pd.read_csv(new_res_path)[metric][0],
+        }
+        results.append(pd.DataFrame.from_dict([res]))
+
+    results = pd.concat(results, ignore_index=True)
+
+    plt.figure(figsize=(12, 8))
+    plt.plot(
+        results["dataset"], results[f"{model_type}_em_organelles"], marker="o", label="ViT-Base (v2)", linestyle="-"
+    )
+    plt.plot(
+        results["dataset"], results[f"{model_type}_em_organelles (NEW)"], marker="s",
+        label=r"$\mathit{(NEW)}$ ViT-Base (v4)", linestyle="--"
+    )
+
+    plt.xticks(rotation=90, fontweight="bold", fontsize=12)
+    plt.yticks(fontsize=12)
+    plt.ylabel("Mean Segmentation Accuracy", fontsize=14, fontweight="bold")
+    plt.title(r"$\mu$SAM EM Organelles Generalist Model", fontsize=12)
+    plt.legend(loc="upper center", bbox_to_anchor=(0.5, 1), ncol=2, fontsize=12, frameon=False)
+
+    plt.savefig("./test_em.png", dpi=300, bbox_inches="tight")
 
 
 def plot_qualitative_ais():
@@ -146,9 +190,11 @@ def plot_qualitative_ais():
 
 
 def main():
-    # get_comparison_plot_for_new_models(metric="mSA", model_type="vit_t")
-    get_comparison_plot_for_new_models(metric="mSA", model_type="vit_b")
-    # get_comparison_plot_for_new_models(metric="mSA", model_type="vit_l")
+    # get_comparison_plot_for_new_lm_models(metric="mSA", model_type="vit_t")
+    get_comparison_plot_for_new_lm_models(metric="mSA", model_type="vit_b")
+    # get_comparison_plot_for_new_lm_models(metric="mSA", model_type="vit_l")
+
+    get_comparison_plot_for_new_em_models(metric="mSA", model_type="vit_b")
 
     # plot_qualitative_ais()
 
