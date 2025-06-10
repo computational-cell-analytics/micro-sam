@@ -107,11 +107,11 @@ def models():
         # LM generalist models:
         "vit_l_lm": "xxh128:017f20677997d628426dec80a8018f9d",
         "vit_b_lm": "xxh128:fe9252a29f3f4ea53c15a06de471e186",
-        "vit_t_lm": "xxh128:72ec5074774761a6e5c05a08942f981e",
+        "vit_t_lm": "xxh128:dece91e10b19077cd5b2f3f9265bff8c",
         # EM models:
         "vit_l_em_organelles": "xxh128:810b084b6e51acdbf760a993d8619f2d",
         "vit_b_em_organelles": "xxh128:bb6398956a6b0132c26b631c14f95ce2",
-        "vit_t_em_organelles": "xxh128:253474720c497cce605e57c9b1d18fd9",
+        "vit_t_em_organelles": "xxh128:0f3670d6689037980135ee311dd65fc5",
         # Histopathology models:
         "vit_b_histopathology": "xxh128:ffd1a2cd84570458b257bd95fdd8f974",
         "vit_l_histopathology": "xxh128:b591833c89754271023e901281dee3f2",
@@ -124,7 +124,7 @@ def models():
         # LM generalist models:
         "vit_l_lm_decoder": "xxh128:2faeafa03819dfe03e7c46a44aaac64a",
         "vit_b_lm_decoder": "xxh128:708b15ac620e235f90bb38612c4929ba",
-        "vit_t_lm_decoder": "xxh128:3e914a5f397b0312cdd36813031f8823",
+        "vit_t_lm_decoder": "xxh128:037aa3baaeeaa76cc7000fbaae30f251",
         # EM models:
         "vit_l_em_organelles_decoder": "xxh128:334877640bfdaaabce533e3252a17294",
         "vit_b_em_organelles_decoder": "xxh128:bb6398956a6b0132c26b631c14f95ce2",
