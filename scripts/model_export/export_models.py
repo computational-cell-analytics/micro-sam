@@ -131,13 +131,18 @@ def export_model(model_path, model_type, modality, version, email):
     print("Decoder:")
     print(f"{model_name}_decoder", f"xxh128:{decoder_checksum}")
 
+    breakpoint()
 
-def export_all_models(email, version):
-    models = glob(os.path.join(INPUT_FOLDER, f"v{version}/**/vit*"), recursive=True)
+
+def export_all_models(email, version, model_type):
+    if model_type is None:
+        model_type = "vit*"
+
+    models = glob(os.path.join(INPUT_FOLDER, f"v{version}/**/{model_type}"), recursive=True)
     for path in models:
         modality, _, model_type = path.split("/")[-3:]  # current expected structure: v4/lm/generalist/vit_b/best.pt
-        # print(model_path, modality, model_type)
         model_path = os.path.join(path, "best.pt")
+        print(model_path, modality, model_type)
         assert os.path.exists(model_path), model_path
         export_model(model_path, model_type, modality, version=version, email=email)
 
@@ -153,9 +158,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--email", required=True)
     parser.add_argument("-v", "--version", default=4, type=int)
+    parser.add_argument("-m", "--model_type", type=str, default=None)
     args = parser.parse_args()
 
-    export_all_models(args.email, args.version)
+    export_all_models(args.email, args.version, args.model_type)
 
 
 if __name__ == "__main__":
