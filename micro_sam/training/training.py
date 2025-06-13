@@ -669,14 +669,28 @@ def default_sam_dataset(
         raw_transform = require_8bit
 
     if with_segmentation_decoder:
-        label_transform = torch_em.transform.label.PerObjectDistanceTransform(
-            distances=True,
-            boundary_distances=True,
-            directed_distances=False,
-            foreground=True,
-            instances=return_instances,
-            min_size=min_size,
-        )
+        label_transform_in = kwargs.pop("label_transform", None)
+        if label_transform_in is None:
+            label_transform = torch_em.transform.label.PerObjectDistanceTransform(
+                distances=True,
+                boundary_distances=True,
+                directed_distances=False,
+                foreground=True,
+                instances=return_instances,
+                min_size=min_size,
+            )
+        else:
+            label_transform = torch_em.transform.generic.Compose(
+                label_transform_in,
+                torch_em.transform.label.PerObjectDistanceTransform(
+                    distances=True,
+                    boundary_distances=True,
+                    directed_distances=False,
+                    foreground=True,
+                    instances=return_instances,
+                    min_size=min_size,
+                )
+            )
     else:
         label_transform = torch_em.transform.label.MinSizeLabelTransform(min_size=min_size)
 
