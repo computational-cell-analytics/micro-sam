@@ -110,7 +110,7 @@ def models():
         "vit_t_lm": "xxh128:dece91e10b19077cd5b2f3f9265bff8c",
         # EM models:
         "vit_l_em_organelles": "xxh128:810b084b6e51acdbf760a993d8619f2d",
-        "vit_b_em_organelles": "xxh128:bb6398956a6b0132c26b631c14f95ce2",
+        "vit_b_em_organelles": "xxh128:f3bf2ed83d691456bae2c3f9a05fb438",
         "vit_t_em_organelles": "xxh128:0f3670d6689037980135ee311dd65fc5",
         # Histopathology models:
         "vit_b_histopathology": "xxh128:ffd1a2cd84570458b257bd95fdd8f974",
@@ -124,7 +124,7 @@ def models():
         # LM generalist models:
         "vit_l_lm_decoder": "xxh128:2faeafa03819dfe03e7c46a44aaac64a",
         "vit_b_lm_decoder": "xxh128:708b15ac620e235f90bb38612c4929ba",
-        "vit_t_lm_decoder": "xxh128:037aa3baaeeaa76cc7000fbaae30f251",
+        "vit_t_lm_decoder": "xxh128:896c651cee16afe1c776ff02e0b00dea",
         # EM models:
         "vit_l_em_organelles_decoder": "xxh128:334877640bfdaaabce533e3252a17294",
         "vit_b_em_organelles_decoder": "xxh128:bb6398956a6b0132c26b631c14f95ce2",
@@ -143,9 +143,9 @@ def models():
         "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
         "vit_l_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1.2/files/vit_l.pt",
         "vit_b_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1.2/files/vit_b.pt",
-        "vit_t_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1.1/files/vit_t.pt",
+        "vit_t_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1.2/files/vit_t.pt",
         "vit_l_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1.2/files/vit_l.pt",  # noqa
-        "vit_b_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b.pt",
+        "vit_b_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1.2/files/vit_b.pt",  # noqa
         "vit_t_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1.2/files/vit_t.pt",  # noqa
         "vit_b_histopathology": "https://owncloud.gwdg.de/index.php/s/sBB4H8CTmIoBZsQ/download",
         "vit_l_histopathology": "https://owncloud.gwdg.de/index.php/s/IZgnn1cpBq2PHod/download",
@@ -156,9 +156,9 @@ def models():
     decoder_urls = {
         "vit_l_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1.2/files/vit_l_decoder.pt",  # noqa
         "vit_b_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1.2/files/vit_b_decoder.pt",  # noqa
-        "vit_t_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1.1/files/vit_t_decoder.pt",  # noqa
+        "vit_t_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1.2/files/vit_t_decoder.pt",  # noqa
         "vit_l_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1.2/files/vit_l_decoder.pt",  # noqa
-        "vit_b_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b_decoder.pt",  # noqa
+        "vit_b_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1.2/files/vit_b_decoder.pt",  # noqa
         "vit_t_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1.2/files/vit_t_decoder.pt",  # noqa
         "vit_b_histopathology_decoder": "https://owncloud.gwdg.de/index.php/s/KO9AWqynI7SFOBj/download",
         "vit_l_histopathology_decoder": "https://owncloud.gwdg.de/index.php/s/oIs6VSmkOp7XrKF/download",
@@ -1259,12 +1259,24 @@ def micro_sam_info():
     """Display μSAM information using a rich console."""
     import psutil
     import platform
+    import argparse
+    from rich import progress
     from rich.panel import Panel
     from rich.table import Table
     from rich.console import Console
 
     import torch
     import micro_sam
+
+    parser = argparse.ArgumentParser(description="μSAM Information Booth")
+    parser.add_argument(
+        "--download", nargs="+", metavar=("WHAT", "KIND"),
+        help="Downloads the pretrained SAM models."
+        "'--download models' -> downloads all pretrained models; "
+        "'--download models vit_b_lm vit_b_em_organelles' -> downloads the listed models; "
+        "'--download model/models vit_b_lm' -> downloads a single specified model."
+    )
+    args = parser.parse_args()
 
     # Open up a new console.
     console = Console()
@@ -1339,3 +1351,38 @@ def micro_sam_info():
                 title="Device Information"
             )
         )
+
+    # The section allowing to download models.
+    # NOTE: In future, can be extended to download sample data.
+    if args.download:
+        download_provided_args = [t.lower() for t in args.download]
+        mode, *model_types = download_provided_args
+
+        if mode not in {"models", "model"}:
+            console.print(f"[red]Unknown option for --download: {mode}[/]")
+            return
+
+        if mode in ["model", "models"] and not model_types:  # If user did not specify, we will download all models.
+            download_list = available_models
+        else:
+            download_list = model_types
+            incorrect_models = [m for m in download_list if m not in available_models]
+            if incorrect_models:
+                console.print(Panel("[red]Unknown model(s):[/] " + ", ".join(incorrect_models), title="Download Error"))
+                return
+
+        with progress.Progress(
+            progress.SpinnerColumn(),
+            progress.TextColumn("[progress.description]{task.description}"),
+            progress.BarColumn(bar_width=None),
+            "[progress.percentage]{task.percentage:>3.0f}%",
+            progress.TimeRemainingColumn(),
+            console=console,
+        ) as prog:
+            task = prog.add_task("[green]Downloading μSAM models…", total=len(download_list))
+            for model_type in download_list:
+                prog.update(task, description=f"Downloading [cyan]{model_type}[/]…")
+                get_sam_model(model_type=model_type)
+                prog.advance(task)
+
+        console.print(Panel("[bold green] Downloads complete![/]", title="Finished"))
