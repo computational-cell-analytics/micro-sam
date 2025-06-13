@@ -283,6 +283,31 @@ def _load_checkpoint(checkpoint_path):
     return state, model_state
 
 
+def _download_sam_model(model_type, progress_bar_factory=None):
+    model_registry = models()
+
+    progress_bar = True
+    # Check if we have to download the model.
+    # If we do and have a progress bar factory, then we over-write the progress bar.
+    if not os.path.exists(os.path.join(get_cache_directory(), model_type)) and progress_bar_factory is not None:
+        progress_bar = progress_bar_factory(model_type)
+
+    checkpoint_path = model_registry.fetch(model_type, progressbar=progress_bar)
+    if not isinstance(progress_bar, bool):  # Close the progress bar when the task finishes.
+        progress_bar.close()
+
+    model_hash = model_registry.registry[model_type]
+
+    # If we have a custom model then we may also have a decoder checkpoint.
+    # Download it here, so that we can add it to the state.
+    decoder_name = f"{model_type}_decoder"
+    decoder_path = model_registry.fetch(
+        decoder_name, progressbar=True
+    ) if decoder_name in model_registry.registry else None
+
+    return checkpoint_path, model_hash, decoder_path
+
+
 def get_sam_model(
     model_type: str = _DEFAULT_MODEL,
     device: Optional[Union[str, torch.device]] = None,
@@ -345,26 +370,7 @@ def get_sam_model(
     # URL from the model_type. If the model_type is invalid pooch will raise an error.
     _provided_checkpoint_path = checkpoint_path is not None
     if checkpoint_path is None:
-        model_registry = models()
-
-        progress_bar = True
-        # Check if we have to download the model.
-        # If we do and have a progress bar factory, then we over-write the progress bar.
-        if not os.path.exists(os.path.join(get_cache_directory(), model_type)) and progress_bar_factory is not None:
-            progress_bar = progress_bar_factory(model_type)
-
-        checkpoint_path = model_registry.fetch(model_type, progressbar=progress_bar)
-        if not isinstance(progress_bar, bool):  # Close the progress bar when the task finishes.
-            progress_bar.close()
-
-        model_hash = model_registry.registry[model_type]
-
-        # If we have a custom model then we may also have a decoder checkpoint.
-        # Download it here, so that we can add it to the state.
-        decoder_name = f"{model_type}_decoder"
-        decoder_path = model_registry.fetch(
-            decoder_name, progressbar=True
-        ) if decoder_name in model_registry.registry else None
+        checkpoint_path, model_hash, decoder_path = _download_sam_model(model_type, progress_bar_factory)
 
     # checkpoint_path has been passed, we use it instead of downloading a model.
     else:
@@ -1382,7 +1388,7 @@ def micro_sam_info():
             task = prog.add_task("[green]Downloading μSAM models…", total=len(download_list))
             for model_type in download_list:
                 prog.update(task, description=f"Downloading [cyan]{model_type}[/]…")
-                get_sam_model(model_type=model_type)
+                _download_sam_model(model_type=model_type)
                 prog.advance(task)
 
         console.print(Panel("[bold green] Downloads complete![/]", title="Finished"))
