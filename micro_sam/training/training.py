@@ -668,8 +668,9 @@ def default_sam_dataset(
     if raw_transform is None:
         raw_transform = require_8bit
 
+    # Prepare the label transform.
     if with_segmentation_decoder:
-        label_transform = torch_em.transform.label.PerObjectDistanceTransform(
+        default_label_transform = torch_em.transform.label.PerObjectDistanceTransform(
             distances=True,
             boundary_distances=True,
             directed_distances=False,
@@ -678,7 +679,14 @@ def default_sam_dataset(
             min_size=min_size,
         )
     else:
-        label_transform = torch_em.transform.label.MinSizeLabelTransform(min_size=min_size)
+        default_label_transform = torch_em.transform.label.MinSizeLabelTransform(min_size=min_size)
+
+    # Allow combining label transforms.
+    custom_label_transform = kwargs.pop("label_transform", None)
+    if custom_label_transform is None:
+        label_transform = default_label_transform
+    else:
+        label_transform = torch_em.transform.generic.Compose(custom_label_transform, default_label_transform)
 
     # Check the patch shape to add a singleton if required.
     patch_shape = _update_patch_shape(
