@@ -105,12 +105,12 @@ def models():
         "vit_t": "xxh128:8eadbc88aeb9d8c7e0b4b60c3db48bd0",
         # The current version of our models in the modelzoo.
         # LM generalist models:
-        "vit_l_lm": "xxh128:fc32ea6f7fcc7eb02737d1304f81f5f2",
-        "vit_b_lm": "xxh128:8fd5806be3c3ba213e19a709d6d1495f",
+        "vit_l_lm": "xxh128:017f20677997d628426dec80a8018f9d",
+        "vit_b_lm": "xxh128:fe9252a29f3f4ea53c15a06de471e186",
         "vit_t_lm": "xxh128:72ec5074774761a6e5c05a08942f981e",
         # EM models:
-        "vit_l_em_organelles": "xxh128:096c9695966803ca6fde24f4c1e3c3fb",
-        "vit_b_em_organelles": "xxh128:f6f6593aeecd0e15a07bdac86360b6cc",
+        "vit_l_em_organelles": "xxh128:810b084b6e51acdbf760a993d8619f2d",
+        "vit_b_em_organelles": "xxh128:f3bf2ed83d691456bae2c3f9a05fb438",
         "vit_t_em_organelles": "xxh128:253474720c497cce605e57c9b1d18fd9",
         # Histopathology models:
         "vit_b_histopathology": "xxh128:ffd1a2cd84570458b257bd95fdd8f974",
@@ -122,12 +122,12 @@ def models():
     # Additional decoders for instance segmentation.
     decoder_registry = {
         # LM generalist models:
-        "vit_l_lm_decoder": "xxh128:779b5a50ecc6d46d495753fba8717f2f",
-        "vit_b_lm_decoder": "xxh128:9f580a96984b3085389ced5d9a4ae75d",
+        "vit_l_lm_decoder": "xxh128:2faeafa03819dfe03e7c46a44aaac64a",
+        "vit_b_lm_decoder": "xxh128:708b15ac620e235f90bb38612c4929ba",
         "vit_t_lm_decoder": "xxh128:3e914a5f397b0312cdd36813031f8823",
         # EM models:
-        "vit_l_em_organelles_decoder": "xxh128:d60fd96bd6060856f6430f29e42568fb",
-        "vit_b_em_organelles_decoder": "xxh128:b2d4dcffb99f76d83497d39ee500088f",
+        "vit_l_em_organelles_decoder": "xxh128:334877640bfdaaabce533e3252a17294",
+        "vit_b_em_organelles_decoder": "xxh128:bb6398956a6b0132c26b631c14f95ce2",
         "vit_t_em_organelles_decoder": "xxh128:8f897c7bb93174a4d1638827c4dd6f44",
         # Histopathology models:
         "vit_b_histopathology_decoder": "xxh128:6a66194dcb6e36199cbee2214ecf7213",
@@ -141,11 +141,11 @@ def models():
         "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
         "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
         "vit_t": "https://owncloud.gwdg.de/index.php/s/TuDzuwVDHd1ZDnQ/download",
-        "vit_l_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1.1/files/vit_l.pt",
-        "vit_b_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1.1/files/vit_b.pt",
+        "vit_l_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1.2/files/vit_l.pt",
+        "vit_b_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1.2/files/vit_b.pt",
         "vit_t_lm": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1.1/files/vit_t.pt",
-        "vit_l_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l.pt",  # noqa
-        "vit_b_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b.pt",
+        "vit_l_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1.2/files/vit_l.pt",  # noqa
+        "vit_b_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1.2/files/vit_b.pt",  # noqa
         "vit_t_em_organelles": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t.pt",  # noqa
         "vit_b_histopathology": "https://owncloud.gwdg.de/index.php/s/sBB4H8CTmIoBZsQ/download",
         "vit_l_histopathology": "https://owncloud.gwdg.de/index.php/s/IZgnn1cpBq2PHod/download",
@@ -154,11 +154,11 @@ def models():
     }
 
     decoder_urls = {
-        "vit_l_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1.1/files/vit_l_decoder.pt",  # noqa
-        "vit_b_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1.1/files/vit_b_decoder.pt",  # noqa
+        "vit_l_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/idealistic-rat/1.2/files/vit_l_decoder.pt",  # noqa
+        "vit_b_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/diplomatic-bug/1.2/files/vit_b_decoder.pt",  # noqa
         "vit_t_lm_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/faithful-chicken/1.1/files/vit_t_decoder.pt",  # noqa
-        "vit_l_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1/files/vit_l_decoder.pt",  # noqa
-        "vit_b_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1/files/vit_b_decoder.pt",  # noqa
+        "vit_l_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/humorous-crab/1.2/files/vit_l_decoder.pt",  # noqa
+        "vit_b_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/noisy-ox/1.2/files/vit_b_decoder.pt",  # noqa
         "vit_t_em_organelles_decoder": "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/greedy-whale/1/files/vit_t_decoder.pt",  # noqa
         "vit_b_histopathology_decoder": "https://owncloud.gwdg.de/index.php/s/KO9AWqynI7SFOBj/download",
         "vit_l_histopathology_decoder": "https://owncloud.gwdg.de/index.php/s/oIs6VSmkOp7XrKF/download",
@@ -283,6 +283,31 @@ def _load_checkpoint(checkpoint_path):
     return state, model_state
 
 
+def _download_sam_model(model_type, progress_bar_factory=None):
+    model_registry = models()
+
+    progress_bar = True
+    # Check if we have to download the model.
+    # If we do and have a progress bar factory, then we over-write the progress bar.
+    if not os.path.exists(os.path.join(get_cache_directory(), model_type)) and progress_bar_factory is not None:
+        progress_bar = progress_bar_factory(model_type)
+
+    checkpoint_path = model_registry.fetch(model_type, progressbar=progress_bar)
+    if not isinstance(progress_bar, bool):  # Close the progress bar when the task finishes.
+        progress_bar.close()
+
+    model_hash = model_registry.registry[model_type]
+
+    # If we have a custom model then we may also have a decoder checkpoint.
+    # Download it here, so that we can add it to the state.
+    decoder_name = f"{model_type}_decoder"
+    decoder_path = model_registry.fetch(
+        decoder_name, progressbar=True
+    ) if decoder_name in model_registry.registry else None
+
+    return checkpoint_path, model_hash, decoder_path
+
+
 def get_sam_model(
     model_type: str = _DEFAULT_MODEL,
     device: Optional[Union[str, torch.device]] = None,
@@ -345,26 +370,7 @@ def get_sam_model(
     # URL from the model_type. If the model_type is invalid pooch will raise an error.
     _provided_checkpoint_path = checkpoint_path is not None
     if checkpoint_path is None:
-        model_registry = models()
-
-        progress_bar = True
-        # Check if we have to download the model.
-        # If we do and have a progress bar factory, then we over-write the progress bar.
-        if not os.path.exists(os.path.join(get_cache_directory(), model_type)) and progress_bar_factory is not None:
-            progress_bar = progress_bar_factory(model_type)
-
-        checkpoint_path = model_registry.fetch(model_type, progressbar=progress_bar)
-        if not isinstance(progress_bar, bool):  # Close the progress bar when the task finishes.
-            progress_bar.close()
-
-        model_hash = model_registry.registry[model_type]
-
-        # If we have a custom model then we may also have a decoder checkpoint.
-        # Download it here, so that we can add it to the state.
-        decoder_name = f"{model_type}_decoder"
-        decoder_path = model_registry.fetch(
-            decoder_name, progressbar=True
-        ) if decoder_name in model_registry.registry else None
+        checkpoint_path, model_hash, decoder_path = _download_sam_model(model_type, progress_bar_factory)
 
     # checkpoint_path has been passed, we use it instead of downloading a model.
     else:
@@ -1259,12 +1265,24 @@ def micro_sam_info():
     """Display μSAM information using a rich console."""
     import psutil
     import platform
+    import argparse
+    from rich import progress
     from rich.panel import Panel
     from rich.table import Table
     from rich.console import Console
 
     import torch
     import micro_sam
+
+    parser = argparse.ArgumentParser(description="μSAM Information Booth")
+    parser.add_argument(
+        "--download", nargs="+", metavar=("WHAT", "KIND"),
+        help="Downloads the pretrained SAM models."
+        "'--download models' -> downloads all pretrained models; "
+        "'--download models vit_b_lm vit_b_em_organelles' -> downloads the listed models; "
+        "'--download model/models vit_b_lm' -> downloads a single specified model."
+    )
+    args = parser.parse_args()
 
     # Open up a new console.
     console = Console()
@@ -1339,3 +1357,38 @@ def micro_sam_info():
                 title="Device Information"
             )
         )
+
+    # The section allowing to download models.
+    # NOTE: In future, can be extended to download sample data.
+    if args.download:
+        download_provided_args = [t.lower() for t in args.download]
+        mode, *model_types = download_provided_args
+
+        if mode not in {"models", "model"}:
+            console.print(f"[red]Unknown option for --download: {mode}[/]")
+            return
+
+        if mode in ["model", "models"] and not model_types:  # If user did not specify, we will download all models.
+            download_list = available_models
+        else:
+            download_list = model_types
+            incorrect_models = [m for m in download_list if m not in available_models]
+            if incorrect_models:
+                console.print(Panel("[red]Unknown model(s):[/] " + ", ".join(incorrect_models), title="Download Error"))
+                return
+
+        with progress.Progress(
+            progress.SpinnerColumn(),
+            progress.TextColumn("[progress.description]{task.description}"),
+            progress.BarColumn(bar_width=None),
+            "[progress.percentage]{task.percentage:>3.0f}%",
+            progress.TimeRemainingColumn(),
+            console=console,
+        ) as prog:
+            task = prog.add_task("[green]Downloading μSAM models…", total=len(download_list))
+            for model_type in download_list:
+                prog.update(task, description=f"Downloading [cyan]{model_type}[/]…")
+                _download_sam_model(model_type=model_type)
+                prog.advance(task)
+
+        console.print(Panel("[bold green] Downloads complete![/]", title="Finished"))
