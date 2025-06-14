@@ -805,6 +805,7 @@ def get_unetr(
         use_skip_connection=False,
         resize_input=True,
         use_conv_transpose=use_conv_transpose,
+
     )
 
     if decoder_state is not None:
