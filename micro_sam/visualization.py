@@ -17,21 +17,23 @@ from .util import ImageEmbeddings
 # PCA visualization for the image embeddings
 #
 
-def compute_pca(embeddings: np.ndarray) -> np.ndarray:
+def compute_pca(embeddings: np.ndarray, n_components: int = 3, as_rgb: bool = True) -> np.ndarray:
     """Compute the pca projection of the embeddings to visualize them as RGB image.
 
     Args:
         embeddings: The embeddings. For example predicted by the SAM image encoder.
+        n_components: The number of PCA components to use for dimensionality reduction.
+        as_rgb: Whether to normalize the projected embeddings so that they can be displated as rgb.
 
     Returns:
         PCA of the embeddings, mapped to the pixels.
     """
     if embeddings.ndim == 4:
-        pca = embedding_pca(embeddings.squeeze()).transpose((1, 2, 0))
+        pca = embedding_pca(embeddings.squeeze(), n_components=n_components, as_rgb=as_rgb).transpose((1, 2, 0))
     elif embeddings.ndim == 5:
         pca = []
         for embed in embeddings:
-            vis = embedding_pca(embed.squeeze()).transpose((1, 2, 0))
+            vis = embedding_pca(embed.squeeze(), n_components=n_components, as_rgb=as_rgb).transpose((1, 2, 0))
             pca.append(vis)
         pca = np.stack(pca)
     else:
@@ -53,10 +55,10 @@ def _get_crop(embed_shape, shape):
     return crop
 
 
-def _project_embeddings(embeddings, shape, apply_crop=True):
+def _project_embeddings(embeddings, shape, apply_crop=True, n_components=3, as_rgb=True):
     assert embeddings.ndim == len(shape) + 2, f"{embeddings.shape}, {shape}"
 
-    embedding_vis = compute_pca(embeddings)
+    embedding_vis = compute_pca(embeddings, n_components=n_components, as_rgb=as_rgb)
     if not apply_crop:
         pass
     elif len(shape) == 2:
@@ -107,7 +109,7 @@ def _resize_and_cocatenate(arrays, axis):
     return np.concatenate([resize(arr, resize_shape(arr.shape)) for arr in arrays], axis=axis)
 
 
-def _project_tiled_embeddings(image_embeddings):
+def _project_tiled_embeddings(image_embeddings, n_components, as_rgb):
     features = image_embeddings["features"]
     tile_shape, halo, shape = features.attrs["tile_shape"], features.attrs["halo"], features.attrs["shape"]
     tiling = blocking([0, 0], shape, tile_shape)
@@ -141,17 +143,21 @@ def _project_tiled_embeddings(image_embeddings):
 
     if features["0"].ndim == 5:
         shape = (features["0"].shape[0],) + tuple(shape)
-    embedding_vis, scale = _project_embeddings(embeds, shape, apply_crop=False)
+    embedding_vis, scale = _project_embeddings(
+        embeds, shape, n_components=n_components, as_rgb=as_rgb, apply_crop=False
+    )
     return embedding_vis, scale
 
 
 def project_embeddings_for_visualization(
-    image_embeddings: ImageEmbeddings
+    image_embeddings: ImageEmbeddings, n_components: int = 3, as_rgb: bool = True,
 ) -> Tuple[np.ndarray, Tuple[float, ...]]:
     """Project image embeddings to pixel-wise PCA.
 
     Args:
         image_embeddings: The image embeddings.
+        n_components: The number of PCA components to use for dimensionality reduction.
+        as_rgb: Whether to normalize the projected embeddings so that they can be displated as rgb.
 
     Returns:
         The PCA of the embeddings.
@@ -159,12 +165,12 @@ def project_embeddings_for_visualization(
     """
     is_tiled = image_embeddings["input_size"] is None
     if is_tiled:
-        embedding_vis, scale = _project_tiled_embeddings(image_embeddings)
+        embedding_vis, scale = _project_tiled_embeddings(image_embeddings, n_components, as_rgb)
     else:
         embeddings = image_embeddings["features"]
         shape = tuple(image_embeddings["original_size"])
         if embeddings.ndim == 5:
             shape = (embeddings.shape[0],) + shape
-        embedding_vis, scale = _project_embeddings(embeddings, shape)
+        embedding_vis, scale = _project_embeddings(embeddings, shape, n_components=n_components, as_rgb=as_rgb)
 
     return embedding_vis, scale
