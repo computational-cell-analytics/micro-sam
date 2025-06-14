@@ -22,6 +22,8 @@ def compute_pca(embeddings: np.ndarray, n_components: int = 3, as_rgb: bool = Tr
 
     Args:
         embeddings: The embeddings. For example predicted by the SAM image encoder.
+        n_components: The number of PCA components to use for dimensionality reduction.
+        as_rgb: Whether to normalize the projected embeddings so that they can be displated as rgb.
 
     Returns:
         PCA of the embeddings, mapped to the pixels.
@@ -154,7 +156,8 @@ def project_embeddings_for_visualization(
 
     Args:
         image_embeddings: The image embeddings.
-        n_components: ...
+        n_components: The number of PCA components to use for dimensionality reduction.
+        as_rgb: Whether to normalize the projected embeddings so that they can be displated as rgb.
 
     Returns:
         The PCA of the embeddings.
