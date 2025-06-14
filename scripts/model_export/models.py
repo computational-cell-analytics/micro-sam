@@ -5,6 +5,7 @@ import numpy as np
 import requests
 import yaml
 
+
 ADDJECTIVE_URL = "https://raw.githubusercontent.com/bioimage-io/collection-bioimage-io/main/adjectives.txt"
 ANIMAL_URL = "https://raw.githubusercontent.com/bioimage-io/collection-bioimage-io/main/animals.yaml"
 COLLECTION_URL = "https://raw.githubusercontent.com/bioimage-io/collection-bioimage-io/gh-pages/collection.json"

@@ -22,7 +22,7 @@ BUF_SIZE = 65536  # lets read stuff in 64kb chunks!
 
 INPUT_FOLDER = "/media/anwai/ANWAI/models/micro_sam"
 OUTPUT_FOLDER = "./exported_models"
-BIOIMAGEIO_VERSION = 1.1  # version marked for v3 (LM) Generalist Models
+BIOIMAGEIO_VERSION = 1.2  # version marked for v4 LM and EM-Organelles Generalist Models
 
 
 def create_doc(model_type, modality, version):
@@ -131,13 +131,18 @@ def export_model(model_path, model_type, modality, version, email):
     print("Decoder:")
     print(f"{model_name}_decoder", f"xxh128:{decoder_checksum}")
 
+    breakpoint()
 
-def export_all_models(email, version):
-    models = glob(os.path.join(INPUT_FOLDER, f"v{version}/**/vit*"), recursive=True)
+
+def export_all_models(email, version, model_type):
+    if model_type is None:
+        model_type = "vit*"
+
+    models = glob(os.path.join(INPUT_FOLDER, f"v{version}/**/{model_type}"), recursive=True)
     for path in models:
-        modality, _, model_type = path.split("/")[-3:]  # current expected structure: v3/lm/generalist/vit_b/best.pt
-        # print(model_path, modality, model_type)
+        modality, _, model_type = path.split("/")[-3:]  # current expected structure: v4/lm/generalist/vit_b/best.pt
         model_path = os.path.join(path, "best.pt")
+        print(model_path, modality, model_type)
         assert os.path.exists(model_path), model_path
         export_model(model_path, model_type, modality, version=version, email=email)
 
@@ -146,16 +151,17 @@ def export_all_models(email, version):
 def export_vit_t_lm(email):
     model_type = "vit_t"
     model_path = os.path.join(INPUT_FOLDER, "lm", "generalist", model_type, "best.pt")
-    export_model(model_path, model_type, "lm", version=3, email=email)
+    export_model(model_path, model_type, "lm", version=4, email=email)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--email", required=True)
-    parser.add_argument("-v", "--version", default=3, type=int)
+    parser.add_argument("-v", "--version", default=4, type=int)
+    parser.add_argument("-m", "--model_type", type=str, default=None)
     args = parser.parse_args()
 
-    export_all_models(args.email, args.version)
+    export_all_models(args.email, args.version, args.model_type)
 
 
 if __name__ == "__main__":

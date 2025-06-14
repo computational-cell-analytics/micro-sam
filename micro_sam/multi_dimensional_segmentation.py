@@ -6,15 +6,13 @@ import multiprocessing as mp
 from concurrent import futures
 from typing import Dict, List, Optional, Union, Tuple
 
-import numpy as np
 import networkx as nx
+import nifty
+import numpy as np
+import torch
 from scipy.ndimage import binary_closing
 from skimage.measure import label, regionprops
 from skimage.segmentation import relabel_sequential
-
-import torch
-
-import nifty
 
 import elf.segmentation as seg_utils
 import elf.tracking.tracking_utils as track_utils
@@ -32,6 +30,7 @@ try:
     from trackastra.tracking import graph_to_ctc, graph_to_napari_tracks
 except ImportError:
     Trackastra = None
+
 
 from . import util
 from .prompt_based_segmentation import segment_from_mask
@@ -292,6 +291,19 @@ def _preprocess_closing(slice_segmentation, gap_closing, pbar_update):
     return new_segmentation
 
 
+def _filter_z_extent(segmentation, min_z_extent):
+    props = regionprops(segmentation)
+    filter_ids = []
+    for prop in props:
+        box = prop.bbox
+        z_extent = box[3] - box[0]
+        if z_extent < min_z_extent:
+            filter_ids.append(prop.label)
+    if filter_ids:
+        segmentation[np.isin(segmentation, filter_ids)] = 0
+    return segmentation
+
+
 def merge_instance_segmentation_3d(
     slice_segmentation: np.ndarray,
     beta: float = 0.5,
@@ -346,7 +358,7 @@ def merge_instance_segmentation_3d(
     graph.insertEdges(uv_ids)
 
     costs = seg_utils.multicut.compute_edge_costs(overlaps)
-    # set background weights to be maximally repulsive
+    # Set background weights to be maximally repulsive.
     if with_background:
         bg_edges = (uv_ids == 0).any(axis=1)
         costs[bg_edges] = -8.0
@@ -354,17 +366,8 @@ def merge_instance_segmentation_3d(
     node_labels = seg_utils.multicut.multicut_decomposition(graph, 1.0 - costs, beta=beta)
 
     segmentation = nifty.tools.take(node_labels, slice_segmentation)
-
     if min_z_extent is not None and min_z_extent > 0:
-        props = regionprops(segmentation)
-        filter_ids = []
-        for prop in props:
-            box = prop.bbox
-            z_extent = box[3] - box[0]
-            if z_extent < min_z_extent:
-                filter_ids.append(prop.label)
-        if filter_ids:
-            segmentation[np.isin(segmentation, filter_ids)] = 0
+        segmentation = _filter_z_extent(segmentation, min_z_extent)
 
     pbar_update(1)
     pbar_close()
@@ -405,7 +408,7 @@ def _segment_slices(
                 )
 
             # Set offset for instance per slice.
-            max_z = seg.max()
+            max_z = int(seg.max())
             if max_z == 0:
                 continue
             seg[seg != 0] += offset
