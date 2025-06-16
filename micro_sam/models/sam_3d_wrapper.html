@@ -139,20 +139,20 @@
 
                         <label class="view-source-button" for="mod-sam_3d_wrapper-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">  1</span></a><span class="kn">import</span> <span class="nn">os</span>
-</span><span id="L-2"><a href="#L-2"><span class="linenos">  2</span></a><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">Type</span><span class="p">,</span> <span class="n">Union</span><span class="p">,</span> <span class="n">Optional</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">  1</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">  2</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">Type</span><span class="p">,</span> <span class="n">Union</span><span class="p">,</span> <span class="n">Optional</span>
 </span><span id="L-3"><a href="#L-3"><span class="linenos">  3</span></a>
-</span><span id="L-4"><a href="#L-4"><span class="linenos">  4</span></a><span class="kn">import</span> <span class="nn">torch</span>
-</span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a><span class="kn">import</span> <span class="nn">torch.nn</span> <span class="k">as</span> <span class="nn">nn</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">  4</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">torch.nn</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">nn</span>
 </span><span id="L-6"><a href="#L-6"><span class="linenos">  6</span></a>
-</span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a><span class="kn">from</span> <span class="nn">segment_anything.modeling</span> <span class="kn">import</span> <span class="n">Sam</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="kn">from</span> <span class="nn">segment_anything.modeling.image_encoder</span> <span class="kn">import</span> <span class="n">window_partition</span><span class="p">,</span> <span class="n">window_unpartition</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">segment_anything.modeling</span><span class="w"> </span><span class="kn">import</span> <span class="n">Sam</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">segment_anything.modeling.image_encoder</span><span class="w"> </span><span class="kn">import</span> <span class="n">window_partition</span><span class="p">,</span> <span class="n">window_unpartition</span>
 </span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a>
-</span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a><span class="kn">from</span> <span class="nn">..util</span> <span class="kn">import</span> <span class="n">get_sam_model</span>
-</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a><span class="kn">from</span> <span class="nn">.peft_sam</span> <span class="kn">import</span> <span class="n">LoRASurgery</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">..util</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_sam_model</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.peft_sam</span><span class="w"> </span><span class="kn">import</span> <span class="n">LoRASurgery</span>
 </span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a>
 </span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a>
-</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="k">def</span> <span class="nf">get_sam_3d_model</span><span class="p">(</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="k">def</span><span class="w"> </span><span class="nf">get_sam_3d_model</span><span class="p">(</span>
 </span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">],</span>
 </span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a>    <span class="n">n_classes</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
 </span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a>    <span class="n">image_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
@@ -185,8 +185,8 @@
 </span><span id="L-44"><a href="#L-44"><span class="linenos"> 44</span></a>    <span class="k">return</span> <span class="n">sam_3d</span>
 </span><span id="L-45"><a href="#L-45"><span class="linenos"> 45</span></a>
 </span><span id="L-46"><a href="#L-46"><span class="linenos"> 46</span></a>
-</span><span id="L-47"><a href="#L-47"><span class="linenos"> 47</span></a><span class="k">class</span> <span class="nc">Sam3DWrapper</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
-</span><span id="L-48"><a href="#L-48"><span class="linenos"> 48</span></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">sam_model</span><span class="p">:</span> <span class="n">Sam</span><span class="p">,</span> <span class="n">freeze_encoder</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;vit_b&quot;</span><span class="p">):</span>
+</span><span id="L-47"><a href="#L-47"><span class="linenos"> 47</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Sam3DWrapper</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+</span><span id="L-48"><a href="#L-48"><span class="linenos"> 48</span></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">sam_model</span><span class="p">:</span> <span class="n">Sam</span><span class="p">,</span> <span class="n">freeze_encoder</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;vit_b&quot;</span><span class="p">):</span>
 </span><span id="L-49"><a href="#L-49"><span class="linenos"> 49</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Initializes the Sam3DWrapper object.</span>
 </span><span id="L-50"><a href="#L-50"><span class="linenos"> 50</span></a>
 </span><span id="L-51"><a href="#L-51"><span class="linenos"> 51</span></a><span class="sd">        Args:</span>
@@ -216,7 +216,7 @@
 </span><span id="L-75"><a href="#L-75"><span class="linenos"> 75</span></a>            <span class="k">for</span> <span class="n">param</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">sam_model</span><span class="o">.</span><span class="n">image_encoder</span><span class="o">.</span><span class="n">parameters</span><span class="p">():</span>
 </span><span id="L-76"><a href="#L-76"><span class="linenos"> 76</span></a>                <span class="n">param</span><span class="o">.</span><span class="n">requires_grad</span> <span class="o">=</span> <span class="kc">False</span>
 </span><span id="L-77"><a href="#L-77"><span class="linenos"> 77</span></a>
-</span><span id="L-78"><a href="#L-78"><span class="linenos"> 78</span></a>    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">batched_input</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]],</span> <span class="n">multimask_output</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]]:</span>
+</span><span id="L-78"><a href="#L-78"><span class="linenos"> 78</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">batched_input</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]],</span> <span class="n">multimask_output</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]]:</span>
 </span><span id="L-79"><a href="#L-79"><span class="linenos"> 79</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Predict 3D masks for the current inputs.</span>
 </span><span id="L-80"><a href="#L-80"><span class="linenos"> 80</span></a>
 </span><span id="L-81"><a href="#L-81"><span class="linenos"> 81</span></a><span class="sd">        Unlike original SAM this model only supports automatic segmentation and does not support prompts.</span>
@@ -288,8 +288,8 @@
 </span><span id="L-147"><a href="#L-147"><span class="linenos">147</span></a>        <span class="k">return</span> <span class="n">outputs</span>
 </span><span id="L-148"><a href="#L-148"><span class="linenos">148</span></a>
 </span><span id="L-149"><a href="#L-149"><span class="linenos">149</span></a>
-</span><span id="L-150"><a href="#L-150"><span class="linenos">150</span></a><span class="k">class</span> <span class="nc">ImageEncoderViT3DWrapper</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
-</span><span id="L-151"><a href="#L-151"><span class="linenos">151</span></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">image_encoder</span><span class="p">:</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">,</span> <span class="n">num_heads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span><span class="p">,</span> <span class="n">embed_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">768</span><span class="p">):</span>
+</span><span id="L-150"><a href="#L-150"><span class="linenos">150</span></a><span class="k">class</span><span class="w"> </span><span class="nc">ImageEncoderViT3DWrapper</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+</span><span id="L-151"><a href="#L-151"><span class="linenos">151</span></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">image_encoder</span><span class="p">:</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">,</span> <span class="n">num_heads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span><span class="p">,</span> <span class="n">embed_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">768</span><span class="p">):</span>
 </span><span id="L-152"><a href="#L-152"><span class="linenos">152</span></a>
 </span><span id="L-153"><a href="#L-153"><span class="linenos">153</span></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
 </span><span id="L-154"><a href="#L-154"><span class="linenos">154</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">image_encoder</span> <span class="o">=</span> <span class="n">image_encoder</span>
@@ -299,7 +299,7 @@
 </span><span id="L-158"><a href="#L-158"><span class="linenos">158</span></a>        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">blk</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">image_encoder</span><span class="o">.</span><span class="n">blocks</span><span class="p">):</span>
 </span><span id="L-159"><a href="#L-159"><span class="linenos">159</span></a>            <span class="bp">self</span><span class="o">.</span><span class="n">image_encoder</span><span class="o">.</span><span class="n">blocks</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">NDBlockWrapper</span><span class="p">(</span><span class="n">block</span><span class="o">=</span><span class="n">blk</span><span class="p">,</span> <span class="n">num_heads</span><span class="o">=</span><span class="n">num_heads</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="n">embed_dim</span><span class="p">)</span>
 </span><span id="L-160"><a href="#L-160"><span class="linenos">160</span></a>
-</span><span id="L-161"><a href="#L-161"><span class="linenos">161</span></a>    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">d_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+</span><span id="L-161"><a href="#L-161"><span class="linenos">161</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">d_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
 </span><span id="L-162"><a href="#L-162"><span class="linenos">162</span></a>        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">image_encoder</span><span class="o">.</span><span class="n">patch_embed</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
 </span><span id="L-163"><a href="#L-163"><span class="linenos">163</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">image_encoder</span><span class="o">.</span><span class="n">pos_embed</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
 </span><span id="L-164"><a href="#L-164"><span class="linenos">164</span></a>            <span class="n">x</span> <span class="o">=</span> <span class="n">x</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">image_encoder</span><span class="o">.</span><span class="n">pos_embed</span>
@@ -312,8 +312,8 @@
 </span><span id="L-171"><a href="#L-171"><span class="linenos">171</span></a>        <span class="k">return</span> <span class="n">x</span>
 </span><span id="L-172"><a href="#L-172"><span class="linenos">172</span></a>
 </span><span id="L-173"><a href="#L-173"><span class="linenos">173</span></a>
-</span><span id="L-174"><a href="#L-174"><span class="linenos">174</span></a><span class="k">class</span> <span class="nc">NDBlockWrapper</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
-</span><span id="L-175"><a href="#L-175"><span class="linenos">175</span></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
+</span><span id="L-174"><a href="#L-174"><span class="linenos">174</span></a><span class="k">class</span><span class="w"> </span><span class="nc">NDBlockWrapper</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+</span><span id="L-175"><a href="#L-175"><span class="linenos">175</span></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
 </span><span id="L-176"><a href="#L-176"><span class="linenos">176</span></a>        <span class="bp">self</span><span class="p">,</span>
 </span><span id="L-177"><a href="#L-177"><span class="linenos">177</span></a>        <span class="n">block</span><span class="p">:</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">,</span>
 </span><span id="L-178"><a href="#L-178"><span class="linenos">178</span></a>        <span class="n">dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
@@ -341,7 +341,7 @@
 </span><span id="L-200"><a href="#L-200"><span class="linenos">200</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">adapter_act_2</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">GELU</span><span class="p">()</span>
 </span><span id="L-201"><a href="#L-201"><span class="linenos">201</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">adapter_norm_2</span> <span class="o">=</span> <span class="n">norm_layer</span><span class="p">(</span><span class="n">dim</span><span class="p">)</span>
 </span><span id="L-202"><a href="#L-202"><span class="linenos">202</span></a>
-</span><span id="L-203"><a href="#L-203"><span class="linenos">203</span></a>    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">d_size</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+</span><span id="L-203"><a href="#L-203"><span class="linenos">203</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">d_size</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
 </span><span id="L-204"><a href="#L-204"><span class="linenos">204</span></a>        <span class="n">b_size</span><span class="p">,</span> <span class="n">hw_size</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
 </span><span id="L-205"><a href="#L-205"><span class="linenos">205</span></a>
 </span><span id="L-206"><a href="#L-206"><span class="linenos">206</span></a>        <span class="c1"># 3D adapter</span>
@@ -398,13 +398,13 @@
 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">get_sam_3d_model</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">device</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">]</span>,</span><span class="param">	<span class="n">n_classes</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">image_size</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">lora_rank</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">freeze_encoder</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>,</span><span class="param">	<span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;vit_b&#39;</span>,</span><span class="param">	<span class="n">checkpoint_path</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="n">NoneType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span></span><span class="return-annotation">):</span></span>
+        <span class="name">get_sam_3d_model</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">device</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">]</span>,</span><span class="param">	<span class="n">n_classes</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">image_size</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">lora_rank</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">freeze_encoder</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>,</span><span class="param">	<span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;vit_b&#39;</span>,</span><span class="param">	<span class="n">checkpoint_path</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">NoneType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span></span><span class="return-annotation">):</span></span>
 
                 <label class="view-source-button" for="get_sam_3d_model-view-source"><span>View Source</span></label>
 
     </div>
     <a class="headerlink" href="#get_sam_3d_model"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="get_sam_3d_model-15"><a href="#get_sam_3d_model-15"><span class="linenos">15</span></a><span class="k">def</span> <span class="nf">get_sam_3d_model</span><span class="p">(</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="get_sam_3d_model-15"><a href="#get_sam_3d_model-15"><span class="linenos">15</span></a><span class="k">def</span><span class="w"> </span><span class="nf">get_sam_3d_model</span><span class="p">(</span>
 </span><span id="get_sam_3d_model-16"><a href="#get_sam_3d_model-16"><span class="linenos">16</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">],</span>
 </span><span id="get_sam_3d_model-17"><a href="#get_sam_3d_model-17"><span class="linenos">17</span></a>    <span class="n">n_classes</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
 </span><span id="get_sam_3d_model-18"><a href="#get_sam_3d_model-18"><span class="linenos">18</span></a>    <span class="n">image_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
@@ -452,8 +452,8 @@
 
     </div>
     <a class="headerlink" href="#Sam3DWrapper"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="Sam3DWrapper-48"><a href="#Sam3DWrapper-48"><span class="linenos"> 48</span></a><span class="k">class</span> <span class="nc">Sam3DWrapper</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
-</span><span id="Sam3DWrapper-49"><a href="#Sam3DWrapper-49"><span class="linenos"> 49</span></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">sam_model</span><span class="p">:</span> <span class="n">Sam</span><span class="p">,</span> <span class="n">freeze_encoder</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;vit_b&quot;</span><span class="p">):</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="Sam3DWrapper-48"><a href="#Sam3DWrapper-48"><span class="linenos"> 48</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Sam3DWrapper</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+</span><span id="Sam3DWrapper-49"><a href="#Sam3DWrapper-49"><span class="linenos"> 49</span></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">sam_model</span><span class="p">:</span> <span class="n">Sam</span><span class="p">,</span> <span class="n">freeze_encoder</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;vit_b&quot;</span><span class="p">):</span>
 </span><span id="Sam3DWrapper-50"><a href="#Sam3DWrapper-50"><span class="linenos"> 50</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Initializes the Sam3DWrapper object.</span>
 </span><span id="Sam3DWrapper-51"><a href="#Sam3DWrapper-51"><span class="linenos"> 51</span></a>
 </span><span id="Sam3DWrapper-52"><a href="#Sam3DWrapper-52"><span class="linenos"> 52</span></a><span class="sd">        Args:</span>
@@ -483,7 +483,7 @@
 </span><span id="Sam3DWrapper-76"><a href="#Sam3DWrapper-76"><span class="linenos"> 76</span></a>            <span class="k">for</span> <span class="n">param</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">sam_model</span><span class="o">.</span><span class="n">image_encoder</span><span class="o">.</span><span class="n">parameters</span><span class="p">():</span>
 </span><span id="Sam3DWrapper-77"><a href="#Sam3DWrapper-77"><span class="linenos"> 77</span></a>                <span class="n">param</span><span class="o">.</span><span class="n">requires_grad</span> <span class="o">=</span> <span class="kc">False</span>
 </span><span id="Sam3DWrapper-78"><a href="#Sam3DWrapper-78"><span class="linenos"> 78</span></a>
-</span><span id="Sam3DWrapper-79"><a href="#Sam3DWrapper-79"><span class="linenos"> 79</span></a>    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">batched_input</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]],</span> <span class="n">multimask_output</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]]:</span>
+</span><span id="Sam3DWrapper-79"><a href="#Sam3DWrapper-79"><span class="linenos"> 79</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">batched_input</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]],</span> <span class="n">multimask_output</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]]:</span>
 </span><span id="Sam3DWrapper-80"><a href="#Sam3DWrapper-80"><span class="linenos"> 80</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Predict 3D masks for the current inputs.</span>
 </span><span id="Sam3DWrapper-81"><a href="#Sam3DWrapper-81"><span class="linenos"> 81</span></a>
 </span><span id="Sam3DWrapper-82"><a href="#Sam3DWrapper-82"><span class="linenos"> 82</span></a><span class="sd">        Unlike original SAM this model only supports automatic segmentation and does not support prompts.</span>
@@ -560,14 +560,14 @@
 
 <p>Your models should also subclass this class.</p>
 
-<p>Modules can also contain other Modules, allowing to nest them in
+<p>Modules can also contain other Modules, allowing them to be nested in
 a tree structure. You can assign the submodules as regular attributes::</p>
 
 <pre><code>import torch.nn as nn
 import torch.nn.functional as F
 
 class Model(nn.Module):
-    def __init__(self):
+    def __init__(self) -&gt; None:
         super().__init__()
         self.conv1 = nn.Conv2d(1, 20, 5)
         self.conv2 = nn.Conv2d(20, 20, 5)
@@ -577,8 +577,8 @@ class Model(nn.Module):
         return F.relu(self.conv2(x))
 </code></pre>
 
-<p>Submodules assigned in this way will be registered, and will have their
-parameters converted too when you call <code><a href="#Sam3DWrapper.to">to()</a></code>, etc.</p>
+<p>Submodules assigned in this way will be registered, and will also have their
+parameters converted when you call <code><a href="#Sam3DWrapper.to">to()</a></code>, etc.</p>
 
 <div class="pdoc-alert pdoc-alert-note">
 
@@ -603,7 +603,7 @@ must be made before assignment on the child.</p>
 
     </div>
     <a class="headerlink" href="#Sam3DWrapper.__init__"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="Sam3DWrapper.__init__-49"><a href="#Sam3DWrapper.__init__-49"><span class="linenos">49</span></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">sam_model</span><span class="p">:</span> <span class="n">Sam</span><span class="p">,</span> <span class="n">freeze_encoder</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;vit_b&quot;</span><span class="p">):</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="Sam3DWrapper.__init__-49"><a href="#Sam3DWrapper.__init__-49"><span class="linenos">49</span></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">sam_model</span><span class="p">:</span> <span class="n">Sam</span><span class="p">,</span> <span class="n">freeze_encoder</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;vit_b&quot;</span><span class="p">):</span>
 </span><span id="Sam3DWrapper.__init__-50"><a href="#Sam3DWrapper.__init__-50"><span class="linenos">50</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Initializes the Sam3DWrapper object.</span>
 </span><span id="Sam3DWrapper.__init__-51"><a href="#Sam3DWrapper.__init__-51"><span class="linenos">51</span></a>
 </span><span id="Sam3DWrapper.__init__-52"><a href="#Sam3DWrapper.__init__-52"><span class="linenos">52</span></a><span class="sd">        Args:</span>
@@ -681,7 +681,7 @@ must be made before assignment on the child.</p>
 
     </div>
     <a class="headerlink" href="#Sam3DWrapper.forward"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="Sam3DWrapper.forward-79"><a href="#Sam3DWrapper.forward-79"><span class="linenos"> 79</span></a>    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">batched_input</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]],</span> <span class="n">multimask_output</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]]:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="Sam3DWrapper.forward-79"><a href="#Sam3DWrapper.forward-79"><span class="linenos"> 79</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">batched_input</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]],</span> <span class="n">multimask_output</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]]:</span>
 </span><span id="Sam3DWrapper.forward-80"><a href="#Sam3DWrapper.forward-80"><span class="linenos"> 80</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Predict 3D masks for the current inputs.</span>
 </span><span id="Sam3DWrapper.forward-81"><a href="#Sam3DWrapper.forward-81"><span class="linenos"> 81</span></a>
 </span><span id="Sam3DWrapper.forward-82"><a href="#Sam3DWrapper.forward-82"><span class="linenos"> 82</span></a><span class="sd">        Unlike original SAM this model only supports automatic segmentation and does not support prompts.</span>
@@ -791,6 +791,7 @@ must be made before assignment on the child.</p>
                 <dd id="Sam3DWrapper.add_module" class="function">add_module</dd>
                 <dd id="Sam3DWrapper.register_module" class="function">register_module</dd>
                 <dd id="Sam3DWrapper.get_submodule" class="function">get_submodule</dd>
+                <dd id="Sam3DWrapper.set_submodule" class="function">set_submodule</dd>
                 <dd id="Sam3DWrapper.get_parameter" class="function">get_parameter</dd>
                 <dd id="Sam3DWrapper.get_buffer" class="function">get_buffer</dd>
                 <dd id="Sam3DWrapper.get_extra_state" class="function">get_extra_state</dd>
@@ -799,6 +800,7 @@ must be made before assignment on the child.</p>
                 <dd id="Sam3DWrapper.cuda" class="function">cuda</dd>
                 <dd id="Sam3DWrapper.ipu" class="function">ipu</dd>
                 <dd id="Sam3DWrapper.xpu" class="function">xpu</dd>
+                <dd id="Sam3DWrapper.mtia" class="function">mtia</dd>
                 <dd id="Sam3DWrapper.cpu" class="function">cpu</dd>
                 <dd id="Sam3DWrapper.type" class="function">type</dd>
                 <dd id="Sam3DWrapper.float" class="function">float</dd>
@@ -812,8 +814,10 @@ must be made before assignment on the child.</p>
                 <dd id="Sam3DWrapper.register_full_backward_hook" class="function">register_full_backward_hook</dd>
                 <dd id="Sam3DWrapper.register_forward_pre_hook" class="function">register_forward_pre_hook</dd>
                 <dd id="Sam3DWrapper.register_forward_hook" class="function">register_forward_hook</dd>
+                <dd id="Sam3DWrapper.register_state_dict_post_hook" class="function">register_state_dict_post_hook</dd>
                 <dd id="Sam3DWrapper.register_state_dict_pre_hook" class="function">register_state_dict_pre_hook</dd>
                 <dd id="Sam3DWrapper.state_dict" class="function">state_dict</dd>
+                <dd id="Sam3DWrapper.register_load_state_dict_pre_hook" class="function">register_load_state_dict_pre_hook</dd>
                 <dd id="Sam3DWrapper.register_load_state_dict_post_hook" class="function">register_load_state_dict_post_hook</dd>
                 <dd id="Sam3DWrapper.load_state_dict" class="function">load_state_dict</dd>
                 <dd id="Sam3DWrapper.parameters" class="function">parameters</dd>
@@ -847,8 +851,8 @@ must be made before assignment on the child.</p>
 
     </div>
     <a class="headerlink" href="#ImageEncoderViT3DWrapper"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="ImageEncoderViT3DWrapper-151"><a href="#ImageEncoderViT3DWrapper-151"><span class="linenos">151</span></a><span class="k">class</span> <span class="nc">ImageEncoderViT3DWrapper</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
-</span><span id="ImageEncoderViT3DWrapper-152"><a href="#ImageEncoderViT3DWrapper-152"><span class="linenos">152</span></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">image_encoder</span><span class="p">:</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">,</span> <span class="n">num_heads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span><span class="p">,</span> <span class="n">embed_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">768</span><span class="p">):</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="ImageEncoderViT3DWrapper-151"><a href="#ImageEncoderViT3DWrapper-151"><span class="linenos">151</span></a><span class="k">class</span><span class="w"> </span><span class="nc">ImageEncoderViT3DWrapper</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+</span><span id="ImageEncoderViT3DWrapper-152"><a href="#ImageEncoderViT3DWrapper-152"><span class="linenos">152</span></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">image_encoder</span><span class="p">:</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">,</span> <span class="n">num_heads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span><span class="p">,</span> <span class="n">embed_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">768</span><span class="p">):</span>
 </span><span id="ImageEncoderViT3DWrapper-153"><a href="#ImageEncoderViT3DWrapper-153"><span class="linenos">153</span></a>
 </span><span id="ImageEncoderViT3DWrapper-154"><a href="#ImageEncoderViT3DWrapper-154"><span class="linenos">154</span></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
 </span><span id="ImageEncoderViT3DWrapper-155"><a href="#ImageEncoderViT3DWrapper-155"><span class="linenos">155</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">image_encoder</span> <span class="o">=</span> <span class="n">image_encoder</span>
@@ -858,7 +862,7 @@ must be made before assignment on the child.</p>
 </span><span id="ImageEncoderViT3DWrapper-159"><a href="#ImageEncoderViT3DWrapper-159"><span class="linenos">159</span></a>        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">blk</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">image_encoder</span><span class="o">.</span><span class="n">blocks</span><span class="p">):</span>
 </span><span id="ImageEncoderViT3DWrapper-160"><a href="#ImageEncoderViT3DWrapper-160"><span class="linenos">160</span></a>            <span class="bp">self</span><span class="o">.</span><span class="n">image_encoder</span><span class="o">.</span><span class="n">blocks</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">NDBlockWrapper</span><span class="p">(</span><span class="n">block</span><span class="o">=</span><span class="n">blk</span><span class="p">,</span> <span class="n">num_heads</span><span class="o">=</span><span class="n">num_heads</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="n">embed_dim</span><span class="p">)</span>
 </span><span id="ImageEncoderViT3DWrapper-161"><a href="#ImageEncoderViT3DWrapper-161"><span class="linenos">161</span></a>
-</span><span id="ImageEncoderViT3DWrapper-162"><a href="#ImageEncoderViT3DWrapper-162"><span class="linenos">162</span></a>    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">d_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+</span><span id="ImageEncoderViT3DWrapper-162"><a href="#ImageEncoderViT3DWrapper-162"><span class="linenos">162</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">d_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
 </span><span id="ImageEncoderViT3DWrapper-163"><a href="#ImageEncoderViT3DWrapper-163"><span class="linenos">163</span></a>        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">image_encoder</span><span class="o">.</span><span class="n">patch_embed</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
 </span><span id="ImageEncoderViT3DWrapper-164"><a href="#ImageEncoderViT3DWrapper-164"><span class="linenos">164</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">image_encoder</span><span class="o">.</span><span class="n">pos_embed</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
 </span><span id="ImageEncoderViT3DWrapper-165"><a href="#ImageEncoderViT3DWrapper-165"><span class="linenos">165</span></a>            <span class="n">x</span> <span class="o">=</span> <span class="n">x</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">image_encoder</span><span class="o">.</span><span class="n">pos_embed</span>
@@ -876,14 +880,14 @@ must be made before assignment on the child.</p>
 
 <p>Your models should also subclass this class.</p>
 
-<p>Modules can also contain other Modules, allowing to nest them in
+<p>Modules can also contain other Modules, allowing them to be nested in
 a tree structure. You can assign the submodules as regular attributes::</p>
 
 <pre><code>import torch.nn as nn
 import torch.nn.functional as F
 
 class Model(nn.Module):
-    def __init__(self):
+    def __init__(self) -&gt; None:
         super().__init__()
         self.conv1 = nn.Conv2d(1, 20, 5)
         self.conv2 = nn.Conv2d(20, 20, 5)
@@ -893,8 +897,8 @@ class Model(nn.Module):
         return F.relu(self.conv2(x))
 </code></pre>
 
-<p>Submodules assigned in this way will be registered, and will have their
-parameters converted too when you call <code><a href="#ImageEncoderViT3DWrapper.to">to()</a></code>, etc.</p>
+<p>Submodules assigned in this way will be registered, and will also have their
+parameters converted when you call <code><a href="#ImageEncoderViT3DWrapper.to">to()</a></code>, etc.</p>
 
 <div class="pdoc-alert pdoc-alert-note">
 
@@ -919,7 +923,7 @@ must be made before assignment on the child.</p>
 
     </div>
     <a class="headerlink" href="#ImageEncoderViT3DWrapper.__init__"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="ImageEncoderViT3DWrapper.__init__-152"><a href="#ImageEncoderViT3DWrapper.__init__-152"><span class="linenos">152</span></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">image_encoder</span><span class="p">:</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">,</span> <span class="n">num_heads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span><span class="p">,</span> <span class="n">embed_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">768</span><span class="p">):</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="ImageEncoderViT3DWrapper.__init__-152"><a href="#ImageEncoderViT3DWrapper.__init__-152"><span class="linenos">152</span></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">image_encoder</span><span class="p">:</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">,</span> <span class="n">num_heads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span><span class="p">,</span> <span class="n">embed_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">768</span><span class="p">):</span>
 </span><span id="ImageEncoderViT3DWrapper.__init__-153"><a href="#ImageEncoderViT3DWrapper.__init__-153"><span class="linenos">153</span></a>
 </span><span id="ImageEncoderViT3DWrapper.__init__-154"><a href="#ImageEncoderViT3DWrapper.__init__-154"><span class="linenos">154</span></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
 </span><span id="ImageEncoderViT3DWrapper.__init__-155"><a href="#ImageEncoderViT3DWrapper.__init__-155"><span class="linenos">155</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">image_encoder</span> <span class="o">=</span> <span class="n">image_encoder</span>
@@ -969,7 +973,7 @@ must be made before assignment on the child.</p>
 
     </div>
     <a class="headerlink" href="#ImageEncoderViT3DWrapper.forward"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="ImageEncoderViT3DWrapper.forward-162"><a href="#ImageEncoderViT3DWrapper.forward-162"><span class="linenos">162</span></a>    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">d_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="ImageEncoderViT3DWrapper.forward-162"><a href="#ImageEncoderViT3DWrapper.forward-162"><span class="linenos">162</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">d_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
 </span><span id="ImageEncoderViT3DWrapper.forward-163"><a href="#ImageEncoderViT3DWrapper.forward-163"><span class="linenos">163</span></a>        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">image_encoder</span><span class="o">.</span><span class="n">patch_embed</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
 </span><span id="ImageEncoderViT3DWrapper.forward-164"><a href="#ImageEncoderViT3DWrapper.forward-164"><span class="linenos">164</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">image_encoder</span><span class="o">.</span><span class="n">pos_embed</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
 </span><span id="ImageEncoderViT3DWrapper.forward-165"><a href="#ImageEncoderViT3DWrapper.forward-165"><span class="linenos">165</span></a>            <span class="n">x</span> <span class="o">=</span> <span class="n">x</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">image_encoder</span><span class="o">.</span><span class="n">pos_embed</span>
@@ -1011,6 +1015,7 @@ registered hooks while the latter silently ignores them.</p>
                 <dd id="ImageEncoderViT3DWrapper.add_module" class="function">add_module</dd>
                 <dd id="ImageEncoderViT3DWrapper.register_module" class="function">register_module</dd>
                 <dd id="ImageEncoderViT3DWrapper.get_submodule" class="function">get_submodule</dd>
+                <dd id="ImageEncoderViT3DWrapper.set_submodule" class="function">set_submodule</dd>
                 <dd id="ImageEncoderViT3DWrapper.get_parameter" class="function">get_parameter</dd>
                 <dd id="ImageEncoderViT3DWrapper.get_buffer" class="function">get_buffer</dd>
                 <dd id="ImageEncoderViT3DWrapper.get_extra_state" class="function">get_extra_state</dd>
@@ -1019,6 +1024,7 @@ registered hooks while the latter silently ignores them.</p>
                 <dd id="ImageEncoderViT3DWrapper.cuda" class="function">cuda</dd>
                 <dd id="ImageEncoderViT3DWrapper.ipu" class="function">ipu</dd>
                 <dd id="ImageEncoderViT3DWrapper.xpu" class="function">xpu</dd>
+                <dd id="ImageEncoderViT3DWrapper.mtia" class="function">mtia</dd>
                 <dd id="ImageEncoderViT3DWrapper.cpu" class="function">cpu</dd>
                 <dd id="ImageEncoderViT3DWrapper.type" class="function">type</dd>
                 <dd id="ImageEncoderViT3DWrapper.float" class="function">float</dd>
@@ -1032,8 +1038,10 @@ registered hooks while the latter silently ignores them.</p>
                 <dd id="ImageEncoderViT3DWrapper.register_full_backward_hook" class="function">register_full_backward_hook</dd>
                 <dd id="ImageEncoderViT3DWrapper.register_forward_pre_hook" class="function">register_forward_pre_hook</dd>
                 <dd id="ImageEncoderViT3DWrapper.register_forward_hook" class="function">register_forward_hook</dd>
+                <dd id="ImageEncoderViT3DWrapper.register_state_dict_post_hook" class="function">register_state_dict_post_hook</dd>
                 <dd id="ImageEncoderViT3DWrapper.register_state_dict_pre_hook" class="function">register_state_dict_pre_hook</dd>
                 <dd id="ImageEncoderViT3DWrapper.state_dict" class="function">state_dict</dd>
+                <dd id="ImageEncoderViT3DWrapper.register_load_state_dict_pre_hook" class="function">register_load_state_dict_pre_hook</dd>
                 <dd id="ImageEncoderViT3DWrapper.register_load_state_dict_post_hook" class="function">register_load_state_dict_post_hook</dd>
                 <dd id="ImageEncoderViT3DWrapper.load_state_dict" class="function">load_state_dict</dd>
                 <dd id="ImageEncoderViT3DWrapper.parameters" class="function">parameters</dd>
@@ -1067,8 +1075,8 @@ registered hooks while the latter silently ignores them.</p>
 
     </div>
     <a class="headerlink" href="#NDBlockWrapper"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="NDBlockWrapper-175"><a href="#NDBlockWrapper-175"><span class="linenos">175</span></a><span class="k">class</span> <span class="nc">NDBlockWrapper</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
-</span><span id="NDBlockWrapper-176"><a href="#NDBlockWrapper-176"><span class="linenos">176</span></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="NDBlockWrapper-175"><a href="#NDBlockWrapper-175"><span class="linenos">175</span></a><span class="k">class</span><span class="w"> </span><span class="nc">NDBlockWrapper</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+</span><span id="NDBlockWrapper-176"><a href="#NDBlockWrapper-176"><span class="linenos">176</span></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
 </span><span id="NDBlockWrapper-177"><a href="#NDBlockWrapper-177"><span class="linenos">177</span></a>        <span class="bp">self</span><span class="p">,</span>
 </span><span id="NDBlockWrapper-178"><a href="#NDBlockWrapper-178"><span class="linenos">178</span></a>        <span class="n">block</span><span class="p">:</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">,</span>
 </span><span id="NDBlockWrapper-179"><a href="#NDBlockWrapper-179"><span class="linenos">179</span></a>        <span class="n">dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
@@ -1096,7 +1104,7 @@ registered hooks while the latter silently ignores them.</p>
 </span><span id="NDBlockWrapper-201"><a href="#NDBlockWrapper-201"><span class="linenos">201</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">adapter_act_2</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">GELU</span><span class="p">()</span>
 </span><span id="NDBlockWrapper-202"><a href="#NDBlockWrapper-202"><span class="linenos">202</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">adapter_norm_2</span> <span class="o">=</span> <span class="n">norm_layer</span><span class="p">(</span><span class="n">dim</span><span class="p">)</span>
 </span><span id="NDBlockWrapper-203"><a href="#NDBlockWrapper-203"><span class="linenos">203</span></a>
-</span><span id="NDBlockWrapper-204"><a href="#NDBlockWrapper-204"><span class="linenos">204</span></a>    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">d_size</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+</span><span id="NDBlockWrapper-204"><a href="#NDBlockWrapper-204"><span class="linenos">204</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">d_size</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
 </span><span id="NDBlockWrapper-205"><a href="#NDBlockWrapper-205"><span class="linenos">205</span></a>        <span class="n">b_size</span><span class="p">,</span> <span class="n">hw_size</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
 </span><span id="NDBlockWrapper-206"><a href="#NDBlockWrapper-206"><span class="linenos">206</span></a>
 </span><span id="NDBlockWrapper-207"><a href="#NDBlockWrapper-207"><span class="linenos">207</span></a>        <span class="c1"># 3D adapter</span>
@@ -1151,14 +1159,14 @@ registered hooks while the latter silently ignores them.</p>
 
 <p>Your models should also subclass this class.</p>
 
-<p>Modules can also contain other Modules, allowing to nest them in
+<p>Modules can also contain other Modules, allowing them to be nested in
 a tree structure. You can assign the submodules as regular attributes::</p>
 
 <pre><code>import torch.nn as nn
 import torch.nn.functional as F
 
 class Model(nn.Module):
-    def __init__(self):
+    def __init__(self) -&gt; None:
         super().__init__()
         self.conv1 = nn.Conv2d(1, 20, 5)
         self.conv2 = nn.Conv2d(20, 20, 5)
@@ -1168,8 +1176,8 @@ class Model(nn.Module):
         return F.relu(self.conv2(x))
 </code></pre>
 
-<p>Submodules assigned in this way will be registered, and will have their
-parameters converted too when you call <code><a href="#NDBlockWrapper.to">to()</a></code>, etc.</p>
+<p>Submodules assigned in this way will be registered, and will also have their
+parameters converted when you call <code><a href="#NDBlockWrapper.to">to()</a></code>, etc.</p>
 
 <div class="pdoc-alert pdoc-alert-note">
 
@@ -1194,7 +1202,7 @@ must be made before assignment on the child.</p>
 
     </div>
     <a class="headerlink" href="#NDBlockWrapper.__init__"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="NDBlockWrapper.__init__-176"><a href="#NDBlockWrapper.__init__-176"><span class="linenos">176</span></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="NDBlockWrapper.__init__-176"><a href="#NDBlockWrapper.__init__-176"><span class="linenos">176</span></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
 </span><span id="NDBlockWrapper.__init__-177"><a href="#NDBlockWrapper.__init__-177"><span class="linenos">177</span></a>        <span class="bp">self</span><span class="p">,</span>
 </span><span id="NDBlockWrapper.__init__-178"><a href="#NDBlockWrapper.__init__-178"><span class="linenos">178</span></a>        <span class="n">block</span><span class="p">:</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">,</span>
 </span><span id="NDBlockWrapper.__init__-179"><a href="#NDBlockWrapper.__init__-179"><span class="linenos">179</span></a>        <span class="n">dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
@@ -1372,7 +1380,7 @@ must be made before assignment on the child.</p>
 
     </div>
     <a class="headerlink" href="#NDBlockWrapper.forward"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="NDBlockWrapper.forward-204"><a href="#NDBlockWrapper.forward-204"><span class="linenos">204</span></a>    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">d_size</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="NDBlockWrapper.forward-204"><a href="#NDBlockWrapper.forward-204"><span class="linenos">204</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">d_size</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
 </span><span id="NDBlockWrapper.forward-205"><a href="#NDBlockWrapper.forward-205"><span class="linenos">205</span></a>        <span class="n">b_size</span><span class="p">,</span> <span class="n">hw_size</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
 </span><span id="NDBlockWrapper.forward-206"><a href="#NDBlockWrapper.forward-206"><span class="linenos">206</span></a>
 </span><span id="NDBlockWrapper.forward-207"><a href="#NDBlockWrapper.forward-207"><span class="linenos">207</span></a>        <span class="c1"># 3D adapter</span>
@@ -1451,6 +1459,7 @@ registered hooks while the latter silently ignores them.</p>
                 <dd id="NDBlockWrapper.add_module" class="function">add_module</dd>
                 <dd id="NDBlockWrapper.register_module" class="function">register_module</dd>
                 <dd id="NDBlockWrapper.get_submodule" class="function">get_submodule</dd>
+                <dd id="NDBlockWrapper.set_submodule" class="function">set_submodule</dd>
                 <dd id="NDBlockWrapper.get_parameter" class="function">get_parameter</dd>
                 <dd id="NDBlockWrapper.get_buffer" class="function">get_buffer</dd>
                 <dd id="NDBlockWrapper.get_extra_state" class="function">get_extra_state</dd>
@@ -1459,6 +1468,7 @@ registered hooks while the latter silently ignores them.</p>
                 <dd id="NDBlockWrapper.cuda" class="function">cuda</dd>
                 <dd id="NDBlockWrapper.ipu" class="function">ipu</dd>
                 <dd id="NDBlockWrapper.xpu" class="function">xpu</dd>
+                <dd id="NDBlockWrapper.mtia" class="function">mtia</dd>
                 <dd id="NDBlockWrapper.cpu" class="function">cpu</dd>
                 <dd id="NDBlockWrapper.type" class="function">type</dd>
                 <dd id="NDBlockWrapper.float" class="function">float</dd>
@@ -1472,8 +1482,10 @@ registered hooks while the latter silently ignores them.</p>
                 <dd id="NDBlockWrapper.register_full_backward_hook" class="function">register_full_backward_hook</dd>
                 <dd id="NDBlockWrapper.register_forward_pre_hook" class="function">register_forward_pre_hook</dd>
                 <dd id="NDBlockWrapper.register_forward_hook" class="function">register_forward_hook</dd>
+                <dd id="NDBlockWrapper.register_state_dict_post_hook" class="function">register_state_dict_post_hook</dd>
                 <dd id="NDBlockWrapper.register_state_dict_pre_hook" class="function">register_state_dict_pre_hook</dd>
                 <dd id="NDBlockWrapper.state_dict" class="function">state_dict</dd>
+                <dd id="NDBlockWrapper.register_load_state_dict_pre_hook" class="function">register_load_state_dict_pre_hook</dd>
                 <dd id="NDBlockWrapper.register_load_state_dict_post_hook" class="function">register_load_state_dict_post_hook</dd>
                 <dd id="NDBlockWrapper.load_state_dict" class="function">load_state_dict</dd>
                 <dd id="NDBlockWrapper.parameters" class="function">parameters</dd>

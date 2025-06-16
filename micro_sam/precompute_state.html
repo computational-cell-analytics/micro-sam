@@ -66,30 +66,30 @@
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">  1</span></a><span class="sd">&quot;&quot;&quot;Precompute image embeddings and automatic mask generator state for image data.</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos">  2</span></a><span class="sd">&quot;&quot;&quot;</span>
 </span><span id="L-3"><a href="#L-3"><span class="linenos">  3</span></a>
-</span><span id="L-4"><a href="#L-4"><span class="linenos">  4</span></a><span class="kn">import</span> <span class="nn">os</span>
-</span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a><span class="kn">import</span> <span class="nn">pickle</span>
-</span><span id="L-6"><a href="#L-6"><span class="linenos">  6</span></a><span class="kn">from</span> <span class="nn">glob</span> <span class="kn">import</span> <span class="n">glob</span>
-</span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a><span class="kn">from</span> <span class="nn">pathlib</span> <span class="kn">import</span> <span class="n">Path</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="kn">from</span> <span class="nn">functools</span> <span class="kn">import</span> <span class="n">partial</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">Union</span><span class="p">,</span> <span class="n">List</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">  4</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">pickle</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos">  6</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">glob</span><span class="w"> </span><span class="kn">import</span> <span class="n">glob</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">partial</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">Union</span><span class="p">,</span> <span class="n">List</span>
 </span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a>
-</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a><span class="kn">import</span> <span class="nn">h5py</span>
-</span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">h5py</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 </span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a>
-</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="kn">import</span> <span class="nn">torch</span>
-</span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a><span class="kn">import</span> <span class="nn">torch.nn</span> <span class="k">as</span> <span class="nn">nn</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+</span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">torch.nn</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">nn</span>
 </span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a>
-</span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a><span class="kn">from</span> <span class="nn">segment_anything.predictor</span> <span class="kn">import</span> <span class="n">SamPredictor</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">segment_anything.predictor</span><span class="w"> </span><span class="kn">import</span> <span class="n">SamPredictor</span>
 </span><span id="L-18"><a href="#L-18"><span class="linenos"> 18</span></a>
 </span><span id="L-19"><a href="#L-19"><span class="linenos"> 19</span></a><span class="k">try</span><span class="p">:</span>
-</span><span id="L-20"><a href="#L-20"><span class="linenos"> 20</span></a>    <span class="kn">from</span> <span class="nn">napari.utils</span> <span class="kn">import</span> <span class="n">progress</span> <span class="k">as</span> <span class="n">tqdm</span>
+</span><span id="L-20"><a href="#L-20"><span class="linenos"> 20</span></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">napari.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">progress</span> <span class="k">as</span> <span class="n">tqdm</span>
 </span><span id="L-21"><a href="#L-21"><span class="linenos"> 21</span></a><span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
-</span><span id="L-22"><a href="#L-22"><span class="linenos"> 22</span></a>    <span class="kn">from</span> <span class="nn">tqdm</span> <span class="kn">import</span> <span class="n">tqdm</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos"> 22</span></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">tqdm</span><span class="w"> </span><span class="kn">import</span> <span class="n">tqdm</span>
 </span><span id="L-23"><a href="#L-23"><span class="linenos"> 23</span></a>
-</span><span id="L-24"><a href="#L-24"><span class="linenos"> 24</span></a><span class="kn">from</span> <span class="nn">.</span> <span class="kn">import</span> <span class="n">instance_segmentation</span><span class="p">,</span> <span class="n">util</span>
+</span><span id="L-24"><a href="#L-24"><span class="linenos"> 24</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.</span><span class="w"> </span><span class="kn">import</span> <span class="n">instance_segmentation</span><span class="p">,</span> <span class="n">util</span>
 </span><span id="L-25"><a href="#L-25"><span class="linenos"> 25</span></a>
 </span><span id="L-26"><a href="#L-26"><span class="linenos"> 26</span></a>
-</span><span id="L-27"><a href="#L-27"><span class="linenos"> 27</span></a><span class="k">def</span> <span class="nf">cache_amg_state</span><span class="p">(</span>
+</span><span id="L-27"><a href="#L-27"><span class="linenos"> 27</span></a><span class="k">def</span><span class="w"> </span><span class="nf">cache_amg_state</span><span class="p">(</span>
 </span><span id="L-28"><a href="#L-28"><span class="linenos"> 28</span></a>    <span class="n">predictor</span><span class="p">:</span> <span class="n">SamPredictor</span><span class="p">,</span>
 </span><span id="L-29"><a href="#L-29"><span class="linenos"> 29</span></a>    <span class="n">raw</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
 </span><span id="L-30"><a href="#L-30"><span class="linenos"> 30</span></a>    <span class="n">image_embeddings</span><span class="p">:</span> <span class="n">util</span><span class="o">.</span><span class="n">ImageEmbeddings</span><span class="p">,</span>
@@ -101,11 +101,11 @@
 </span><span id="L-36"><a href="#L-36"><span class="linenos"> 36</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute and cache or load the state for the automatic mask generator.</span>
 </span><span id="L-37"><a href="#L-37"><span class="linenos"> 37</span></a>
 </span><span id="L-38"><a href="#L-38"><span class="linenos"> 38</span></a><span class="sd">    Args:</span>
-</span><span id="L-39"><a href="#L-39"><span class="linenos"> 39</span></a><span class="sd">        predictor: The segment anything predictor.</span>
+</span><span id="L-39"><a href="#L-39"><span class="linenos"> 39</span></a><span class="sd">        predictor: The Segment Anything predictor.</span>
 </span><span id="L-40"><a href="#L-40"><span class="linenos"> 40</span></a><span class="sd">        raw: The image data.</span>
 </span><span id="L-41"><a href="#L-41"><span class="linenos"> 41</span></a><span class="sd">        image_embeddings: The image embeddings.</span>
 </span><span id="L-42"><a href="#L-42"><span class="linenos"> 42</span></a><span class="sd">        save_path: The embedding save path. The AMG state will be stored in &#39;save_path/amg_state.pickle&#39;.</span>
-</span><span id="L-43"><a href="#L-43"><span class="linenos"> 43</span></a><span class="sd">        verbose: Whether to run the computation verbose.</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos"> 43</span></a><span class="sd">        verbose: Whether to run the computation verbose. By default, set to &#39;True&#39;.</span>
 </span><span id="L-44"><a href="#L-44"><span class="linenos"> 44</span></a><span class="sd">        i: The index for which to cache the state.</span>
 </span><span id="L-45"><a href="#L-45"><span class="linenos"> 45</span></a><span class="sd">        kwargs: The keyword arguments for the amg class.</span>
 </span><span id="L-46"><a href="#L-46"><span class="linenos"> 46</span></a>
@@ -152,7 +152,7 @@
 </span><span id="L-87"><a href="#L-87"><span class="linenos"> 87</span></a>    <span class="k">return</span> <span class="n">amg</span>
 </span><span id="L-88"><a href="#L-88"><span class="linenos"> 88</span></a>
 </span><span id="L-89"><a href="#L-89"><span class="linenos"> 89</span></a>
-</span><span id="L-90"><a href="#L-90"><span class="linenos"> 90</span></a><span class="k">def</span> <span class="nf">cache_is_state</span><span class="p">(</span>
+</span><span id="L-90"><a href="#L-90"><span class="linenos"> 90</span></a><span class="k">def</span><span class="w"> </span><span class="nf">cache_is_state</span><span class="p">(</span>
 </span><span id="L-91"><a href="#L-91"><span class="linenos"> 91</span></a>    <span class="n">predictor</span><span class="p">:</span> <span class="n">SamPredictor</span><span class="p">,</span>
 </span><span id="L-92"><a href="#L-92"><span class="linenos"> 92</span></a>    <span class="n">decoder</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">,</span>
 </span><span id="L-93"><a href="#L-93"><span class="linenos"> 93</span></a>    <span class="n">raw</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
@@ -166,14 +166,14 @@
 </span><span id="L-101"><a href="#L-101"><span class="linenos">101</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute and cache or load the state for the automatic mask generator.</span>
 </span><span id="L-102"><a href="#L-102"><span class="linenos">102</span></a>
 </span><span id="L-103"><a href="#L-103"><span class="linenos">103</span></a><span class="sd">    Args:</span>
-</span><span id="L-104"><a href="#L-104"><span class="linenos">104</span></a><span class="sd">        predictor: The segment anything predictor.</span>
+</span><span id="L-104"><a href="#L-104"><span class="linenos">104</span></a><span class="sd">        predictor: The Segment Anything predictor.</span>
 </span><span id="L-105"><a href="#L-105"><span class="linenos">105</span></a><span class="sd">        decoder: The instance segmentation decoder.</span>
 </span><span id="L-106"><a href="#L-106"><span class="linenos">106</span></a><span class="sd">        raw: The image data.</span>
 </span><span id="L-107"><a href="#L-107"><span class="linenos">107</span></a><span class="sd">        image_embeddings: The image embeddings.</span>
 </span><span id="L-108"><a href="#L-108"><span class="linenos">108</span></a><span class="sd">        save_path: The embedding save path. The AMG state will be stored in &#39;save_path/amg_state.pickle&#39;.</span>
-</span><span id="L-109"><a href="#L-109"><span class="linenos">109</span></a><span class="sd">        verbose: Whether to run the computation verbose.</span>
+</span><span id="L-109"><a href="#L-109"><span class="linenos">109</span></a><span class="sd">        verbose: Whether to run the computation verbose. By default, set to &#39;True&#39;.</span>
 </span><span id="L-110"><a href="#L-110"><span class="linenos">110</span></a><span class="sd">        i: The index for which to cache the state.</span>
-</span><span id="L-111"><a href="#L-111"><span class="linenos">111</span></a><span class="sd">        skip_load: Skip loading the state if it is precomputed.</span>
+</span><span id="L-111"><a href="#L-111"><span class="linenos">111</span></a><span class="sd">        skip_load: Skip loading the state if it is precomputed. By default, set to &#39;False&#39;.</span>
 </span><span id="L-112"><a href="#L-112"><span class="linenos">112</span></a><span class="sd">        kwargs: The keyword arguments for the amg class.</span>
 </span><span id="L-113"><a href="#L-113"><span class="linenos">113</span></a>
 </span><span id="L-114"><a href="#L-114"><span class="linenos">114</span></a><span class="sd">    Returns:</span>
@@ -218,7 +218,7 @@
 </span><span id="L-153"><a href="#L-153"><span class="linenos">153</span></a>    <span class="k">return</span> <span class="n">amg</span>
 </span><span id="L-154"><a href="#L-154"><span class="linenos">154</span></a>
 </span><span id="L-155"><a href="#L-155"><span class="linenos">155</span></a>
-</span><span id="L-156"><a href="#L-156"><span class="linenos">156</span></a><span class="k">def</span> <span class="nf">_precompute_state_for_file</span><span class="p">(</span>
+</span><span id="L-156"><a href="#L-156"><span class="linenos">156</span></a><span class="k">def</span><span class="w"> </span><span class="nf">_precompute_state_for_file</span><span class="p">(</span>
 </span><span id="L-157"><a href="#L-157"><span class="linenos">157</span></a>    <span class="n">predictor</span><span class="p">,</span> <span class="n">input_path</span><span class="p">,</span> <span class="n">output_path</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="n">ndim</span><span class="p">,</span> <span class="n">tile_shape</span><span class="p">,</span> <span class="n">halo</span><span class="p">,</span> <span class="n">precompute_amg_state</span><span class="p">,</span> <span class="n">decoder</span><span class="p">,</span> <span class="n">verbose</span>
 </span><span id="L-158"><a href="#L-158"><span class="linenos">158</span></a><span class="p">):</span>
 </span><span id="L-159"><a href="#L-159"><span class="linenos">159</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">input_path</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">):</span>
@@ -255,7 +255,7 @@
 </span><span id="L-190"><a href="#L-190"><span class="linenos">190</span></a>                <span class="n">cache_function</span><span class="p">(</span><span class="n">raw</span><span class="o">=</span><span class="n">image_data</span><span class="p">,</span> <span class="n">i</span><span class="o">=</span><span class="n">i</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 </span><span id="L-191"><a href="#L-191"><span class="linenos">191</span></a>
 </span><span id="L-192"><a href="#L-192"><span class="linenos">192</span></a>
-</span><span id="L-193"><a href="#L-193"><span class="linenos">193</span></a><span class="k">def</span> <span class="nf">_precompute_state_for_files</span><span class="p">(</span>
+</span><span id="L-193"><a href="#L-193"><span class="linenos">193</span></a><span class="k">def</span><span class="w"> </span><span class="nf">_precompute_state_for_files</span><span class="p">(</span>
 </span><span id="L-194"><a href="#L-194"><span class="linenos">194</span></a>    <span class="n">predictor</span><span class="p">:</span> <span class="n">SamPredictor</span><span class="p">,</span>
 </span><span id="L-195"><a href="#L-195"><span class="linenos">195</span></a>    <span class="n">input_files</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="nb">str</span><span class="p">]],</span> <span class="n">List</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]],</span>
 </span><span id="L-196"><a href="#L-196"><span class="linenos">196</span></a>    <span class="n">output_path</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span>
@@ -284,7 +284,7 @@
 </span><span id="L-219"><a href="#L-219"><span class="linenos">219</span></a>        <span class="n">idx</span> <span class="o">+=</span> <span class="mi">1</span>
 </span><span id="L-220"><a href="#L-220"><span class="linenos">220</span></a>
 </span><span id="L-221"><a href="#L-221"><span class="linenos">221</span></a>
-</span><span id="L-222"><a href="#L-222"><span class="linenos">222</span></a><span class="k">def</span> <span class="nf">precompute_state</span><span class="p">(</span>
+</span><span id="L-222"><a href="#L-222"><span class="linenos">222</span></a><span class="k">def</span><span class="w"> </span><span class="nf">precompute_state</span><span class="p">(</span>
 </span><span id="L-223"><a href="#L-223"><span class="linenos">223</span></a>    <span class="n">input_path</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span>
 </span><span id="L-224"><a href="#L-224"><span class="linenos">224</span></a>    <span class="n">output_path</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span>
 </span><span id="L-225"><a href="#L-225"><span class="linenos">225</span></a>    <span class="n">pattern</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -310,9 +310,9 @@
 </span><span id="L-245"><a href="#L-245"><span class="linenos">245</span></a><span class="sd">        checkpoint_path: Path to a checkpoint for a custom model.</span>
 </span><span id="L-246"><a href="#L-246"><span class="linenos">246</span></a><span class="sd">        key: The key to the input file. This is needed for contaner files (e.g. hdf5 or zarr)</span>
 </span><span id="L-247"><a href="#L-247"><span class="linenos">247</span></a><span class="sd">            or to load several images as 3d volume. Provide a glob pattern, e.g. &quot;*.tif&quot;, for this case.</span>
-</span><span id="L-248"><a href="#L-248"><span class="linenos">248</span></a><span class="sd">        ndim: The dimensionality of the data.</span>
+</span><span id="L-248"><a href="#L-248"><span class="linenos">248</span></a><span class="sd">        ndim: The dimensionality of the data. By default, computes it from the input data.</span>
 </span><span id="L-249"><a href="#L-249"><span class="linenos">249</span></a><span class="sd">        tile_shape: Shape of tiles for tiled prediction. By default prediction is run without tiling.</span>
-</span><span id="L-250"><a href="#L-250"><span class="linenos">250</span></a><span class="sd">        halo: Overlap of the tiles for tiled prediction.</span>
+</span><span id="L-250"><a href="#L-250"><span class="linenos">250</span></a><span class="sd">        halo: Overlap of the tiles for tiled prediction. By default prediction is run without tiling.</span>
 </span><span id="L-251"><a href="#L-251"><span class="linenos">251</span></a><span class="sd">        precompute_amg_state: Whether to precompute the state for automatic instance segmentation</span>
 </span><span id="L-252"><a href="#L-252"><span class="linenos">252</span></a><span class="sd">            in addition to the image embeddings.</span>
 </span><span id="L-253"><a href="#L-253"><span class="linenos">253</span></a><span class="sd">    &quot;&quot;&quot;</span>
@@ -341,9 +341,9 @@
 </span><span id="L-276"><a href="#L-276"><span class="linenos">276</span></a>        <span class="p">)</span>
 </span><span id="L-277"><a href="#L-277"><span class="linenos">277</span></a>
 </span><span id="L-278"><a href="#L-278"><span class="linenos">278</span></a>
-</span><span id="L-279"><a href="#L-279"><span class="linenos">279</span></a><span class="k">def</span> <span class="nf">main</span><span class="p">():</span>
+</span><span id="L-279"><a href="#L-279"><span class="linenos">279</span></a><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">():</span>
 </span><span id="L-280"><a href="#L-280"><span class="linenos">280</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;@private&quot;&quot;&quot;</span>
-</span><span id="L-281"><a href="#L-281"><span class="linenos">281</span></a>    <span class="kn">import</span> <span class="nn">argparse</span>
+</span><span id="L-281"><a href="#L-281"><span class="linenos">281</span></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">argparse</span>
 </span><span id="L-282"><a href="#L-282"><span class="linenos">282</span></a>
 </span><span id="L-283"><a href="#L-283"><span class="linenos">283</span></a>    <span class="n">available_models</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">util</span><span class="o">.</span><span class="n">get_model_names</span><span class="p">())</span>
 </span><span id="L-284"><a href="#L-284"><span class="linenos">284</span></a>    <span class="n">available_models</span> <span class="o">=</span> <span class="s2">&quot;, &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">available_models</span><span class="p">)</span>
@@ -416,7 +416,7 @@
 
     </div>
     <a class="headerlink" href="#cache_amg_state"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="cache_amg_state-28"><a href="#cache_amg_state-28"><span class="linenos">28</span></a><span class="k">def</span> <span class="nf">cache_amg_state</span><span class="p">(</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="cache_amg_state-28"><a href="#cache_amg_state-28"><span class="linenos">28</span></a><span class="k">def</span><span class="w"> </span><span class="nf">cache_amg_state</span><span class="p">(</span>
 </span><span id="cache_amg_state-29"><a href="#cache_amg_state-29"><span class="linenos">29</span></a>    <span class="n">predictor</span><span class="p">:</span> <span class="n">SamPredictor</span><span class="p">,</span>
 </span><span id="cache_amg_state-30"><a href="#cache_amg_state-30"><span class="linenos">30</span></a>    <span class="n">raw</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
 </span><span id="cache_amg_state-31"><a href="#cache_amg_state-31"><span class="linenos">31</span></a>    <span class="n">image_embeddings</span><span class="p">:</span> <span class="n">util</span><span class="o">.</span><span class="n">ImageEmbeddings</span><span class="p">,</span>
@@ -428,11 +428,11 @@
 </span><span id="cache_amg_state-37"><a href="#cache_amg_state-37"><span class="linenos">37</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute and cache or load the state for the automatic mask generator.</span>
 </span><span id="cache_amg_state-38"><a href="#cache_amg_state-38"><span class="linenos">38</span></a>
 </span><span id="cache_amg_state-39"><a href="#cache_amg_state-39"><span class="linenos">39</span></a><span class="sd">    Args:</span>
-</span><span id="cache_amg_state-40"><a href="#cache_amg_state-40"><span class="linenos">40</span></a><span class="sd">        predictor: The segment anything predictor.</span>
+</span><span id="cache_amg_state-40"><a href="#cache_amg_state-40"><span class="linenos">40</span></a><span class="sd">        predictor: The Segment Anything predictor.</span>
 </span><span id="cache_amg_state-41"><a href="#cache_amg_state-41"><span class="linenos">41</span></a><span class="sd">        raw: The image data.</span>
 </span><span id="cache_amg_state-42"><a href="#cache_amg_state-42"><span class="linenos">42</span></a><span class="sd">        image_embeddings: The image embeddings.</span>
 </span><span id="cache_amg_state-43"><a href="#cache_amg_state-43"><span class="linenos">43</span></a><span class="sd">        save_path: The embedding save path. The AMG state will be stored in &#39;save_path/amg_state.pickle&#39;.</span>
-</span><span id="cache_amg_state-44"><a href="#cache_amg_state-44"><span class="linenos">44</span></a><span class="sd">        verbose: Whether to run the computation verbose.</span>
+</span><span id="cache_amg_state-44"><a href="#cache_amg_state-44"><span class="linenos">44</span></a><span class="sd">        verbose: Whether to run the computation verbose. By default, set to &#39;True&#39;.</span>
 </span><span id="cache_amg_state-45"><a href="#cache_amg_state-45"><span class="linenos">45</span></a><span class="sd">        i: The index for which to cache the state.</span>
 </span><span id="cache_amg_state-46"><a href="#cache_amg_state-46"><span class="linenos">46</span></a><span class="sd">        kwargs: The keyword arguments for the amg class.</span>
 </span><span id="cache_amg_state-47"><a href="#cache_amg_state-47"><span class="linenos">47</span></a>
@@ -485,11 +485,11 @@
 <h6 id="arguments">Arguments:</h6>
 
 <ul>
-<li><strong>predictor:</strong>  The segment anything predictor.</li>
+<li><strong>predictor:</strong>  The Segment Anything predictor.</li>
 <li><strong>raw:</strong>  The image data.</li>
 <li><strong>image_embeddings:</strong>  The image embeddings.</li>
 <li><strong>save_path:</strong>  The embedding save path. The AMG state will be stored in 'save_path/amg_state.pickle'.</li>
-<li><strong>verbose:</strong>  Whether to run the computation verbose.</li>
+<li><strong>verbose:</strong>  Whether to run the computation verbose. By default, set to 'True'.</li>
 <li><strong>i:</strong>  The index for which to cache the state.</li>
 <li><strong>kwargs:</strong>  The keyword arguments for the amg class.</li>
 </ul>
@@ -514,7 +514,7 @@
 
     </div>
     <a class="headerlink" href="#cache_is_state"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="cache_is_state-91"><a href="#cache_is_state-91"><span class="linenos"> 91</span></a><span class="k">def</span> <span class="nf">cache_is_state</span><span class="p">(</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="cache_is_state-91"><a href="#cache_is_state-91"><span class="linenos"> 91</span></a><span class="k">def</span><span class="w"> </span><span class="nf">cache_is_state</span><span class="p">(</span>
 </span><span id="cache_is_state-92"><a href="#cache_is_state-92"><span class="linenos"> 92</span></a>    <span class="n">predictor</span><span class="p">:</span> <span class="n">SamPredictor</span><span class="p">,</span>
 </span><span id="cache_is_state-93"><a href="#cache_is_state-93"><span class="linenos"> 93</span></a>    <span class="n">decoder</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">,</span>
 </span><span id="cache_is_state-94"><a href="#cache_is_state-94"><span class="linenos"> 94</span></a>    <span class="n">raw</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
@@ -528,14 +528,14 @@
 </span><span id="cache_is_state-102"><a href="#cache_is_state-102"><span class="linenos">102</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute and cache or load the state for the automatic mask generator.</span>
 </span><span id="cache_is_state-103"><a href="#cache_is_state-103"><span class="linenos">103</span></a>
 </span><span id="cache_is_state-104"><a href="#cache_is_state-104"><span class="linenos">104</span></a><span class="sd">    Args:</span>
-</span><span id="cache_is_state-105"><a href="#cache_is_state-105"><span class="linenos">105</span></a><span class="sd">        predictor: The segment anything predictor.</span>
+</span><span id="cache_is_state-105"><a href="#cache_is_state-105"><span class="linenos">105</span></a><span class="sd">        predictor: The Segment Anything predictor.</span>
 </span><span id="cache_is_state-106"><a href="#cache_is_state-106"><span class="linenos">106</span></a><span class="sd">        decoder: The instance segmentation decoder.</span>
 </span><span id="cache_is_state-107"><a href="#cache_is_state-107"><span class="linenos">107</span></a><span class="sd">        raw: The image data.</span>
 </span><span id="cache_is_state-108"><a href="#cache_is_state-108"><span class="linenos">108</span></a><span class="sd">        image_embeddings: The image embeddings.</span>
 </span><span id="cache_is_state-109"><a href="#cache_is_state-109"><span class="linenos">109</span></a><span class="sd">        save_path: The embedding save path. The AMG state will be stored in &#39;save_path/amg_state.pickle&#39;.</span>
-</span><span id="cache_is_state-110"><a href="#cache_is_state-110"><span class="linenos">110</span></a><span class="sd">        verbose: Whether to run the computation verbose.</span>
+</span><span id="cache_is_state-110"><a href="#cache_is_state-110"><span class="linenos">110</span></a><span class="sd">        verbose: Whether to run the computation verbose. By default, set to &#39;True&#39;.</span>
 </span><span id="cache_is_state-111"><a href="#cache_is_state-111"><span class="linenos">111</span></a><span class="sd">        i: The index for which to cache the state.</span>
-</span><span id="cache_is_state-112"><a href="#cache_is_state-112"><span class="linenos">112</span></a><span class="sd">        skip_load: Skip loading the state if it is precomputed.</span>
+</span><span id="cache_is_state-112"><a href="#cache_is_state-112"><span class="linenos">112</span></a><span class="sd">        skip_load: Skip loading the state if it is precomputed. By default, set to &#39;False&#39;.</span>
 </span><span id="cache_is_state-113"><a href="#cache_is_state-113"><span class="linenos">113</span></a><span class="sd">        kwargs: The keyword arguments for the amg class.</span>
 </span><span id="cache_is_state-114"><a href="#cache_is_state-114"><span class="linenos">114</span></a>
 </span><span id="cache_is_state-115"><a href="#cache_is_state-115"><span class="linenos">115</span></a><span class="sd">    Returns:</span>
@@ -586,14 +586,14 @@
 <h6 id="arguments">Arguments:</h6>
 
 <ul>
-<li><strong>predictor:</strong>  The segment anything predictor.</li>
+<li><strong>predictor:</strong>  The Segment Anything predictor.</li>
 <li><strong>decoder:</strong>  The instance segmentation decoder.</li>
 <li><strong>raw:</strong>  The image data.</li>
 <li><strong>image_embeddings:</strong>  The image embeddings.</li>
 <li><strong>save_path:</strong>  The embedding save path. The AMG state will be stored in 'save_path/amg_state.pickle'.</li>
-<li><strong>verbose:</strong>  Whether to run the computation verbose.</li>
+<li><strong>verbose:</strong>  Whether to run the computation verbose. By default, set to 'True'.</li>
 <li><strong>i:</strong>  The index for which to cache the state.</li>
-<li><strong>skip_load:</strong>  Skip loading the state if it is precomputed.</li>
+<li><strong>skip_load:</strong>  Skip loading the state if it is precomputed. By default, set to 'False'.</li>
 <li><strong>kwargs:</strong>  The keyword arguments for the amg class.</li>
 </ul>
 
@@ -611,13 +611,13 @@
 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">precompute_state</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">input_path</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span>,</span><span class="param">	<span class="n">output_path</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span>,</span><span class="param">	<span class="n">pattern</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;vit_b_lm&#39;</span>,</span><span class="param">	<span class="n">checkpoint_path</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="n">NoneType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">key</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">ndim</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">tile_shape</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">halo</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">precompute_amg_state</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span></span><span class="return-annotation">) -> <span class="kc">None</span>:</span></span>
+        <span class="name">precompute_state</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">input_path</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span>,</span><span class="param">	<span class="n">output_path</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span>,</span><span class="param">	<span class="n">pattern</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;vit_b_lm&#39;</span>,</span><span class="param">	<span class="n">checkpoint_path</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">NoneType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">key</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">ndim</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">tile_shape</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">halo</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">precompute_amg_state</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span></span><span class="return-annotation">) -> <span class="kc">None</span>:</span></span>
 
                 <label class="view-source-button" for="precompute_state-view-source"><span>View Source</span></label>
 
     </div>
     <a class="headerlink" href="#precompute_state"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="precompute_state-223"><a href="#precompute_state-223"><span class="linenos">223</span></a><span class="k">def</span> <span class="nf">precompute_state</span><span class="p">(</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="precompute_state-223"><a href="#precompute_state-223"><span class="linenos">223</span></a><span class="k">def</span><span class="w"> </span><span class="nf">precompute_state</span><span class="p">(</span>
 </span><span id="precompute_state-224"><a href="#precompute_state-224"><span class="linenos">224</span></a>    <span class="n">input_path</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span>
 </span><span id="precompute_state-225"><a href="#precompute_state-225"><span class="linenos">225</span></a>    <span class="n">output_path</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span>
 </span><span id="precompute_state-226"><a href="#precompute_state-226"><span class="linenos">226</span></a>    <span class="n">pattern</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -643,9 +643,9 @@
 </span><span id="precompute_state-246"><a href="#precompute_state-246"><span class="linenos">246</span></a><span class="sd">        checkpoint_path: Path to a checkpoint for a custom model.</span>
 </span><span id="precompute_state-247"><a href="#precompute_state-247"><span class="linenos">247</span></a><span class="sd">        key: The key to the input file. This is needed for contaner files (e.g. hdf5 or zarr)</span>
 </span><span id="precompute_state-248"><a href="#precompute_state-248"><span class="linenos">248</span></a><span class="sd">            or to load several images as 3d volume. Provide a glob pattern, e.g. &quot;*.tif&quot;, for this case.</span>
-</span><span id="precompute_state-249"><a href="#precompute_state-249"><span class="linenos">249</span></a><span class="sd">        ndim: The dimensionality of the data.</span>
+</span><span id="precompute_state-249"><a href="#precompute_state-249"><span class="linenos">249</span></a><span class="sd">        ndim: The dimensionality of the data. By default, computes it from the input data.</span>
 </span><span id="precompute_state-250"><a href="#precompute_state-250"><span class="linenos">250</span></a><span class="sd">        tile_shape: Shape of tiles for tiled prediction. By default prediction is run without tiling.</span>
-</span><span id="precompute_state-251"><a href="#precompute_state-251"><span class="linenos">251</span></a><span class="sd">        halo: Overlap of the tiles for tiled prediction.</span>
+</span><span id="precompute_state-251"><a href="#precompute_state-251"><span class="linenos">251</span></a><span class="sd">        halo: Overlap of the tiles for tiled prediction. By default prediction is run without tiling.</span>
 </span><span id="precompute_state-252"><a href="#precompute_state-252"><span class="linenos">252</span></a><span class="sd">        precompute_amg_state: Whether to precompute the state for automatic instance segmentation</span>
 </span><span id="precompute_state-253"><a href="#precompute_state-253"><span class="linenos">253</span></a><span class="sd">            in addition to the image embeddings.</span>
 </span><span id="precompute_state-254"><a href="#precompute_state-254"><span class="linenos">254</span></a><span class="sd">    &quot;&quot;&quot;</span>
@@ -691,9 +691,9 @@ for each of these files. To select all files in a folder pass "*".</li>
 <li><strong>checkpoint_path:</strong>  Path to a checkpoint for a custom model.</li>
 <li><strong>key:</strong>  The key to the input file. This is needed for contaner files (e.g. hdf5 or zarr)
 or to load several images as 3d volume. Provide a glob pattern, e.g. "*.tif", for this case.</li>
-<li><strong>ndim:</strong>  The dimensionality of the data.</li>
+<li><strong>ndim:</strong>  The dimensionality of the data. By default, computes it from the input data.</li>
 <li><strong>tile_shape:</strong>  Shape of tiles for tiled prediction. By default prediction is run without tiling.</li>
-<li><strong>halo:</strong>  Overlap of the tiles for tiled prediction.</li>
+<li><strong>halo:</strong>  Overlap of the tiles for tiled prediction. By default prediction is run without tiling.</li>
 <li><strong>precompute_amg_state:</strong>  Whether to precompute the state for automatic instance segmentation
 in addition to the image embeddings.</li>
 </ul>

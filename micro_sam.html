@@ -42,6 +42,7 @@
     <li><a href="#annotator-3d">Annotator 3D</a></li>
     <li><a href="#annotator-tracking">Annotator Tracking</a></li>
     <li><a href="#image-series-annotator">Image Series Annotator</a></li>
+    <li><a href="#object-classification">Object Classification</a></li>
     <li><a href="#finetuning-ui">Finetuning UI</a></li>
   </ul></li>
   <li><a href="#using-the-command-line-interface-cli">Using the Command Line Interface (CLI)</a></li>
@@ -84,10 +85,10 @@
                     <li><a href="micro_sam/instance_segmentation.html">instance_segmentation</a></li>
                     <li><a href="micro_sam/models.html">models</a></li>
                     <li><a href="micro_sam/multi_dimensional_segmentation.html">multi_dimensional_segmentation</a></li>
+                    <li><a href="micro_sam/object_classification.html">object_classification</a></li>
                     <li><a href="micro_sam/precompute_state.html">precompute_state</a></li>
                     <li><a href="micro_sam/prompt_based_segmentation.html">prompt_based_segmentation</a></li>
                     <li><a href="micro_sam/prompt_generators.html">prompt_generators</a></li>
-                    <li><a href="micro_sam/reproducibility.html">reproducibility</a></li>
                     <li><a href="micro_sam/sam_annotator.html">sam_annotator</a></li>
                     <li><a href="micro_sam/sample_data.html">sample_data</a></li>
                     <li><a href="micro_sam/training.html">training</a></li>
@@ -133,7 +134,8 @@ We are still working on improving and extending its functionality. The current r
 <li>Support for <a href="https://ai.meta.com/sam2/">SAM2</a>.</li>
 </ul>
 
-<p>If you run into any problems or have questions please <a href="https://github.com/computational-cell-analytics/micro-sam/issues/new">open an issue</a> or reach out via <a href="https://forum.image.sc/">image.sc</a> using the tag <code>micro-sam</code>.</p>
+<p>If you run into any problems or have questions please <a href="https://github.com/computational-cell-analytics/micro-sam/issues/new">open an issue</a> or reach out via <a href="https://forum.image.sc/">image.sc</a> using the tag <code>micro-sam</code>.
+You can follow recent updates on <code><a href="">micro_sam</a></code> in our <a href="https://forum.image.sc/t/microsam-news-feed">news feed</a>.</p>
 
 <h2 id="quickstart">Quickstart</h2>
 
@@ -158,11 +160,13 @@ We are still working on improving and extending its functionality. The current r
 <p>The <code><a href="">micro_sam</a></code> python library can be imported via</p>
 
 <div class="pdoc-code codehilite">
-<pre><span></span><code><span class="kn">import</span> <span class="nn">micro_sam</span>
+<pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">micro_sam</span>
 </code></pre>
 </div>
 
 <p>It is explained in more detail <a href="#using-the-python-library">here</a>.</p>
+
+<p>We also have a quick start notebook <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/quick_start.ipynb">here</a>.</p>
 
 <p>We provide different finetuned models for microscopy that can be used within our tools or any other tool that supports Segment Anything. See <a href="#finetuned-models">finetuned models</a> for details on the available models.
 You can also train models on your own data, see <a href="#training-your-own-model">here for details</a>.</p>
@@ -194,7 +198,7 @@ You can also train models on your own data, see <a href="#training-your-own-mode
 
 <h2 id="from-conda">From conda</h2>
 
-<p><code>conda</code> is a python package manager. If you don't have it installed yet you can follow the instructions <a href="https://conda-forge.org/download/">here</a> to set it up on your system.
+<p><code>conda</code> is a python package manager. If you don't have it installed yet you can follow the instructions <a href="https://conda-forge.org/download/">here</a> or look into our <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#faq">installation FAQs</a> to set it up on your system.
 Please make sure that you are using an up-to-date version of conda to install <code><a href="">micro_sam</a></code>.
 You can also use <a href="https://mamba.readthedocs.io/en/latest/">mamba</a>, which is a drop-in replacement for conda, to install it. In this case, just replace the <code>conda</code> commands below with <code>mamba</code>.</p>
 
@@ -512,6 +516,27 @@ Once you click <code>Annotate Images</code> the images from the folder you have 
 
 <p>Check out <a href="https://youtu.be/HqRoImdTX3c">the video tutorial</a> for an in-depth explanation on how to use the image series annotator.</p>
 
+<h2 id="object-classification">Object Classification</h2>
+
+<p>We have recently implemented an experimental workflow for object classification with <code><a href="">micro_sam</a></code>. It can be started by:</p>
+
+<ul>
+<li>clicking <code>Object Classifier</code> in the plugin menu after starting <code>napari</code>.</li>
+<li>calling <code><a href="micro_sam/sam_annotator/object_classifier.html#object_classifier">micro_sam.sam_annotator.object_classifier.object_classifier</a></code> in a python script.</li>
+</ul>
+
+<p>When starting this worklfow the following interface opens up.</p>
+
+<p><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/object-classifier.png" width="512"></p>
+
+<p>You can load an image (here: <code>livecell</code>) and a segmentation (here, <code>segmentation</code>, for example from another <code><a href="">micro_sam</a></code> widget).
+Compute image embeddings as in the other widgets.
+Then, draw annotations for the different types of objects in your image in the <code>annotation</code> layer, see also the brushstroke labels visible in some cells in the image.
+By clicking <code>Train and predict</code> you train a random forest classifer on the objects you have annotated, that uses the image embeddings projected to the objects as features.
+It is then applied to all objects to obtain the semantic segmentation shown in <code>prediction</code>.</p>
+
+<p><strong>This worklfow is still experimental. It may significantly change in the future and we are working on a publication to explain the underlying methodology and to document it properly. Feedback is already welcome in case you use it.</strong></p>
+
 <h2 id="finetuning-ui">Finetuning UI</h2>
 
 <p>We also provide a graphical inferface for fine-tuning models on your own data. It can be started by clicking <code>Finetuning</code> in the plugin menu after starting <code>napari</code>.</p>
@@ -542,6 +567,7 @@ Once you click <code>Annotate Images</code> the images from the folder you have 
 <p>The supported CLIs can be used by</p>
 
 <ul>
+<li>Running <code>$ micro_sam.info</code> for getting <code>micro-sam</code> package information and other necessary system-level information to use <code>micro-sam</code>.</li>
 <li>Running <code>$ micro_sam.precompute_embeddings</code> for precomputing and caching the image embeddings.</li>
 <li>Running <code>$ micro_sam.annotator_2d</code> for starting the 2d annotator.</li>
 <li>Running <code>$ micro_sam.annotator_3d</code> for starting the 3d annotator.</li>
@@ -557,18 +583,15 @@ Once you click <code>Annotate Images</code> the images from the folder you have 
 <li>AIS is supported by <code>micro-sam</code> models (or finetuned models; subjected to they are trained with the additional instance segmentation decoder)</li>
 </ul></li>
 <li>If these parameters are not provided by the user, <code>micro-sam</code> makes use of the best post-processing parameters (depending on the choice of model). </li>
-<li>The post-processing parameters can be changed by parsing the parameters via the CLI using <code>--&lt;PARAMETER_NAME&gt; &lt;VALUE&gt;.</code> For example, one can update the parameter values (eg. <code>pred_iou_thresh</code>, <code>stability_iou_thresh</code>, etc. - supported by AMG) using
-<div class="pdoc-code codehilite">
-<pre><span></span><code>$<span class="w"> </span><a href="micro_sam/automatic_segmentation.html">micro_sam.automatic_segmentation</a><span class="w"> </span>...<span class="w"> </span>--pred_iou_thresh<span class="w"> </span><span class="m">0</span>.6<span class="w"> </span>--stability_iou_thresh<span class="w"> </span><span class="m">0</span>.6<span class="w"> </span>...
-</code></pre>
-</div></li>
+<li>The post-processing parameters can be changed by parsing the parameters via the CLI using <code>--&lt;PARAMETER_NAME&gt; &lt;VALUE&gt;.</code> For example, one can update the parameter values (eg. <code>pred_iou_thresh</code>, <code>stability_iou_thresh</code>, etc. - supported by AMG) using <code>$ <a href="micro_sam/automatic_segmentation.html">micro_sam.automatic_segmentation</a> ... --pred_iou_thresh 0.6 --stability_iou_thresh 0.6 ...</code>
+<ul>
+<li>Remember to specify the automatic segmentation mode using <code>--mode &lt;MODE_NAME&gt;</code> when using additional post-processing parameters.</li>
 </ul></li>
+<li>You can check details for supported parameters and their respective default values at <code>micro_sam/instance_segmentation.py</code> under the <code>generate</code> method for <code>AutomaticMaskGenerator</code> and <code>InstanceSegmentationWithDecoder</code> class.</li>
+<li>A good practice is to set <code>--ndim &lt;NDIM&gt;</code>, where <code>&lt;NDIM&gt;</code> corresponds to the number of dimensions of input images.</li>
+</ul></li>
+<li>Running <code>$ micro_sam.evaluate</code> for evaluating instance segmentation.</li>
 </ul>
-
-<pre><code>    - Remember to specify the automatic segmentation mode using `--mode &lt;MODE_NAME&gt;` when using additional post-processing parameters.
-- You can check details for supported parameters and their respective default values at `micro_sam/instance_segmentation.py` under the `generate` method for `AutomaticMaskGenerator` and `InstanceSegmentationWithDecoder` class.
-- A good practice is to set `--ndim &lt;NDIM&gt;`, where `&lt;NDIM&gt;` corresponds to the number of dimensions of input images.
-</code></pre>
 
 <p>NOTE: For all CLIs above, you can find more details by adding the argument <code>-h</code> to the CLI script (eg. <code>$ micro_sam.annotator_2d -h</code>).</p>
 
@@ -577,7 +600,7 @@ Once you click <code>Annotate Images</code> the images from the folder you have 
 <p>The python library can be imported via</p>
 
 <div class="pdoc-code codehilite">
-<pre><span></span><code><span class="kn">import</span> <span class="nn">micro_sam</span>
+<pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">micro_sam</span>
 </code></pre>
 </div>
 
@@ -593,8 +616,8 @@ Once you click <code>Annotate Images</code> the images from the folder you have 
 <p>You can import these sub-modules via</p>
 
 <div class="pdoc-code codehilite">
-<pre><span></span><code><span class="kn">import</span> <span class="nn"><a href="micro_sam/prompt_based_segmentation.html">micro_sam.prompt_based_segmentation</a></span>
-<span class="kn">import</span> <span class="nn"><a href="micro_sam/instance_segmentation.html">micro_sam.instance_segmentation</a></span>
+<pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn"><a href="micro_sam/prompt_based_segmentation.html">micro_sam.prompt_based_segmentation</a></span>
+<span class="kn">import</span><span class="w"> </span><span class="nn"><a href="micro_sam/instance_segmentation.html">micro_sam.instance_segmentation</a></span>
 <span class="c1"># etc.</span>
 </code></pre>
 </div>
@@ -734,15 +757,15 @@ By default, the <code>base</code> size is used.</p>
 </ul></li>
 <li>The light microscopy generalist models from <a href="https://www.nature.com/articles/s41592-024-02580-4">Segment Anything for Microscopy</a> (<code>Light Microscopy</code>).
 <ul>
-<li><code>vit_l_lm</code>: Model for cells and nuclei in light microscopy data with ViT Large image encoder. (<a href="https://doi.org/10.5281/zenodo.11111176">Zenodo</a>) (<a href="https://bioimage.io/#/?id=idealistic-rat">idealistic-rat on BioImage.IO</a>)</li>
-<li><code>vit_b_lm</code>: Model for cells and nuclei in light microscopy data with ViT Base image encoder. (<a href="https://zenodo.org/doi/10.5281/zenodo.11103797">Zenodo</a>) (<a href="https://bioimage.io/#/?id=diplomatic-bug">diplomatic-bug on BioImage.IO</a>)</li>
-<li><code>vit_t_lm</code>: Model for cells and nuclei in light microscopy data with ViT Tiny image encoder. (<a href="https://doi.org/10.5281/zenodo.11111328">Zenodo</a>) (<a href="https://bioimage.io/#/?id=faithful-chicken">faithful-chicken BioImage.IO</a>)</li>
+<li><code>vit_l_lm</code>: Model for cells and nuclei in light microscopy data with ViT Large image encoder. (<a href="https://bioimage.io/#/?id=idealistic-rat">idealistic-rat on BioImage.IO</a>)</li>
+<li><code>vit_b_lm</code>: Model for cells and nuclei in light microscopy data with ViT Base image encoder. (<a href="https://bioimage.io/#/?id=diplomatic-bug">diplomatic-bug on BioImage.IO</a>)</li>
+<li><code>vit_t_lm</code>: Model for cells and nuclei in light microscopy data with ViT Tiny image encoder. (<a href="https://bioimage.io/#/?id=faithful-chicken">faithful-chicken BioImage.IO</a>)</li>
 </ul></li>
 <li>The electron microscopy generalist models from <a href="https://www.nature.com/articles/s41592-024-02580-4">Segment Anything for Microscopy</a> (<code>Electron Microscopy</code>).
 <ul>
-<li><code>vit_l_em_organelles</code>: Model for mitochodria and nuclei in electron microscopy data with ViT Large image encoder. (<a href="https://doi.org/10.5281/zenodo.11111054">Zenodo</a>) (<a href="https://bioimage.io/#/?id=humorous-crab">humorous-crab on BioImage.IO</a>)</li>
-<li><code>vit_b_em_organelles</code>: Model for mitochodria and nuclei in electron microscopy data with ViT Base image encoder. (<a href="https://doi.org/10.5281/zenodo.11111293">Zenodo</a>) (<a href="https://bioimage.io/#/?id=noisy-ox">noisy-ox on BioImage.IO</a>)</li>
-<li><code>vit_t_em_organelles</code>: Model for mitochodria and nuclei in electron microscopy data with ViT Tiny image encoder. (<a href="https://doi.org/10.5281/zenodo.11110950">Zenodo</a>) (<a href="https://bioimage.io/#/?id=greedy-whale">greedy-whale on BioImage.IO</a>)</li>
+<li><code>vit_l_em_organelles</code>: Model for mitochodria and nuclei in electron microscopy data with ViT Large image encoder. (<a href="https://bioimage.io/#/?id=humorous-crab">humorous-crab on BioImage.IO</a>)</li>
+<li><code>vit_b_em_organelles</code>: Model for mitochodria and nuclei in electron microscopy data with ViT Base image encoder. (<a href="https://bioimage.io/#/?id=noisy-ox">noisy-ox on BioImage.IO</a>)</li>
+<li><code>vit_t_em_organelles</code>: Model for mitochodria and nuclei in electron microscopy data with ViT Tiny image encoder. (<a href="https://bioimage.io/#/?id=greedy-whale">greedy-whale on BioImage.IO</a>)</li>
 </ul></li>
 <li>The medical imaging generalist models from <a href="https://arxiv.org/abs/2501.11734">MedicoSAM</a> (<code>Medical Imaging</code>).
 <ul>
@@ -784,17 +807,37 @@ We are working on further improving these models and adding new models for other
 
 <h2 id="other-models">Other Models</h2>
 
-<p>Previous versions of our models are available on Zenodo:</p>
+<p>Previous versions of our models are available on Zenodo or on the BioImage.IO modelzoo:</p>
+
+<h3 id="v3-models">v3 Models</h3>
+
+<p><!---
+It seems like there's no easy way to link to previous versions on BioImage.IO right now.
+-->
+An improved version of the light microscopy that were trained on a larger dataset compared to the v2 light microscopy models:</p>
+
+<ul>
+<li><a href="TODO">vit_t_lm</a>: the ViT-Tiny model for segmenting cells and nuclei in LM.</li>
+<li><a href="TODO">vit_b_lm</a>: the ViT-Base model for segmenting cells and nuclei in LM.</li>
+<li><a href="TODO">vit_l_lm</a>: the ViT-Large model for segmenting cells and nuclei in LM.</li>
+</ul>
 
 <h3 id="v2-models">v2 Models</h3>
 
+<p>The models at the point of the <a href="https://www.nature.com/articles/s41592-024-02580-4">publication</a>. The results reported in the paper refer to these models:</p>
+
 <ul>
-<li>vit_t_lm (<a href="https://zenodo.org/records/11111329">Zenodo</a>): the ViT-Tiny model for segmenting cells and nuclei in LM.</li>
-<li>vit_b_lm (<a href="https://zenodo.org/records/11103798">Zenodo</a>): the ViT-Base model for segmenting cells and nuclei in LM.</li>
-<li>vit_l_lm (<a href="https://zenodo.org/records/11111177">Zenodo</a>): the ViT-Large mopdel for segmenting cells and nuclei in LM.</li>
+<li><a href="https://zenodo.org/records/11111329">vit_t_lm</a>: the ViT-Tiny model for segmenting cells and nuclei in LM.</li>
+<li><a href="https://zenodo.org/records/11103798">vit_b_lm</a>: the ViT-Base model for segmenting cells and nuclei in LM.</li>
+<li><a href="https://zenodo.org/records/11111177">vit_l_lm</a>: the ViT-Large model for segmenting cells and nuclei in LM.</li>
+<li><a href="https://doi.org/10.5281/zenodo.11110950">vit_t_em_organelles</a>: the ViT-Base model for segmenting mitochondria and nuclei in EM.</li>
+<li><a href="https://doi.org/10.5281/zenodo.11111293">vit_b_em_organelles</a>: the ViT-Base model for segmenting mitochondria and nuclei in EM.</li>
+<li><a href="https://doi.org/10.5281/zenodo.11111054">vit_l_em_organelles</a>: the ViT-Large model for segmenting mitochondria and nuclei in EM.</li>
 </ul>
 
 <h3 id="v1-models">v1 Models</h3>
+
+<p>The initial models published with our preprint:</p>
 
 <ul>
 <li><a href="https://zenodo.org/records/10524894">vit_b_em_boundaries</a>: for segmenting compartments delineated by boundaries such as cells or neurites in EM.</li>
@@ -871,6 +914,26 @@ To do this, please either create an <a href="https://github.com/computational-ce
 If you encounter a problem or question not addressed here feel free to <a href="https://github.com/computational-cell-analytics/micro-sam/issues/new">open an issue</a> or to ask your question on <a href="https://forum.image.sc/">image.sc</a> with the tag <code>micro-sam</code>.</p>
 
 <h2 id="installation-questions">Installation questions</h2>
+
+<h3 id="0-i-am-not-familiar-with-conda-mamba-micromamba-and-would-like-to-get-started-with-a-python-package-manager">0. I am not familiar with <code>conda</code> / <code>mamba</code> / <code>micromamba</code> and would like to get started with a python package manager.</h3>
+
+<p>If you are getting started from scratch, we recommend using <code>micromamba</code> to setup your own package manager and creating a new environment with the required dependencies. You can install <code>micromamba</code> by following the instructions <a href="https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html">here</a> under the <code>Automatic install</code> section. If you are using Linux, macOS, or Git Bash on Windows, the simplest way to of installing <code>micromamba</code> is to simply execute the installation script below in your preferred shell:</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SHELL</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span>&lt;<span class="o">(</span>curl<span class="w"> </span>-L<span class="w"> </span>micro.mamba.pm/install.sh<span class="o">)</span>
+</code></pre>
+</div>
+
+<p>If you are using Windows PowerShell, you should be able to install <code>micromamba</code> by running the following command:</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code>Invoke-Expression<span class="w"> </span><span class="o">((</span>Invoke-WebRequest<span class="w"> </span>-Uri<span class="w"> </span>https://micro.mamba.pm/install.ps1<span class="w"> </span>-UseBasicParsing<span class="o">)</span>.Content<span class="o">)</span>
+</code></pre>
+</div>
+
+<p>Once you have <code>micromamba</code> installed, you can create a new environment with the required dependencies by following the <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation">installation</a> instructions for <code><a href="">micro_sam</a></code> (remember to replace <code>conda</code> by <code>micromamba</code> in the installation commands. For example: to check the list of available environments, <code>conda env list</code> becomes <code>micromamba env list</code>).</p>
+
+<p>If you have any troubles in the aforementioned steps, remember to first check the <a href="https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html">official documentation</a> for troubleshooting details.</p>
 
 <h3 id="1-how-to-install-micro_sam">1. How to install <code><a href="">micro_sam</a></code>?</h3>
 
@@ -1383,32 +1446,34 @@ $ git checkout -b my-new-feature
 
 <h1 id="using-micro_sam-on-band">Using <code><a href="">micro_sam</a></code> on BAND</h1>
 
-<p>BAND is a service offered by EMBL Heidelberg that gives access to a virtual desktop for image analysis tasks. It is free to use and <code><a href="">micro_sam</a></code> is installed there.
+<p>BAND is a service offered by EMBL Heidelberg under the "The German Network for Bioinformatics Infrastructure" (de.NBI) that gives access to a virtual desktop for image analysis tasks. It is free to use and <code><a href="">micro_sam</a></code> is installed there.
 In order to use BAND and start <code><a href="">micro_sam</a></code> on it follow these steps:</p>
 
 <h2 id="start-band">Start BAND</h2>
 
 <ul>
-<li>Go to <a href="https://band.embl.de/">https://band.embl.de/</a> and click <strong>Login</strong>. If you have not used BAND before you will need to register for BAND. Currently you can only sign up via a Google account.</li>
+<li>Go to <a href="https://bandv1.denbi.uni-tuebingen.de/">https://bandv1.denbi.uni-tuebingen.de/</a> and click <strong>Login</strong>. If you have not used BAND before you will need to register for BAND. Currently you can only sign up via a Google account. NOTE: It takes a couple of seconds for the "Launch Desktops" window to appear.</li>
 <li>Launch a BAND desktop with sufficient resources. It's particularly important to select a GPU. The settings from the image below are a good choice.</li>
 <li>Go to the desktop by clicking <strong>GO TO DESKTOP</strong> in the <strong>Running Desktops</strong> menu. See also the screenshot below.</li>
 </ul>
 
-<p><img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/f965fce2-b924-4fc8-871b-f3201e502138" alt="image" /></p>
+<p><img src="https://github.com/user-attachments/assets/2e615769-b176-4ced-9507-99553aafb1c1" alt="image" /></p>
 
 <h2 id="start-micro_sam-in-band">Start <code><a href="">micro_sam</a></code> in BAND</h2>
 
 <ul>
-<li>Select <strong>Applications -> Image Analysis -> uSAM</strong> (see screenshot)
-<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/5daeafb3-119b-4104-8708-aab2960cb21c" alt="image" /></li>
-<li>This will open the micro_sam menu, where you can select the tool you want to use (see screenshot). Note: this may take a few minutes.
-<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/900ce0b9-4cf8-418c-94f1-e99ac7bc0086" alt="image" /></li>
-<li>For testing if the tool works, it's best to use the <strong>2d annotator</strong> first.
+<li><p>Select <strong>Applications -> Image Analysis -> microSAM</strong> (see screenshot)
+<img src="https://github.com/user-attachments/assets/f1e7af0d-5cc6-442d-95c7-9010f5996e2a" alt="image" /></p></li>
+<li><p>This will open the napari GUI, where you can select the images and annotator tools you want to use (see screenshot). NOTE: this may take a few minutes.
+<img src="https://github.com/user-attachments/assets/23296589-be8d-4f9f-9a38-92d5eea60541" alt="image" /></p></li>
+<li><p>For testing if the tool works, it's best to use the <strong>Annotator 2d</strong> first.</p>
+
 <ul>
-<li>You can find an example image to use here: <code>/scratch/cajal-connectomics/hela-2d-image.png</code>. Select it via <strong>Select image</strong>. (see screenshot)
-<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/5fbd1c53-2ba1-47d4-ae50-dfab890ac9d3" alt="image" /></li>
+<li>You can find an example image to use by selection <code>File</code> -> <code>Open Sample</code> -> <code>Segment Anything for Microscopy</code> -> <code>HeLa 2d example data</code> (see screenshot)
+<img src="https://github.com/user-attachments/assets/ac259787-6238-4b68-8739-48a62f169913" alt="image" /></li>
 </ul></li>
-<li>Then press <strong>2d annotator</strong> and the tool will start.</li>
+<li>Then select <code>Plugins</code> -> <code>Segment Anything for Microscopy</code> -> <code>Annotator 2d</code>, and the tool will start.
+<img src="https://github.com/user-attachments/assets/3062e723-6fe0-48f7-835f-663be7d78b87" alt="image" /></li>
 </ul>
 
 <h2 id="transfering-data-to-band">Transfering data to BAND</h2>
@@ -1444,9 +1509,9 @@ In order to use BAND and start <code><a href="">micro_sam</a></code> on it follo
 </span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="sd">.. include:: ../doc/band.md</span>
 </span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="sd">&quot;&quot;&quot;</span>
 </span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>
-</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a><span class="kn">import</span> <span class="nn">os</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 </span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>
-</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a><span class="kn">from</span> <span class="nn">.__version__</span> <span class="kn">import</span> <span class="n">__version__</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.__version__</span><span class="w"> </span><span class="kn">import</span> <span class="n">__version__</span>
 </span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>
 </span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;PYTORCH_ENABLE_MPS_FALLBACK&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;1&quot;</span>
 </span></pre></div>

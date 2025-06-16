@@ -60,15 +60,18 @@
 
                         <label class="view-source-button" for="mod-training-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;Functionality for training Segment Anything.</span>
-</span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a>
-</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a><span class="kn">from</span> <span class="nn">.sam_trainer</span> <span class="kn">import</span> <span class="n">SamTrainer</span><span class="p">,</span> <span class="n">SamLogger</span>
-</span><span id="L-5"><a href="#L-5"><span class="linenos">5</span></a><span class="kn">from</span> <span class="nn">.util</span> <span class="kn">import</span> <span class="n">ConvertToSamInputs</span><span class="p">,</span> <span class="n">get_trainable_sam_model</span><span class="p">,</span> <span class="n">identity</span>
-</span><span id="L-6"><a href="#L-6"><span class="linenos">6</span></a><span class="kn">from</span> <span class="nn">.joint_sam_trainer</span> <span class="kn">import</span> <span class="n">JointSamTrainer</span><span class="p">,</span> <span class="n">JointSamLogger</span>
-</span><span id="L-7"><a href="#L-7"><span class="linenos">7</span></a><span class="kn">from</span> <span class="nn">.simple_sam_trainer</span> <span class="kn">import</span> <span class="n">SimpleSamTrainer</span><span class="p">,</span> <span class="n">MedSAMTrainer</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos">8</span></a><span class="kn">from</span> <span class="nn">.semantic_sam_trainer</span> <span class="kn">import</span> <span class="n">SemanticSamTrainer</span><span class="p">,</span> <span class="n">SemanticMapsSamTrainer</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos">9</span></a><span class="kn">from</span> <span class="nn">.training</span> <span class="kn">import</span> <span class="n">train_sam</span><span class="p">,</span> <span class="n">train_sam_for_configuration</span><span class="p">,</span> <span class="n">default_sam_loader</span><span class="p">,</span> <span class="n">default_sam_dataset</span><span class="p">,</span> <span class="n">CONFIGURATIONS</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;Functionality for training Segment Anything.</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a>
+</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.sam_trainer</span><span class="w"> </span><span class="kn">import</span> <span class="n">SamTrainer</span><span class="p">,</span> <span class="n">SamLogger</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.util</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConvertToSamInputs</span><span class="p">,</span> <span class="n">get_trainable_sam_model</span><span class="p">,</span> <span class="n">identity</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.joint_sam_trainer</span><span class="w"> </span><span class="kn">import</span> <span class="n">JointSamTrainer</span><span class="p">,</span> <span class="n">JointSamLogger</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.simple_sam_trainer</span><span class="w"> </span><span class="kn">import</span> <span class="n">SimpleSamTrainer</span><span class="p">,</span> <span class="n">MedSAMTrainer</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.semantic_sam_trainer</span><span class="w"> </span><span class="kn">import</span> <span class="n">SemanticSamTrainer</span><span class="p">,</span> <span class="n">SemanticMapsSamTrainer</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.training</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a>    <span class="n">train_sam</span><span class="p">,</span> <span class="n">train_sam_for_configuration</span><span class="p">,</span> <span class="n">train_instance_segmentation</span><span class="p">,</span> <span class="n">default_sam_loader</span><span class="p">,</span> <span class="n">default_sam_dataset</span><span class="p">,</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>    <span class="n">export_instance_segmentation_model</span><span class="p">,</span> <span class="n">CONFIGURATIONS</span><span class="p">,</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="p">)</span>
 </span></pre></div>
 
 

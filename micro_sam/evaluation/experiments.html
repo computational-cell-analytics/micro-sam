@@ -69,7 +69,7 @@
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;Predefined experiment settings for experiments with different prompt strategies.</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a><span class="sd">&quot;&quot;&quot;</span>
 </span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a>
-</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span>
 </span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a>
 </span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a>
 </span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="c1"># TODO fully define the dict type</span>
@@ -78,7 +78,7 @@
 </span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="sd">&quot;&quot;&quot;@private&quot;&quot;&quot;</span>
 </span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>
 </span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a>
-</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a><span class="k">def</span> <span class="nf">full_experiment_settings</span><span class="p">(</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a><span class="k">def</span><span class="w"> </span><span class="nf">full_experiment_settings</span><span class="p">(</span>
 </span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>    <span class="n">use_boxes</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">positive_range</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">negative_range</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ExperimentSettings</span><span class="p">:</span>
 </span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;The full experiment settings.</span>
@@ -116,7 +116,7 @@
 </span><span id="L-48"><a href="#L-48"><span class="linenos">48</span></a>    <span class="k">return</span> <span class="n">experiment_settings</span>
 </span><span id="L-49"><a href="#L-49"><span class="linenos">49</span></a>
 </span><span id="L-50"><a href="#L-50"><span class="linenos">50</span></a>
-</span><span id="L-51"><a href="#L-51"><span class="linenos">51</span></a><span class="k">def</span> <span class="nf">default_experiment_settings</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">ExperimentSettings</span><span class="p">:</span>
+</span><span id="L-51"><a href="#L-51"><span class="linenos">51</span></a><span class="k">def</span><span class="w"> </span><span class="nf">default_experiment_settings</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">ExperimentSettings</span><span class="p">:</span>
 </span><span id="L-52"><a href="#L-52"><span class="linenos">52</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;The three default experiment settings.</span>
 </span><span id="L-53"><a href="#L-53"><span class="linenos">53</span></a>
 </span><span id="L-54"><a href="#L-54"><span class="linenos">54</span></a><span class="sd">    For the default experiments we use a single positive prompt,</span>
@@ -134,7 +134,7 @@
 </span><span id="L-66"><a href="#L-66"><span class="linenos">66</span></a>    <span class="k">return</span> <span class="n">experiment_settings</span>
 </span><span id="L-67"><a href="#L-67"><span class="linenos">67</span></a>
 </span><span id="L-68"><a href="#L-68"><span class="linenos">68</span></a>
-</span><span id="L-69"><a href="#L-69"><span class="linenos">69</span></a><span class="k">def</span> <span class="nf">get_experiment_setting_name</span><span class="p">(</span><span class="n">setting</span><span class="p">:</span> <span class="n">ExperimentSetting</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="L-69"><a href="#L-69"><span class="linenos">69</span></a><span class="k">def</span><span class="w"> </span><span class="nf">get_experiment_setting_name</span><span class="p">(</span><span class="n">setting</span><span class="p">:</span> <span class="n">ExperimentSetting</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="L-70"><a href="#L-70"><span class="linenos">70</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Get the name for the given experiment setting.</span>
 </span><span id="L-71"><a href="#L-71"><span class="linenos">71</span></a>
 </span><span id="L-72"><a href="#L-72"><span class="linenos">72</span></a><span class="sd">    Args:</span>
@@ -175,7 +175,7 @@
 
     </div>
     <a class="headerlink" href="#full_experiment_settings"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="full_experiment_settings-14"><a href="#full_experiment_settings-14"><span class="linenos">14</span></a><span class="k">def</span> <span class="nf">full_experiment_settings</span><span class="p">(</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="full_experiment_settings-14"><a href="#full_experiment_settings-14"><span class="linenos">14</span></a><span class="k">def</span><span class="w"> </span><span class="nf">full_experiment_settings</span><span class="p">(</span>
 </span><span id="full_experiment_settings-15"><a href="#full_experiment_settings-15"><span class="linenos">15</span></a>    <span class="n">use_boxes</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">positive_range</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">negative_range</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="full_experiment_settings-16"><a href="#full_experiment_settings-16"><span class="linenos">16</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ExperimentSettings</span><span class="p">:</span>
 </span><span id="full_experiment_settings-17"><a href="#full_experiment_settings-17"><span class="linenos">17</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;The full experiment settings.</span>
@@ -246,7 +246,7 @@ By defaul the values are set to [0, 1, 2, 4, 8, 16].</li>
 
     </div>
     <a class="headerlink" href="#default_experiment_settings"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="default_experiment_settings-52"><a href="#default_experiment_settings-52"><span class="linenos">52</span></a><span class="k">def</span> <span class="nf">default_experiment_settings</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">ExperimentSettings</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="default_experiment_settings-52"><a href="#default_experiment_settings-52"><span class="linenos">52</span></a><span class="k">def</span><span class="w"> </span><span class="nf">default_experiment_settings</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">ExperimentSettings</span><span class="p">:</span>
 </span><span id="default_experiment_settings-53"><a href="#default_experiment_settings-53"><span class="linenos">53</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;The three default experiment settings.</span>
 </span><span id="default_experiment_settings-54"><a href="#default_experiment_settings-54"><span class="linenos">54</span></a>
 </span><span id="default_experiment_settings-55"><a href="#default_experiment_settings-55"><span class="linenos">55</span></a><span class="sd">    For the default experiments we use a single positive prompt,</span>
@@ -290,7 +290,7 @@ two positive and four negative prompts and box prompts.</p>
 
     </div>
     <a class="headerlink" href="#get_experiment_setting_name"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="get_experiment_setting_name-70"><a href="#get_experiment_setting_name-70"><span class="linenos">70</span></a><span class="k">def</span> <span class="nf">get_experiment_setting_name</span><span class="p">(</span><span class="n">setting</span><span class="p">:</span> <span class="n">ExperimentSetting</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="get_experiment_setting_name-70"><a href="#get_experiment_setting_name-70"><span class="linenos">70</span></a><span class="k">def</span><span class="w"> </span><span class="nf">get_experiment_setting_name</span><span class="p">(</span><span class="n">setting</span><span class="p">:</span> <span class="n">ExperimentSetting</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="get_experiment_setting_name-71"><a href="#get_experiment_setting_name-71"><span class="linenos">71</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Get the name for the given experiment setting.</span>
 </span><span id="get_experiment_setting_name-72"><a href="#get_experiment_setting_name-72"><span class="linenos">72</span></a>
 </span><span id="get_experiment_setting_name-73"><a href="#get_experiment_setting_name-73"><span class="linenos">73</span></a><span class="sd">    Args:</span>

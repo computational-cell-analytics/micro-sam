@@ -126,21 +126,21 @@ inside your default cache directory, eg:
 </span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a><span class="sd">    * Windows: C:\Users\&lt;user&gt;\AppData\Local\&lt;AppAuthor&gt;\&lt;AppName&gt;\Cache</span>
 </span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a><span class="sd">&quot;&quot;&quot;</span>
 </span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a>
-</span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a><span class="kn">import</span> <span class="nn">os</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="kn">import</span> <span class="nn">pooch</span>
-</span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a><span class="kn">from</span> <span class="nn">pathlib</span> <span class="kn">import</span> <span class="n">Path</span>
-</span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Union</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">pooch</span>
+</span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Union</span>
 </span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a>
-</span><span id="L-18"><a href="#L-18"><span class="linenos"> 18</span></a><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
-</span><span id="L-19"><a href="#L-19"><span class="linenos"> 19</span></a><span class="kn">import</span> <span class="nn">imageio.v3</span> <span class="k">as</span> <span class="nn">imageio</span>
-</span><span id="L-20"><a href="#L-20"><span class="linenos"> 20</span></a><span class="kn">from</span> <span class="nn">skimage.measure</span> <span class="kn">import</span> <span class="n">label</span>
-</span><span id="L-21"><a href="#L-21"><span class="linenos"> 21</span></a><span class="kn">from</span> <span class="nn">skimage.transform</span> <span class="kn">import</span> <span class="n">resize</span>
-</span><span id="L-22"><a href="#L-22"><span class="linenos"> 22</span></a><span class="kn">from</span> <span class="nn">skimage.data</span> <span class="kn">import</span> <span class="n">binary_blobs</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos"> 18</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos"> 19</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">imageio.v3</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">imageio</span>
+</span><span id="L-20"><a href="#L-20"><span class="linenos"> 20</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">skimage.measure</span><span class="w"> </span><span class="kn">import</span> <span class="n">label</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos"> 21</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">skimage.transform</span><span class="w"> </span><span class="kn">import</span> <span class="n">resize</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos"> 22</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">skimage.data</span><span class="w"> </span><span class="kn">import</span> <span class="n">binary_blobs</span>
 </span><span id="L-23"><a href="#L-23"><span class="linenos"> 23</span></a>
-</span><span id="L-24"><a href="#L-24"><span class="linenos"> 24</span></a><span class="kn">from</span> <span class="nn">.util</span> <span class="kn">import</span> <span class="n">get_cache_directory</span>
+</span><span id="L-24"><a href="#L-24"><span class="linenos"> 24</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.util</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_cache_directory</span>
 </span><span id="L-25"><a href="#L-25"><span class="linenos"> 25</span></a>
 </span><span id="L-26"><a href="#L-26"><span class="linenos"> 26</span></a>
-</span><span id="L-27"><a href="#L-27"><span class="linenos"> 27</span></a><span class="k">def</span> <span class="nf">fetch_image_series_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="L-27"><a href="#L-27"><span class="linenos"> 27</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fetch_image_series_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="L-28"><a href="#L-28"><span class="linenos"> 28</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Download the sample images for the image series annotator.</span>
 </span><span id="L-29"><a href="#L-29"><span class="linenos"> 29</span></a>
 </span><span id="L-30"><a href="#L-30"><span class="linenos"> 30</span></a><span class="sd">    Args:</span>
@@ -171,7 +171,7 @@ inside your default cache directory, eg:
 </span><span id="L-55"><a href="#L-55"><span class="linenos"> 55</span></a>    <span class="k">return</span> <span class="n">data_folder</span>
 </span><span id="L-56"><a href="#L-56"><span class="linenos"> 56</span></a>
 </span><span id="L-57"><a href="#L-57"><span class="linenos"> 57</span></a>
-</span><span id="L-58"><a href="#L-58"><span class="linenos"> 58</span></a><span class="k">def</span> <span class="nf">sample_data_image_series</span><span class="p">():</span>
+</span><span id="L-58"><a href="#L-58"><span class="linenos"> 58</span></a><span class="k">def</span><span class="w"> </span><span class="nf">sample_data_image_series</span><span class="p">():</span>
 </span><span id="L-59"><a href="#L-59"><span class="linenos"> 59</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Provides image series example image to napari.</span>
 </span><span id="L-60"><a href="#L-60"><span class="linenos"> 60</span></a>
 </span><span id="L-61"><a href="#L-61"><span class="linenos"> 61</span></a><span class="sd">    Opens as three separate image layers in napari (one per image in series).</span>
@@ -191,7 +191,7 @@ inside your default cache directory, eg:
 </span><span id="L-75"><a href="#L-75"><span class="linenos"> 75</span></a>    <span class="k">return</span> <span class="n">data_and_image_kwargs</span>
 </span><span id="L-76"><a href="#L-76"><span class="linenos"> 76</span></a>
 </span><span id="L-77"><a href="#L-77"><span class="linenos"> 77</span></a>
-</span><span id="L-78"><a href="#L-78"><span class="linenos"> 78</span></a><span class="k">def</span> <span class="nf">fetch_wholeslide_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="L-78"><a href="#L-78"><span class="linenos"> 78</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fetch_wholeslide_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="L-79"><a href="#L-79"><span class="linenos"> 79</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Download the sample data for the 2d annotator.</span>
 </span><span id="L-80"><a href="#L-80"><span class="linenos"> 80</span></a>
 </span><span id="L-81"><a href="#L-81"><span class="linenos"> 81</span></a><span class="sd">    This downloads part of a whole-slide image from the NeurIPS Cell Segmentation Challenge.</span>
@@ -217,7 +217,7 @@ inside your default cache directory, eg:
 </span><span id="L-101"><a href="#L-101"><span class="linenos">101</span></a>    <span class="k">return</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">save_directory</span><span class="p">,</span> <span class="n">fname</span><span class="p">)</span>
 </span><span id="L-102"><a href="#L-102"><span class="linenos">102</span></a>
 </span><span id="L-103"><a href="#L-103"><span class="linenos">103</span></a>
-</span><span id="L-104"><a href="#L-104"><span class="linenos">104</span></a><span class="k">def</span> <span class="nf">sample_data_wholeslide</span><span class="p">():</span>
+</span><span id="L-104"><a href="#L-104"><span class="linenos">104</span></a><span class="k">def</span><span class="w"> </span><span class="nf">sample_data_wholeslide</span><span class="p">():</span>
 </span><span id="L-105"><a href="#L-105"><span class="linenos">105</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Provides wholeslide 2d example image to napari.&quot;&quot;&quot;</span>
 </span><span id="L-106"><a href="#L-106"><span class="linenos">106</span></a>    <span class="c1"># Return list of tuples</span>
 </span><span id="L-107"><a href="#L-107"><span class="linenos">107</span></a>    <span class="c1"># [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]</span>
@@ -231,7 +231,7 @@ inside your default cache directory, eg:
 </span><span id="L-115"><a href="#L-115"><span class="linenos">115</span></a>    <span class="k">return</span> <span class="p">[(</span><span class="n">data</span><span class="p">,</span> <span class="n">add_image_kwargs</span><span class="p">)]</span>
 </span><span id="L-116"><a href="#L-116"><span class="linenos">116</span></a>
 </span><span id="L-117"><a href="#L-117"><span class="linenos">117</span></a>
-</span><span id="L-118"><a href="#L-118"><span class="linenos">118</span></a><span class="k">def</span> <span class="nf">fetch_livecell_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="L-118"><a href="#L-118"><span class="linenos">118</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fetch_livecell_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="L-119"><a href="#L-119"><span class="linenos">119</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Download the sample data for the 2d annotator.</span>
 </span><span id="L-120"><a href="#L-120"><span class="linenos">120</span></a>
 </span><span id="L-121"><a href="#L-121"><span class="linenos">121</span></a><span class="sd">    This downloads a single image from the LIVECell dataset.</span>
@@ -256,7 +256,7 @@ inside your default cache directory, eg:
 </span><span id="L-140"><a href="#L-140"><span class="linenos">140</span></a>    <span class="k">return</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">save_directory</span><span class="p">,</span> <span class="n">fname</span><span class="p">)</span>
 </span><span id="L-141"><a href="#L-141"><span class="linenos">141</span></a>
 </span><span id="L-142"><a href="#L-142"><span class="linenos">142</span></a>
-</span><span id="L-143"><a href="#L-143"><span class="linenos">143</span></a><span class="k">def</span> <span class="nf">sample_data_livecell</span><span class="p">():</span>
+</span><span id="L-143"><a href="#L-143"><span class="linenos">143</span></a><span class="k">def</span><span class="w"> </span><span class="nf">sample_data_livecell</span><span class="p">():</span>
 </span><span id="L-144"><a href="#L-144"><span class="linenos">144</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Provides LIVECell 2d example image to napari.&quot;&quot;&quot;</span>
 </span><span id="L-145"><a href="#L-145"><span class="linenos">145</span></a>    <span class="c1"># Return list of tuples</span>
 </span><span id="L-146"><a href="#L-146"><span class="linenos">146</span></a>    <span class="c1"># [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]</span>
@@ -270,7 +270,7 @@ inside your default cache directory, eg:
 </span><span id="L-154"><a href="#L-154"><span class="linenos">154</span></a>    <span class="k">return</span> <span class="p">[(</span><span class="n">data</span><span class="p">,</span> <span class="n">add_image_kwargs</span><span class="p">)]</span>
 </span><span id="L-155"><a href="#L-155"><span class="linenos">155</span></a>
 </span><span id="L-156"><a href="#L-156"><span class="linenos">156</span></a>
-</span><span id="L-157"><a href="#L-157"><span class="linenos">157</span></a><span class="k">def</span> <span class="nf">fetch_hela_2d_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">]:</span>
+</span><span id="L-157"><a href="#L-157"><span class="linenos">157</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fetch_hela_2d_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">]:</span>
 </span><span id="L-158"><a href="#L-158"><span class="linenos">158</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Download the sample data for the 2d annotator.</span>
 </span><span id="L-159"><a href="#L-159"><span class="linenos">159</span></a>
 </span><span id="L-160"><a href="#L-160"><span class="linenos">160</span></a><span class="sd">    This downloads a single image from the HeLa CTC dataset.</span>
@@ -295,7 +295,7 @@ inside your default cache directory, eg:
 </span><span id="L-179"><a href="#L-179"><span class="linenos">179</span></a>    <span class="k">return</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">save_directory</span><span class="p">,</span> <span class="n">fname</span><span class="p">)</span>
 </span><span id="L-180"><a href="#L-180"><span class="linenos">180</span></a>
 </span><span id="L-181"><a href="#L-181"><span class="linenos">181</span></a>
-</span><span id="L-182"><a href="#L-182"><span class="linenos">182</span></a><span class="k">def</span> <span class="nf">sample_data_hela_2d</span><span class="p">():</span>
+</span><span id="L-182"><a href="#L-182"><span class="linenos">182</span></a><span class="k">def</span><span class="w"> </span><span class="nf">sample_data_hela_2d</span><span class="p">():</span>
 </span><span id="L-183"><a href="#L-183"><span class="linenos">183</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Provides HeLa 2d example image to napari.&quot;&quot;&quot;</span>
 </span><span id="L-184"><a href="#L-184"><span class="linenos">184</span></a>    <span class="c1"># Return list of tuples</span>
 </span><span id="L-185"><a href="#L-185"><span class="linenos">185</span></a>    <span class="c1"># [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]</span>
@@ -309,7 +309,7 @@ inside your default cache directory, eg:
 </span><span id="L-193"><a href="#L-193"><span class="linenos">193</span></a>    <span class="k">return</span> <span class="p">[(</span><span class="n">data</span><span class="p">,</span> <span class="n">add_image_kwargs</span><span class="p">)]</span>
 </span><span id="L-194"><a href="#L-194"><span class="linenos">194</span></a>
 </span><span id="L-195"><a href="#L-195"><span class="linenos">195</span></a>
-</span><span id="L-196"><a href="#L-196"><span class="linenos">196</span></a><span class="k">def</span> <span class="nf">fetch_3d_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="L-196"><a href="#L-196"><span class="linenos">196</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fetch_3d_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="L-197"><a href="#L-197"><span class="linenos">197</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Download the sample data for the 3d annotator.</span>
 </span><span id="L-198"><a href="#L-198"><span class="linenos">198</span></a>
 </span><span id="L-199"><a href="#L-199"><span class="linenos">199</span></a><span class="sd">    This downloads the Lucchi++ datasets from https://casser.io/connectomics/.</span>
@@ -339,7 +339,7 @@ inside your default cache directory, eg:
 </span><span id="L-223"><a href="#L-223"><span class="linenos">223</span></a>    <span class="k">return</span> <span class="nb">str</span><span class="p">(</span><span class="n">lucchi_dir</span><span class="p">)</span>
 </span><span id="L-224"><a href="#L-224"><span class="linenos">224</span></a>
 </span><span id="L-225"><a href="#L-225"><span class="linenos">225</span></a>
-</span><span id="L-226"><a href="#L-226"><span class="linenos">226</span></a><span class="k">def</span> <span class="nf">sample_data_3d</span><span class="p">():</span>
+</span><span id="L-226"><a href="#L-226"><span class="linenos">226</span></a><span class="k">def</span><span class="w"> </span><span class="nf">sample_data_3d</span><span class="p">():</span>
 </span><span id="L-227"><a href="#L-227"><span class="linenos">227</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Provides Lucchi++ 3d example image to napari.&quot;&quot;&quot;</span>
 </span><span id="L-228"><a href="#L-228"><span class="linenos">228</span></a>    <span class="c1"># Return list of tuples</span>
 </span><span id="L-229"><a href="#L-229"><span class="linenos">229</span></a>    <span class="c1"># [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]</span>
@@ -356,7 +356,7 @@ inside your default cache directory, eg:
 </span><span id="L-240"><a href="#L-240"><span class="linenos">240</span></a>    <span class="k">return</span> <span class="p">[(</span><span class="n">data</span><span class="p">,</span> <span class="n">add_image_kwargs</span><span class="p">)]</span>
 </span><span id="L-241"><a href="#L-241"><span class="linenos">241</span></a>
 </span><span id="L-242"><a href="#L-242"><span class="linenos">242</span></a>
-</span><span id="L-243"><a href="#L-243"><span class="linenos">243</span></a><span class="k">def</span> <span class="nf">fetch_tracking_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="L-243"><a href="#L-243"><span class="linenos">243</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fetch_tracking_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="L-244"><a href="#L-244"><span class="linenos">244</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Download the sample data for the tracking annotator.</span>
 </span><span id="L-245"><a href="#L-245"><span class="linenos">245</span></a>
 </span><span id="L-246"><a href="#L-246"><span class="linenos">246</span></a><span class="sd">    This data is the Cell Tracking Challenge dataset DIC-C2DH-HeLa.</span>
@@ -390,7 +390,7 @@ inside your default cache directory, eg:
 </span><span id="L-274"><a href="#L-274"><span class="linenos">274</span></a>    <span class="k">return</span> <span class="nb">str</span><span class="p">(</span><span class="n">cell_tracking_dir</span><span class="p">)</span>
 </span><span id="L-275"><a href="#L-275"><span class="linenos">275</span></a>
 </span><span id="L-276"><a href="#L-276"><span class="linenos">276</span></a>
-</span><span id="L-277"><a href="#L-277"><span class="linenos">277</span></a><span class="k">def</span> <span class="nf">sample_data_tracking</span><span class="p">():</span>
+</span><span id="L-277"><a href="#L-277"><span class="linenos">277</span></a><span class="k">def</span><span class="w"> </span><span class="nf">sample_data_tracking</span><span class="p">():</span>
 </span><span id="L-278"><a href="#L-278"><span class="linenos">278</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Provides tracking example dataset to napari.&quot;&quot;&quot;</span>
 </span><span id="L-279"><a href="#L-279"><span class="linenos">279</span></a>    <span class="c1"># Return list of tuples</span>
 </span><span id="L-280"><a href="#L-280"><span class="linenos">280</span></a>    <span class="c1"># [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]</span>
@@ -407,7 +407,7 @@ inside your default cache directory, eg:
 </span><span id="L-291"><a href="#L-291"><span class="linenos">291</span></a>    <span class="k">return</span> <span class="p">[(</span><span class="n">data</span><span class="p">,</span> <span class="n">add_image_kwargs</span><span class="p">)]</span>
 </span><span id="L-292"><a href="#L-292"><span class="linenos">292</span></a>
 </span><span id="L-293"><a href="#L-293"><span class="linenos">293</span></a>
-</span><span id="L-294"><a href="#L-294"><span class="linenos">294</span></a><span class="k">def</span> <span class="nf">fetch_tracking_segmentation_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="L-294"><a href="#L-294"><span class="linenos">294</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fetch_tracking_segmentation_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="L-295"><a href="#L-295"><span class="linenos">295</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Download groundtruth segmentation for the tracking example data.</span>
 </span><span id="L-296"><a href="#L-296"><span class="linenos">296</span></a>
 </span><span id="L-297"><a href="#L-297"><span class="linenos">297</span></a><span class="sd">    This downloads the groundtruth segmentation for the image data from `fetch_tracking_example_data`.</span>
@@ -437,7 +437,7 @@ inside your default cache directory, eg:
 </span><span id="L-321"><a href="#L-321"><span class="linenos">321</span></a>    <span class="k">return</span> <span class="nb">str</span><span class="p">(</span><span class="n">cell_tracking_dir</span><span class="p">)</span>
 </span><span id="L-322"><a href="#L-322"><span class="linenos">322</span></a>
 </span><span id="L-323"><a href="#L-323"><span class="linenos">323</span></a>
-</span><span id="L-324"><a href="#L-324"><span class="linenos">324</span></a><span class="k">def</span> <span class="nf">sample_data_segmentation</span><span class="p">():</span>
+</span><span id="L-324"><a href="#L-324"><span class="linenos">324</span></a><span class="k">def</span><span class="w"> </span><span class="nf">sample_data_segmentation</span><span class="p">():</span>
 </span><span id="L-325"><a href="#L-325"><span class="linenos">325</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Provides segmentation example dataset to napari.&quot;&quot;&quot;</span>
 </span><span id="L-326"><a href="#L-326"><span class="linenos">326</span></a>    <span class="c1"># Return list of tuples</span>
 </span><span id="L-327"><a href="#L-327"><span class="linenos">327</span></a>    <span class="c1"># [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]</span>
@@ -454,7 +454,7 @@ inside your default cache directory, eg:
 </span><span id="L-338"><a href="#L-338"><span class="linenos">338</span></a>    <span class="k">return</span> <span class="p">[(</span><span class="n">data</span><span class="p">,</span> <span class="n">add_image_kwargs</span><span class="p">)]</span>
 </span><span id="L-339"><a href="#L-339"><span class="linenos">339</span></a>
 </span><span id="L-340"><a href="#L-340"><span class="linenos">340</span></a>
-</span><span id="L-341"><a href="#L-341"><span class="linenos">341</span></a><span class="k">def</span> <span class="nf">synthetic_data</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+</span><span id="L-341"><a href="#L-341"><span class="linenos">341</span></a><span class="k">def</span><span class="w"> </span><span class="nf">synthetic_data</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 </span><span id="L-342"><a href="#L-342"><span class="linenos">342</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Create synthetic image data and segmentation for training.&quot;&quot;&quot;</span>
 </span><span id="L-343"><a href="#L-343"><span class="linenos">343</span></a>    <span class="n">ndim</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span>
 </span><span id="L-344"><a href="#L-344"><span class="linenos">344</span></a>    <span class="k">assert</span> <span class="n">ndim</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
@@ -472,7 +472,7 @@ inside your default cache directory, eg:
 </span><span id="L-356"><a href="#L-356"><span class="linenos">356</span></a>    <span class="k">return</span> <span class="n">image</span><span class="p">,</span> <span class="n">segmentation</span>
 </span><span id="L-357"><a href="#L-357"><span class="linenos">357</span></a>
 </span><span id="L-358"><a href="#L-358"><span class="linenos">358</span></a>
-</span><span id="L-359"><a href="#L-359"><span class="linenos">359</span></a><span class="k">def</span> <span class="nf">fetch_nucleus_3d_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="L-359"><a href="#L-359"><span class="linenos">359</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fetch_nucleus_3d_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="L-360"><a href="#L-360"><span class="linenos">360</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Download the sample data for 3d segmentation of nuclei.</span>
 </span><span id="L-361"><a href="#L-361"><span class="linenos">361</span></a>
 </span><span id="L-362"><a href="#L-362"><span class="linenos">362</span></a><span class="sd">    This data contains a small crop from a volume from the publication</span>
@@ -499,7 +499,7 @@ inside your default cache directory, eg:
 </span><span id="L-383"><a href="#L-383"><span class="linenos">383</span></a>    <span class="k">return</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">save_directory</span><span class="p">,</span> <span class="n">fname</span><span class="p">)</span>
 </span><span id="L-384"><a href="#L-384"><span class="linenos">384</span></a>
 </span><span id="L-385"><a href="#L-385"><span class="linenos">385</span></a>
-</span><span id="L-386"><a href="#L-386"><span class="linenos">386</span></a><span class="k">def</span> <span class="nf">fetch_wholeslide_histopathology_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="L-386"><a href="#L-386"><span class="linenos">386</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fetch_wholeslide_histopathology_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="L-387"><a href="#L-387"><span class="linenos">387</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Download the sample histpathology data for the 2d annotator.</span>
 </span><span id="L-388"><a href="#L-388"><span class="linenos">388</span></a>
 </span><span id="L-389"><a href="#L-389"><span class="linenos">389</span></a><span class="sd">    This downloads a WSI image from https://openslide.cs.cmu.edu/download/openslide-testdata/,</span>
@@ -538,7 +538,7 @@ inside your default cache directory, eg:
 
     </div>
     <a class="headerlink" href="#fetch_image_series_example_data"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="fetch_image_series_example_data-28"><a href="#fetch_image_series_example_data-28"><span class="linenos">28</span></a><span class="k">def</span> <span class="nf">fetch_image_series_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="fetch_image_series_example_data-28"><a href="#fetch_image_series_example_data-28"><span class="linenos">28</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fetch_image_series_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="fetch_image_series_example_data-29"><a href="#fetch_image_series_example_data-29"><span class="linenos">29</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Download the sample images for the image series annotator.</span>
 </span><span id="fetch_image_series_example_data-30"><a href="#fetch_image_series_example_data-30"><span class="linenos">30</span></a>
 </span><span id="fetch_image_series_example_data-31"><a href="#fetch_image_series_example_data-31"><span class="linenos">31</span></a><span class="sd">    Args:</span>
@@ -598,7 +598,7 @@ inside your default cache directory, eg:
 
     </div>
     <a class="headerlink" href="#sample_data_image_series"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="sample_data_image_series-59"><a href="#sample_data_image_series-59"><span class="linenos">59</span></a><span class="k">def</span> <span class="nf">sample_data_image_series</span><span class="p">():</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="sample_data_image_series-59"><a href="#sample_data_image_series-59"><span class="linenos">59</span></a><span class="k">def</span><span class="w"> </span><span class="nf">sample_data_image_series</span><span class="p">():</span>
 </span><span id="sample_data_image_series-60"><a href="#sample_data_image_series-60"><span class="linenos">60</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Provides image series example image to napari.</span>
 </span><span id="sample_data_image_series-61"><a href="#sample_data_image_series-61"><span class="linenos">61</span></a>
 </span><span id="sample_data_image_series-62"><a href="#sample_data_image_series-62"><span class="linenos">62</span></a><span class="sd">    Opens as three separate image layers in napari (one per image in series).</span>
@@ -638,7 +638,7 @@ The third image in the series has a different size and modality.</p>
 
     </div>
     <a class="headerlink" href="#fetch_wholeslide_example_data"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="fetch_wholeslide_example_data-79"><a href="#fetch_wholeslide_example_data-79"><span class="linenos"> 79</span></a><span class="k">def</span> <span class="nf">fetch_wholeslide_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="fetch_wholeslide_example_data-79"><a href="#fetch_wholeslide_example_data-79"><span class="linenos"> 79</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fetch_wholeslide_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="fetch_wholeslide_example_data-80"><a href="#fetch_wholeslide_example_data-80"><span class="linenos"> 80</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Download the sample data for the 2d annotator.</span>
 </span><span id="fetch_wholeslide_example_data-81"><a href="#fetch_wholeslide_example_data-81"><span class="linenos"> 81</span></a>
 </span><span id="fetch_wholeslide_example_data-82"><a href="#fetch_wholeslide_example_data-82"><span class="linenos"> 82</span></a><span class="sd">    This downloads part of a whole-slide image from the NeurIPS Cell Segmentation Challenge.</span>
@@ -696,7 +696,7 @@ See <a href="https://neurips22-cellseg.grand-challenge.org/">https://neurips22-c
 
     </div>
     <a class="headerlink" href="#sample_data_wholeslide"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="sample_data_wholeslide-105"><a href="#sample_data_wholeslide-105"><span class="linenos">105</span></a><span class="k">def</span> <span class="nf">sample_data_wholeslide</span><span class="p">():</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="sample_data_wholeslide-105"><a href="#sample_data_wholeslide-105"><span class="linenos">105</span></a><span class="k">def</span><span class="w"> </span><span class="nf">sample_data_wholeslide</span><span class="p">():</span>
 </span><span id="sample_data_wholeslide-106"><a href="#sample_data_wholeslide-106"><span class="linenos">106</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Provides wholeslide 2d example image to napari.&quot;&quot;&quot;</span>
 </span><span id="sample_data_wholeslide-107"><a href="#sample_data_wholeslide-107"><span class="linenos">107</span></a>    <span class="c1"># Return list of tuples</span>
 </span><span id="sample_data_wholeslide-108"><a href="#sample_data_wholeslide-108"><span class="linenos">108</span></a>    <span class="c1"># [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]</span>
@@ -727,7 +727,7 @@ See <a href="https://neurips22-cellseg.grand-challenge.org/">https://neurips22-c
 
     </div>
     <a class="headerlink" href="#fetch_livecell_example_data"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="fetch_livecell_example_data-119"><a href="#fetch_livecell_example_data-119"><span class="linenos">119</span></a><span class="k">def</span> <span class="nf">fetch_livecell_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="fetch_livecell_example_data-119"><a href="#fetch_livecell_example_data-119"><span class="linenos">119</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fetch_livecell_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="fetch_livecell_example_data-120"><a href="#fetch_livecell_example_data-120"><span class="linenos">120</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Download the sample data for the 2d annotator.</span>
 </span><span id="fetch_livecell_example_data-121"><a href="#fetch_livecell_example_data-121"><span class="linenos">121</span></a>
 </span><span id="fetch_livecell_example_data-122"><a href="#fetch_livecell_example_data-122"><span class="linenos">122</span></a><span class="sd">    This downloads a single image from the LIVECell dataset.</span>
@@ -784,7 +784,7 @@ See <a href="https://doi.org/10.1038/s41592-021-01249-6">https://doi.org/10.1038
 
     </div>
     <a class="headerlink" href="#sample_data_livecell"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="sample_data_livecell-144"><a href="#sample_data_livecell-144"><span class="linenos">144</span></a><span class="k">def</span> <span class="nf">sample_data_livecell</span><span class="p">():</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="sample_data_livecell-144"><a href="#sample_data_livecell-144"><span class="linenos">144</span></a><span class="k">def</span><span class="w"> </span><span class="nf">sample_data_livecell</span><span class="p">():</span>
 </span><span id="sample_data_livecell-145"><a href="#sample_data_livecell-145"><span class="linenos">145</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Provides LIVECell 2d example image to napari.&quot;&quot;&quot;</span>
 </span><span id="sample_data_livecell-146"><a href="#sample_data_livecell-146"><span class="linenos">146</span></a>    <span class="c1"># Return list of tuples</span>
 </span><span id="sample_data_livecell-147"><a href="#sample_data_livecell-147"><span class="linenos">147</span></a>    <span class="c1"># [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]</span>
@@ -815,7 +815,7 @@ See <a href="https://doi.org/10.1038/s41592-021-01249-6">https://doi.org/10.1038
 
     </div>
     <a class="headerlink" href="#fetch_hela_2d_example_data"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="fetch_hela_2d_example_data-158"><a href="#fetch_hela_2d_example_data-158"><span class="linenos">158</span></a><span class="k">def</span> <span class="nf">fetch_hela_2d_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">]:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="fetch_hela_2d_example_data-158"><a href="#fetch_hela_2d_example_data-158"><span class="linenos">158</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fetch_hela_2d_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">]:</span>
 </span><span id="fetch_hela_2d_example_data-159"><a href="#fetch_hela_2d_example_data-159"><span class="linenos">159</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Download the sample data for the 2d annotator.</span>
 </span><span id="fetch_hela_2d_example_data-160"><a href="#fetch_hela_2d_example_data-160"><span class="linenos">160</span></a>
 </span><span id="fetch_hela_2d_example_data-161"><a href="#fetch_hela_2d_example_data-161"><span class="linenos">161</span></a><span class="sd">    This downloads a single image from the HeLa CTC dataset.</span>
@@ -871,7 +871,7 @@ See <a href="https://doi.org/10.1038/s41592-021-01249-6">https://doi.org/10.1038
 
     </div>
     <a class="headerlink" href="#sample_data_hela_2d"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="sample_data_hela_2d-183"><a href="#sample_data_hela_2d-183"><span class="linenos">183</span></a><span class="k">def</span> <span class="nf">sample_data_hela_2d</span><span class="p">():</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="sample_data_hela_2d-183"><a href="#sample_data_hela_2d-183"><span class="linenos">183</span></a><span class="k">def</span><span class="w"> </span><span class="nf">sample_data_hela_2d</span><span class="p">():</span>
 </span><span id="sample_data_hela_2d-184"><a href="#sample_data_hela_2d-184"><span class="linenos">184</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Provides HeLa 2d example image to napari.&quot;&quot;&quot;</span>
 </span><span id="sample_data_hela_2d-185"><a href="#sample_data_hela_2d-185"><span class="linenos">185</span></a>    <span class="c1"># Return list of tuples</span>
 </span><span id="sample_data_hela_2d-186"><a href="#sample_data_hela_2d-186"><span class="linenos">186</span></a>    <span class="c1"># [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]</span>
@@ -902,7 +902,7 @@ See <a href="https://doi.org/10.1038/s41592-021-01249-6">https://doi.org/10.1038
 
     </div>
     <a class="headerlink" href="#fetch_3d_example_data"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="fetch_3d_example_data-197"><a href="#fetch_3d_example_data-197"><span class="linenos">197</span></a><span class="k">def</span> <span class="nf">fetch_3d_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="fetch_3d_example_data-197"><a href="#fetch_3d_example_data-197"><span class="linenos">197</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fetch_3d_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="fetch_3d_example_data-198"><a href="#fetch_3d_example_data-198"><span class="linenos">198</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Download the sample data for the 3d annotator.</span>
 </span><span id="fetch_3d_example_data-199"><a href="#fetch_3d_example_data-199"><span class="linenos">199</span></a>
 </span><span id="fetch_3d_example_data-200"><a href="#fetch_3d_example_data-200"><span class="linenos">200</span></a><span class="sd">    This downloads the Lucchi++ datasets from https://casser.io/connectomics/.</span>
@@ -964,7 +964,7 @@ It is a dataset for mitochondria segmentation in EM.</p>
 
     </div>
     <a class="headerlink" href="#sample_data_3d"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="sample_data_3d-227"><a href="#sample_data_3d-227"><span class="linenos">227</span></a><span class="k">def</span> <span class="nf">sample_data_3d</span><span class="p">():</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="sample_data_3d-227"><a href="#sample_data_3d-227"><span class="linenos">227</span></a><span class="k">def</span><span class="w"> </span><span class="nf">sample_data_3d</span><span class="p">():</span>
 </span><span id="sample_data_3d-228"><a href="#sample_data_3d-228"><span class="linenos">228</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Provides Lucchi++ 3d example image to napari.&quot;&quot;&quot;</span>
 </span><span id="sample_data_3d-229"><a href="#sample_data_3d-229"><span class="linenos">229</span></a>    <span class="c1"># Return list of tuples</span>
 </span><span id="sample_data_3d-230"><a href="#sample_data_3d-230"><span class="linenos">230</span></a>    <span class="c1"># [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]</span>
@@ -998,7 +998,7 @@ It is a dataset for mitochondria segmentation in EM.</p>
 
     </div>
     <a class="headerlink" href="#fetch_tracking_example_data"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="fetch_tracking_example_data-244"><a href="#fetch_tracking_example_data-244"><span class="linenos">244</span></a><span class="k">def</span> <span class="nf">fetch_tracking_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="fetch_tracking_example_data-244"><a href="#fetch_tracking_example_data-244"><span class="linenos">244</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fetch_tracking_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="fetch_tracking_example_data-245"><a href="#fetch_tracking_example_data-245"><span class="linenos">245</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Download the sample data for the tracking annotator.</span>
 </span><span id="fetch_tracking_example_data-246"><a href="#fetch_tracking_example_data-246"><span class="linenos">246</span></a>
 </span><span id="fetch_tracking_example_data-247"><a href="#fetch_tracking_example_data-247"><span class="linenos">247</span></a><span class="sd">    This data is the Cell Tracking Challenge dataset DIC-C2DH-HeLa.</span>
@@ -1068,7 +1068,7 @@ Challenge dataset: <a href="http://data.celltrackingchallenge.net/challenge-data
 
     </div>
     <a class="headerlink" href="#sample_data_tracking"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="sample_data_tracking-278"><a href="#sample_data_tracking-278"><span class="linenos">278</span></a><span class="k">def</span> <span class="nf">sample_data_tracking</span><span class="p">():</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="sample_data_tracking-278"><a href="#sample_data_tracking-278"><span class="linenos">278</span></a><span class="k">def</span><span class="w"> </span><span class="nf">sample_data_tracking</span><span class="p">():</span>
 </span><span id="sample_data_tracking-279"><a href="#sample_data_tracking-279"><span class="linenos">279</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Provides tracking example dataset to napari.&quot;&quot;&quot;</span>
 </span><span id="sample_data_tracking-280"><a href="#sample_data_tracking-280"><span class="linenos">280</span></a>    <span class="c1"># Return list of tuples</span>
 </span><span id="sample_data_tracking-281"><a href="#sample_data_tracking-281"><span class="linenos">281</span></a>    <span class="c1"># [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]</span>
@@ -1102,7 +1102,7 @@ Challenge dataset: <a href="http://data.celltrackingchallenge.net/challenge-data
 
     </div>
     <a class="headerlink" href="#fetch_tracking_segmentation_data"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="fetch_tracking_segmentation_data-295"><a href="#fetch_tracking_segmentation_data-295"><span class="linenos">295</span></a><span class="k">def</span> <span class="nf">fetch_tracking_segmentation_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="fetch_tracking_segmentation_data-295"><a href="#fetch_tracking_segmentation_data-295"><span class="linenos">295</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fetch_tracking_segmentation_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="fetch_tracking_segmentation_data-296"><a href="#fetch_tracking_segmentation_data-296"><span class="linenos">296</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Download groundtruth segmentation for the tracking example data.</span>
 </span><span id="fetch_tracking_segmentation_data-297"><a href="#fetch_tracking_segmentation_data-297"><span class="linenos">297</span></a>
 </span><span id="fetch_tracking_segmentation_data-298"><a href="#fetch_tracking_segmentation_data-298"><span class="linenos">298</span></a><span class="sd">    This downloads the groundtruth segmentation for the image data from `fetch_tracking_example_data`.</span>
@@ -1163,7 +1163,7 @@ Challenge dataset: <a href="http://data.celltrackingchallenge.net/challenge-data
 
     </div>
     <a class="headerlink" href="#sample_data_segmentation"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="sample_data_segmentation-325"><a href="#sample_data_segmentation-325"><span class="linenos">325</span></a><span class="k">def</span> <span class="nf">sample_data_segmentation</span><span class="p">():</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="sample_data_segmentation-325"><a href="#sample_data_segmentation-325"><span class="linenos">325</span></a><span class="k">def</span><span class="w"> </span><span class="nf">sample_data_segmentation</span><span class="p">():</span>
 </span><span id="sample_data_segmentation-326"><a href="#sample_data_segmentation-326"><span class="linenos">326</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Provides segmentation example dataset to napari.&quot;&quot;&quot;</span>
 </span><span id="sample_data_segmentation-327"><a href="#sample_data_segmentation-327"><span class="linenos">327</span></a>    <span class="c1"># Return list of tuples</span>
 </span><span id="sample_data_segmentation-328"><a href="#sample_data_segmentation-328"><span class="linenos">328</span></a>    <span class="c1"># [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]</span>
@@ -1197,7 +1197,7 @@ Challenge dataset: <a href="http://data.celltrackingchallenge.net/challenge-data
 
     </div>
     <a class="headerlink" href="#synthetic_data"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="synthetic_data-342"><a href="#synthetic_data-342"><span class="linenos">342</span></a><span class="k">def</span> <span class="nf">synthetic_data</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="synthetic_data-342"><a href="#synthetic_data-342"><span class="linenos">342</span></a><span class="k">def</span><span class="w"> </span><span class="nf">synthetic_data</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 </span><span id="synthetic_data-343"><a href="#synthetic_data-343"><span class="linenos">343</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Create synthetic image data and segmentation for training.&quot;&quot;&quot;</span>
 </span><span id="synthetic_data-344"><a href="#synthetic_data-344"><span class="linenos">344</span></a>    <span class="n">ndim</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span>
 </span><span id="synthetic_data-345"><a href="#synthetic_data-345"><span class="linenos">345</span></a>    <span class="k">assert</span> <span class="n">ndim</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
@@ -1232,7 +1232,7 @@ Challenge dataset: <a href="http://data.celltrackingchallenge.net/challenge-data
 
     </div>
     <a class="headerlink" href="#fetch_nucleus_3d_example_data"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="fetch_nucleus_3d_example_data-360"><a href="#fetch_nucleus_3d_example_data-360"><span class="linenos">360</span></a><span class="k">def</span> <span class="nf">fetch_nucleus_3d_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="fetch_nucleus_3d_example_data-360"><a href="#fetch_nucleus_3d_example_data-360"><span class="linenos">360</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fetch_nucleus_3d_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="fetch_nucleus_3d_example_data-361"><a href="#fetch_nucleus_3d_example_data-361"><span class="linenos">361</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Download the sample data for 3d segmentation of nuclei.</span>
 </span><span id="fetch_nucleus_3d_example_data-362"><a href="#fetch_nucleus_3d_example_data-362"><span class="linenos">362</span></a>
 </span><span id="fetch_nucleus_3d_example_data-363"><a href="#fetch_nucleus_3d_example_data-363"><span class="linenos">363</span></a><span class="sd">    This data contains a small crop from a volume from the publication</span>
@@ -1292,7 +1292,7 @@ Challenge dataset: <a href="http://data.celltrackingchallenge.net/challenge-data
 
     </div>
     <a class="headerlink" href="#fetch_wholeslide_histopathology_example_data"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="fetch_wholeslide_histopathology_example_data-387"><a href="#fetch_wholeslide_histopathology_example_data-387"><span class="linenos">387</span></a><span class="k">def</span> <span class="nf">fetch_wholeslide_histopathology_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="fetch_wholeslide_histopathology_example_data-387"><a href="#fetch_wholeslide_histopathology_example_data-387"><span class="linenos">387</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fetch_wholeslide_histopathology_example_data</span><span class="p">(</span><span class="n">save_directory</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="fetch_wholeslide_histopathology_example_data-388"><a href="#fetch_wholeslide_histopathology_example_data-388"><span class="linenos">388</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Download the sample histpathology data for the 2d annotator.</span>
 </span><span id="fetch_wholeslide_histopathology_example_data-389"><a href="#fetch_wholeslide_histopathology_example_data-389"><span class="linenos">389</span></a>
 </span><span id="fetch_wholeslide_histopathology_example_data-390"><a href="#fetch_wholeslide_histopathology_example_data-390"><span class="linenos">390</span></a><span class="sd">    This downloads a WSI image from https://openslide.cs.cmu.edu/download/openslide-testdata/,</span>
