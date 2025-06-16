@@ -6,7 +6,7 @@ For this, we want to collect data where the models don't work well yet, and need
 If you are using `micro_sam` for a task where the current models don't do a good job, but you have annotated data and successfully fine-tuned a model, then you can submit this data to us, so that we can use it to train our next version of improved microscopy models.
 To do this, please either create an [issue on github](https://github.com/computational-cell-analytics/micro-sam/issues) or a post on [image.sc](https://forum.image.sc/) and:
 - Use a title "Data submission for micro_sam: ..." ("..." should be a title for your data, e.g. "cells in brightfield microscopy")
-    - On image.sc use the tag `micro-sam`.
+    - On [image.sc](https://forum.image.sc/) use the tag `micro-sam`.
 - Briefly describe your data and add an image that shows the microscopy data and the segmentation masks you have.
 - Make sure to describe:
     - The imaging modality and the structure(s) that you have segmented.
