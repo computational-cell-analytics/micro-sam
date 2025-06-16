@@ -1,5 +1,8 @@
 # Release Overview
 
+**New in version 1.6.0**
+Publish improved versions of the light microscopy and electron microscopy models.
+
 **New in version 1.5.0**
 - Preliminary version of object classification tool.
 - Enabling support for napari v6, zarr v3 and numpy v2.
