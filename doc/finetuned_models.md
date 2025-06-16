@@ -18,13 +18,13 @@ Specifically, we provide the following model types and sizes:
     - `vit_b`: Segment Anything model with ViT Base image encoder.
     - `vit_t`: Segment Anything model with ViT Tiny image encoder. From [Mobile SAM](https://arxiv.org/abs/2306.14289).
 - The light microscopy generalist models from [Segment Anything for Microscopy](https://www.nature.com/articles/s41592-024-02580-4) (`Light Microscopy`).
-    - `vit_l_lm`: Model for cells and nuclei in light microscopy data with ViT Large image encoder. ([Zenodo](https://doi.org/10.5281/zenodo.11111176)) ([idealistic-rat on BioImage.IO](https://bioimage.io/#/?id=idealistic-rat))
-    - `vit_b_lm`: Model for cells and nuclei in light microscopy data with ViT Base image encoder. ([Zenodo](https://zenodo.org/doi/10.5281/zenodo.11103797)) ([diplomatic-bug on BioImage.IO](https://bioimage.io/#/?id=diplomatic-bug))
-    - `vit_t_lm`: Model for cells and nuclei in light microscopy data with ViT Tiny image encoder. ([Zenodo](https://doi.org/10.5281/zenodo.11111328)) ([faithful-chicken BioImage.IO](https://bioimage.io/#/?id=faithful-chicken))
+    - `vit_l_lm`: Model for cells and nuclei in light microscopy data with ViT Large image encoder. ([idealistic-rat on BioImage.IO](https://bioimage.io/#/?id=idealistic-rat))
+    - `vit_b_lm`: Model for cells and nuclei in light microscopy data with ViT Base image encoder. ([diplomatic-bug on BioImage.IO](https://bioimage.io/#/?id=diplomatic-bug))
+    - `vit_t_lm`: Model for cells and nuclei in light microscopy data with ViT Tiny image encoder. ([faithful-chicken BioImage.IO](https://bioimage.io/#/?id=faithful-chicken))
 - The electron microscopy generalist models from [Segment Anything for Microscopy](https://www.nature.com/articles/s41592-024-02580-4) (`Electron Microscopy`).
-    - `vit_l_em_organelles`: Model for mitochodria and nuclei in electron microscopy data with ViT Large image encoder. ([Zenodo](https://doi.org/10.5281/zenodo.11111054)) ([humorous-crab on BioImage.IO](https://bioimage.io/#/?id=humorous-crab))
-    - `vit_b_em_organelles`: Model for mitochodria and nuclei in electron microscopy data with ViT Base image encoder. ([Zenodo](https://doi.org/10.5281/zenodo.11111293)) ([noisy-ox on BioImage.IO](https://bioimage.io/#/?id=noisy-ox))
-    - `vit_t_em_organelles`: Model for mitochodria and nuclei in electron microscopy data with ViT Tiny image encoder. ([Zenodo](https://doi.org/10.5281/zenodo.11110950)) ([greedy-whale on BioImage.IO](https://bioimage.io/#/?id=greedy-whale))
+    - `vit_l_em_organelles`: Model for mitochodria and nuclei in electron microscopy data with ViT Large image encoder. ([humorous-crab on BioImage.IO](https://bioimage.io/#/?id=humorous-crab))
+    - `vit_b_em_organelles`: Model for mitochodria and nuclei in electron microscopy data with ViT Base image encoder. ([noisy-ox on BioImage.IO](https://bioimage.io/#/?id=noisy-ox))
+    - `vit_t_em_organelles`: Model for mitochodria and nuclei in electron microscopy data with ViT Tiny image encoder. ([greedy-whale on BioImage.IO](https://bioimage.io/#/?id=greedy-whale))
 - The medical imaging generalist models from [MedicoSAM](https://arxiv.org/abs/2501.11734) (`Medical Imaging`).
     - `vit_b_medical_imaging`: Model for medical imaging data with ViT Base image encoder.
 - The histopathology generalist models from [PathoSAM](https://arxiv.org/abs/2502.00408) (`Histopathology`).
@@ -58,14 +58,31 @@ We are working on further improving these models and adding new models for other
 
 ## Other Models
 
-Previous versions of our models are available on Zenodo:
+Previous versions of our models are available on Zenodo or on the BioImage.IO modelzoo:
+
+### v3 Models
+
+<!---
+It seems like there's no easy way to link to previous versions on BioImage.IO right now.
+-->
+An improved version of the light microscopy that were trained on a larger dataset compared to the v2 light microscopy models:
+- [vit_t_lm](TODO): the ViT-Tiny model for segmenting cells and nuclei in LM.
+- [vit_b_lm](TODO): the ViT-Base model for segmenting cells and nuclei in LM.
+- [vit_l_lm](TODO): the ViT-Large model for segmenting cells and nuclei in LM.
 
 ### v2 Models
-- vit_t_lm ([Zenodo](https://zenodo.org/records/11111329)): the ViT-Tiny model for segmenting cells and nuclei in LM.
-- vit_b_lm ([Zenodo](https://zenodo.org/records/11103798)): the ViT-Base model for segmenting cells and nuclei in LM.
-- vit_l_lm ([Zenodo](https://zenodo.org/records/11111177)): the ViT-Large mopdel for segmenting cells and nuclei in LM.
+
+The models at the point of the [publication](https://www.nature.com/articles/s41592-024-02580-4). The results reported in the paper refer to these models:
+- [vit_t_lm](https://zenodo.org/records/11111329): the ViT-Tiny model for segmenting cells and nuclei in LM.
+- [vit_b_lm](https://zenodo.org/records/11103798): the ViT-Base model for segmenting cells and nuclei in LM.
+- [vit_l_lm](https://zenodo.org/records/11111177): the ViT-Large model for segmenting cells and nuclei in LM.
+- [vit_t_em_organelles](https://doi.org/10.5281/zenodo.11110950): the ViT-Base model for segmenting mitochondria and nuclei in EM.
+- [vit_b_em_organelles](https://doi.org/10.5281/zenodo.11111293): the ViT-Base model for segmenting mitochondria and nuclei in EM.
+- [vit_l_em_organelles](https://doi.org/10.5281/zenodo.11111054): the ViT-Large model for segmenting mitochondria and nuclei in EM.
 
 ### v1 Models
+
+The initial models published with our preprint:
 - [vit_b_em_boundaries](https://zenodo.org/records/10524894): for segmenting compartments delineated by boundaries such as cells or neurites in EM.
 - [vit_b_em_organelles](https://zenodo.org/records/10524828): for segmenting mitochondria, nuclei or other organelles in EM.
 - [vit_b_lm](https://zenodo.org/records/10524791): for segmenting cells and nuclei in LM.

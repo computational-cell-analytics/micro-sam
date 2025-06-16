@@ -17,6 +17,7 @@ We are still working on improving and extending its functionality. The current r
 - Support for [SAM2](https://ai.meta.com/sam2/).
 
 If you run into any problems or have questions please [open an issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) or reach out via [image.sc](https://forum.image.sc/) using the tag `micro-sam`.
+You can follow recent updates on `micro_sam` in our [news feed](https://forum.image.sc/t/microsam-news-feed).
 
 
 ## Quickstart

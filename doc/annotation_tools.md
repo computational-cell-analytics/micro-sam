@@ -131,6 +131,25 @@ This menu will not open if you start the image series annotator from the command
 Check out [the video tutorial](https://youtu.be/HqRoImdTX3c) for an in-depth explanation on how to use the image series annotator.
 
 
+## Object Classification
+
+We have recently implemented an experimental workflow for object classification with `micro_sam`. It can be started by:
+- clicking `Object Classifier` in the plugin menu after starting `napari`.
+- calling `micro_sam.sam_annotator.object_classifier.object_classifier` in a python script.
+
+When starting this worklfow the following interface opens up.
+
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/object-classifier.png" width="512">
+
+You can load an image (here: `livecell`) and a segmentation (here, `segmentation`, for example from another `micro_sam` widget).
+Compute image embeddings as in the other widgets.
+Then, draw annotations for the different types of objects in your image in the `annotation` layer, see also the brushstroke labels visible in some cells in the image.
+By clicking `Train and predict` you train a random forest classifer on the objects you have annotated, that uses the image embeddings projected to the objects as features.
+It is then applied to all objects to obtain the semantic segmentation shown in `prediction`.
+
+**This worklfow is still experimental. It may significantly change in the future and we are working on a publication to explain the underlying methodology and to document it properly. Feedback is already welcome in case you use it.**
+
+
 ## Finetuning UI
 
 We also provide a graphical inferface for fine-tuning models on your own data. It can be started by clicking `Finetuning` in the plugin menu after starting `napari`.
