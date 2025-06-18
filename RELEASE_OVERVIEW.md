@@ -1,6 +1,7 @@
 # Release Overview
 
 **New in version 1.6.0**
+
 Publish improved versions of the light microscopy and electron microscopy models.
 
 **New in version 1.5.0**
