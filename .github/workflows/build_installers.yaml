@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build_intaller:
+  build_installer:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
 
