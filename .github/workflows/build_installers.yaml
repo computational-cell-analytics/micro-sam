@@ -7,48 +7,88 @@ jobs:
   build_installer:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
 
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]  # macos-latest
 
+    env:
+      PREPARE_SCRIPT: |
+        cd deployment
+        mamba install -y -c conda-forge constructor
+        mamba install -y -c conda-forge ruamel.yaml
+        mamba create -y -c conda-forge -n __MICROSAM_BUILD_ENV__ micro_sam natsort
+        conda activate base
+
+      RUN_SCRIPT: |
+        python version_getter.py
+        mkdir ./${{ matrix.os }}_x86_64
+        constructor --output-dir ./${{ matrix.os }}_x86_64 --config-filename construct_${{ matrix.os }}.yaml .
+
     steps:
       - name: checkout
         uses: actions/checkout@v4
-
-      - name: setup micromamba
-        uses: mamba-org/setup-micromamba@v1
         with:
-          init-shell: bash
-          environment-name: base
-          create-args: >-
-            python=3.11
+          ref: ${{ github.ref }}
+      # - name: lint check
+      #   if: matrix.os == 'ubuntu-latest'
+      #   shell: bash -el {0}
+      #   run: |
+      #     bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+      #     ./actionlint
 
-      - name: prepare environment
-        shell: bash -l {0}
-        run: |
-          cd deployment
-          micromamba install -y -c conda-forge constructor ruamel.yaml
-          micromamba create -y -c conda-forge -n __MICROSAM_BUILD_ENV__ micro_sam natsort
-          micromamba activate base
+      - name: setup conda
+        if: matrix.os == 'windows-latest' || matrix.os == 'ubuntu-latest'
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          miniconda-version: "latest"
+          auto-activate-base: true
+          activate-environment: ""
+          channels: conda-forge
+          mamba-version: "*"
+        env:
+          ACTIONS_ALLOW_UNSECURE_COMMANDS: true
 
-      - name: windows-specific setup
+      - name: build ${{ matrix.os }}_x86_64
         if: matrix.os == 'windows-latest'
-        shell: bash -l {0}
+        shell: pwsh
         run: |
-          cd deployment
-          micromamba install -y -c anaconda menuinst
+          ${{ env.PREPARE_SCRIPT }}
+          mamba activate sam
+          mamba install -c anaconda menuinst
           python windows_menu_setup.py
+          conda activate base
+          ${{ env.RUN_SCRIPT }}
 
-      - name: Build installer
-        shell: bash -l {0}
+      - name: build ${{ matrix.os }}_x86_64
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash -el {0}
+        run: |
+          ${{ env.PREPARE_SCRIPT }}
+          ${{ env.RUN_SCRIPT }}
+
+      - name: build ${{ matrix.os }}_x86_64_step1
+        if: matrix.os == 'macos-latest'
+        shell: bash -el {0}
+        run: |
+          brew install micromamba
+          /usr/local/opt/micromamba/bin/micromamba shell init -s bash -p ~/micromamba
+
+      - name: build ${{ matrix.os }}_x86_64_step2
+        if: matrix.os == 'macos-latest'
+        shell: bash -el {0}
         run: |
           cd deployment
+          micromamba activate base
+          micromamba install -y -c conda-forge python=3.10
+          micromamba install -y -c conda-forge constructor
+          micromamba install -y -c conda-forge ruamel.yaml
+          micromamba install -y -c conda-forge mamba
+          mamba env create --file=env.yaml
           python version_getter.py
-          mkdir -p ./${{ matrix.os }}_x86_64
-          constructor --output-dir ./${{ matrix.os }}_x86_64 --config-filename construct_${{ matrix.os }}.yaml .
+          mkdir ./${{ matrix.os }}_x86_64
+          constructor --conda-exe=$(which mamba) --output-dir ./${{ matrix.os }}_x86_64 .
 
       - name: upload installer
         uses: actions/upload-artifact@v4
