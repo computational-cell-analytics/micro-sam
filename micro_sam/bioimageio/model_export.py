@@ -476,7 +476,7 @@ def export_sam_model(
                 source=Path(checkpoint_path),
                 architecture=architecture,
                 pytorch_version=spec.Version(torch.__version__),
-                dependencies=spec.EnvironmentFileDescr(source=dependency_file),
+                dependencies=spec.FileDescr(source=dependency_file),
             )
         )
 
