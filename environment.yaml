@@ -26,6 +26,7 @@ dependencies:
     - torch_em >=0.7.10
     - tqdm
     - timm
+    - trackastra
     - xarray
     - zarr
     - pip:
