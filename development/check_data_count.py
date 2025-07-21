@@ -86,7 +86,7 @@ def check_data_count(lm_version="v3"):
     image_counter += curr_image_counter
     object_counter += curr_object_counter
 
-    print("TissueNet", curr_image_counter, curr_object_counter)
+    print("NeurIPS CellSeg", curr_image_counter, curr_object_counter)
 
     # CTC data.
     curr_image_counter, curr_object_counter = 0, 0
@@ -166,12 +166,13 @@ def check_data_count(lm_version="v3"):
 
     # DynamicNuclearNet data.
     sample_paths = datasets.light_microscopy.dynamicnuclearnet.get_dynamicnuclearnet_paths(
-        path=os.path.join(ROOT, "dynamicnuclearnet")
+        path=os.path.join(ROOT, "dynamicnuclearnet"), split="train",
     )
-    curr_image_counter, curr_object_counter = 0, 0
-    for p in sample_paths:
-        f = open_file(p)
-        breakpoint()
+
+    curr_image_counter = len(sample_paths)
+    curr_object_counter = sum(
+        [len(np.unique(open_file(p)["labels"])[1:]) for p in sample_paths]
+    )
 
     image_counter += curr_image_counter
     object_counter += curr_object_counter
@@ -224,11 +225,11 @@ def check_data_count(lm_version="v3"):
 
 
 def main():
-    image_counts, object_counts = check_data_count("v2")
-    print(f"Count of images: '{image_counts}'; and count of objects: '{object_counts}'")
+    # image_counts, object_counts = check_data_count("v2")
+    # print(f"v2 Model - Count of images: '{image_counts}'; and count of objects: '{object_counts}'")
 
     image_counts, object_counts = check_data_count("v3")
-    print(f"Count of images: '{image_counts}'; and count of objects: '{object_counts}'")
+    print(f"v3 and v4 Model - Count of images: '{image_counts}'; and count of objects: '{object_counts}'")
 
 
 if __name__ == "__main__":
