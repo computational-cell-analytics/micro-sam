@@ -270,9 +270,9 @@ def train_sam(
     with _filter_warnings(ignore_warnings):
 
         t_start = time.time()
-
-        _check_loader(train_loader, with_segmentation_decoder, "train", verify_n_labels_in_loader)
-        _check_loader(val_loader, with_segmentation_decoder, "val", verify_n_labels_in_loader)
+        if verify_n_labels_in_loader is not None:
+            _check_loader(train_loader, with_segmentation_decoder, "train", verify_n_labels_in_loader)
+            _check_loader(val_loader, with_segmentation_decoder, "val", verify_n_labels_in_loader)
 
         device = get_device(device)
         # Get the trainable segment anything model.
@@ -684,7 +684,10 @@ def default_sam_dataset(
     if custom_label_transform is None:
         label_transform = default_label_transform
     else:
-        label_transform = torch_em.transform.generic.Compose(custom_label_transform, default_label_transform)
+        is_multi_tensor = kwargs.pop("is_multi_tensor", True)
+        label_transform = torch_em.transform.generic.Compose(
+            custom_label_transform, default_label_transform, is_multi_tensor=is_multi_tensor
+        )
 
     # Check the patch shape to add a singleton if required.
     patch_shape = _update_patch_shape(
