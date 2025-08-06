@@ -686,7 +686,6 @@ def default_sam_dataset(
     if custom_label_transform is None:
         label_transform = default_label_transform
     else:
-        # is_multi_tensor = kwargs.pop("is_multi_tensor", True)
         label_transform = torch_em.transform.generic.Compose(
             custom_label_transform, default_label_transform, is_multi_tensor=is_multi_tensor
         )
