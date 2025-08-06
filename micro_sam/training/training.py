@@ -582,7 +582,7 @@ def default_sam_dataset(
     min_size: int = 25,
     max_sampling_attempts: Optional[int] = None,
     rois: Optional[Union[slice, Tuple[slice, ...]]] = None,
-    is_multi_tensor: bool = True,
+    _tensor: bool = True,
     **kwargs,
 ) -> Dataset:
     """Create a PyTorch Dataset for training a SAM model.
@@ -609,7 +609,7 @@ def default_sam_dataset(
         min_size: Minimal object size. Smaller objects will be filtered. By default, set to '25'.
         max_sampling_attempts: Number of sampling attempts to make from a dataset.
         rois: The region of interest(s) for the data.
-        is_multi_tensor: Whether the data is multi-tensor.
+        is_multi_tensor: Whether the input data to data transforms is multiple tensors or not.
         kwargs: Additional keyword arguments for `torch_em.default_segmentation_dataset`.
 
     Returns:
