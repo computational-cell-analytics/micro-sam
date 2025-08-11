@@ -397,10 +397,10 @@ class SimpleLoRALayer(nn.Module):
         self.original_layer = original_layer
         self.lora_A = nn.Linear(original_layer.in_features, rank, bias=False)
         self.lora_B = nn.Linear(rank, original_layer.out_features, bias=False)
-        
+
         nn.init.kaiming_uniform_(self.lora_A.weight, a=math.sqrt(5))
         nn.init.zeros_(self.lora_B.weight)
-        
+
     def forward(self, x):
         return self.original_layer(x) + self.lora_B(self.lora_A(x))
 
@@ -493,7 +493,7 @@ class PEFT_Sam(nn.Module):
 
         # Filter out decoder-specific kwargs from module_kwargs
         encoder_kwargs = {k: v for k, v in module_kwargs.items() if k != 'decoder_lora'}
-        
+
         for t_layer_i, blk in enumerate(model.image_encoder.blocks):
 
             # If we only want specific layers with PEFT instead of all
@@ -506,17 +506,17 @@ class PEFT_Sam(nn.Module):
                 self.peft_blocks.append(self.peft_module(rank=rank, block=blk, **encoder_kwargs))
 
         self.peft_blocks = nn.ModuleList(self.peft_blocks)
-        
+
         # Apply LoRA to the mask decoder if requested
         if decoder_lora:
             if not rank or rank <= 0:
                 raise RuntimeError("The decoder LoRA method cannot run without a valid rank choice.")
-            
+
             for param in model.mask_decoder.parameters():
                 param.requires_grad = False
-                
+
             self._apply_lora_to_decoder(model.mask_decoder, rank, module_kwargs.get('update_matrices', ["q", "v"]))
-            
+
         self.sam = model
 
     def _apply_lora_to_decoder(self, decoder, rank, update_matrices):
@@ -529,7 +529,7 @@ class PEFT_Sam(nn.Module):
                 layer.self_attn.v_proj = SimpleLoRALayer(layer.self_attn.v_proj, rank)
             if "k" in update_matrices:
                 layer.self_attn.k_proj = SimpleLoRALayer(layer.self_attn.k_proj, rank)
-                
+
             # Cross-attention token to image
             if "q" in update_matrices:
                 layer.cross_attn_token_to_image.q_proj = SimpleLoRALayer(layer.cross_attn_token_to_image.q_proj, rank)
@@ -537,7 +537,7 @@ class PEFT_Sam(nn.Module):
                 layer.cross_attn_token_to_image.v_proj = SimpleLoRALayer(layer.cross_attn_token_to_image.v_proj, rank)
             if "k" in update_matrices:
                 layer.cross_attn_token_to_image.k_proj = SimpleLoRALayer(layer.cross_attn_token_to_image.k_proj, rank)
-                
+
             # Cross-attention image to token
             if "q" in update_matrices:
                 layer.cross_attn_image_to_token.q_proj = SimpleLoRALayer(layer.cross_attn_image_to_token.q_proj, rank)
@@ -545,7 +545,7 @@ class PEFT_Sam(nn.Module):
                 layer.cross_attn_image_to_token.v_proj = SimpleLoRALayer(layer.cross_attn_image_to_token.v_proj, rank)
             if "k" in update_matrices:
                 layer.cross_attn_image_to_token.k_proj = SimpleLoRALayer(layer.cross_attn_image_to_token.k_proj, rank)
-                
+
             # MLP layers
             if "mlp" in update_matrices:
                 layer.mlp.lin1 = SimpleLoRALayer(layer.mlp.lin1, rank)
@@ -553,11 +553,17 @@ class PEFT_Sam(nn.Module):
 
         # Final attention layer
         if "q" in update_matrices:
-            decoder.transformer.final_attn_token_to_image.q_proj = SimpleLoRALayer(decoder.transformer.final_attn_token_to_image.q_proj, rank)
+            decoder.transformer.final_attn_token_to_image.q_proj = SimpleLoRALayer(
+                decoder.transformer.final_attn_token_to_image.q_proj, rank
+            )
         if "v" in update_matrices:
-            decoder.transformer.final_attn_token_to_image.v_proj = SimpleLoRALayer(decoder.transformer.final_attn_token_to_image.v_proj, rank)
+            decoder.transformer.final_attn_token_to_image.v_proj = SimpleLoRALayer(
+                decoder.transformer.final_attn_token_to_image.v_proj, rank
+            )
         if "k" in update_matrices:
-            decoder.transformer.final_attn_token_to_image.k_proj = SimpleLoRALayer(decoder.transformer.final_attn_token_to_image.k_proj, rank)
+            decoder.transformer.final_attn_token_to_image.k_proj = SimpleLoRALayer(
+                decoder.transformer.final_attn_token_to_image.k_proj, rank
+            )
 
     def forward(self, batched_input, multimask_output):
         return self.sam(batched_input, multimask_output)
