@@ -135,9 +135,10 @@ def get_trainable_sam_model(
 
             # we would want to "freeze" all the components in the model if passed a list of parts
             for l_item in freeze:
-                # in case PEFT is switched on, we cannot freeze the image encoder
+                # in case PEFT is switched on, we cannot freeze the image encoder unless decoder_lora is enabled
                 if (peft_kwargs and peft_kwargs.get('rank') is not None) and (l_item == "image_encoder"):
-                    raise ValueError("You cannot use PEFT & freeze the image encoder at the same time.")
+                    if not peft_kwargs.get('decoder_lora', False):
+                        raise ValueError("You cannot use PEFT & freeze the image encoder at the same time.")
 
                 if name.startswith(f"{l_item}"):
                     param.requires_grad = False
