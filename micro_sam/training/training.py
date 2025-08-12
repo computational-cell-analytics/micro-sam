@@ -848,14 +848,17 @@ def train_sam_for_configuration(
 
     train_kwargs.update(**kwargs)
     if train_instance_segmentation_only:
+        instance_seg_kwargs, extra_kwargs = split_kwargs(train_instance_segmentation, **train_kwargs)
+        model_kwargs, extra_kwargs = split_kwargs(get_sam_model, **extra_kwargs)
+        instance_seg_kwargs.update(**model_kwargs)
+
         train_instance_segmentation(
             name=name,
             train_loader=train_loader,
             val_loader=val_loader,
             checkpoint_path=checkpoint_path,
-            with_segmentation_decoder=with_segmentation_decoder,
             model_type=model_type,
-            **train_kwargs
+            **instance_seg_kwargs,
         )
     else:
         train_sam(
