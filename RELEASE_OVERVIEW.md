@@ -1,5 +1,9 @@
 # Release Overview
 
+**New in version 1.6.1**
+
+Minor updates to training functionality and some other tiny updates. 
+
 **New in version 1.6.0**
 
 Publish improved versions of the light microscopy and electron microscopy models.
