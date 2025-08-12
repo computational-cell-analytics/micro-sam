@@ -4,7 +4,7 @@ BAND is a service offered by EMBL Heidelberg under the "The German Network for B
 In order to use BAND and start `micro_sam` on it follow these steps:
 
 ## Start BAND
-- Go to https://bandv1.denbi.uni-tuebingen.de/ and click **Login**. If you have not used BAND before you will need to register for BAND. Currently you can only sign up via a Google account. NOTE: It takes a couple of seconds for the "Launch Desktops" window to appear.
+- Go to https://bandv1.denbi.uni-tuebingen.de/ (another site available at https://band.vm.fedcloud.eu/, choose either) and click **Login**. If you have not used BAND before you will need to register for BAND. Currently you can only sign up via a Google account. NOTE: It takes a couple of seconds for the "Launch Desktops" window to appear.
 - Launch a BAND desktop with sufficient resources. It's particularly important to select a GPU. The settings from the image below are a good choice.
 - Go to the desktop by clicking **GO TO DESKTOP** in the **Running Desktops** menu. See also the screenshot below.
 

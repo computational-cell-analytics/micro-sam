@@ -270,9 +270,9 @@ def train_sam(
     with _filter_warnings(ignore_warnings):
 
         t_start = time.time()
-
-        _check_loader(train_loader, with_segmentation_decoder, "train", verify_n_labels_in_loader)
-        _check_loader(val_loader, with_segmentation_decoder, "val", verify_n_labels_in_loader)
+        if verify_n_labels_in_loader is not None:
+            _check_loader(train_loader, with_segmentation_decoder, "train", verify_n_labels_in_loader)
+            _check_loader(val_loader, with_segmentation_decoder, "val", verify_n_labels_in_loader)
 
         device = get_device(device)
         # Get the trainable segment anything model.
@@ -582,6 +582,7 @@ def default_sam_dataset(
     min_size: int = 25,
     max_sampling_attempts: Optional[int] = None,
     rois: Optional[Union[slice, Tuple[slice, ...]]] = None,
+    is_multi_tensor: bool = True,
     **kwargs,
 ) -> Dataset:
     """Create a PyTorch Dataset for training a SAM model.
@@ -608,6 +609,7 @@ def default_sam_dataset(
         min_size: Minimal object size. Smaller objects will be filtered. By default, set to '25'.
         max_sampling_attempts: Number of sampling attempts to make from a dataset.
         rois: The region of interest(s) for the data.
+        is_multi_tensor: Whether the input data to data transforms is multiple tensors or not.
         kwargs: Additional keyword arguments for `torch_em.default_segmentation_dataset`.
 
     Returns:
@@ -684,7 +686,9 @@ def default_sam_dataset(
     if custom_label_transform is None:
         label_transform = default_label_transform
     else:
-        label_transform = torch_em.transform.generic.Compose(custom_label_transform, default_label_transform)
+        label_transform = torch_em.transform.generic.Compose(
+            custom_label_transform, default_label_transform, is_multi_tensor=is_multi_tensor
+        )
 
     # Check the patch shape to add a singleton if required.
     patch_shape = _update_patch_shape(
@@ -844,14 +848,17 @@ def train_sam_for_configuration(
 
     train_kwargs.update(**kwargs)
     if train_instance_segmentation_only:
+        instance_seg_kwargs, extra_kwargs = split_kwargs(train_instance_segmentation, **train_kwargs)
+        model_kwargs, extra_kwargs = split_kwargs(get_sam_model, **extra_kwargs)
+        instance_seg_kwargs.update(**model_kwargs)
+
         train_instance_segmentation(
             name=name,
             train_loader=train_loader,
             val_loader=val_loader,
             checkpoint_path=checkpoint_path,
-            with_segmentation_decoder=with_segmentation_decoder,
             model_type=model_type,
-            **train_kwargs
+            **instance_seg_kwargs,
         )
     else:
         train_sam(

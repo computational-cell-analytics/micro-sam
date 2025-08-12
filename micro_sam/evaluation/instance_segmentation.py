@@ -229,20 +229,20 @@ def run_instance_segmentation_grid_search(
         image = _load_image(image_path, image_key, roi=None if rois is None else rois[i])
         gt = _load_image(gt_path, gt_key, roi=None if rois is None else rois[i])
 
-        if embedding_dir is None:
-            embedding_path = None
-        else:
-            assert predictor is not None
-            embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
-
         if tiling_window_params is None:
             tiling_window_params = {}
 
-        image_embeddings = util.precompute_image_embeddings(
-            predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings, **tiling_window_params
-        )
+        if embedding_dir is None:
+            embedding_path = None
+            segmenter.initialize(image, **tiling_window_params)
 
-        segmenter.initialize(image, image_embeddings, **tiling_window_params)
+        else:
+            assert predictor is not None
+            embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
+            image_embeddings = util.precompute_image_embeddings(
+                predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings, **tiling_window_params
+            )
+            segmenter.initialize(image, image_embeddings, **tiling_window_params)
 
         _grid_search_iteration(
             segmenter, gs_combinations, gt, image_name,
