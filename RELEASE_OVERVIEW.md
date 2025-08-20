@@ -6,7 +6,7 @@ Minor updates to training functionality and some other tiny updates.
 
 **New in version 1.6.0**
 
-Publish improved versions of the light microscopy and electron microscopy models.
+Publish improved versions of the light microscopy (v4) and electron microscopy (v3) models.
 
 **New in version 1.5.0**
 - Preliminary version of object classification tool.
