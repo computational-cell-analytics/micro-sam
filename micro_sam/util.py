@@ -317,6 +317,7 @@ def get_sam_model(
     peft_kwargs: Optional[Dict] = None,
     flexible_load_checkpoint: bool = False,
     progress_bar_factory: Optional[Callable] = None,
+    decoder_path: Optional[Union[str, os.PathLike]] = None,
     **model_kwargs,
 ) -> SamPredictor:
     r"""Get the Segment Anything Predictor.
@@ -355,6 +356,8 @@ def get_sam_model(
         flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
             By default, set to 'False'.
         progress_bar_factory: A function to create a progress bar for the model download.
+        decoder_path: The path to a file with weights that should be used for the additional segmentation decoder
+            instead of using the weights corresponding to `model_type`, if available.
         model_kwargs: Additional parameters necessary to initialize the Segment Anything model.
 
     Returns:
@@ -370,6 +373,7 @@ def get_sam_model(
     # URL from the model_type. If the model_type is invalid pooch will raise an error.
     _provided_checkpoint_path = checkpoint_path is not None
     if checkpoint_path is None:
+        assert decoder_path is None, "Since 'checkpoint_path' hasn't been provided, you can't pass 'decoder_path'."
         checkpoint_path, model_hash, decoder_path = _download_sam_model(model_type, progress_bar_factory)
 
     # checkpoint_path has been passed, we use it instead of downloading a model.
@@ -379,8 +383,11 @@ def get_sam_model(
         # (If it isn't the model creation will fail below.)
         if not os.path.exists(checkpoint_path):
             raise ValueError(f"Checkpoint at '{checkpoint_path}' could not be found.")
+
+        if decoder_path and not os.path.exists(decoder_path):
+            raise ValueError(f"Decoder checkpoint at '{decoder_path}' could not be found.")
+
         model_hash = _compute_hash(checkpoint_path)
-        decoder_path = None
 
     # Our fine-tuned model types have a suffix "_...". This suffix needs to be stripped
     # before calling sam_model_registry.
