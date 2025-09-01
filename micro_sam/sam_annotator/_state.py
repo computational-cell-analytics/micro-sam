@@ -102,6 +102,7 @@ class AnnotatorState(metaclass=Singleton):
         pbar_update=None,
         skip_load=True,
         use_cli=False,
+        decoder_path=None,
     ):
         assert ndim in (2, 3)
 
@@ -112,8 +113,11 @@ class AnnotatorState(metaclass=Singleton):
                 return pbar
 
             self.predictor, state = util.get_sam_model(
-                device=device, model_type=model_type,
-                checkpoint_path=checkpoint_path, return_state=True,
+                device=device,
+                model_type=model_type,
+                checkpoint_path=checkpoint_path,
+                decoder_path=decoder_path,
+                return_state=True,
                 progress_bar_factory=None if use_cli else progress_bar_factory,
             )
             if prefer_decoder and "decoder_state" in state:

@@ -25,16 +25,29 @@ from ..precompute_state import _precompute_state_for_files
 
 
 def _precompute(
-    images, model_type, embedding_path,
-    tile_shape, halo, precompute_amg_state,
-    checkpoint_path, device, ndim, prefer_decoder,
+    images,
+    model_type,
+    embedding_path,
+    tile_shape,
+    halo,
+    precompute_amg_state,
+    checkpoint_path,
+    decoder_path,
+    device,
+    ndim,
+    prefer_decoder,
 ):
     t_start = time.time()
 
     device = util.get_device(device)
     predictor, state = util.get_sam_model(
-        model_type=model_type, checkpoint_path=checkpoint_path, device=device, return_state=True
+        model_type=model_type,
+        checkpoint_path=checkpoint_path,
+        decoder_path=decoder_path,
+        device=device,
+        return_state=True,
     )
+
     if prefer_decoder and "decoder_state" in state:
         decoder = get_decoder(predictor.model.image_encoder, state["decoder_state"], device)
     else:
@@ -80,9 +93,19 @@ def _get_input_shape(image, is_volumetric=False):
 
 
 def _initialize_annotator(
-    viewer, image, image_embedding_path,
-    model_type, halo, tile_shape, predictor, decoder, is_volumetric,
-    precompute_amg_state, checkpoint_path, device, embedding_path,
+    viewer,
+    image,
+    embedding_path,
+    model_type,
+    halo,
+    tile_shape,
+    predictor,
+    decoder,
+    is_volumetric,
+    precompute_amg_state,
+    checkpoint_path,
+    decoder_path,
+    device,
     segmentation_path,
 ):
     if viewer is None:
@@ -91,10 +114,20 @@ def _initialize_annotator(
 
     state = AnnotatorState()
     state.initialize_predictor(
-        image, model_type=model_type, save_path=image_embedding_path, halo=halo, tile_shape=tile_shape,
-        predictor=predictor, decoder=decoder,
-        ndim=3 if is_volumetric else 2, precompute_amg_state=precompute_amg_state,
-        checkpoint_path=checkpoint_path, device=device, skip_load=False, use_cli=True,
+        image_data=image,
+        model_type=model_type,
+        save_path=embedding_path,
+        halo=halo,
+        tile_shape=tile_shape,
+        predictor=predictor,
+        decoder=decoder,
+        ndim=3 if is_volumetric else 2,
+        precompute_amg_state=precompute_amg_state,
+        checkpoint_path=checkpoint_path,
+        decoder_path=decoder_path,
+        device=device,
+        skip_load=False,
+        use_cli=True,
     )
     state.image_shape = _get_input_shape(image, is_volumetric)
 
@@ -137,7 +170,8 @@ def image_series_annotator(
     viewer: Optional["napari.viewer.Viewer"] = None,
     return_viewer: bool = False,
     precompute_amg_state: bool = False,
-    checkpoint_path: Optional[str] = None,
+    checkpoint_path: Optional[Union[os.PathLike, str]] = None,
+    decoder_path: Optional[Union[os.PathLike, str]] = None,
     is_volumetric: bool = False,
     device: Optional[Union[str, torch.device]] = None,
     prefer_decoder: bool = True,
@@ -162,6 +196,7 @@ def image_series_annotator(
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster. By default, set to 'False'.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
+        decoder_path: Path to a custom decoder checkpoint from which to load the additional convolutional decoder.
         is_volumetric: Whether to use the 3d annotator. By default, set to 'False'.
         prefer_decoder: Whether to use decoder based instance segmentation if
             the model used has an additional decoder for instance segmentation.
@@ -178,10 +213,17 @@ def image_series_annotator(
 
     # Precompute embeddings and amg state (if corresponding options set).
     predictor, decoder, embedding_paths = _precompute(
-        images, model_type,
-        embedding_path, tile_shape, halo, precompute_amg_state,
-        checkpoint_path=checkpoint_path, device=device,
-        ndim=3 if is_volumetric else 2, prefer_decoder=prefer_decoder,
+        images=images,
+        model_type=model_type,
+        embedding_path=embedding_path,
+        tile_shape=tile_shape,
+        halo=halo,
+        precompute_amg_state=precompute_amg_state,
+        checkpoint_path=checkpoint_path,
+        decoder_path=decoder_path,
+        device=device,
+        ndim=3 if is_volumetric else 2,
+        prefer_decoder=prefer_decoder,
     )
 
     next_image_id = 0
@@ -224,10 +266,20 @@ def image_series_annotator(
     # Initialize the viewer and annotator for this image.
     state = AnnotatorState()
     viewer, annotator = _initialize_annotator(
-        viewer, image, image_embedding_path,
-        model_type, halo, tile_shape, predictor, decoder, is_volumetric,
-        precompute_amg_state, checkpoint_path, device, embedding_path,
-        save_path,
+        viewer=viewer,
+        image=image,
+        embedding_path=embedding_path,
+        model_type=model_type,
+        halo=halo,
+        tile_shape=tile_shape,
+        predictor=predictor,
+        decoder=decoder,
+        is_volumetric=is_volumetric,
+        precompute_amg_state=precompute_amg_state,
+        checkpoint_path=checkpoint_path,
+        decoder_path=decoder_path,
+        device=device,
+        segmentation_path=save_path,
     )
 
     def _save_segmentation(image_path, current_idx, segmentation):
@@ -304,11 +356,18 @@ def image_series_annotator(
             state.amg.clear_state()
 
         state.initialize_predictor(
-            image, model_type=model_type, ndim=3 if is_volumetric else 2,
+            image_data=image,
+            model_type=model_type,
+            ndim=3 if is_volumetric else 2,
             save_path=image_embedding_path,
-            tile_shape=tile_shape, halo=halo,
-            predictor=predictor, decoder=decoder,
-            precompute_amg_state=precompute_amg_state, device=device,
+            tile_shape=tile_shape,
+            halo=halo,
+            predictor=predictor,
+            decoder=decoder,
+            checkpoint_path=checkpoint_path,
+            decoder_path=decoder_path,
+            precompute_amg_state=precompute_amg_state,
+            device=device,
             skip_load=False,
         )
         state.image_shape = _get_input_shape(image, is_volumetric)
@@ -353,7 +412,7 @@ def image_folder_annotator(
     image_files = sorted(glob(os.path.join(input_folder, pattern)))
 
     return image_series_annotator(
-        image_files, output_folder, viewer=viewer, return_viewer=return_viewer, **kwargs
+        images=image_files, output_folder=output_folder, viewer=viewer, return_viewer=return_viewer, **kwargs
     )
 
 
@@ -518,6 +577,10 @@ def main():
         help="Checkpoint from which the SAM model will be loaded loaded."
     )
     parser.add_argument(
+        "--decoder_checkpoint", default=None, type=str,
+        help="Checkpoint from which the additional convolutional decoder will be loaded."
+    )
+    parser.add_argument(
         "-d", "--device", default=None,
         help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
         "By default the most performant available device will be selected."
@@ -539,9 +602,18 @@ def main():
     args = parser.parse_args()
 
     image_folder_annotator(
-        args.input_folder, args.output_folder, args.pattern,
-        embedding_path=args.embedding_path, model_type=args.model_type,
-        tile_shape=args.tile_shape, halo=args.halo, precompute_amg_state=args.precompute_amg_state,
-        checkpoint_path=args.checkpoint, device=args.device, is_volumetric=args.is_volumetric,
-        prefer_decoder=args.prefer_decoder, skip_segmented=args.skip_segmented
+        input_folder=args.input_folder,
+        output_folder=args.output_folder,
+        pattern=args.pattern,
+        embedding_path=args.embedding_path,
+        model_type=args.model_type,
+        tile_shape=args.tile_shape,
+        halo=args.halo,
+        precompute_amg_state=args.precompute_amg_state,
+        checkpoint_path=args.checkpoint,
+        decoder_path=args.decoder_checkpoint,
+        device=args.device,
+        is_volumetric=args.is_volumetric,
+        prefer_decoder=args.prefer_decoder,
+        skip_segmented=args.skip_segmented
     )

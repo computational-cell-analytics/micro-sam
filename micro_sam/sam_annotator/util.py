@@ -80,8 +80,12 @@ def _initialize_parser(description, with_segmentation_result=True, with_instance
         help=f"The segment anything model that will be used, one of {available_models}."
     )
     parser.add_argument(
-        "-c", "--checkpoint", default=None,
-        help="Checkpoint from which the SAM model will be loaded loaded."
+        "-c", "--checkpoint", default=None, type=str,
+        help="Checkpoint from which the SAM model will be loaded."
+    )
+    parser.add_argument(
+        "--decoder_checkpoint", default=None, type=str,
+        help="Checkpoint from which the additional convolutional decoder will be loaded."
     )
     parser.add_argument(
         "-d", "--device", default=None,

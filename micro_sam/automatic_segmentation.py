@@ -22,6 +22,7 @@ from .multi_dimensional_segmentation import automatic_3d_segmentation, automatic
 def get_predictor_and_segmenter(
     model_type: str,
     checkpoint: Optional[Union[os.PathLike, str]] = None,
+    decoder_checkpoint: Optional[Union[os.PathLike, str]] = None,
     device: str = None,
     amg: Optional[bool] = None,
     is_tiled: bool = False,
@@ -32,6 +33,7 @@ def get_predictor_and_segmenter(
     Args:
         model_type: The Segment Anything model choice.
         checkpoint: The filepath to the stored model checkpoints.
+        decoder_checkpoint: The filepath to the stored decoder checkpoints.
         device: The torch device. By default, automatically chooses the best available device.
         amg: Whether to perform automatic segmentation in AMG mode.
             Otherwise AIS will be used, which requires a special segmentation decoder.
@@ -49,7 +51,11 @@ def get_predictor_and_segmenter(
 
     # Get the predictor and state for Segment Anything models.
     predictor, state = util.get_sam_model(
-        model_type=model_type, device=device, checkpoint_path=checkpoint, return_state=True,
+        model_type=model_type,
+        device=device,
+        checkpoint_path=checkpoint,
+        decoder_path=decoder_checkpoint,
+        return_state=True,
     )
 
     if amg is None:
