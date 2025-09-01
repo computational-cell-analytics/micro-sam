@@ -117,7 +117,7 @@ def models():
         "vit_l_histopathology": "xxh128:b591833c89754271023e901281dee3f2",
         "vit_h_histopathology": "xxh128:bd1856dafc156a43fb3aa705f1a6e92e",
         # Medical Imaging models:
-        "vit_b_medical_imaging": "xxh128:5be672f1458263a9edc9fd40d7f56ac1",
+        "vit_b_medical_imaging": "xxh128:dc7364c9ccd346f1b6a882102568d41d",
     }
     # Additional decoders for instance segmentation.
     decoder_registry = {
@@ -134,7 +134,7 @@ def models():
         "vit_l_histopathology_decoder": "xxh128:46aab7765d4400e039772d5a50b55c04",
         "vit_h_histopathology_decoder": "xxh128:3ed9f87e46ad5e16935bd8d722c8dc47",
         # Medical Imaging models:
-        "vit_b_medical_imaging": "",
+        "vit_b_medical_imaging_decoder": "xxh128:c08d3ada20e2314ed54b50975f49e71e",
     }
     registry = {**encoder_registry, **decoder_registry}
 
@@ -165,7 +165,7 @@ def models():
         "vit_b_histopathology_decoder": "https://owncloud.gwdg.de/index.php/s/KO9AWqynI7SFOBj/download",
         "vit_l_histopathology_decoder": "https://owncloud.gwdg.de/index.php/s/oIs6VSmkOp7XrKF/download",
         "vit_h_histopathology_decoder": "https://owncloud.gwdg.de/index.php/s/1qAKxy5H0jgwZvM/download",
-        "vit_b_medical_imaging": "https://owncloud.gwdg.de/index.php/s/JHEJDdppVka8rbm/download",
+        "vit_b_medical_imaging_decoder": "https://owncloud.gwdg.de/index.php/s/JHEJDdppVka8rbm/download",
     }
     urls = {**encoder_urls, **decoder_urls}
 
