@@ -1324,11 +1324,6 @@ def micro_sam_info():
         Panel(f"[bold #009E73]Cache Directory:[/bold #009E73]\n{cache_dir}", title="Cache Directory")
     )
 
-    # The available models panel.
-    curr_models = list(get_model_names())
-    # We filter out the decoder models.
-    curr_models = [m for m in curr_models if not m.endswith("_decoder")]
-
     # We have a simple versioning logic here (which is what I'll follow here for mapping model versions).
     available_models = []
     for model_name, model_path in models().urls.items():  # We filter out the decoder models.
@@ -1356,6 +1351,8 @@ def micro_sam_info():
             available_models.append(f"{model_name} (v4)")
 
     model_list = "\n".join(available_models)
+
+    # The available models panel.
     console.print(
         Panel(f"[bold #D55E00]Available Models:[/bold #D55E00]\n{model_list}", title="List of Supported Models")
     )
