@@ -116,7 +116,7 @@ class AnnotatorState(metaclass=Singleton):
                 checkpoint_path=checkpoint_path, return_state=True,
                 progress_bar_factory=None if use_cli else progress_bar_factory,
             )
-            if prefer_decoder and "decoder_state" in state:
+            if prefer_decoder and "decoder_state" in state and model_type != "vit_b_medical_imaging":
                 self.decoder = get_decoder(
                     image_encoder=self.predictor.model.image_encoder,
                     decoder_state=state["decoder_state"],
