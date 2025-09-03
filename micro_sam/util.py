@@ -1315,16 +1315,44 @@ def micro_sam_info():
         )
     )
 
+    # Creating a cache directory when users' run `micro_sam.info`.
+    cache_dir = get_cache_directory()
+    os.makedirs(cache_dir, exist_ok=True)
+
     # The cache directory panel.
     console.print(
-        Panel(f"[bold #009E73]Cache Directory:[/bold #009E73]\n{get_cache_directory()}", title="Cache Directory")
+        Panel(f"[bold #009E73]Cache Directory:[/bold #009E73]\n{cache_dir}", title="Cache Directory")
     )
 
-    # The available models panel.
-    available_models = list(get_model_names())
-    # We filter out the decoder models.
-    available_models = [m for m in available_models if not m.endswith("_decoder")]
+    # We have a simple versioning logic here (which is what I'll follow here for mapping model versions).
+    available_models = []
+    for model_name, model_path in models().urls.items():  # We filter out the decoder models.
+        if model_name.endswith("decoder"):
+            continue
+
+        if "https://dl.fbaipublicfiles.com/segment_anything/" in model_path:  # Valid v1 SAM models.
+            available_models.append(model_name)
+
+        if "https://owncloud.gwdg.de/" in model_path:  # Our own hosted models (in their v1 mode quite often)
+            if model_name == "vit_t":  # MobileSAM model.
+                available_models.append(model_name)
+            else:
+                available_models.append(f"{model_name} (v1)")
+
+        # Now for our models, the BioImageIO ModelZoo upload structure is such that:
+        # '/1/files' corresponds to v2 models.
+        # '/1.1/files' corresponds to v3 models.
+        # '/1.2/files' corresponds to v4 models.
+        if "/1/files" in model_path:
+            available_models.append(f"{model_name} (v2)")
+        if "/1.1/files" in model_path:
+            available_models.append(f"{model_name} (v3)")
+        if "/1.2/files" in model_path:
+            available_models.append(f"{model_name} (v4)")
+
     model_list = "\n".join(available_models)
+
+    # The available models panel.
     console.print(
         Panel(f"[bold #D55E00]Available Models:[/bold #D55E00]\n{model_list}", title="List of Supported Models")
     )
