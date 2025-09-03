@@ -57,10 +57,10 @@ def _precompute(
             ]
         assert all(os.path.exists(emb_path) for emb_path in embedding_paths)
 
-    t_run = time.time() - t_start
-    minutes = int(t_run // 60)
-    seconds = int(round(t_run % 60, 0))
-    print("Precomputation took", t_run, f"seconds (= {minutes:02}:{seconds:02} minutes)")
+        t_run = time.time() - t_start
+        minutes = int(t_run // 60)
+        seconds = int(round(t_run % 60, 0))
+        print("Precomputation took", t_run, f"seconds (= {minutes:02}:{seconds:02} minutes)")
 
     return predictor, decoder, embedding_paths
 
@@ -101,11 +101,11 @@ def _initialize_annotator(
     if is_volumetric:
         if image.ndim not in [3, 4]:
             raise ValueError(f"Invalid image dimensions for 3d annotator, expect 3 or 4 dimensions, got {image.ndim}")
-        annotator = Annotator3d(viewer)
+        annotator = Annotator3d(viewer, reset_state=False)
     else:
         if image.ndim not in (2, 3):
             raise ValueError(f"Invalid image dimensions for 2d annotator, expect 2 or 3 dimensions, got {image.ndim}")
-        annotator = Annotator2d(viewer)
+        annotator = Annotator2d(viewer, reset_state=False)
 
     if os.path.exists(segmentation_path):
         segmentation_result = imageio.imread(segmentation_path)
