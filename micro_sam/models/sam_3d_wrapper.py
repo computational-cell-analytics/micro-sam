@@ -38,7 +38,7 @@ def get_sam_3d_model(
 
     # Make sure not to freeze the encoder when using LoRA.
     _freeze_encoder = freeze_encoder if lora_rank is None else False
-    sam_3d = Sam3DWrapper(sam, freeze_encoder=_freeze_encoder, model_type=model_type)
+    sam_3d = Sam3DWrapper(sam, freeze_encoder=_freeze_encoder, model_type=model_type[:5])
     sam_3d.to(device)
 
     return sam_3d
