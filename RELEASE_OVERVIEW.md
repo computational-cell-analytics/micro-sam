@@ -1,5 +1,9 @@
 # Release Overview
 
+**New in version 1.6.2**
+
+Publish improved version of the medical imaging model and minor fixes to image series annotator.
+
 **New in version 1.6.1**
 
 Minor updates to training functionality and some other tiny updates. 
