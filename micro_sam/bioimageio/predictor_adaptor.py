@@ -28,8 +28,8 @@ class PredictorAdaptor(nn.Module):
     """
     def __init__(self, model_type: str) -> None:
         super().__init__()
-        sam_model = sam_model_registry[model_type]()
-        self.sam = SamPredictor(sam_model)
+        self.sam_model = sam_model_registry[model_type]()
+        self.sam = SamPredictor(self.sam_model)
 
     def load_state_dict(self, state):
         self.sam.model.load_state_dict(state)
