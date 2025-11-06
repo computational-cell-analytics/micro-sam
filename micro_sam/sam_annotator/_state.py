@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import zarr
 import numpy as np
 
+from napari.layers import Image
 from qtpy.QtWidgets import QWidget
 
 import torch.nn as nn
@@ -19,7 +20,6 @@ import micro_sam.util as util
 from micro_sam.instance_segmentation import AMGBase, get_decoder
 from micro_sam.precompute_state import cache_amg_state, cache_is_state
 
-from napari.layers import Image
 from segment_anything import SamPredictor
 
 try:
