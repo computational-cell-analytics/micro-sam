@@ -102,6 +102,7 @@ class AnnotatorState(metaclass=Singleton):
         pbar_update=None,
         skip_load=True,
         use_cli=False,
+        is_sam2=False,  # By default, we use SAM1.
     ):
         assert ndim in (2, 3)
 
@@ -132,8 +133,13 @@ class AnnotatorState(metaclass=Singleton):
             self.image_embeddings = save_path
             self.embedding_path = None  # setting this to 'None' as we do not have embeddings cached.
 
-        else:  # otherwise, compute the image embeddings.
-            self.image_embeddings = util.precompute_image_embeddings(
+        else:  # Otherwise, compute the image embeddings.
+            if is_sam2:
+                from micro_sam2.util import precompute_image_embeddings as _comp_embed_fn
+            else:
+                _comp_embed_fn = util.precompute_image_embeddings
+
+            self.image_embeddings = _comp_embed_fn(
                 predictor=self.predictor,
                 input_=image_data,
                 save_path=save_path,

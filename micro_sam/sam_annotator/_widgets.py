@@ -31,6 +31,8 @@ from magicgui.widgets import ComboBox, Container, create_widget
 # from napari.qt.threading import thread_worker
 from napari.utils import progress
 
+from segment_anything import SamPredictor
+
 from . import util as vutil
 from ._tooltips import get_tooltip
 from ._state import AnnotatorState
@@ -237,8 +239,11 @@ class _WidgetBase(QtWidgets.QWidget):
         # We store the actual model names mapped to UI labels.
         self.model_size_mapping = {}
         if self.model_family == "Natural Images (SAM)":
-            self.model_size_options = list(self._model_size_map .values())
+            self.model_size_options = list(self._model_size_map.values())
             self.model_size_mapping = {self._model_size_map[k]: f"vit_{k}" for k in self._model_size_map.keys()}
+        elif self.model_family == "Natural Images (SAM2)":
+            self.model_size_options = list(self._model_size_map.values())
+            self.model_size_mapping = {self._model_size_map[k]: f"hvit_{k}" for k in self._model_size_map.keys()}
         else:
             model_suffix = self.supported_dropdown_maps[self.model_family]
             self.model_size_options = []
@@ -278,7 +283,10 @@ class _WidgetBase(QtWidgets.QWidget):
         size_key = next(
             (k for k, v in self._model_size_map.items() if v == self.model_size), "b"
         )
-        self.model_type = f"vit_{size_key}" + self.supported_dropdown_maps[self.model_family]
+        if "SAM2" in self.model_family:
+            self.model_type = f"hvit_{size_key}"
+        else:
+            self.model_type = f"vit_{size_key}" + self.supported_dropdown_maps[self.model_family]
 
         self.model_size_dropdown.setCurrentText(self.model_size)  # Apply the selected text to the dropdown
 
@@ -293,6 +301,7 @@ class _WidgetBase(QtWidgets.QWidget):
         # Create a list of support dropdown values and correspond them to suffixes.
         self.supported_dropdown_maps = {
             "Natural Images (SAM)": "",
+            "Natural Images (SAM2)": "_sam2",
             "Light Microscopy": "_lm",
             "Electron Microscopy": "_em_organelles",
             "Medical Imaging": "_medical_imaging",
@@ -343,7 +352,10 @@ class _WidgetBase(QtWidgets.QWidget):
 
     def _validate_model_type_and_custom_weights(self):
         # Let's get all model combination stuff into the desired `model_type` structure.
-        self.model_type = "vit_" + self.model_size[0] + self.supported_dropdown_maps[self.model_family]
+        if "SAM2" in self.model_family:
+            self.model_type = "hvit_" + self.model_size[0]
+        else:
+            self.model_type = "vit_" + self.model_size[0] + self.supported_dropdown_maps[self.model_family]
 
         # For 'custom_weights', we remove the displayed text on top of the drop-down menu.
         if self.custom_weights:
@@ -1014,10 +1026,21 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
 
     predictor = AnnotatorState().predictor
     image_embeddings = AnnotatorState().image_embeddings
-    seg = vutil.prompt_segmentation(
-        predictor, points, labels, boxes, masks, shape, image_embeddings=image_embeddings,
-        multiple_box_prompts=True, batched=batched, previous_segmentation=viewer.layers["current_object"].data,
-    )
+
+    if isinstance(predictor, SamPredictor):  # This is SAM2 predictor.
+        seg = vutil.prompt_segmentation(
+            predictor, points, labels, boxes, masks, shape, image_embeddings=image_embeddings,
+            multiple_box_prompts=True, batched=batched, previous_segmentation=viewer.layers["current_object"].data,
+        )
+    else:  # This would be SAM2 predictors.
+        from micro_sam2.prompt_based_segmentation import promptable_segmentation_2d
+        seg = promptable_segmentation_2d(
+            predictor=predictor,
+            points=points,
+            labels=labels,
+            boxes=boxes,
+            masks=masks,
+        )
 
     # no prompts were given or prompts were invalid, skip segmentation
     if seg is None:
@@ -1451,11 +1474,44 @@ class EmbeddingWidget(_WidgetBase):
             if self.automatic_segmentation_mode == "amg":
                 prefer_decoder = False
 
+            # Define a predictor for SAM2 models.
+            predictor = None
+            if self.model_type.startswith("h"):  # i.e. SAM2 models.
+                if ndim == 2:
+                    from micro_sam2.util import get_sam2_model
+                    # Get the SAM2 model.
+                    model = get_sam2_model(
+                        model_type="hvit_t",  # TODO: Again, hard-coded atm.
+                        checkpoint_path="/home/anwai/data/models/sam2.1_hiera_tiny.pt",  # TODO: Fix hard-coding
+                        input_type="images",
+                    )
+                    # Prepare the SAM2 predictor.
+                    from sam2.sam2_image_predictor import SAM2ImagePredictor
+                    predictor = SAM2ImagePredictor(model)
+                elif ndim == 3:
+                    # Get SAM2 predictor
+                    predictor = get_sam2_model(
+                        model_type="hvit_t",
+                        checkpoint_path="/home/anwai/data/models/sam2.1_hiera_tiny.pt",
+                        input_type="videos",
+                    )
+                else:
+                    raise ValueError
+
             state.initialize_predictor(
-                image_data, model_type=self.model_type, save_path=save_path, ndim=ndim,
-                device=self.device, checkpoint_path=self.custom_weights, tile_shape=tile_shape, halo=halo,
-                prefer_decoder=prefer_decoder, pbar_init=pbar_init,
+                image_data,
+                model_type=self.model_type,
+                save_path=save_path,
+                ndim=ndim,
+                device=self.device,
+                checkpoint_path=self.custom_weights,
+                predictor=predictor,
+                tile_shape=tile_shape,
+                halo=halo,
+                prefer_decoder=prefer_decoder,
+                pbar_init=pbar_init,
                 pbar_update=lambda update: pbar_signals.pbar_update.emit(update),
+                is_sam2=self.model_type.startswith("h"),
             )
             pbar_signals.pbar_stop.emit()
 
