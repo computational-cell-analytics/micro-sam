@@ -1698,7 +1698,11 @@ class SegmentNDWidget(_WidgetBase):
                     [box[:1, 0] for box in box_prompts.data]
                 ) if box_prompts.data else np.zeros(0, dtype="int")
 
-                frame_id = z_values[0]  # HACK: Make this modular.
+                # TODO: Make this modular.
+                if z_values:
+                    frame_id = z_values[0]
+                else:
+                    frame_id = z_values_boxes[0]
 
                 # Get the volume
                 # TODO: We need to switch later to volume embeddings.
