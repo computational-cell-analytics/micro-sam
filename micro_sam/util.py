@@ -1468,7 +1468,7 @@ def _calculate_ious_between_pred_masks(masks, boxes, diagonal_value=1):
 
     for i in range(n_points):
         js = torch.where(overlap_m[i])[0]
-        js_half = js[js > i]
+        js_half = js[js > i].to(masks.device)
 
         if len(js_half) > 0:
             intersection = torch.logical_and(masks[i], masks[js_half]).sum(dim=(1, 2))
