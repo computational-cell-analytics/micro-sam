@@ -1423,3 +1423,129 @@ def micro_sam_info():
                 prog.advance(task)
 
         console.print(Panel("[bold green] Downloads complete![/]", title="Finished"))
+
+
+#
+# Functionality to convert mask predictions to an instance segmentation via non-maximum suppression.
+# The functionality for computing NMS for masks is taken from CellSeg1:
+# https://github.com/Nuisal/cellseg1/blob/1c027c2568b83494d2662d1fbecec9aafb478ee0/mask_nms.py
+#
+
+
+def rle_to_mask(rle):
+    h, w = rle["size"]
+    mask = np.empty(h * w, dtype=bool)
+    idx = 0
+    parity = False
+    for count in rle["counts"]:
+        mask[idx:idx + count] = parity
+        idx += count
+        parity ^= True
+    mask = mask.reshape(w, h)
+    return mask.transpose()
+
+
+def overlap_matrix(boxes):
+    x1 = torch.max(boxes[:, None, 0], boxes[:, 0])
+    y1 = torch.max(boxes[:, None, 1], boxes[:, 1])
+    x2 = torch.min(boxes[:, None, 2], boxes[:, 2])
+    y2 = torch.min(boxes[:, None, 3], boxes[:, 3])
+
+    w = torch.clamp(x2 - x1, min=0)
+    h = torch.clamp(y2 - y1, min=0)
+
+    return (w * h) > 0
+
+
+def calculate_ious_between_pred_masks(masks, boxes, diagonal_value=1):
+    masks = (
+        masks.detach() if isinstance(masks, torch.Tensor) else torch.tensor(masks)
+    )
+    n_points = masks.shape[0]
+    m = torch.zeros((n_points, n_points))
+
+    overlap_m = overlap_matrix(boxes)
+
+    for i in range(n_points):
+        js = torch.where(overlap_m[i])[0]
+        js_half = js[js > i]
+
+        if len(js_half) > 0:
+            intersection = torch.logical_and(masks[i], masks[js_half]).sum(dim=(1, 2))
+            union = torch.logical_or(masks[i], masks[js_half]).sum(dim=(1, 2))
+            iou = intersection / union
+            m[i, js_half] = iou
+
+    m = m + m.T
+    m.fill_diagonal_(diagonal_value)
+    return m
+
+
+def batched_mask_nms(rles, boxes, scores, nms_thresh):
+    if len(rles) == 0:
+        return torch.tensor([], dtype=torch.int64)
+
+    masks = torch.stack([torch.tensor(rle_to_mask(rle)) for rle in rles])
+    boxes = (
+        boxes.detach()
+        if isinstance(boxes, torch.Tensor)
+        else torch.tensor(boxes)
+    )
+    scores = (
+        scores.detach()
+        if isinstance(scores, torch.Tensor)
+        else torch.tensor(scores)
+    )
+
+    iou_matrix = calculate_ious_between_pred_masks(masks, boxes)
+    sorted_indices = torch.argsort(scores, descending=True)
+
+    keep = []
+    while len(sorted_indices) > 0:
+        i = sorted_indices[0]
+        keep.append(i)
+
+        if len(sorted_indices) == 1:
+            break
+
+        iou_values = iou_matrix[i, sorted_indices[1:]]
+        mask = iou_values <= nms_thresh
+        sorted_indices = sorted_indices[1:][mask]
+
+    return torch.tensor(keep)
+
+
+def apply_nms(predictions, shape, min_size, perform_box_nms=False, nms_thresh=0.9):
+    data = amg_utils.MaskData(
+        masks=torch.cat([pred["segmentation"][None] for pred in predictions], dim=0),
+        iou_preds=torch.tensor([pred["predicted_iou"] for pred in predictions]),
+    )
+    data["rles"] = mask_to_rle_pytorch(data["masks"])
+    data["boxes"] = batched_mask_to_box(data["masks"])
+    data["area"] = [mask.sum() for mask in data["masks"]]
+
+    if min_size > 0:
+        keep_by_size = torch.tensor([i for i, area in enumerate(data["area"]) if area > min_size])
+        data.filter(keep_by_size)
+
+    if perform_box_nms:
+        keep_by_nms = batched_nms(
+            data["boxes"].float(),
+            data["iou_preds"],
+            torch.zeros_like(data["boxes"][:, 0]),  # categories
+            iou_threshold=nms_thresh,
+        )
+    else:
+        keep_by_nms = batched_mask_nms(
+            rles=data["rles"],
+            boxes=data["boxes"].float(),
+            scores=data["iou_preds"],
+            nms_thresh=nms_thresh,
+        )
+    data.filter(keep_by_nms)
+
+    mask_data = [
+        {"segmentation": mask, "area": area} for mask, area in zip(data["masks"], data["area"])
+    ]
+    segmentation = mask_data_to_segmentation(mask_data, min_object_size=min_size)
+    return segmentation

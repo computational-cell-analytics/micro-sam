@@ -1275,6 +1275,49 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         self._is_initialized = True
 
 
+class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
+    """Generates an instance segmentation automatically, using automatically generated prompts from a decoder.
+
+    This class is used in the same way as `InstanceSegmentationWithDecoder` and `AutomaticMaskGenerator`
+
+    Args:
+        predictor: The segment anything predictor.
+        decoder: The derive prompts for automatic instance segmentation.
+    """
+    # TODO correct output return type (for binary mask, also in the other functions)
+    def generate(
+        self,
+        # TODO params
+        min_size: int = 25,
+        output_mode: Optional[str] = "binary_mask",
+    ) -> List[Dict[str, Any]]:
+        """Generate instance segmentation for the currently initialized image.
+
+        Args:
+            min_size: Minimal object size in the segmentation result. By default, set to '25'.
+            output_mode: The form masks are returned in. Pass None to directly return the instance segmentation.
+                By default, set to 'binary_mask'.
+
+        Returns:
+            The instance segmentation masks.
+        """
+        if not self.is_initialized:
+            raise RuntimeError("AutomaticPromptGenerator has not been initialized. Call initialize first.")
+        # 1.) Derive promtps from the decoder predictions.
+
+        # TODO we can try either multi-mask or single mask decoder output here.
+        # 2.) Apply the predictor to the prompts.
+
+        # 3.) Apply non-max suppression to the masks.
+
+        # 4.) Write the masks to a segmentation.
+
+        # 5.) Generate and return the output format.
+
+
+# TODO add explicit choice of segmentation methods,
+#      so that we can switch between AIS and APG for segmentation with decoder
+# TODO rename
 def get_amg(
     predictor: SamPredictor, is_tiled: bool, decoder: Optional[torch.nn.Module] = None, **kwargs,
 ) -> Union[AMGBase, InstanceSegmentationWithDecoder]:
