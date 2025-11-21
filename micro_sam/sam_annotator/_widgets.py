@@ -1479,23 +1479,13 @@ class EmbeddingWidget(_WidgetBase):
             if self.model_type.startswith("h"):  # i.e. SAM2 models.
                 from micro_sam2.util import get_sam2_model
 
-                if ndim == 2:
-                    # Get the SAM2 model.
-                    model = get_sam2_model(
-                        model_type="hvit_t",  # TODO: Again, hard-coded atm.
-                        checkpoint_path="/home/anwai/data/models/sam2.1_hiera_tiny.pt",  # TODO: Fix hard-coding
-                        input_type="images",
-                    )
+                if ndim == 2:  # Get the SAM2 model and prepare the image predictor.
+                    model = get_sam2_model(model_type=self.model_type, input_type="images")
                     # Prepare the SAM2 predictor.
                     from sam2.sam2_image_predictor import SAM2ImagePredictor
                     predictor = SAM2ImagePredictor(model)
-                elif ndim == 3:
-                    # Get SAM2 predictor
-                    predictor = get_sam2_model(
-                        model_type="hvit_t",  # TODO: Again, hard-coded atm.
-                        checkpoint_path="/home/anwai/data/models/sam2.1_hiera_tiny.pt",  # TODO: Fix hard-coding
-                        input_type="videos",
-                    )
+                elif ndim == 3:  # Get SAM2 video predictor
+                    predictor = get_sam2_model(model_type=self.model_type, input_type="videos")
                 else:
                     raise ValueError
 
