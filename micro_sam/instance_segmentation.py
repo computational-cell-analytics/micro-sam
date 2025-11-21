@@ -1301,12 +1301,39 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         Returns:
             The instance segmentation masks.
         """
+        from skimage.feature import peak_local_max
+        from micro_sam.inference import batched_inference
+
         if not self.is_initialized:
             raise RuntimeError("AutomaticPromptGenerator has not been initialized. Call initialize first.")
-        # 1.) Derive promtps from the decoder predictions.
+        foreground, center_distances, boundary_distances =\
+            self._foreground, self._center_distances, self._boundary_distances  # noqa
 
-        # TODO we can try either multi-mask or single mask decoder output here.
+        # 1.) Derive promtps from the decoder predictions.
+        # TODO first very naive approach
+        bg_mask = foreground < 0.5
+        hmap = 1.0 - boundary_distances.copy()
+        hmap[bg_mask] = 0
+        prompts = peak_local_max(hmap, min_distance=5, threshold_abs=0.25)
+
+        # For debugging / development.
+        # import napari
+        # v = napari.Viewer()
+        # v.add_image(hmap)
+        # v.add_points(prompts)
+        # napari.run()
+
         # 2.) Apply the predictor to the prompts.
+        # We can try either multi-mask or single mask decoder output here -> should make this a param.
+        multimasking = False
+        batch_size = 16  # can also make a param
+        points = prompts[:, None, ::-1]
+        labels = np.ones((len(prompts), 1))
+        predictions = batched_inference(
+            self._predictor, image=None, batch_size=batch_size, points=points, point_labels=labels,
+            return_instance_segmentation=False, multimasking=multimasking,
+        )
+        breakpoint()
 
         # 3.) Apply non-max suppression to the masks.
 

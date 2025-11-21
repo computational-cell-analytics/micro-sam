@@ -17,7 +17,7 @@ from ._vendored import batched_mask_to_box
 @torch.no_grad()
 def batched_inference(
     predictor: SamPredictor,
-    image: np.ndarray,
+    image: Optional[np.ndarray],
     batch_size: int,
     boxes: Optional[np.ndarray] = None,
     points: Optional[np.ndarray] = None,
@@ -34,7 +34,7 @@ def batched_inference(
 
     Args:
         predictor: The Segment Anything predictor.
-        image: The input image.
+        image: The input image. If None, we assume that the image embeddings have already been computed.
         batch_size: The batch size to use for inference.
         boxes: The box prompts. Array of shape N_PROMPTS x 4.
             The bounding boxes are represented by [MIN_X, MIN_Y, MAX_X, MAX_Y].
@@ -106,10 +106,14 @@ def batched_inference(
         )
 
     # Compute the image embeddings.
-    image_embeddings = util.precompute_image_embeddings(
-        predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings
-    )
-    util.set_precomputed(predictor, image_embeddings)
+    if image is None:
+        breakpoint()
+        pass
+    else:
+        image_embeddings = util.precompute_image_embeddings(
+            predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings
+        )
+        util.set_precomputed(predictor, image_embeddings)
 
     # Determine the number of batches.
     n_batches = int(np.ceil(float(n_prompts) / batch_size))
