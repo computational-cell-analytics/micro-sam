@@ -106,9 +106,9 @@ def batched_inference(
         )
 
     # Compute the image embeddings.
-    if image is None:
-        breakpoint()
-        pass
+    if image is None:  # This means the image embeddings are computed already.
+        # Call get image embeddings, this will throw an error if they have not yet been computed.
+        predictor.get_image_embedding()
     else:
         image_embeddings = util.precompute_image_embeddings(
             predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings

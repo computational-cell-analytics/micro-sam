@@ -1432,7 +1432,7 @@ def micro_sam_info():
 #
 
 
-def rle_to_mask(rle):
+def _rle_to_mask(rle):
     h, w = rle["size"]
     mask = np.empty(h * w, dtype=bool)
     idx = 0
@@ -1445,7 +1445,7 @@ def rle_to_mask(rle):
     return mask.transpose()
 
 
-def overlap_matrix(boxes):
+def _overlap_matrix(boxes):
     x1 = torch.max(boxes[:, None, 0], boxes[:, 0])
     y1 = torch.max(boxes[:, None, 1], boxes[:, 1])
     x2 = torch.min(boxes[:, None, 2], boxes[:, 2])
@@ -1457,14 +1457,14 @@ def overlap_matrix(boxes):
     return (w * h) > 0
 
 
-def calculate_ious_between_pred_masks(masks, boxes, diagonal_value=1):
+def _calculate_ious_between_pred_masks(masks, boxes, diagonal_value=1):
     masks = (
         masks.detach() if isinstance(masks, torch.Tensor) else torch.tensor(masks)
     )
     n_points = masks.shape[0]
     m = torch.zeros((n_points, n_points))
 
-    overlap_m = overlap_matrix(boxes)
+    overlap_m = _overlap_matrix(boxes)
 
     for i in range(n_points):
         js = torch.where(overlap_m[i])[0]
@@ -1481,11 +1481,11 @@ def calculate_ious_between_pred_masks(masks, boxes, diagonal_value=1):
     return m
 
 
-def batched_mask_nms(rles, boxes, scores, nms_thresh):
+def _batched_mask_nms(rles, boxes, scores, nms_thresh):
     if len(rles) == 0:
         return torch.tensor([], dtype=torch.int64)
 
-    masks = torch.stack([torch.tensor(rle_to_mask(rle)) for rle in rles])
+    masks = torch.stack([torch.tensor(_rle_to_mask(rle)) for rle in rles])
     boxes = (
         boxes.detach()
         if isinstance(boxes, torch.Tensor)
@@ -1497,7 +1497,7 @@ def batched_mask_nms(rles, boxes, scores, nms_thresh):
         else torch.tensor(scores)
     )
 
-    iou_matrix = calculate_ious_between_pred_masks(masks, boxes)
+    iou_matrix = _calculate_ious_between_pred_masks(masks, boxes)
     sorted_indices = torch.argsort(scores, descending=True)
 
     keep = []
@@ -1515,7 +1515,40 @@ def batched_mask_nms(rles, boxes, scores, nms_thresh):
     return torch.tensor(keep)
 
 
-def apply_nms(predictions, shape, min_size, perform_box_nms=False, nms_thresh=0.9):
+# TODO consolidate this with 'mask_data_to_segmentation' in 'instance_segmentation.py'
+def _mask_data_to_segmentation(masks, min_object_size):
+    from skimage.measure import label
+
+    masks = sorted(masks, key=(lambda x: x["area"]), reverse=True)
+    shape = next(iter(masks))["segmentation"].shape
+    segmentation = np.zeros(shape, dtype="uint32")
+
+    def require_numpy(mask):
+        return mask.cpu().numpy() if torch.is_tensor(mask) else mask
+
+    seg_id = 1
+    for seg_id, mask in enumerate(masks, 1):
+        this_mask = require_numpy(mask["segmentation"])
+        this_mask = np.logical_and(this_mask, segmentation == 0)
+        segmentation[this_mask] = seg_id
+
+    segmentation = label(segmentation)
+    seg_ids, sizes = np.unique(segmentation, return_counts=True)
+    filter_ids = seg_ids[sizes < min_object_size]
+
+    segmentation[np.isin(segmentation, filter_ids)] = 0
+    segmentation = relabel_sequential(segmentation)[0]
+    return segmentation
+
+
+# TODO add documentation and refactor imports
+def apply_nms(predictions, min_size, perform_box_nms=False, nms_thresh=0.9):
+    """
+    """
+    import segment_anything.utils.amg as amg_utils
+    from micro_sam._vendored import batched_mask_to_box, mask_to_rle_pytorch
+    from torchvision.ops.boxes import batched_nms
+
     data = amg_utils.MaskData(
         masks=torch.cat([pred["segmentation"][None] for pred in predictions], dim=0),
         iou_preds=torch.tensor([pred["predicted_iou"] for pred in predictions]),
@@ -1536,7 +1569,7 @@ def apply_nms(predictions, shape, min_size, perform_box_nms=False, nms_thresh=0.
             iou_threshold=nms_thresh,
         )
     else:
-        keep_by_nms = batched_mask_nms(
+        keep_by_nms = _batched_mask_nms(
             rles=data["rles"],
             boxes=data["boxes"].float(),
             scores=data["iou_preds"],
@@ -1547,5 +1580,5 @@ def apply_nms(predictions, shape, min_size, perform_box_nms=False, nms_thresh=0.
     mask_data = [
         {"segmentation": mask, "area": area} for mask, area in zip(data["masks"], data["area"])
     ]
-    segmentation = mask_data_to_segmentation(mask_data, min_object_size=min_size)
+    segmentation = _mask_data_to_segmentation(mask_data, min_object_size=min_size)
     return segmentation

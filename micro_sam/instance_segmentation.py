@@ -850,7 +850,7 @@ def get_decoder(
 
 def get_predictor_and_decoder(
     model_type: str,
-    checkpoint_path: Union[str, os.PathLike],
+    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     device: Optional[Union[str, torch.device]] = None,
     peft_kwargs: Optional[Dict] = None,
 ) -> Tuple[SamPredictor, DecoderAdapter]:
@@ -1284,10 +1284,26 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         predictor: The segment anything predictor.
         decoder: The derive prompts for automatic instance segmentation.
     """
-    # TODO correct output return type (for binary mask, also in the other functions)
+    # TODO first very naive approach
+    def _derive_prompts(self, foreground, center_distances, boundary_distances):
+        from skimage.feature import peak_local_max
+        bg_mask = foreground < 0.5
+        hmap = 1.0 - boundary_distances.copy()
+        hmap[bg_mask] = 0
+        prompts = peak_local_max(hmap, min_distance=5, threshold_abs=0.25, exclude_border=False)
+
+        # For debugging / development.
+        # import napari
+        # v = napari.Viewer()
+        # v.add_image(hmap)
+        # v.add_points(prompts)
+        # napari.run()
+        return prompts
+
+    # TODO should we update generate to return a segmentation by default?
     def generate(
         self,
-        # TODO params
+        # TODO params for 'derive_prompts'
         min_size: int = 25,
         output_mode: Optional[str] = "binary_mask",
     ) -> List[Dict[str, Any]]:
@@ -1301,27 +1317,15 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         Returns:
             The instance segmentation masks.
         """
-        from skimage.feature import peak_local_max
         from micro_sam.inference import batched_inference
 
         if not self.is_initialized:
             raise RuntimeError("AutomaticPromptGenerator has not been initialized. Call initialize first.")
         foreground, center_distances, boundary_distances =\
-            self._foreground, self._center_distances, self._boundary_distances  # noqa
+            self._foreground, self._center_distances, self._boundary_distances
 
         # 1.) Derive promtps from the decoder predictions.
-        # TODO first very naive approach
-        bg_mask = foreground < 0.5
-        hmap = 1.0 - boundary_distances.copy()
-        hmap[bg_mask] = 0
-        prompts = peak_local_max(hmap, min_distance=5, threshold_abs=0.25)
-
-        # For debugging / development.
-        # import napari
-        # v = napari.Viewer()
-        # v.add_image(hmap)
-        # v.add_points(prompts)
-        # napari.run()
+        prompts = self._derive_prompts(foreground, center_distances, boundary_distances)
 
         # 2.) Apply the predictor to the prompts.
         # We can try either multi-mask or single mask decoder output here -> should make this a param.
@@ -1333,13 +1337,11 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
             self._predictor, image=None, batch_size=batch_size, points=points, point_labels=labels,
             return_instance_segmentation=False, multimasking=multimasking,
         )
-        breakpoint()
 
         # 3.) Apply non-max suppression to the masks.
-
-        # 4.) Write the masks to a segmentation.
-
-        # 5.) Generate and return the output format.
+        segmentation = util.apply_nms(predictions, min_size=min_size)
+        # TODO apply the transformations to bring this to the correct output formats.
+        return segmentation
 
 
 # TODO add explicit choice of segmentation methods,
