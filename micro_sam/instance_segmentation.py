@@ -998,7 +998,7 @@ class InstanceSegmentationWithDecoder:
         pbar_init(1, "Initialize instance segmentation with decoder")
 
         if image_embeddings is None:
-            image_embeddings = util.precompute_image_embeddings(self._predictor, image)
+            image_embeddings = util.precompute_image_embeddings(self._predictor, image, verbose=verbose)
 
         # Get the image embeddings from the predictor.
         self._predictor = util.set_precomputed(self._predictor, image_embeddings, i=i)
