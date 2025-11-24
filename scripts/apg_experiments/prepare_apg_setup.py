@@ -9,6 +9,9 @@ def run_apg_grid_search(model_type="vit_b_lm"):
     val_image_paths, val_label_paths = get_livecell_paths(path=data_dir, split="val")
     test_image_paths, test_label_paths = get_livecell_paths(path=data_dir, split="test")
 
+    # HACK: Let's test the pipeline super quickly on a very few validation images.
+    val_image_paths, val_label_paths = val_image_paths[:10], val_label_paths[:10]
+
     experiment_folder = "./experiments/livecell"  # HACK: Hard-coded to something random atm.
     run_apg(
         checkpoint=None,
