@@ -1284,27 +1284,81 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         predictor: The segment anything predictor.
         decoder: The derive prompts for automatic instance segmentation.
     """
-    # TODO first very naive approach
-    def _derive_prompts(self, foreground, center_distances, boundary_distances):
+    def _derive_prompts(
+        self,
+        foreground,
+        center_distances,
+        boundary_distances,
+        prompt_selection: Union[str, List[str]],
+        foreground_threshold=0.5,
+        min_distance=5,
+        threshold_abs=0.25,
+    ):
         from skimage.feature import peak_local_max
-        bg_mask = foreground < 0.5
-        hmap = 1.0 - boundary_distances.copy()
-        hmap[bg_mask] = 0
-        prompts = peak_local_max(hmap, min_distance=5, threshold_abs=0.25, exclude_border=False)
+        bg_mask = foreground < foreground_threshold
 
-        # For debugging / development.
+        if isinstance(prompt_selection, str):
+            prompt_selection = [prompt_selection]
+
+        if not any(
+            [v in prompt_selection for v in ("center_distances", "boundary_distances", "connected_components")]
+        ):
+            raise ValueError("Please choose a valid 'prompt_selection' option.")
+
+        if "center_distances" in prompt_selection:  # Use 'center_distances' to extract prompts.
+            hmap_bd = 1.0 - boundary_distances.copy()
+            hmap_bd[bg_mask] = 0
+            prompts_bd = peak_local_max(
+                hmap_bd, min_distance=min_distance, threshold_abs=threshold_abs, exclude_border=False
+            )
+        else:
+            prompts_bd = None
+
+        if "boundary_distances" in prompt_selection:  # Use 'boundary_distances' to extract prompts.
+            hmap_center = 1.0 - center_distances.copy()
+            hmap_center[bg_mask] = 0
+            prompts_center = peak_local_max(
+                hmap_center, min_distance=min_distance, threshold_abs=threshold_abs, exclude_border=False
+            )
+        else:
+            prompts_center = None
+
+        if "connected_components" in prompt_selection:  # Inspired by micro-sam watershed to extract seeds.
+            hmap_cc = np.logical_and(
+                center_distances < 0.5, boundary_distances < 0.5,
+            )  # TODO: Expose these parameters too?
+            hmap_cc[bg_mask] = 0
+            hmap_cc = label(hmap_cc)
+            # Extract centroids per object.
+            rprompts = regionprops(hmap_cc)
+            prompts_cc = np.array([np.round(r.centroid).astype(int) for r in rprompts])
+        else:
+            prompts_cc = None
+
+        # Merge all prompts into one.
+        prompts = np.concatenate(
+            [p for p in (prompts_bd, prompts_center, prompts_cc) if p is not None], axis=0,
+        )
+
+        # For debugging/visualization purposes
         # import napari
         # v = napari.Viewer()
-        # v.add_image(hmap)
+        # v.add_image(foreground)
         # v.add_points(prompts)
         # napari.run()
+
         return prompts
 
     # TODO should we update generate to return a segmentation by default?
     def generate(
         self,
-        # TODO params for 'derive_prompts'
-        min_size: int = 25,
+        min_size: int = 25,  # [1, 100, 10]
+        foreground_threshold: float = 0.5,  # [0.3, 0.7, 0.1]
+        min_distance: int = 5,  # [1, 5, 1]
+        threshold_abs: float = 0.25,  # [0.1, 0.5, 0.1]
+        multimasking: bool = False,  # True / False
+        prompt_selection: Union[str, List[str]] = "center_distances",  # add to GS
+        batch_size: int = 16,
         output_mode: Optional[str] = "binary_mask",
     ) -> List[Dict[str, Any]]:
         """Generate instance segmentation for the currently initialized image.
@@ -1325,17 +1379,29 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
             self._foreground, self._center_distances, self._boundary_distances
 
         # 1.) Derive promtps from the decoder predictions.
-        prompts = self._derive_prompts(foreground, center_distances, boundary_distances)
+        prompts = self._derive_prompts(
+            foreground,
+            center_distances,
+            boundary_distances,
+            foreground_threshold=foreground_threshold,
+            min_distance=min_distance,
+            threshold_abs=threshold_abs,
+            prompt_selection=prompt_selection,
+        )
 
         # 2.) Apply the predictor to the prompts.
         # We can try either multi-mask or single mask decoder output here -> should make this a param.
-        multimasking = False
-        batch_size = 16  # can also make a param
+        batch_size = batch_size
         points = prompts[:, None, ::-1]
         labels = np.ones((len(prompts), 1))
         predictions = batched_inference(
-            self._predictor, image=None, batch_size=batch_size, points=points, point_labels=labels,
-            return_instance_segmentation=False, multimasking=multimasking,
+            self._predictor,
+            image=None,
+            batch_size=batch_size,
+            points=points,
+            point_labels=labels,
+            return_instance_segmentation=False,
+            multimasking=multimasking,
         )
 
         # 3.) Apply non-max suppression to the masks.
