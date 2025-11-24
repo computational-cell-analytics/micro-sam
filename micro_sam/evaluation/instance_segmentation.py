@@ -100,6 +100,54 @@ def default_grid_search_values_instance_segmentation_with_decoder(
     }
 
 
+def default_grid_search_values_apg(
+    foreground_threshold_values: Optional[List[float]] = None,
+    min_distance_values: Optional[List[float]] = None,
+    threshold_abs_values: Optional[List[float]] = None,
+    multimasking_values: Optional[List[float]] = None,
+    prompt_selection_values: Optional[List[float]] = None,
+    min_size_values: Optional[List[float]] = None,
+) -> Dict[str, List[float]]:
+    """Default grid-search parameter for APG-based instance segmentation.
+
+    Args:
+        ...
+
+    Returns:
+        The values for grid search.
+    """
+    if foreground_threshold_values is None:
+        foreground_threshold_values = _get_range_of_search_values([0.3, 0.7], step=0.1)
+    if min_distance_values is None:
+        min_distance_values = _get_range_of_search_values([1, 5], step=1)
+    if threshold_abs_values is None:
+        threshold_abs_values = _get_range_of_search_values([0.1, 0.5], step=0.1)
+    if multimasking_values is None:
+        multimasking_values = [True, False]
+    if prompt_selection_values is None:
+        prompt_selection_values = [
+            "center_distances",
+            # TODO: Need to disconnect the two grid-searches.
+            # "boundary_distances",
+            # "connected_components",
+            # ["center_distances", "connected_components"],
+            # ["center_distances", "boundary_distances"],
+            # ["boundary_distances", "connected_components"],
+            # ["center_distances", "boundary_distances", "connected_components"]
+        ]
+    if min_size_values is None:
+        min_size_values = [50, 100, 200]
+
+    return {
+        "foreground_threshold": foreground_threshold_values,
+        "min_distance": min_distance_values,
+        "threshold_abs": threshold_abs_values,
+        "multimasking": multimasking_values,
+        "prompt_selection": prompt_selection_values,
+        "min_size": min_size_values
+    }
+
+
 def _grid_search_iteration(
     segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
     gs_combinations: List[Dict],

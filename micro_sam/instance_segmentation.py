@@ -1352,12 +1352,12 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
     # TODO should we update generate to return a segmentation by default?
     def generate(
         self,
-        min_size: int = 25,  # [1, 100, 10]
-        foreground_threshold: float = 0.5,  # [0.3, 0.7, 0.1]
-        min_distance: int = 5,  # [1, 5, 1]
-        threshold_abs: float = 0.25,  # [0.1, 0.5, 0.1]
-        multimasking: bool = False,  # True / False
-        prompt_selection: Union[str, List[str]] = "center_distances",  # add to GS
+        min_size: int = 25,
+        foreground_threshold: float = 0.5,
+        min_distance: int = 5,
+        threshold_abs: float = 0.25,
+        multimasking: bool = False,
+        prompt_selection: Union[str, List[str]] = "center_distances",
         batch_size: int = 16,
         output_mode: Optional[str] = "binary_mask",
     ) -> List[Dict[str, Any]]:
@@ -1365,6 +1365,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
 
         Args:
             min_size: Minimal object size in the segmentation result. By default, set to '25'.
+            ...
             output_mode: The form masks are returned in. Pass None to directly return the instance segmentation.
                 By default, set to 'binary_mask'.
 
@@ -1406,7 +1407,10 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
 
         # 3.) Apply non-max suppression to the masks.
         segmentation = util.apply_nms(predictions, min_size=min_size)
-        # TODO apply the transformations to bring this to the correct output formats.
+
+        if output_mode is not None:
+            segmentation = self._to_masks(segmentation, output_mode)
+
         return segmentation
 
 
