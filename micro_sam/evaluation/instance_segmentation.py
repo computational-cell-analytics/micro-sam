@@ -101,7 +101,6 @@ def default_grid_search_values_instance_segmentation_with_decoder(
 
 
 def default_grid_search_values_apg(
-    foreground_threshold_values: Optional[List[float]] = None,
     min_distance_values: Optional[List[float]] = None,
     threshold_abs_values: Optional[List[float]] = None,
     multimasking_values: Optional[List[float]] = None,
@@ -116,8 +115,6 @@ def default_grid_search_values_apg(
     Returns:
         The values for grid search.
     """
-    if foreground_threshold_values is None:
-        foreground_threshold_values = _get_range_of_search_values([0.3, 0.7], step=0.1)
     if min_distance_values is None:
         min_distance_values = _get_range_of_search_values([1, 5], step=1)
     if threshold_abs_values is None:
@@ -139,7 +136,6 @@ def default_grid_search_values_apg(
         min_size_values = [50, 100, 200]
 
     return {
-        "foreground_threshold": foreground_threshold_values,
         "min_distance": min_distance_values,
         "threshold_abs": threshold_abs_values,
         "multimasking": multimasking_values,

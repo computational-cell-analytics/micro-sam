@@ -1278,13 +1278,15 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
 
 # TODO enable parallel peak_local_max and label to scale to large images, e.g. WSI
 def _derive_prompts(
-    foreground,
-    center_distances,
-    boundary_distances,
+    foreground: np.ndarray,
+    center_distances: np.ndarray,
+    boundary_distances: np.ndarray,
     prompt_selection: Union[str, List[str]],
-    foreground_threshold=0.5,
-    min_distance=5,
-    threshold_abs=0.25,
+    foreground_threshold: float = 0.5,
+    min_distance: int = 5,
+    threshold_abs: float = 0.25,
+    center_distance_threshold: float = 0.5,
+    boundary_distance_threshold: float = 0.5,
 ):
     bg_mask = foreground < foreground_threshold
 
@@ -1316,8 +1318,8 @@ def _derive_prompts(
 
     if "connected_components" in prompt_selection:  # Inspired by micro-sam watershed to extract seeds.
         hmap_cc = np.logical_and(
-            center_distances < 0.5, boundary_distances < 0.5,
-        )  # TODO: Expose these parameters too?
+            center_distances < center_distance_threshold, boundary_distances < boundary_distance_threshold,
+        )
         hmap_cc[bg_mask] = 0
         hmap_cc = label(hmap_cc)
         # Extract centroids per object.
