@@ -1221,7 +1221,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
             batch_size: The batch size for image embedding computation and segmentation decoder prediction.
         """
         original_size = image.shape[:2]
-        image_embeddings, tile_shape, halo = _process_tiled_embeddings(
+        self._image_embeddings, tile_shape, halo = _process_tiled_embeddings(
             self._predictor, image, image_embeddings, tile_shape, halo, verbose=verbose, batch_size=batch_size
         )
         tiling = blocking([0, 0], original_size, tile_shape)
@@ -1243,7 +1243,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
             batched_embeddings, input_shapes, original_shapes = [], [], []
             for tile_id in range(tile_start, tile_stop):
                 # Get the image embeddings from the predictor for this tile.
-                self._predictor = util.set_precomputed(self._predictor, image_embeddings, i=i, tile_id=tile_id)
+                self._predictor = util.set_precomputed(self._predictor, self._image_embeddings, i=i, tile_id=tile_id)
 
                 batched_embeddings.append(self._predictor.features)
                 input_shapes.append(tuple(self._predictor.input_size))
@@ -1409,13 +1409,73 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         segmentation = util.apply_nms(predictions, min_size=min_size)
         if output_mode is not None:
             segmentation = self._to_masks(segmentation, output_mode)
-
         return segmentation
 
 
 class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
     """Same as `AutomaticPromptGenerator` but for tiled image embeddings.
     """
+    # TODO align with the function signature of AutomaticPromptGenerator.generate
+    def generate(
+        self,
+        min_size: int = 25,
+        foreground_threshold: float = 0.5,
+        min_distance: int = 5,
+        threshold_abs: float = 0.25,
+        multimasking: bool = False,
+        prompt_selection: Union[str, List[str]] = "center_distances",
+        batch_size: int = 32,
+        output_mode: Optional[str] = "binary_mask",
+    ) -> List[Dict[str, Any]]:
+        """Generate instance segmentation for the currently initialized image.
+
+        Args:
+            min_size: Minimal object size in the segmentation result. By default, set to '25'.
+            ...
+            output_mode: The form masks are returned in. Pass None to directly return the instance segmentation.
+                By default, set to 'binary_mask'.
+
+        Returns:
+            The instance segmentation masks.
+        """
+        from .inference import batched_tiled_inference
+
+        if not self.is_initialized:
+            raise RuntimeError("TiledAutomaticPromptGenerator has not been initialized. Call initialize first.")
+        foreground, center_distances, boundary_distances =\
+            self._foreground, self._center_distances, self._boundary_distances
+
+        # 1.) Derive promtps from the decoder predictions.
+        prompts = _derive_prompts(
+            foreground,
+            center_distances,
+            boundary_distances,
+            foreground_threshold=foreground_threshold,
+            min_distance=min_distance,
+            threshold_abs=threshold_abs,
+            prompt_selection=prompt_selection,
+        )
+
+        # 2.) Apply the predictor to the prompts.
+        batch_size = batch_size
+        points = prompts[:, None, ::-1]
+        labels = np.ones((len(prompts), 1))
+        predictions = batched_tiled_inference(
+            self._predictor,
+            image=None,
+            batch_size=batch_size,
+            image_embeddings=self._image_embeddings,
+            points=points,
+            point_labels=labels,
+            return_instance_segmentation=False,
+            multimasking=multimasking,
+        )
+
+        # 3.) Apply non-max suppression to the masks.
+        segmentation = util.apply_nms(predictions, min_size=min_size)
+        if output_mode is not None:
+            segmentation = self._to_masks(segmentation, output_mode)
+        return segmentation
 
 
 # TODO rename
