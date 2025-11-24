@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import vigra
 import numpy as np
+from skimage.feature import peak_local_max
 from skimage.measure import label, regionprops
 from skimage.segmentation import relabel_sequential
 
@@ -1275,6 +1276,71 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         self._is_initialized = True
 
 
+# TODO enable parallel peak_local_max and label to scale to large images, e.g. WSI
+def _derive_prompts(
+    foreground,
+    center_distances,
+    boundary_distances,
+    prompt_selection: Union[str, List[str]],
+    foreground_threshold=0.5,
+    min_distance=5,
+    threshold_abs=0.25,
+):
+    bg_mask = foreground < foreground_threshold
+
+    if isinstance(prompt_selection, str):
+        prompt_selection = [prompt_selection]
+
+    if not any(
+        [v in prompt_selection for v in ("center_distances", "boundary_distances", "connected_components")]
+    ):
+        raise ValueError("Please choose a valid 'prompt_selection' option.")
+
+    if "center_distances" in prompt_selection:  # Use 'center_distances' to extract prompts.
+        hmap_bd = 1.0 - boundary_distances.copy()
+        hmap_bd[bg_mask] = 0
+        prompts_bd = peak_local_max(
+            hmap_bd, min_distance=min_distance, threshold_abs=threshold_abs, exclude_border=False
+        )
+    else:
+        prompts_bd = None
+
+    if "boundary_distances" in prompt_selection:  # Use 'boundary_distances' to extract prompts.
+        hmap_center = 1.0 - center_distances.copy()
+        hmap_center[bg_mask] = 0
+        prompts_center = peak_local_max(
+            hmap_center, min_distance=min_distance, threshold_abs=threshold_abs, exclude_border=False
+        )
+    else:
+        prompts_center = None
+
+    if "connected_components" in prompt_selection:  # Inspired by micro-sam watershed to extract seeds.
+        hmap_cc = np.logical_and(
+            center_distances < 0.5, boundary_distances < 0.5,
+        )  # TODO: Expose these parameters too?
+        hmap_cc[bg_mask] = 0
+        hmap_cc = label(hmap_cc)
+        # Extract centroids per object.
+        rprompts = regionprops(hmap_cc)
+        prompts_cc = np.array([np.round(r.centroid).astype(int) for r in rprompts])
+    else:
+        prompts_cc = None
+
+    # Merge all prompts into one.
+    prompts = np.concatenate(
+        [p for p in (prompts_bd, prompts_center, prompts_cc) if p is not None], axis=0,
+    )
+
+    # For debugging/visualization purposes
+    # import napari
+    # v = napari.Viewer()
+    # v.add_image(foreground)
+    # v.add_points(prompts)
+    # napari.run()
+
+    return prompts
+
+
 class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
     """Generates an instance segmentation automatically, using automatically generated prompts from a decoder.
 
@@ -1284,71 +1350,6 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         predictor: The segment anything predictor.
         decoder: The derive prompts for automatic instance segmentation.
     """
-    def _derive_prompts(
-        self,
-        foreground,
-        center_distances,
-        boundary_distances,
-        prompt_selection: Union[str, List[str]],
-        foreground_threshold=0.5,
-        min_distance=5,
-        threshold_abs=0.25,
-    ):
-        from skimage.feature import peak_local_max
-        bg_mask = foreground < foreground_threshold
-
-        if isinstance(prompt_selection, str):
-            prompt_selection = [prompt_selection]
-
-        if not any(
-            [v in prompt_selection for v in ("center_distances", "boundary_distances", "connected_components")]
-        ):
-            raise ValueError("Please choose a valid 'prompt_selection' option.")
-
-        if "center_distances" in prompt_selection:  # Use 'center_distances' to extract prompts.
-            hmap_bd = 1.0 - boundary_distances.copy()
-            hmap_bd[bg_mask] = 0
-            prompts_bd = peak_local_max(
-                hmap_bd, min_distance=min_distance, threshold_abs=threshold_abs, exclude_border=False
-            )
-        else:
-            prompts_bd = None
-
-        if "boundary_distances" in prompt_selection:  # Use 'boundary_distances' to extract prompts.
-            hmap_center = 1.0 - center_distances.copy()
-            hmap_center[bg_mask] = 0
-            prompts_center = peak_local_max(
-                hmap_center, min_distance=min_distance, threshold_abs=threshold_abs, exclude_border=False
-            )
-        else:
-            prompts_center = None
-
-        if "connected_components" in prompt_selection:  # Inspired by micro-sam watershed to extract seeds.
-            hmap_cc = np.logical_and(
-                center_distances < 0.5, boundary_distances < 0.5,
-            )  # TODO: Expose these parameters too?
-            hmap_cc[bg_mask] = 0
-            hmap_cc = label(hmap_cc)
-            # Extract centroids per object.
-            rprompts = regionprops(hmap_cc)
-            prompts_cc = np.array([np.round(r.centroid).astype(int) for r in rprompts])
-        else:
-            prompts_cc = None
-
-        # Merge all prompts into one.
-        prompts = np.concatenate(
-            [p for p in (prompts_bd, prompts_center, prompts_cc) if p is not None], axis=0,
-        )
-
-        # For debugging/visualization purposes
-        # import napari
-        # v = napari.Viewer()
-        # v.add_image(foreground)
-        # v.add_points(prompts)
-        # napari.run()
-
-        return prompts
-
     # TODO should we update generate to return a segmentation by default?
     def generate(
         self,
@@ -1372,7 +1373,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         Returns:
             The instance segmentation masks.
         """
-        from micro_sam.inference import batched_inference
+        from .inference import batched_inference
 
         if not self.is_initialized:
             raise RuntimeError("AutomaticPromptGenerator has not been initialized. Call initialize first.")
@@ -1380,7 +1381,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
             self._foreground, self._center_distances, self._boundary_distances
 
         # 1.) Derive promtps from the decoder predictions.
-        prompts = self._derive_prompts(
+        prompts = _derive_prompts(
             foreground,
             center_distances,
             boundary_distances,
@@ -1391,7 +1392,6 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         )
 
         # 2.) Apply the predictor to the prompts.
-        # We can try either multi-mask or single mask decoder output here -> should make this a param.
         batch_size = batch_size
         points = prompts[:, None, ::-1]
         labels = np.ones((len(prompts), 1))
@@ -1407,35 +1407,53 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
 
         # 3.) Apply non-max suppression to the masks.
         segmentation = util.apply_nms(predictions, min_size=min_size)
-
         if output_mode is not None:
             segmentation = self._to_masks(segmentation, output_mode)
 
         return segmentation
 
 
-# TODO add explicit choice of segmentation methods,
-#      so that we can switch between AIS and APG for segmentation with decoder
+class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
+    """Same as `AutomaticPromptGenerator` but for tiled image embeddings.
+    """
+
+
 # TODO rename
 def get_amg(
-    predictor: SamPredictor, is_tiled: bool, decoder: Optional[torch.nn.Module] = None, **kwargs,
+    predictor: SamPredictor,
+    is_tiled: bool,
+    decoder: Optional[torch.nn.Module] = None,
+    segmentation_mode: Optional[str] = None,
+    **kwargs,
 ) -> Union[AMGBase, InstanceSegmentationWithDecoder]:
-    """Get the automatic mask generator class.
+    """Get the automatic mask generator.
 
     Args:
         predictor: The segment anything predictor.
         is_tiled: Whether tiled embeddings are used.
         decoder: Decoder to predict instacne segmmentation.
+        segmentation_mode: The segmentation mode.
         kwargs: The keyword arguments for the amg class.
 
     Returns:
         The automatic mask generator.
     """
-    if decoder is None:
+    if segmentation_mode is None:
+        # TODO: change default to APG if it works better than AIS?
+        segmentation_mode = "AMG" if decoder is None else "AIS"
+
+    if segmentation_mode == "AMG":
         segmenter_class = TiledAutomaticMaskGenerator if is_tiled else AutomaticMaskGenerator
         segmenter = segmenter_class(predictor, **kwargs)
-    else:
+    elif segmentation_mode == "AIS":
+        assert decoder is not None
         segmenter_class = TiledInstanceSegmentationWithDecoder if is_tiled else InstanceSegmentationWithDecoder
         segmenter = segmenter_class(predictor, decoder, **kwargs)
+    elif segmentation_mode == "APG":
+        assert decoder is not None
+        segmenter_class = TiledAutomaticPromptGenerator if is_tiled else AutomaticPromptGenerator
+        segmenter = segmenter_class(predictor, decoder, **kwargs)
+    else:
+        raise ValueError(f"Invalid segmentation_mode: {segmentation_mode}. Choose one of 'AMG', 'AIS', or 'APG'.")
 
     return segmenter

@@ -1,7 +1,9 @@
 import napari
 
 from micro_sam.sample_data import sample_data_hela_2d
-from micro_sam.instance_segmentation import AutomaticPromptGenerator, get_predictor_and_decoder
+from micro_sam.instance_segmentation import (
+    AutomaticPromptGenerator, get_predictor_and_decoder, mask_data_to_segmentation
+)
 
 
 def example_script():
@@ -11,6 +13,7 @@ def example_script():
     generator = AutomaticPromptGenerator(predictor, decoder)
     generator.initialize(im)
     segmentation = generator.generate()
+    segmentation = mask_data_to_segmentation(segmentation, with_background=False)
 
     v = napari.Viewer()
     v.add_image(im)
