@@ -1,8 +1,7 @@
 import os
-from typing import Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
-
 import torch
 
 from segment_anything import SamPredictor
@@ -29,7 +28,7 @@ def batched_inference(
     reduce_multimasking: bool = True,
     logits_masks: Optional[torch.Tensor] = None,
     verbose_embeddings: bool = True,
-):
+) -> Union[List[List[Dict[str, Any]]], np.ndarray]:
     """Run batched inference for input prompts.
 
     Args:
@@ -180,3 +179,20 @@ def batched_inference(
         masks = mask_data_to_segmentation(masks, with_background=False, min_object_size=0)
 
     return masks
+
+
+@torch.no_grad()
+def batched_tiled_inference(
+    predictor: SamPredictor,
+    image: Optional[np.ndarray],
+    batch_size: int,
+    image_embeddings: Optional[util.ImageEmbeddings] = None,
+    boxes: Optional[np.ndarray] = None,
+    points: Optional[np.ndarray] = None,
+    point_labels: Optional[np.ndarray] = None,
+    # TODO: tiling params
+    # TODO: all the other inputs from batched_inference
+) -> Union[List[List[Dict[str, Any]]], np.ndarray]:
+    # TODO: order the prompts by tile and then iterate over the tiles
+    # Run batched inference for each tile.
+    pass
