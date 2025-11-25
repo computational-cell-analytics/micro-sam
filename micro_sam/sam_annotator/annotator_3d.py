@@ -46,6 +46,16 @@ class Annotator3d(_AnnotatorBase):
         else:
             state.amg_state = _load_amg_state(state.embedding_path)
 
+        # NOTE: this is an intermediate solution. We should re-design the plugin for SAM2 eventually.
+        # If we have a SAM2 model, then remove the widget for segmenting single slices.
+        model_type = self._embedding_widget.model_type
+        if model_type.startswith("hvit") and "segment" in self._widgets:
+            widget = self._widgets.pop("segment")
+            layout = self._annotator_widget.layout()
+            layout.removeWidget(widget.native)
+            widget.native.setParent(None)
+            widget.native.deleteLater()
+
 
 def annotator_3d(
     image: np.ndarray,
