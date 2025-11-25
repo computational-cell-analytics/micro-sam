@@ -13,7 +13,7 @@ import pandas as pd
 import imageio.v3 as imageio
 
 from elf.io import open_file
-from elf.evaluation import mean_segmentation_accuracy
+from elf.evaluation import mean_segmentation_accuracy, matching
 
 from .. import util
 from ..instance_segmentation import AMGBase, InstanceSegmentationWithDecoder, mask_data_to_segmentation
@@ -124,13 +124,12 @@ def default_grid_search_values_apg(
     if prompt_selection_values is None:
         prompt_selection_values = [
             "center_distances",
-            # TODO: Need to disconnect the two grid-searches.
-            # "boundary_distances",
-            # "connected_components",
-            # ["center_distances", "connected_components"],
-            # ["center_distances", "boundary_distances"],
-            # ["boundary_distances", "connected_components"],
-            # ["center_distances", "boundary_distances", "connected_components"]
+            "boundary_distances",
+            "connected_components",
+            ["center_distances", "connected_components"],
+            ["center_distances", "boundary_distances"],
+            ["boundary_distances", "connected_components"],
+            ["center_distances", "boundary_distances", "connected_components"]
         ]
     if min_size_values is None:
         min_size_values = [50, 100, 200]
@@ -163,9 +162,19 @@ def _grid_search_iteration(
             instance_labels = np.zeros(gt.shape, dtype="uint32")
         else:
             instance_labels = mask_data_to_segmentation(masks, with_background=True, min_object_size=min_object_size)
-        m_sas, sas = mean_segmentation_accuracy(instance_labels, gt, return_accuracies=True)  # type: ignore
 
-        result_dict = {"image_name": image_name, "mSA": m_sas, "SA50": sas[0], "SA75": sas[5]}
+        m_sas, sas = mean_segmentation_accuracy(instance_labels, gt, return_accuracies=True)
+        stats = matching(instance_labels, gt)
+
+        result_dict = {
+            "image_name": image_name,
+            "mSA": m_sas,
+            "SA50": sas[0],
+            "SA75": sas[5],
+            "Precision": stats["precision"],
+            "Recall": stats["recall"],
+            "F1": stats["f1"],
+        }
         result_dict.update(gs_kwargs)
         tmp_df = pd.DataFrame([result_dict])
         net_list.append(tmp_df)
