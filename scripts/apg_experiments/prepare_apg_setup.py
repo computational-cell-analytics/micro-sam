@@ -266,8 +266,6 @@ def main():
     run_default_cellsam()
     # run_default_instanseg()
 
-    # echo 'export XYZ="SR4eAxJl.RHckMDt9tC1g6xXwdJjzu3pzhe430wFL"' >> ~/.bashrc
-
 
 if __name__ == "__main__":
     main()
