@@ -134,6 +134,8 @@ def default_grid_search_values_apg(
     if min_size_values is None:
         min_size_values = [50, 100, 200]
 
+    # TODO: Expose the connected component parameters.
+
     return {
         "min_distance": min_distance_values,
         "threshold_abs": threshold_abs_values,
