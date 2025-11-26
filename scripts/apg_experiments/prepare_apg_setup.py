@@ -59,7 +59,8 @@ def run_default_ais(model_type="vit_b_lm"):
 
 def run_default_apg(model_type="vit_b_lm"):
     # Get the image paths for LIVECell.
-    data_dir = "/mnt/vast-nhr/projects/cidas/cca/data/livecell"
+    # data_dir = "/mnt/vast-nhr/projects/cidas/cca/data/livecell"
+    data_dir = "/home/anwai/data/livecell"
     image_paths, label_paths = get_livecell_paths(path=data_dir, split="test")
 
     # Prepare the predictor
@@ -75,7 +76,9 @@ def run_default_apg(model_type="vit_b_lm"):
 
         # Run APG
         segmenter.initialize(image)
-        segmentation = segmenter.generate()
+        segmentation = segmenter.generate(
+            prompt_selection=["center_distances", "boundary_distances", "connected_components"]
+        )
         segmentation = mask_data_to_segmentation(segmentation, with_background=False)
 
         # Evalate results.
@@ -263,7 +266,7 @@ def main():
     run_apg_grid_search()
 
     # run_default_ais()
-    # run_default_apg()
+    run_default_apg()
     # run_default_amg("vit_b")
     # run_default_amg("vit_b_lm")
 

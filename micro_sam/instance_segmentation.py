@@ -1299,15 +1299,6 @@ def _derive_prompts(
         raise ValueError("Please choose a valid 'prompt_selection' option.")
 
     if "center_distances" in prompt_selection:  # Use 'center_distances' to extract prompts.
-        hmap_bd = 1.0 - boundary_distances.copy()
-        hmap_bd[bg_mask] = 0
-        prompts_bd = peak_local_max(
-            hmap_bd, min_distance=min_distance, threshold_abs=threshold_abs, exclude_border=False
-        )
-    else:
-        prompts_bd = None
-
-    if "boundary_distances" in prompt_selection:  # Use 'boundary_distances' to extract prompts.
         hmap_center = 1.0 - center_distances.copy()
         hmap_center[bg_mask] = 0
         prompts_center = peak_local_max(
@@ -1315,6 +1306,15 @@ def _derive_prompts(
         )
     else:
         prompts_center = None
+
+    if "boundary_distances" in prompt_selection:  # Use 'boundary_distances' to extract prompts.
+        hmap_bd = 1.0 - boundary_distances.copy()
+        hmap_bd[bg_mask] = 0
+        prompts_bd = peak_local_max(
+            hmap_bd, min_distance=min_distance, threshold_abs=threshold_abs, exclude_border=False
+        )
+    else:
+        prompts_bd = None
 
     if "connected_components" in prompt_selection:  # Inspired by micro-sam watershed to extract seeds.
         hmap_cc = np.logical_and(
@@ -1330,15 +1330,18 @@ def _derive_prompts(
 
     # Merge all prompts into one.
     prompts = np.concatenate(
-        [p for p in (prompts_bd, prompts_center, prompts_cc) if p is not None], axis=0,
+        [p for p in (prompts_center, prompts_bd, prompts_cc) if p is not None], axis=0,
     )
 
     # For debugging/visualization purposes
-    # import napari
-    # v = napari.Viewer()
-    # v.add_image(foreground)
-    # v.add_points(prompts)
-    # napari.run()
+    import napari
+    v = napari.Viewer()
+    v.add_image(foreground)
+    v.add_image(hmap_bd)
+    v.add_image(hmap_center)
+    v.add_image(hmap_cc)
+    v.add_points(prompts)
+    napari.run()
 
     return prompts
 
