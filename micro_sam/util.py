@@ -1558,7 +1558,9 @@ def apply_nms(predictions, min_size, perform_box_nms=False, nms_thresh=0.9):
     data["area"] = [mask.sum() for mask in data["masks"]]
 
     if min_size > 0:
-        keep_by_size = torch.tensor([i for i, area in enumerate(data["area"]) if area > min_size])
+        keep_by_size = torch.tensor(
+            [i for i, area in enumerate(data["area"]) if area > min_size], dtype=torch.long,
+        )
         data.filter(keep_by_size)
 
     if perform_box_nms:
@@ -1580,5 +1582,9 @@ def apply_nms(predictions, min_size, perform_box_nms=False, nms_thresh=0.9):
     mask_data = [
         {"segmentation": mask, "area": area} for mask, area in zip(data["masks"], data["area"])
     ]
-    segmentation = _mask_data_to_segmentation(mask_data, min_object_size=min_size)
+    if mask_data:
+        segmentation = _mask_data_to_segmentation(mask_data, min_object_size=min_size)
+    else:  # In case all objects have been filtered out due to size filtering.
+        segmentation = np.zeros(predictions[0]["segmentation"].shape, dtype="uint32")
+
     return segmentation

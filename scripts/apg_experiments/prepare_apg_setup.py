@@ -178,7 +178,13 @@ def run_default_cellsam():
         # Run CellSAM
         segmentation = cellsam_pipeline(image, use_wsi=False)
 
-        # Evalate results.
+        # NOTE: For images where no objects could be found, a weird segmentation is returned.
+        if segmentation.ndim == 3 and segmentation.shape[0] == 3:
+            segmentation = segmentation[0]
+
+        assert labels.shape == segmentation.shape
+
+        # Evaluate results.
         msa, sas = mean_segmentation_accuracy(segmentation, labels, return_accuracies=True)
         stats = matching(segmentation, labels)
 
@@ -254,7 +260,7 @@ def run_apg_grid_search(model_type="vit_b_lm"):
 
 
 def main():
-    # run_apg_grid_search()
+    run_apg_grid_search()
 
     # run_default_ais()
     # run_default_apg()
@@ -263,8 +269,11 @@ def main():
 
     # run_default_cellpose("cyto3")
     # run_default_cellpose("cpsam")
-    run_default_cellsam()
+    # run_default_cellsam()
+
+    # run_default_ais("vit_b_histopathology")
     # run_default_instanseg()
+    # run_default_cellvit()
 
 
 if __name__ == "__main__":

@@ -1409,6 +1409,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
 
         # 3.) Apply non-max suppression to the masks.
         segmentation = util.apply_nms(predictions, min_size=min_size)
+
         if output_mode is not None:
             segmentation = self._to_masks(segmentation, output_mode)
         return segmentation
