@@ -1292,7 +1292,6 @@ def _derive_prompts(
 
     if isinstance(prompt_selection, str):
         prompt_selection = [prompt_selection]
-
     if not any(
         [v in prompt_selection for v in ("center_distances", "boundary_distances", "connected_components")]
     ):
@@ -1334,14 +1333,14 @@ def _derive_prompts(
     )
 
     # For debugging/visualization purposes
-    import napari
-    v = napari.Viewer()
-    v.add_image(foreground)
-    v.add_image(hmap_bd)
-    v.add_image(hmap_center)
-    v.add_image(hmap_cc)
-    v.add_points(prompts)
-    napari.run()
+    # import napari
+    # v = napari.Viewer()
+    # v.add_image(foreground)
+    # v.add_image(hmap_bd)
+    # v.add_image(hmap_center)
+    # v.add_image(hmap_cc)
+    # v.add_points(prompts)
+    # napari.run()
 
     return prompts
 

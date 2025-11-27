@@ -482,6 +482,10 @@ def run_instance_segmentation_grid_search_and_inference(
     generate_kwargs = {} if fixed_generate_kwargs is None else fixed_generate_kwargs
     generate_kwargs.update(best_kwargs)
 
+    # NOTE: Make sure the 'prompt_selection' values for APG are as expected
+    if "prompt_selection" in generate_kwargs:
+        generate_kwargs["prompt_selection"] = _maybe_list_value(generate_kwargs["prompt_selection"])
+
     run_instance_segmentation_inference(
         segmenter=segmenter,
         image_paths=test_image_paths,
@@ -490,3 +494,19 @@ def run_instance_segmentation_grid_search_and_inference(
         generate_kwargs=generate_kwargs,
         tiling_window_params=tiling_window_params,
     )
+
+
+def _maybe_list_value(val):
+    # In case it's not a string, well we ignore it.
+    if not isinstance(val, str):
+        return val
+
+    s = val.strip()
+    # Let's try to parse through values that appear to be an obvious list.
+    if s.startswith("[") and s.endswith("]"):
+        import ast
+        parsed = ast.literal_eval(s)
+        if isinstance(parsed, list):
+            return parsed
+
+    return val

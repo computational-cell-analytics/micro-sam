@@ -1,5 +1,6 @@
 import os
 from glob import glob
+from natsort import natsorted
 
 from util import get_image_label_paths
 
@@ -23,7 +24,7 @@ def run_apg_evaluation(dataset_name, model_type, experiment_folder):
     )
 
     # Get the prediction paths.
-    prediction_paths = sorted(glob(os.path.join(prediction_folder, "*.tif")))
+    prediction_paths = natsorted(glob(os.path.join(prediction_folder, "*.tif")))
     res = run_evaluation(test_label_paths, prediction_paths, os.path.join(experiment_folder, "results", "apg.csv"))
     print(dataset_name, model_type, res)
 

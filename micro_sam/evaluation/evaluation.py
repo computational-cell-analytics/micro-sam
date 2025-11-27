@@ -40,6 +40,7 @@ def _run_evaluation(gt_paths, prediction_paths, verbose=True, thresholds=None):
             assert os.path.exists(pred_path), pred_path
             pred = imageio.imread(pred_path)
 
+        assert gt.shape == pred.shape, f"Expected {gt.shape}, got {pred.shape}"
         msa, scores = mean_segmentation_accuracy(pred, gt, thresholds=thresholds, return_accuracies=True)
         stats = matching(pred, gt)
         msas.append(msa)
