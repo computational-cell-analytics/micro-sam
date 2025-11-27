@@ -1362,7 +1362,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         min_distance: int = 5,
         threshold_abs: float = 0.25,
         multimasking: bool = False,
-        prompt_selection: Union[str, List[str]] = "center_distances",
+        prompt_selection: Union[str, List[str]] = "boundary_distances",
         batch_size: int = 32,
         output_mode: Optional[str] = "binary_mask",
     ) -> List[Dict[str, Any]]:

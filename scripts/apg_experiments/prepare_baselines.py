@@ -16,194 +16,70 @@ from tukra.inference.get_instanseg import segment_using_instanseg
 from util import get_image_label_paths
 
 
-NAME = "dsb"
-
-
-def run_default_ais(model_type="vit_b_lm"):
-    image_paths, label_paths = get_image_label_paths(dataset_name=NAME, split="test")
-
-    # Prepare the predictor
-    predictor, segmenter = get_predictor_and_segmenter(model_type=model_type)
-
-    msas, sa50s, precisions, recalls, f1s = [], [], [], [], []
-    for curr_image_path, curr_label_path in tqdm(
-        zip(image_paths, label_paths), total=len(image_paths), desc="Run AIS",
-    ):
-        image = imageio.imread(curr_image_path)
-        labels = imageio.imread(curr_label_path)
-
-        # Run AIS
-        segmentation = automatic_instance_segmentation(
-            predictor=predictor, segmenter=segmenter, input_path=image, verbose=False, ndim=2,
-        )
-
-        # Evalate results.
-        msa, sas = mean_segmentation_accuracy(segmentation, labels, return_accuracies=True)
-        stats = matching(segmentation, labels)
-
-        msas.append(msa)
-        sa50s.append(sas[0])
-        precisions.append(stats["precision"])
-        recalls.append(stats["recall"])
-        f1s.append(stats["f1"])
-
-    print(
-        "The final scores are - mSA:", np.mean(msas), "SA50:",  np.mean(sa50s),
-        "Precision:", np.mean(precisions), "Recall:", np.mean(recalls), "F1 Score:", np.mean(f1s)
-    )
-
-
-def run_default_apg(model_type="vit_b_lm"):
-    image_paths, label_paths = get_image_label_paths(dataset_name=NAME, split="test")
-
-    # Prepare the predictor
-    predictor, decoder = get_predictor_and_decoder(model_type=model_type)
-    segmenter = AutomaticPromptGenerator(predictor, decoder)
-
-    msas, sa50s, precisions, recalls, f1s = [], [], [], [], []
-    for curr_image_path, curr_label_path in tqdm(
-        zip(image_paths, label_paths), total=len(image_paths), desc="Run APG",
-    ):
-        image = imageio.imread(curr_image_path)
-        labels = imageio.imread(curr_label_path)
-
-        # Run APG
+def run_baseline_engine(image, method, **kwargs):
+    # OG SAM methods.
+    if method in ["ais", "amg"]:
+        segmentation = automatic_instance_segmentation(input_path=image, verbose=False, ndim=2, **kwargs)
+    elif method == "apg":
+        segmenter = kwargs["segmenter"]
         segmenter.initialize(image)
         segmentation = segmenter.generate(
             prompt_selection=["center_distances", "boundary_distances", "connected_components"]
         )
         segmentation = mask_data_to_segmentation(segmentation, with_background=False)
 
-        # Evalate results.
-        msa, sas = mean_segmentation_accuracy(segmentation, labels, return_accuracies=True)
-        stats = matching(segmentation, labels)
+    # Newer SAM methods.
+    elif method == "sam2":
+        raise NotImplementedError
+    elif method == "sam3":
+        raise NotImplementedError
 
-        msas.append(msa)
-        sa50s.append(sas[0])
-        precisions.append(stats["precision"])
-        recalls.append(stats["recall"])
-        f1s.append(stats["f1"])
-
-    print(
-        "The final scores are - mSA:", np.mean(msas), "SA50:",  np.mean(sa50s),
-        "Precision:", np.mean(precisions), "Recall:", np.mean(recalls), "F1 Score:", np.mean(f1s)
-    )
-
-
-def run_default_amg(model_type="vit_b_lm"):
-    image_paths, label_paths = get_image_label_paths(dataset_name=NAME, split="test")
-
-    # Prepare the predictor
-    predictor, segmenter = get_predictor_and_segmenter(model_type=model_type, amg=True)
-
-    msas, sa50s, precisions, recalls, f1s = [], [], [], [], []
-    for curr_image_path, curr_label_path in tqdm(
-        zip(image_paths, label_paths), total=len(image_paths), desc="Run AMG",
-    ):
-        image = imageio.imread(curr_image_path)
-        labels = imageio.imread(curr_label_path)
-
-        # Run AIS
-        segmentation = automatic_instance_segmentation(
-            predictor=predictor, segmenter=segmenter, input_path=image, verbose=False, ndim=2,
-        )
-
-        # Evalate results.
-        msa, sas = mean_segmentation_accuracy(segmentation, labels, return_accuracies=True)
-        stats = matching(segmentation, labels)
-
-        msas.append(msa)
-        sa50s.append(sas[0])
-        precisions.append(stats["precision"])
-        recalls.append(stats["recall"])
-        f1s.append(stats["f1"])
-
-    print(
-        "The final scores are - mSA:", np.mean(msas), "SA50:",  np.mean(sa50s),
-        "Precision:", np.mean(precisions), "Recall:", np.mean(recalls), "F1 Score:", np.mean(f1s)
-    )
-
-
-def run_default_cellpose(model_choice):
-    image_paths, label_paths = get_image_label_paths(dataset_name=NAME, split="test")
-
-    msas, sa50s, precisions, recalls, f1s = [], [], [], [], []
-    for curr_image_path, curr_label_path in tqdm(
-        zip(image_paths, label_paths), total=len(image_paths), desc=f"Run {model_choice}",
-    ):
-        image = imageio.imread(curr_image_path)
-        labels = imageio.imread(curr_label_path)
-
-        # Run CellPose
-        segmentation = segment_using_cellpose(image=image, model_choice=model_choice)
-
-        # Evalate results.
-        msa, sas = mean_segmentation_accuracy(segmentation, labels, return_accuracies=True)
-        stats = matching(segmentation, labels)
-
-        msas.append(msa)
-        sa50s.append(sas[0])
-        precisions.append(stats["precision"])
-        recalls.append(stats["recall"])
-        f1s.append(stats["f1"])
-
-    print(
-        "The final scores are - mSA:", np.mean(msas), "SA50:",  np.mean(sa50s),
-        "Precision:", np.mean(precisions), "Recall:", np.mean(recalls), "F1 Score:", np.mean(f1s)
-    )
-
-
-def run_default_cellsam():
-    from cellSAM import cellsam_pipeline
-
-    image_paths, label_paths = get_image_label_paths(dataset_name=NAME, split="test")
-
-    msas, sa50s, precisions, recalls, f1s = [], [], [], [], []
-    for curr_image_path, curr_label_path in tqdm(
-        zip(image_paths, label_paths), total=len(image_paths), desc="Run CellSAM",
-    ):
-        image = imageio.imread(curr_image_path)
-        labels = imageio.imread(curr_label_path)
-
-        # Run CellSAM
+    # And external baselines.
+    elif method == "cellpose":
+        segmentation = segment_using_cellpose(image, kwargs["model_type"])
+    elif method == "cellsam":
+        from cellSAM import cellsam_pipeline
         segmentation = cellsam_pipeline(image, use_wsi=False)
+    elif method == "instanseg":
+        segmentation = segment_using_instanseg(image, verbose=False, **kwargs)
+    elif method == "cellvit":
+        raise NotImplementedError
+    else:
+        raise ValueError
 
-        # NOTE: For images where no objects could be found, a weird segmentation is returned.
-        if segmentation.ndim == 3 and segmentation.shape[0] == 3:
-            segmentation = segmentation[0]
-
-        assert labels.shape == segmentation.shape
-
-        # Evaluate results.
-        msa, sas = mean_segmentation_accuracy(segmentation, labels, return_accuracies=True)
-        stats = matching(segmentation, labels)
-
-        msas.append(msa)
-        sa50s.append(sas[0])
-        precisions.append(stats["precision"])
-        recalls.append(stats["recall"])
-        f1s.append(stats["f1"])
-
-    print(
-        "The final scores are - mSA:", np.mean(msas), "SA50:",  np.mean(sa50s),
-        "Precision:", np.mean(precisions), "Recall:", np.mean(recalls), "F1 Score:", np.mean(f1s)
-    )
+    return segmentation
 
 
-def run_default_instanseg():
-    image_paths, label_paths = get_image_label_paths(dataset_name=NAME, split="test")
+def run_default_baselines(dataset_name, method, model_type, target=None):
+    # Get the image and label paths.
+    image_paths, label_paths = get_image_label_paths(dataset_name=dataset_name, split="test")
+
+    assert isinstance(method, str)
+    kwargs = {}
+    if method in ["ais", "amg"]:
+        predictor, segmenter = get_predictor_and_segmenter(model_type=model_type, amg=(method == "amg"))
+        kwargs["predictor"] = predictor
+        kwargs["segmenter"] = segmenter
+    elif method == "apg":
+        predictor, decoder = get_predictor_and_decoder(model_type=model_type)
+        segmenter = AutomaticPromptGenerator(predictor, decoder)
+        kwargs["predictor"] = predictor
+        kwargs["segmenter"] = segmenter
+    elif method == "cellpose":
+        kwargs["model_type"] = model_type
+    elif method == "instanseg":
+        kwargs["model_type"] = model_type
+        kwargs["target"] = target
 
     msas, sa50s, precisions, recalls, f1s = [], [], [], [], []
     for curr_image_path, curr_label_path in tqdm(
-        zip(image_paths, label_paths), total=len(image_paths), desc="Run InstanSeg",
+        zip(image_paths, label_paths), total=len(image_paths), desc=f"Run '{method}' baseline",
     ):
         image = imageio.imread(curr_image_path)
         labels = imageio.imread(curr_label_path)
 
-        # Run InstanSeg
-        segmentation = segment_using_instanseg(
-            image, model_type="fluorescence_nuclei_and_cells", target="cells", verbose=False,
-        )
+        # Run the baseline method.
+        segmentation = run_baseline_engine(image, method, **kwargs)
 
         # Evalate results.
         msa, sas = mean_segmentation_accuracy(segmentation, labels, return_accuracies=True)
@@ -216,25 +92,21 @@ def run_default_instanseg():
         f1s.append(stats["f1"])
 
     print(
-        "The final scores are - mSA:", np.mean(msas), "SA50:",  np.mean(sa50s),
+        f"The final scores for '{method}' with '{model_type}' are - mSA:", np.mean(msas), "SA50:",  np.mean(sa50s),
         "Precision:", np.mean(precisions), "Recall:", np.mean(recalls), "F1 Score:", np.mean(f1s)
     )
 
 
-def main():
-    run_default_ais()
-    # run_default_apg()
-    # run_default_amg("vit_b")
-    # run_default_amg("vit_b_lm")
-
-    # run_default_cellpose("cyto3")
-    # run_default_cellpose("cpsam")
-    # run_default_cellsam()
-
-    # run_default_ais("vit_b_histopathology")
-    # run_default_instanseg()
-    # run_default_cellvit()
+def main(args):
+    run_default_baselines(args.dataset_name, args.method, args.model_type, args.target)
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-d", "--dataset_name", type=str, required=True)
+    parser.add_argument("--method", type=str, required=True)
+    parser.add_argument("-m", "--model_type", type=str, required=True)
+    parser.add_argument("--target", type=str, default=None)  # needed for instanseg.
+    args = parser.parse_args()
+    main(args)
