@@ -1542,7 +1542,7 @@ def _mask_data_to_segmentation(masks, min_object_size):
 
 
 # TODO add documentation and refactor imports
-def apply_nms(predictions, min_size, perform_box_nms=False, nms_thresh=0.9):
+def apply_nms(predictions, min_size, perform_box_nms=False, nms_thresh=0.9, max_size=None):
     """
     """
     import segment_anything.utils.amg as amg_utils
@@ -1561,6 +1561,10 @@ def apply_nms(predictions, min_size, perform_box_nms=False, nms_thresh=0.9):
         keep_by_size = torch.tensor(
             [i for i, area in enumerate(data["area"]) if area > min_size], dtype=torch.long,
         )
+        data.filter(keep_by_size)
+
+    if max_size is not None:
+        keep_by_size = torch.tensor([i for i, area in enumerate(data["area"]) if area < max_size])
         data.filter(keep_by_size)
 
     if perform_box_nms:
