@@ -1,16 +1,65 @@
 import os
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Tuple
 
 import numpy as np
 import torch
+from nifty.tools import blocking
 
-from segment_anything import SamPredictor
 import segment_anything.utils.amg as amg_utils
+from segment_anything import SamPredictor
 from segment_anything.utils.transforms import ResizeLongestSide
 
 from . import util
 from .instance_segmentation import mask_data_to_segmentation
 from ._vendored import batched_mask_to_box
+
+
+def _validate_inputs(
+    boxes, points, point_labels, multimasking, return_instance_segmentation, segmentation_ids, logits_masks
+):
+    if multimasking and (segmentation_ids is not None) and (not return_instance_segmentation):
+        raise NotImplementedError
+
+    if (points is None) != (point_labels is None):
+        raise ValueError(
+            "If you have point prompts both `points` and `point_labels` have to be passed, "
+            "but you passed only one of them."
+        )
+
+    have_points = points is not None
+    have_boxes = boxes is not None
+    have_logits = logits_masks is not None
+    if (not have_points) and (not have_boxes):
+        raise ValueError("Point and/or box prompts have to be passed, you passed neither.")
+
+    if have_points and (len(point_labels) != len(points)):
+        raise ValueError(
+            f"The number of point coordinates and labels does not match: {len(point_labels)} != {len(points)}"
+        )
+
+    if (have_points and have_boxes) and (len(points) != len(boxes)):
+        raise ValueError(
+            f"The number of point and box prompts does not match: {len(points)} != {len(boxes)}"
+        )
+
+    if have_logits:
+        if have_points and (len(logits_masks) != len(point_labels)):
+            raise ValueError(
+                f"The number of point and logits does not match: {len(points) != len(logits_masks)}"
+            )
+        elif have_boxes and (len(logits_masks) != len(boxes)):
+            raise ValueError(
+                f"The number of boxes and logits does not match: {len(boxes)} != {len(logits_masks)}"
+            )
+
+    n_prompts = boxes.shape[0] if have_boxes else points.shape[0]
+
+    if (segmentation_ids is not None) and (len(segmentation_ids) != n_prompts):
+        raise ValueError(
+            f"The number of segmentation ids and prompts does not match: {len(segmentation_ids)} != {n_prompts}"
+        )
+
+    return n_prompts, have_boxes, have_points, have_logits
 
 
 @torch.no_grad()
@@ -57,52 +106,9 @@ def batched_inference(
     Returns:
         The predicted segmentation masks.
     """
-    if multimasking and (segmentation_ids is not None) and (not return_instance_segmentation):
-        raise NotImplementedError
-
-    if (points is None) != (point_labels is None):
-        raise ValueError(
-            "If you have point prompts both `points` and `point_labels` have to be passed, "
-            "but you passed only one of them."
-        )
-
-    have_points = points is not None
-    have_boxes = boxes is not None
-    have_logits = logits_masks is not None
-    if (not have_points) and (not have_boxes):
-        raise ValueError("Point and/or box prompts have to be passed, you passed neither.")
-
-    if have_points and (len(point_labels) != len(points)):
-        raise ValueError(
-            "The number of point coordinates and labels does not match: "
-            f"{len(point_labels)} != {len(points)}"
-        )
-
-    if (have_points and have_boxes) and (len(points) != len(boxes)):
-        raise ValueError(
-            "The number of point and box prompts does not match: "
-            f"{len(points)} != {len(boxes)}"
-        )
-
-    if have_logits:
-        if have_points and (len(logits_masks) != len(point_labels)):
-            raise ValueError(
-                "The number of point and logits does not match: "
-                f"{len(points) != len(logits_masks)}"
-            )
-        elif have_boxes and (len(logits_masks) != len(boxes)):
-            raise ValueError(
-                "The number of boxes and logits does not match: "
-                f"{len(boxes)} != {len(logits_masks)}"
-            )
-
-    n_prompts = boxes.shape[0] if have_boxes else points.shape[0]
-
-    if (segmentation_ids is not None) and (len(segmentation_ids) != n_prompts):
-        raise ValueError(
-            "The number of segmentation ids and prompts does not match: "
-            f"{len(segmentation_ids)} != {n_prompts}"
-        )
+    n_prompts, have_boxes, have_points, have_logits = _validate_inputs(
+        boxes, points, point_labels, multimasking, return_instance_segmentation, segmentation_ids, logits_masks
+    )
 
     # Compute the image embeddings.
     if image is None:  # This means the image embeddings are computed already.
@@ -177,8 +183,33 @@ def batched_inference(
 
     if return_instance_segmentation:
         masks = mask_data_to_segmentation(masks, with_background=False, min_object_size=0)
-
     return masks
+
+
+def _require_tiled_embeddings(
+    predictor, image, image_embeddings, embedding_path, tile_shape, halo, verbose_embeddings
+):
+    if image_embeddings is None:
+        assert image is not None
+        assert (tile_shape is not None) and (halo is not None)
+        shape = image.shape
+        image_embeddings = util.precompute_image_embeddings(
+            predictor, image, embedding_path, ndim=2, tile_shape=tile_shape, halo=halo, verbose=verbose_embeddings
+        )
+    else:  # This means the image embeddings are computed already.
+        attrs = image_embeddings["features"].attrs
+        tile_shape_, halo_ = attrs["tile_shape"], attrs["halo"]
+        shape = attrs["shape"]
+        if tile_shape is None:
+            tile_shape = tile_shape_
+        elif any(ts != ts_ for ts, ts_ in zip(tile_shape, tile_shape_)):
+            raise ValueError(f"Incompatible tile shapes: {tile_shape} != {tile_shape_}")
+        if halo is None:
+            halo = halo_
+        elif any(ts != ts_ for ts, ts_ in zip(halo, halo_)):
+            raise ValueError(f"Incompatible tile shapes: {halo} != {halo_}")
+
+    return image_embeddings, shape, tile_shape, halo
 
 
 @torch.no_grad()
@@ -190,9 +221,131 @@ def batched_tiled_inference(
     boxes: Optional[np.ndarray] = None,
     points: Optional[np.ndarray] = None,
     point_labels: Optional[np.ndarray] = None,
-    # TODO: tiling params
-    # TODO: all the other inputs from batched_inference
+    multimasking: bool = False,
+    embedding_path: Optional[Union[str, os.PathLike]] = None,
+    return_instance_segmentation: bool = True,
+    reduce_multimasking: bool = True,
+    logits_masks: Optional[torch.Tensor] = None,
+    verbose_embeddings: bool = True,
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
 ) -> Union[List[List[Dict[str, Any]]], np.ndarray]:
-    # TODO: order the prompts by tile and then iterate over the tiles
+    """
+    """
+    # Validate inputs and get input prompt summary.
+    segmentation_ids = None
+    n_prompts, have_boxes, have_points, have_logits = _validate_inputs(
+        boxes, points, point_labels, multimasking, return_instance_segmentation, segmentation_ids, logits_masks
+    )
+    if have_logits:
+        raise NotImplementedError
+
+    # Get the tiling parameters and compute embeddings if needed.
+    image_embeddings, shape, tile_shape, halo = _require_tiled_embeddings(
+        predictor, image, image_embeddings, embedding_path, tile_shape, halo, verbose_embeddings
+    )
+
+    # Order the prompts by tile and then iterate over the tiles.
+    tiling = blocking([0, 0], shape, tile_shape)
+    box_to_tile, point_to_tile, label_to_tile, logits_to_tile = {}, {}, {}, {}
+    tile_ids = []
+
+    # Box prompts are in the format N x 4. Boxes are stored in order [MIN_X, MIN_Y, MAX_X, MAX_Y].
+    # Points are in the Format N x 1 x 2 with coordinate order X, Y.
+    # Point labels are in the format N x 1.
+    # Mask prompts are in the format N x 1 x 256 x 256.
+    for prompt_id in range(n_prompts):
+        this_tile_id = None
+
+        if have_boxes:
+            box = boxes[prompt_id]
+            center = np.array([(box[1] + box[3]) / 2, (box[0] + box[2]) / 2]).round().astype("int").tolist()
+            this_tile_id = tiling.coordinatesToBlockId(center)
+            tile = tiling.getBlockWithHalo(this_tile_id, list(halo)).outerBlock
+            offset = tile.begin
+            this_tile_shape = tile.shape
+            box_in_tile = np.array(
+                [
+                    max(box[1] - offset[0], 0), max(box[0] - offset[1], 0),
+                    min(box[3] - offset[0], this_tile_shape[0]), min(box[2] - offset[1], this_tile_shape[1])
+                ]
+            )[None]
+            if this_tile_id in box_to_tile:
+                box_to_tile[this_tile_id] = np.concatenate([box_to_tile[this_tile_id], box_in_tile])
+            else:
+                box_to_tile[this_tile_id] = box_in_tile
+
+        if have_points:
+            point = points[prompt_id, 0][::-1].round().astype("int").tolist()
+            if this_tile_id is None:
+                this_tile_id = tiling.coordinatesToBlockId(point)
+            else:
+                assert this_tile_id == tiling.coordinatesToBlockId(point)
+            tile = tiling.getBlockWithHalo(this_tile_id, list(halo)).outerBlock
+            offset = tile.begin
+            point_in_tile = (points[prompt_id, 0] - np.array(offset)[::-1])[None, None]
+            label_in_tile = point_labels[prompt_id][None]
+            if this_tile_id in point_to_tile:
+                point_to_tile[this_tile_id] = np.concatenate([point_to_tile[this_tile_id], point_in_tile])
+                label_to_tile[this_tile_id] = np.concatenate([label_to_tile[this_tile_id], label_in_tile])
+            else:
+                point_to_tile[this_tile_id] = point_in_tile
+                label_to_tile[this_tile_id] = label_in_tile
+
+        # NOTE: logits are not yet supported.
+        tile_ids.append(this_tile_id)
+
+    # Find the tiles with prompts.
+    tile_ids = sorted(list(set(tile_ids)))
+
     # Run batched inference for each tile.
-    pass
+    masks = []
+    for tile_id in tile_ids:
+        # Get the prompts for this tile.
+        tile_boxes = box_to_tile.get(tile_id)
+        tile_logits = logits_to_tile.get(tile_id)
+        tile_points, tile_labels = point_to_tile.get(tile_id), label_to_tile.get(tile_id)
+
+        # Set the correct embeddings, run inference.
+        predictor = util.set_precomputed(predictor, image_embeddings, tile_id=tile_id)
+        this_masks = batched_inference(
+            predictor=predictor,
+            image=None,
+            batch_size=batch_size,
+            boxes=tile_boxes,
+            points=tile_points,
+            point_labels=tile_labels,
+            multimasking=multimasking,
+            return_instance_segmentation=False,
+            segmentation_ids=segmentation_ids,
+            reduce_multimasking=reduce_multimasking,
+            logits_masks=tile_logits,
+        )
+
+        # Take care of offsets for the current tile.
+        tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
+        offset = tile.begin
+
+        # TODO: this is an inefficient work-around. Instead of uncropping all the masks we should
+        # store the offset of this tile and only fuse everything back to the full shape in the output
+        # segmentation image. This should be updated for all the tiled segmentation functions.
+        extended_masks = []
+        # TODO
+        for mask_data in this_masks:
+            seg = mask_data.pop("segmentation")
+            bbox = mask_data.pop("bbox")
+            breakpoint()
+            extended_mask = {
+                "segmentation": seg,
+                "bbox": bbox,
+            }
+            extended_mask.update(**mask_data)
+            extended_masks.append(extended_mask)
+
+        # "segmentation": masks["masks"][idx],
+        # "bbox": amg_utils.box_xyxy_to_xywh(masks["boxes"][idx]).tolist(),
+        masks.extend(extended_masks)
+
+    if return_instance_segmentation:
+        masks = mask_data_to_segmentation(masks, with_background=False, min_object_size=0)
+    return masks
