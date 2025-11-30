@@ -980,6 +980,7 @@ class InstanceSegmentationWithDecoder:
         verbose: bool = False,
         pbar_init: Optional[callable] = None,
         pbar_update: Optional[callable] = None,
+        ndim: Optional[int] = None,
     ) -> None:
         """Initialize image embeddings and decoder predictions for an image.
 
@@ -994,12 +995,16 @@ class InstanceSegmentationWithDecoder:
                 Can be used together with pbar_update to handle napari progress bar in other thread.
                 To enables using this function within a threadworker.
             pbar_update: Callback to update an external progress bar.
+            ndim: The dimensionality of the data. If not given will be deduced from the input data.
+                By default, set to 'None', i.e. will be computed from the provided image.
         """
         _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
         pbar_init(1, "Initialize instance segmentation with decoder")
 
         if image_embeddings is None:
-            image_embeddings = util.precompute_image_embeddings(self._predictor, image, verbose=verbose)
+            image_embeddings = util.precompute_image_embeddings(
+                predictor=self._predictor, input_=image, ndim=ndim, verbose=verbose
+            )
 
         # Get the image embeddings from the predictor.
         self._predictor = util.set_precomputed(self._predictor, image_embeddings, i=i)
@@ -1399,15 +1404,19 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         batch_size = batch_size
         points = prompts[:, None, ::-1]
         labels = np.ones((len(prompts), 1))
-        predictions = batched_inference(
-            self._predictor,
-            image=None,
-            batch_size=batch_size,
-            points=points,
-            point_labels=labels,
-            return_instance_segmentation=False,
-            multimasking=multimasking,
-        )
+
+        if len(points) == 0:  # Since there were no prompts derived, we can't do much further.
+            return []  # Returns empty masks.
+        else:
+            predictions = batched_inference(
+                self._predictor,
+                image=None,
+                batch_size=batch_size,
+                points=points,
+                point_labels=labels,
+                return_instance_segmentation=False,
+                multimasking=multimasking,
+            )
 
         # 3.) Apply non-max suppression to the masks.
         segmentation = util.apply_nms(predictions, min_size=min_size)

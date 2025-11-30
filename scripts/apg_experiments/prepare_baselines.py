@@ -5,9 +5,9 @@ import imageio.v3 as imageio
 
 from elf.evaluation import mean_segmentation_accuracy, matching
 
-from micro_sam.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
-from micro_sam.instance_segmentation import (
-    AutomaticPromptGenerator, get_predictor_and_decoder, mask_data_to_segmentation
+from micro_sam.instance_segmentation import AutomaticPromptGenerator, get_predictor_and_decoder
+from micro_sam.automatic_segmentation import (
+    get_predictor_and_segmenter, automatic_instance_segmentation, mask_data_to_segmentation
 )
 
 from tukra.inference.get_cellpose import segment_using_cellpose
@@ -22,11 +22,13 @@ def run_baseline_engine(image, method, **kwargs):
         segmentation = automatic_instance_segmentation(input_path=image, verbose=False, ndim=2, **kwargs)
     elif method == "apg":
         segmenter = kwargs["segmenter"]
-        segmenter.initialize(image)
-        segmentation = segmenter.generate(
-            prompt_selection=["center_distances", "boundary_distances", "connected_components"]
-        )
-        segmentation = mask_data_to_segmentation(segmentation, with_background=False)
+        segmenter.initialize(image, ndim=2)
+        segmentation = segmenter.generate(prompt_selection="boundary_distances")
+
+        if len(segmentation) == 0:
+            segmentation = np.zeros(image.shape[:2], dtype="uint32")
+        else:
+            segmentation = mask_data_to_segmentation(segmentation, with_background=False)
 
     # Newer SAM methods.
     elif method == "sam2":
@@ -40,6 +42,9 @@ def run_baseline_engine(image, method, **kwargs):
     elif method == "cellsam":
         from cellSAM import cellsam_pipeline
         segmentation = cellsam_pipeline(image, use_wsi=False)
+        # NOTE: For images where no objects could be found, a weird segmentation is returned.
+        if segmentation.ndim == 3:
+            segmentation = segmentation[0]
     elif method == "instanseg":
         segmentation = segment_using_instanseg(image, verbose=False, **kwargs)
     elif method == "cellvit":
@@ -73,7 +78,7 @@ def run_default_baselines(dataset_name, method, model_type, target=None):
 
     msas, sa50s, precisions, recalls, f1s = [], [], [], [], []
     for curr_image_path, curr_label_path in tqdm(
-        zip(image_paths, label_paths), total=len(image_paths), desc=f"Run '{method}' baseline",
+        zip(image_paths, label_paths), total=len(image_paths), desc=f"Run '{method}' baseline for '{model_type}'",
     ):
         image = imageio.imread(curr_image_path)
         labels = imageio.imread(curr_label_path)
