@@ -17,6 +17,10 @@ DATA_DIR = "/mnt/vast-nhr/projects/cidas/cca/data"
 
 
 def _process_images(image_paths, label_paths, split, base_dir, dataset_name, limiter=None):
+
+    if os.path.exists(os.path.join(base_dir, split)):
+        return _find_paths(base_dir, split, dataset_name)
+
     im_folder = os.path.join(base_dir, split, "images")
     label_folder = os.path.join(base_dir, split, "labels")
     os.makedirs(im_folder, exist_ok=True)
@@ -58,18 +62,16 @@ def prepare_data_paths(dataset_name, split, base_dir):
     """This script converts all images to expected 2d images.
     """
     base_dir = os.path.join(base_dir, "benchmark_apg")
-    if os.path.exists(base_dir):  # If the files are created, find them and return them!
-        return _find_paths(base_dir, split, dataset_name)
 
     if dataset_name == "pannuke":
         # This needs to be done as the PanNuke images are stacked together.
         if split == "val":
             volume_path = datasets.histopathology.pannuke.get_pannuke_paths(
-                path=os.path.join(DATA_DIR, "pannuke"), folds=["fold_2"]
+                path=os.path.join(DATA_DIR, "pannuke"), folds=["fold_2"], download=True,
             )[0]
         else:
             volume_path = datasets.histopathology.pannuke.get_pannuke_paths(
-                path=os.path.join(DATA_DIR, "pannuke"), folds=["fold_3"]
+                path=os.path.join(DATA_DIR, "pannuke"), folds=["fold_3"], download=True,
             )[0]
 
         f = open_file(volume_path)
@@ -108,7 +110,7 @@ def get_image_label_paths(dataset_name, split):
             input_folder=os.path.join(DATA_DIR, dataset_name), split=split,
         )
     elif dataset_name == "omnipose":
-        if split == "val":  # Since 'val' does not exist for this data.
+        if split == "val":  # NOTE: Since 'val' does not exist for this data.
             split = "test"
 
         image_paths, label_paths = datasets.light_microscopy.omnipose.get_omnipose_paths(
@@ -131,7 +133,7 @@ def get_image_label_paths(dataset_name, split):
             os.path.join(DATA_DIR, dataset_name), split,
         )
     elif dataset_name == "deepseas":
-        if split == "val":  # Since 'val' does not exist for this data.
+        if split == "val":  # NOTE: Since 'val' does not exist for this data.
             split = "test"
         datasets.light_microscopy.deepseas.get_deepseas_paths(
             os.path.join(DATA_DIR, dataset_name), split,
@@ -145,7 +147,7 @@ def get_image_label_paths(dataset_name, split):
 
     # Fluoroscence (Nuclei)
     elif dataset_name == "dsb":
-        if split == "val":  # Since 'val' does not exist for this data.
+        if split == "val":  # NOTE: Since 'val' does not exist for this data.
             split = "test"
 
         image_paths, label_paths = datasets.light_microscopy.dsb.get_dsb_paths(

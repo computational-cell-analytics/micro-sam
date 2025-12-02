@@ -106,6 +106,7 @@ def default_grid_search_values_apg(
     multimasking_values: Optional[List[float]] = None,
     prompt_selection_values: Optional[List[float]] = None,
     min_size_values: Optional[List[float]] = None,
+    nms_threshold_values: Optional[List[float]] = None,
 ) -> Dict[str, List[float]]:
     """Default grid-search parameter for APG-based instance segmentation.
 
@@ -121,18 +122,20 @@ def default_grid_search_values_apg(
         threshold_abs_values = _get_range_of_search_values([0.1, 0.5], step=0.1)
     if multimasking_values is None:
         multimasking_values = [True, False]
-    if prompt_selection_values is None:
-        prompt_selection_values = [
-            "center_distances",
-            "boundary_distances",
-            "connected_components",
-            ["center_distances", "connected_components"],
-            ["center_distances", "boundary_distances"],
-            ["boundary_distances", "connected_components"],
-            ["center_distances", "boundary_distances", "connected_components"]
-        ]
+    # if prompt_selection_values is None:
+    #     prompt_selection_values = [
+    #         "center_distances",
+    #         "boundary_distances",
+    #         "connected_components",
+    #         ["center_distances", "connected_components"],
+    #         ["center_distances", "boundary_distances"],
+    #         ["boundary_distances", "connected_components"],
+    #         ["center_distances", "boundary_distances", "connected_components"]
+    #     ]
     if min_size_values is None:
         min_size_values = [50, 100, 200]
+    if nms_threshold_values is None:
+        nms_threshold_values = _get_range_of_search_values([0.5, 0.9], step=0.1)
 
     # TODO: Expose the connected component parameters.
 
@@ -140,8 +143,9 @@ def default_grid_search_values_apg(
         "min_distance": min_distance_values,
         "threshold_abs": threshold_abs_values,
         "multimasking": multimasking_values,
-        "prompt_selection": prompt_selection_values,
-        "min_size": min_size_values
+        # "prompt_selection": prompt_selection_values,
+        "min_size": min_size_values,
+        "nms_threshold": nms_threshold_values,
     }
 
 

@@ -980,7 +980,8 @@ class InstanceSegmentationWithDecoder:
         verbose: bool = False,
         pbar_init: Optional[callable] = None,
         pbar_update: Optional[callable] = None,
-        ndim: Optional[int] = None,
+        # ndim: Optional[int] = None,
+        ndim=2,  # HACK: Hard-coded atm.
     ) -> None:
         """Initialize image embeddings and decoder predictions for an image.
 
@@ -1369,6 +1370,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         multimasking: bool = False,
         prompt_selection: Union[str, List[str]] = "boundary_distances",
         batch_size: int = 32,
+        nms_threshold: float = 0.9,
         output_mode: Optional[str] = "binary_mask",
     ) -> List[Dict[str, Any]]:
         """Generate instance segmentation for the currently initialized image.
@@ -1419,7 +1421,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
             )
 
         # 3.) Apply non-max suppression to the masks.
-        segmentation = util.apply_nms(predictions, min_size=min_size)
+        segmentation = util.apply_nms(predictions, min_size=min_size, nms_thresh=nms_threshold)
 
         if output_mode is not None:
             segmentation = self._to_masks(segmentation, output_mode)
@@ -1439,6 +1441,7 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
         multimasking: bool = False,
         prompt_selection: Union[str, List[str]] = "center_distances",
         batch_size: int = 32,
+        nms_threshold: float = 0.9,
         output_mode: Optional[str] = "binary_mask",
     ) -> List[Dict[str, Any]]:
         """Generate instance segmentation for the currently initialized image.
@@ -1486,7 +1489,7 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
         )
 
         # 3.) Apply non-max suppression to the masks.
-        segmentation = util.apply_nms(predictions, min_size=min_size)
+        segmentation = util.apply_nms(predictions, min_size=min_size, nms_thresh=nms_threshold)
         if output_mode is not None:
             segmentation = self._to_masks(segmentation, output_mode)
         return segmentation

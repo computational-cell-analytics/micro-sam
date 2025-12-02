@@ -72,34 +72,47 @@ def get_batch_script_names(tmp_folder):
 def submit_slurm(args):
     """Submit python scripts that need slurm resources with given inputs on a slurm node.
     """
+    # Other random stuff.
     tmp_folder = "./gpu_jobs"
-
-    if args.dataset_name:
-        datasets = [args.dataset]
-    else:
-        datasets = ["livecell", "dsb", "pannuke", "tissuenet"]
-
-    # HACK: Make a heuristic to check for histopathology datasets.
+    generalist_model = args.model_type
+    dataset_name = args.dataset_name
+    dry = args.dry
 
     method_combinations = [
         ["amg", "vit_b"],
-        ["amg", "vit_b_lm"],
-        ["ais", "vit_b_lm"],
-        ["apg", "vit_b_lm"],
+        ["amg", generalist_model],
+        ["ais", generalist_model],
+        ["apg", generalist_model],
         ["cellpose", "cyto3"],
         ["cellpose", "cpsam"],
         ["cellsam", "cellsam"],
+        # ["instanseg", "brightgield_nuclei"]
+        # ["instanseg", "fluoroscence_cells_and_nuclei"]
     ]
 
-    for data in datasets:
-        print(f"Submitting scripts for {data}")
+    # 1. First, run the APG grid-search script
+    write_batch_script(
+        dataset_name=dataset_name,
+        out_path=get_batch_script_names(tmp_folder),
+        method="apg",
+        model_type=generalist_model,
+        baseline=False,
+        dry=dry,
+    )
 
+    return
+
+    # 2. Next, run the baselines.
+    for curr_method in method_combinations:
+        print(f"Submitting scripts for {dataset_name}")
+        method, model_type = curr_method
         write_batch_script(
+            dataset_name=dataset_name,
             out_path=get_batch_script_names(tmp_folder),
-            method=args.method,
-            model_type=args.model_type,
-            dry=args.dry,
-            baseline=args.baseline,
+            method=method,
+            model_type=model_type,
+            baseline=True,
+            dry=dry,
         )
 
 
