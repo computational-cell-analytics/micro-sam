@@ -32,9 +32,32 @@ def run_baseline_engine(image, method, **kwargs):
 
     # Newer SAM methods.
     elif method == "sam2":
-        raise NotImplementedError
+        # TODO: Wrap this out in a modular function (like our segmenters)
+        from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+        from micro_sam2.util import get_sam2_model
+        predictor = get_sam2_model(model_type=kwargs["model_type"])
+        generator = SAM2AutomaticMaskGenerator(predictor)
+        segmentation = generator.generate(image.astype("uint8"))  # HACK: Casting forcefully.
+
+        if len(segmentation) == 0:
+            segmentation = np.zeros(image.shape[:2], dtype="uint32")
+        else:
+            segmentation = mask_data_to_segmentation(segmentation, with_background=True)
+
     elif method == "sam3":
-        raise NotImplementedError
+        # TODO: Wrap this out in a modular function too?
+        from sam3.model_builder import build_sam3_image_model
+        from sam3.model.sam3_image_processor import Sam3Processor
+        model = build_sam3_image_model()
+        processor = Sam3Processor(model)
+        inference_state = processor.set_image(image)
+        # Prompt the model with text
+        segmentation = processor.set_text_prompt(state=inference_state, prompt=kwargs["prompt"])
+
+        if len(segmentation) == 0:
+            segmentation = np.zeros(image.shape[:2], dtype="uint32")
+        else:
+            segmentation = mask_data_to_segmentation(segmentation, with_background=True)
 
     # And external baselines.
     elif method == "cellpose":
@@ -75,6 +98,10 @@ def run_default_baselines(dataset_name, method, model_type, target=None):
     elif method == "instanseg":
         kwargs["model_type"] = model_type
         kwargs["target"] = target
+    elif method == "sam2":
+        kwargs["model_type"] = model_type
+    elif method == "sam3":
+        kwargs["prompt"] = target
 
     msas, sa50s, precisions, recalls, f1s = [], [], [], [], []
     for curr_image_path, curr_label_path in tqdm(
