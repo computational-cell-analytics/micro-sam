@@ -53,11 +53,17 @@ def run_baseline_engine(image, method, **kwargs):
         inference_state = processor.set_image(image)
         # Prompt the model with text
         segmentation = processor.set_text_prompt(state=inference_state, prompt=kwargs["prompt"])
+        segmentation = segmentation["masks"]  # Get the masks only.
 
         if len(segmentation) == 0:
             segmentation = np.zeros(image.shape[:2], dtype="uint32")
         else:
-            segmentation = mask_data_to_segmentation(segmentation, with_background=True)
+            # HACK: Let's get a cheap merging strategy
+            segmentation = segmentation.squeeze(1).detach().cpu().numpy()
+            final_mask = np.zeros(image.shape, dtype="uint32")
+            for i, curr_mask in enumerate(segmentation, start=1):
+                final_mask[curr_mask] = i
+            segmentation = final_mask
 
     # And external baselines.
     elif method == "cellpose":

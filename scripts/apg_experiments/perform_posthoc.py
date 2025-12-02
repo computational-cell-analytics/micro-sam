@@ -18,7 +18,6 @@ def posthoc_analysis(dataset_name):
 
     # Get the predicted paths
     base_dir = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam/apg_experiments"
-    # experiment_folder = os.path.join(base_dir, dataset_name)
     prediction_paths = natsorted(
         glob(os.path.join(base_dir, dataset_name, "apg", "inference", "*.tif"))
     )
