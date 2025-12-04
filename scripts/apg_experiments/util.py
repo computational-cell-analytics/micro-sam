@@ -16,8 +16,15 @@ from micro_sam.evaluation.livecell import _get_livecell_paths
 DATA_DIR = "/mnt/vast-nhr/projects/cidas/cca/data"
 
 
-def _process_images(image_paths, label_paths, split, base_dir, dataset_name, limiter=None):
-
+def _process_images(
+    image_paths,
+    label_paths,
+    split,
+    base_dir,
+    dataset_name,
+    cell_count_criterion=None,
+    limiter=None
+):
     if os.path.exists(os.path.join(base_dir, split)):
         return _find_paths(base_dir, split, dataset_name)
 
@@ -34,8 +41,14 @@ def _process_images(image_paths, label_paths, split, base_dir, dataset_name, lim
         if im.ndim == 3 and im.shape[0] == 3:  # eg. for PanNuke
             im = im.transpose(1, 2, 0)  # Make channels last for RGB images.
 
+        cell_count = len(np.unique(label))
+
         # If there are no labels in ground-truth, no point in storing it
-        if len(np.unique(label)) == 1:
+        if cell_count == 1:
+            continue
+
+        # Check for minimum cells per image.
+        if cell_count < cell_count_criterion:
             continue
 
         # Store images in a folder.
@@ -79,7 +92,13 @@ def prepare_data_paths(dataset_name, split, base_dir):
         raw_stack = raw_stack.transpose(1, 0, 2, 3)
 
         image_paths, label_paths = _process_images(
-            raw_stack, label_stack, split, base_dir, dataset_name, 100 if split == "val" else None,
+            image_paths=raw_stack,
+            label_paths=label_stack,
+            split=split,
+            base_dir=base_dir,
+            dataset_name=dataset_name,
+            limiter=100 if split == "val" else None,
+            cell_count_criterion=5,
         )
 
     elif dataset_name == "tissuenet":
@@ -92,7 +111,13 @@ def prepare_data_paths(dataset_name, split, base_dir):
         labels = [open_file(p)["labels/cell"][:] for p in fpaths]
 
         image_paths, label_paths = _process_images(
-            images, labels, split, base_dir, dataset_name, 100 if split == "val" else None,
+            image_paths=images,
+            label_paths=labels, 
+            split=split,
+            base_dir=base_dir,
+            dataset_name=dataset_name,
+            limiter=100 if split == "val" else None,
+            cell_count_criterion=10,
         )
 
     else:
@@ -107,7 +132,10 @@ def get_image_label_paths(dataset_name, split):
     # Label-free
     if dataset_name == "livecell":
         image_paths, label_paths = _get_livecell_paths(
-            input_folder=os.path.join(DATA_DIR, dataset_name), split=split,
+            input_folder=os.path.join(DATA_DIR, dataset_name),
+            split=split,
+            n_val_per_cell_type=5 if split == "val" else None,
+
         )
     elif dataset_name == "omnipose":
         if split == "val":  # NOTE: Since 'val' does not exist for this data.

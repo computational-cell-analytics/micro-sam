@@ -13,7 +13,8 @@ def run_apg_evaluation(dataset_name, model_type, experiment_folder):
     test_image_paths, test_label_paths = get_image_label_paths(dataset_name=dataset_name, split="test")
 
     # HACK: For simpilicity of grid-search, we run it on 25-images only in the beginning.
-    val_image_paths, val_label_paths = val_image_paths[:25], val_label_paths[:25]
+    if dataset_name != "livecell":
+        val_image_paths, val_label_paths = val_image_paths[:25], val_label_paths[:25]
 
     # Run predictions with grid-search.
     experiment_folder = os.path.join(experiment_folder, dataset_name)
