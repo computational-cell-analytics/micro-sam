@@ -162,6 +162,9 @@ def batched_inference(
             batch_logits = torch.cat([batch_logits[i, max_id][None] for i, max_id in enumerate(max_index)]).unsqueeze(1)
 
         batch_data = amg_utils.MaskData(masks=batch_masks.flatten(0, 1), iou_preds=batch_ious.flatten(0, 1))
+        batch_data["stability_scores"] = amg_utils.calculate_stability_score(
+            batch_data["masks"], predictor.model.mask_threshold, 1.0,
+        )
         batch_data["masks"] = (batch_data["masks"] > predictor.model.mask_threshold).type(torch.bool)
         batch_data["boxes"] = batched_mask_to_box(batch_data["masks"])
         batch_data["logits"] = batch_logits
@@ -175,6 +178,7 @@ def batched_inference(
             "area": masks["masks"][idx].sum(),
             "bbox": amg_utils.box_xyxy_to_xywh(masks["boxes"][idx]).tolist(),
             "predicted_iou": masks["iou_preds"][idx].item(),
+            "stability_score": masks["stability_scores"][idx].item(),
             "seg_id": idx + 1 if segmentation_ids is None else int(segmentation_ids[idx]),
             "logits": masks["logits"][idx]
         }

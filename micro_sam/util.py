@@ -1556,6 +1556,7 @@ def apply_nms(predictions, min_size, perform_box_nms=False, nms_thresh=0.9, max_
     data["rles"] = mask_to_rle_pytorch(data["masks"])
     data["boxes"] = batched_mask_to_box(data["masks"])
     data["area"] = [mask.sum() for mask in data["masks"]]
+    data["stability_scores"] = torch.tensor([pred["stability_score"] for pred in predictions])
 
     if min_size > 0:
         keep_by_size = torch.tensor(
@@ -1567,10 +1568,11 @@ def apply_nms(predictions, min_size, perform_box_nms=False, nms_thresh=0.9, max_
         keep_by_size = torch.tensor([i for i, area in enumerate(data["area"]) if area < max_size])
         data.filter(keep_by_size)
 
+    scores = data["iou_preds"] * data["stability_scores"]
     if perform_box_nms:
         keep_by_nms = batched_nms(
             data["boxes"].float(),
-            data["iou_preds"],
+            scores,
             torch.zeros_like(data["boxes"][:, 0]),  # categories
             iou_threshold=nms_thresh,
         )
@@ -1578,7 +1580,7 @@ def apply_nms(predictions, min_size, perform_box_nms=False, nms_thresh=0.9, max_
         keep_by_nms = _batched_mask_nms(
             rles=data["rles"],
             boxes=data["boxes"].float(),
-            scores=data["iou_preds"],
+            scores=scores,
             nms_thresh=nms_thresh,
         )
     data.filter(keep_by_nms)
