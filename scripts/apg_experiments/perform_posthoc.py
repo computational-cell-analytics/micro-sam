@@ -51,11 +51,14 @@ def posthoc_analysis(dataset_name):
         fig, ax = plt.subplots(1, 3, figsize=(15, 10))
 
         if dataset_name == "tissuenet":
-            ax[0].imshow(im[:, :, 1], cmap="gray")
+            im = im[:, :, 0]
+            print(im.max(), im.min())
+            ax[0].imshow(im, cmap="gray")
         elif dataset_name == "pannuke":
             ax[0].imshow(im)
         else:
             ax[0].imshow(im, cmap="gray")
+
         ax[0].axis("off")
         ax[0].set_title("Image")
 
