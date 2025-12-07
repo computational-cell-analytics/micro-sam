@@ -79,10 +79,16 @@ def submit_slurm(args):
     dry = args.dry
 
     method_combinations = [
+        # SAM-based models
         ["amg", "vit_b"],
         ["amg", generalist_model],
         ["ais", generalist_model],
         ["apg", generalist_model],
+        # SAM2
+        # ["sam2", "hvit_b"],
+        # SAM3
+        # ["sam3", "cells"]
+        # And other external methods.
         ["cellpose", "cyto3"],
         ["cellpose", "cpsam"],
         ["cellsam", "cellsam"],
@@ -90,28 +96,26 @@ def submit_slurm(args):
         # ["instanseg", "fluoroscence_cells_and_nuclei"]
     ]
 
-    # 1. First, run the APG grid-search script
-    write_batch_script(
-        dataset_name=dataset_name,
-        out_path=get_batch_script_names(tmp_folder),
-        method="apg",
-        model_type=generalist_model,
-        baseline=False,
-        dry=dry,
-    )
-
-    return
-
-    # 2. Next, run the baselines.
-    for curr_method in method_combinations:
-        print(f"Submitting scripts for {dataset_name}")
-        method, model_type = curr_method
+    if args.baseline:  # Let's run the baselines.
+        for curr_method in method_combinations:
+            print(f"Submitting scripts for {dataset_name}")
+            method, model_type = curr_method
+            write_batch_script(
+                dataset_name=dataset_name,
+                out_path=get_batch_script_names(tmp_folder),
+                method=method,
+                model_type=model_type,
+                baseline=True,
+                dry=dry,
+            )
+    else:  # Run the APG grid-search script
+        print(f"Submitting grid-search script for {dataset_name}")
         write_batch_script(
             dataset_name=dataset_name,
             out_path=get_batch_script_names(tmp_folder),
-            method=method,
-            model_type=model_type,
-            baseline=True,
+            method="apg",
+            model_type=generalist_model,
+            baseline=False,
             dry=dry,
         )
 

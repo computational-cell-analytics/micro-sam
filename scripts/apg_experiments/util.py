@@ -1,6 +1,7 @@
 import os
 from tqdm import tqdm
 from glob import glob
+from typing import Literal
 from natsort import natsorted
 
 import numpy as np
@@ -126,7 +127,9 @@ def prepare_data_paths(dataset_name, split, base_dir):
     return image_paths, label_paths
 
 
-def get_image_label_paths(dataset_name, split):
+def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
+    """Returns the available / prepared 2d image and corresponding labels for APG benchmarking.
+    """
     assert split in ["val", "test"]
 
     # Label-free
@@ -163,14 +166,41 @@ def get_image_label_paths(dataset_name, split):
     elif dataset_name == "deepseas":
         if split == "val":  # NOTE: Since 'val' does not exist for this data.
             split = "test"
-        datasets.light_microscopy.deepseas.get_deepseas_paths(
-            os.path.join(DATA_DIR, dataset_name), split,
+        image_paths, label_paths = datasets.light_microscopy.deepseas.get_deepseas_paths(
+            os.path.join(DATA_DIR, dataset_name), split, download=True,
         )
+    elif dataset_name == "bacmother":   # TODO: Double-check
+        image_paths, label_paths = datasets.light_microscopy.bac_mother.get_bac_mother_paths(
+            os.path.join(DATA_DIR, dataset_name), split=split, download=True,
+        )
+    elif dataset_name == "dic_hepg2":  # TODO: Double-check
+        image_paths, label_paths = datasets.light_microscopy.dic_hepg2.get_dic_hepg2_paths(
+            os.path.join(DATA_DIR, dataset_name), split=split, download=True,
+        )
+    elif dataset_name == "toiam":  # TODO: Double check and make splits on the fly
+        image_paths, label_paths = datasets.light_microscopy.toiam.get_toiam_paths(
+            os.path.join(DATA_DIR, dataset_name), download=True,
+        )
+    elif dataset_name == "usiigaci":  # TODO: Double check
+        split = "train" if split == "test" else split
+        image_paths, label_paths = datasets.light_microscopy.usiigaci.get_usiigaci_paths(
+            os.path.join(DATA_DIR, dataset_name), split=split, download=True,
+        )
+    elif dataset_name == "vicar":  # TODO: Double check and make splits on the fly.
+        image_paths, label_paths = datasets.light_microscopy.vicar.get_vicar_paths(
+            os.path.join(DATA_DIR, dataset_name), download=True,
+        )
+
+    # NOTE: Can we add other organoid segmentation data?
 
     # Histopathology
     elif dataset_name == "pannuke":
         image_paths, label_paths = prepare_data_paths(
             dataset_name=dataset_name, split=split, base_dir=os.path.join(DATA_DIR, dataset_name),
+        )
+    elif dataset_name == "monuseg":  # TODO: Double check and make splits on the fly.
+        image_paths, label_paths = datasets.histopathology.monuseg.get_monuseg_paths(
+            os.path.join(DATA_DIR, dataset_name), split=split, download=True,
         )
 
     # Fluoroscence (Nuclei)
@@ -181,12 +211,69 @@ def get_image_label_paths(dataset_name, split):
         image_paths, label_paths = datasets.light_microscopy.dsb.get_dsb_paths(
             os.path.join(DATA_DIR, "dsb"), source="reduced", split=split,
         )
+    elif dataset_name == "aisegcell":
+        # TODO: Container format, implement stuff
+        ...
+    elif dataset_name == "arvidsson":  # TODO: Double check
+        image_paths, label_paths = datasets.light_microscopy.arvidsson.get_arvidsson_paths(
+            os.path.join(DATA_DIR, dataset_name), split, download=True,
+        )
+    elif dataset_name == "bitdepth_nucseg":  # TODO: Double check and make splits.
+        image_paths, label_paths = datasets.light_microscopy.bitdepth_nucseg.get_bitdepth_nucseg_paths(
+            os.path.join(DATA_DIR, dataset_name), download=True,
+        )
+    elif dataset_name == "blastospim":  # TODO: Double check data and make splits on the fly.
+        # TODO: Container format, implement stuff
+        ...
+    elif dataset_name == "celegans_atlas":  # TODO: Double check data and make 2d crops.
+        image_paths, label_paths = datasets.light_microscopy.celegans_atlas.get_celegans_atlas_paths(
+            os.path.join(DATA_DIR, dataset_name), split=split, download=True,
+        )
+    elif dataset_name == "cellseg_3d":  # TODO: Make splits on the fly and make 2d crops.
+        image_paths, label_paths = datasets.light_microscopy.cellseg_3d.get_cellseg_3d_paths(
+            os.path.join(DATA_DIR, dataset_name), download=True,
+        )
+    elif dataset_name == "gonuclear":
+        # TODO: Container format and get 2d crops.
+        ...
+    elif dataset_name == "ifnuclei":  # TODO: Double check
+        image_paths, label_paths = datasets.light_microscopy.ifnuclei.get_ifnuclei_paths(
+            os.path.join(DATA_DIR, dataset_name), download=True,
+        )
+    elif dataset_name == "nis3d":
+        # TODO: 3d images need to be converted to 2d.
+        ...
+    elif dataset_name == "parhyale_regen":
+        # TODO: Container data formats and need to be converted to 2d.
+        ...
+    elif dataset_name == "plantseg_nuclei":
+        # TODO: Convert 3d images to 2d crops.
+        ...
 
     # Fluorescence (Cells)
     elif dataset_name == "tissuenet":
         image_paths, label_paths = prepare_data_paths(
             dataset_name=dataset_name, split=split, base_dir=os.path.join(DATA_DIR, dataset_name),
         )
+    elif dataset_name == "cellpose":
+        ...
+    elif dataset_name == "plantseg_root":
+        # TODO: Convert 3d images from container format and make splits.
+        ...
+    elif dataset_name == "covid_if":
+        # TODO: Convert from container format
+        ...
+    elif dataset_name == "hpa":
+        # TODO: Choose the three channels as PEFT-SAM paper.
+        ...
+    elif dataset_name == "cellbindb":
+        ...
+    elif dataset_name == "mouse_embryo":
+        ...
+    elif dataset_name == "plantseg_ovules":
+        ...
+    elif dataset_name == "pnas_arabidopsis":
+        ...
 
     else:
         raise ValueError
