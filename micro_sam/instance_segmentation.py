@@ -1283,7 +1283,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
 
 
 # TODO enable parallel peak_local_max and label to scale to large images, e.g. WSI
-def _derive_prompts(
+def _derive_point_prompts(
     foreground: np.ndarray,
     center_distances: np.ndarray,
     boundary_distances: np.ndarray,
@@ -1348,7 +1348,76 @@ def _derive_prompts(
     # v.add_points(prompts)
     # napari.run()
 
-    return prompts
+    if len(prompts) == 0:
+        return None
+    points = prompts[:, None, ::-1]
+    labels = np.ones((len(prompts), 1))
+    return {"points": points, "point_labels": labels}
+
+
+# First version of function to derive box prompts.
+def _derive_box_prompts(
+    foreground: np.ndarray,
+    center_distances: np.ndarray,
+    boundary_distances: np.ndarray,
+    foreground_threshold: float = 0.5,
+    center_distance_threshold: float = 0.5,
+    boundary_distance_threshold: float = 0.5,
+    box_extension: float = 0.05,
+    **kwargs,
+):
+    # We derive from the two different possible height maps.
+    fg_mask = (foreground > foreground_threshold).astype("int8")
+
+    # TODO expose this properly as params.
+    center_distance_threshold = 0.9
+    boundary_distance_threshold = 0.9
+    center_mask = (center_distances > center_distance_threshold)
+    boundary_mask = (boundary_distances > boundary_distance_threshold)
+
+    hmap0 = (fg_mask - boundary_mask) > 0
+    hmap1 = (fg_mask - boundary_mask - center_mask) > 0
+    hmaps = [hmap0, hmap1]
+
+    shape = fg_mask.shape
+    prompts = []
+    for hmap in hmaps:
+        hmap[~fg_mask] = 0
+        cc = label(hmap)
+        props = regionprops(cc)
+        len_y = [prop.bbox[2] - prop.bbox[0] for prop in props]
+        len_x = [prop.bbox[3] - prop.bbox[1] for prop in props]
+        # The bounding boxes are represented by [MIN_X, MIN_Y, MAX_X, MAX_Y].
+        prompts.extend([[
+            max(prop.bbox[1] - box_extension * lx, 0),
+            max(prop.bbox[0] - box_extension * ly, 0),
+            min(prop.bbox[3] + box_extension * lx, shape[1]),
+            min(prop.bbox[2] + box_extension * lx, shape[0]),
+        ] for prop, lx, ly in zip(props, len_x, len_y)])
+
+    # For debugging/visualization purposes
+    # import napari
+    # prompts_vis = [
+    #     [(prompt[1], prompt[0]),
+    #      (prompt[3], prompt[2])]
+    #     for prompt in prompts
+    # ]
+    # v = napari.Viewer()
+    # v.add_image(fg_mask, contrast_limits=(0, 1))
+    # v.add_image(hmaps[0], name="center-map", contrast_limits=(0, 1))
+    # v.add_image(hmaps[1], name="bd-map", contrast_limits=(0, 1))
+    # v.add_shapes(
+    #     prompts_vis,
+    #     shape_type="rectangle",
+    #     face_color="transparent",
+    #     edge_color="red",
+    #     edge_width=2,
+    # )
+    # napari.run()
+
+    if len(prompts) == 0:
+        return None
+    return {"boxes": np.array(prompts)}
 
 
 class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
@@ -1391,6 +1460,9 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         foreground, center_distances, boundary_distances =\
             self._foreground, self._center_distances, self._boundary_distances
 
+        # TODO make param?
+        # _derive_prompts = _derive_point_prompts
+        _derive_prompts = _derive_box_prompts
         # 1.) Derive promtps from the decoder predictions.
         prompts = _derive_prompts(
             foreground,
@@ -1404,20 +1476,17 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
 
         # 2.) Apply the predictor to the prompts.
         batch_size = batch_size
-        points = prompts[:, None, ::-1]
-        labels = np.ones((len(prompts), 1))
-
-        if len(points) == 0:  # Since there were no prompts derived, we can't do much further.
+        # TODO: the ouptputs have to be synced (i.e. depending on output model)
+        if prompts is None:  # Since there were no prompts derived, we can't do much further.
             return []  # Returns empty masks.
         else:
             predictions = batched_inference(
                 self._predictor,
                 image=None,
                 batch_size=batch_size,
-                points=points,
-                point_labels=labels,
                 return_instance_segmentation=False,
                 multimasking=multimasking,
+                **prompts,
             )
 
         # 3.) Apply non-max suppression to the masks.
@@ -1462,6 +1531,7 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
         foreground, center_distances, boundary_distances =\
             self._foreground, self._center_distances, self._boundary_distances
 
+        _derive_prompts = _derive_box_prompts
         # 1.) Derive promtps from the decoder predictions.
         prompts = _derive_prompts(
             foreground,
@@ -1475,17 +1545,14 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
 
         # 2.) Apply the predictor to the prompts.
         batch_size = batch_size
-        points = prompts[:, None, ::-1]
-        labels = np.ones((len(prompts), 1))
         predictions = batched_tiled_inference(
             self._predictor,
             image=None,
             batch_size=batch_size,
             image_embeddings=self._image_embeddings,
-            points=points,
-            point_labels=labels,
             return_instance_segmentation=False,
             multimasking=multimasking,
+            **prompts
         )
 
         # 3.) Apply non-max suppression to the masks.
