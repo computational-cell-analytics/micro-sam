@@ -211,6 +211,9 @@ def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
         image_paths, label_paths = datasets.light_microscopy.dsb.get_dsb_paths(
             os.path.join(DATA_DIR, "dsb"), source="reduced", split=split,
         )
+    elif dataset_name == "dynamicnuclearnet":
+        # TODO: Need to do it.
+        ...
     elif dataset_name == "aisegcell":
         # TODO: Container format, implement stuff
         ...
