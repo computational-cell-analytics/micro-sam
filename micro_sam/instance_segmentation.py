@@ -1361,8 +1361,8 @@ def _derive_box_prompts(
     center_distances: np.ndarray,
     boundary_distances: np.ndarray,
     foreground_threshold: float = 0.5,
-    center_distance_threshold: float = 0.5,
-    boundary_distance_threshold: float = 0.5,
+    center_distance_threshold: float = 0.9,  # NOTE: These parameters work best.
+    boundary_distance_threshold: float = 0.9,  # NOTE: These parameters work best.
     box_extension: float = 0.05,
     **kwargs,
 ):
@@ -1435,7 +1435,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         min_distance: int = 5,
         threshold_abs: float = 0.25,
         multimasking: bool = False,
-        prompt_type: Literal["box", "point"] = "box",
+        prompt_type: Literal["box", "point"] = "point",
         prompt_selection: Union[str, List[str]] = "boundary_distances",
         batch_size: int = 32,
         nms_threshold: float = 0.9,
@@ -1511,7 +1511,7 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
         min_distance: int = 5,
         threshold_abs: float = 0.25,
         multimasking: bool = False,
-        prompt_type: Literal["box", "point"] = "box",
+        prompt_type: Literal["box", "point"] = "point",
         prompt_selection: Union[str, List[str]] = "boundary_distances",
         batch_size: int = 32,
         nms_threshold: float = 0.9,

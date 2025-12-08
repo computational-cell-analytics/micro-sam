@@ -6,6 +6,7 @@ from natsort import natsorted
 
 import numpy as np
 import imageio.v3 as imageio
+from skimage.measure import label as connected_components
 
 from torch_em.data import datasets
 
@@ -24,7 +25,8 @@ def _process_images(
     base_dir,
     dataset_name,
     cell_count_criterion=None,
-    limiter=None
+    limiter=None,
+    ensure_connected_components=False,
 ):
     if os.path.exists(os.path.join(base_dir, split)):
         return _find_paths(base_dir, split, dataset_name)
@@ -41,6 +43,9 @@ def _process_images(
     ):
         if im.ndim == 3 and im.shape[0] == 3:  # eg. for PanNuke
             im = im.transpose(1, 2, 0)  # Make channels last for RGB images.
+
+        if ensure_connected_components:
+            label = connected_components(label)
 
         cell_count = len(np.unique(label))
 
@@ -113,7 +118,25 @@ def prepare_data_paths(dataset_name, split, base_dir):
 
         image_paths, label_paths = _process_images(
             image_paths=images,
-            label_paths=labels, 
+            label_paths=labels,
+            split=split,
+            base_dir=base_dir,
+            dataset_name=dataset_name,
+            limiter=100 if split == "val" else None,
+            cell_count_criterion=10,
+        )
+
+    elif dataset_name == "deepseas":
+        # Additional work needs to be done as the labels are binary
+        image_paths, label_paths = datasets.light_microscopy.deepseas.get_deepseas_paths(
+            os.path.join(DATA_DIR, dataset_name),
+            split="train" if split == "val" else split,  # NOTE: Since 'val' does not exist for this data.
+            download=True,
+        )
+
+        image_paths, label_paths = _process_images(
+            image_paths=images,
+            label_paths=labels,
             split=split,
             base_dir=base_dir,
             dataset_name=dataset_name,
@@ -138,12 +161,9 @@ def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
             input_folder=os.path.join(DATA_DIR, dataset_name),
             split=split,
             n_val_per_cell_type=5 if split == "val" else None,
-
         )
     elif dataset_name == "omnipose":
-        if split == "val":  # NOTE: Since 'val' does not exist for this data.
-            split = "test"
-
+        split = "train" if split == "val" else split  # NOTE: Since 'val' does not exist for this data.
         image_paths, label_paths = datasets.light_microscopy.omnipose.get_omnipose_paths(
             os.path.join(DATA_DIR, dataset_name), split, data_choice=["bact_phase", "worm"],
         )
@@ -154,10 +174,8 @@ def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
         image_paths = natsorted(glob(os.path.join(image_dir, "*.tif")))
         label_paths = natsorted(glob(os.path.join(label_dir, "*.tif")))
     elif dataset_name == "deepseas":
-        if split == "val":  # NOTE: Since 'val' does not exist for this data.
-            split = "test"
-        image_paths, label_paths = datasets.light_microscopy.deepseas.get_deepseas_paths(
-            os.path.join(DATA_DIR, dataset_name), split, download=True,
+        image_paths, label_paths = prepare_data_paths(
+            dataset_name=dataset_name, split=split, base_dir=os.path.join(DATA_DIR, dataset_name),
         )
     elif dataset_name == "bacmother":   # TODO: Double-check
         image_paths, label_paths = datasets.light_microscopy.bac_mother.get_bac_mother_paths(
