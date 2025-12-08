@@ -81,7 +81,6 @@ def posthoc_analysis(dataset_name, worst_k):
 
         if dataset_name == "tissuenet":
             im = im[:, :, 0]
-            print(im.max(), im.min())
             ax[0].imshow(im, cmap="gray")
         elif dataset_name == "pannuke":
             ax[0].imshow(im)
