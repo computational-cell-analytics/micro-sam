@@ -23,7 +23,9 @@ def run_baseline_engine(image, method, **kwargs):
     elif method == "apg":
         segmenter = kwargs["segmenter"]
         segmenter.initialize(image, ndim=2)
-        segmentation = segmenter.generate(prompt_selection="boundary_distances")
+        segmentation = segmenter.generate(
+            prompt_selection="boundary_distances",
+        )
 
         if len(segmentation) == 0:
             segmentation = np.zeros(image.shape[:2], dtype="uint32")
@@ -130,8 +132,9 @@ def run_default_baselines(dataset_name, method, model_type, target=None):
         f1s.append(stats["f1"])
 
     print(
-        f"The final scores for '{method}' with '{model_type}' are - mSA:", np.mean(msas), "SA50:",  np.mean(sa50s),
-        "Precision:", np.mean(precisions), "Recall:", np.mean(recalls), "F1 Score:", np.mean(f1s)
+        f"The final scores for '{method}' with '{model_type}' on '{dataset_name}' are - mSA:",
+        np.mean(msas), "SA50:",  np.mean(sa50s), "Precision:", np.mean(precisions), "Recall:",
+        np.mean(recalls), "F1 Score:", np.mean(f1s)
     )
 
 
@@ -145,6 +148,6 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--dataset_name", type=str, required=True)
     parser.add_argument("--method", type=str, required=True)
     parser.add_argument("-m", "--model_type", type=str, required=True)
-    parser.add_argument("--target", type=str, default=None)  # needed for instanseg.
+    parser.add_argument("--target", type=str, default=None)  # We need this for InstanSeg and SAM3.
     args = parser.parse_args()
     main(args)

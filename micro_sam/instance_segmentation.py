@@ -8,7 +8,7 @@ import warnings
 from abc import ABC
 from copy import deepcopy
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, Literal
 
 import vigra
 import numpy as np
@@ -1370,8 +1370,6 @@ def _derive_box_prompts(
     fg_mask = (foreground > foreground_threshold).astype("int8")
 
     # TODO expose this properly as params.
-    center_distance_threshold = 0.9
-    boundary_distance_threshold = 0.9
     center_mask = (center_distances > center_distance_threshold)
     boundary_mask = (boundary_distances > boundary_distance_threshold)
 
@@ -1437,6 +1435,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         min_distance: int = 5,
         threshold_abs: float = 0.25,
         multimasking: bool = False,
+        prompt_type: Literal["box", "point"] = "box",
         prompt_selection: Union[str, List[str]] = "boundary_distances",
         batch_size: int = 32,
         nms_threshold: float = 0.9,
@@ -1460,9 +1459,13 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         foreground, center_distances, boundary_distances =\
             self._foreground, self._center_distances, self._boundary_distances
 
-        # TODO make param?
-        # _derive_prompts = _derive_point_prompts
-        _derive_prompts = _derive_box_prompts
+        if prompt_type == "point":
+            _derive_prompts = _derive_point_prompts
+        elif prompt_type == "box":
+            _derive_prompts = _derive_box_prompts
+        else:
+            raise ValueError(prompt_type)
+
         # 1.) Derive promtps from the decoder predictions.
         prompts = _derive_prompts(
             foreground,
@@ -1508,12 +1511,13 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
         min_distance: int = 5,
         threshold_abs: float = 0.25,
         multimasking: bool = False,
-        prompt_selection: Union[str, List[str]] = "center_distances",
+        prompt_type: Literal["box", "point"] = "box",
+        prompt_selection: Union[str, List[str]] = "boundary_distances",
         batch_size: int = 32,
         nms_threshold: float = 0.9,
         output_mode: Optional[str] = "binary_mask",
     ) -> List[Dict[str, Any]]:
-        """Generate instance segmentation for the currently initialized image.
+        """Generate tiling-based instance segmentation for the currently initialized image.
 
         Args:
             min_size: Minimal object size in the segmentation result. By default, set to '25'.
@@ -1531,7 +1535,13 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
         foreground, center_distances, boundary_distances =\
             self._foreground, self._center_distances, self._boundary_distances
 
-        _derive_prompts = _derive_box_prompts
+        if prompt_type == "point":
+            _derive_prompts = _derive_point_prompts
+        elif prompt_type == "box":
+            _derive_prompts = _derive_box_prompts
+        else:
+            raise ValueError(prompt_type)
+
         # 1.) Derive promtps from the decoder predictions.
         prompts = _derive_prompts(
             foreground,

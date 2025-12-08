@@ -153,16 +153,6 @@ def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
         )
         image_paths = natsorted(glob(os.path.join(image_dir, "*.tif")))
         label_paths = natsorted(glob(os.path.join(label_dir, "*.tif")))
-    elif dataset_name == "yeaz":
-        image_paths, label_paths = datasets.light_microscopy.yeaz.get_yeaz_paths(
-            os.path.join(DATA_DIR, dataset_name), choice="bf", split=split,
-        )
-    elif dataset_name == "orgasegment":
-        if split == "test":
-            split = "eval"  # Simple name matching
-        image_paths, label_paths = datasets.light_microscopy.orgasegment.get_orgasegment_paths(
-            os.path.join(DATA_DIR, dataset_name), split,
-        )
     elif dataset_name == "deepseas":
         if split == "val":  # NOTE: Since 'val' does not exist for this data.
             split = "test"
@@ -191,8 +181,6 @@ def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
             os.path.join(DATA_DIR, dataset_name), download=True,
         )
 
-    # NOTE: Can we add other organoid segmentation data?
-
     # Histopathology
     elif dataset_name == "pannuke":
         image_paths, label_paths = prepare_data_paths(
@@ -202,6 +190,20 @@ def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
         image_paths, label_paths = datasets.histopathology.monuseg.get_monuseg_paths(
             os.path.join(DATA_DIR, dataset_name), split=split, download=True,
         )
+    elif dataset_name == "tnbc":
+        ...
+    elif dataset_name == "nuinsseg":
+        ...
+    elif dataset_name == "ihc_tma":
+        ...
+    elif dataset_name == "lynsec":
+        ...
+    elif dataset_name == "puma":
+        ...
+    elif dataset_name == "nuclick":
+        ...
+    elif dataset_name == "cytodark0":
+        ...
 
     # Fluoroscence (Nuclei)
     elif dataset_name == "dsb":
@@ -213,6 +215,8 @@ def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
         )
     elif dataset_name == "dynamicnuclearnet":
         # TODO: Need to do it.
+        ...
+    elif dataset_name == "u20s":  # TODO: Implement it.
         ...
     elif dataset_name == "aisegcell":
         # TODO: Container format, implement stuff
@@ -228,14 +232,6 @@ def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
     elif dataset_name == "blastospim":  # TODO: Double check data and make splits on the fly.
         # TODO: Container format, implement stuff
         ...
-    elif dataset_name == "celegans_atlas":  # TODO: Double check data and make 2d crops.
-        image_paths, label_paths = datasets.light_microscopy.celegans_atlas.get_celegans_atlas_paths(
-            os.path.join(DATA_DIR, dataset_name), split=split, download=True,
-        )
-    elif dataset_name == "cellseg_3d":  # TODO: Make splits on the fly and make 2d crops.
-        image_paths, label_paths = datasets.light_microscopy.cellseg_3d.get_cellseg_3d_paths(
-            os.path.join(DATA_DIR, dataset_name), download=True,
-        )
     elif dataset_name == "gonuclear":
         # TODO: Container format and get 2d crops.
         ...
@@ -248,9 +244,6 @@ def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
         ...
     elif dataset_name == "parhyale_regen":
         # TODO: Container data formats and need to be converted to 2d.
-        ...
-    elif dataset_name == "plantseg_nuclei":
-        # TODO: Convert 3d images to 2d crops.
         ...
 
     # Fluorescence (Cells)
