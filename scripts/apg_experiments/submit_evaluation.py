@@ -88,12 +88,12 @@ def submit_slurm(args):
         # SAM2
         # ["sam2", "hvit_b"],
         # SAM3
-        # ["sam3", "cells"]
+        # ["sam3", "cells"],
         # And other external methods.
         ["cellpose", "cyto3"],
         ["cellpose", "cpsam"],
         ["cellsam", "cellsam"],
-        # ["instanseg", "brightgield_nuclei"]
+        # ["instanseg", "brightfield_nuclei"]
         # ["instanseg", "fluoroscence_cells_and_nuclei"]
     ]
 

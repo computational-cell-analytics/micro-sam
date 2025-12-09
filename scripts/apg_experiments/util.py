@@ -110,7 +110,7 @@ def _norm_image(image):
     return image
 
 
-def _make_center_crop(image, target_shape=(512, 512)):
+def _make_center_crop(image, target_shape=(512, 512), seg=None):
     """Essential for images larger than (512, 512) for our evaluation strategy.
     """
     target_h, target_w = target_shape
@@ -120,10 +120,42 @@ def _make_center_crop(image, target_shape=(512, 512)):
     crop_h = min(target_h, H)
     crop_w = min(target_w, W)
 
-    top = (H - crop_h) // 2
-    left = (W - crop_w) // 2
+    def _center_crop_coords():
+        top = (H - crop_h) // 2
+        left = (W - crop_w) // 2
+        return top, left
 
-    return image[top: (top+crop_h), left: (left+crop_w), ...]
+    if seg is not None:  # Otherwise, make a smarter crop subjected to labels.
+        # I'll treat non-zero as foreground.
+        mask = (seg != 0)
+
+        if np.any(mask):
+            ys, xs = np.where(mask)
+            y_min, y_max = ys.min(), ys.max()
+            x_min, x_max = xs.min(), xs.max()
+
+            # Center of the foreground bounding box
+            cy = (y_min + y_max) // 2
+            cx = (x_min + x_max) // 2
+
+            # Place crop centered at (cy, cx), then clip to image bounds
+            top = cy - crop_h // 2
+            left = cx - crop_w // 2
+
+            top = max(0, min(top, H - crop_h))
+            left = max(0, min(left, W - crop_w))
+        else:   # No foreground, let's fallback to the classic center crop.
+            top, left = _center_crop_coords()
+
+    else:  # Well no segmentation? We do classic stuff anyways!
+        top, left = _center_crop_coords()
+
+    image_crop = image[top: top + crop_h, left: left + crop_w, ...]
+
+    if seg is None:
+        return image_crop
+    else:
+        return image_crop, seg[top: top + crop_h, left: left + crop_w]
 
 
 def prepare_data_paths(dataset_name, split, base_dir):
@@ -139,6 +171,50 @@ def prepare_data_paths(dataset_name, split, base_dir):
         ipaths, lpaths = _get_livecell_paths(
             input_folder=os.path.join(DATA_DIR, dataset_name), split=split,
             n_val_per_cell_type=5 if split == "val" else None,
+        )
+
+        images = [_make_center_crop(imageio.imread(p)) for p in ipaths]
+        labels = [_make_center_crop(imageio.imread(p)) for p in lpaths]
+
+    elif dataset_name == "omnipose":
+        # Making center crops for larger images
+        cell_count_criterion = 3
+        split = "train" if split == "val" else split  # NOTE: Since 'val' does not exist for this data.
+        ipaths, lpaths = datasets.light_microscopy.omnipose.get_omnipose_paths(
+            os.path.join(DATA_DIR, dataset_name), split, data_choice=["bact_phase", "worm"],
+        )
+
+        images = [_make_center_crop(imageio.imread(p)) for p in ipaths]
+        labels = [_make_center_crop(imageio.imread(p)) for p in lpaths]
+
+    elif dataset_name == "deepbacs":
+        # Make center crops for larger images.
+        cell_count_criterion = 5
+        image_dir, label_dir = datasets.light_microscopy.deepbacs.get_deepbacs_paths(
+            os.path.join(DATA_DIR, dataset_name), split=split, bac_type="mixed",
+        )
+        ipaths = natsorted(glob(os.path.join(image_dir, "*.tif")))
+        lpaths = natsorted(glob(os.path.join(label_dir, "*.tif")))
+
+        images = [_make_center_crop(imageio.imread(p)) for p in ipaths]
+        labels = [_make_center_crop(imageio.imread(p)) for p in lpaths]
+
+    elif dataset_name == "usiigaci":
+        # Make crops out of the data.
+        cell_count_criterion = 3
+        split = "train" if split == "test" else split
+        ipaths, lpaths = datasets.light_microscopy.usiigaci.get_usiigaci_paths(
+            os.path.join(DATA_DIR, dataset_name), split=split, download=True,
+        )
+
+        images = [_make_center_crop(imageio.imread(p)) for p in ipaths]
+        labels = [_make_center_crop(imageio.imread(p)) for p in lpaths]
+
+    elif dataset_name == "vicar":
+        # Make crops out of it.
+        cell_count_criterion = 5
+        ipaths, lpaths = datasets.light_microscopy.vicar.get_vicar_paths(
+            os.path.join(DATA_DIR, dataset_name), download=True,
         )
 
         images = [_make_center_crop(imageio.imread(p)) for p in ipaths]
@@ -164,6 +240,9 @@ def prepare_data_paths(dataset_name, split, base_dir):
         # Let's pad the image and labels to match (512, 512)
         images = [_pad_image(im) for im in images]
         labels = [_pad_image(lab) for lab in labels]
+
+        if split == "val":  # NOTE: Limiting the number of images for validation.
+            images, labels = images[:200], labels[:200]
 
     elif dataset_name == "tissuenet":
         # This needs to be done as these are zarr images.
@@ -211,15 +290,18 @@ def prepare_data_paths(dataset_name, split, base_dir):
         # Making splits on the fly.
         cell_count_criterion = 5
         ipaths, lpaths = datasets.histopathology.monuseg.get_monuseg_paths(
-            os.path.join(DATA_DIR, dataset_name),
-            split="train" if split == "val" else split,
-            download=True,
+            os.path.join(DATA_DIR, dataset_name), split="train" if split == "val" else split, download=True,
         )
+
         images = [imageio.imread(p) for p in ipaths]
         labels = [imageio.imread(p) for p in lpaths]
 
-        if split == "val":
+        if split == "val":  # Make the validation pool small.
             images, labels = images[:20], labels[:20]
+
+        # Finally, let's crop the images
+        images = [_make_center_crop(im) for im in images]
+        labels = [_make_center_crop(lab) for lab in labels]
 
     elif dataset_name == "tnbc":
         # Converting container data formats
@@ -262,6 +344,10 @@ def prepare_data_paths(dataset_name, split, base_dir):
         images = [open_file(p)["raw"][:].transpose(1, 2, 0) for p in fpaths]
         labels = [open_file(p)["labels/instances/nuclei"][:] for p in fpaths]
 
+        # Let's crop the images
+        images = [_make_center_crop(im) for im in images]
+        labels = [_make_center_crop(lab) for lab in labels]
+
     elif dataset_name == "cytodark0":
         # Convert container ff to tif files.
         cell_count_criterion = 5
@@ -271,6 +357,48 @@ def prepare_data_paths(dataset_name, split, base_dir):
 
         images = [open_file(p)["raw"][:].transpose(1, 2, 0) for p in fpaths]
         labels = [open_file(p)["labels/instances"][:] for p in fpaths]
+
+        # Let's crop the images
+        images = [_make_center_crop(im) for im in images]
+        labels = [_make_center_crop(lab) for lab in labels]
+
+    elif dataset_name == "u20s":
+        # Make crops out of large images.
+        cell_count_criterion = 5
+        ipaths, lpaths = datasets.light_microscopy.u20s.get_u20s_paths(
+            os.path.join(DATA_DIR, dataset_name), download=True,
+        )
+        if split == "val":
+            ipaths, lpaths = ipaths[:25], lpaths[:25]
+        else:
+            ipaths, lpaths = ipaths[25:], lpaths[25:]
+
+        images = [_make_center_crop(imageio.imread(p)) for p in ipaths]
+        labels = [_make_center_crop(imageio.imread(p)) for p in lpaths]
+
+    elif dataset_name == "arvidsson":
+        # Make crops out of large images.
+        cell_count_criterion = 5
+        ipaths, lpaths = datasets.light_microscopy.arvidsson.get_arvidsson_paths(
+            os.path.join(DATA_DIR, dataset_name), split, download=True,
+        )
+
+        images = [_make_center_crop(imageio.imread(p)) for p in ipaths]
+        labels = [_make_center_crop(imageio.imread(p)) for p in lpaths]
+
+    elif dataset_name == "ifnuclei":
+        # Make crops out of large images.
+        cell_count_criterion = 5
+        ipaths, lpaths = datasets.light_microscopy.ifnuclei.get_ifnuclei_paths(
+            os.path.join(DATA_DIR, dataset_name), download=True,
+        )
+        if split == "val":
+            ipaths, lpaths = ipaths[:10], lpaths[:10]
+        else:
+            ipaths, lpaths = ipaths[10:], lpaths[10:]
+
+        images = [_make_center_crop(imageio.imread(p)) for p in ipaths]
+        labels = [_make_center_crop(imageio.imread(p)) for p in lpaths]
 
     elif dataset_name == "dynamicnuclearnet":
         # Converting from container ff to tif files.
@@ -282,22 +410,9 @@ def prepare_data_paths(dataset_name, split, base_dir):
         images = [open_file(p)["raw"][:] for p in fpaths]
         labels = [open_file(p)["labels"][:] for p in fpaths]
 
-    elif dataset_name == "aisegcell":
-        # Converting container ff to tif files
-        cell_count_criterion = 5
-        fpaths = datasets.light_microscopy.aisegcell.get_aisegcell_paths(
-            os.path.join(DATA_DIR, dataset_name), split=split, download=True,
-        )
-
-        # NOTE: There's just too many images for this. Let's collect the first 1000 images.
-        fpaths = fpaths[:1000]
-
-        images = [open_file(p)["raw/fluorescence"][:].transpose(1, 2, 0) for p in fpaths]
-        labels = [open_file(p)["labels"][:] for p in fpaths]
-
     elif dataset_name == "blastospim":
         # Converting container ff to tif files and making splits.
-        cell_count_criterion = 5
+        cell_count_criterion = 6
         fpaths = datasets.light_microscopy.blastospim.get_blastospim_paths(
             os.path.join(DATA_DIR, dataset_name), download=True,
         )
@@ -314,6 +429,13 @@ def prepare_data_paths(dataset_name, split, base_dir):
         # Let's slice it up
         images = [im for vol in images for im in vol]
         labels = [lab for vol in labels for lab in vol]
+
+        # Next, we do smarter cropping, subjected to where objects are.
+        paired = [
+            _make_center_crop(im, target_shape=(512, 512), seg=lab) for im, lab in zip(images, labels)
+        ]
+        images, labels = zip(*paired)
+        images, labels = list(images), list(labels)
 
     elif dataset_name == "gonuclear":
         # Converting container ff to tif files and make splits.
@@ -334,6 +456,9 @@ def prepare_data_paths(dataset_name, split, base_dir):
         else:
             images, labels = images[250:], labels[250:]
 
+        images = [_make_center_crop(im) for im in images]
+        labels = [_make_center_crop(lab) for lab in labels]
+
     elif dataset_name == "nis3d":
         # Converting 3d LSM images to 2d and making data splits.
         cell_count_criterion = 20
@@ -348,6 +473,13 @@ def prepare_data_paths(dataset_name, split, base_dir):
         # Let's slice it up
         images = [im for vol in images for im in vol]
         labels = [lab for vol in labels for lab in vol]
+
+        # Next, we do smarter cropping, subjected to where objects are.
+        paired = [
+            _make_center_crop(im, target_shape=(512, 512), seg=lab) for im, lab in zip(images, labels)
+        ]
+        images, labels = zip(*paired)
+        images, labels = list(images), list(labels)
 
     elif dataset_name == "parhyale_regen":
         # Convert container ff stored 3d images to 2d and make splits.
@@ -375,13 +507,20 @@ def prepare_data_paths(dataset_name, split, base_dir):
             os.path.join(DATA_DIR, dataset_name), download=True,
         )
 
-        images = [open_file(p)["raw/serum_IgG/s0"][:] for p in fpaths]
+        icells = [open_file(p)["raw/serum_IgG/s0"][:] for p in fpaths]
+        inuclei = [open_file(p)["raw/nuclei/s0"][:] for p in fpaths]
+        images = [
+            np.stack([icell, inuc, np.zeros_like(icell)], axis=-1) for icell, inuc in zip(icells, inuclei)
+        ]
         labels = [open_file(p)["labels/cells/s0"][:] for p in fpaths]
 
         if split == "val":
             images, labels = images[:10], labels[:10]
         else:
             images, labels = images[10:], labels[10:]
+
+        images = [_make_center_crop(im) for im in images]
+        labels = [_make_center_crop(lab) for lab in labels]
 
     elif dataset_name == "hpa":
         # Make PEFT-SAM style resizing.
@@ -424,6 +563,9 @@ def prepare_data_paths(dataset_name, split, base_dir):
         else:
             images, labels = images[150:], labels[150:]
 
+        images = [_make_center_crop(im) for im in images]
+        labels = [_make_center_crop(lab) for lab in labels]
+
     elif dataset_name == "plantseg_root":
         # Convert from container ff and make splits.
         cell_count_criterion = 5
@@ -444,6 +586,9 @@ def prepare_data_paths(dataset_name, split, base_dir):
         else:
             images, labels = images[400:], labels[400:]
 
+        images = [_make_center_crop(im) for im in images]
+        labels = [_make_center_crop(lab) for lab in labels]
+
     elif dataset_name == "plantseg_ovules":
         # Convert container ff and make splits
         cell_count_criterion = 25
@@ -462,6 +607,9 @@ def prepare_data_paths(dataset_name, split, base_dir):
             images, labels = images[:600], labels[:600]
         else:
             images, labels = images[600:], labels[600:]
+
+        images = [_make_center_crop(im) for im in images]
+        labels = [_make_center_crop(lab) for lab in labels]
 
     elif dataset_name == "pnas_arabidopsis":
         # Convert container ff and make splits.
@@ -507,36 +655,18 @@ def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
     assert split in ["val", "test"]
 
     # Label-free
-    if dataset_name == "omnipose":
-        split = "train" if split == "val" else split  # NOTE: Since 'val' does not exist for this data.
-        image_paths, label_paths = datasets.light_microscopy.omnipose.get_omnipose_paths(
-            os.path.join(DATA_DIR, dataset_name), split, data_choice=["bact_phase", "worm"],
-        )
-    elif dataset_name == "deepbacs":
-        image_dir, label_dir = datasets.light_microscopy.deepbacs.get_deepbacs_paths(
-            os.path.join(DATA_DIR, dataset_name), split=split, bac_type="mixed",
-        )
-        image_paths = natsorted(glob(os.path.join(image_dir, "*.tif")))
-        label_paths = natsorted(glob(os.path.join(label_dir, "*.tif")))
-    elif dataset_name == "bac_mother":
+    # TODO: Add EVICAN?
+    if dataset_name == "bac_mother":
         image_paths, label_paths = datasets.light_microscopy.bac_mother.get_bac_mother_paths(
             os.path.join(DATA_DIR, dataset_name), split=split, download=True,
         )
-    elif dataset_name == "usiigaci":
-        split = "train" if split == "test" else split
-        image_paths, label_paths = datasets.light_microscopy.usiigaci.get_usiigaci_paths(
-            os.path.join(DATA_DIR, dataset_name), split=split, download=True,
-        )
-    elif dataset_name == "vicar":
-        image_paths, label_paths = datasets.light_microscopy.vicar.get_vicar_paths(
-            os.path.join(DATA_DIR, dataset_name), download=True,
-        )
-    elif dataset_name in ["livecell", "deepseas", "toiam"]:
+    elif dataset_name in ["livecell", "omnipose", "deepbacs", "usiigaci", "vicar", "deepseas", "toiam"]:
         image_paths, label_paths = prepare_data_paths(
             dataset_name=dataset_name, split=split, base_dir=os.path.join(DATA_DIR, dataset_name),
         )
 
     # Histopathology
+    # TODO: Need one more out-of-domain data? (NuClick was lymphocytes only)
     elif dataset_name == "ihc_tma":
         image_paths, label_paths = datasets.histopathology.srsanet.get_srsanet_paths(
             os.path.join(DATA_DIR, dataset_name), split=split, download=True,
@@ -545,32 +675,18 @@ def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
         image_paths, label_paths = datasets.histopathology.lynsec.get_lynsec_paths(
             os.path.join(DATA_DIR, dataset_name), split=split, choice="ihc", download=True,
         )
-    elif dataset_name == "nuclick":  # TODO: Double check and make splits on the fly.
-        image_paths, label_paths = datasets.histopathology.nuclick.get_nuclick_paths(
-            os.path.join(DATA_DIR, dataset_name), split="Train" if split == "val" else "Validation", download=True,
-        )
     elif dataset_name in ["pannuke", "monuseg", "tnbc", "nuinsseg", "puma", "cytodark0"]:
         image_paths, label_paths = prepare_data_paths(
             dataset_name=dataset_name, split=split, base_dir=os.path.join(DATA_DIR, dataset_name),
         )
 
     # Fluoroscence (Nuclei)
+    # TODO: Another dataset? (the labels for AISegCell are horrible, the evaluation is thrown off)
     elif dataset_name == "dsb":
         image_paths, label_paths = datasets.light_microscopy.dsb.get_dsb_paths(
             os.path.join(DATA_DIR, dataset_name),
+            source="reduced",
             split="train" if split == "val" else split,  # NOTE: Since 'val' does not exist for this data.
-        )
-    elif dataset_name == "u20s":
-        image_paths, label_paths = datasets.light_microscopy.u20s.get_u20s_paths(
-            os.path.join(DATA_DIR, dataset_name), download=True,
-        )
-        if split == "val":
-            image_paths, label_paths = image_paths[:25], label_paths[:25]
-        else:
-            image_paths, label_paths = image_paths[25:], label_paths[25:]
-    elif dataset_name == "arvidsson":
-        image_paths, label_paths = datasets.light_microscopy.arvidsson.get_arvidsson_paths(
-            os.path.join(DATA_DIR, dataset_name), split, download=True,
         )
     elif dataset_name == "bitdepth_nucseg":
         image_paths, label_paths = [], []
@@ -582,29 +698,31 @@ def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
                 image_paths.extend(ipaths[:4]), label_paths.extend(lpaths[:4])
             else:
                 image_paths.extend(ipaths[4:]), label_paths.extend(lpaths[4:])
-    elif dataset_name == "ifnuclei":
-        image_paths, label_paths = datasets.light_microscopy.ifnuclei.get_ifnuclei_paths(
-            os.path.join(DATA_DIR, dataset_name), download=True,
-        )
-        if split == "val":
-            image_paths, label_paths = image_paths[:10], label_paths[:10]
-        else:
-            image_paths, label_paths = image_paths[10:], label_paths[10:]
-    elif dataset_name in ["dynamicnuclearnet", "aisegcell", "blastospim", "gonuclear", "nis3d", "parhyale_regen"]:
+    elif dataset_name in [
+        "dynamicnuclearnet", "u20s", "arvidsson", "ifnuclei",
+        "blastospim", "gonuclear", "nis3d", "parhyale_regen"
+    ]:
         image_paths, label_paths = prepare_data_paths(
             dataset_name=dataset_name, split=split, base_dir=os.path.join(DATA_DIR, dataset_name),
         )
 
     # Fluorescence (Cells)
+    # TODO: Look for another data? (MouseEmbryo has really bad labels)
     elif dataset_name == "cellpose":
         image_paths, label_paths = datasets.light_microscopy.cellpose.get_cellpose_paths(
             os.path.join(DATA_DIR, dataset_name), split="train" if split == "val" else split,
             choice="cyto", download=True,
         )
     elif dataset_name == "cellbindb":
-        image_paths, label_paths = datasets.light_microscopy.cellbindb.get_cellbindb_paths(
-            os.path.join(DATA_DIR, dataset_name), download=True,
-        )
+        image_paths, label_paths = [], []
+        for choice in ["10×Genomics_DAPI", "DAPI", "mIF"]:
+            ipaths, lpaths = datasets.light_microscopy.cellbindb.get_cellbindb_paths(
+                os.path.join(DATA_DIR, dataset_name), data_choice=choice, download=True,
+            )
+            if split == "val":
+                image_paths.extend(ipaths[:20]), label_paths.extend(lpaths[:20])
+            else:
+                image_paths.extend(ipaths[20:]), label_paths.extend(lpaths[20:])
     elif dataset_name in [
         "tissuenet", "plantseg_root", "covid_if", "hpa", "mouse_embryo", "plantseg_ovules", "pnas_arabidopsis"
     ]:
@@ -613,6 +731,6 @@ def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
         )
 
     else:
-        raise ValueError
+        raise ValueError(dataset_name)
 
     return image_paths, label_paths
