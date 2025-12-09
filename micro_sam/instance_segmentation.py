@@ -1282,6 +1282,46 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         self._is_initialized = True
 
 
+def _get_centers(segmentation, avoid_image_border=True):
+    from skimage.segmentation import find_boundaries
+    from scipy.ndimage import distance_transform_edt
+
+    # Compute the distance transform to object bounaries.
+    boundaries = find_boundaries(segmentation, mode="outer") == 0
+    # Avoid centroids on the border.
+    if avoid_image_border:
+        boundaries[0, :] = False
+        boundaries[:, 0] = False
+        boundaries[-1, :] = False
+        boundaries[:, -1] = False
+    distances = distance_transform_edt(boundaries)
+
+    # Get the unique segmentation id, exluding the background label 0.
+    seg_ids = np.unique(segmentation)[1:]
+    # Get the maximum for each id.
+    centers = []
+    # This can maybe be done more efficiently.
+    for seg_id in seg_ids:
+        # Get the mask and bounding box for this segmentation id.
+        mask = segmentation == seg_id
+        bounding_box = np.where(mask)
+        bounding_box = tuple(
+            slice(int(bb.min()), int(bb.max()) + 1) for bb in bounding_box
+        )
+        # Restrict the mask and distances to the bounding box.
+        mask, dist = mask[bounding_box], distances[bounding_box].copy()
+        # Set the distances outside of the mask to 0.
+        dist[~mask] = 0
+        # Find the center coordinate (= distance maximum).
+        center = np.argmax(dist)
+        center = np.unravel_index(center, dist.shape)
+        # Bring the center coordinate back to the full coordinate system.
+        center = tuple(ce + bb.start for ce, bb in zip(center, bounding_box))
+        centers.append(center)
+
+    return centers
+
+
 # TODO enable parallel peak_local_max and label to scale to large images, e.g. WSI
 def _derive_point_prompts(
     foreground: np.ndarray,
@@ -1327,9 +1367,7 @@ def _derive_point_prompts(
         )
         hmap_cc[bg_mask] = 0
         hmap_cc = label(hmap_cc)
-        # Extract centroids per object.
-        rprompts = regionprops(hmap_cc)
-        prompts_cc = np.array([np.round(r.centroid).astype(int) for r in rprompts])
+        prompts_cc = _get_centers(hmap_cc)
     else:
         prompts_cc = None
 
