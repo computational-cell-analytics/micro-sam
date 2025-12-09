@@ -23,11 +23,12 @@ def write_batch_script(
 #SBATCH -t 2-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH -p grete-h100:shared
-#SBATCH -G H100:1
+#SBATCH -p grete:shared
+#SBATCH -G A100:1
 #SBATCH -A gzz0001
 #SBATCH -c 16
 #SBATCH --mem 64G
+#SBATCH --constraint=inet,80gb
 #SBATCH --job-name=apg_evaluation
 
 source ~/.bashrc
@@ -96,7 +97,7 @@ def submit_slurm(args):
         # ["instanseg", "fluoroscence_cells_and_nuclei"]
     ]
 
-    if args.baseline:  # Let's run the baselines.
+    if args.baselines:  # Let's run the baselines.
         for curr_method in method_combinations:
             print(f"Submitting scripts for {dataset_name}")
             method, model_type = curr_method
@@ -132,7 +133,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--baseline", action="store_true", help="Whether to run a baseline script"
+        "--baselines", action="store_true", help="Whether to run baseline scripts."
     )
     parser.add_argument(
         "-d", "--dataset_name", type=str, default=None, help="The choice of dataset name.",
@@ -141,7 +142,7 @@ if __name__ == "__main__":
         "--method", type=str, default=None, help="The choice of baseline method."
     )
     parser.add_argument(
-        "-m", "--model_type", type=str, default=None, help="The choice of model type for baseline / SAM methods."
+        "-m", "--model_type", type=str, required=True, help="The choice of model type for baseline / SAM methods."
     )
     parser.add_argument(
         "--dry", action="store_true", help="Whether to submit the scripts to slurm or only store the scripts."

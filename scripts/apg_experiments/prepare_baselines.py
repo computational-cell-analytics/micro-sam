@@ -113,7 +113,8 @@ def run_default_baselines(dataset_name, method, model_type, target=None):
 
     msas, sa50s, precisions, recalls, f1s = [], [], [], [], []
     for curr_image_path, curr_label_path in tqdm(
-        zip(image_paths, label_paths), total=len(image_paths), desc=f"Run '{method}' baseline for '{model_type}'",
+        zip(image_paths, label_paths), total=len(image_paths),
+        desc=f"Run '{method}' baseline for '{model_type}' on '{dataset_name}'",
     ):
         image = imageio.imread(curr_image_path)
         labels = imageio.imread(curr_label_path)

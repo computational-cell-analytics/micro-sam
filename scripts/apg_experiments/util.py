@@ -85,6 +85,47 @@ def _find_paths(base_dir, split, dataset_name):
     return image_paths, label_paths
 
 
+def _pad_image(image, target_shape=(512, 512)):
+    """NOTE: Currently applicable for PanNuke only.
+    """
+    pad_width = [max(0, ms - sh) for sh, ms in zip(image.shape[:2], target_shape)]
+    if any(pw > 0 for pw in pad_width):
+        pad_width = [(0, pad_width[0]), (0, pad_width[1])]
+        if image.ndim == 3:
+            pad_width += [(0, 0)]
+        image = np.pad(image, pad_width)
+
+    return image
+
+
+def _norm_image(image):
+    """NOTE: Currently applicable for TissueNet only.
+    """
+    assert image.shape[-1] == 3  # ensure channel last.
+    image = image.astype("float32")
+    image -= image.min(axis=(0, 1))  # NOTE: For the first two channels only.
+    image /= (image.max(axis=(0, 1)) + 1e-7)  # Same as above.
+    image *= 255
+    image = image.astype("uint8")
+    return image
+
+
+def _make_center_crop(image, target_shape=(512, 512)):
+    """Essential for images larger than (512, 512) for our evaluation strategy.
+    """
+    target_h, target_w = target_shape
+    H, W = image.shape[:2]  # We assume the images coming here are YXC or YX.
+
+    # Let's choose the smallest one if size of one axis is smaller than target
+    crop_h = min(target_h, H)
+    crop_w = min(target_w, W)
+
+    top = (H - crop_h) // 2
+    left = (W - crop_w) // 2
+
+    return image[top: (top+crop_h), left: (left+crop_w), ...]
+
+
 def prepare_data_paths(dataset_name, split, base_dir):
     """This script converts all images to expected 2d images.
     """
@@ -92,7 +133,18 @@ def prepare_data_paths(dataset_name, split, base_dir):
     ensure_connected_components = False
     ignore_label = None
 
-    if dataset_name == "pannuke":
+    if dataset_name == "livecell":
+        # Making center crops
+        cell_count_criterion = 5
+        ipaths, lpaths = _get_livecell_paths(
+            input_folder=os.path.join(DATA_DIR, dataset_name), split=split,
+            n_val_per_cell_type=5 if split == "val" else None,
+        )
+
+        images = [_make_center_crop(imageio.imread(p)) for p in ipaths]
+        labels = [_make_center_crop(imageio.imread(p)) for p in lpaths]
+
+    elif dataset_name == "pannuke":
         # This needs to be done as the PanNuke images are stacked together.
         cell_count_criterion = 5
 
@@ -107,7 +159,11 @@ def prepare_data_paths(dataset_name, split, base_dir):
 
         f = open_file(volume_path)
         images, labels = f["images"][:], f["labels/instances"][:]
-        images = images.transpose(1, 0, 2, 3)
+        images = images.transpose(1, 2, 3, 0)
+
+        # Let's pad the image and labels to match (512, 512)
+        images = [_pad_image(im) for im in images]
+        labels = [_pad_image(lab) for lab in labels]
 
     elif dataset_name == "tissuenet":
         # This needs to be done as these are zarr images.
@@ -119,6 +175,9 @@ def prepare_data_paths(dataset_name, split, base_dir):
         fpaths = natsorted(fpaths)
         images = [open_file(p)["raw/rgb"][:].transpose(1, 2, 0) for p in fpaths]
         labels = [open_file(p)["labels/cell"][:] for p in fpaths]
+
+        # Let's normalize the selected channels for tissuenet
+        images = [_norm_image(im) for im in images]
 
     elif dataset_name == "deepseas":
         # Additional work needs to be done as the labels are binary
@@ -448,12 +507,7 @@ def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
     assert split in ["val", "test"]
 
     # Label-free
-    if dataset_name == "livecell":
-        image_paths, label_paths = _get_livecell_paths(
-            input_folder=os.path.join(DATA_DIR, dataset_name), split=split,
-            n_val_per_cell_type=5 if split == "val" else None,
-        )
-    elif dataset_name == "omnipose":
+    if dataset_name == "omnipose":
         split = "train" if split == "val" else split  # NOTE: Since 'val' does not exist for this data.
         image_paths, label_paths = datasets.light_microscopy.omnipose.get_omnipose_paths(
             os.path.join(DATA_DIR, dataset_name), split, data_choice=["bact_phase", "worm"],
@@ -477,7 +531,7 @@ def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
         image_paths, label_paths = datasets.light_microscopy.vicar.get_vicar_paths(
             os.path.join(DATA_DIR, dataset_name), download=True,
         )
-    elif dataset_name in ["deepseas", "toiam"]:
+    elif dataset_name in ["livecell", "deepseas", "toiam"]:
         image_paths, label_paths = prepare_data_paths(
             dataset_name=dataset_name, split=split, base_dir=os.path.join(DATA_DIR, dataset_name),
         )
