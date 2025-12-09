@@ -1,0 +1,152 @@
+import argparse
+import json
+import os
+from inspect import signature
+from pathlib import Path
+
+import h5py
+import imageio.v3 as imageio
+import pandas as pd
+import napari
+import numpy as np
+from tqdm import tqdm
+
+
+def _normalize_and_pad(image):
+    if image.ndim == 3:  # RGB -> normalize per channel.
+        assert image.shape[-1] == 3  # ensure channel last.
+        image = image.astype("float32")
+        image -= image.min(axis=(0, 1))
+        image /= (image.max(axis=(0, 1)) + 1e-7)
+        image *= 255
+        image = image.astype("uint8")
+
+    min_shape = (512, 512)
+    pad_width = [max(0, ms - sh) for sh, ms in zip(image.shape[:2], min_shape)]
+    if any(pw > 0 for pw in pad_width):
+        pad_width = [(0, pad_width[0]), (0, pad_width[1])]
+        if image.ndim == 3:
+            pad_width += [(0, 0)]
+        image = np.pad(image, pad_width)
+    # breakpoint()
+
+    return image
+
+
+def _run_prediction(image_path, out_path, predictor, segmenter, model_type, settings):
+    from micro_sam.instance_segmentation import _derive_point_prompts
+
+    if predictor is None:
+        from micro_sam.instance_segmentation import AutomaticPromptGenerator, get_predictor_and_decoder
+        predictor, decoder = get_predictor_and_decoder(model_type=model_type)
+        segmenter = AutomaticPromptGenerator(predictor, decoder)
+
+    image = imageio.imread(image_path)
+    image = _normalize_and_pad(image)
+    segmenter.initialize(image)
+
+    # Derive prompts.
+    prompt_kwargs = {k: v for k, v in settings.items() if k in signature(_derive_point_prompts).parameters}
+    prompts = _derive_point_prompts(
+        segmenter._foreground,
+        segmenter._center_distances,
+        segmenter._boundary_distances,
+        **prompt_kwargs,
+    )["points"]
+
+    with h5py.File(out_path, "w") as f:
+        f.create_dataset("foreground", data=segmenter._foreground, compression="gzip")
+        f.create_dataset("center_distances", data=segmenter._center_distances, compression="gzip")
+        f.create_dataset("boundary_distances", data=segmenter._boundary_distances, compression="gzip")
+        f.create_dataset("prompts", data=prompts)
+
+    return predictor, segmenter
+
+
+def _require_intermediates(result_info, analysis_folder, model_type, settings):
+    os.makedirs(analysis_folder, exist_ok=True)
+    paths = []
+    predictor, segmenter = None, None
+    for image_path in tqdm(result_info["image_paths"], desc="Precompute intermediate results"):
+        fname = f"{Path(image_path).stem}.h5"
+        out_path = os.path.join(analysis_folder, fname)
+        if os.path.exists(out_path):
+            paths.append(out_path)
+            continue
+        predictor, segmenter = _run_prediction(image_path, out_path, predictor, segmenter, model_type, settings)
+        paths.append(out_path)
+    return paths
+
+
+def _plot_posthoc(im_path, lab_path, pred_path, intermed, msa):
+    image = imageio.imread(im_path)
+    labels = imageio.imread(lab_path).astype("uint32")
+    seg = imageio.imread(pred_path)
+
+    with h5py.File(intermed, "r") as f:
+        foreground = f["foreground"][:]
+        boundary_distances = f["boundary_distances"][:]
+        center_distances = f["center_distances"][:]
+        prompts = f["prompts"][:]
+
+    prompts = prompts.squeeze()[:, ::-1]
+    fname = os.path.basename(im_path)
+    v = napari.Viewer()
+    v.add_image(image)
+    v.add_image(foreground)
+    v.add_image(boundary_distances, visible=False)
+    v.add_image(center_distances, visible=False)
+    v.add_labels(labels)
+    v.add_labels(seg)
+    v.add_points(prompts)
+    v.title = os.path.basename(f"{fname}: mSA: {msa}")
+    napari.run()
+
+
+def analyze_posthoc(dataset_name):
+    result_info_path = os.path.join(f"./figures/{dataset_name}/summary.json")
+    assert os.path.exists(result_info_path), result_info_path
+
+    with open(result_info_path, "r") as f:
+        result_info = json.load(f)
+
+    # Take care of other histopatho datasets once we have them.
+    if dataset_name in ("pannuke",):
+        model_type = "vit_b_histopathology"
+    else:
+        model_type = "vit_b_lm"
+
+    gs_settings = f"/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam/apg_experiments/{dataset_name}/results/grid_search_params_instance_segmentation_with_decoder.csv"  # noqa
+    gs_settings = pd.read_csv(gs_settings).drop(columns=["Unnamed: 0",  "best_msa"])
+    gs_settings = {k: v for k, v in zip(gs_settings.columns.values, gs_settings.values.squeeze())}
+    if "prompt_selection" not in gs_settings:
+        gs_settings["prompt_selection"] = "boundary_distances"
+
+    analysis_folder = f"./analysis/{dataset_name}"
+    intermediates = _require_intermediates(result_info, analysis_folder, model_type, gs_settings)
+
+    for im_path, lab_path, pred_path, intermed, msa in zip(
+        result_info["image_paths"],
+        result_info["label_paths"],
+        result_info["prediction_paths"],
+        intermediates,
+        result_info["msas"],
+    ):
+        _plot_posthoc(im_path, lab_path, pred_path, intermed, msa)
+
+
+# Hypotheses for the issues we observe:
+# - TissueNet: images with very low contrast in the green channel -> independent normalization of channels?
+# - LiveCell: something is off with the predictions (wrong number).
+# - PanNuke: model issues + size filter? Are we sure this is PathoSAM?
+# - DSB: Predominantly GT issues.
+# In general: store prompt settings.
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-d", "--dataset", required=True)
+    args = parser.parse_args()
+    analyze_posthoc(args.dataset)
+
+
+if __name__ == "__main__":
+    main()
