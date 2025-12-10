@@ -12,33 +12,41 @@ from elf.evaluation import mean_segmentation_accuracy
 
 from util import get_image_label_paths
 
+DEFAULT_ROOT = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam/apg_cc"
 
-def posthoc_analysis(dataset_name, worst_k):
+
+def posthoc_analysis(dataset_name, input_root, worst_k):
     import matplotlib.pyplot as plt
 
+    # TODO enable changing the root.
     # Check the dataset.
-    base_dir = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam/apg_experiments"
-    dataset_dir = os.path.join(base_dir, dataset_name)
+    dataset_dir = os.path.join(input_root, dataset_name)
     if not os.path.exists(dataset_dir):
-        datasets = [os.path.basename(path) for path in glob(os.path.join(base_dir, "*"))]
+        datasets = [os.path.basename(path) for path in glob(os.path.join(input_root, "*"))]
         raise ValueError(f"Invalid dataset: {dataset_name}. Available datasets: {datasets}")
 
     # Let's check inference results of APG and check where APG does the worst.
-    image_paths, label_paths = get_image_label_paths(
-        dataset_name=dataset_name, split="test",
-    )
+    try:
+        image_paths, label_paths = get_image_label_paths(dataset_name=dataset_name, split="test")
+    except Exception:
+        print("Cannot get the dataset:", dataset_name)
+        return
 
     # Get all the predictions.
     prediction_paths = natsorted(
         glob(os.path.join(dataset_dir, "apg", "inference", "*.tif"))
     )
-    assert len(label_paths) == len(prediction_paths), \
-        f"Inconsistent labels and predictions: {len(label_paths)}, {len(prediction_paths)}"
+    try:
+        assert len(label_paths) == len(prediction_paths), \
+            f"Inconsistent labels and predictions: {len(label_paths)}, {len(prediction_paths)}"
+    except AssertionError:
+        print("Predictions are missing for", dataset_name)
+        return
 
     # Make a simple check: the images with worst mSA will be stored locally.
     results = []
     for i, (curr_label, curr_seg) in tqdm(
-        enumerate(zip(label_paths, prediction_paths)), total=len(label_paths), desc="Post-hoc",
+        enumerate(zip(label_paths, prediction_paths)), total=len(label_paths), desc=f"Post-hoc for {dataset_name}",
     ):
         label = imageio.imread(curr_label)
         seg = imageio.imread(curr_seg)
@@ -106,12 +114,20 @@ def posthoc_analysis(dataset_name, worst_k):
         json.dump(result_info, f)
 
 
+def run_posthoc_analysis(datasets, input_root, worst_k):
+    if datasets is None:
+        datasets = [os.path.basename(path) for path in glob(os.path.join(input_root, "*"))]
+    for dataset in datasets:
+        posthoc_analysis(dataset, input_root, worst_k)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-d", "--dataset", required=True)
+    parser.add_argument("-d", "--datasets", nargs="+")
+    parser.add_argument("-i", "--input_root", default=DEFAULT_ROOT)
     parser.add_argument("-k", "--worst_k", type=int, default=10)
     args = parser.parse_args()
-    posthoc_analysis(args.dataset, args.worst_k)
+    run_posthoc_analysis(args.datasets, args.input_root, args.worst_k)
 
 
 if __name__ == "__main__":
