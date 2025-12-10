@@ -1393,66 +1393,15 @@ def _derive_point_prompts(
     return {"points": points, "point_labels": labels}
 
 
-# First version of function to derive box prompts.
-def _derive_box_prompts(
-    foreground: np.ndarray,
-    center_distances: np.ndarray,
-    boundary_distances: np.ndarray,
-    foreground_threshold: float = 0.5,
-    center_distance_threshold: float = 0.9,  # NOTE: These parameters work best.
-    boundary_distance_threshold: float = 0.9,  # NOTE: These parameters work best.
-    box_extension: float = 0.05,
-    **kwargs,
-):
-    # We derive from the two different possible height maps.
-    fg_mask = (foreground > foreground_threshold).astype("int8")
-
-    # TODO expose this properly as params.
-    center_mask = (center_distances > center_distance_threshold)
-    boundary_mask = (boundary_distances > boundary_distance_threshold)
-
-    hmap0 = (fg_mask - boundary_mask) > 0
-    hmap1 = (fg_mask - boundary_mask - center_mask) > 0
-    hmaps = [hmap0, hmap1]
-
-    shape = fg_mask.shape
-    prompts = []
-    for hmap in hmaps:
-        hmap[~fg_mask] = 0
-        cc = label(hmap)
-        props = regionprops(cc)
-        len_y = [prop.bbox[2] - prop.bbox[0] for prop in props]
-        len_x = [prop.bbox[3] - prop.bbox[1] for prop in props]
-        # The bounding boxes are represented by [MIN_X, MIN_Y, MAX_X, MAX_Y].
-        prompts.extend([[
-            max(prop.bbox[1] - box_extension * lx, 0),
-            max(prop.bbox[0] - box_extension * ly, 0),
-            min(prop.bbox[3] + box_extension * lx, shape[1]),
-            min(prop.bbox[2] + box_extension * lx, shape[0]),
-        ] for prop, lx, ly in zip(props, len_x, len_y)])
-
-    # For debugging/visualization purposes
-    # import napari
-    # prompts_vis = [
-    #     [(prompt[1], prompt[0]),
-    #      (prompt[3], prompt[2])]
-    #     for prompt in prompts
-    # ]
-    # v = napari.Viewer()
-    # v.add_image(fg_mask, contrast_limits=(0, 1))
-    # v.add_image(hmaps[0], name="center-map", contrast_limits=(0, 1))
-    # v.add_image(hmaps[1], name="bd-map", contrast_limits=(0, 1))
-    # v.add_shapes(
-    #     prompts_vis,
-    #     shape_type="rectangle",
-    #     face_color="transparent",
-    #     edge_color="red",
-    #     edge_width=2,
-    # )
-    # napari.run()
-
-    if len(prompts) == 0:
-        return None
+def _derive_box_prompts(predictions, box_extension):
+    shape = predictions[0]["segmentation"].shape
+    bboxes = [pred["bbox"] for pred in predictions]
+    prompts = [[
+        max(x - w * box_extension, 0),
+        max(y - h * box_extension, 0),
+        min(x + (1 + box_extension) * w, shape[0]),
+        min(y + (1 + box_extension) * h, shape[1]),
+    ] for (x, y, w, h) in bboxes]
     return {"boxes": np.array(prompts)}
 
 
@@ -1473,7 +1422,6 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         min_distance: int = 5,
         threshold_abs: float = 0.25,
         multimasking: bool = False,
-        prompt_type: Literal["box", "point"] = "point",
         prompt_selection: Union[str, List[str]] = "connected_components",
         batch_size: int = 32,
         nms_threshold: float = 0.9,
@@ -1482,6 +1430,8 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         mask_threshold: Optional[Union[float, str]] = None,
         center_distance_threshold: float = 0.5,
         boundary_distance_threshold: float = 0.5,
+        refine_with_box_prompts: bool = True,
+        # box_extension: float =
     ) -> List[Dict[str, Any]]:
         """Generate instance segmentation for the currently initialized image.
 
@@ -1501,15 +1451,8 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         foreground, center_distances, boundary_distances =\
             self._foreground, self._center_distances, self._boundary_distances
 
-        if prompt_type == "point":
-            _derive_prompts = _derive_point_prompts
-        elif prompt_type == "box":
-            _derive_prompts = _derive_box_prompts
-        else:
-            raise ValueError(prompt_type)
-
         # 1.) Derive promtps from the decoder predictions.
-        prompts = _derive_prompts(
+        prompts = _derive_point_prompts(
             foreground,
             center_distances,
             boundary_distances,
@@ -1527,6 +1470,19 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         if prompts is None:  # Since there were no prompts derived, we can't do much further.
             return []  # Returns empty masks.
         else:
+            predictions = batched_inference(
+                self._predictor,
+                image=None,
+                batch_size=batch_size,
+                return_instance_segmentation=False,
+                multimasking=multimasking,
+                mask_threshold=mask_threshold,
+                **prompts,
+            )
+
+        if refine_with_box_prompts:
+            box_extension = 0.01  # expose as hyperparam?
+            prompts = _derive_box_prompts(predictions, box_extension)
             predictions = batched_inference(
                 self._predictor,
                 image=None,
@@ -1575,6 +1531,8 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
         Returns:
             The instance segmentation masks.
         """
+        raise NotImplementedError("Needs to be updated")
+
         from .inference import batched_tiled_inference
 
         if not self.is_initialized:
