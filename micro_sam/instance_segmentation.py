@@ -1477,6 +1477,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         prompt_selection: Union[str, List[str]] = "connected_components",
         batch_size: int = 32,
         nms_threshold: float = 0.9,
+        intersection_over_min: bool = False,
         output_mode: Optional[str] = "binary_mask",
     ) -> List[Dict[str, Any]]:
         """Generate instance segmentation for the currently initialized image.
@@ -1531,7 +1532,9 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
             )
 
         # 3.) Apply non-max suppression to the masks.
-        segmentation = util.apply_nms(predictions, min_size=min_size, nms_thresh=nms_threshold)
+        segmentation = util.apply_nms(
+            predictions, min_size=min_size, nms_thresh=nms_threshold, intersection_over_min=intersection_over_min
+        )
 
         if output_mode is not None:
             segmentation = self._to_masks(segmentation, output_mode)
