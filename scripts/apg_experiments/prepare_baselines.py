@@ -23,9 +23,7 @@ def run_baseline_engine(image, method, **kwargs):
     elif method == "apg":
         segmenter = kwargs["segmenter"]
         segmenter.initialize(image, ndim=2)
-        segmentation = segmenter.generate(
-            prompt_selection="boundary_distances",
-        )
+        segmentation = segmenter.generate()
 
         if len(segmentation) == 0:
             segmentation = np.zeros(image.shape[:2], dtype="uint32")

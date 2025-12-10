@@ -50,7 +50,7 @@ if __name__ == "__main__":
     parser.add_argument("-m", "--model_type", type=str, default="vit_b_lm")
     parser.add_argument(
         "-e", "--experiment_folder", type=str,
-        default="/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam/apg"
+        default="/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam/apg_cc"
     )
     args = parser.parse_args()
     main(args)

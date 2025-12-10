@@ -1474,7 +1474,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         threshold_abs: float = 0.25,
         multimasking: bool = False,
         prompt_type: Literal["box", "point"] = "point",
-        prompt_selection: Union[str, List[str]] = "boundary_distances",
+        prompt_selection: Union[str, List[str]] = "connected_components",
         batch_size: int = 32,
         nms_threshold: float = 0.9,
         output_mode: Optional[str] = "binary_mask",
