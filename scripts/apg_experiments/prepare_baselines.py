@@ -12,7 +12,6 @@ from micro_sam.automatic_segmentation import (
 )
 
 from tukra.inference.get_cellpose import segment_using_cellpose
-from tukra.inference.get_instanseg import segment_using_instanseg
 
 from util import get_image_label_paths
 
@@ -34,18 +33,6 @@ def run_baseline_engine(image, method, **kwargs):
             segmentation = mask_data_to_segmentation(segmentation, with_background=False)
 
     # Newer SAM methods.
-    elif method == "sam2":  # TODO: Wrap this out in a modular function (like our segmenters)
-        from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
-        from micro_sam2.util import get_sam2_model
-        predictor = get_sam2_model(model_type=kwargs["model_type"])
-        generator = SAM2AutomaticMaskGenerator(predictor)
-        segmentation = generator.generate(_to_image(image))
-
-        if len(segmentation) == 0:
-            segmentation = np.zeros(image.shape[:2], dtype="uint32")
-        else:
-            segmentation = mask_data_to_segmentation(segmentation, with_background=True)
-
     elif method == "sam3":  # TODO: Wrap this out in a modular function too?
         from PIL import Image
         from sam3.model_builder import build_sam3_image_model
@@ -76,8 +63,6 @@ def run_baseline_engine(image, method, **kwargs):
         # NOTE: For images where no objects could be found, a weird segmentation is returned.
         if segmentation.ndim == 3:
             segmentation = segmentation[0]
-    elif method == "instanseg":
-        segmentation = segment_using_instanseg(image, verbose=False, **kwargs)
     elif method == "cellvit":
         raise NotImplementedError
     else:

@@ -85,16 +85,13 @@ def submit_slurm(args):
         ["amg", generalist_model],
         ["ais", generalist_model],
         ["apg", generalist_model],
-        # SAM2
-        # ["sam2", "hvit_b"],
         # SAM3
-        # ["sam3", "cells"],
+        ["sam3", "cells"],
         # And other external methods.
         ["cellpose", "cyto3"],
         ["cellpose", "cpsam"],
         ["cellsam", "cellsam"],
-        # ["instanseg", "brightfield_nuclei"]
-        # ["instanseg", "fluoroscence_cells_and_nuclei"]
+        # ["cellvit", "cellvit"]
     ]
 
     if args.baselines:  # Let's run the baselines.
