@@ -283,9 +283,9 @@ def prepare_data_paths(dataset_name, split, base_dir):
 
         # We make a super simple heuristic for it. The first 1500 images for val, last 2500 for test.
         if split == "val":
-            images, labels = images[:1500], labels[:1500]
+            images, labels = images[:100], labels[:100]
         else:
-            images, labels = images[1500:], labels[1500:]
+            images, labels = images[-200:], labels[-200:]
 
     elif dataset_name == "monuseg":
         # Making splits on the fly.
@@ -544,29 +544,6 @@ def prepare_data_paths(dataset_name, split, base_dir):
         images = [raw_trafo(im).astype(im.dtype) for im in images]
         labels = [label_trafo(lab).astype(lab.dtype) for lab in labels]
 
-    elif dataset_name == "mouse_embryo":
-        # Convert container ff and make splits
-        cell_count_criterion = 10
-        fpaths = datasets.light_microscopy.mouse_embryo.get_mouse_embryo_paths(
-            os.path.join(DATA_DIR, dataset_name), name="membrane",
-            split="train" if split == "test" else split, download=True,
-        )
-
-        images = [open_file(p)["raw"][:] for p in fpaths]
-        labels = [open_file(p)["label"][:] for p in fpaths]
-
-        # Let's slice it up
-        images = [im for vol in images for im in vol]
-        labels = [lab for vol in labels for lab in vol]
-
-        if split == "val":
-            images, labels = images[:150], labels[:150]
-        else:
-            images, labels = images[150:], labels[150:]
-
-        images = [_make_center_crop(im) for im in images]
-        labels = [_make_center_crop(lab) for lab in labels]
-
     elif dataset_name == "plantseg_root":
         # Convert from container ff and make splits.
         cell_count_criterion = 5
@@ -623,7 +600,7 @@ def prepare_data_paths(dataset_name, split, base_dir):
         if split == "val":
             fpaths = fpaths[:5]
         else:
-            fpaths = fpaths[-20:]
+            fpaths = fpaths[-10:]
 
         images = [open_file(p)["raw"][:] for p in fpaths]
         labels = [open_file(p)["labels"][:] for p in fpaths]

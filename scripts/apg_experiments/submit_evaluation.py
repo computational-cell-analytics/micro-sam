@@ -83,17 +83,16 @@ def submit_slurm(args):
 
     method_combinations = [
         # SAM-based models
-        # ["amg", "vit_b"],
-        # ["amg", generalist_model],
-        # ["ais", generalist_model],
+        ["amg", "vit_b"],
+        ["amg", generalist_model],
+        ["ais", generalist_model],
         ["apg", generalist_model],
         # SAM3
-        # ["sam3", "cells"],
+        ["sam3", "cells"],
         # And other external methods.
-        # ["cellpose", "cyto3"],
-        # ["cellpose", "cpsam"],
-        # ["cellsam", "cellsam"],
-        # ["cellvit", "cellvit"]
+        ["cellpose", "cyto3"],
+        ["cellpose", "cpsam"],
+        ["cellsam", "cellsam"],
     ]
 
     if dataset_name is None:
@@ -105,8 +104,8 @@ def submit_slurm(args):
                 "dynamicnuclearnet", "u20s", "arvidsson", "ifnuclei", "blastospim",
                 "gonuclear", "nis3d", "parhyale_regen", "dsb", "bitdepth_nucseg",
                 # Fluo (cells)
-                "cellpose", "cellbindb", "tissuenet", "plantseg_root", "covid_if", "hpa",
-                "mouse_embryo", "plantseg_ovules", "pnas_arabidopsis"
+                "cellpose", "cellbindb", "tissuenet", "plantseg_root", "covid_if",
+                "hpa", "plantseg_ovules", "pnas_arabidopsis",
             ]
         else:  # Histopatholgoy
             assert generalist_model == "vit_b_histopathology"

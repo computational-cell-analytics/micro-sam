@@ -47,7 +47,7 @@ def run_baseline_engine(image, method, **kwargs):
             segmentation = np.zeros(image.shape[:2], dtype="uint32")
         else:  # HACK: Let's get a cheap merging strategy
             segmentation = segmentation.squeeze(1).detach().cpu().numpy()
-            final_mask = np.zeros(image.shape, dtype="uint32")
+            final_mask = np.zeros(image.shape[:2], dtype="uint32")
             for i, curr_mask in enumerate(segmentation, start=1):
                 final_mask[curr_mask] = i
             segmentation = final_mask
@@ -61,8 +61,6 @@ def run_baseline_engine(image, method, **kwargs):
         # NOTE: For images where no objects could be found, a weird segmentation is returned.
         if segmentation.ndim == 3:
             segmentation = segmentation[0]
-    elif method == "cellvit":
-        raise NotImplementedError
     else:
         raise ValueError
 
