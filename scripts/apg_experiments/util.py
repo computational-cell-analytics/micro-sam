@@ -30,9 +30,6 @@ def _process_images(
     ensure_connected_components=False,
     ignore_label=None,
 ):
-    if os.path.exists(os.path.join(base_dir, split)):
-        return _find_paths(base_dir, split, dataset_name)
-
     im_folder = os.path.join(base_dir, split, "images")
     label_folder = os.path.join(base_dir, split, "labels")
     os.makedirs(im_folder, exist_ok=True)
@@ -164,6 +161,10 @@ def prepare_data_paths(dataset_name, split, base_dir):
     base_dir = os.path.join(base_dir, "benchmark_apg")
     ensure_connected_components = False
     ignore_label = None
+
+    # If the folder exists, just find the paths and return them.
+    if os.path.exists(os.path.join(base_dir, split)):
+        return _find_paths(base_dir, split, dataset_name)
 
     if dataset_name == "livecell":
         # Making center crops
@@ -655,7 +656,7 @@ def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
     assert split in ["val", "test"]
 
     # Label-free
-    # TODO: Add EVICAN?
+    # TODO: Add EVICAN? (BacMother is a bad aspect ratio in general)
     if dataset_name == "bac_mother":
         image_paths, label_paths = datasets.light_microscopy.bac_mother.get_bac_mother_paths(
             os.path.join(DATA_DIR, dataset_name), split=split, download=True,

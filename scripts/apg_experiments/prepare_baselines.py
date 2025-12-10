@@ -5,6 +5,7 @@ import imageio.v3 as imageio
 
 from elf.evaluation import mean_segmentation_accuracy, matching
 
+from micro_sam.util import _to_image
 from micro_sam.instance_segmentation import AutomaticPromptGenerator, get_predictor_and_decoder
 from micro_sam.automatic_segmentation import (
     get_predictor_and_segmenter, automatic_instance_segmentation, mask_data_to_segmentation
@@ -33,34 +34,33 @@ def run_baseline_engine(image, method, **kwargs):
             segmentation = mask_data_to_segmentation(segmentation, with_background=False)
 
     # Newer SAM methods.
-    elif method == "sam2":
-        # TODO: Wrap this out in a modular function (like our segmenters)
+    elif method == "sam2":  # TODO: Wrap this out in a modular function (like our segmenters)
         from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
         from micro_sam2.util import get_sam2_model
         predictor = get_sam2_model(model_type=kwargs["model_type"])
         generator = SAM2AutomaticMaskGenerator(predictor)
-        segmentation = generator.generate(image.astype("uint8"))  # HACK: Casting forcefully.
+        segmentation = generator.generate(_to_image(image))
 
         if len(segmentation) == 0:
             segmentation = np.zeros(image.shape[:2], dtype="uint32")
         else:
             segmentation = mask_data_to_segmentation(segmentation, with_background=True)
 
-    elif method == "sam3":
-        # TODO: Wrap this out in a modular function too?
+    elif method == "sam3":  # TODO: Wrap this out in a modular function too?
+        from PIL import Image
         from sam3.model_builder import build_sam3_image_model
         from sam3.model.sam3_image_processor import Sam3Processor
         model = build_sam3_image_model()
         processor = Sam3Processor(model)
-        inference_state = processor.set_image(image)
+        inference_state = processor.set_image(Image.fromarray(_to_image(image)))
         # Prompt the model with text
+        processor.reset_all_prompts(inference_state)
         segmentation = processor.set_text_prompt(state=inference_state, prompt=kwargs["prompt"])
         segmentation = segmentation["masks"]  # Get the masks only.
 
         if len(segmentation) == 0:
             segmentation = np.zeros(image.shape[:2], dtype="uint32")
-        else:
-            # HACK: Let's get a cheap merging strategy
+        else:  # HACK: Let's get a cheap merging strategy
             segmentation = segmentation.squeeze(1).detach().cpu().numpy()
             final_mask = np.zeros(image.shape, dtype="uint32")
             for i, curr_mask in enumerate(segmentation, start=1):
