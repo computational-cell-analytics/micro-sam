@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+from glob import glob
 from inspect import signature
 from pathlib import Path
 
@@ -52,13 +53,14 @@ def _run_prediction(image_path, out_path, predictor, segmenter, model_type, sett
         segmenter._center_distances,
         segmenter._boundary_distances,
         **prompt_kwargs,
-    )["points"]
+    )
 
     with h5py.File(out_path, "w") as f:
         f.create_dataset("foreground", data=segmenter._foreground, compression="gzip")
         f.create_dataset("center_distances", data=segmenter._center_distances, compression="gzip")
         f.create_dataset("boundary_distances", data=segmenter._boundary_distances, compression="gzip")
-        f.create_dataset("prompts", data=prompts)
+        if prompts is not None:
+            f.create_dataset("prompts", data=prompts["points"])
 
     return predictor, segmenter
 
@@ -67,7 +69,7 @@ def _require_intermediates(result_info, analysis_folder, model_type, settings):
     os.makedirs(analysis_folder, exist_ok=True)
     paths = []
     predictor, segmenter = None, None
-    for image_path in tqdm(result_info["image_paths"], desc="Precompute intermediate results"):
+    for image_path in tqdm(result_info["image_paths"], desc=f"Precompute intermediates for {analysis_folder}"):
         fname = f"{Path(image_path).stem}.h5"
         out_path = os.path.join(analysis_folder, fname)
         if os.path.exists(out_path):
@@ -87,9 +89,11 @@ def _plot_posthoc(im_path, lab_path, pred_path, intermed, msa):
         foreground = f["foreground"][:]
         boundary_distances = f["boundary_distances"][:]
         center_distances = f["center_distances"][:]
-        prompts = f["prompts"][:]
+        if "prompts" in f:
+            prompts = f["prompts"][:]
+        else:
+            prompts = None
 
-    prompts = prompts.squeeze()[:, ::-1]
     fname = os.path.basename(im_path)
     v = napari.Viewer()
     v.add_image(image)
@@ -98,12 +102,14 @@ def _plot_posthoc(im_path, lab_path, pred_path, intermed, msa):
     v.add_image(center_distances, visible=False)
     v.add_labels(labels)
     v.add_labels(seg)
-    v.add_points(prompts)
+    if prompts is not None:
+        prompts = prompts.squeeze(1)[:, ::-1]
+        v.add_points(prompts)
     v.title = os.path.basename(f"{fname}: mSA: {msa}")
     napari.run()
 
 
-def analyze_posthoc(dataset_name):
+def analyze_posthoc(dataset_name, skip_visualization):
     result_info_path = os.path.join(f"./figures/{dataset_name}/summary.json")
     assert os.path.exists(result_info_path), result_info_path
 
@@ -116,14 +122,21 @@ def analyze_posthoc(dataset_name):
     else:
         model_type = "vit_b_lm"
 
-    gs_settings = f"/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam/apg_experiments/{dataset_name}/results/grid_search_params_instance_segmentation_with_decoder.csv"  # noqa
-    gs_settings = pd.read_csv(gs_settings).drop(columns=["Unnamed: 0",  "best_msa"])
-    gs_settings = {k: v for k, v in zip(gs_settings.columns.values, gs_settings.values.squeeze())}
-    if "prompt_selection" not in gs_settings:
-        gs_settings["prompt_selection"] = "boundary_distances"
+    # TODO update path
+    gs_settings = f"/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam/apg_cc/{dataset_name}/results/grid_search_params_instance_segmentation_with_decoder.csv"  # noqa
+    if os.path.exists(gs_settings):
+        gs_settings = pd.read_csv(gs_settings).drop(columns=["Unnamed: 0",  "best_msa"])
+        gs_settings = {k: v for k, v in zip(gs_settings.columns.values, gs_settings.values.squeeze())}
+        if "prompt_selection" not in gs_settings:
+            gs_settings["prompt_selection"] = "connected_components"
+    else:
+        gs_settings = {}
 
     analysis_folder = f"./analysis/{dataset_name}"
     intermediates = _require_intermediates(result_info, analysis_folder, model_type, gs_settings)
+
+    if skip_visualization:
+        return
 
     for im_path, lab_path, pred_path, intermed, msa in zip(
         result_info["image_paths"],
@@ -135,17 +148,28 @@ def analyze_posthoc(dataset_name):
         _plot_posthoc(im_path, lab_path, pred_path, intermed, msa)
 
 
-# Hypotheses for the issues we observe:
-# - TissueNet: images with very low contrast in the green channel -> independent normalization of channels?
-# - LiveCell: something is off with the predictions (wrong number).
-# - PanNuke: model issues + size filter? Are we sure this is PathoSAM?
-# - DSB: Predominantly GT issues.
-# In general: store prompt settings.
+def run_analyze_posthoc(datasets, skip_visualization):
+    if datasets is None:
+        datasets = [os.path.basename(path) for path in glob(os.path.join("figures/*"))]
+    for dataset in datasets:
+        analyze_posthoc(dataset, skip_visualization)
+
+
+# Observations and hypotheses for the datasets I could inspect:
+# - Arvidsson: Cytosol is picked up + artifacts from merging the masks together.
+# - BlastoSPIM: no prompts in extremely low SNR images.
+# - DeepBacs: Artifacts from segmentation merging, slight mismatch of annotations and predictions
+#   (pred is better than labels).
+# - IFNuclei: Slight mismatch prediction and labels, some over-segmentation, some GT issues
+# - Pannuke: Over-segmentation, prediction better than GT?
+# - PlantSeg: some artifacts, difficult samples
+# - TNBC: Looks very good (min mSA > 0.4)
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-d", "--dataset", required=True)
+    parser.add_argument("-d", "--datasets", nargs="+")
+    parser.add_argument("-s", "--skip_visualization", action="store_true")
     args = parser.parse_args()
-    analyze_posthoc(args.dataset)
+    run_analyze_posthoc(args.datasets, args.skip_visualization)
 
 
 if __name__ == "__main__":
