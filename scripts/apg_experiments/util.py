@@ -171,7 +171,7 @@ def prepare_data_paths(dataset_name, split, base_dir):
         cell_count_criterion = 5
         ipaths, lpaths = _get_livecell_paths(
             input_folder=os.path.join(DATA_DIR, dataset_name), split=split,
-            n_val_per_cell_type=5 if split == "val" else None,
+            n_val_per_cell_type=3 if split == "val" else None,
         )
 
         images = [_make_center_crop(imageio.imread(p)) for p in ipaths]

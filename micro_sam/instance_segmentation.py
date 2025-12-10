@@ -1479,6 +1479,9 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         nms_threshold: float = 0.9,
         intersection_over_min: bool = False,
         output_mode: Optional[str] = "binary_mask",
+        mask_threshold: Optional[Union[float, str]] = None,
+        center_distance_threshold: float = 0.5,
+        boundary_distance_threshold: float = 0.5,
     ) -> List[Dict[str, Any]]:
         """Generate instance segmentation for the currently initialized image.
 
@@ -1514,6 +1517,8 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
             min_distance=min_distance,
             threshold_abs=threshold_abs,
             prompt_selection=prompt_selection,
+            center_distance_threshold=center_distance_threshold,
+            boundary_distance_threshold=boundary_distance_threshold,
         )
 
         # 2.) Apply the predictor to the prompts.
@@ -1528,6 +1533,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
                 batch_size=batch_size,
                 return_instance_segmentation=False,
                 multimasking=multimasking,
+                mask_threshold=mask_threshold,
                 **prompts,
             )
 

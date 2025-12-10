@@ -107,6 +107,10 @@ def default_grid_search_values_apg(
     prompt_selection_values: Optional[List[float]] = None,
     min_size_values: Optional[List[float]] = None,
     nms_threshold_values: Optional[List[float]] = None,
+    intersection_over_min_values: Optional[List[bool]] = None,
+    mask_threshold_values: Optional[List[Union[float, str]]] = None,
+    center_distance_threshold_values: Optional[List[float]] = None,
+    boundary_distance_threshold_values: Optional[List[float]] = None,
 ) -> Dict[str, List[float]]:
     """Default grid-search parameter for APG-based instance segmentation.
 
@@ -116,12 +120,14 @@ def default_grid_search_values_apg(
     Returns:
         The values for grid search.
     """
-    if min_distance_values is None:
-        min_distance_values = _get_range_of_search_values([1, 5], step=1)
-    if threshold_abs_values is None:
-        threshold_abs_values = _get_range_of_search_values([0.1, 0.5], step=0.1)
-    if multimasking_values is None:
-        multimasking_values = [True, False]
+    # NOTE: The two combinations below are for distances. Since we use connected components, we don't run them!
+    # if min_distance_values is None:
+    #     min_distance_values = _get_range_of_search_values([1, 5], step=1)
+    # if threshold_abs_values is None:
+    #     threshold_abs_values = _get_range_of_search_values([0.1, 0.5], step=0.1)
+
+    # if multimasking_values is None:
+    #     multimasking_values = [True, False]
     # if prompt_selection_values is None:
     #     prompt_selection_values = [
     #         "center_distances",
@@ -132,20 +138,33 @@ def default_grid_search_values_apg(
     #         ["boundary_distances", "connected_components"],
     #         ["center_distances", "boundary_distances", "connected_components"]
     #     ]
+
+    # NOTE: The two parameters below are for connected components.
+    if center_distance_threshold_values is None:
+        center_distance_threshold_values = _get_range_of_search_values([0.3, 0.7], step=0.1)
+    if boundary_distance_threshold_values is None:
+        boundary_distance_threshold_values = _get_range_of_search_values([0.3, 0.7], step=0.1)
+
     if min_size_values is None:
         min_size_values = [50, 100, 200]
     if nms_threshold_values is None:
         nms_threshold_values = _get_range_of_search_values([0.5, 0.9], step=0.1)
-
-    # TODO: Expose the connected component parameters.
+    if intersection_over_min_values is None:
+        intersection_over_min_values = [True, False]
+    if mask_threshold_values is None:
+        mask_threshold_values = [None, "auto"]  # 'None' derives the default from the model.
 
     return {
-        "min_distance": min_distance_values,
-        "threshold_abs": threshold_abs_values,
-        "multimasking": multimasking_values,
+        # "min_distance": min_distance_values,
+        # "threshold_abs": threshold_abs_values,
+        # "multimasking": multimasking_values,
         # "prompt_selection": prompt_selection_values,
+        "center_distance_threshold": center_distance_threshold_values,
+        "boundary_distance_threshold": boundary_distance_threshold_values,
         "min_size": min_size_values,
         "nms_threshold": nms_threshold_values,
+        "intersection_over_min": intersection_over_min_values,
+        "mask_threshold": mask_threshold_values,
     }
 
 

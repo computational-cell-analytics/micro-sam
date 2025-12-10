@@ -101,7 +101,7 @@ def submit_slurm(args):
                 # Label-free
                 "livecell", "omnipose", "deepbacs", "usiigaci", "vicar", "deepseas", "toiam",
                 # Fluo (nuclei)
-                "dynamicnuclearnet", "u20s", "arvidsson", "ifnuclei", "blastospim",
+                "dynamicnuclearnet", "u20s", "arvidsson", "ifnuclei",
                 "gonuclear", "nis3d", "parhyale_regen", "dsb", "bitdepth_nucseg",
                 # Fluo (cells)
                 "cellpose", "cellbindb", "tissuenet", "plantseg_root", "covid_if",
