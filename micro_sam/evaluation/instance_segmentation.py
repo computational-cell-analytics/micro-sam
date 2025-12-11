@@ -151,8 +151,8 @@ def default_grid_search_values_apg(
         nms_threshold_values = _get_range_of_search_values([0.5, 0.9], step=0.1)
     if intersection_over_min_values is None:
         intersection_over_min_values = [True, False]
-    if mask_threshold_values is None:
-        mask_threshold_values = [None, "auto"]  # 'None' derives the default from the model.
+    # if mask_threshold_values is None:
+    #     mask_threshold_values = [None, "auto"]  # 'None' derives the default from the model.
 
     return {
         # "min_distance": min_distance_values,
@@ -164,7 +164,7 @@ def default_grid_search_values_apg(
         "min_size": min_size_values,
         "nms_threshold": nms_threshold_values,
         "intersection_over_min": intersection_over_min_values,
-        "mask_threshold": mask_threshold_values,
+        # "mask_threshold": mask_threshold_values,
     }
 
 

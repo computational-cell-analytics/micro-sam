@@ -12,9 +12,9 @@ def run_apg_evaluation(dataset_name, model_type, experiment_folder):
     val_image_paths, val_label_paths = get_image_label_paths(dataset_name=dataset_name, split="val")
     test_image_paths, test_label_paths = get_image_label_paths(dataset_name=dataset_name, split="test")
 
-    # HACK: For simpilicity of grid-search, we run it on 10-images only in the beginning.
+    # HACK: For simpilicity of grid-search, we run it on 25-images only in the beginning.
     if dataset_name != "livecell":
-        val_image_paths, val_label_paths = val_image_paths[:10], val_label_paths[:10]
+        val_image_paths, val_label_paths = val_image_paths[:25], val_label_paths[:25]
 
     if dataset_name == "plantseg_root":  # It takes super duper long for the grid-search.
         val_image_paths, val_label_paths = val_image_paths[:5], val_label_paths[:5]

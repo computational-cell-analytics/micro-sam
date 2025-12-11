@@ -171,7 +171,7 @@ def prepare_data_paths(dataset_name, split, base_dir):
         cell_count_criterion = 5
         ipaths, lpaths = _get_livecell_paths(
             input_folder=os.path.join(DATA_DIR, dataset_name), split=split,
-            n_val_per_cell_type=3 if split == "val" else None,
+            n_val_per_cell_type=5 if split == "val" else None,
         )
 
         images = [_make_center_crop(imageio.imread(p)) for p in ipaths]
@@ -220,6 +220,30 @@ def prepare_data_paths(dataset_name, split, base_dir):
 
         images = [_make_center_crop(imageio.imread(p)) for p in ipaths]
         labels = [_make_center_crop(imageio.imread(p)) for p in lpaths]
+
+    elif dataset_name == "yeaz":
+        # Make crops out of it
+        cell_count_criterion = 5
+        ipaths, lpaths = datasets.light_microscopy.yeaz.get_yeaz_paths(
+            os.path.join(DATA_DIR, dataset_name), choice="bf", split=split, download=True
+        )
+
+        images = [_make_center_crop(imageio.imread(p)) for p in ipaths]
+        labels = [_make_center_crop(imageio.imread(p)) for p in lpaths]
+
+    elif dataset_name == "segpc":
+        # Make crops out of it
+        cell_count_criterion = 5
+        fpaths = datasets.light_microscopy.segpc.get_segpc_paths(
+            os.path.join(DATA_DIR, dataset_name), split="train" if split == "val" else "validation",
+        )
+
+        images = [open_file(p)["raw"][:].transpose(1, 2, 0) for p in fpaths]
+        labels = [open_file(p)["labels/cells"][:] for p in fpaths]
+
+        # Let's crop the images
+        images = [_make_center_crop(im) for im in images]
+        labels = [_make_center_crop(lab) for lab in labels]
 
     elif dataset_name == "pannuke":
         # This needs to be done as the PanNuke images are stacked together.
@@ -567,6 +591,28 @@ def prepare_data_paths(dataset_name, split, base_dir):
         images = [_make_center_crop(im) for im in images]
         labels = [_make_center_crop(lab) for lab in labels]
 
+    elif dataset_name == "mouse_embryo":
+        # Convert from container ff and make splits.
+        cell_count_criterion = 10
+        fpaths = datasets.light_microscopy.mouse_embryo.get_mouse_embryo_paths(
+            os.path.join(DATA_DIR, "mouse_embryo"), name="membrane", split="val", download=True,
+        )
+
+        images = [open_file(p)["raw"][:] for p in fpaths]
+        labels = [open_file(p)["label"][:] for p in fpaths]
+
+        # Let's slice it up
+        images = [im for vol in images for im in vol]
+        labels = [lab for vol in labels for lab in vol]
+
+        if split == "val":
+            images, labels = images[:100], labels[:100]
+        else:
+            images, labels = images[100:], labels[100:]
+
+        images = [_make_center_crop(im) for im in images]
+        labels = [_make_center_crop(lab) for lab in labels]
+
     elif dataset_name == "plantseg_ovules":
         # Convert container ff and make splits
         cell_count_criterion = 25
@@ -633,12 +679,15 @@ def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
     assert split in ["val", "test"]
 
     # Label-free
-    # TODO: Add EVICAN? (BacMother is a bad aspect ratio in general)
+    # TODO: Add EVICAN?
     if dataset_name == "bac_mother":
         image_paths, label_paths = datasets.light_microscopy.bac_mother.get_bac_mother_paths(
             os.path.join(DATA_DIR, dataset_name), split=split, download=True,
         )
-    elif dataset_name in ["livecell", "omnipose", "deepbacs", "usiigaci", "vicar", "deepseas", "toiam"]:
+    elif dataset_name in [
+        "livecell", "omnipose", "deepbacs", "usiigaci", "vicar",
+        "deepseas", "toiam", "yeaz", "segpc",
+    ]:
         image_paths, label_paths = prepare_data_paths(
             dataset_name=dataset_name, split=split, base_dir=os.path.join(DATA_DIR, dataset_name),
         )
@@ -653,13 +702,16 @@ def get_image_label_paths(dataset_name: str, split: Literal["val", "test"]):
         image_paths, label_paths = datasets.histopathology.lynsec.get_lynsec_paths(
             os.path.join(DATA_DIR, dataset_name), split=split, choice="ihc", download=True,
         )
+    elif dataset_name == "cryonuseg":
+        image_paths, label_paths = datasets.histopathology.cryonuseg.get_cryonuseg_paths(
+            os.path.join(DATA_DIR, dataset_name), split=split, download=True,
+        )
     elif dataset_name in ["pannuke", "monuseg", "tnbc", "nuinsseg", "puma", "cytodark0"]:
         image_paths, label_paths = prepare_data_paths(
             dataset_name=dataset_name, split=split, base_dir=os.path.join(DATA_DIR, dataset_name),
         )
 
     # Fluoroscence (Nuclei)
-    # TODO: Another dataset? (the labels for AISegCell are horrible, the evaluation is thrown off)
     elif dataset_name == "dsb":
         image_paths, label_paths = datasets.light_microscopy.dsb.get_dsb_paths(
             os.path.join(DATA_DIR, dataset_name),

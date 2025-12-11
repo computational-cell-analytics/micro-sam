@@ -1430,8 +1430,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         mask_threshold: Optional[Union[float, str]] = None,
         center_distance_threshold: float = 0.5,
         boundary_distance_threshold: float = 0.5,
-        refine_with_box_prompts: bool = True,
-        # box_extension: float =
+        refine_with_box_prompts: bool = False,
     ) -> List[Dict[str, Any]]:
         """Generate instance segmentation for the currently initialized image.
 
