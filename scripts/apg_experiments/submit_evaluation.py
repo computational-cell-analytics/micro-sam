@@ -23,11 +23,12 @@ def write_batch_script(
 #SBATCH -t 2-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH -p grete-h100:shared
-#SBATCH -G H100:1
+#SBATCH -p grete:shared
+#SBATCH -G A100:1
 #SBATCH -A gzz0001
 #SBATCH -c 16
 #SBATCH --mem 64G
+#SBATCH --constraint=inet,80gb
 #SBATCH --job-name=apg_evaluation
 
 source ~/.bashrc
@@ -38,11 +39,13 @@ micromamba activate {env} \n"""
         python_script = "python prepare_baselines.py "
         python_script += f"-d {dataset_name} "
         python_script += f"--method {method} "
-        python_script += f"-m {model_type}"
+        python_script += f"-m {model_type} "
+        if method == "sam3":
+            python_script += f"--target {model_type} "
     else:
         python_script = "python run_evaluation.py "
         python_script += f"-d {dataset_name} "
-        python_script += f"-m {model_type}"
+        python_script += f"-m {model_type} "
 
     # Add the python script to the bash script
     batch_script += python_script
@@ -79,41 +82,61 @@ def submit_slurm(args):
     dry = args.dry
 
     method_combinations = [
+        # SAM-based models
         ["amg", "vit_b"],
         ["amg", generalist_model],
         ["ais", generalist_model],
         ["apg", generalist_model],
+        # SAM3
+        ["sam3", "cells"],
+        # And other external methods.
         ["cellpose", "cyto3"],
         ["cellpose", "cpsam"],
         ["cellsam", "cellsam"],
-        # ["instanseg", "brightgield_nuclei"]
-        # ["instanseg", "fluoroscence_cells_and_nuclei"]
     ]
 
-    # 1. First, run the APG grid-search script
-    write_batch_script(
-        dataset_name=dataset_name,
-        out_path=get_batch_script_names(tmp_folder),
-        method="apg",
-        model_type=generalist_model,
-        baseline=False,
-        dry=dry,
-    )
+    if dataset_name is None:
+        if generalist_model == "vit_b_lm":
+            datasets = [
+                # Label-free
+                "livecell", "omnipose", "deepbacs", "usiigaci", "vicar", "deepseas", "toiam",
+                # Fluo (nuclei)
+                "dynamicnuclearnet", "u20s", "arvidsson", "ifnuclei",
+                "gonuclear", "nis3d", "parhyale_regen", "dsb", "bitdepth_nucseg",
+                # Fluo (cells)
+                "cellpose", "cellbindb", "tissuenet", "plantseg_root", "covid_if",
+                "hpa", "plantseg_ovules", "pnas_arabidopsis",
+            ]
+        else:  # Histopatholgoy
+            assert generalist_model == "vit_b_histopathology"
+            datasets = ["ihc_tma", "lynsec", "pannuke", "monuseg", "tnbc", "nuinsseg", "puma", "cytodark0"]
+    else:
+        datasets = [dataset_name]
 
-    return
-
-    # 2. Next, run the baselines.
-    for curr_method in method_combinations:
-        print(f"Submitting scripts for {dataset_name}")
-        method, model_type = curr_method
-        write_batch_script(
-            dataset_name=dataset_name,
-            out_path=get_batch_script_names(tmp_folder),
-            method=method,
-            model_type=model_type,
-            baseline=True,
-            dry=dry,
-        )
+    if args.baselines:  # Let's run the baselines.
+        for curr_method in method_combinations:
+            for d in datasets:
+                print(f"Submitting scripts for {d}")
+                method, model_type = curr_method
+                write_batch_script(
+                    dataset_name=d,
+                    out_path=get_batch_script_names(tmp_folder),
+                    method=method,
+                    model_type=model_type,
+                    baseline=True,
+                    dry=dry,
+                )
+    else:  # Run the APG grid-search script
+        for d in datasets:
+            print(f"Submitting grid-search script for {d}")
+            write_batch_script(
+                dataset_name=d,
+                out_path=get_batch_script_names(tmp_folder),
+                method="apg",
+                model_type=generalist_model,
+                baseline=False,
+                dry=dry,
+            )
 
 
 def main(args):
@@ -128,16 +151,13 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--baseline", action="store_true", help="Whether to run a baseline script"
+        "--baselines", action="store_true", help="Whether to run baseline scripts."
     )
     parser.add_argument(
         "-d", "--dataset_name", type=str, default=None, help="The choice of dataset name.",
     )
     parser.add_argument(
-        "--method", type=str, default=None, help="The choice of baseline method."
-    )
-    parser.add_argument(
-        "-m", "--model_type", type=str, default=None, help="The choice of model type for baseline / SAM methods."
+        "-m", "--model_type", type=str, required=True, help="The choice of model type for baseline / SAM methods."
     )
     parser.add_argument(
         "--dry", action="store_true", help="Whether to submit the scripts to slurm or only store the scripts."

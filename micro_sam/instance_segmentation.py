@@ -8,7 +8,7 @@ import warnings
 from abc import ABC
 from copy import deepcopy
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, Literal
 
 import vigra
 import numpy as np
@@ -1282,8 +1282,48 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         self._is_initialized = True
 
 
+def _get_centers(segmentation, avoid_image_border=True):
+    from skimage.segmentation import find_boundaries
+    from scipy.ndimage import distance_transform_edt
+
+    # Compute the distance transform to object bounaries.
+    boundaries = find_boundaries(segmentation, mode="outer") == 0
+    # Avoid centroids on the border.
+    if avoid_image_border:
+        boundaries[0, :] = False
+        boundaries[:, 0] = False
+        boundaries[-1, :] = False
+        boundaries[:, -1] = False
+    distances = distance_transform_edt(boundaries)
+
+    # Get the unique segmentation id, exluding the background label 0.
+    seg_ids = np.unique(segmentation)[1:]
+    # Get the maximum for each id.
+    centers = []
+    # This can maybe be done more efficiently.
+    for seg_id in seg_ids:
+        # Get the mask and bounding box for this segmentation id.
+        mask = segmentation == seg_id
+        bounding_box = np.where(mask)
+        bounding_box = tuple(
+            slice(int(bb.min()), int(bb.max()) + 1) for bb in bounding_box
+        )
+        # Restrict the mask and distances to the bounding box.
+        mask, dist = mask[bounding_box], distances[bounding_box].copy()
+        # Set the distances outside of the mask to 0.
+        dist[~mask] = 0
+        # Find the center coordinate (= distance maximum).
+        center = np.argmax(dist)
+        center = np.unravel_index(center, dist.shape)
+        # Bring the center coordinate back to the full coordinate system.
+        center = tuple(ce + bb.start for ce, bb in zip(center, bounding_box))
+        centers.append(center)
+
+    return centers
+
+
 # TODO enable parallel peak_local_max and label to scale to large images, e.g. WSI
-def _derive_prompts(
+def _derive_point_prompts(
     foreground: np.ndarray,
     center_distances: np.ndarray,
     boundary_distances: np.ndarray,
@@ -1327,9 +1367,7 @@ def _derive_prompts(
         )
         hmap_cc[bg_mask] = 0
         hmap_cc = label(hmap_cc)
-        # Extract centroids per object.
-        rprompts = regionprops(hmap_cc)
-        prompts_cc = np.array([np.round(r.centroid).astype(int) for r in rprompts])
+        prompts_cc = _get_centers(hmap_cc)
     else:
         prompts_cc = None
 
@@ -1348,7 +1386,23 @@ def _derive_prompts(
     # v.add_points(prompts)
     # napari.run()
 
-    return prompts
+    if len(prompts) == 0:
+        return None
+    points = prompts[:, None, ::-1]
+    labels = np.ones((len(prompts), 1))
+    return {"points": points, "point_labels": labels}
+
+
+def _derive_box_prompts(predictions, box_extension):
+    shape = predictions[0]["segmentation"].shape
+    bboxes = [pred["bbox"] for pred in predictions]
+    prompts = [[
+        max(x - w * box_extension, 0),
+        max(y - h * box_extension, 0),
+        min(x + (1 + box_extension) * w, shape[0]),
+        min(y + (1 + box_extension) * h, shape[1]),
+    ] for (x, y, w, h) in bboxes]
+    return {"boxes": np.array(prompts)}
 
 
 class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
@@ -1368,10 +1422,15 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         min_distance: int = 5,
         threshold_abs: float = 0.25,
         multimasking: bool = False,
-        prompt_selection: Union[str, List[str]] = "boundary_distances",
+        prompt_selection: Union[str, List[str]] = "connected_components",
         batch_size: int = 32,
         nms_threshold: float = 0.9,
+        intersection_over_min: bool = False,
         output_mode: Optional[str] = "binary_mask",
+        mask_threshold: Optional[Union[float, str]] = None,
+        center_distance_threshold: float = 0.5,
+        boundary_distance_threshold: float = 0.5,
+        refine_with_box_prompts: bool = False,
     ) -> List[Dict[str, Any]]:
         """Generate instance segmentation for the currently initialized image.
 
@@ -1392,7 +1451,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
             self._foreground, self._center_distances, self._boundary_distances
 
         # 1.) Derive promtps from the decoder predictions.
-        prompts = _derive_prompts(
+        prompts = _derive_point_prompts(
             foreground,
             center_distances,
             boundary_distances,
@@ -1400,28 +1459,43 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
             min_distance=min_distance,
             threshold_abs=threshold_abs,
             prompt_selection=prompt_selection,
+            center_distance_threshold=center_distance_threshold,
+            boundary_distance_threshold=boundary_distance_threshold,
         )
 
         # 2.) Apply the predictor to the prompts.
         batch_size = batch_size
-        points = prompts[:, None, ::-1]
-        labels = np.ones((len(prompts), 1))
-
-        if len(points) == 0:  # Since there were no prompts derived, we can't do much further.
+        # TODO: the ouptputs have to be synced (i.e. depending on output model)
+        if prompts is None:  # Since there were no prompts derived, we can't do much further.
             return []  # Returns empty masks.
         else:
             predictions = batched_inference(
                 self._predictor,
                 image=None,
                 batch_size=batch_size,
-                points=points,
-                point_labels=labels,
                 return_instance_segmentation=False,
                 multimasking=multimasking,
+                mask_threshold=mask_threshold,
+                **prompts,
+            )
+
+        if refine_with_box_prompts:
+            box_extension = 0.01  # expose as hyperparam?
+            prompts = _derive_box_prompts(predictions, box_extension)
+            predictions = batched_inference(
+                self._predictor,
+                image=None,
+                batch_size=batch_size,
+                return_instance_segmentation=False,
+                multimasking=multimasking,
+                mask_threshold=mask_threshold,
+                **prompts,
             )
 
         # 3.) Apply non-max suppression to the masks.
-        segmentation = util.apply_nms(predictions, min_size=min_size, nms_thresh=nms_threshold)
+        segmentation = util.apply_nms(
+            predictions, min_size=min_size, nms_thresh=nms_threshold, intersection_over_min=intersection_over_min
+        )
 
         if output_mode is not None:
             segmentation = self._to_masks(segmentation, output_mode)
@@ -1439,12 +1513,13 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
         min_distance: int = 5,
         threshold_abs: float = 0.25,
         multimasking: bool = False,
-        prompt_selection: Union[str, List[str]] = "center_distances",
+        prompt_type: Literal["box", "point"] = "point",
+        prompt_selection: Union[str, List[str]] = "boundary_distances",
         batch_size: int = 32,
         nms_threshold: float = 0.9,
         output_mode: Optional[str] = "binary_mask",
     ) -> List[Dict[str, Any]]:
-        """Generate instance segmentation for the currently initialized image.
+        """Generate tiling-based instance segmentation for the currently initialized image.
 
         Args:
             min_size: Minimal object size in the segmentation result. By default, set to '25'.
@@ -1455,12 +1530,21 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
         Returns:
             The instance segmentation masks.
         """
+        raise NotImplementedError("Needs to be updated")
+
         from .inference import batched_tiled_inference
 
         if not self.is_initialized:
             raise RuntimeError("TiledAutomaticPromptGenerator has not been initialized. Call initialize first.")
         foreground, center_distances, boundary_distances =\
             self._foreground, self._center_distances, self._boundary_distances
+
+        if prompt_type == "point":
+            _derive_prompts = _derive_point_prompts
+        elif prompt_type == "box":
+            _derive_prompts = _derive_box_prompts
+        else:
+            raise ValueError(prompt_type)
 
         # 1.) Derive promtps from the decoder predictions.
         prompts = _derive_prompts(
@@ -1475,17 +1559,14 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
 
         # 2.) Apply the predictor to the prompts.
         batch_size = batch_size
-        points = prompts[:, None, ::-1]
-        labels = np.ones((len(prompts), 1))
         predictions = batched_tiled_inference(
             self._predictor,
             image=None,
             batch_size=batch_size,
             image_embeddings=self._image_embeddings,
-            points=points,
-            point_labels=labels,
             return_instance_segmentation=False,
             multimasking=multimasking,
+            **prompts
         )
 
         # 3.) Apply non-max suppression to the masks.

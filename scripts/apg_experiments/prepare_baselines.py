@@ -5,13 +5,13 @@ import imageio.v3 as imageio
 
 from elf.evaluation import mean_segmentation_accuracy, matching
 
+from micro_sam.util import _to_image
 from micro_sam.instance_segmentation import AutomaticPromptGenerator, get_predictor_and_decoder
 from micro_sam.automatic_segmentation import (
     get_predictor_and_segmenter, automatic_instance_segmentation, mask_data_to_segmentation
 )
 
 from tukra.inference.get_cellpose import segment_using_cellpose
-from tukra.inference.get_instanseg import segment_using_instanseg
 
 from util import get_image_label_paths
 
@@ -23,7 +23,7 @@ def run_baseline_engine(image, method, **kwargs):
     elif method == "apg":
         segmenter = kwargs["segmenter"]
         segmenter.initialize(image, ndim=2)
-        segmentation = segmenter.generate(prompt_selection="boundary_distances")
+        segmentation = segmenter.generate()
 
         if len(segmentation) == 0:
             segmentation = np.zeros(image.shape[:2], dtype="uint32")
@@ -31,36 +31,23 @@ def run_baseline_engine(image, method, **kwargs):
             segmentation = mask_data_to_segmentation(segmentation, with_background=False)
 
     # Newer SAM methods.
-    elif method == "sam2":
-        # TODO: Wrap this out in a modular function (like our segmenters)
-        from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
-        from micro_sam2.util import get_sam2_model
-        predictor = get_sam2_model(model_type=kwargs["model_type"])
-        generator = SAM2AutomaticMaskGenerator(predictor)
-        segmentation = generator.generate(image.astype("uint8"))  # HACK: Casting forcefully.
-
-        if len(segmentation) == 0:
-            segmentation = np.zeros(image.shape[:2], dtype="uint32")
-        else:
-            segmentation = mask_data_to_segmentation(segmentation, with_background=True)
-
-    elif method == "sam3":
-        # TODO: Wrap this out in a modular function too?
+    elif method == "sam3":  # TODO: Wrap this out in a modular function too?
+        from PIL import Image
         from sam3.model_builder import build_sam3_image_model
         from sam3.model.sam3_image_processor import Sam3Processor
         model = build_sam3_image_model()
         processor = Sam3Processor(model)
-        inference_state = processor.set_image(image)
+        inference_state = processor.set_image(Image.fromarray(_to_image(image)))
         # Prompt the model with text
+        processor.reset_all_prompts(inference_state)
         segmentation = processor.set_text_prompt(state=inference_state, prompt=kwargs["prompt"])
         segmentation = segmentation["masks"]  # Get the masks only.
 
         if len(segmentation) == 0:
             segmentation = np.zeros(image.shape[:2], dtype="uint32")
-        else:
-            # HACK: Let's get a cheap merging strategy
+        else:  # HACK: Let's get a cheap merging strategy
             segmentation = segmentation.squeeze(1).detach().cpu().numpy()
-            final_mask = np.zeros(image.shape, dtype="uint32")
+            final_mask = np.zeros(image.shape[:2], dtype="uint32")
             for i, curr_mask in enumerate(segmentation, start=1):
                 final_mask[curr_mask] = i
             segmentation = final_mask
@@ -74,10 +61,6 @@ def run_baseline_engine(image, method, **kwargs):
         # NOTE: For images where no objects could be found, a weird segmentation is returned.
         if segmentation.ndim == 3:
             segmentation = segmentation[0]
-    elif method == "instanseg":
-        segmentation = segment_using_instanseg(image, verbose=False, **kwargs)
-    elif method == "cellvit":
-        raise NotImplementedError
     else:
         raise ValueError
 
@@ -111,7 +94,8 @@ def run_default_baselines(dataset_name, method, model_type, target=None):
 
     msas, sa50s, precisions, recalls, f1s = [], [], [], [], []
     for curr_image_path, curr_label_path in tqdm(
-        zip(image_paths, label_paths), total=len(image_paths), desc=f"Run '{method}' baseline for '{model_type}'",
+        zip(image_paths, label_paths), total=len(image_paths),
+        desc=f"Run '{method}' baseline for '{model_type}' on '{dataset_name}'",
     ):
         image = imageio.imread(curr_image_path)
         labels = imageio.imread(curr_label_path)
@@ -130,8 +114,9 @@ def run_default_baselines(dataset_name, method, model_type, target=None):
         f1s.append(stats["f1"])
 
     print(
-        f"The final scores for '{method}' with '{model_type}' are - mSA:", np.mean(msas), "SA50:",  np.mean(sa50s),
-        "Precision:", np.mean(precisions), "Recall:", np.mean(recalls), "F1 Score:", np.mean(f1s)
+        f"The final scores for '{method}' with '{model_type}' on '{dataset_name}' are - mSA:",
+        np.mean(msas), "SA50:",  np.mean(sa50s), "Precision:", np.mean(precisions), "Recall:",
+        np.mean(recalls), "F1 Score:", np.mean(f1s)
     )
 
 
@@ -145,6 +130,6 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--dataset_name", type=str, required=True)
     parser.add_argument("--method", type=str, required=True)
     parser.add_argument("-m", "--model_type", type=str, required=True)
-    parser.add_argument("--target", type=str, default=None)  # needed for instanseg.
+    parser.add_argument("--target", type=str, default=None)  # We need this for InstanSeg and SAM3.
     args = parser.parse_args()
     main(args)

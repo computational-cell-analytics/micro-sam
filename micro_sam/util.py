@@ -1481,7 +1481,30 @@ def _calculate_ious_between_pred_masks(masks, boxes, diagonal_value=1):
     return m
 
 
-def _batched_mask_nms(rles, boxes, scores, nms_thresh):
+def _calculate_iomin_between_pred_masks(masks, boxes=None, eps=1e-6):
+    # Flatten spatial dimensions: (N, H*W) or (N, D*H*W)
+    N = masks.shape[0]
+    masks_flat = masks.reshape(N, -1).float()
+
+    # Per-mask area
+    areas = masks_flat.sum(dim=1)  # (N,)
+
+    # Pairwise intersections via matrix multiplication
+    # inter[i, j] = sum_k masks_flat[i, k] * masks_flat[j, k]
+    inter = masks_flat @ masks_flat.t()  # (N, N)
+
+    # Denominator: min area of the two masks
+    min_areas = torch.minimum(areas[:, None], areas[None, :])  # (N, N)
+
+    # IoMin = intersection / min(area_i, area_j)
+    iomin = inter / (min_areas + eps)
+
+    # If either mask is empty, set IoMin to 0 explicitly
+    iomin[min_areas == 0] = 0.0
+    return iomin
+
+
+def _batched_mask_nms(rles, boxes, scores, nms_thresh, intersection_over_min):
     if len(rles) == 0:
         return torch.tensor([], dtype=torch.int64)
 
@@ -1497,7 +1520,10 @@ def _batched_mask_nms(rles, boxes, scores, nms_thresh):
         else torch.tensor(scores)
     )
 
-    iou_matrix = _calculate_ious_between_pred_masks(masks, boxes)
+    if intersection_over_min:
+        iou_matrix = _calculate_iomin_between_pred_masks(masks, boxes)
+    else:
+        iou_matrix = _calculate_ious_between_pred_masks(masks, boxes)
     sorted_indices = torch.argsort(scores, descending=True)
 
     keep = []
@@ -1542,7 +1568,14 @@ def _mask_data_to_segmentation(masks, min_object_size):
 
 
 # TODO add documentation and refactor imports
-def apply_nms(predictions, min_size, perform_box_nms=False, nms_thresh=0.9, max_size=None):
+def apply_nms(
+    predictions,
+    min_size: int,
+    perform_box_nms: bool = False,
+    nms_thresh: float = 0.9,
+    max_size: Optional[int] = None,
+    intersection_over_min: bool = False
+):
     """
     """
     import segment_anything.utils.amg as amg_utils
@@ -1556,6 +1589,7 @@ def apply_nms(predictions, min_size, perform_box_nms=False, nms_thresh=0.9, max_
     data["rles"] = mask_to_rle_pytorch(data["masks"])
     data["boxes"] = batched_mask_to_box(data["masks"])
     data["area"] = [mask.sum() for mask in data["masks"]]
+    data["stability_scores"] = torch.tensor([pred["stability_score"] for pred in predictions])
 
     if min_size > 0:
         keep_by_size = torch.tensor(
@@ -1567,10 +1601,12 @@ def apply_nms(predictions, min_size, perform_box_nms=False, nms_thresh=0.9, max_
         keep_by_size = torch.tensor([i for i, area in enumerate(data["area"]) if area < max_size])
         data.filter(keep_by_size)
 
+    scores = data["iou_preds"] * data["stability_scores"]
     if perform_box_nms:
+        assert not intersection_over_min  # not implemented
         keep_by_nms = batched_nms(
             data["boxes"].float(),
-            data["iou_preds"],
+            scores,
             torch.zeros_like(data["boxes"][:, 0]),  # categories
             iou_threshold=nms_thresh,
         )
@@ -1578,8 +1614,9 @@ def apply_nms(predictions, min_size, perform_box_nms=False, nms_thresh=0.9, max_
         keep_by_nms = _batched_mask_nms(
             rles=data["rles"],
             boxes=data["boxes"].float(),
-            scores=data["iou_preds"],
+            scores=scores,
             nms_thresh=nms_thresh,
+            intersection_over_min=intersection_over_min,
         )
     data.filter(keep_by_nms)
 

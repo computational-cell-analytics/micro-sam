@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional, Union, Tuple
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from nifty.tools import blocking
 
 import segment_anything.utils.amg as amg_utils
@@ -62,6 +63,87 @@ def _validate_inputs(
     return n_prompts, have_boxes, have_points, have_logits
 
 
+def _local_otsu_threshold(images: torch.Tensor, window_size: int = 31, num_bins: int = 64, eps: float = 1e-6):
+    x = images
+    B, _, H, W = x.shape
+    device = x.device
+
+    # Work in float32 for stability even if input is fp16
+    x = x.to(torch.float32)
+
+    # --- per-image min/max for normalization to [0, 1] ---
+    x_flat = x.view(B, -1)
+    x_min = x_flat.min(dim=1).values.view(B, 1, 1, 1)
+    x_max = x_flat.max(dim=1).values.view(B, 1, 1, 1)
+    x_range = (x_max - x_min).clamp_min(eps)
+
+    x_norm = (x - x_min) / x_range  # (B,1,H,W), in [0,1]
+
+    # --- extract local patches via unfold ---
+    pad = window_size // 2
+    patches = F.unfold(x_norm, kernel_size=window_size, padding=pad)  # (B, P, L)
+    # P = window_size * window_size, L = H * W
+    B_, P, L = patches.shape
+
+    # --- quantize to bins ---
+    bin_idx = (patches * (num_bins - 1)).long().clamp(0, num_bins - 1)  # (B, P, L)
+
+    # --- build histograms per patch ---
+    # one_hot: (B, L, num_bins)
+    one_hot = torch.zeros(B, L, num_bins, device=device, dtype=torch.float32)
+    idx = bin_idx.transpose(1, 2)  # (B, L, P)
+    src = torch.ones_like(idx, dtype=one_hot.dtype)  # (B, L, P)
+    one_hot.scatter_add_(2, idx, src)
+    # hist: (B, num_bins, L)
+    hist = one_hot.permute(0, 2, 1)
+
+    # --- Otsu per patch (vectorized) ---
+    # p: (B, bins, L)
+    p = hist / hist.sum(dim=1, keepdim=True).clamp_min(eps)
+
+    bins = torch.arange(num_bins, device=device, dtype=torch.float32).view(1, num_bins, 1)
+
+    omega1 = torch.cumsum(p, dim=1)              # (B, bins, L)
+    mu = torch.cumsum(p * bins, dim=1)           # (B, bins, L)
+    mu_T = mu[:, -1:, :]                         # (B, 1, L)
+
+    omega2 = 1.0 - omega1
+
+    mu1 = mu / omega1.clamp_min(eps)
+    mu2 = (mu_T - mu) / omega2.clamp_min(eps)
+
+    sigma_b2 = omega1 * omega2 * (mu1 - mu2) ** 2  # (B, bins, L)
+
+    # argmax over bins gives local threshold bin per patch
+    t_bin = torch.argmax(sigma_b2, dim=1)        # (B, L)
+    t_norm = t_bin.to(torch.float32) / (num_bins - 1)  # normalized [0,1]
+
+    # --- map thresholds back to original intensity scale (per-image) ---
+    # x_min, x_range: (B,1,1,1) -> flatten batch dims
+    thr_vals = x_min.view(B, 1) + t_norm * x_range.view(B, 1)  # (B, L)
+    # clamp to >= 0 because foreground is positive
+    thr_vals = thr_vals.clamp_min(0.0)
+
+    thresholds = thr_vals.view(B, H, W)
+    # Take the spatial max over the thresholds.
+    thresholds = torch.amax(thresholds, dim=(1, 2), keepdims=True)
+    return thresholds
+
+
+def _process_masks_for_batch(batch_masks, batch_ious, batch_logits, return_highres_logits, mask_threshold):
+    batch_data = amg_utils.MaskData(masks=batch_masks.flatten(0, 1), iou_preds=batch_ious.flatten(0, 1))
+    batch_data["logits"] = batch_masks.clone() if return_highres_logits else batch_logits
+    if mask_threshold == "auto":
+        thresholds = _local_otsu_threshold(batch_logits)
+        batch_data["stability_scores"] = amg_utils.calculate_stability_score(batch_data["masks"], thresholds, 1.0)
+        batch_data["masks"] = (batch_data["masks"] > thresholds).type(torch.bool)
+    else:
+        batch_data["stability_scores"] = amg_utils.calculate_stability_score(batch_data["masks"], mask_threshold, 1.0)
+        batch_data["masks"] = (batch_data["masks"] > mask_threshold).type(torch.bool)
+    batch_data["boxes"] = batched_mask_to_box(batch_data["masks"])
+    return batch_data
+
+
 @torch.no_grad()
 def batched_inference(
     predictor: SamPredictor,
@@ -77,6 +159,8 @@ def batched_inference(
     reduce_multimasking: bool = True,
     logits_masks: Optional[torch.Tensor] = None,
     verbose_embeddings: bool = True,
+    mask_threshold: Optional[Union[float, str]] = None,
+    return_highres_logits: bool = False,
 ) -> Union[List[List[Dict[str, Any]]], np.ndarray]:
     """Run batched inference for input prompts.
 
@@ -102,6 +186,10 @@ def batched_inference(
             Whether to use the logits masks from previous segmentation.
         verbose_embeddings: Whether to show progress outputs of computing image embeddings.
             By default, set to 'True'.
+        mask_threshold: The theshold for binarizing masks based on the predicted values.
+            If None, the default threshold 0 is used. If "auto" is passed then the threshold is
+            determined with a local otsu filter.
+        return_highres_logits: Wheher to return high-resolution logits.
 
     Returns:
         The predicted segmentation masks.
@@ -136,6 +224,7 @@ def batched_inference(
         point_labels = torch.tensor(point_labels, dtype=torch.float32).to(device)
 
     masks = amg_utils.MaskData()
+    mask_threshold = predictor.model.mask_threshold if mask_threshold is None else mask_threshold
     for batch_idx in range(n_batches):
         batch_start = batch_idx * batch_size
         batch_stop = min((batch_idx + 1) * batch_size, n_prompts)
@@ -150,7 +239,8 @@ def batched_inference(
             point_labels=batch_labels,
             boxes=batch_boxes,
             mask_input=batch_logits,
-            multimask_output=multimasking
+            multimask_output=multimasking,
+            return_logits=True,
         )
 
         # If we expect to reduce the masks from multimasking and use multi-masking,
@@ -161,11 +251,9 @@ def batched_inference(
             batch_ious = torch.cat([batch_ious[i, max_id][None] for i, max_id in enumerate(max_index)]).unsqueeze(1)
             batch_logits = torch.cat([batch_logits[i, max_id][None] for i, max_id in enumerate(max_index)]).unsqueeze(1)
 
-        batch_data = amg_utils.MaskData(masks=batch_masks.flatten(0, 1), iou_preds=batch_ious.flatten(0, 1))
-        batch_data["masks"] = (batch_data["masks"] > predictor.model.mask_threshold).type(torch.bool)
-        batch_data["boxes"] = batched_mask_to_box(batch_data["masks"])
-        batch_data["logits"] = batch_logits
-
+        batch_data = _process_masks_for_batch(
+            batch_masks, batch_ious, batch_logits, return_highres_logits, mask_threshold
+        )
         masks.cat(batch_data)
 
     # Mask data to records.
@@ -175,6 +263,7 @@ def batched_inference(
             "area": masks["masks"][idx].sum(),
             "bbox": amg_utils.box_xyxy_to_xywh(masks["boxes"][idx]).tolist(),
             "predicted_iou": masks["iou_preds"][idx].item(),
+            "stability_score": masks["stability_scores"][idx].item(),
             "seg_id": idx + 1 if segmentation_ids is None else int(segmentation_ids[idx]),
             "logits": masks["logits"][idx]
         }
