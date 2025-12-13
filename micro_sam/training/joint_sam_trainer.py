@@ -136,6 +136,7 @@ class JointSamTrainer(SamTrainer):
 
         val_iteration = 0
         metric_val, loss_val, model_iou_val = 0.0, 0.0, 0.0
+        mask_loss_val, iou_loss_val, unetr_loss_val = 0.0, 0.0, 0.0
 
         with torch.no_grad():
             for x, y in self.val_loader:
@@ -155,17 +156,23 @@ class JointSamTrainer(SamTrainer):
 
                 loss_val += loss.item()
                 metric_val += metric.item() + (unetr_metric.item() / 3)
+                mask_loss_val += mask_loss.item()
+                iou_loss_val += iou_regression_loss.item()
                 model_iou_val += model_iou.item()
+                unetr_loss_val += unetr_loss.item()
                 val_iteration += 1
 
         loss_val /= len(self.val_loader)
         metric_val /= len(self.val_loader)
+        mask_loss_val /= len(self.val_loader)
+        iou_loss_val /= len(self.val_loader)
         model_iou_val /= len(self.val_loader)
+        unetr_loss_val /= len(self.val_loader)
 
         if self.logger is not None:
             self.logger.log_validation(
                 self._iteration, metric_val, loss_val, x, labels_instances, sampled_binary_y,
-                mask_loss, iou_regression_loss, model_iou_val, unetr_loss
+                mask_loss_val, iou_loss_val, model_iou_val, unetr_loss_val
             )
 
         return metric_val
