@@ -8,11 +8,10 @@ import warnings
 from abc import ABC
 from copy import deepcopy
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Tuple, Union, Literal
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import vigra
 import numpy as np
-from skimage.feature import peak_local_max
 from skimage.measure import label, regionprops
 from skimage.segmentation import relabel_sequential
 
@@ -1319,75 +1318,28 @@ def _get_centers(segmentation, avoid_image_border=True):
         center = tuple(ce + bb.start for ce, bb in zip(center, bounding_box))
         centers.append(center)
 
-    return centers
+    return np.array(centers)
 
 
-# TODO enable parallel peak_local_max and label to scale to large images, e.g. WSI
 def _derive_point_prompts(
     foreground: np.ndarray,
     center_distances: np.ndarray,
     boundary_distances: np.ndarray,
-    prompt_selection: Union[str, List[str]],
     foreground_threshold: float = 0.5,
-    min_distance: int = 5,
-    threshold_abs: float = 0.25,
     center_distance_threshold: float = 0.5,
     boundary_distance_threshold: float = 0.5,
 ):
     bg_mask = foreground < foreground_threshold
-
-    if isinstance(prompt_selection, str):
-        prompt_selection = [prompt_selection]
-    if not any(
-        [v in prompt_selection for v in ("center_distances", "boundary_distances", "connected_components")]
-    ):
-        raise ValueError("Please choose a valid 'prompt_selection' option.")
-
-    if "center_distances" in prompt_selection:  # Use 'center_distances' to extract prompts.
-        hmap_center = 1.0 - center_distances.copy()
-        hmap_center[bg_mask] = 0
-        prompts_center = peak_local_max(
-            hmap_center, min_distance=min_distance, threshold_abs=threshold_abs, exclude_border=False
-        )
-    else:
-        prompts_center = None
-
-    if "boundary_distances" in prompt_selection:  # Use 'boundary_distances' to extract prompts.
-        hmap_bd = 1.0 - boundary_distances.copy()
-        hmap_bd[bg_mask] = 0
-        prompts_bd = peak_local_max(
-            hmap_bd, min_distance=min_distance, threshold_abs=threshold_abs, exclude_border=False
-        )
-    else:
-        prompts_bd = None
-
-    if "connected_components" in prompt_selection:  # Inspired by micro-sam watershed to extract seeds.
-        hmap_cc = np.logical_and(
-            center_distances < center_distance_threshold, boundary_distances < boundary_distance_threshold,
-        )
-        hmap_cc[bg_mask] = 0
-        hmap_cc = label(hmap_cc)
-        prompts_cc = _get_centers(hmap_cc)
-    else:
-        prompts_cc = None
-
-    # Merge all prompts into one.
-    prompts = np.concatenate(
-        [p for p in (prompts_center, prompts_bd, prompts_cc) if p is not None], axis=0,
+    hmap_cc = np.logical_and(
+        center_distances < center_distance_threshold, boundary_distances < boundary_distance_threshold,
     )
-
-    # For debugging/visualization purposes
-    # import napari
-    # v = napari.Viewer()
-    # v.add_image(foreground)
-    # v.add_image(hmap_bd)
-    # v.add_image(hmap_center)
-    # v.add_image(hmap_cc)
-    # v.add_points(prompts)
-    # napari.run()
-
+    hmap_cc[bg_mask] = 0
+    # TODO parallelize
+    hmap_cc = label(hmap_cc)
+    prompts = _get_centers(hmap_cc)
     if len(prompts) == 0:
         return None
+
     points = prompts[:, None, ::-1]
     labels = np.ones((len(prompts), 1))
     return {"points": points, "point_labels": labels}
@@ -1415,34 +1367,44 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         decoder: The derive prompts for automatic instance segmentation.
     """
     # TODO should we update generate to return a segmentation by default?
+    # TODO refactor the prompt generation logic: only support connected-components and its params
+    # support passing a custom function instead for prompt-derivation, so that we can test other things.
     def generate(
         self,
         min_size: int = 25,
+        center_distance_threshold: float = 0.5,
+        boundary_distance_threshold: float = 0.5,
         foreground_threshold: float = 0.5,
-        min_distance: int = 5,
-        threshold_abs: float = 0.25,
         multimasking: bool = False,
-        prompt_selection: Union[str, List[str]] = "connected_components",
         batch_size: int = 32,
         nms_threshold: float = 0.9,
         intersection_over_min: bool = False,
         output_mode: Optional[str] = "binary_mask",
         mask_threshold: Optional[Union[float, str]] = None,
-        center_distance_threshold: float = 0.5,
-        boundary_distance_threshold: float = 0.5,
         refine_with_box_prompts: bool = False,
+        prompt_function: Optional[callable] = None,
     ) -> List[Dict[str, Any]]:
         """Generate instance segmentation for the currently initialized image.
 
         Args:
             min_size: Minimal object size in the segmentation result. By default, set to '25'.
-            ...
+            center_distance_threshold:
+            boundary_distance_threshold:
+            multimasking:
+            batch_size:
+            nms_threshold:
+            intersection_over_min:
             output_mode: The form masks are returned in. Pass None to directly return the instance segmentation.
                 By default, set to 'binary_mask'.
+            mask_threshold:
+            refine_with_box_prompts:
+            prompt_function:
 
         Returns:
             The instance segmentation masks.
         """
+        # TODO: this can't be imported top-level due to a circular import caused by 'mask_data_to_segmentation'.
+        # Solve this by refactoring 'mask_datato_segmentation' to utils.
         from .inference import batched_inference
 
         if not self.is_initialized:
@@ -1451,20 +1413,17 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
             self._foreground, self._center_distances, self._boundary_distances
 
         # 1.) Derive promtps from the decoder predictions.
-        prompts = _derive_point_prompts(
+        prompt_function = _derive_point_prompts if prompt_function is None else prompt_function
+        prompts = prompt_function(
             foreground,
             center_distances,
             boundary_distances,
             foreground_threshold=foreground_threshold,
-            min_distance=min_distance,
-            threshold_abs=threshold_abs,
-            prompt_selection=prompt_selection,
             center_distance_threshold=center_distance_threshold,
             boundary_distance_threshold=boundary_distance_threshold,
         )
 
         # 2.) Apply the predictor to the prompts.
-        batch_size = batch_size
         # TODO: the ouptputs have to be synced (i.e. depending on output model)
         if prompts is None:  # Since there were no prompts derived, we can't do much further.
             return []  # Returns empty masks.
@@ -1509,15 +1468,17 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
     def generate(
         self,
         min_size: int = 25,
+        center_distance_threshold: float = 0.5,
+        boundary_distance_threshold: float = 0.5,
         foreground_threshold: float = 0.5,
-        min_distance: int = 5,
-        threshold_abs: float = 0.25,
         multimasking: bool = False,
-        prompt_type: Literal["box", "point"] = "point",
-        prompt_selection: Union[str, List[str]] = "boundary_distances",
         batch_size: int = 32,
         nms_threshold: float = 0.9,
+        intersection_over_min: bool = False,
         output_mode: Optional[str] = "binary_mask",
+        mask_threshold: Optional[Union[float, str]] = None,
+        refine_with_box_prompts: bool = False,
+        prompt_function: Optional[callable] = None,
     ) -> List[Dict[str, Any]]:
         """Generate tiling-based instance segmentation for the currently initialized image.
 
@@ -1530,8 +1491,8 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
         Returns:
             The instance segmentation masks.
         """
-        raise NotImplementedError("Needs to be updated")
-
+        # TODO: this can't be imported top-level due to a circular import caused by 'mask_data_to_segmentation'.
+        # Solve this by refactoring 'mask_datato_segmentation' to utils.
         from .inference import batched_tiled_inference
 
         if not self.is_initialized:
@@ -1539,26 +1500,18 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
         foreground, center_distances, boundary_distances =\
             self._foreground, self._center_distances, self._boundary_distances
 
-        if prompt_type == "point":
-            _derive_prompts = _derive_point_prompts
-        elif prompt_type == "box":
-            _derive_prompts = _derive_box_prompts
-        else:
-            raise ValueError(prompt_type)
-
         # 1.) Derive promtps from the decoder predictions.
-        prompts = _derive_prompts(
+        prompt_function = _derive_point_prompts if prompt_function is None else prompt_function
+        prompts = prompt_function(
             foreground,
             center_distances,
             boundary_distances,
             foreground_threshold=foreground_threshold,
-            min_distance=min_distance,
-            threshold_abs=threshold_abs,
-            prompt_selection=prompt_selection,
+            center_distance_threshold=center_distance_threshold,
+            boundary_distance_threshold=boundary_distance_threshold,
         )
 
         # 2.) Apply the predictor to the prompts.
-        batch_size = batch_size
         predictions = batched_tiled_inference(
             self._predictor,
             image=None,

@@ -1,4 +1,5 @@
 import unittest
+from copy import deepcopy
 
 import micro_sam.util as util
 import numpy as np
@@ -50,46 +51,17 @@ class TestInstanceSegmentation(unittest.TestCase):
             predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint)
         if with_tiling:
             image_embeddings = util.precompute_image_embeddings(
-                predictor, image, tile_shape=self.tile_shape, halo=self.halo
+                predictor, image, tile_shape=self.tile_shape, halo=self.halo, verbose=False,
             )
         else:
-            image_embeddings = util.precompute_image_embeddings(predictor, image)
+            image_embeddings = util.precompute_image_embeddings(predictor, image, verbose=False)
 
         if with_decoder:
             return predictor, decoder, image_embeddings
         else:
             return predictor, image_embeddings
 
-    def test_automatic_mask_generator(self):
-        from micro_sam.instance_segmentation import AutomaticMaskGenerator, mask_data_to_segmentation
-
-        mask, image = self.mask, self.image
-        predictor, image_embeddings = self._get_model(image, self.model_type)
-
-        amg = AutomaticMaskGenerator(predictor, points_per_side=10, points_per_batch=16)
-        amg.initialize(image, image_embeddings=image_embeddings, verbose=False)
-
-        predicted = amg.generate()
-        predicted = mask_data_to_segmentation(predicted, with_background=True)
-        self.assertGreater(matching(predicted, mask, threshold=0.75)["segmentation_accuracy"], 0.99)
-
-        # check that regenerating the segmentation works
-        predicted2 = amg.generate()
-        predicted2 = mask_data_to_segmentation(predicted2, with_background=True)
-        self.assertTrue(np.array_equal(predicted, predicted2))
-
-        # check that serializing and reserializing the state works
-        state = amg.get_state()
-        amg = AutomaticMaskGenerator(predictor, points_per_side=10, points_per_batch=16)
-        amg.set_state(state)
-        predicted3 = amg.generate()
-        predicted3 = mask_data_to_segmentation(predicted3, with_background=True)
-        self.assertTrue(np.array_equal(predicted, predicted3))
-
-    def test_tiled_automatic_mask_generator(self):
-        from micro_sam.instance_segmentation import TiledAutomaticMaskGenerator, mask_data_to_segmentation
-
-        # Release all unoccupied cached memory, tiling requires a lot of memory
+    def _clear_gpu_memory(self):
         device = util.get_device(None)
         if device == "cuda":
             import torch.cuda
@@ -98,90 +70,86 @@ class TestInstanceSegmentation(unittest.TestCase):
             import torch.mps
             torch.mps.empty_cache()
 
-        mask, image = self.large_mask, self.large_image
-        predictor, image_embeddings = self._get_model(image, self.model_type, with_tiling=True)
+    def _test_instance_segmentation(
+        self, amg_class, create_kwargs={}, generate_kwargs={}, with_decoder=False, with_tiling=False
+    ):
+        from micro_sam.instance_segmentation import mask_data_to_segmentation
 
-        pred_iou_thresh = 0.75
+        if with_tiling:
+            mask, image = self.large_mask, self.large_image
+        else:
+            mask, image = self.mask, self.image
 
-        amg = TiledAutomaticMaskGenerator(predictor, points_per_side=8)
+        if with_decoder:
+            predictor, decoder, image_embeddings = self._get_model(
+                image, self.model_type_ais, with_decoder=True, with_tiling=with_tiling
+            )
+            create_kwargs = deepcopy(create_kwargs)
+            create_kwargs.update({"decoder": decoder})
+        else:
+            predictor, image_embeddings = self._get_model(image, self.model_type, with_tiling=with_tiling)
+
+        amg = amg_class(predictor, **create_kwargs)
         amg.initialize(image, image_embeddings=image_embeddings, verbose=False)
-        predicted = amg.generate(pred_iou_thresh=pred_iou_thresh)
+
+        predicted = amg.generate(**generate_kwargs)
         predicted = mask_data_to_segmentation(predicted, with_background=True)
         self.assertGreater(matching(predicted, mask, threshold=0.75)["segmentation_accuracy"], 0.99)
 
-        predicted2 = amg.generate(pred_iou_thresh=pred_iou_thresh)
+        # Check that regenerating the segmentation works.
+        predicted2 = amg.generate(**generate_kwargs)
         predicted2 = mask_data_to_segmentation(predicted2, with_background=True)
         self.assertTrue(np.array_equal(predicted, predicted2))
 
         # Check that serializing and reserializing the state works.
         state = amg.get_state()
-        amg = TiledAutomaticMaskGenerator(predictor)
+        amg = amg_class(predictor, **create_kwargs)
         amg.set_state(state)
-        predicted3 = amg.generate(pred_iou_thresh=pred_iou_thresh)
+        predicted3 = amg.generate(**generate_kwargs)
         predicted3 = mask_data_to_segmentation(predicted3, with_background=True)
         self.assertTrue(np.array_equal(predicted, predicted3))
+
+    def test_automatic_mask_generator(self):
+        from micro_sam.instance_segmentation import AutomaticMaskGenerator
+        create_kwargs = dict(points_per_side=10, points_per_batch=16)
+        self._test_instance_segmentation(AutomaticMaskGenerator, create_kwargs=create_kwargs)
+
+    def test_tiled_automatic_mask_generator(self):
+        from micro_sam.instance_segmentation import TiledAutomaticMaskGenerator
+        self._clear_gpu_memory()  # Release all unoccupied cached memory, tiling requires a lot of memory.
+        create_kwargs = dict(points_per_side=8)
+        generate_kwargs = dict(pred_iou_thresh=0.75)
+        self._test_instance_segmentation(
+            TiledAutomaticMaskGenerator, create_kwargs=create_kwargs, generate_kwargs=generate_kwargs, with_tiling=True
+        )
 
     def test_instance_segmentation_with_decoder(self):
-        from micro_sam.instance_segmentation import InstanceSegmentationWithDecoder, mask_data_to_segmentation
-
-        mask, image = self.mask, self.image
-        predictor, decoder, image_embeddings = self._get_model(
-            image, self.model_type_ais, with_decoder=True
-        )
-
-        amg = InstanceSegmentationWithDecoder(predictor, decoder)
-        amg.initialize(image, image_embeddings=image_embeddings, verbose=False)
-
+        from micro_sam.instance_segmentation import InstanceSegmentationWithDecoder
         # VIT_T behaves a bit weirdly, that's why we need these specific settings
         generate_kwargs = dict(foreground_threshold=0.8, min_size=100)
-        predicted = amg.generate(**generate_kwargs)
-        predicted = mask_data_to_segmentation(predicted, with_background=True)
-
-        self.assertGreater(matching(predicted, mask, threshold=0.75)["segmentation_accuracy"], 0.99)
-
-        # check that regenerating the segmentation works
-        predicted2 = amg.generate(**generate_kwargs)
-        predicted2 = mask_data_to_segmentation(predicted2, with_background=True)
-        self.assertTrue(np.array_equal(predicted, predicted2))
-
-        # check that serializing and reserializing the state works
-        state = amg.get_state()
-        amg = InstanceSegmentationWithDecoder(predictor, decoder)
-        amg.set_state(state)
-        predicted3 = amg.generate(**generate_kwargs)
-        predicted3 = mask_data_to_segmentation(predicted3, with_background=True)
-        self.assertTrue(np.array_equal(predicted, predicted3))
+        self._test_instance_segmentation(
+            InstanceSegmentationWithDecoder, generate_kwargs=generate_kwargs, with_decoder=True
+        )
 
     def test_tiled_instance_segmentation_with_decoder(self):
-        from micro_sam.instance_segmentation import TiledInstanceSegmentationWithDecoder, mask_data_to_segmentation
-
-        mask, image = self.large_mask, self.large_image
-        predictor, decoder, image_embeddings = self._get_model(
-            image, self.model_type_ais, with_decoder=True, with_tiling=True
+        from micro_sam.instance_segmentation import TiledInstanceSegmentationWithDecoder
+        generate_kwargs = dict(foreground_threshold=0.8, min_size=100)
+        self._test_instance_segmentation(
+            TiledInstanceSegmentationWithDecoder, generate_kwargs=generate_kwargs, with_decoder=True, with_tiling=True,
         )
 
-        amg = TiledInstanceSegmentationWithDecoder(predictor, decoder)
-        amg.initialize(image, image_embeddings=image_embeddings, verbose=False)
-
-        # VIT_T behaves a bit weirdly, that's why we need these specific settings
+    def test_automatic_prompt_generator(self):
+        from micro_sam.instance_segmentation import AutomaticPromptGenerator
         generate_kwargs = dict(foreground_threshold=0.8, min_size=100)
-        predicted = amg.generate(**generate_kwargs)
-        predicted = mask_data_to_segmentation(predicted, with_background=True)
+        self._test_instance_segmentation(AutomaticPromptGenerator, generate_kwargs=generate_kwargs, with_decoder=True)
 
-        self.assertGreater(matching(predicted, mask, threshold=0.75)["segmentation_accuracy"], 0.99)
-
-        # check that regenerating the segmentation works
-        predicted2 = amg.generate(**generate_kwargs)
-        predicted2 = mask_data_to_segmentation(predicted2, with_background=True)
-        self.assertTrue(np.array_equal(predicted, predicted2))
-
-        # check that serializing and reserializing the state works
-        state = amg.get_state()
-        amg = TiledInstanceSegmentationWithDecoder(predictor, decoder)
-        amg.set_state(state)
-        predicted3 = amg.generate(**generate_kwargs)
-        predicted3 = mask_data_to_segmentation(predicted3, with_background=True)
-        self.assertTrue(np.array_equal(predicted, predicted3))
+    # TODO
+    # def test_tiled_automatic_prompt_generator(self):
+    #     from micro_sam.instance_segmentation import TildedAutomaticPromptGenerator
+    #     generate_kwargs = dict(foreground_threshold=0.8, min_size=100)
+    #     self._test_instance_segmentation(
+    #         TiledAutomaticPromptGenerator, generate_kwargs=generate_kwargs, with_decoder=True, with_tiling=True,
+    #     )
 
 
 if __name__ == "__main__":

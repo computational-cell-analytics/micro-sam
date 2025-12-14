@@ -8,6 +8,7 @@ from micro_sam.instance_segmentation import (
 from micro_sam.util import precompute_image_embeddings
 
 
+# TODO example with a custom prompt function
 def example_script():
     im = sample_data_hela_2d()[0][0]
 
@@ -15,7 +16,7 @@ def example_script():
     image_embeddings = precompute_image_embeddings(predictor, im, save_path="x.zarr")
     generator = AutomaticPromptGenerator(predictor, decoder)
     generator.initialize(im, image_embeddings=image_embeddings)
-    segmentation = generator.generate(prompt_selection="connected_components", intersection_over_min=True)
+    segmentation = generator.generate(intersection_over_min=True)
     segmentation = mask_data_to_segmentation(segmentation, with_background=False)
 
     v = napari.Viewer()
