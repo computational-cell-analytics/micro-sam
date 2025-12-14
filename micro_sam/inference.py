@@ -11,7 +11,6 @@ from segment_anything import SamPredictor
 from segment_anything.utils.transforms import ResizeLongestSide
 
 from . import util
-from .instance_segmentation import mask_data_to_segmentation
 from ._vendored import batched_mask_to_box
 
 
@@ -271,7 +270,7 @@ def batched_inference(
     ]
 
     if return_instance_segmentation:
-        masks = mask_data_to_segmentation(masks, with_background=False, min_object_size=0)
+        masks = util.mask_data_to_segmentation(masks, min_object_size=0)
     return masks
 
 
@@ -316,10 +315,42 @@ def batched_tiled_inference(
     reduce_multimasking: bool = True,
     logits_masks: Optional[torch.Tensor] = None,
     verbose_embeddings: bool = True,
+    mask_threshold: Optional[Union[float, str]] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
 ) -> Union[List[List[Dict[str, Any]]], np.ndarray]:
-    """
+    """Run batched inference for input prompts.
+
+    Args:
+        predictor: The Segment Anything predictor.
+        image: The input image. If None, we assume that the image embeddings have already been computed.
+        batch_size: The batch size to use for inference.
+        boxes: The box prompts. Array of shape N_PROMPTS x 4.
+            The bounding boxes are represented by [MIN_X, MIN_Y, MAX_X, MAX_Y].
+        points: The point prompt coordinates. Array of shape N_PROMPTS x 1 x 2.
+            The points are represented by their coordinates [X, Y], which are given in the last dimension.
+        point_labels: The point prompt labels. Array of shape N_PROMPTS x 1.
+            The labels are either 0 (negative prompt) or 1 (positive prompt).
+        multimasking: Whether to predict with 3 or 1 mask. By default, set to 'False'.
+        embedding_path: Cache path for the image embeddings. By default, computed on-the-fly.
+        return_instance_segmentation: Whether to return a instance segmentation
+            or the individual mask data. By default, set to 'True'.
+        segmentation_ids: Fixed segmentation ids to assign to the masks
+            derived from the prompts.
+        reduce_multimasking: Whether to choose the most likely masks with
+            highest ious from multimasking. By default, set to 'True'.
+        logits_masks: The logits masks. Array of shape N_PROMPTS x 1 x 256 x 256.
+            Whether to use the logits masks from previous segmentation.
+        verbose_embeddings: Whether to show progress outputs of computing image embeddings.
+            By default, set to 'True'.
+        mask_threshold: The theshold for binarizing masks based on the predicted values.
+            If None, the default threshold 0 is used. If "auto" is passed then the threshold is
+            determined with a local otsu filter.
+        tile_shape: The tile shape for embedding prediction.
+        halo: The overlap of between tiles.
+
+    Returns:
+        The predicted segmentation masks.
     """
     # Validate inputs and get input prompt summary.
     segmentation_ids = None
@@ -409,6 +440,7 @@ def batched_tiled_inference(
             segmentation_ids=segmentation_ids,
             reduce_multimasking=reduce_multimasking,
             logits_masks=tile_logits,
+            mask_threshold=mask_threshold,
         )
 
         # Add the offset for the current tile to the bounding box.
@@ -420,5 +452,5 @@ def batched_tiled_inference(
         masks.extend(this_masks)
 
     if return_instance_segmentation:
-        masks = mask_data_to_segmentation(masks, with_background=False, min_object_size=0)
+        masks = util.mask_data_to_segmentation(masks, shape=shape, min_object_size=0)
     return masks

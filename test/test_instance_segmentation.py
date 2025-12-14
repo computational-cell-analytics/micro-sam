@@ -73,7 +73,6 @@ class TestInstanceSegmentation(unittest.TestCase):
     def _test_instance_segmentation(
         self, amg_class, create_kwargs={}, generate_kwargs={}, with_decoder=False, with_tiling=False, check_init=True,
     ):
-        from micro_sam.instance_segmentation import mask_data_to_segmentation
 
         if with_tiling:
             mask, image = self.large_mask, self.large_image
@@ -93,12 +92,10 @@ class TestInstanceSegmentation(unittest.TestCase):
         amg.initialize(image, image_embeddings=image_embeddings, verbose=False)
 
         predicted = amg.generate(**generate_kwargs)
-        predicted = mask_data_to_segmentation(predicted, with_background=True)
         self.assertGreater(matching(predicted, mask, threshold=0.75)["segmentation_accuracy"], 0.99)
 
         # Check that regenerating the segmentation works.
         predicted2 = amg.generate(**generate_kwargs)
-        predicted2 = mask_data_to_segmentation(predicted2, with_background=True)
         self.assertTrue(np.array_equal(predicted, predicted2))
 
         # Check that serializing and reserializing the state works.
@@ -107,7 +104,6 @@ class TestInstanceSegmentation(unittest.TestCase):
             amg = amg_class(predictor, **create_kwargs)
             amg.set_state(state)
             predicted3 = amg.generate(**generate_kwargs)
-            predicted3 = mask_data_to_segmentation(predicted3, with_background=True)
             self.assertTrue(np.array_equal(predicted, predicted3))
 
     def test_automatic_mask_generator(self):

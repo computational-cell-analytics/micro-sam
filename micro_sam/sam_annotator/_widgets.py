@@ -563,8 +563,6 @@ def _get_auto_segmentation_options(state, object_ids):
         segmentation_options["box_nms_thresh"] = widget.box_nms_thresh
 
     segmentation_options["min_object_size"] = widget.min_object_size
-    segmentation_options["with_background"] = widget.with_background
-
     if widget.volumetric:
         segmentation_options["apply_to_volume"] = widget.apply_to_volume
         segmentation_options["gap_closing"] = widget.gap_closing
@@ -1714,20 +1712,11 @@ def _handle_amg_state(state, i, pbar_init, pbar_update):
         )
 
 
-def _instance_segmentation_impl(with_background, min_object_size, i=None, pbar_init=None, pbar_update=None, **kwargs):
+def _instance_segmentation_impl(min_object_size, i=None, pbar_init=None, pbar_update=None, **kwargs):
     state = AnnotatorState()
     _handle_amg_state(state, i, pbar_init, pbar_update)
-
     seg = state.amg.generate(**kwargs)
-    if len(seg) == 0:
-        shape = state.image_shape
-        seg = np.zeros(shape[-2:], dtype="uint32")
-    else:
-        seg = instance_segmentation.mask_data_to_segmentation(
-            seg, with_background=with_background, min_object_size=min_object_size
-        )
     assert isinstance(seg, np.ndarray)
-
     return seg
 
 
@@ -1789,13 +1778,6 @@ class AutoSegmentWidget(_WidgetBase):
         )
         settings.layout().addLayout(layout)
 
-        # Create the UI element for with background.
-        self.with_background = True
-        settings.layout().addWidget(self._add_boolean_param(
-            "with_background", self.with_background,
-            tooltip=get_tooltip("autosegment", "with_background")
-            ))
-
         # Add extra settings for volumetric segmentation: gap_closing and min_extent.
         if self.volumetric:
             self.gap_closing = 2
@@ -1832,7 +1814,7 @@ class AutoSegmentWidget(_WidgetBase):
         )
         settings.layout().addLayout(layout)
 
-        # Add min_object_size and with_background
+        # Add min_object_size.
         self._add_common_settings(settings)
 
         return settings
@@ -1865,7 +1847,7 @@ class AutoSegmentWidget(_WidgetBase):
             )
         settings.layout().addLayout(layout)
 
-        # Add min_object_size and with_background
+        # Add min_object_size.
         self._add_common_settings(settings)
 
         return settings
@@ -1893,8 +1875,7 @@ class AutoSegmentWidget(_WidgetBase):
                 pbar_signals.pbar_description.emit(description)
 
             seg = _instance_segmentation_impl(
-                self.with_background, self.min_object_size, i=i,
-                pbar_init=pbar_init,
+                self.min_object_size, i=i, pbar_init=pbar_init,
                 pbar_update=lambda update: pbar_signals.pbar_update.emit(update),
                 **kwargs
             )
@@ -1960,7 +1941,7 @@ class AutoSegmentWidget(_WidgetBase):
 
             # Further optimization: parallelize if state is precomputed for all slices
             for i in range(segmentation.shape[0]):
-                seg = _instance_segmentation_impl(self.with_background, self.min_object_size, i=i, **kwargs)
+                seg = _instance_segmentation_impl(self.min_object_size, i=i, **kwargs)
                 seg_max = seg.max()
                 if seg_max == 0:
                     continue
@@ -1971,10 +1952,8 @@ class AutoSegmentWidget(_WidgetBase):
 
             pbar_signals.pbar_reset.emit()
             segmentation = merge_instance_segmentation_3d(
-                segmentation, beta=0.5, with_background=self.with_background,
-                gap_closing=self.gap_closing, min_z_extent=self.min_extent,
-                verbose=True, pbar_init=pbar_init,
-                pbar_update=lambda update: pbar_signals.pbar_update.emit(1),
+                segmentation, beta=0.5,  gap_closing=self.gap_closing, min_z_extent=self.min_extent,
+                verbose=True, pbar_init=pbar_init, pbar_update=lambda update: pbar_signals.pbar_update.emit(1),
             )
             pbar_signals.pbar_stop.emit()
             return segmentation
@@ -2070,7 +2049,7 @@ class AutoTrackWidget(AutoSegmentWidget):
 
             # Further optimization: parallelize if state is precomputed for all slices
             for i in range(segmentation.shape[0]):
-                seg = _instance_segmentation_impl(self.with_background, self.min_object_size, i=i, **kwargs)
+                seg = _instance_segmentation_impl(self.min_object_size, i=i, **kwargs)
                 seg_max = seg.max()
                 if seg_max == 0:
                     continue

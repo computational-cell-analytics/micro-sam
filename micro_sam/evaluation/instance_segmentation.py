@@ -16,7 +16,7 @@ from elf.io import open_file
 from elf.evaluation import mean_segmentation_accuracy, matching
 
 from .. import util
-from ..instance_segmentation import AMGBase, InstanceSegmentationWithDecoder, mask_data_to_segmentation
+from ..instance_segmentation import AMGBase, InstanceSegmentationWithDecoder
 
 
 def _get_range_of_search_values(input_vals, step):
@@ -180,14 +180,7 @@ def _grid_search_iteration(
     net_list = []
     for gs_kwargs in tqdm(gs_combinations, disable=not verbose):
         generate_kwargs = gs_kwargs | fixed_generate_kwargs
-        masks = segmenter.generate(**generate_kwargs)
-
-        min_object_size = generate_kwargs.get("min_mask_region_area", 0)
-        if len(masks) == 0:
-            instance_labels = np.zeros(gt.shape, dtype="uint32")
-        else:
-            instance_labels = mask_data_to_segmentation(masks, with_background=True, min_object_size=min_object_size)
-
+        instance_labels = segmenter.generate(**generate_kwargs)
         m_sas, sas = mean_segmentation_accuracy(instance_labels, gt, return_accuracies=True)
         stats = matching(instance_labels, gt)
 
@@ -352,7 +345,6 @@ def run_instance_segmentation_inference(
 
     generate_kwargs = {} if generate_kwargs is None else generate_kwargs
     predictor = segmenter._predictor
-    min_object_size = generate_kwargs.get("min_mask_region_area", 0)
 
     for image_path in tqdm(image_paths, desc="Run inference for automatic mask generation"):
         image_name = os.path.basename(image_path)
@@ -379,20 +371,7 @@ def run_instance_segmentation_inference(
         )
 
         segmenter.initialize(image, image_embeddings, **tiling_window_params)
-
-        masks = segmenter.generate(**generate_kwargs)
-
-        if len(masks) == 0:  # the instance segmentation can have no masks, hence we just save empty labels
-            if isinstance(segmenter, InstanceSegmentationWithDecoder):
-                this_shape = segmenter._foreground.shape
-            elif isinstance(segmenter, AMGBase):
-                this_shape = segmenter._original_size
-            else:
-                this_shape = image.shape[-2:]
-
-            instances = np.zeros(this_shape, dtype="uint32")
-        else:
-            instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=min_object_size)
+        instances = segmenter.generate(**generate_kwargs)
 
         # It's important to compress here, otherwise the predictions would take up a lot of space.
         imageio.imwrite(prediction_path, instances, compression=5)

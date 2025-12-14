@@ -13,8 +13,8 @@ from torch_em.data.datasets.util import split_kwargs
 
 from . import util
 from .instance_segmentation import (
-    get_amg, get_decoder, mask_data_to_segmentation, InstanceSegmentationWithDecoder,
-    AMGBase, AutomaticMaskGenerator, TiledAutomaticMaskGenerator
+    get_amg, get_decoder,
+    InstanceSegmentationWithDecoder, AMGBase, AutomaticMaskGenerator, TiledAutomaticMaskGenerator
 )
 from .multi_dimensional_segmentation import automatic_3d_segmentation, automatic_tracking_implementation
 
@@ -121,11 +121,6 @@ def automatic_tracking(
     else:
         image_data = util.load_image_data(input_path, key)
 
-    # We perform additional post-processing for AMG-only.
-    # Otherwise, we ignore additional post-processing for AIS.
-    if isinstance(segmenter, InstanceSegmentationWithDecoder):
-        generate_kwargs["output_mode"] = None
-
     if (image_data.ndim != 3) and (image_data.ndim != 4 and image_data.shape[-1] != 3):
         raise ValueError(f"The inputs does not match the shape expectation of 3d inputs: {image_data.shape}")
 
@@ -214,11 +209,6 @@ def automatic_instance_segmentation(
 
     ndim = image_data.ndim if ndim is None else ndim
 
-    # We perform additional post-processing for AMG-only.
-    # Otherwise, we ignore additional post-processing for AIS.
-    if isinstance(segmenter, InstanceSegmentationWithDecoder):
-        generate_kwargs["output_mode"] = None
-
     if ndim == 2:
         if (image_data.ndim != 2) and (image_data.ndim != 3 and image_data.shape[-1] != 3):
             raise ValueError(f"The inputs does not match the shape expectation of 2d inputs: {image_data.shape}")
@@ -244,18 +234,7 @@ def automatic_instance_segmentation(
             initialize_kwargs["batch_size"] = batch_size
 
         segmenter.initialize(**initialize_kwargs)
-        masks = segmenter.generate(**generate_kwargs)
-
-        if isinstance(masks, list):
-            # whether the predictions from 'generate' are list of dict,
-            # which contains additional info req. for post-processing, eg. area per object.
-            if len(masks) == 0:
-                instances = np.zeros(image_data.shape[:2], dtype="uint32")
-            else:
-                instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=0)
-        else:
-            # if (raw) predictions provided, store them as it is w/o further post-processing.
-            instances = masks
+        instances = segmenter.generate(**generate_kwargs)
 
     else:
         if (image_data.ndim != 3) and (image_data.ndim != 4 and image_data.shape[-1] != 3):

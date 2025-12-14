@@ -34,7 +34,7 @@ except ImportError:
 
 from . import util
 from .prompt_based_segmentation import segment_from_mask
-from .instance_segmentation import AMGBase, mask_data_to_segmentation
+from .instance_segmentation import AMGBase
 
 
 PROJECTION_MODES = ("box", "mask", "points", "points_and_mask", "single_point")
@@ -376,11 +376,10 @@ def merge_instance_segmentation_3d(
 
 
 def _segment_slices(
-    data, predictor, segmentor, embedding_path, verbose, tile_shape, halo, with_background=True, batch_size=1, **kwargs
+    data, predictor, segmentor, embedding_path, verbose, tile_shape, halo, batch_size=1, **kwargs
 ):
     assert data.ndim == 3
 
-    min_object_size = kwargs.pop("min_object_size", 0)
     image_embeddings = util.precompute_image_embeddings(
         predictor=predictor,
         input_=data,
@@ -399,21 +398,12 @@ def _segment_slices(
         segmentor.initialize(data[i], image_embeddings=image_embeddings, verbose=False, i=i)
         seg = segmentor.generate(**kwargs)
 
-        if isinstance(seg, list) and len(seg) == 0:
+        # Set offset for instance per slice.
+        max_z = int(seg.max())
+        if max_z == 0:
             continue
-        else:
-            if isinstance(seg, list):
-                seg = mask_data_to_segmentation(
-                    seg, with_background=with_background, min_object_size=min_object_size
-                )
-
-            # Set offset for instance per slice.
-            max_z = int(seg.max())
-            if max_z == 0:
-                continue
-            seg[seg != 0] += offset
-            offset = max_z + offset
-
+        seg[seg != 0] += offset
+        offset = max_z + offset
         segmentation[i] = seg
 
     return segmentation, image_embeddings
@@ -467,7 +457,6 @@ def automatic_3d_segmentation(
         verbose=verbose,
         tile_shape=tile_shape,
         halo=halo,
-        with_background=with_background,
         batch_size=batch_size,
         **kwargs
     )
