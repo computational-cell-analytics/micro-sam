@@ -1490,8 +1490,7 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
         raise NotImplementedError
 
 
-# TODO rename
-def get_amg(
+def get_instance_segmentation_generator(
     predictor: SamPredictor,
     is_tiled: bool,
     decoder: Optional[torch.nn.Module] = None,
@@ -1504,28 +1503,30 @@ def get_amg(
         predictor: The segment anything predictor.
         is_tiled: Whether tiled embeddings are used.
         decoder: Decoder to predict instacne segmmentation.
-        segmentation_mode: The segmentation mode.
-        kwargs: The keyword arguments for the amg class.
+        segmentation_mode: The segmentation mode. One of 'amg', 'ais', or 'apg'.
+            By default, 'ais' is used if a decoder is passed, otherwise 'amg' is used.
+        kwargs: The keyword arguments of the segmentation genetator class.
 
     Returns:
-        The automatic mask generator.
+        The segmentation generator instance.
     """
+    # TODO change the default to apg once everything is figured out for it.
+    # Choose the segmentation decoder default depending on whether we have a decoder.
     if segmentation_mode is None:
-        # TODO: change default to APG if it works better than AIS?
-        segmentation_mode = "AMG" if decoder is None else "AIS"
+        segmentation_mode = "amg" if decoder is None else "ais"
 
-    if segmentation_mode == "AMG":
+    if segmentation_mode.lower() == "amg":
         segmenter_class = TiledAutomaticMaskGenerator if is_tiled else AutomaticMaskGenerator
         segmenter = segmenter_class(predictor, **kwargs)
-    elif segmentation_mode == "AIS":
+    elif segmentation_mode.lower() == "ais":
         assert decoder is not None
         segmenter_class = TiledInstanceSegmentationWithDecoder if is_tiled else InstanceSegmentationWithDecoder
         segmenter = segmenter_class(predictor, decoder, **kwargs)
-    elif segmentation_mode == "APG":
+    elif segmentation_mode.lower() == "apg":
         assert decoder is not None
         segmenter_class = TiledAutomaticPromptGenerator if is_tiled else AutomaticPromptGenerator
         segmenter = segmenter_class(predictor, decoder, **kwargs)
     else:
-        raise ValueError(f"Invalid segmentation_mode: {segmentation_mode}. Choose one of 'AMG', 'AIS', or 'APG'.")
+        raise ValueError(f"Invalid segmentation_mode: {segmentation_mode}. Choose one of 'amg', 'ais', or 'apg'.")
 
     return segmenter

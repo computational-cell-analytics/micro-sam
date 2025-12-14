@@ -1664,7 +1664,9 @@ class SegmentNDWidget(_WidgetBase):
 def _handle_amg_state(state, i, pbar_init, pbar_update):
     if state.amg is None:
         is_tiled = state.image_embeddings["input_size"] is None
-        state.amg = instance_segmentation.get_amg(state.predictor, is_tiled, decoder=state.decoder)
+        state.amg = instance_segmentation.get_instance_segmentation_generator(
+            state.predictor, is_tiled=is_tiled, decoder=state.decoder
+        )
 
     shape = state.image_shape
 

@@ -13,7 +13,7 @@ from torch_em.data.datasets.util import split_kwargs
 
 from . import util
 from .instance_segmentation import (
-    get_amg, get_decoder,
+    get_instance_segmentation_generator, get_decoder,
     InstanceSegmentationWithDecoder, AMGBase, AutomaticMaskGenerator, TiledAutomaticMaskGenerator
 )
 from .multi_dimensional_segmentation import automatic_3d_segmentation, automatic_tracking_implementation
@@ -23,7 +23,7 @@ def get_predictor_and_segmenter(
     model_type: str,
     checkpoint: Optional[Union[os.PathLike, str]] = None,
     device: str = None,
-    amg: Optional[bool] = None,
+    segmentation_mode: Optional[str] = None,
     is_tiled: bool = False,
     **kwargs,
 ) -> Tuple[util.SamPredictor, Union[AMGBase, InstanceSegmentationWithDecoder]]:
@@ -33,9 +33,8 @@ def get_predictor_and_segmenter(
         model_type: The Segment Anything model choice.
         checkpoint: The filepath to the stored model checkpoints.
         device: The torch device. By default, automatically chooses the best available device.
-        amg: Whether to perform automatic segmentation in AMG mode.
-            Otherwise AIS will be used, which requires a special segmentation decoder.
-            If not specified AIS will be used if it is available and otherwise AMG will be used.
+        segmentation_mode: The segmentation mode. One of 'amg', 'ais', or 'apg'.
+            By default, 'ais' is used if a decoder is passed, otherwise 'amg' is used.
         is_tiled: Whether to return segmenter for performing segmentation in tiling window style.
             By default, set to 'False'.
         kwargs: Keyword arguments for the automatic mask generation class.
@@ -49,22 +48,26 @@ def get_predictor_and_segmenter(
 
     # Get the predictor and state for Segment Anything models.
     predictor, state = util.get_sam_model(
-        model_type=model_type, device=device, checkpoint_path=checkpoint, return_state=True,
+        model_type=model_type, device=device, checkpoint_path=checkpoint, return_state=True
     )
 
-    if amg is None:
-        amg = "decoder_state" not in state
+    # TODO change the default to apg once everything is figured out for it.
+    if segmentation_mode in (None, "auto"):
+        segmentation_mode = "ais" if "decoder_state" in state else "amg"
 
-    if amg:
+    if segmentation_mode == "amg":
         decoder = None
     else:
         if "decoder_state" not in state:
-            raise RuntimeError("You have passed 'amg=False', but your model does not contain a segmentation decoder.")
+            raise RuntimeError(
+                f"You have passed 'segmentation_mode={segmentation_mode}', but your model does not contain a decoder."
+            )
         decoder_state = state["decoder_state"]
         decoder = get_decoder(image_encoder=predictor.model.image_encoder, decoder_state=decoder_state, device=device)
 
-    segmenter = get_amg(predictor=predictor, is_tiled=is_tiled, decoder=decoder, **kwargs)
-
+    segmenter = get_instance_segmentation_generator(
+        predictor=predictor, is_tiled=is_tiled, decoder=decoder, segmentation_mode=segmentation_mode, **kwargs
+    )
     return predictor, segmenter
 
 
@@ -109,7 +112,7 @@ def automatic_tracking(
             By default, does not activate the annotator.
         batch_size: The batch size to compute image embeddings over tiles / z-planes.
             By default, does it sequentially, i.e. one after the other.
-        generate_kwargs: optional keyword arguments for the generate function of the AMG or AIS class.
+        generate_kwargs: optional keyword arguments for the generate function of the AMG, APG, or AIS class.
 
     Returns:
         The tracking result as a timeseries, where each object is labeled by its track id.
@@ -378,7 +381,7 @@ def main():
     )
     parser.add_argument(
         "--mode", default="auto", type=str,
-        help="The choice of automatic segmentation with the Segment Anything models. Either 'auto', 'amg' or 'ais'."
+        help="The choice of automatic segmentation mode. Either 'auto', 'amg', 'apg', or 'ais'."
     )
     parser.add_argument(
         "--annotate", action="store_true",
@@ -425,20 +428,11 @@ def main():
     amg_class = AutomaticMaskGenerator if args.tile_shape is None else TiledAutomaticMaskGenerator
     amg_kwargs, generate_kwargs = split_kwargs(amg_class, **extra_kwargs)
 
-    # Validate for the expected automatic segmentation mode.
-    # By default, it is set to 'auto', i.e. searches for the decoder state to prioritize AIS for finetuned models.
-    # Otherwise, runs AMG for all models in any case.
-    amg = None
-    if args.mode != "auto":
-        assert args.mode in ["ais", "amg"], \
-            f"'{args.mode}' is not a valid automatic segmentation mode. Please choose either 'amg' or 'ais'."
-        amg = (args.mode == "amg")
-
     predictor, segmenter = get_predictor_and_segmenter(
         model_type=args.model_type,
         checkpoint=args.checkpoint,
         device=args.device,
-        amg=amg,
+        segmentation_mode=args.mode,
         is_tiled=args.tile_shape is not None,
         **amg_kwargs,
     )
