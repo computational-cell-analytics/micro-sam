@@ -1523,10 +1523,23 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
         )
 
         # 3.) Apply non-max suppression to the masks.
-        segmentation = util.apply_nms(predictions, min_size=min_size, nms_thresh=nms_threshold)
+        shape = self._image_embeddings["features"].attrs["shape"]
+        segmentation = util.apply_nms(predictions, shape=shape, min_size=min_size, nms_thresh=nms_threshold)
         if output_mode is not None:
             segmentation = self._to_masks(segmentation, output_mode)
         return segmentation
+
+    # Set state and get state are not implemented yet, as this generator relies on having the image embeddings
+    # in the state. However, they should not be serialized here and we have to address this a bit differently.
+    def get_state(self):
+        """@private
+        """
+        raise NotImplementedError
+
+    def set_state(self, state):
+        """@private
+        """
+        raise NotImplementedError
 
 
 # TODO rename

@@ -411,29 +411,13 @@ def batched_tiled_inference(
             logits_masks=tile_logits,
         )
 
-        # Take care of offsets for the current tile.
+        # Add the offset for the current tile to the bounding box.
         tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
-        offset = tile.begin
-
-        # TODO: this is an inefficient work-around. Instead of uncropping all the masks we should
-        # store the offset of this tile and only fuse everything back to the full shape in the output
-        # segmentation image. This should be updated for all the tiled segmentation functions.
-        extended_masks = []
-        # TODO
-        for mask_data in this_masks:
-            seg = mask_data.pop("segmentation")
-            bbox = mask_data.pop("bbox")
-            breakpoint()
-            extended_mask = {
-                "segmentation": seg,
-                "bbox": bbox,
-            }
-            extended_mask.update(**mask_data)
-            extended_masks.append(extended_mask)
-
-        # "segmentation": masks["masks"][idx],
-        # "bbox": amg_utils.box_xyxy_to_xywh(masks["boxes"][idx]).tolist(),
-        masks.extend(extended_masks)
+        offset = np.array(tile.begin[::-1] + [0, 0])
+        this_masks = [
+            {**mask, "global_bbox": (np.array(mask["bbox"]) + offset).tolist()} for mask in this_masks
+        ]
+        masks.extend(this_masks)
 
     if return_instance_segmentation:
         masks = mask_data_to_segmentation(masks, with_background=False, min_object_size=0)

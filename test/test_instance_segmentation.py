@@ -71,7 +71,7 @@ class TestInstanceSegmentation(unittest.TestCase):
             torch.mps.empty_cache()
 
     def _test_instance_segmentation(
-        self, amg_class, create_kwargs={}, generate_kwargs={}, with_decoder=False, with_tiling=False
+        self, amg_class, create_kwargs={}, generate_kwargs={}, with_decoder=False, with_tiling=False, check_init=True,
     ):
         from micro_sam.instance_segmentation import mask_data_to_segmentation
 
@@ -102,12 +102,13 @@ class TestInstanceSegmentation(unittest.TestCase):
         self.assertTrue(np.array_equal(predicted, predicted2))
 
         # Check that serializing and reserializing the state works.
-        state = amg.get_state()
-        amg = amg_class(predictor, **create_kwargs)
-        amg.set_state(state)
-        predicted3 = amg.generate(**generate_kwargs)
-        predicted3 = mask_data_to_segmentation(predicted3, with_background=True)
-        self.assertTrue(np.array_equal(predicted, predicted3))
+        if check_init:
+            state = amg.get_state()
+            amg = amg_class(predictor, **create_kwargs)
+            amg.set_state(state)
+            predicted3 = amg.generate(**generate_kwargs)
+            predicted3 = mask_data_to_segmentation(predicted3, with_background=True)
+            self.assertTrue(np.array_equal(predicted, predicted3))
 
     def test_automatic_mask_generator(self):
         from micro_sam.instance_segmentation import AutomaticMaskGenerator
@@ -143,13 +144,13 @@ class TestInstanceSegmentation(unittest.TestCase):
         generate_kwargs = dict(foreground_threshold=0.8, min_size=100)
         self._test_instance_segmentation(AutomaticPromptGenerator, generate_kwargs=generate_kwargs, with_decoder=True)
 
-    # TODO
-    # def test_tiled_automatic_prompt_generator(self):
-    #     from micro_sam.instance_segmentation import TildedAutomaticPromptGenerator
-    #     generate_kwargs = dict(foreground_threshold=0.8, min_size=100)
-    #     self._test_instance_segmentation(
-    #         TiledAutomaticPromptGenerator, generate_kwargs=generate_kwargs, with_decoder=True, with_tiling=True,
-    #     )
+    def test_tiled_automatic_prompt_generator(self):
+        from micro_sam.instance_segmentation import TiledAutomaticPromptGenerator
+        generate_kwargs = dict(foreground_threshold=0.8, min_size=100)
+        self._test_instance_segmentation(
+            TiledAutomaticPromptGenerator, generate_kwargs=generate_kwargs,
+            with_decoder=True, with_tiling=True, check_init=False,
+        )
 
 
 if __name__ == "__main__":

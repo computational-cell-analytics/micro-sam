@@ -8,7 +8,7 @@ import hashlib
 import warnings
 from pathlib import Path
 from collections import OrderedDict
-from typing import Any, Dict, Iterable, Optional, Tuple, Union, Callable
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, Callable
 
 import zarr
 import vigra
@@ -17,12 +17,13 @@ import pooch
 import xxhash
 import numpy as np
 import imageio.v3 as imageio
+import segment_anything.utils.amg as amg_utils
 from skimage.measure import regionprops
 from skimage.segmentation import relabel_sequential
 
 from elf.io import open_file
-
 from nifty.tools import blocking
+from torchvision.ops.boxes import batched_nms
 
 from .__version__ import __version__
 from . import models as custom_models
@@ -1264,7 +1265,7 @@ def get_block_shape(shape: Tuple[int]) -> Tuple[int]:
     return block_shape
 
 
-def micro_sam_info():
+def micro_sam_info() -> None:
     """Display μSAM information using a rich console."""
     import psutil
     import platform
@@ -1432,19 +1433,6 @@ def micro_sam_info():
 #
 
 
-def _rle_to_mask(rle):
-    h, w = rle["size"]
-    mask = np.empty(h * w, dtype=bool)
-    idx = 0
-    parity = False
-    for count in rle["counts"]:
-        mask[idx:idx + count] = parity
-        idx += count
-        parity ^= True
-    mask = mask.reshape(w, h)
-    return mask.transpose()
-
-
 def _overlap_matrix(boxes):
     x1 = torch.max(boxes[:, None, 0], boxes[:, 0])
     y1 = torch.max(boxes[:, None, 1], boxes[:, 1])
@@ -1458,9 +1446,7 @@ def _overlap_matrix(boxes):
 
 
 def _calculate_ious_between_pred_masks(masks, boxes, diagonal_value=1):
-    masks = (
-        masks.detach() if isinstance(masks, torch.Tensor) else torch.tensor(masks)
-    )
+    masks = masks.detach() if isinstance(masks, torch.Tensor) else torch.tensor(masks)
     n_points = masks.shape[0]
     m = torch.zeros((n_points, n_points))
 
@@ -1481,7 +1467,9 @@ def _calculate_ious_between_pred_masks(masks, boxes, diagonal_value=1):
     return m
 
 
-def _calculate_iomin_between_pred_masks(masks, boxes=None, eps=1e-6):
+def _calculate_iomin_between_pred_masks(masks, boxes, eps=1e-6):
+    overlap_m = _overlap_matrix(boxes)
+
     # Flatten spatial dimensions: (N, H*W) or (N, D*H*W)
     N = masks.shape[0]
     masks_flat = masks.reshape(N, -1).float()
@@ -1499,26 +1487,14 @@ def _calculate_iomin_between_pred_masks(masks, boxes=None, eps=1e-6):
     # IoMin = intersection / min(area_i, area_j)
     iomin = inter / (min_areas + eps)
 
-    # If either mask is empty, set IoMin to 0 explicitly
-    iomin[min_areas == 0] = 0.0
+    # Set elements without any overlap explicitly to zero.
+    iomin[~overlap_m] = 0
     return iomin
 
 
-def _batched_mask_nms(rles, boxes, scores, nms_thresh, intersection_over_min):
-    if len(rles) == 0:
-        return torch.tensor([], dtype=torch.int64)
-
-    masks = torch.stack([torch.tensor(_rle_to_mask(rle)) for rle in rles])
-    boxes = (
-        boxes.detach()
-        if isinstance(boxes, torch.Tensor)
-        else torch.tensor(boxes)
-    )
-    scores = (
-        scores.detach()
-        if isinstance(scores, torch.Tensor)
-        else torch.tensor(scores)
-    )
+def _batched_mask_nms(masks, boxes, scores, nms_thresh, intersection_over_min):
+    boxes = boxes.detach() if isinstance(boxes, torch.Tensor) else torch.tensor(boxes)
+    scores = scores.detach() if isinstance(scores, torch.Tensor) else torch.tensor(scores)
 
     if intersection_over_min:
         iou_matrix = _calculate_iomin_between_pred_masks(masks, boxes)
@@ -1541,22 +1517,30 @@ def _batched_mask_nms(rles, boxes, scores, nms_thresh, intersection_over_min):
     return torch.tensor(keep)
 
 
-# TODO consolidate this with 'mask_data_to_segmentation' in 'instance_segmentation.py'
-def _mask_data_to_segmentation(masks, min_object_size):
+# TODO consolidate this with 'mask_data_to_segmentation' in 'instance_segmentation.py' and refactor to 'util.py'
+def _mask_data_to_segmentation(masks, shape, min_object_size):
+    # TODO parallelize
     from skimage.measure import label
 
     masks = sorted(masks, key=(lambda x: x["area"]), reverse=True)
-    shape = next(iter(masks))["segmentation"].shape
     segmentation = np.zeros(shape, dtype="uint32")
 
     def require_numpy(mask):
         return mask.cpu().numpy() if torch.is_tensor(mask) else mask
 
     seg_id = 1
-    for seg_id, mask in enumerate(masks, 1):
-        this_mask = require_numpy(mask["segmentation"])
-        this_mask = np.logical_and(this_mask, segmentation == 0)
-        segmentation[this_mask] = seg_id
+    for seg_id, mask_data in enumerate(masks, 1):
+        this_mask = require_numpy(mask_data["segmentation"])
+        if "global_bbox" in mask_data:
+            bb = mask_data["bbox"]
+            bb = np.s_[bb[1]:bb[1] + bb[3], bb[0]:bb[0] + bb[2]]
+            global_bb = mask_data["global_bbox"]
+            global_bb = np.s_[global_bb[1]:global_bb[1] + global_bb[3], global_bb[0]:global_bb[0] + global_bb[2]]
+            this_mask = np.logical_and(this_mask[bb], segmentation[global_bb] == 0)
+            segmentation[global_bb][this_mask] = seg_id
+        else:
+            this_mask = np.logical_and(this_mask, segmentation == 0)
+            segmentation[this_mask] = seg_id
 
     segmentation = label(segmentation)
     seg_ids, sizes = np.unique(segmentation, return_counts=True)
@@ -1567,29 +1551,48 @@ def _mask_data_to_segmentation(masks, min_object_size):
     return segmentation
 
 
-# TODO add documentation and refactor imports
 def apply_nms(
-    predictions,
+    predictions: List[Dict[str, Any]],
     min_size: int,
+    shape: Optional[Tuple[int, int]] = None,
     perform_box_nms: bool = False,
     nms_thresh: float = 0.9,
     max_size: Optional[int] = None,
     intersection_over_min: bool = False
-):
-    """
-    """
-    import segment_anything.utils.amg as amg_utils
-    from micro_sam._vendored import batched_mask_to_box, mask_to_rle_pytorch
-    from torchvision.ops.boxes import batched_nms
+) -> np.ndarray:
+    """Apply non-maximum suppression to mask predictions from a segment anything model.
 
+    Args:
+        predictions: The mask predictions from SAM.
+        min_size: The minimum mask size to keep in the output.
+        shape: The shape of the output segmentation.
+            Has to be passed for predictions obtained from tiling.
+        perform_box_nms: Whether to perform NMS on the box coordinates or on the masks.
+        nms_thresh: The threshold for filtering out objects in NMS.
+        max_size: The maximum mask size to keep in the output.
+        intersection_over_min: Whether to perform intersection over the minimum overlap shape
+            or to perform intersection over union.
+
+    Returns:
+        The segmentation obtained from merging the masks left after NMS.
+    """
     data = amg_utils.MaskData(
         masks=torch.cat([pred["segmentation"][None] for pred in predictions], dim=0),
         iou_preds=torch.tensor([pred["predicted_iou"] for pred in predictions]),
     )
-    data["rles"] = mask_to_rle_pytorch(data["masks"])
-    data["boxes"] = batched_mask_to_box(data["masks"])
+    data["boxes"] = torch.tensor(np.array([pred["bbox"] for pred in predictions]))
     data["area"] = [mask.sum() for mask in data["masks"]]
     data["stability_scores"] = torch.tensor([pred["stability_score"] for pred in predictions])
+
+    # Check if the input comes with a 'global_bbox' attribute. If it does, then the predictions are from
+    # a tiled prediction. In this case, we have to take the coordinates w.r.t. the tiling into account.
+    if "global_bbox" in predictions[0]:
+        if shape is None:
+            raise ValueError("The output shape 'shape' has to be passed for tiled predictions.")
+        data["global_boxes"] = torch.tensor(np.array([pred["global_bbox"] for pred in predictions]))
+        is_tiled = True
+    else:
+        is_tiled = False
 
     if min_size > 0:
         keep_by_size = torch.tensor(
@@ -1605,27 +1608,37 @@ def apply_nms(
     if perform_box_nms:
         assert not intersection_over_min  # not implemented
         keep_by_nms = batched_nms(
-            data["boxes"].float(),
+            data["global_boxes"].float() if is_tiled else data["boxes"].float(),
             scores,
             torch.zeros_like(data["boxes"][:, 0]),  # categories
             iou_threshold=nms_thresh,
         )
     else:
         keep_by_nms = _batched_mask_nms(
-            rles=data["rles"],
-            boxes=data["boxes"].float(),
+            masks=data["masks"],
+            boxes=data["global_boxes"].float() if is_tiled else data["boxes"].float(),
             scores=scores,
             nms_thresh=nms_thresh,
             intersection_over_min=intersection_over_min,
         )
     data.filter(keep_by_nms)
 
-    mask_data = [
-        {"segmentation": mask, "area": area} for mask, area in zip(data["masks"], data["area"])
-    ]
+    if is_tiled:
+        mask_data = [
+            {"segmentation": mask, "area": area, "bbox": box, "global_bbox": global_box}
+            for mask, area, box, global_box in zip(data["masks"], data["area"], data["boxes"], data["global_boxes"])
+        ]
+    else:
+        mask_data = [
+            {"segmentation": mask, "area": area, "bbox": box}
+            for mask, area, box in zip(data["masks"], data["area"], data["boxes"])
+        ]
+
+    if shape is None:
+        shape = predictions[0]["segmentation"].shape
     if mask_data:
-        segmentation = _mask_data_to_segmentation(mask_data, min_object_size=min_size)
+        segmentation = _mask_data_to_segmentation(mask_data, shape, min_object_size=min_size)
     else:  # In case all objects have been filtered out due to size filtering.
-        segmentation = np.zeros(predictions[0]["segmentation"].shape, dtype="uint32")
+        segmentation = np.zeros(shape, dtype="uint32")
 
     return segmentation
