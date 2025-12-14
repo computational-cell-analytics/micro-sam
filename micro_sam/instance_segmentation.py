@@ -512,7 +512,10 @@ class AutomaticMaskGenerator(AMGBase):
         data.to_numpy()
         masks = self._postprocess_masks(data, min_mask_region_area, box_nms_thresh, crop_nms_thresh, output_mode)
         if output_mode == "instance_segmentation":
-            masks = util.mask_data_to_segmentation(masks, with_background=with_background, merge_exclusively=False)
+            shape = next(iter(masks))["segmentation"].shape if len(masks) > 0 else self.original_size
+            masks = util.mask_data_to_segmentation(
+                masks, shape=shape, with_background=with_background, merge_exclusively=False
+            )
         return masks
 
 
