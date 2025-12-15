@@ -12,7 +12,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import vigra
 import numpy as np
-from skimage.measure import label, regionprops
+from skimage.measure import regionprops
+from skimage.segmentation import find_boundaries
 
 import torch
 from torchvision.ops.boxes import batched_nms, box_area
@@ -20,7 +21,7 @@ from torchvision.ops.boxes import batched_nms, box_area
 from torch_em.model import UNETR
 from torch_em.util.segmentation import watershed_from_center_and_boundary_distances
 
-import elf.parallel as parallel
+import elf.parallel as parallel_impl
 from elf.parallel.filters import apply_filter
 
 from nifty.tools import blocking
@@ -868,18 +869,18 @@ def _watershed_from_center_and_boundary_distances_parallel(
     marker_map[~fg_mask] = 0
 
     markers = np.zeros(marker_map.shape, dtype="uint64")
-    markers = parallel.label(
+    markers = parallel_impl.label(
         marker_map, out=markers, block_shape=tile_shape, n_threads=n_threads, verbose=verbose,
     )
 
     seg = np.zeros_like(markers, dtype="uint64")
-    seg = parallel.seeded_watershed(
+    seg = parallel_impl.seeded_watershed(
         boundary_distances, seeds=markers, out=seg, block_shape=tile_shape,
         halo=halo, n_threads=n_threads, verbose=verbose, mask=fg_mask,
     )
 
     out = np.zeros_like(seg, dtype="uint64")
-    out = parallel.size_filter(
+    out = parallel_impl.size_filter(
         seg, out=out, min_size=min_size, block_shape=tile_shape, n_threads=n_threads, verbose=verbose
     )
 
@@ -1233,9 +1234,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
 
 
 def _get_centers(segmentation, avoid_image_border=True):
-    from skimage.segmentation import find_boundaries
-    from scipy.ndimage import distance_transform_edt
-
+    # Not sure if 'find_boundaries' has to be paralellized.
     # Compute the distance transform to object bounaries.
     boundaries = find_boundaries(segmentation, mode="outer") == 0
     # Avoid centroids on the border.
@@ -1244,22 +1243,20 @@ def _get_centers(segmentation, avoid_image_border=True):
         boundaries[:, 0] = False
         boundaries[-1, :] = False
         boundaries[:, -1] = False
-    distances = distance_transform_edt(boundaries)
+    block_shape = (512, 512)
+    halo = (16, 16)
+    distances = parallel_impl.distance_transform(boundaries, halo=halo, block_shape=block_shape)
 
-    # Get the unique segmentation id, exluding the background label 0.
-    seg_ids = np.unique(segmentation)[1:]
-    # Get the maximum for each id.
+    # Get the maximum coordinate of the distance transform for each id.
+    props = regionprops(segmentation)
     centers = []
-    # This can maybe be done more efficiently.
-    for seg_id in seg_ids:
-        # Get the mask and bounding box for this segmentation id.
-        mask = segmentation == seg_id
-        bounding_box = np.where(mask)
-        bounding_box = tuple(
-            slice(int(bb.min()), int(bb.max()) + 1) for bb in bounding_box
-        )
-        # Restrict the mask and distances to the bounding box.
-        mask, dist = mask[bounding_box], distances[bounding_box].copy()
+    for prop in props:
+        seg_id = prop.label
+        # Get the bounding box and mask for this segmentation id.
+        bounding_box = np.s_[prop.bbox[0]:prop.bbox[2], prop.bbox[1]:prop.bbox[3]]
+        mask = segmentation[bounding_box] == seg_id
+        # Restrict the distances to the bounding box.
+        dist = distances[bounding_box].copy()
         # Set the distances outside of the mask to 0.
         dist[~mask] = 0
         # Find the center coordinate (= distance maximum).
@@ -1285,9 +1282,9 @@ def _derive_point_prompts(
         center_distances < center_distance_threshold, boundary_distances < boundary_distance_threshold,
     )
     hmap_cc[bg_mask] = 0
-    # TODO parallelize
-    hmap_cc = label(hmap_cc)
-    prompts = _get_centers(hmap_cc)
+    cc = np.zeros_like(hmap_cc, dtype="uint32")
+    cc = parallel_impl.label(hmap_cc, out=cc, block_shape=(512, 512))
+    prompts = _get_centers(cc)
     if len(prompts) == 0:
         return None
 

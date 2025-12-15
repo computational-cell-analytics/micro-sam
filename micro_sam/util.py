@@ -10,19 +10,20 @@ from pathlib import Path
 from collections import OrderedDict
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, Callable
 
-import zarr
-import vigra
-import torch
-import pooch
-import xxhash
-import numpy as np
+import elf.parallel as parallel_impl
 import imageio.v3 as imageio
+import numpy as np
+import pooch
 import segment_anything.utils.amg as amg_utils
-from skimage.measure import regionprops, label
-from skimage.segmentation import relabel_sequential
+import torch
+import vigra
+import xxhash
+import zarr
 
 from elf.io import open_file
 from nifty.tools import blocking
+from skimage.measure import regionprops, label
+from skimage.segmentation import relabel_sequential
 from torchvision.ops.boxes import batched_nms
 
 from .__version__ import __version__
@@ -52,7 +53,6 @@ _DEFAULT_MODEL = "vit_b_lm"
 _MODEL_TYPES = ("vit_l", "vit_b", "vit_h", "vit_t")
 
 
-# TODO define the proper type for image embeddings
 ImageEmbeddings = Dict[str, Any]
 """@private"""
 
@@ -1575,18 +1575,22 @@ def mask_data_to_segmentation(
             segmentation[this_mask] = this_seg_id
         seg_id = this_seg_id + 1
 
-    # TODO parallelize label, unique, isin, and relabel with elf.parallel
+    block_shape = (512, 512)
     if label_masks:
-        segmentation = label(segmentation)
+        segmentation_cc = np.zeros_like(segmentation, dtype=segmentation.dtype)
+        segmentation_cc = parallel_impl.label(segmentation, out=segmentation_cc, block_shape=block_shape)
+        segmentation = segmentation_cc
 
-    seg_ids, sizes = np.unique(segmentation, return_counts=True)
+    seg_ids, sizes = parallel_impl.unique(segmentation, return_counts=True, block_shape=block_shape)
     filter_ids = seg_ids[sizes < min_object_size]
     if with_background:
         bg_id = seg_ids[np.argmax(sizes)]
         filter_ids = np.concatenate([filter_ids, [bg_id]])
 
-    segmentation[np.isin(segmentation, filter_ids)] = 0
-    segmentation = relabel_sequential(segmentation)[0]
+    filter_mask = np.zeros(segmentation.shape, dtype="bool")
+    filter_mask = parallel_impl.isin(segmentation, filter_ids, out=filter_mask, block_shape=block_shape)
+    segmentation[filter_mask] = 0
+    parallel_impl.relabel_consecutive(segmentation, block_shape=block_shape)[0]
 
     return segmentation
 
