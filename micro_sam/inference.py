@@ -132,6 +132,9 @@ def _local_otsu_threshold(images: torch.Tensor, window_size: int = 31, num_bins:
 def _process_masks_for_batch(batch_masks, batch_ious, batch_logits, return_highres_logits, mask_threshold):
     batch_data = amg_utils.MaskData(masks=batch_masks.flatten(0, 1), iou_preds=batch_ious.flatten(0, 1))
     batch_data["logits"] = batch_masks.clone() if return_highres_logits else batch_logits
+    # TODO: probably the best heuristic: choose the lowest threshold which still has stable masks.
+    # To do this: go through the thresholds, starting from 0 in smallish increments, compute stability score,
+    # select the threshold before the stability score starts to drop.
     if mask_threshold == "auto":
         thresholds = _local_otsu_threshold(batch_logits)
         batch_data["stability_scores"] = amg_utils.calculate_stability_score(batch_data["masks"], thresholds, 1.0)
