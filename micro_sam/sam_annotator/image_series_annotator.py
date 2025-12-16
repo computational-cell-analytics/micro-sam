@@ -12,6 +12,7 @@ import torch
 import napari
 from magicgui import magicgui
 from qtpy import QtWidgets
+from qtpy.QtCore import QTimer
 
 from .. import util
 from . import _widgets as widgets
@@ -262,19 +263,19 @@ def image_series_annotator(
         # Save the current segmentation.
         _save_segmentation(images[next_image_id], next_image_id, segmentation)
 
+        # Check if we are done.
+        if (next_image_id + 1) == len(images):
+            # Inform the user via dialog.
+            abort = widgets._generate_message("info", end_msg)
+            if not abort:
+                QTimer.singleShot(0, viewer.close)
+            return
+
         # Clear the segmentation already to avoid lagging removal.
         viewer.layers["committed_objects"].data = np.zeros_like(viewer.layers["committed_objects"].data)
 
         # Go to the next image.
         next_image_id += 1
-
-        # Check if we are done.
-        if next_image_id == len(images):
-            # Inform the user via dialog.
-            abort = widgets._generate_message("info", end_msg)
-            if not abort:
-                viewer.close()
-            return
 
         # If we are skipping images that are already segmented, then check if we have to load the next image.
         save_path = _get_save_path(images[next_image_id], next_image_id)
