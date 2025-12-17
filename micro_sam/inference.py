@@ -9,6 +9,10 @@ from nifty.tools import blocking
 import segment_anything.utils.amg as amg_utils
 from segment_anything import SamPredictor
 from segment_anything.utils.transforms import ResizeLongestSide
+try:
+    from napari.utils import progress as tqdm
+except ImportError:
+    from tqdm import tqdm
 
 from . import util
 from ._vendored import batched_mask_to_box
@@ -423,7 +427,7 @@ def batched_tiled_inference(
 
     # Run batched inference for each tile.
     masks = []
-    for tile_id in tile_ids:
+    for tile_id in tqdm(tile_ids, desc="Run batched inference"):
         # Get the prompts for this tile.
         tile_boxes = box_to_tile.get(tile_id)
         tile_logits = logits_to_tile.get(tile_id)
