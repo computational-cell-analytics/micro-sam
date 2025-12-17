@@ -135,8 +135,6 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         """
         mask_loss, iou_regression_loss = 0.0, 0.0
         batch_size = len(batched_outputs)
-        if batch_size == 0:
-            raise RuntimeError("Got empty batch outputs in loss computation.")
 
         # Loop over the batch.
         for batch_output, targets in zip(batched_outputs, y_one_hot):
