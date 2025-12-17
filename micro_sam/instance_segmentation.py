@@ -1420,6 +1420,7 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
         mask_threshold: Optional[Union[float, str]] = None,
         refine_with_box_prompts: bool = False,
         prompt_function: Optional[callable] = None,
+        optimize_memory: bool = False,
     ) -> List[Dict[str, Any]]:
         """Generate tiling-based instance segmentation for the currently initialized image.
 
@@ -1436,6 +1437,8 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
         """
         if not self.is_initialized:
             raise RuntimeError("TiledAutomaticPromptGenerator has not been initialized. Call initialize first.")
+        if optimize_memory and (output_mode != "instance_segmentation" or refine_with_box_prompts):
+            raise ValueError("Invalid settings")
         foreground, center_distances, boundary_distances =\
             self._foreground, self._center_distances, self._boundary_distances
 
@@ -1455,6 +1458,10 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
         if prompts is None:  # No prompts were derived, we can't do much further and return empty masks.
             return np.zeros(shape, dtype="uint32") if output_mode == "instance_segmentation" else []
         else:
+            if optimize_memory:
+                prompts.update(dict(
+                    min_size=min_size, nms_thresh=nms_threshold, intersection_over_min=intersection_over_min
+                ))
             predictions = batched_tiled_inference(
                 self._predictor,
                 image=None,
@@ -1462,8 +1469,13 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
                 image_embeddings=self._image_embeddings,
                 return_instance_segmentation=False,
                 multimasking=multimasking,
+                optimize_memory=optimize_memory,
                 **prompts
             )
+        # Optimize memory directly returns an instance segmentation and does not
+        # allow for any further refinements.
+        if optimize_memory:
+            return predictions
 
         # TODO
         # 3.) Refine the segmentation with box prompts.

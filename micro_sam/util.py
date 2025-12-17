@@ -22,7 +22,7 @@ import zarr
 
 from elf.io import open_file
 from nifty.tools import blocking
-from skimage.measure import regionprops, label
+from skimage.measure import regionprops
 from skimage.segmentation import relabel_sequential
 from torchvision.ops.boxes import batched_nms
 
@@ -1602,7 +1602,7 @@ def apply_nms(
     perform_box_nms: bool = False,
     nms_thresh: float = 0.9,
     max_size: Optional[int] = None,
-    intersection_over_min: bool = False
+    intersection_over_min: bool = False,
 ) -> np.ndarray:
     """Apply non-maximum suppression to mask predictions from a segment anything model.
 
