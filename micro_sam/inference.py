@@ -331,18 +331,19 @@ def _merge_segmentations(this_seg, prev_seg, overlap_threshold=0.75):
 # Note: we merge with a very simple first come first serve strategy.
 # This could also be improved by merging according to IoUs.
 # (But would add a lot of complexity)
-def _stitch_segmentation(masks, tiling, halo, output_shape):
+def _stitch_segmentation(masks, tile_ids, tiling, halo, output_shape, verbose=False):
+    assert len(masks) == len(tile_ids), f"{len(masks)}, {len(tile_ids)}"
     segmentation = np.zeros(output_shape, dtype="uint32")
 
-    for tile_id in range(tiling.numberOfBlocks):
+    for tile_id, this_seg in tqdm(zip(tile_ids, masks), desc="Stitch tiles", disable=not verbose):
         tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
-        this_seg = masks[tile_id]
         bb = tuple(slice(begin, end) for begin, end in zip(tile.begin, tile.end))
         if tile_id == 0:
             segmentation[bb] = this_seg
         else:
             # Merge the segmentation, discarding ids with too much overlap.
             prev_seg = segmentation[bb]
+            assert prev_seg.shape == this_seg.shape, f"{tile_id}: {prev_seg.shape}, {this_seg.shape}"
             this_seg = _merge_segmentations(this_seg, prev_seg)
             segmentation[bb] = this_seg
 
@@ -502,9 +503,6 @@ def batched_tiled_inference(
             mask_threshold=mask_threshold,
         )
 
-        # Add the offset for the current tile to the bounding box.
-        tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
-        offset = np.array(tile.begin[::-1] + [0, 0])
         if optimize_memory:
             # Apply NMS directly to get a segmentation.
             segmentation = util.apply_nms(this_masks, **nms_kwargs)
@@ -513,6 +511,9 @@ def batched_tiled_inference(
             id_offset = segmentation.max()
             masks.append(segmentation)
         else:
+            # Add the offset for the current tile to the bounding box.
+            tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
+            offset = np.array(tile.begin[::-1] + [0, 0])
             this_masks = [
                 {**mask, "global_bbox": (np.array(mask["bbox"]) + offset).tolist()} for mask in this_masks
             ]
@@ -523,7 +524,7 @@ def batched_tiled_inference(
         gc.collect()
 
     if optimize_memory:
-        return _stitch_segmentation(masks, tiling, halo, output_shape=shape)
+        return _stitch_segmentation(masks, tile_ids, tiling, halo, output_shape=shape)
 
     if return_instance_segmentation:
         masks = util.mask_data_to_segmentation(masks, shape=shape, min_object_size=0)
