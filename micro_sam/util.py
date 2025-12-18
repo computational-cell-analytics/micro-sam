@@ -22,7 +22,7 @@ import zarr
 
 from elf.io import open_file
 from nifty.tools import blocking
-from skimage.measure import regionprops, label
+from skimage.measure import regionprops
 from skimage.segmentation import relabel_sequential
 from torchvision.ops.boxes import batched_nms
 
@@ -1446,7 +1446,6 @@ def _overlap_matrix(boxes):
 
 
 def _calculate_ious_between_pred_masks(masks, boxes, diagonal_value=1):
-    masks = masks.detach() if isinstance(masks, torch.Tensor) else torch.tensor(masks)
     n_points = masks.shape[0]
     m = torch.zeros((n_points, n_points))
 
@@ -1493,8 +1492,15 @@ def _calculate_iomin_between_pred_masks(masks, boxes, eps=1e-6):
 
 
 def _batched_mask_nms(masks, boxes, scores, nms_thresh, intersection_over_min):
-    boxes = boxes.detach() if isinstance(boxes, torch.Tensor) else torch.tensor(boxes)
-    scores = scores.detach() if isinstance(scores, torch.Tensor) else torch.tensor(scores)
+    boxes = (
+        boxes.detach() if isinstance(boxes, torch.Tensor) else torch.tensor(boxes)
+    ).cpu()
+    scores = (
+        scores.detach() if isinstance(scores, torch.Tensor) else torch.tensor(scores)
+    ).cpu()
+    masks = (
+        masks.detach() if isinstance(masks, torch.Tensor) else torch.tensor(masks)
+    ).cpu()
 
     if intersection_over_min:
         iou_matrix = _calculate_iomin_between_pred_masks(masks, boxes)

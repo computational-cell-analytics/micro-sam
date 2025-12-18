@@ -7,9 +7,7 @@ from elf.evaluation import mean_segmentation_accuracy, matching
 
 from micro_sam.util import _to_image
 from micro_sam.instance_segmentation import AutomaticPromptGenerator, get_predictor_and_decoder
-from micro_sam.automatic_segmentation import (
-    get_predictor_and_segmenter, automatic_instance_segmentation, mask_data_to_segmentation
-)
+from micro_sam.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
 
 from tukra.inference.get_cellpose import segment_using_cellpose
 
@@ -23,12 +21,9 @@ def run_baseline_engine(image, method, **kwargs):
     elif method == "apg":
         segmenter = kwargs["segmenter"]
         segmenter.initialize(image, ndim=2)
-        segmentation = segmenter.generate()
-
-        if len(segmentation) == 0:
-            segmentation = np.zeros(image.shape[:2], dtype="uint32")
-        else:
-            segmentation = mask_data_to_segmentation(segmentation, with_background=False)
+        segmentation = segmenter.generate(
+            refine_with_box_prompts=True,
+        )
 
     # Newer SAM methods.
     elif method == "sam3":  # TODO: Wrap this out in a modular function too?

@@ -1358,9 +1358,9 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
         # 1.) Derive promtps from the decoder predictions.
         prompt_function = _derive_point_prompts if prompt_function is None else prompt_function
         prompts = prompt_function(
-            foreground,
-            center_distances,
-            boundary_distances,
+            foreground=foreground,
+            center_distances=center_distances,
+            boundary_distances=boundary_distances,
             foreground_threshold=foreground_threshold,
             center_distance_threshold=center_distance_threshold,
             boundary_distance_threshold=boundary_distance_threshold,
