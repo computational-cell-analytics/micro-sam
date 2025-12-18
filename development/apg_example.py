@@ -82,8 +82,8 @@ def example_script_wsi():
             data, image_embeddings=image_embeddings, tile_shape=tile_shape, halo=halo, verbose=True, batch_size=24
         )
 
-        # Processing time:
-        # Out of this ... for the batched prediction, the rest for pre/post-processing.
+        # Processing time: 21:12 min
+        # Out of this 18:09 for the batched prediction, the rest for pre/post-processing.
         print("Start generate ...")
         t0 = time.time()
         seg = generator.generate(batch_size=32, optimize_memory=True)
