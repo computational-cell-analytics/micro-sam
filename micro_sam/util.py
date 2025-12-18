@@ -631,7 +631,7 @@ def _to_image(image):
     # Normalize the input per channel and bring it to uint8.
     input_ = input_.astype("float32")
     input_ -= input_.min(axis=(0, 1))[None, None]
-    input_ /= input_.max(axis=(0, 1))[None, None]
+    input_ /= (input_.max(axis=(0, 1))[None, None] + 1e-7)
     input_ = (input_ * 255).astype("uint8")
 
     # Explicitly return a numpy array for compatibility with torchvision
