@@ -722,7 +722,7 @@ def _get_tiles_in_mask(mask, tiling, halo, z=None):
 
     n_threads = mp.cpu_count()
     with futures.ThreadPoolExecutor(n_threads) as tp:
-        tiles_in_mask = tp.map(_check_mask, range(tiling.numberOfTiles))
+        tiles_in_mask = tp.map(_check_mask, range(tiling.numberOfBlocks))
     return sorted([tile_id for tile_id in tiles_in_mask if tile_id is not None])
 
 
