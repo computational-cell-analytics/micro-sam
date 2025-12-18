@@ -1608,7 +1608,7 @@ def apply_nms(
     perform_box_nms: bool = False,
     nms_thresh: float = 0.9,
     max_size: Optional[int] = None,
-    intersection_over_min: bool = False
+    intersection_over_min: bool = False,
 ) -> np.ndarray:
     """Apply non-maximum suppression to mask predictions from a segment anything model.
 

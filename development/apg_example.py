@@ -82,17 +82,47 @@ def example_script_wsi():
             data, image_embeddings=image_embeddings, tile_shape=tile_shape, halo=halo, verbose=True, batch_size=24
         )
 
+        # Processing time:
+        # Out of this ... for the batched prediction, the rest for pre/post-processing.
         print("Start generate ...")
         t0 = time.time()
-        seg = generator.generate(batch_size=32)
+        seg = generator.generate(batch_size=32, optimize_memory=True)
         print("Generate took:", time.time() - t0, "s")
         print(seg.shape)
+
+        # Save the segmentation to check the result
+        with h5py.File("./data/seg.h5", "w") as f:
+            f.create_dataset("seg", data=seg, compression="gzip")
+
+
+def debug_wsi():
+    from micro_sam.inference import _stitch_segmentation
+    from nifty.tools import blocking
+    from tqdm import tqdm
+
+    print("Load data for debugging ....")
+    masks = []
+    with h5py.File("./debug.h5", mode="r") as f:
+        tile_ids = f["tile_ids"][:]
+        g = f["masks"]
+        for tile_id in tqdm(tile_ids, desc="Load masks"):
+            masks.append(g[str(tile_id)][:])
+
+        halo = f.attrs["halo"]
+        shape = f.attrs["shape"]
+        tile_shape = f.attrs["tile_shape"]
+
+    tiling = blocking([0, 0], shape, tile_shape)
+    print("Start stitching ...")
+    seg = _stitch_segmentation(masks, tile_ids, tiling, halo, output_shape=shape)
+    print(seg.shape)
 
 
 def main():
     # example_script()
     # example_script_tiled()
     example_script_wsi()
+    # debug_wsi()
 
 
 if __name__ == "__main__":

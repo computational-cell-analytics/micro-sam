@@ -1,10 +1,12 @@
 import os
+import gc
 from typing import Any, Dict, List, Optional, Union, Tuple
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from nifty.tools import blocking
+import nifty.ground_truth as ngt
 
 import segment_anything.utils.amg as amg_utils
 from segment_anything import SamPredictor
@@ -307,6 +309,47 @@ def _require_tiled_embeddings(
     return image_embeddings, shape, tile_shape, halo
 
 
+def _merge_segmentations(this_seg, prev_seg, overlap_threshold=0.75):
+    # Discard new ids with too much overlap.
+    ovlp = ngt.overlap(this_seg, prev_seg)
+    ids = np.unique(this_seg)
+    if ids[0] == 0:
+        ids = ids[1:]
+    discard_ids = []
+    for seg_id in ids:
+        ovlp_ids, ovlp_vals = ovlp.overlapArraysNormalized(seg_id, True)
+        ovlp_vals = ovlp_vals[ovlp_ids != 0]
+        if ovlp_vals.size > 0 and ovlp_vals[0] > overlap_threshold:
+            discard_ids.append(seg_id)
+
+    # Make sure the previous segmentation is fully preserved.
+    captured = prev_seg != 0
+    this_seg[captured] = prev_seg[captured]
+    return this_seg
+
+
+# Note: we merge with a very simple first come first serve strategy.
+# This could also be improved by merging according to IoUs.
+# (But would add a lot of complexity)
+def _stitch_segmentation(masks, tile_ids, tiling, halo, output_shape, verbose=False):
+    assert len(masks) == len(tile_ids), f"{len(masks)}, {len(tile_ids)}"
+    segmentation = np.zeros(output_shape, dtype="uint32")
+
+    for tile_id, this_seg in tqdm(zip(tile_ids, masks), desc="Stitch tiles", disable=not verbose):
+        tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
+        bb = tuple(slice(begin, end) for begin, end in zip(tile.begin, tile.end))
+        if tile_id == 0:
+            segmentation[bb] = this_seg
+        else:
+            # Merge the segmentation, discarding ids with too much overlap.
+            prev_seg = segmentation[bb]
+            assert prev_seg.shape == this_seg.shape, f"{tile_id}: {prev_seg.shape}, {this_seg.shape}"
+            this_seg = _merge_segmentations(this_seg, prev_seg)
+            segmentation[bb] = this_seg
+
+    return segmentation
+
+
 @torch.no_grad()
 def batched_tiled_inference(
     predictor: SamPredictor,
@@ -325,6 +368,8 @@ def batched_tiled_inference(
     mask_threshold: Optional[Union[float, str]] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
+    optimize_memory: bool = False,
+    **nms_kwargs,
 ) -> Union[List[List[Dict[str, Any]]], np.ndarray]:
     """Run batched inference for input prompts.
 
@@ -355,6 +400,12 @@ def batched_tiled_inference(
             determined with a local otsu filter.
         tile_shape: The tile shape for embedding prediction.
         halo: The overlap of between tiles.
+        optimize_memory: Whether to optimize the memory usage. If set to True:
+            - NMS will be applied directly for each tile to reduce it to a per-tile instance segmentation.
+            - The per-tile segmentations will be stitched.
+            - The result will be returned as an instance segmentation.
+        nms_kwargs: Keyword arguments for the NMS operations that is used for optimize_memory=True.
+            Does not have any effcet for optimize_memory=False.
 
     Returns:
         The predicted segmentation masks.
@@ -427,6 +478,8 @@ def batched_tiled_inference(
 
     # Run batched inference for each tile.
     masks = []
+    # Additional variables needed for optimized memory mode.
+    id_offset = 0
     for tile_id in tqdm(tile_ids, desc="Run batched inference"):
         # Get the prompts for this tile.
         tile_boxes = box_to_tile.get(tile_id)
@@ -450,13 +503,28 @@ def batched_tiled_inference(
             mask_threshold=mask_threshold,
         )
 
-        # Add the offset for the current tile to the bounding box.
-        tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
-        offset = np.array(tile.begin[::-1] + [0, 0])
-        this_masks = [
-            {**mask, "global_bbox": (np.array(mask["bbox"]) + offset).tolist()} for mask in this_masks
-        ]
-        masks.extend(this_masks)
+        if optimize_memory:
+            # Apply NMS directly to get a segmentation.
+            segmentation = util.apply_nms(this_masks, **nms_kwargs)
+            fg_mask = segmentation != 0
+            segmentation[fg_mask] += id_offset
+            id_offset = segmentation.max()
+            masks.append(segmentation)
+        else:
+            # Add the offset for the current tile to the bounding box.
+            tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
+            offset = np.array(tile.begin[::-1] + [0, 0])
+            this_masks = [
+                {**mask, "global_bbox": (np.array(mask["bbox"]) + offset).tolist()} for mask in this_masks
+            ]
+            masks.extend(this_masks)
+
+        # Try to keep the memory clean.
+        del this_masks
+        gc.collect()
+
+    if optimize_memory:
+        return _stitch_segmentation(masks, tile_ids, tiling, halo, output_shape=shape)
 
     if return_instance_segmentation:
         masks = util.mask_data_to_segmentation(masks, shape=shape, min_object_size=0)
