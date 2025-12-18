@@ -18,7 +18,7 @@ from segment_anything import SamPredictor
 from .. import util as util
 from ..inference import batched_inference
 from ..instance_segmentation import (
-    mask_data_to_segmentation, get_predictor_and_decoder,
+    get_predictor_and_decoder,
     AutomaticMaskGenerator, InstanceSegmentationWithDecoder,
     TiledAutomaticMaskGenerator, TiledInstanceSegmentationWithDecoder,
     AutomaticPromptGenerator,
@@ -347,7 +347,7 @@ def _save_segmentation(masks, prediction_path):
     # masks to segmentation
     masks = masks.cpu().numpy().squeeze(1).astype("bool")
     masks = [{"segmentation": mask, "area": mask.sum()} for mask in masks]
-    segmentation = mask_data_to_segmentation(masks, with_background=True)
+    segmentation = util.mask_data_to_segmentation(masks)
     imageio.imwrite(prediction_path, segmentation, compression=5)
 
 

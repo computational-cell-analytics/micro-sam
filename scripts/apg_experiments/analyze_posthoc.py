@@ -12,6 +12,8 @@ import napari
 import numpy as np
 from tqdm import tqdm
 
+DEFAULT_ROOT = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam/apg_cc"
+
 
 def _normalize_and_pad(image):
     if image.ndim == 3:  # RGB -> normalize per channel.
@@ -109,7 +111,7 @@ def _plot_posthoc(im_path, lab_path, pred_path, intermed, msa):
     napari.run()
 
 
-def analyze_posthoc(dataset_name, skip_visualization):
+def analyze_posthoc(dataset_name, skip_visualization, k, gs_root=None):
     result_info_path = os.path.join(f"./figures/{dataset_name}/summary.json")
     assert os.path.exists(result_info_path), result_info_path
 
@@ -122,13 +124,18 @@ def analyze_posthoc(dataset_name, skip_visualization):
     else:
         model_type = "vit_b_lm"
 
-    # TODO update path
-    gs_settings = f"/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam/apg_cc/{dataset_name}/results/grid_search_params_instance_segmentation_with_decoder.csv"  # noqa
-    if os.path.exists(gs_settings):
-        gs_settings = pd.read_csv(gs_settings).drop(columns=["Unnamed: 0",  "best_msa"])
+    if gs_root is not None:
+        settings_path = os.path.join(
+            gs_root, dataset_name, "results", "grid_search_params_instance_segmentation_with_decoder.csv"
+        )
+        assert os.path.exists(settings_path), settings_path
+        gs_settings = pd.read_csv(settings_path).drop(columns=["Unnamed: 0",  "best_msa"])
         gs_settings = {k: v for k, v in zip(gs_settings.columns.values, gs_settings.values.squeeze())}
         if "prompt_selection" not in gs_settings:
             gs_settings["prompt_selection"] = "connected_components"
+        print("GS Settings:")
+        for name, val in gs_settings.items():
+            print(name, ":", val)
     else:
         gs_settings = {}
 
@@ -138,6 +145,7 @@ def analyze_posthoc(dataset_name, skip_visualization):
     if skip_visualization:
         return
 
+    i = 0
     for im_path, lab_path, pred_path, intermed, msa in zip(
         result_info["image_paths"],
         result_info["label_paths"],
@@ -145,14 +153,17 @@ def analyze_posthoc(dataset_name, skip_visualization):
         intermediates,
         result_info["msas"],
     ):
+        if i >= k:
+            break
         _plot_posthoc(im_path, lab_path, pred_path, intermed, msa)
+        i += 1
 
 
-def run_analyze_posthoc(datasets, skip_visualization):
+def run_analyze_posthoc(datasets, skip_visualization, k, gs_root):
     if datasets is None:
         datasets = [os.path.basename(path) for path in glob(os.path.join("figures/*"))]
     for dataset in datasets:
-        analyze_posthoc(dataset, skip_visualization)
+        analyze_posthoc(dataset, skip_visualization, k, gs_root)
 
 
 # Observations and hypotheses for the datasets I could inspect:
@@ -168,8 +179,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--datasets", nargs="+")
     parser.add_argument("-s", "--skip_visualization", action="store_true")
+    parser.add_argument("-k", "--worst_k", type=int, default=10)
+    parser.add_argument("-g", "--gs_root", default=DEFAULT_ROOT)
     args = parser.parse_args()
-    run_analyze_posthoc(args.datasets, args.skip_visualization)
+    run_analyze_posthoc(args.datasets, args.skip_visualization, args.worst_k, args.gs_root)
 
 
 if __name__ == "__main__":

@@ -48,7 +48,7 @@ def cache_amg_state(
         The automatic mask generator class with the cached state.
     """
     is_tiled = image_embeddings["input_size"] is None
-    amg = instance_segmentation.get_amg(predictor, is_tiled, **kwargs)
+    amg = instance_segmentation.get_instance_segmentation_generator(predictor, is_tiled=is_tiled, **kwargs)
 
     # If i is given we compute the state for a given slice/frame.
     # And we have to save the state for slices/frames separately.
@@ -115,7 +115,9 @@ def cache_is_state(
         The instance segmentation class with the cached state.
     """
     is_tiled = image_embeddings["input_size"] is None
-    amg = instance_segmentation.get_amg(predictor, is_tiled, decoder=decoder, **kwargs)
+    amg = instance_segmentation.get_instance_segmentation_generator(
+        predictor, is_tiled=is_tiled, decoder=decoder, **kwargs
+    )
 
     # If i is given we compute the state for a given slice/frame.
     # And we have to save the state for slices/frames separately.
