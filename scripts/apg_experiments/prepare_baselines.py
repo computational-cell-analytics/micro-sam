@@ -1,6 +1,9 @@
+import os
 from tqdm import tqdm
+from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import imageio.v3 as imageio
 
 from elf.evaluation import mean_segmentation_accuracy, matching
@@ -22,7 +25,7 @@ def run_baseline_engine(image, method, **kwargs):
         segmenter = kwargs["segmenter"]
         segmenter.initialize(image, ndim=2)
         segmentation = segmenter.generate(
-            refine_with_box_prompts=True,
+            # refine_with_box_prompts=True,
         )
 
     # Newer SAM methods.
@@ -62,7 +65,18 @@ def run_baseline_engine(image, method, **kwargs):
     return segmentation
 
 
-def run_default_baselines(dataset_name, method, model_type, target=None):
+def run_default_baselines(dataset_name, method, model_type, experiment_folder, target=None):
+    # Prepare the results folder.
+    res_folder = os.path.join(experiment_folder, "results")
+    inference_folder = os.path.join(experiment_folder, "inference", f"{dataset_name}_{method}_{model_type}")
+    os.makedirs(res_folder, exist_ok=True)
+    os.makedirs(inference_folder, exist_ok=True)
+
+    csv_path = os.path.join(experiment_folder, "results", f"{dataset_name}_{method}_{model_type}.csv")
+    if os.path.exists(csv_path):
+        print(f"The results are computed and stored at {csv_path}")
+        return
+
     # Get the image and label paths.
     image_paths, label_paths = get_image_label_paths(dataset_name=dataset_name, split="test")
 
@@ -102,21 +116,30 @@ def run_default_baselines(dataset_name, method, model_type, target=None):
         msa, sas = mean_segmentation_accuracy(segmentation, labels, return_accuracies=True)
         stats = matching(segmentation, labels)
 
+        # Store segmentations
+        fname = os.path.join(inference_folder, f"{Path(curr_image_path).stem}.tif")
+        imageio.imwrite(fname, segmentation, compression="zlib")
+
         msas.append(msa)
         sa50s.append(sas[0])
         precisions.append(stats["precision"])
         recalls.append(stats["recall"])
         f1s.append(stats["f1"])
 
-    print(
-        f"The final scores for '{method}' with '{model_type}' on '{dataset_name}' are - mSA:",
-        np.mean(msas), "SA50:",  np.mean(sa50s), "Precision:", np.mean(precisions), "Recall:",
-        np.mean(recalls), "F1 Score:", np.mean(f1s)
-    )
+    results = {
+        "mSA": np.mean(msas),
+        "SA50": np.mean(sa50s),
+        "Precision": np.mean(precisions),
+        "Recall": np.mean(recalls),
+        "F1": np.mean(f1s),
+    }
+    results = pd.DataFrame.from_dict([results])
+    results.to_csv(csv_path)
+    print(f"The results are stored at {csv_path}")
 
 
 def main(args):
-    run_default_baselines(args.dataset_name, args.method, args.model_type, args.target)
+    run_default_baselines(args.dataset_name, args.method, args.model_type, args.experiment_folder, args.target)
 
 
 if __name__ == "__main__":
@@ -126,5 +149,8 @@ if __name__ == "__main__":
     parser.add_argument("--method", type=str, required=True)
     parser.add_argument("-m", "--model_type", type=str, required=True)
     parser.add_argument("--target", type=str, default=None)  # We need this for InstanSeg and SAM3.
+    parser.add_argument(
+        "--experiment_folder", type=str, default="/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam/apg_baselines/cc_without_box"  # noqa
+    )
     args = parser.parse_args()
     main(args)

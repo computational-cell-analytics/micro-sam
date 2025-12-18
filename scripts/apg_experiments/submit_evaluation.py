@@ -25,7 +25,7 @@ def write_batch_script(
 #SBATCH --ntasks=1
 #SBATCH -p grete:shared
 #SBATCH -G A100:1
-#SBATCH -A gzz0001
+#SBATCH -A nim00007
 #SBATCH -c 16
 #SBATCH --mem 64G
 #SBATCH --constraint=inet,80gb
@@ -83,16 +83,16 @@ def submit_slurm(args):
 
     method_combinations = [
         # SAM-based models
-        ["amg", "vit_b"],
-        ["amg", generalist_model],
-        ["ais", generalist_model],
+        # ["amg", "vit_b"],
+        # ["amg", generalist_model],
+        # ["ais", generalist_model],
         ["apg", generalist_model],
         # SAM3
-        ["sam3", "cells"],
+        # ["sam3", "cells"],
         # And other external methods.
-        ["cellpose", "cyto3"],
-        ["cellpose", "cpsam"],
-        ["cellsam", "cellsam"],
+        # ["cellpose", "cyto3"],
+        # ["cellpose", "cpsam"],
+        # ["cellsam", "cellsam"],
     ]
 
     if dataset_name is None:
