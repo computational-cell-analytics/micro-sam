@@ -982,6 +982,7 @@ class InstanceSegmentationWithDecoder:
         self._foreground = output[0]
         self._center_distances = output[1]
         self._boundary_distances = output[2]
+        self._i = i
         self._is_initialized = True
 
     def _to_masks(self, segmentation, output_mode):
@@ -1204,17 +1205,18 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         center_distances = np.zeros(original_size, dtype="float32")
         boundary_distances = np.zeros(original_size, dtype="float32")
 
-        n_tiles = tiling.numberOfBlocks
-        n_batches = int(np.ceil(n_tiles / batch_size))
+        msg = "Initialize tiled instance segmentation with decoder"
         if tiles_in_mask is None:
-            tile_ids_for_batches = [
-                [range(batch_id * batch_size, min((batch_id + 1) * batch_size, n_tiles))
-                 for batch_id in range(n_batches)]
-            ]
-            pbar_init(n_tiles, "Initialize tiled instance segmentation with decoder")
+            n_tiles = tiling.numberOfBlocks
+            all_tile_ids = list(range(n_tiles))
         else:
-            pbar_init(len(tiles_in_mask), "Initialize tiled instance segmentation with decoder and mask")
-            tile_ids_for_batches = np.array_split(tiles_in_mask, n_batches)
+            n_tiles = len(tiles_in_mask)
+            all_tile_ids = tiles_in_mask
+            msg += " and mask"
+
+        n_batches = int(np.ceil(n_tiles / batch_size))
+        pbar_init(n_tiles, msg)
+        tile_ids_for_batches = np.array_split(all_tile_ids, n_batches)
 
         for tile_ids in tile_ids_for_batches:
             batched_embeddings, input_shapes, original_shapes = [], [], []
@@ -1247,6 +1249,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         pbar_close()
 
         # Set the state.
+        self._i = i
         self._foreground = foreground
         self._center_distances = center_distances
         self._boundary_distances = boundary_distances
@@ -1397,6 +1400,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
                 return_instance_segmentation=False,
                 multimasking=multimasking,
                 mask_threshold=mask_threshold,
+                i=getattr(self, "_i", None),
                 **prompts,
             )
 
@@ -1411,6 +1415,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
                 return_instance_segmentation=False,
                 multimasking=multimasking,
                 mask_threshold=mask_threshold,
+                i=getattr(self, "_i", None),
                 **prompts,
             )
 
@@ -1490,6 +1495,7 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
                 return_instance_segmentation=False,
                 multimasking=multimasking,
                 optimize_memory=optimize_memory,
+                i=getattr(self, "_i", None),
                 **prompts
             )
         # Optimize memory directly returns an instance segmentation and does not

@@ -682,28 +682,39 @@ def _create_dataset_without_data(group, name, shape, dtype, chunks):
     return ds
 
 
-def _write_batch(features, tile_ids, batched_embeddings, original_sizes, input_sizes, z=None, n_slices=None):
+def _write_batch(features, tile_ids, batched_embeddings, original_sizes, input_sizes, slices=None, n_slices=None):
+
+    # Pre-create / pre-fetch the datasets if we have slices.
+    # (Dataset creation is not thread-safe)
+    if slices is not None:
+        datasets = {}
+        for tile_id, tile_embeddings, original_size, input_size in zip(
+            tile_ids, batched_embeddings, original_sizes, input_sizes
+        ):
+            ds_name = str(tile_id)
+            if ds_name in datasets:
+                continue
+            if ds_name in features:
+                datasets[ds_name] = features[ds_name]
+                continue
+            shape = (n_slices, 1) + tile_embeddings.shape
+            chunks = (1, 1) + tile_embeddings.shape
+            ds = _create_dataset_without_data(features, ds_name, shape=shape, dtype="float32", chunks=chunks)
+            ds.attrs["original_size"] = original_size
+            ds.attrs["input_size"] = input_size
+            datasets[ds_name] = ds
 
     def _write_embed(i):
-        tile_id = tile_ids[i]
-        tile_embeddings, original_size, input_size = batched_embeddings[i], original_sizes[i], input_sizes[i]
-        # Unsqueeze the channel axis of the tile embeddings.
-        tile_embeddings = tile_embeddings.unsqueeze(0)
-        ds_name = str(tile_id)
-        if z is None:
+        ds_name = str(tile_ids[i])
+        tile_embeddings = batched_embeddings[i].unsqueeze(0)
+        if slices is None:
             ds = _create_dataset_with_data(features, ds_name, data=tile_embeddings.cpu().numpy())
-            ds.attrs["original_size"] = original_size
-            ds.attrs["input_size"] = input_size
+            ds.attrs["original_size"] = original_sizes[i]
+            ds.attrs["input_size"] = input_sizes[i]
         elif ds_name in features:
-            ds = features[ds_name]
+            ds = datasets[ds_name]
+            z = slices[i]
             ds[z] = tile_embeddings.cpu().numpy()
-        else:
-            shape = (n_slices,) + tile_embeddings.shape
-            chunks = (1,) + tile_embeddings.shape
-            ds = _create_dataset_without_data(features, ds_name, shape=shape, dtype="float32", chunks=chunks)
-            ds[z] = tile_embeddings.cpu().numpy()
-            ds.attrs["original_size"] = original_size
-            ds.attrs["input_size"] = input_size
 
     n_tiles = len(tile_ids)
     n_workers = min(mp.cpu_count(), n_tiles)
@@ -767,6 +778,53 @@ def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init
     return features
 
 
+class _BatchProvider:
+    def __init__(self, n_slices, n_tiles_per_plane, tiles_in_mask_per_slice, batch_size):
+        if tiles_in_mask_per_slice is None:
+            self.n_tiles_total = n_slices * n_tiles_per_plane
+        else:
+            self.n_tiles_total = sum(len(val) for val in tiles_in_mask_per_slice.values())
+
+        self.n_batches = int(np.ceil(self.n_tiles_total / batch_size))
+        self.n_slices = n_slices
+        self.n_tiles_per_plane = n_tiles_per_plane
+        self.tiles_in_mask_per_slice = tiles_in_mask_per_slice
+        self.batch_size = batch_size
+
+        # Iter variables.
+        self.batch_id = 0
+        self.z = 0
+        self.tile_id = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.batch_id >= self.n_batches:
+            raise StopIteration
+
+        z_list = list(range(self.n_tiles_per_plane))
+        z_tiles = z_list if self.tiles_in_mask_per_slice is None else self.tiles_in_mask_per_slice[self.z]
+
+        slices, tile_ids = [], []
+        this_batch_size = 0
+        while this_batch_size < self.batch_size:
+            if self.tile_id == len(z_tiles):
+                self.z += 1
+                self.tile_id = 0
+                if self.z >= self.n_slices:
+                    break
+                z_tiles = z_list if self.tiles_in_mask_per_slice is None else self.tiles_in_mask_per_slice[self.z]
+                continue
+
+            slices.append(self.z), tile_ids.append(z_tiles[self.tile_id])
+            self.tile_id += 1
+            this_batch_size += 1
+
+        self.batch_id += 1
+        return slices, tile_ids
+
+
 def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update, batch_size, mask):
     assert input_.ndim == 3
 
@@ -777,37 +835,36 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init
     features.attrs["tile_shape"] = tile_shape
     features.attrs["halo"] = halo
 
-    # We batch across the tiles.
-    n_tiles = tiling.numberOfBlocks
+    n_tiles_per_plane = tiling.numberOfBlocks
     n_slices = input_.shape[0]
-    n_batches = int(np.ceil(n_tiles / batch_size))
 
+    msg = "Compute Image Embeddings 3D tiled"
     if mask is None:
-        pbar_init(n_tiles * n_slices, "Compute Image Embeddings 3D tiled")
+        n_tiles_total = n_slices * n_tiles_per_plane
     else:
         tiles_in_mask_per_slice = {}
         for z in range(n_slices):
             tiles_in_mask_per_slice[z] = _get_tiles_in_mask(mask, tiling, halo, z=z)
         n_tiles_total = sum(len(val) for val in tiles_in_mask_per_slice.values())
-        pbar_init(n_tiles_total, "Compute Image Embeddings 3D tiled masked")
+        msg += " masked"
+    pbar_init(n_tiles_total, msg)
 
-    for z in range(n_slices):
-        tile_ids_z = list(range(n_tiles)) if mask is None else tiles_in_mask_per_slice[z]
-        tile_ids_for_batches = np.array_split(tile_ids_z, n_batches)
+    batch_provider = _BatchProvider(n_slices, n_tiles_per_plane, tiles_in_mask_per_slice, batch_size)
+    for slices, tile_ids in batch_provider:
+        batched_images = []
+        for z, tile_id in zip(slices, tile_ids):
+            tile = tiling.getBlockWithHalo(tile_id, list(halo))
+            outer_tile = (z,) + tuple(
+                slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end)
+            )
+            tile_input = _to_image(input_[outer_tile])
+            batched_images.append(tile_input)
 
-        for tile_ids in tile_ids_for_batches:
-            batched_images = []
-            for tile_id in tile_ids:
-                tile = tiling.getBlockWithHalo(tile_id, list(halo))
-                outer_tile = (z,) + tuple(
-                    slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end)
-                )
-                tile_input = _to_image(input_[outer_tile])
-                batched_images.append(tile_input)
-
-            batched_embeddings, original_sizes, input_sizes = _compute_embeddings_batched(predictor, batched_images)
-            _write_batch(features, tile_ids, batched_embeddings, original_sizes, input_sizes, z=z, n_slices=n_slices)
-            pbar_update(len(tile_ids))
+        batched_embeddings, original_sizes, input_sizes = _compute_embeddings_batched(predictor, batched_images)
+        _write_batch(
+            features, tile_ids, batched_embeddings, original_sizes, input_sizes, slices=slices, n_slices=n_slices
+        )
+        pbar_update(len(tile_ids))
 
     if mask is not None:
         features.attrs["tiles_in_mask"] = tiles_in_mask_per_slice

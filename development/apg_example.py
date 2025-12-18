@@ -125,6 +125,32 @@ def example_script_wsi():
             f.create_dataset("seg", data=seg, compression="gzip")
 
 
+def example_script_3d():
+    data_path = "./data/N_522_final_crop_ds2.h5"
+    with h5py.File(data_path, "r") as f:
+        data = f["raw"][:]
+        mask = f["label"][:] > 0
+
+    tile_shape, halo = (512, 512), (64, 64)
+    predictor, decoder = get_predictor_and_decoder(model_type="vit_b_lm")
+
+    embed_path = "./data/embeds_3d.zarr"
+    image_embeddings = precompute_image_embeddings(
+        predictor, data, tile_shape=tile_shape, halo=halo, save_path=embed_path, batch_size=12, ndim=3, mask=mask,
+    )
+
+    z = 50
+    generator = TiledAutomaticPromptGenerator(predictor, decoder)
+    generator.initialize(
+        data[z], image_embeddings=image_embeddings, tile_shape=tile_shape,
+        halo=halo, verbose=True, batch_size=12, mask=mask, i=z,
+    )
+    seg = generator.generate(batch_size=12, optimize_memory=True)
+
+    with h5py.File(f"./data/seg_z{z}.h5", "w") as f:
+        f.create_dataset("seg", data=seg, compression="gzip")
+
+
 def debug_wsi():
     from micro_sam.inference import _stitch_segmentation
     from nifty.tools import blocking
@@ -152,6 +178,7 @@ def main():
     # example_script()
     # example_script_tiled()
     example_script_wsi()
+    example_script_3d()
     # debug_wsi()
 
 
