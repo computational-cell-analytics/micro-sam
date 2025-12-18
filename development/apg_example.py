@@ -9,6 +9,7 @@ from micro_sam.instance_segmentation import (
     TiledAutomaticPromptGenerator, AutomaticPromptGenerator, get_predictor_and_decoder
 )
 from micro_sam.util import precompute_image_embeddings
+from elf.wrapper.resized_volume import ResizedVolume
 
 
 # TODO example with a custom prompt function
@@ -53,30 +54,58 @@ def _require_wsi_data():
 
     example_data = fetch_wholeslide_histopathology_example_data("./data")
     data = read_wsi(example_data)
+    shape = data.shape[:2]
 
     with h5py.File(out_path, "w") as f:
-        f.create_dataset("data", data=data, compression="gzip")
+        f.create_dataset("data/s0", data=data, compression="gzip")
+        for level in range(1, 5):
+            ds_shape = tuple(sh // (2 ** level) for sh in shape)
+            print(level, ds_shape)
+            data = read_wsi(example_data, scale=ds_shape)
+            f.create_dataset(f"data/s{level}", data=data, compression="gzip")
 
     os.remove(example_data)
     return out_path
 
 
+def _require_mask(path, level=4, bg_threshold=240, window=15, majority_threshold=0.3):
+    mask_key = f"mask/s{level}"
+    with h5py.File(path, "a") as f:
+        full_shape = f["data/s0"].shape[:2]
+        if mask_key in f:
+            mask = f[mask_key][:]
+        else:
+            from scipy.ndimage import uniform_filter
+            image = f[f"data/s{level}"][:]
+            mask = (image > bg_threshold).all(axis=-1)
+            mask = uniform_filter(mask.astype("float"), size=window)
+            mask = ~(mask >= majority_threshold)
+            f.create_dataset(mask_key, data=mask, compression="gzip")
+
+    resized_mask = ResizedVolume(mask, shape=full_shape, order=0)
+    return resized_mask
+
+
 def example_script_wsi():
+    data_path = _require_wsi_data()
+    mask = _require_mask(data_path)
+
     tile_shape, halo = (768, 768), (64, 64)
     predictor, decoder = get_predictor_and_decoder(model_type="vit_b_histopathology")
 
-    data_path = _require_wsi_data()
     with h5py.File(data_path, "r") as f:
-        data = f["data"]
+        data = f["data/s0"][:]
         print("Run prediction for WSI of shape:", data.shape)
 
         # Processing time: 10:34 min (batch size 24 on an A100 with 80 GB)
+        # WITH MASK: 3:33 min (+ some further optimizartions)
         embed_path = "./data/embeds.zarr"
         image_embeddings = precompute_image_embeddings(
-            predictor, data, tile_shape=tile_shape, halo=halo, save_path=embed_path, batch_size=24, ndim=2
+            predictor, data, tile_shape=tile_shape, halo=halo, save_path=embed_path, batch_size=24, ndim=2, mask=mask,
         )
 
-        # Processing time: 02:14 min (batch size 24 on an A100 with 80 GB)
+        # Processing time: 03:14 min (batch size 24 on an A100 with 80 GB)
+        # WITH MASK: 34 seconds
         generator = TiledAutomaticPromptGenerator(predictor, decoder)
         generator.initialize(
             data, image_embeddings=image_embeddings, tile_shape=tile_shape, halo=halo, verbose=True, batch_size=24
@@ -84,6 +113,7 @@ def example_script_wsi():
 
         # Processing time: 21:12 min
         # Out of this 18:09 for the batched prediction, the rest for pre/post-processing.
+        # WITH MASK: 19:59 min (total time).
         print("Start generate ...")
         t0 = time.time()
         seg = generator.generate(batch_size=32, optimize_memory=True)
