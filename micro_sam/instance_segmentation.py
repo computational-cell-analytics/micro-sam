@@ -544,8 +544,9 @@ def _process_tiled_embeddings(predictor, image, image_embeddings, tile_shape, ha
     elif halo != halo_:
         raise ValueError(f"Inconsistent halo parameter {halo} with precomputed embeedings: {halo_}.")
 
-    # TODO we need to figure out how tiles_in_mask are handled for 3D embeddings
     tiles_in_mask = feats.attrs.get("tiles_in_mask", None)
+    if tiles_in_mask is not None and i is not None:
+        tiles_in_mask = tiles_in_mask[str(i)]
 
     return image_embeddings, tile_shape, halo, tiles_in_mask
 
