@@ -841,6 +841,7 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init
     msg = "Compute Image Embeddings 3D tiled"
     if mask is None:
         n_tiles_total = n_slices * n_tiles_per_plane
+        tiles_in_mask_per_slice = None
     else:
         tiles_in_mask_per_slice = {}
         for z in range(n_slices):
@@ -867,7 +868,7 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init
         pbar_update(len(tile_ids))
 
     if mask is not None:
-        features.attrs["tiles_in_mask"] = tiles_in_mask_per_slice
+        features.attrs["tiles_in_mask"] = {str(z): per_slice for z, per_slice in tiles_in_mask_per_slice.items()}
 
     _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size=None, original_size=None)
     return features

@@ -108,7 +108,7 @@ def example_script_wsi():
         # WITH MASK: 34 seconds
         generator = TiledAutomaticPromptGenerator(predictor, decoder)
         generator.initialize(
-            data, image_embeddings=image_embeddings, tile_shape=tile_shape, halo=halo, verbose=True, batch_size=24
+            data, image_embeddings=image_embeddings, tile_shape=tile_shape, halo=halo, verbose=True, batch_size=12
         )
 
         # Processing time: 21:12 min
@@ -177,7 +177,7 @@ def debug_wsi():
 def main():
     # example_script()
     # example_script_tiled()
-    example_script_wsi()
+    # example_script_wsi()
     example_script_3d()
     # debug_wsi()
 
