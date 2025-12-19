@@ -10,9 +10,10 @@ import imageio.v3 as imageio
 import pandas as pd
 import napari
 import numpy as np
+
 from tqdm import tqdm
 
-DEFAULT_ROOT = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam/apg_cc"
+HISTO_DATASETS = ("cytodark0", "ihc_tma", "lynsec", "monuseg", "pannuke", "nuinsseg", "puma", "tnbc")
 
 
 def _normalize_and_pad(image):
@@ -24,20 +25,26 @@ def _normalize_and_pad(image):
         image *= 255
         image = image.astype("uint8")
 
+    shape = image.shape[:2]
     min_shape = (512, 512)
-    pad_width = [max(0, ms - sh) for sh, ms in zip(image.shape[:2], min_shape)]
+    pad_width = [max(0, ms - sh) for sh, ms in zip(shape, min_shape)]
     if any(pw > 0 for pw in pad_width):
-        pad_width = [(0, pad_width[0]), (0, pad_width[1])]
+        pad_width_np = [(0, pad_width[0]), (0, pad_width[1])]
         if image.ndim == 3:
-            pad_width += [(0, 0)]
-        image = np.pad(image, pad_width)
-    # breakpoint()
+            pad_width_np += [(0, 0)]
+        image = np.pad(image, pad_width_np)
+        crop = np.s_[0:image.shape[0]-pad_width[0], 0:image.shape[1]-pad_width[1]]
+    else:
+        crop = None
 
-    return image
+    return image, crop
 
 
-def _run_prediction(image_path, out_path, predictor, segmenter, model_type, settings):
-    from micro_sam.instance_segmentation import _derive_point_prompts
+def _run_prediction(image_path, label_path, out_path, predictor, segmenter, model_type, settings):
+    from micro_sam.inference import batched_inference
+    from micro_sam.instance_segmentation import _derive_point_prompts, _derive_box_prompts
+    from micro_sam.util import apply_nms
+    from elf.evaluation import mean_segmentation_accuracy
 
     if predictor is None:
         from micro_sam.instance_segmentation import AutomaticPromptGenerator, get_predictor_and_decoder
@@ -45,7 +52,7 @@ def _run_prediction(image_path, out_path, predictor, segmenter, model_type, sett
         segmenter = AutomaticPromptGenerator(predictor, decoder)
 
     image = imageio.imread(image_path)
-    image = _normalize_and_pad(image)
+    image, crop = _normalize_and_pad(image)
     segmenter.initialize(image)
 
     # Derive prompts.
@@ -57,12 +64,38 @@ def _run_prediction(image_path, out_path, predictor, segmenter, model_type, sett
         **prompt_kwargs,
     )
 
+    if settings.get("refine_with_box_prompts", False) and (prompts is not None):
+        box_extension = 0.01  # expose as hyperparam?
+        predictions = batched_inference(
+            predictor, image=image, batch_size=16, return_instance_segmentation=False,
+            verbose_embeddings=False, **prompts,
+        )
+        box_prompts = _derive_box_prompts(predictions, box_extension)
+        # Add the segmentation from points so that we can understand the difference.
+        seg_from_points = apply_nms(
+            predictions,
+            min_size=settings.get("min_size", 25),
+            nms_thresh=settings.get("nms_threshold", 0.9),
+            intersection_over_min=settings.get("intersection_over_min", False),
+        )
+        if crop is not None:
+            seg_from_points = seg_from_points[crop]
+        labels = imageio.imread(label_path)
+        assert labels.shape == seg_from_points.shape, f"{labels.shape}, {seg_from_points.shape}"
+        msa_points = mean_segmentation_accuracy(seg_from_points, labels)
+    else:
+        box_prompts = None
+
     with h5py.File(out_path, "w") as f:
         f.create_dataset("foreground", data=segmenter._foreground, compression="gzip")
         f.create_dataset("center_distances", data=segmenter._center_distances, compression="gzip")
         f.create_dataset("boundary_distances", data=segmenter._boundary_distances, compression="gzip")
         if prompts is not None:
             f.create_dataset("prompts", data=prompts["points"])
+        if box_prompts is not None:
+            f.create_dataset("box_prompts", data=box_prompts["boxes"])
+            ds = f.create_dataset("seg_from_points", data=seg_from_points, compression="gzip")
+            ds.attrs["msa_points"] = msa_points
 
     return predictor, segmenter
 
@@ -71,13 +104,19 @@ def _require_intermediates(result_info, analysis_folder, model_type, settings):
     os.makedirs(analysis_folder, exist_ok=True)
     paths = []
     predictor, segmenter = None, None
-    for image_path in tqdm(result_info["image_paths"], desc=f"Precompute intermediates for {analysis_folder}"):
+    for image_path, label_path in tqdm(
+        zip(result_info["image_paths"], result_info["label_paths"]),
+        desc=f"Precompute intermediates for {analysis_folder}",
+        total=len(result_info["image_paths"]),
+    ):
         fname = f"{Path(image_path).stem}.h5"
         out_path = os.path.join(analysis_folder, fname)
         if os.path.exists(out_path):
             paths.append(out_path)
             continue
-        predictor, segmenter = _run_prediction(image_path, out_path, predictor, segmenter, model_type, settings)
+        predictor, segmenter = _run_prediction(
+            image_path, label_path, out_path, predictor, segmenter, model_type, settings
+        )
         paths.append(out_path)
     return paths
 
@@ -95,31 +134,47 @@ def _plot_posthoc(im_path, lab_path, pred_path, intermed, msa):
             prompts = f["prompts"][:]
         else:
             prompts = None
+        if "box_prompts" in f:
+            box_prompts = f["box_prompts"][:]
+            seg_from_points = f["seg_from_points"][:]
+            msa_points = f["seg_from_points"].attrs["msa_points"]
+        else:
+            box_prompts = None
 
     fname = os.path.basename(im_path)
+    title = f"{fname}: mSA: {np.round(msa, 4)}"
     v = napari.Viewer()
     v.add_image(image)
-    v.add_image(foreground)
+    v.add_image(foreground, visible=False)
     v.add_image(boundary_distances, visible=False)
     v.add_image(center_distances, visible=False)
     v.add_labels(labels)
     v.add_labels(seg)
+
     if prompts is not None:
         prompts = prompts.squeeze(1)[:, ::-1]
         v.add_points(prompts)
-    v.title = os.path.basename(f"{fname}: mSA: {msa}")
+    if box_prompts is not None:
+        box_prompts = [
+            [[p[1], p[0]], [p[3], p[2]]] for p in box_prompts
+        ]
+        v.add_shapes(box_prompts, shape_type="rectangle", edge_color="orange", edge_width=2, face_color="transparent")
+        v.add_labels(seg_from_points)
+        title += f", mSA (points): {np.round(msa_points, 4)}"
+
+    v.title = os.path.basename(title)
     napari.run()
 
 
-def analyze_posthoc(dataset_name, skip_visualization, k, gs_root=None):
-    result_info_path = os.path.join(f"./figures/{dataset_name}/summary.json")
+def analyze_posthoc(input_folder, dataset_name, skip_visualization, k, gs_root=None):
+    result_info_path = os.path.join(f"{input_folder}/figures/{dataset_name}/summary.json")
     assert os.path.exists(result_info_path), result_info_path
 
     with open(result_info_path, "r") as f:
         result_info = json.load(f)
 
     # Take care of other histopatho datasets once we have them.
-    if dataset_name in ("pannuke",):
+    if dataset_name.startswith(HISTO_DATASETS):
         model_type = "vit_b_histopathology"
     else:
         model_type = "vit_b_lm"
@@ -131,15 +186,15 @@ def analyze_posthoc(dataset_name, skip_visualization, k, gs_root=None):
         assert os.path.exists(settings_path), settings_path
         gs_settings = pd.read_csv(settings_path).drop(columns=["Unnamed: 0",  "best_msa"])
         gs_settings = {k: v for k, v in zip(gs_settings.columns.values, gs_settings.values.squeeze())}
-        if "prompt_selection" not in gs_settings:
-            gs_settings["prompt_selection"] = "connected_components"
         print("GS Settings:")
         for name, val in gs_settings.items():
             print(name, ":", val)
     else:
         gs_settings = {}
+        if "with_box" in input_folder:
+            gs_settings["refine_with_box_prompts"] = True
 
-    analysis_folder = f"./analysis/{dataset_name}"
+    analysis_folder = f"{input_folder}/analysis/{dataset_name}"
     intermediates = _require_intermediates(result_info, analysis_folder, model_type, gs_settings)
 
     if skip_visualization:
@@ -159,11 +214,11 @@ def analyze_posthoc(dataset_name, skip_visualization, k, gs_root=None):
         i += 1
 
 
-def run_analyze_posthoc(datasets, skip_visualization, k, gs_root):
+def run_analyze_posthoc(input_folder, datasets, skip_visualization, k, gs_root):
     if datasets is None:
-        datasets = [os.path.basename(path) for path in glob(os.path.join("figures/*"))]
+        datasets = [os.path.basename(path) for path in glob(os.path.join(f"{input_folder}/figures/*"))]
     for dataset in datasets:
-        analyze_posthoc(dataset, skip_visualization, k, gs_root)
+        analyze_posthoc(input_folder, dataset, skip_visualization, k, gs_root)
 
 
 # Observations and hypotheses for the datasets I could inspect:
@@ -177,12 +232,13 @@ def run_analyze_posthoc(datasets, skip_visualization, k, gs_root):
 # - TNBC: Looks very good (min mSA > 0.4)
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("-i", "--input_folder", required=True)
     parser.add_argument("-d", "--datasets", nargs="+")
     parser.add_argument("-s", "--skip_visualization", action="store_true")
     parser.add_argument("-k", "--worst_k", type=int, default=10)
-    parser.add_argument("-g", "--gs_root", default=DEFAULT_ROOT)
+    parser.add_argument("-g", "--gs_root")
     args = parser.parse_args()
-    run_analyze_posthoc(args.datasets, args.skip_visualization, args.worst_k, args.gs_root)
+    run_analyze_posthoc(args.input_folder, args.datasets, args.skip_visualization, args.worst_k, args.gs_root)
 
 
 if __name__ == "__main__":

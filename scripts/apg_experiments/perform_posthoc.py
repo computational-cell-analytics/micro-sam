@@ -15,10 +15,9 @@ from util import get_image_label_paths
 DEFAULT_ROOT = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam/apg_cc"
 
 
-def posthoc_analysis(dataset_name, input_root, worst_k):
+def posthoc_analysis(dataset_name, input_root, worst_k, output_name):
     import matplotlib.pyplot as plt
 
-    # TODO enable changing the root.
     # Check the dataset.
     dataset_dir = os.path.join(input_root, dataset_name)
     if not os.path.exists(dataset_dir):
@@ -27,15 +26,15 @@ def posthoc_analysis(dataset_name, input_root, worst_k):
 
     # Let's check inference results of APG and check where APG does the worst.
     try:
-        image_paths, label_paths = get_image_label_paths(dataset_name=dataset_name, split="test")
+        ds_name = dataset_name[:(dataset_name.find("apg") - 1)] if "apg" in dataset_name else dataset_name
+        image_paths, label_paths = get_image_label_paths(dataset_name=ds_name, split="test")
     except Exception:
-        print("Cannot get the dataset:", dataset_name)
+        print("Cannot get the dataset:", ds_name)
         return
 
     # Get all the predictions.
-    prediction_paths = natsorted(
-        glob(os.path.join(dataset_dir, "apg", "inference", "*.tif"))
-    )
+    # prediction_paths = natsorted(glob(os.path.join(dataset_dir, "apg", "inference", "*.tif")))
+    prediction_paths = natsorted(glob(os.path.join(dataset_dir, "*.tif")))
     try:
         assert len(label_paths) == len(prediction_paths), \
             f"Inconsistent labels and predictions: {len(label_paths)}, {len(prediction_paths)}"
@@ -71,7 +70,7 @@ def posthoc_analysis(dataset_name, input_root, worst_k):
         "prediction_paths": [],
         "msas": [],
     }
-    out_folder = f"figures/{dataset_name}"
+    out_folder = f"{output_name}/figures/{dataset_name}"
     os.makedirs(out_folder, exist_ok=True)
     for rank, (msa, i) in enumerate(worst_res, start=1):
         image_path, label_path, pred_path = image_paths[i], label_paths[i], prediction_paths[i]
@@ -107,7 +106,7 @@ def posthoc_analysis(dataset_name, input_root, worst_k):
         ax[2].axis("off")
 
         plt.tight_layout()
-        plt.savefig(f"figures/{dataset_name}/bad_res_{rank:03}.png")
+        plt.savefig(f"{output_name}/figures/{dataset_name}/bad_res_{rank:03}.png")
         plt.close()
 
     with open(os.path.join(out_folder, "summary.json"), "w") as f:
@@ -115,10 +114,13 @@ def posthoc_analysis(dataset_name, input_root, worst_k):
 
 
 def run_posthoc_analysis(datasets, input_root, worst_k):
+    output_name = os.path.basename(input_root)
+    if os.path.exists(os.path.join(input_root, "inference")):
+        input_root = os.path.join(input_root, "inference")
     if datasets is None:
         datasets = [os.path.basename(path) for path in glob(os.path.join(input_root, "*"))]
     for dataset in datasets:
-        posthoc_analysis(dataset, input_root, worst_k)
+        posthoc_analysis(dataset, input_root, worst_k, output_name)
 
 
 def main():
