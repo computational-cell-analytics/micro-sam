@@ -3,26 +3,30 @@ Helper functions for downloading Segment Anything models and predicting image em
 """
 
 import os
+import multiprocessing as mp
 import pickle
 import hashlib
 import warnings
+from concurrent import futures
 from pathlib import Path
 from collections import OrderedDict
-from typing import Any, Dict, Iterable, Optional, Tuple, Union, Callable
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, Callable
 
-import zarr
-import vigra
-import torch
-import pooch
-import xxhash
-import numpy as np
+import elf.parallel as parallel_impl
 import imageio.v3 as imageio
-from skimage.measure import regionprops
-from skimage.segmentation import relabel_sequential
+import numpy as np
+import pooch
+import segment_anything.utils.amg as amg_utils
+import torch
+import vigra
+import xxhash
+import zarr
 
 from elf.io import open_file
-
 from nifty.tools import blocking
+from skimage.measure import regionprops
+from skimage.segmentation import relabel_sequential
+from torchvision.ops.boxes import batched_nms
 
 from .__version__ import __version__
 from . import models as custom_models
@@ -51,7 +55,6 @@ _DEFAULT_MODEL = "vit_b_lm"
 _MODEL_TYPES = ("vit_l", "vit_b", "vit_h", "vit_t")
 
 
-# TODO define the proper type for image embeddings
 ImageEmbeddings = Dict[str, Any]
 """@private"""
 
@@ -602,25 +605,40 @@ def get_model_names() -> Iterable:
 #
 
 
-def _to_image(input_):
-    # we require the input to be uint8
-    if input_.dtype != np.dtype("uint8"):
-        # first normalize the input to [0, 1]
-        input_ = input_.astype("float32") - input_.min()
-        input_ = input_ / input_.max()
-        # then bring to [0, 255] and cast to uint8
-        input_ = (input_ * 255).astype("uint8")
+def _to_image(image):
+    input_ = image
+    ndim = input_.ndim
+    n_channels = 1 if ndim == 2 else input_.shape[-1]
 
-    if input_.ndim == 2:
-        image = np.concatenate([input_[..., None]] * 3, axis=-1)
-    elif input_.ndim == 3 and input_.shape[-1] == 3:
-        image = input_
+    # Map the input to three channels.
+    if ndim == 2:  # Grayscale image -> replicate channels.
+        input_ = np.concatenate([input_[..., None]] * 3, axis=-1)
+    elif ndim == 3 and n_channels == 1:  # Grayscale image -> replicate channels.
+        input_ = np.concatenate([input_] * 3, axis=-1)
+    elif ndim == 3 and n_channels == 2:  # Two channels -> add a zero channel.
+        zero_channel = np.zeros(input_.shape[:2] + (1,), dtype=input_.dtype)
+        input_ = np.concatenate([input_, zero_channel], axis=-1)
+    elif input_.ndim == 3 and n_channels == 3:  # RGB input -> do nothing.
+        pass
+    elif input_.ndim == 3 and n_channels > 3:  # More than three channels -> select first three.
+        warnings.warn(f"You provided an input with {n_channels} channels. Only the first three will be used.")
+        input_ = input_[..., :3]
     else:
-        raise ValueError(f"Invalid input image of shape {input_.shape}. Expect either 2D grayscale or 3D RGB image.")
+        raise ValueError(
+            f"Invalid input dimensionality {ndim}. Expect either a 2D input (=grayscale image) "
+            "or a 3D input (= image with channels)."
+        )
+    assert input_.ndim == 3 and input_.shape[-1] == 3
 
-    # explicitly return a numpy array for compatibility with torchvision
-    # because the input_ array could be something like dask array
-    return np.array(image)
+    # Normalize the input per channel and bring it to uint8.
+    input_ = input_.astype("float32")
+    input_ -= input_.min(axis=(0, 1))[None, None]
+    input_ /= (input_.max(axis=(0, 1))[None, None] + 1e-7)
+    input_ = (input_ * 255).astype("uint8")
+
+    # Explicitly return a numpy array for compatibility with torchvision
+    # because the input_ array could be something like dask array.
+    return np.array(input_)
 
 
 @torch.no_grad
@@ -659,13 +677,9 @@ def _create_dataset_with_data(group, name, data, chunks=None):
     if chunks is None:
         chunks = data.shape
     if zarr_major_version == 2:
-        ds = group.create_dataset(
-            name, data=data, shape=data.shape, compression="gzip", chunks=chunks
-        )
+        ds = group.create_dataset(name, data=data, shape=data.shape, chunks=chunks)
     elif zarr_major_version == 3:
-        ds = group.create_array(
-            name, shape=data.shape, compressors=[zarr.codecs.GzipCodec()], chunks=chunks, dtype=data.dtype,
-        )
+        ds = group.create_array(name, shape=data.shape, chunks=chunks, dtype=data.dtype)
         ds[:] = data
     else:
         raise RuntimeError(f"Unsupported zarr version: {zarr_major_version}")
@@ -675,19 +689,70 @@ def _create_dataset_with_data(group, name, data, chunks=None):
 def _create_dataset_without_data(group, name, shape, dtype, chunks):
     zarr_major_version = int(zarr.__version__.split(".")[0])
     if zarr_major_version == 2:
-        ds = group.create_dataset(
-            name, shape=shape, dtype=dtype, compression="gzip", chunks=chunks
-        )
+        ds = group.create_dataset(name, shape=shape, dtype=dtype, chunks=chunks)
     elif zarr_major_version == 3:
-        ds = group.create_array(
-            name, shape=shape, compressors=[zarr.codecs.GzipCodec()], chunks=chunks, dtype=dtype
-        )
+        ds = group.create_array(name, shape=shape, chunks=chunks, dtype=dtype)
     else:
         raise RuntimeError(f"Unsupported zarr version: {zarr_major_version}")
     return ds
 
 
-def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update, batch_size):
+def _write_batch(features, tile_ids, batched_embeddings, original_sizes, input_sizes, slices=None, n_slices=None):
+
+    # Pre-create / pre-fetch the datasets if we have slices.
+    # (Dataset creation is not thread-safe)
+    if slices is not None:
+        datasets = {}
+        for tile_id, tile_embeddings, original_size, input_size in zip(
+            tile_ids, batched_embeddings, original_sizes, input_sizes
+        ):
+            ds_name = str(tile_id)
+            if ds_name in datasets:
+                continue
+            if ds_name in features:
+                datasets[ds_name] = features[ds_name]
+                continue
+            shape = (n_slices, 1) + tile_embeddings.shape
+            chunks = (1, 1) + tile_embeddings.shape
+            ds = _create_dataset_without_data(features, ds_name, shape=shape, dtype="float32", chunks=chunks)
+            ds.attrs["original_size"] = original_size
+            ds.attrs["input_size"] = input_size
+            datasets[ds_name] = ds
+
+    def _write_embed(i):
+        ds_name = str(tile_ids[i])
+        tile_embeddings = batched_embeddings[i].unsqueeze(0)
+        if slices is None:
+            ds = _create_dataset_with_data(features, ds_name, data=tile_embeddings.cpu().numpy())
+            ds.attrs["original_size"] = original_sizes[i]
+            ds.attrs["input_size"] = input_sizes[i]
+        elif ds_name in features:
+            ds = datasets[ds_name]
+            z = slices[i]
+            ds[z] = tile_embeddings.cpu().numpy()
+
+    n_tiles = len(tile_ids)
+    n_workers = min(mp.cpu_count(), n_tiles)
+    with futures.ThreadPoolExecutor(n_workers) as tp:
+        list(tp.map(_write_embed, range(n_tiles)))
+
+
+def _get_tiles_in_mask(mask, tiling, halo, z=None):
+    def _check_mask(tile_id):
+        tile = tiling.getBlockWithHalo(tile_id, list(halo))
+        outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end))
+        if z is not None:
+            outer_tile = (z,) + outer_tile
+        tile_mask = mask[outer_tile].astype("bool")
+        return None if tile_mask.sum() == 0 else tile_id
+
+    n_threads = mp.cpu_count()
+    with futures.ThreadPoolExecutor(n_threads) as tp:
+        tiles_in_mask = tp.map(_check_mask, range(tiling.numberOfBlocks))
+    return sorted([tile_id for tile_id in tiles_in_mask if tile_id is not None])
+
+
+def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update, batch_size, mask):
     tiling = blocking([0, 0], input_.shape[:2], tile_shape)
     n_tiles = tiling.numberOfBlocks
 
@@ -696,84 +761,131 @@ def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init
     features.attrs["tile_shape"] = tile_shape
     features.attrs["halo"] = halo
 
-    pbar_init(n_tiles, "Compute Image Embeddings 2D tiled")
-
     n_batches = int(np.ceil(n_tiles / batch_size))
-    for batch_id in range(n_batches):
-        tile_start = batch_id * batch_size
-        tile_stop = min(tile_start + batch_size, n_tiles)
+    if mask is None:
+        tile_ids_for_batches = [
+            range(batch_id * batch_size, min((batch_id + 1) * batch_size, n_tiles))
+            for batch_id in range(n_batches)
+        ]
+        pbar_init(n_tiles, "Compute Image Embeddings 2D tiled")
+    else:
+        tiles_in_mask = _get_tiles_in_mask(mask, tiling, halo)
+        pbar_init(len(tiles_in_mask), "Compute Image Embeddings 2D tiled with mask")
+        tile_ids_for_batches = np.array_split(tiles_in_mask, n_batches)
+        assert len(tile_ids_for_batches) == n_batches
 
+    for tile_ids in tile_ids_for_batches:
         batched_images = []
-        for tile_id in range(tile_start, tile_stop):
+        for tile_id in tile_ids:
             tile = tiling.getBlockWithHalo(tile_id, list(halo))
             outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end))
             tile_input = _to_image(input_[outer_tile])
             batched_images.append(tile_input)
 
         batched_embeddings, original_sizes, input_sizes = _compute_embeddings_batched(predictor, batched_images)
-        for i, tile_id in enumerate(range(tile_start, tile_stop)):
-            tile_embeddings, original_size, input_size = batched_embeddings[i], original_sizes[i], input_sizes[i]
-            # Unsqueeze the channel axis of the tile embeddings.
-            tile_embeddings = tile_embeddings.unsqueeze(0)
-            ds = _create_dataset_with_data(features, str(tile_id), data=tile_embeddings.cpu().numpy())
-            ds.attrs["original_size"] = original_size
-            ds.attrs["input_size"] = input_size
-            pbar_update(1)
+        _write_batch(features, tile_ids, batched_embeddings, original_sizes, input_sizes)
+        pbar_update(len(tile_ids))
 
     _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size=None, original_size=None)
+    if mask is not None:
+        features.attrs["tiles_in_mask"] = tiles_in_mask
+
     return features
 
 
-def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update, batch_size):
+class _BatchProvider:
+    def __init__(self, n_slices, n_tiles_per_plane, tiles_in_mask_per_slice, batch_size):
+        if tiles_in_mask_per_slice is None:
+            self.n_tiles_total = n_slices * n_tiles_per_plane
+        else:
+            self.n_tiles_total = sum(len(val) for val in tiles_in_mask_per_slice.values())
+
+        self.n_batches = int(np.ceil(self.n_tiles_total / batch_size))
+        self.n_slices = n_slices
+        self.n_tiles_per_plane = n_tiles_per_plane
+        self.tiles_in_mask_per_slice = tiles_in_mask_per_slice
+        self.batch_size = batch_size
+
+        # Iter variables.
+        self.batch_id = 0
+        self.z = 0
+        self.tile_id = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.batch_id >= self.n_batches:
+            raise StopIteration
+
+        z_list = list(range(self.n_tiles_per_plane))
+        z_tiles = z_list if self.tiles_in_mask_per_slice is None else self.tiles_in_mask_per_slice[self.z]
+
+        slices, tile_ids = [], []
+        this_batch_size = 0
+        while this_batch_size < self.batch_size:
+            if self.tile_id == len(z_tiles):
+                self.z += 1
+                self.tile_id = 0
+                if self.z >= self.n_slices:
+                    break
+                z_tiles = z_list if self.tiles_in_mask_per_slice is None else self.tiles_in_mask_per_slice[self.z]
+                continue
+
+            slices.append(self.z), tile_ids.append(z_tiles[self.tile_id])
+            self.tile_id += 1
+            this_batch_size += 1
+
+        self.batch_id += 1
+        return slices, tile_ids
+
+
+def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update, batch_size, mask):
     assert input_.ndim == 3
 
     shape = input_.shape[1:]
     tiling = blocking([0, 0], shape, tile_shape)
-    n_tiles = tiling.numberOfBlocks
-
     features = f.require_group("features")
     features.attrs["shape"] = shape
     features.attrs["tile_shape"] = tile_shape
     features.attrs["halo"] = halo
 
+    n_tiles_per_plane = tiling.numberOfBlocks
     n_slices = input_.shape[0]
-    pbar_init(n_tiles * n_slices, "Compute Image Embeddings 3D tiled")
 
-    # We batch across the z axis.
-    n_batches = int(np.ceil(n_slices / batch_size))
+    msg = "Compute Image Embeddings 3D tiled"
+    if mask is None:
+        n_tiles_total = n_slices * n_tiles_per_plane
+        tiles_in_mask_per_slice = None
+    else:
+        tiles_in_mask_per_slice = {}
+        for z in range(n_slices):
+            tiles_in_mask_per_slice[z] = _get_tiles_in_mask(mask, tiling, halo, z=z)
+        n_tiles_total = sum(len(val) for val in tiles_in_mask_per_slice.values())
+        msg += " masked"
+    pbar_init(n_tiles_total, msg)
 
-    for tile_id in range(n_tiles):
-        tile = tiling.getBlockWithHalo(tile_id, list(halo))
-        outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end))
+    batch_provider = _BatchProvider(n_slices, n_tiles_per_plane, tiles_in_mask_per_slice, batch_size)
+    for slices, tile_ids in batch_provider:
+        batched_images = []
+        for z, tile_id in zip(slices, tile_ids):
+            tile = tiling.getBlockWithHalo(tile_id, list(halo))
+            outer_tile = (z,) + tuple(
+                slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end)
+            )
+            tile_input = _to_image(input_[outer_tile])
+            batched_images.append(tile_input)
 
-        ds = None
-        for batch_id in range(n_batches):
-            z_start = batch_id * batch_size
-            z_stop = min(z_start + batch_size, n_slices)
+        batched_embeddings, original_sizes, input_sizes = _compute_embeddings_batched(predictor, batched_images)
+        _write_batch(
+            features, tile_ids, batched_embeddings, original_sizes, input_sizes, slices=slices, n_slices=n_slices
+        )
+        pbar_update(len(tile_ids))
 
-            batched_images = []
-            for z in range(z_start, z_stop):
-                tile_input = _to_image(input_[z][outer_tile])
-                batched_images.append(tile_input)
-
-            batched_embeddings, original_sizes, input_sizes = _compute_embeddings_batched(predictor, batched_images)
-            for i, z in enumerate(range(z_start, z_stop)):
-                tile_embeddings = batched_embeddings[i].unsqueeze(0)
-                if ds is None:
-                    shape = (n_slices,) + tile_embeddings.shape
-                    chunks = (1,) + tile_embeddings.shape
-                    ds = _create_dataset_without_data(
-                        features, str(tile_id), shape=shape, dtype="float32", chunks=chunks
-                    )
-
-                ds[z] = tile_embeddings.cpu().numpy()
-                pbar_update(1)
-
-        ds.attrs["original_size"] = original_sizes[-1]
-        ds.attrs["input_size"] = input_sizes[-1]
+    if mask is not None:
+        features.attrs["tiles_in_mask"] = {str(z): per_slice for z, per_slice in tiles_in_mask_per_slice.items()}
 
     _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size=None, original_size=None)
-
     return features
 
 
@@ -808,7 +920,7 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
     return image_embeddings
 
 
-def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update, batch_size):
+def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update, batch_size, mask):
     # Check if the features are already computed.
     if "input_size" in f.attrs:
         features = f["features"]
@@ -818,7 +930,9 @@ def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_up
 
     # Otherwise compute them. Note: saving happens automatically because we
     # always write the features to zarr. If no save path is given we use an in-memory zarr.
-    features = _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update, batch_size)
+    features = _compute_tiled_features_2d(
+        predictor, input_, tile_shape, halo, f, pbar_init, pbar_update, batch_size, mask=mask
+    )
     image_embeddings = {"features": features, "input_size": None, "original_size": None}
     return image_embeddings
 
@@ -894,7 +1008,7 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_u
     return image_embeddings
 
 
-def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update, batch_size):
+def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update, batch_size, mask):
     # Check if the features are already computed.
     if "input_size" in f.attrs:
         features = f["features"]
@@ -904,7 +1018,9 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_up
 
     # Otherwise compute them. Note: saving happens automatically because we
     # always write the features to zarr. If no save path is given we use an in-memory zarr.
-    features = _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update, batch_size)
+    features = _compute_tiled_features_3d(
+        predictor, input_, tile_shape, halo, f, pbar_init, pbar_update, batch_size, mask
+    )
     image_embeddings = {"features": features, "input_size": None, "original_size": None}
     return image_embeddings
 
@@ -1014,6 +1130,7 @@ def precompute_image_embeddings(
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
     batch_size: int = 1,
+    mask: Optional[np.typing.ArrayLike] = None,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
 ) -> ImageEmbeddings:
@@ -1035,6 +1152,9 @@ def precompute_image_embeddings(
         halo: Overlap of the tiles for tiled prediction. By default prediction is run without tiling.
         verbose: Whether to be verbose in the computation. By default, set to 'True'.
         batch_size: The batch size for precomputing image embeddings over tiles (or planes). By default, set to '1'.
+        mask: An optional mask to define areas that are ignored in the computation.
+            The mask will be used within tiled embedding computation and tiles that don't contain any foreground
+            in the mask will be excluded from the computation. It does not have any effect for non-tiled embeddings.
         pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
             Can be used together with pbar_update to handle napari progress bar in other thread.
             To enables using this function within a threadworker.
@@ -1066,11 +1186,15 @@ def precompute_image_embeddings(
     if ndim == 2 and tile_shape is None:
         embeddings = _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update)
     elif ndim == 2 and tile_shape is not None:
-        embeddings = _compute_tiled_2d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update, batch_size)
+        embeddings = _compute_tiled_2d(
+            input_, predictor, tile_shape, halo, f, pbar_init, pbar_update, batch_size, mask=mask
+        )
     elif ndim == 3 and tile_shape is None:
         embeddings = _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_update, batch_size)
     elif ndim == 3 and tile_shape is not None:
-        embeddings = _compute_tiled_3d(input_, predictor, tile_shape, halo, f, pbar_init, pbar_update, batch_size)
+        embeddings = _compute_tiled_3d(
+            input_, predictor, tile_shape, halo, f, pbar_init, pbar_update, batch_size, mask=mask
+        )
     else:
         raise ValueError(f"Invalid dimesionality {input_.ndim}, expect 2 or 3 dim data.")
 
@@ -1264,7 +1388,7 @@ def get_block_shape(shape: Tuple[int]) -> Tuple[int]:
     return block_shape
 
 
-def micro_sam_info():
+def micro_sam_info() -> None:
     """Display μSAM information using a rich console."""
     import psutil
     import platform
@@ -1423,3 +1547,271 @@ def micro_sam_info():
                 prog.advance(task)
 
         console.print(Panel("[bold green] Downloads complete![/]", title="Finished"))
+
+
+#
+# Functionality to convert mask predictions to an instance segmentation via non-maximum suppression.
+# The functionality for computing NMS for masks is taken from CellSeg1:
+# https://github.com/Nuisal/cellseg1/blob/1c027c2568b83494d2662d1fbecec9aafb478ee0/mask_nms.py
+#
+
+
+def _overlap_matrix(boxes):
+    x1 = torch.max(boxes[:, None, 0], boxes[:, 0])
+    y1 = torch.max(boxes[:, None, 1], boxes[:, 1])
+    x2 = torch.min(boxes[:, None, 2], boxes[:, 2])
+    y2 = torch.min(boxes[:, None, 3], boxes[:, 3])
+
+    w = torch.clamp(x2 - x1, min=0)
+    h = torch.clamp(y2 - y1, min=0)
+
+    return (w * h) > 0
+
+
+def _calculate_ious_between_pred_masks(masks, boxes, diagonal_value=1):
+    n_points = masks.shape[0]
+    m = torch.zeros((n_points, n_points))
+
+    overlap_m = _overlap_matrix(boxes)
+
+    for i in range(n_points):
+        js = torch.where(overlap_m[i])[0]
+        js_half = js[js > i].to(masks.device)
+
+        if len(js_half) > 0:
+            intersection = torch.logical_and(masks[i], masks[js_half]).sum(dim=(1, 2))
+            union = torch.logical_or(masks[i], masks[js_half]).sum(dim=(1, 2))
+            iou = intersection / union
+            m[i, js_half] = iou
+
+    m = m + m.T
+    m.fill_diagonal_(diagonal_value)
+    return m
+
+
+def _calculate_iomin_between_pred_masks(masks, boxes, eps=1e-6):
+    overlap_m = _overlap_matrix(boxes)
+
+    # Flatten spatial dimensions: (N, H*W) or (N, D*H*W)
+    N = masks.shape[0]
+    masks_flat = masks.reshape(N, -1).float()
+
+    # Per-mask area
+    areas = masks_flat.sum(dim=1)  # (N,)
+
+    # Pairwise intersections via matrix multiplication
+    # inter[i, j] = sum_k masks_flat[i, k] * masks_flat[j, k]
+    inter = masks_flat @ masks_flat.t()  # (N, N)
+
+    # Denominator: min area of the two masks
+    min_areas = torch.minimum(areas[:, None], areas[None, :])  # (N, N)
+
+    # IoMin = intersection / min(area_i, area_j)
+    iomin = inter / (min_areas + eps)
+
+    # Set elements without any overlap explicitly to zero.
+    iomin[~overlap_m] = 0
+    return iomin
+
+
+def _batched_mask_nms(masks, boxes, scores, nms_thresh, intersection_over_min):
+    boxes = (
+        boxes.detach() if isinstance(boxes, torch.Tensor) else torch.tensor(boxes)
+    ).cpu()
+    scores = (
+        scores.detach() if isinstance(scores, torch.Tensor) else torch.tensor(scores)
+    ).cpu()
+    masks = (
+        masks.detach() if isinstance(masks, torch.Tensor) else torch.tensor(masks)
+    ).cpu()
+
+    if intersection_over_min:
+        iou_matrix = _calculate_iomin_between_pred_masks(masks, boxes)
+    else:
+        iou_matrix = _calculate_ious_between_pred_masks(masks, boxes)
+    sorted_indices = torch.argsort(scores, descending=True)
+
+    keep = []
+    while len(sorted_indices) > 0:
+        i = sorted_indices[0]
+        keep.append(i)
+
+        if len(sorted_indices) == 1:
+            break
+
+        iou_values = iou_matrix[i, sorted_indices[1:]]
+        mask = iou_values <= nms_thresh
+        sorted_indices = sorted_indices[1:][mask]
+
+    return torch.tensor(keep)
+
+
+def mask_data_to_segmentation(
+    masks: List[Dict[str, Any]],
+    shape: Optional[Tuple[int, int]] = None,
+    min_object_size: int = 0,
+    max_object_size: Optional[int] = None,
+    label_masks: bool = True,
+    with_background: bool = False,
+    merge_exclusively: bool = True,
+) -> np.ndarray:
+    """Convert the output of the automatic mask generation to an instance segmentation.
+
+    Args:
+        masks: The outputs generated by `AutomaticMaskGenerator`, other classes from `micro_sam.instance_segmentation`,
+            or from `micro_sam.inference` functions. Only supported for output_mode=binary_mask.
+        shape: The shape of the output segmentation. If None, it will be derived from the mask input.
+            If the mask where predicted with tiling then the shape must be given.
+        min_object_size: The minimal size of an object in pixels. By default, set to '0'.
+        max_object_size: The maximal size of an object in pixels.
+        label_masks: Whether to apply connected components to the result before removing small objects.
+            By default, set to 'True'.
+        with_background: Whether to remove the largest object, which often covers the background for AMG.
+        merge_exclusively: Whether to exclude previous merged masks from merging.
+
+    Returns:
+        The instance segmentation.
+    """
+    masks = sorted(masks, key=(lambda x: x["area"]), reverse=True)
+    if shape is None:
+        shape = next(iter(masks))["segmentation"].shape
+    segmentation = np.zeros(shape, dtype="uint32")
+
+    def require_numpy(mask):
+        return mask.cpu().numpy() if torch.is_tensor(mask) else mask
+
+    seg_id = 1
+    for mask_data in masks:
+        area = mask_data["area"]
+        if (area < min_object_size) or (max_object_size is not None and area > max_object_size):
+            continue
+
+        this_mask = require_numpy(mask_data["segmentation"])
+        this_seg_id = mask_data.get("seg_id", seg_id)
+        if "global_bbox" in mask_data:
+            bb = mask_data["bbox"]
+            bb = np.s_[bb[1]:bb[1] + bb[3], bb[0]:bb[0] + bb[2]]
+            global_bb = mask_data["global_bbox"]
+            global_bb = np.s_[global_bb[1]:global_bb[1] + global_bb[3], global_bb[0]:global_bb[0] + global_bb[2]]
+            if merge_exclusively:
+                this_mask = np.logical_and(this_mask[bb], segmentation[global_bb] == 0)
+            else:
+                this_mask = this_mask[bb]
+            segmentation[global_bb][this_mask] = this_seg_id
+        else:
+            if merge_exclusively:
+                this_mask = np.logical_and(this_mask, segmentation == 0)
+            segmentation[this_mask] = this_seg_id
+        seg_id = this_seg_id + 1
+
+    block_shape = (512, 512)
+    if label_masks:
+        segmentation_cc = np.zeros_like(segmentation, dtype=segmentation.dtype)
+        segmentation_cc = parallel_impl.label(segmentation, out=segmentation_cc, block_shape=block_shape)
+        segmentation = segmentation_cc
+
+    seg_ids, sizes = parallel_impl.unique(segmentation, return_counts=True, block_shape=block_shape)
+    filter_ids = seg_ids[sizes < min_object_size]
+    if with_background:
+        bg_id = seg_ids[np.argmax(sizes)]
+        filter_ids = np.concatenate([filter_ids, [bg_id]])
+
+    filter_mask = np.zeros(segmentation.shape, dtype="bool")
+    filter_mask = parallel_impl.isin(segmentation, filter_ids, out=filter_mask, block_shape=block_shape)
+    segmentation[filter_mask] = 0
+    parallel_impl.relabel_consecutive(segmentation, block_shape=block_shape)[0]
+
+    return segmentation
+
+
+def apply_nms(
+    predictions: List[Dict[str, Any]],
+    min_size: int,
+    shape: Optional[Tuple[int, int]] = None,
+    perform_box_nms: bool = False,
+    nms_thresh: float = 0.9,
+    max_size: Optional[int] = None,
+    intersection_over_min: bool = False,
+) -> np.ndarray:
+    """Apply non-maximum suppression to mask predictions from a segment anything model.
+
+    Args:
+        predictions: The mask predictions from SAM.
+        min_size: The minimum mask size to keep in the output.
+        shape: The shape of the output segmentation.
+            Has to be passed for predictions obtained from tiling.
+        perform_box_nms: Whether to perform NMS on the box coordinates or on the masks.
+        nms_thresh: The threshold for filtering out objects in NMS.
+        max_size: The maximum mask size to keep in the output.
+        intersection_over_min: Whether to perform intersection over the minimum overlap shape
+            or to perform intersection over union.
+
+    Returns:
+        The segmentation obtained from merging the masks left after NMS.
+    """
+    data = amg_utils.MaskData(
+        masks=torch.cat([pred["segmentation"][None] for pred in predictions], dim=0),
+        iou_preds=torch.tensor([pred["predicted_iou"] for pred in predictions]),
+    )
+    data["boxes"] = torch.tensor(np.array([pred["bbox"] for pred in predictions]))
+    data["area"] = [mask.sum() for mask in data["masks"]]
+    data["stability_scores"] = torch.tensor([pred["stability_score"] for pred in predictions])
+
+    # Check if the input comes with a 'global_bbox' attribute. If it does, then the predictions are from
+    # a tiled prediction. In this case, we have to take the coordinates w.r.t. the tiling into account.
+    if "global_bbox" in predictions[0]:
+        if shape is None:
+            raise ValueError("The output shape 'shape' has to be passed for tiled predictions.")
+        data["global_boxes"] = torch.tensor(np.array([pred["global_bbox"] for pred in predictions]))
+        is_tiled = True
+    else:
+        is_tiled = False
+
+    if min_size > 0:
+        keep_by_size = torch.tensor(
+            [i for i, area in enumerate(data["area"]) if area > min_size], dtype=torch.long,
+        )
+        data.filter(keep_by_size)
+
+    if max_size is not None:
+        keep_by_size = torch.tensor([i for i, area in enumerate(data["area"]) if area < max_size])
+        data.filter(keep_by_size)
+
+    scores = data["iou_preds"] * data["stability_scores"]
+    if perform_box_nms:
+        assert not intersection_over_min  # not implemented
+        keep_by_nms = batched_nms(
+            data["global_boxes"].float() if is_tiled else data["boxes"].float(),
+            scores,
+            torch.zeros_like(data["boxes"][:, 0]),  # categories
+            iou_threshold=nms_thresh,
+        )
+    else:
+        keep_by_nms = _batched_mask_nms(
+            masks=data["masks"],
+            boxes=data["global_boxes"].float() if is_tiled else data["boxes"].float(),
+            scores=scores,
+            nms_thresh=nms_thresh,
+            intersection_over_min=intersection_over_min,
+        )
+    data.filter(keep_by_nms)
+
+    if is_tiled:
+        mask_data = [
+            {"segmentation": mask, "area": area, "bbox": box, "global_bbox": global_box}
+            for mask, area, box, global_box in zip(data["masks"], data["area"], data["boxes"], data["global_boxes"])
+        ]
+    else:
+        mask_data = [
+            {"segmentation": mask, "area": area, "bbox": box}
+            for mask, area, box in zip(data["masks"], data["area"], data["boxes"])
+        ]
+
+    if shape is None:
+        shape = predictions[0]["segmentation"].shape
+    if mask_data:
+        segmentation = mask_data_to_segmentation(mask_data, shape=shape, min_object_size=min_size)
+    else:  # In case all objects have been filtered out due to size filtering.
+        segmentation = np.zeros(shape, dtype="uint32")
+
+    return segmentation

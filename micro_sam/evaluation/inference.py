@@ -18,9 +18,10 @@ from segment_anything import SamPredictor
 from .. import util as util
 from ..inference import batched_inference
 from ..instance_segmentation import (
-    mask_data_to_segmentation, get_predictor_and_decoder,
+    get_predictor_and_decoder,
     AutomaticMaskGenerator, InstanceSegmentationWithDecoder,
     TiledAutomaticMaskGenerator, TiledInstanceSegmentationWithDecoder,
+    AutomaticPromptGenerator,
 )
 from . import instance_segmentation
 from ..prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
@@ -346,7 +347,7 @@ def _save_segmentation(masks, prediction_path):
     # masks to segmentation
     masks = masks.cpu().numpy().squeeze(1).astype("bool")
     masks = [{"segmentation": mask, "area": mask.sum()} for mask in masks]
-    segmentation = mask_data_to_segmentation(masks, with_background=True)
+    segmentation = util.mask_data_to_segmentation(masks)
     imageio.imwrite(prediction_path, segmentation, compression=5)
 
 
@@ -603,6 +604,69 @@ def run_amg(
 
     instance_segmentation.run_instance_segmentation_grid_search_and_inference(
         segmenter=amg,
+        grid_search_values=grid_search_values,
+        val_image_paths=val_image_paths,
+        val_gt_paths=val_gt_paths,
+        test_image_paths=test_image_paths,
+        embedding_dir=embedding_folder,
+        prediction_dir=prediction_folder,
+        result_dir=gs_result_folder,
+        experiment_folder=experiment_folder,
+        tiling_window_params=tiling_window_params,
+    )
+    return prediction_folder
+
+
+def run_apg(
+    checkpoint: Optional[Union[str, os.PathLike]],
+    model_type: str,
+    experiment_folder: Union[str, os.PathLike],
+    val_image_paths: List[Union[str, os.PathLike]],
+    val_gt_paths: List[Union[str, os.PathLike]],
+    test_image_paths: List[Union[str, os.PathLike]],
+    peft_kwargs: Optional[Dict] = None,
+    cache_embeddings: bool = False,
+    tiling_window_params: Optional[Dict[str, Tuple[int, int]]] = None,
+) -> str:
+    """Run Segment Anything inference for multiple images using automatic prompt generation (APG).
+
+    Args:
+        ...
+
+    Returns:
+        Filepath where the predictions have been saved.
+    """
+    if cache_embeddings:
+        embedding_folder = os.path.join(experiment_folder, "embeddings")  # where the precomputed embeddings are saved
+        os.makedirs(embedding_folder, exist_ok=True)
+    else:
+        embedding_folder = None
+
+    predictor, decoder = get_predictor_and_decoder(
+        model_type=model_type, checkpoint_path=checkpoint, peft_kwargs=peft_kwargs,
+    )
+
+    # Get the APG class.
+    if tiling_window_params:
+        raise NotImplementedError
+    else:
+        apg_class = AutomaticPromptGenerator
+
+    segmenter = apg_class(predictor, decoder)
+    seg_prefix = "apg"
+
+    # where the predictions are saved
+    prediction_folder = os.path.join(experiment_folder, seg_prefix, "inference")
+    os.makedirs(prediction_folder, exist_ok=True)
+
+    # where the grid-search results are saved
+    gs_result_folder = os.path.join(experiment_folder, seg_prefix, "grid_search")
+    os.makedirs(gs_result_folder, exist_ok=True)
+
+    grid_search_values = instance_segmentation.default_grid_search_values_apg()
+
+    instance_segmentation.run_instance_segmentation_grid_search_and_inference(
+        segmenter=segmenter,
         grid_search_values=grid_search_values,
         val_image_paths=val_image_paths,
         val_gt_paths=val_gt_paths,

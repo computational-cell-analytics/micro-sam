@@ -13,10 +13,10 @@ import pandas as pd
 import imageio.v3 as imageio
 
 from elf.io import open_file
-from elf.evaluation import mean_segmentation_accuracy
+from elf.evaluation import mean_segmentation_accuracy, matching
 
 from .. import util
-from ..instance_segmentation import AMGBase, InstanceSegmentationWithDecoder, mask_data_to_segmentation
+from ..instance_segmentation import AMGBase, InstanceSegmentationWithDecoder
 
 
 def _get_range_of_search_values(input_vals, step):
@@ -100,6 +100,74 @@ def default_grid_search_values_instance_segmentation_with_decoder(
     }
 
 
+def default_grid_search_values_apg(
+    min_distance_values: Optional[List[float]] = None,
+    threshold_abs_values: Optional[List[float]] = None,
+    multimasking_values: Optional[List[float]] = None,
+    prompt_selection_values: Optional[List[float]] = None,
+    min_size_values: Optional[List[float]] = None,
+    nms_threshold_values: Optional[List[float]] = None,
+    intersection_over_min_values: Optional[List[bool]] = None,
+    mask_threshold_values: Optional[List[Union[float, str]]] = None,
+    center_distance_threshold_values: Optional[List[float]] = None,
+    boundary_distance_threshold_values: Optional[List[float]] = None,
+) -> Dict[str, List[float]]:
+    """Default grid-search parameter for APG-based instance segmentation.
+
+    Args:
+        ...
+
+    Returns:
+        The values for grid search.
+    """
+    # NOTE: The two combinations below are for distances. Since we use connected components, we don't run them!
+    # if min_distance_values is None:
+    #     min_distance_values = _get_range_of_search_values([1, 5], step=1)
+    # if threshold_abs_values is None:
+    #     threshold_abs_values = _get_range_of_search_values([0.1, 0.5], step=0.1)
+
+    # if multimasking_values is None:
+    #     multimasking_values = [True, False]
+    # if prompt_selection_values is None:
+    #     prompt_selection_values = [
+    #         "center_distances",
+    #         "boundary_distances",
+    #         "connected_components",
+    #         ["center_distances", "connected_components"],
+    #         ["center_distances", "boundary_distances"],
+    #         ["boundary_distances", "connected_components"],
+    #         ["center_distances", "boundary_distances", "connected_components"]
+    #     ]
+
+    # NOTE: The two parameters below are for connected components.
+    if center_distance_threshold_values is None:
+        center_distance_threshold_values = _get_range_of_search_values([0.3, 0.7], step=0.1)
+    if boundary_distance_threshold_values is None:
+        boundary_distance_threshold_values = _get_range_of_search_values([0.3, 0.7], step=0.1)
+
+    if min_size_values is None:
+        min_size_values = [50, 100, 200]
+    if nms_threshold_values is None:
+        nms_threshold_values = _get_range_of_search_values([0.5, 0.9], step=0.1)
+    if intersection_over_min_values is None:
+        intersection_over_min_values = [True, False]
+    # if mask_threshold_values is None:
+    #     mask_threshold_values = [None, "auto"]  # 'None' derives the default from the model.
+
+    return {
+        # "min_distance": min_distance_values,
+        # "threshold_abs": threshold_abs_values,
+        # "multimasking": multimasking_values,
+        # "prompt_selection": prompt_selection_values,
+        "center_distance_threshold": center_distance_threshold_values,
+        "boundary_distance_threshold": boundary_distance_threshold_values,
+        "min_size": min_size_values,
+        "nms_threshold": nms_threshold_values,
+        "intersection_over_min": intersection_over_min_values,
+        # "mask_threshold": mask_threshold_values,
+    }
+
+
 def _grid_search_iteration(
     segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
     gs_combinations: List[Dict],
@@ -112,16 +180,19 @@ def _grid_search_iteration(
     net_list = []
     for gs_kwargs in tqdm(gs_combinations, disable=not verbose):
         generate_kwargs = gs_kwargs | fixed_generate_kwargs
-        masks = segmenter.generate(**generate_kwargs)
+        instance_labels = segmenter.generate(**generate_kwargs)
+        m_sas, sas = mean_segmentation_accuracy(instance_labels, gt, return_accuracies=True)
+        stats = matching(instance_labels, gt)
 
-        min_object_size = generate_kwargs.get("min_mask_region_area", 0)
-        if len(masks) == 0:
-            instance_labels = np.zeros(gt.shape, dtype="uint32")
-        else:
-            instance_labels = mask_data_to_segmentation(masks, with_background=True, min_object_size=min_object_size)
-        m_sas, sas = mean_segmentation_accuracy(instance_labels, gt, return_accuracies=True)  # type: ignore
-
-        result_dict = {"image_name": image_name, "mSA": m_sas, "SA50": sas[0], "SA75": sas[5]}
+        result_dict = {
+            "image_name": image_name,
+            "mSA": m_sas,
+            "SA50": sas[0],
+            "SA75": sas[5],
+            "Precision": stats["precision"],
+            "Recall": stats["recall"],
+            "F1": stats["f1"],
+        }
         result_dict.update(gs_kwargs)
         tmp_df = pd.DataFrame([result_dict])
         net_list.append(tmp_df)
@@ -274,7 +345,6 @@ def run_instance_segmentation_inference(
 
     generate_kwargs = {} if generate_kwargs is None else generate_kwargs
     predictor = segmenter._predictor
-    min_object_size = generate_kwargs.get("min_mask_region_area", 0)
 
     for image_path in tqdm(image_paths, desc="Run inference for automatic mask generation"):
         image_name = os.path.basename(image_path)
@@ -301,20 +371,7 @@ def run_instance_segmentation_inference(
         )
 
         segmenter.initialize(image, image_embeddings, **tiling_window_params)
-
-        masks = segmenter.generate(**generate_kwargs)
-
-        if len(masks) == 0:  # the instance segmentation can have no masks, hence we just save empty labels
-            if isinstance(segmenter, InstanceSegmentationWithDecoder):
-                this_shape = segmenter._foreground.shape
-            elif isinstance(segmenter, AMGBase):
-                this_shape = segmenter._original_size
-            else:
-                this_shape = image.shape[-2:]
-
-            instances = np.zeros(this_shape, dtype="uint32")
-        else:
-            instances = mask_data_to_segmentation(masks, with_background=True, min_object_size=min_object_size)
+        instances = segmenter.generate(**generate_kwargs)
 
         # It's important to compress here, otherwise the predictions would take up a lot of space.
         imageio.imwrite(prediction_path, instances, compression=5)
@@ -427,6 +484,10 @@ def run_instance_segmentation_grid_search_and_inference(
     generate_kwargs = {} if fixed_generate_kwargs is None else fixed_generate_kwargs
     generate_kwargs.update(best_kwargs)
 
+    # NOTE: Make sure the 'prompt_selection' values for APG are as expected
+    if "prompt_selection" in generate_kwargs:
+        generate_kwargs["prompt_selection"] = _maybe_list_value(generate_kwargs["prompt_selection"])
+
     run_instance_segmentation_inference(
         segmenter=segmenter,
         image_paths=test_image_paths,
@@ -435,3 +496,19 @@ def run_instance_segmentation_grid_search_and_inference(
         generate_kwargs=generate_kwargs,
         tiling_window_params=tiling_window_params,
     )
+
+
+def _maybe_list_value(val):
+    # In case it's not a string, well we ignore it.
+    if not isinstance(val, str):
+        return val
+
+    s = val.strip()
+    # Let's try to parse through values that appear to be an obvious list.
+    if s.startswith("[") and s.endswith("]"):
+        import ast
+        parsed = ast.literal_eval(s)
+        if isinstance(parsed, list):
+            return parsed
+
+    return val
