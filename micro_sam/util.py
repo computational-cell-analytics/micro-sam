@@ -605,25 +605,40 @@ def get_model_names() -> Iterable:
 #
 
 
-def _to_image(input_):
-    # we require the input to be uint8
-    if input_.dtype != np.dtype("uint8"):
-        # first normalize the input to [0, 1]
-        input_ = input_.astype("float32") - input_.min()
-        input_ = input_ / input_.max()
-        # then bring to [0, 255] and cast to uint8
-        input_ = (input_ * 255).astype("uint8")
+def _to_image(image):
+    input_ = image
+    ndim = input_.ndim
+    n_channels = 1 if ndim == 2 else input_.shape[-1]
 
-    if input_.ndim == 2:
-        image = np.concatenate([input_[..., None]] * 3, axis=-1)
-    elif input_.ndim == 3 and input_.shape[-1] == 3:
-        image = input_
+    # Map the input to three channels.
+    if ndim == 2:  # Grayscale image -> replicate channels.
+        input_ = np.concatenate([input_[..., None]] * 3, axis=-1)
+    elif ndim == 3 and n_channels == 1:  # Grayscale image -> replicate channels.
+        input_ = np.concatenate([input_] * 3, axis=-1)
+    elif ndim == 3 and n_channels == 2:  # Two channels -> add a zero channel.
+        zero_channel = np.zeros(input_.shape[:2] + (1,), dtype=input_.dtype)
+        input_ = np.concatenate([input_, zero_channel], axis=-1)
+    elif input_.ndim == 3 and n_channels == 3:  # RGB input -> do nothing.
+        pass
+    elif input_.ndim == 3 and n_channels > 3:  # More than three channels -> select first three.
+        warnings.warn(f"You provided an input with {n_channels} channels. Only the first three will be used.")
+        input_ = input_[..., :3]
     else:
-        raise ValueError(f"Invalid input image of shape {input_.shape}. Expect either 2D grayscale or 3D RGB image.")
+        raise ValueError(
+            f"Invalid input dimensionality {ndim}. Expect either a 2D input (=grayscale image) "
+            "or a 3D input (= image with channels)."
+        )
+    assert input_.ndim == 3 and input_.shape[-1] == 3
 
-    # explicitly return a numpy array for compatibility with torchvision
-    # because the input_ array could be something like dask array
-    return np.array(image)
+    # Normalize the input per channel and bring it to uint8.
+    input_ = input_.astype("float32")
+    input_ -= input_.min(axis=(0, 1))[None, None]
+    input_ /= (input_.max(axis=(0, 1))[None, None] + 1e-7)
+    input_ = (input_ * 255).astype("uint8")
+
+    # Explicitly return a numpy array for compatibility with torchvision
+    # because the input_ array could be something like dask array.
+    return np.array(input_)
 
 
 @torch.no_grad
