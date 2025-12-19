@@ -13,8 +13,11 @@ from torch_em.data.datasets.util import split_kwargs
 
 from . import util
 from .instance_segmentation import (
-    get_instance_segmentation_generator, get_decoder,
-    InstanceSegmentationWithDecoder, AMGBase, AutomaticMaskGenerator, TiledAutomaticMaskGenerator
+    get_instance_segmentation_generator, get_decoder, AMGBase,
+    AutomaticMaskGenerator, TiledAutomaticMaskGenerator,
+    AutomaticPromptGenerator, TiledAutomaticPromptGenerator,
+    InstanceSegmentationWithDecoder, TiledInstanceSegmentationWithDecoder,
+    DEFAULT_SEGMENTATION_MODE_WITH_DECODER,
 )
 from .multi_dimensional_segmentation import automatic_3d_segmentation, automatic_tracking_implementation
 
@@ -25,37 +28,42 @@ def get_predictor_and_segmenter(
     device: str = None,
     segmentation_mode: Optional[str] = None,
     is_tiled: bool = False,
+    predictor=None,
+    state=None,
     **kwargs,
 ) -> Tuple[util.SamPredictor, Union[AMGBase, InstanceSegmentationWithDecoder]]:
-    """Get the Segment Anything model and class for automatic instance segmentation.
+    f"""Get the Segment Anything model and class for automatic instance segmentation.
 
     Args:
         model_type: The Segment Anything model choice.
         checkpoint: The filepath to the stored model checkpoints.
         device: The torch device. By default, automatically chooses the best available device.
         segmentation_mode: The segmentation mode. One of 'amg', 'ais', or 'apg'.
-            By default, 'ais' is used if a decoder is passed, otherwise 'amg' is used.
+            By default, '{DEFAULT_SEGMENTATION_MODE_WITH_DECODER}' is used
+            if a decoder is passed, otherwise 'amg' is used.
         is_tiled: Whether to return segmenter for performing segmentation in tiling window style.
             By default, set to 'False'.
+        predictor: The pre-loaded predictor (optional).
+        state: The pre-loaded state (optional).
         kwargs: Keyword arguments for the automatic mask generation class.
 
     Returns:
         The Segment Anything model.
         The automatic instance segmentation class.
     """
-    # Get the device
-    device = util.get_device(device=device)
+    # Get the predictor and state for Segment Anything Model.
+    if predictor is None:
+        device = util.get_device(device=device)
+        predictor, state = util.get_sam_model(
+            model_type=model_type, device=device, checkpoint_path=checkpoint, return_state=True
+        )
+    else:
+        assert state is not None
 
-    # Get the predictor and state for Segment Anything models.
-    predictor, state = util.get_sam_model(
-        model_type=model_type, device=device, checkpoint_path=checkpoint, return_state=True
-    )
-
-    # TODO change the default to apg once everything is figured out for it.
     if segmentation_mode in (None, "auto"):
-        segmentation_mode = "ais" if "decoder_state" in state else "amg"
+        segmentation_mode = DEFAULT_SEGMENTATION_MODE_WITH_DECODER if "decoder_state" in state else "amg"
 
-    if segmentation_mode == "amg":
+    if segmentation_mode.lower() == "amg":
         decoder = None
     else:
         if "decoder_state" not in state:
@@ -331,11 +339,12 @@ def main():
         "to '--pattern' to use a wildcard pattern ('*') for selecting multiple files.\n"
         "NOTE: for automatic 3d segmentation or tracking the data has to be stored as volume / timeseries, "
         "stacking individual tif images is not supported.\n"
-        "Segmentation is performed using one of the two modes supported by micro_sam: \n"
-        "automatic instance segmentation (AIS) or automatic mask generation (AMG).\n"
+        "Segmentation is performed using one of the three modes supported by micro_sam: \n"
+        "automatic instance segmentation (AIS), automatic prompt generation (APG) or automatic mask generation (AMG).\n"
         "In addition to the options listed below, "
-        "you can also passed additional arguments for these two segmentation modes:\n"
-        "For AIS: '--center_distance_threshold', '--boundary_distance_threshold' and other arguments of `InstanceSegmentationWithDecoder.generate`."  # noqa
+        "you can also passed additional arguments for these three segmentation modes:\n"
+        "For AIS: '--center_distance_threshold', '--boundary_distance_threshold' and other arguments of `InstanceSegmentationWithDecoder.generate`.\n"  # noqa
+        "FOR APG: '--center_distance_threshold', '--boundary_distance_threshold' and other arguments of `AutomaticPromptGenerator.generate`.\n"  # noqa
         "For AMG: '--pred_iou_thresh', '--stability_score_thresh' and other arguments of `AutomaticMaskGenerator.generate`."  # noqa
     )
     parser.add_argument(
@@ -425,16 +434,37 @@ def main():
     # This is done to ensure the extra arguments are allocated to the desired location.
     # eg. for AMG, 'points_per_side' is expected by '__init__',
     # and 'stability_score_thresh' is expected in 'generate' method.
-    amg_class = AutomaticMaskGenerator if args.tile_shape is None else TiledAutomaticMaskGenerator
-    amg_kwargs, generate_kwargs = split_kwargs(amg_class, **extra_kwargs)
+    mode = args.mode
+    if mode in ("auto", None):
+        # We have to load the state to see if we have a decoder in this case.
+        device = util.get_device(device=args.device)
+        predictor, state = util.get_sam_model(
+            model_type=args.model_type, device=device, checkpoint_path=args.checkpoint, return_state=True
+        )
+        mode = DEFAULT_SEGMENTATION_MODE_WITH_DECODER if "decoder_state" in state else "amg"
+    else:
+        predictor, state = None, None
+
+    if mode.lower() == "amg":
+        segmenter_class = AutomaticMaskGenerator if args.tile_shape is None else TiledAutomaticMaskGenerator
+    elif mode.lower() == "ais":
+        segmenter_class = InstanceSegmentationWithDecoder if args.tile_shape is None else\
+            TiledInstanceSegmentationWithDecoder
+    elif mode.lower() == "apg":
+        segmenter_class = AutomaticPromptGenerator if args.tile_shape is None else TiledAutomaticPromptGenerator
+    else:
+        raise ValueError(f"Invalid segmentation_mode: {mode}. Choose one of 'amg', 'ais', or 'apg'.")
+    init_kwargs, generate_kwargs = split_kwargs(segmenter_class, **extra_kwargs)
 
     predictor, segmenter = get_predictor_and_segmenter(
         model_type=args.model_type,
         checkpoint=args.checkpoint,
         device=args.device,
-        segmentation_mode=args.mode,
+        segmentation_mode=mode,
         is_tiled=args.tile_shape is not None,
-        **amg_kwargs,
+        predictor=predictor,
+        state=state,
+        **init_kwargs,
     )
 
     # Get the filepaths to input images (and other paths to store stuff, eg. segmentations and embeddings)
