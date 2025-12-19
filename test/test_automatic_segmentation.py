@@ -1,10 +1,13 @@
 import unittest
 
 import numpy as np
+import torch
 from skimage.draw import disk
 from skimage.measure import label as connected_components
 
 import micro_sam.util as util
+
+HAVE_CUDA = torch.cuda.is_available()
 
 
 class TestAutomaticSegmentation(unittest.TestCase):
@@ -116,7 +119,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         )
         self.assertEqual(mask.shape, instances.shape)
 
-    @unittest.skip("Skipping long running tests by default.")
+    @unittest.skipUnless(HAVE_CUDA, "Skipping long running tests unless we have a GPU.")
     def test_automatic_mask_generator_3d(self):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
@@ -129,7 +132,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         )
         self.assertEqual(labels.shape, instances.shape)
 
-    @unittest.skip("Skipping long running tests by default.")
+    @unittest.skipUnless(HAVE_CUDA, "Skipping long running tests unless we have a GPU.")
     def test_tiled_automatic_mask_generator_3d(self):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 

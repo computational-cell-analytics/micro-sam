@@ -521,12 +521,12 @@ class AutomaticMaskGenerator(AMGBase):
 
 
 # Helper function for tiled embedding computation and checking consistent state.
-def _process_tiled_embeddings(predictor, image, image_embeddings, tile_shape, halo, verbose, batch_size):
+def _process_tiled_embeddings(predictor, image, image_embeddings, tile_shape, halo, verbose, batch_size, mask, i):
     if image_embeddings is None:
         if tile_shape is None or halo is None:
             raise ValueError("To compute tiled embeddings the parameters tile_shape and halo have to be passed.")
         image_embeddings = util.precompute_image_embeddings(
-            predictor, image, tile_shape=tile_shape, halo=halo, verbose=verbose, batch_size=batch_size
+            predictor, image, tile_shape=tile_shape, halo=halo, verbose=verbose, batch_size=batch_size, mask=mask,
         )
 
     # Use tile shape and halo from the precomputed embeddings if not given.
@@ -544,7 +544,11 @@ def _process_tiled_embeddings(predictor, image, image_embeddings, tile_shape, ha
     elif halo != halo_:
         raise ValueError(f"Inconsistent halo parameter {halo} with precomputed embeedings: {halo_}.")
 
-    return image_embeddings, tile_shape, halo
+    tiles_in_mask = feats.attrs.get("tiles_in_mask", None)
+    if tiles_in_mask is not None and i is not None:
+        tiles_in_mask = tiles_in_mask[str(i)]
+
+    return image_embeddings, tile_shape, halo, tiles_in_mask
 
 
 class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
@@ -595,6 +599,7 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         pbar_init: Optional[callable] = None,
         pbar_update: Optional[callable] = None,
         batch_size: int = 1,
+        mask: Optional[np.typing.ArrayLike] = None,
     ) -> None:
         """Initialize image embeddings and masks for an image.
 
@@ -612,19 +617,26 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
                 To enables using this function within a threadworker.
             pbar_update: Callback to update an external progress bar.
             batch_size: The batch size for image embedding prediction. By default, set to '1'.
+            mask: An optional mask to define areas that are ignored in the segmentation.
         """
         original_size = image.shape[:2]
         self._original_size = original_size
 
-        image_embeddings, tile_shape, halo = _process_tiled_embeddings(
-            self._predictor, image, image_embeddings, tile_shape, halo, verbose=verbose, batch_size=batch_size
+        self._image_embeddings, tile_shape, halo, tiles_in_mask = _process_tiled_embeddings(
+            self._predictor, image, image_embeddings, tile_shape, halo,
+            verbose=verbose, batch_size=batch_size, mask=mask, i=i,
         )
 
         tiling = blocking([0, 0], original_size, tile_shape)
-        n_tiles = tiling.numberOfBlocks
+        if tiles_in_mask is None:
+            n_tiles = tiling.numberOfBlocks
+            tile_ids = range(n_tiles)
+        else:
+            n_tiles = len(tiles_in_mask)
+            tile_ids = tiles_in_mask
 
         # The crop box is always the full local tile.
-        tiles = [tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock for tile_id in range(n_tiles)]
+        tiles = [tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock for tile_id in tile_ids]
         crop_boxes = [[tile.begin[1], tile.begin[0], tile.end[1], tile.end[0]] for tile in tiles]
 
         _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
@@ -634,7 +646,7 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         image = util._to_image(image)
 
         mask_data = []
-        for tile_id in range(n_tiles):
+        for idx, tile_id in enumerate(tile_ids):
             # set the pre-computed embeddings for this tile
             features = image_embeddings["features"][str(tile_id)]
             tile_embeddings = {
@@ -644,9 +656,9 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
             }
             util.set_precomputed(self._predictor, tile_embeddings, i)
 
-            # compute the mask data for this tile and append it
+            # Compute the mask data for this tile and append it
             this_mask_data = self._process_crop(
-                image, crop_box=crop_boxes[tile_id], crop_layer_idx=0, precomputed_embeddings=True
+                image, crop_box=crop_boxes[idx], crop_layer_idx=0, precomputed_embeddings=True
             )
             mask_data.append(this_mask_data)
             pbar_update(1)
@@ -970,6 +982,7 @@ class InstanceSegmentationWithDecoder:
         self._foreground = output[0]
         self._center_distances = output[1]
         self._boundary_distances = output[2]
+        self._i = i
         self._is_initialized = True
 
     def _to_masks(self, segmentation, output_mode):
@@ -1159,6 +1172,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         pbar_init: Optional[callable] = None,
         pbar_update: Optional[callable] = None,
         batch_size: int = 1,
+        mask: Optional[np.typing.ArrayLike] = None,
     ) -> None:
         """Initialize image embeddings and decoder predictions for an image.
 
@@ -1176,29 +1190,37 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
                 To enables using this function within a threadworker.
             pbar_update: Callback to update an external progress bar.
             batch_size: The batch size for image embedding computation and segmentation decoder prediction.
+            mask: An optional mask to define areas that are ignored in the segmentation.
         """
         original_size = image.shape[:2]
-        self._image_embeddings, tile_shape, halo = _process_tiled_embeddings(
-            self._predictor, image, image_embeddings, tile_shape, halo, verbose=verbose, batch_size=batch_size
+        self._image_embeddings, tile_shape, halo, tiles_in_mask = _process_tiled_embeddings(
+            self._predictor, image, image_embeddings, tile_shape, halo,
+            verbose=verbose, batch_size=batch_size, mask=mask, i=i,
         )
         tiling = blocking([0, 0], original_size, tile_shape)
 
         _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
-        pbar_init(tiling.numberOfBlocks, "Initialize tiled instance segmentation with decoder")
 
         foreground = np.zeros(original_size, dtype="float32")
         center_distances = np.zeros(original_size, dtype="float32")
         boundary_distances = np.zeros(original_size, dtype="float32")
 
-        n_tiles = tiling.numberOfBlocks
+        msg = "Initialize tiled instance segmentation with decoder"
+        if tiles_in_mask is None:
+            n_tiles = tiling.numberOfBlocks
+            all_tile_ids = list(range(n_tiles))
+        else:
+            n_tiles = len(tiles_in_mask)
+            all_tile_ids = tiles_in_mask
+            msg += " and mask"
+
         n_batches = int(np.ceil(n_tiles / batch_size))
+        pbar_init(n_tiles, msg)
+        tile_ids_for_batches = np.array_split(all_tile_ids, n_batches)
 
-        for batch_id in range(n_batches):
-            tile_start = batch_id * batch_size
-            tile_stop = min(tile_start + batch_size, n_tiles)
-
+        for tile_ids in tile_ids_for_batches:
             batched_embeddings, input_shapes, original_shapes = [], [], []
-            for tile_id in range(tile_start, tile_stop):
+            for tile_id in tile_ids:
                 # Get the image embeddings from the predictor for this tile.
                 self._predictor = util.set_precomputed(self._predictor, self._image_embeddings, i=i, tile_id=tile_id)
 
@@ -1208,7 +1230,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
 
             batched_output = self._predict_decoder(batched_embeddings, input_shapes, original_shapes)
 
-            for output_id, tile_id in enumerate(range(tile_start, tile_stop)):
+            for output_id, tile_id in enumerate(tile_ids):
                 output = batched_output[output_id]
                 assert output.shape[0] == 3
 
@@ -1227,6 +1249,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         pbar_close()
 
         # Set the state.
+        self._i = i
         self._foreground = foreground
         self._center_distances = center_distances
         self._boundary_distances = boundary_distances
@@ -1377,6 +1400,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
                 return_instance_segmentation=False,
                 multimasking=multimasking,
                 mask_threshold=mask_threshold,
+                i=getattr(self, "_i", None),
                 **prompts,
             )
 
@@ -1391,6 +1415,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
                 return_instance_segmentation=False,
                 multimasking=multimasking,
                 mask_threshold=mask_threshold,
+                i=getattr(self, "_i", None),
                 **prompts,
             )
 
@@ -1470,6 +1495,7 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
                 return_instance_segmentation=False,
                 multimasking=multimasking,
                 optimize_memory=optimize_memory,
+                i=getattr(self, "_i", None),
                 **prompts
             )
         # Optimize memory directly returns an instance segmentation and does not

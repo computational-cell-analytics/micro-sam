@@ -169,6 +169,7 @@ def batched_inference(
     verbose_embeddings: bool = True,
     mask_threshold: Optional[Union[float, str]] = None,
     return_highres_logits: bool = False,
+    i: Optional[int] = None,
 ) -> Union[List[List[Dict[str, Any]]], np.ndarray]:
     """Run batched inference for input prompts.
 
@@ -198,6 +199,8 @@ def batched_inference(
             If None, the default threshold 0 is used. If "auto" is passed then the threshold is
             determined with a local otsu filter.
         return_highres_logits: Wheher to return high-resolution logits.
+        i: Index for the image data. Required if `image` has three spatial dimensions
+            or a time dimension and two spatial dimensions.
 
     Returns:
         The predicted segmentation masks.
@@ -212,7 +215,7 @@ def batched_inference(
         predictor.get_image_embedding()
     else:
         image_embeddings = util.precompute_image_embeddings(
-            predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings
+            predictor, image, embedding_path, verbose=verbose_embeddings, i=i,
         )
         util.set_precomputed(predictor, image_embeddings)
 
@@ -369,6 +372,7 @@ def batched_tiled_inference(
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     optimize_memory: bool = False,
+    i: Optional[int] = None,
     **nms_kwargs,
 ) -> Union[List[List[Dict[str, Any]]], np.ndarray]:
     """Run batched inference for input prompts.
@@ -404,6 +408,8 @@ def batched_tiled_inference(
             - NMS will be applied directly for each tile to reduce it to a per-tile instance segmentation.
             - The per-tile segmentations will be stitched.
             - The result will be returned as an instance segmentation.
+        i: Index for the image data. Required if `image` has three spatial dimensions
+            or a time dimension and two spatial dimensions.
         nms_kwargs: Keyword arguments for the NMS operations that is used for optimize_memory=True.
             Does not have any effcet for optimize_memory=False.
 
@@ -487,7 +493,7 @@ def batched_tiled_inference(
         tile_points, tile_labels = point_to_tile.get(tile_id), label_to_tile.get(tile_id)
 
         # Set the correct embeddings, run inference.
-        predictor = util.set_precomputed(predictor, image_embeddings, tile_id=tile_id)
+        predictor = util.set_precomputed(predictor, image_embeddings, tile_id=tile_id, i=i)
         this_masks = batched_inference(
             predictor=predictor,
             image=None,

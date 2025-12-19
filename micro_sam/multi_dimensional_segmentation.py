@@ -349,6 +349,8 @@ def merge_instance_segmentation_3d(
 
     # Extract the overlap between slices.
     edges = track_utils.compute_edges_from_overlap(slice_segmentation, verbose=False)
+    if len(edges) == 0:  # Nothing to merge.
+        return slice_segmentation
 
     uv_ids = np.array([[edge["source"], edge["target"]] for edge in edges])
     overlaps = np.array([edge["score"] for edge in edges])
