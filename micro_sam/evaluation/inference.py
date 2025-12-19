@@ -631,7 +631,15 @@ def run_apg(
     """Run Segment Anything inference for multiple images using automatic prompt generation (APG).
 
     Args:
-        ...
+        checkpoint: The filepath to the model checkpoint.
+        model_type: The choice of segment anything model.
+        experiment_folder: The experiment folder where results are stored.
+        val_image_paths: The list of filepaths for the validation images.
+        val_gt_paths: The list of filepaths for the validation labels.
+        test_image_paths: The list of filepaths for the test images
+        peft_kwargs: Additional arguments for PEFT methods.
+        cache_embeddings: Whether to store the computed image embeddings.
+        tiling_window_params: Additional parameters for tiling window-based prediction.
 
     Returns:
         Filepath where the predictions have been saved.
