@@ -8,7 +8,7 @@ from contextlib import contextmanager, nullcontext
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import imageio.v3 as imageio
-
+import numpy as np
 import torch
 from torch.optim import Optimizer
 from torch.utils.data import random_split
@@ -538,10 +538,12 @@ def _update_patch_shape(patch_shape, raw_paths, raw_key, with_channels):
         path = raw_paths
     else:
         path = raw_paths[0]
-    assert isinstance(path, (str, os.PathLike))
+    assert isinstance(path, (str, os.PathLike, np.ndarray, torch.Tensor))
 
     # Check the underlying data dimensionality.
-    if raw_key is None:  # If no key is given then we assume it's an image file.
+    if raw_key is None and isinstance(path, (np.ndarray, torch.Tensor)):
+        ndim = path.ndim
+    elif raw_key is None:  # If no key is given and this is not a tensor/array then we assume it's an image file.
         ndim = imageio.imread(path).ndim
     else:  # Otherwise we try to open the file from key.
         try:  # First try to open it with elf.
@@ -566,10 +568,53 @@ def _update_patch_shape(patch_shape, raw_paths, raw_key, with_channels):
         return patch_shape
 
 
+def _determine_dataset_and_channels(raw_paths, raw_key, label_paths, label_key, with_channels, **kwargs):
+    # By default, let the 'default_segmentation_dataset' heuristic decide for itself.
+    is_seg_dataset = kwargs.pop("is_seg_dataset", None)
+
+    # Check if the input data is in numpy or torch. In this case determine we use
+    # the image collection dataset heuristic (torch_em will figure it out),
+    # and we determine the number of channels.
+    if isinstance(raw_paths, list) and isinstance(raw_paths[0], (np.ndarray, torch.Tensor)):
+        is_seg_dataset = False
+        if with_channels is None:
+            with_channels = raw_paths[0].ndim == 3 and raw_paths.shape[-1] == 3
+        return is_seg_dataset, with_channels
+
+    # Check if the raw inputs are RGB or not. If yes, use 'ImageCollectionDataset'.
+    # Get valid raw paths to make checks possible.
+    if raw_key and "*" in raw_key:  # Use the wildcard pattern to find the filepath to only one image.
+        rpath = glob(os.path.join(raw_paths if isinstance(raw_paths, str) else raw_paths[0], raw_key))[0]
+    else:  # Otherwise, either 'raw_key' is None or container format, supported by 'elf', then we load 1 filepath.
+        rpath = raw_paths if isinstance(raw_paths, str) else raw_paths[0]
+
+    # Load one of the raw inputs to validate whether it is RGB or not.
+    test_raw_inputs = load_data(path=rpath, key=raw_key if raw_key and "*" not in raw_key else None)
+    if test_raw_inputs.ndim == 3:
+        if test_raw_inputs.shape[-1] == 3:  # i.e. if it is an RGB image and has channels last.
+            is_seg_dataset = False  # we use 'ImageCollectionDataset' in this case.
+            # We need to provide a list of inputs to 'ImageCollectionDataset'.
+            raw_paths = [raw_paths] if isinstance(raw_paths, str) else raw_paths
+            label_paths = [label_paths] if isinstance(label_paths, str) else label_paths
+
+            # This is not relevant for 'ImageCollectionDataset'. Hence, we set 'with_channels' to 'False'.
+            with_channels = False if with_channels is None else with_channels
+
+        elif test_raw_inputs.shape[0] == 3:  # i.e. if it is a RGB image and has 3 channels first.
+            # This is relevant for 'SegmentationDataset'. If not provided by the user, we set this to 'True'.
+            with_channels = True if with_channels is None else with_channels
+
+    # Set 'with_channels' to 'False', i.e. the default behavior of 'default_segmentation_dataset'
+    # Otherwise, let the user make the choice as priority, else set this to our suggested default.
+    with_channels = False if with_channels is None else with_channels
+
+    return is_seg_dataset, with_channels
+
+
 def default_sam_dataset(
-    raw_paths: Union[List[FilePath], FilePath],
+    raw_paths: Union[List[Union[np.ndarray, torch.Tensor]], List[FilePath], FilePath],
     raw_key: Optional[str],
-    label_paths: Union[List[FilePath], FilePath],
+    label_paths: Union[List[Union[np.ndarray, torch.Tensor]], List[FilePath], FilePath],
     label_key: Optional[str],
     patch_shape: Tuple[int],
     with_segmentation_decoder: bool,
@@ -590,12 +635,16 @@ def default_sam_dataset(
     Args:
         raw_paths: The path(s) to the image data used for training.
             Can either be multiple 2D images or volumetric data.
+            The data can also be passed as a list of numpy arrays or torch tensors.
         raw_key: The key for accessing the image data. Internal filepath for hdf5-like input
             or a glob pattern for selecting multiple files.
+            Set to None when passing a list of file paths to regular images or numpy arrays / torch tensors.
         label_paths: The path(s) to the label data used for training.
             Can either be multiple 2D images or volumetric data.
+            The data can also be passed as a list of numpy arrays or torch tensors.
         label_key: The key for accessing the label data. Internal filepath for hdf5-like input
             or a glob pattern for selecting multiple files.
+            Set to None when passing a list of file paths to regular images or numpy arrays / torch tensors.
         patch_shape: The shape for training patches.
         with_segmentation_decoder: Whether to train with additional segmentation decoder.
         with_channels: Whether the image data has channels. By default, it makes the decision based on inputs.
@@ -634,35 +683,9 @@ def default_sam_dataset(
     if sampler is None and not train_instance_segmentation_only:
         sampler = torch_em.data.sampler.MinInstanceSampler(2, min_size=min_size)
 
-    # By default, let the 'default_segmentation_dataset' heuristic decide for itself.
-    is_seg_dataset = kwargs.pop("is_seg_dataset", None)
-
-    # Check if the raw inputs are RGB or not. If yes, use 'ImageCollectionDataset'.
-    # Get valid raw paths to make checks possible.
-    if raw_key and "*" in raw_key:  # Use the wildcard pattern to find the filepath to only one image.
-        rpath = glob(os.path.join(raw_paths if isinstance(raw_paths, str) else raw_paths[0], raw_key))[0]
-    else:  # Otherwise, either 'raw_key' is None or container format, supported by 'elf', then we load 1 filepath.
-        rpath = raw_paths if isinstance(raw_paths, str) else raw_paths[0]
-
-    # Load one of the raw inputs to validate whether it is RGB or not.
-    test_raw_inputs = load_data(path=rpath, key=raw_key if raw_key and "*" not in raw_key else None)
-    if test_raw_inputs.ndim == 3:
-        if test_raw_inputs.shape[-1] == 3:  # i.e. if it is an RGB image and has channels last.
-            is_seg_dataset = False  # we use 'ImageCollectionDataset' in this case.
-            # We need to provide a list of inputs to 'ImageCollectionDataset'.
-            raw_paths = [raw_paths] if isinstance(raw_paths, str) else raw_paths
-            label_paths = [label_paths] if isinstance(label_paths, str) else label_paths
-
-            # This is not relevant for 'ImageCollectionDataset'. Hence, we set 'with_channels' to 'False'.
-            with_channels = False if with_channels is None else with_channels
-
-        elif test_raw_inputs.shape[0] == 3:  # i.e. if it is a RGB image and has 3 channels first.
-            # This is relevant for 'SegmentationDataset'. If not provided by the user, we set this to 'True'.
-            with_channels = True if with_channels is None else with_channels
-
-    # Set 'with_channels' to 'False', i.e. the default behavior of 'default_segmentation_dataset'
-    # Otherwise, let the user make the choice as priority, else set this to our suggested default.
-    with_channels = False if with_channels is None else with_channels
+    is_seg_dataset, with_channels = _determine_dataset_and_channels(
+        raw_paths, raw_key, label_paths, label_key, with_channels, **kwargs
+    )
 
     # Set the data transformations.
     if raw_transform is None:
