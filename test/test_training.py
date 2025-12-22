@@ -10,6 +10,68 @@ from micro_sam.sample_data import synthetic_data
 from micro_sam.util import VIT_T_SUPPORT, get_sam_model, SamPredictor
 
 
+class TestDataset(unittest.TestCase):
+    tmp_folder = "./tmp-dataset"
+
+    def setUp(self):
+        self.image_dir = os.path.join(self.tmp_folder, "synthetic-data", "images")
+        self.label_dir = os.path.join(self.tmp_folder, "synthetic-data", "labels")
+        shape = (512, 512)
+
+        os.makedirs(self.image_dir, exist_ok=True)
+        os.makedirs(self.label_dir, exist_ok=True)
+
+        n_images = 5
+        for idx in range(n_images):
+            image_path = os.path.join(self.image_dir, f"data-{idx}.tif")
+            label_path = os.path.join(self.label_dir, f"data-{idx}.tif")
+
+            image, labels = synthetic_data(shape)
+            imageio.imwrite(image_path, image)
+            imageio.imwrite(label_path, labels)
+
+    def tearDown(self):
+        try:
+            rmtree(self.tmp_folder)
+        except OSError:
+            pass
+
+    def _check_dataset(self, ds, patch_shape, exp_type):
+        self.assertIsInstance(ds, exp_type)
+        self.assertEqual(ds._ndim, 2)
+
+        expected_im_shape = (1,) + patch_shape
+        expected_label_shape = (4,) + patch_shape
+        for i in range(5):
+            x, y = ds[i]
+            self.assertEqual(x.shape, expected_im_shape)
+            self.assertEqual(y.shape, expected_label_shape)
+
+    def test_default_sam_dataset(self):
+        from micro_sam.training.training import default_sam_dataset
+        from torch_em.data import SegmentationDataset
+
+        patch_shape = (512, 512)
+        ds = default_sam_dataset(
+            self.image_dir, "*.tif", self.label_dir, "*.tif", patch_shape, with_segmentation_decoder=True
+        )
+        self._check_dataset(ds, patch_shape, SegmentationDataset)
+
+    def test_default_sam_dataset_with_numpy_data(self):
+        from micro_sam.training.training import default_sam_dataset
+        from torch_em.data import TensorDataset
+
+        patch_shape = (512, 512)
+        images = sorted(glob(os.path.join(self.image_dir, "*.tif")))
+        images = [imageio.imread(im) for im in images]
+        labels = sorted(glob(os.path.join(self.label_dir, "*.tif")))
+        labels = [imageio.imread(lab) for lab in labels]
+        ds = default_sam_dataset(
+            images, None, labels, None, patch_shape, with_segmentation_decoder=True
+        )
+        self._check_dataset(ds, patch_shape, TensorDataset)
+
+
 @unittest.skip("Not working in CI")
 @unittest.skipUnless(VIT_T_SUPPORT, "Integration test is only run with vit_t support, otherwise it takes too long.")
 class TestTraining(unittest.TestCase):
