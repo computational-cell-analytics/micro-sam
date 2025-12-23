@@ -12,6 +12,7 @@ import torch
 import napari
 from magicgui import magicgui
 from qtpy import QtWidgets
+from qtpy.QtCore import QTimer
 
 from .. import util
 from . import _widgets as widgets
@@ -83,7 +84,7 @@ def _initialize_annotator(
     viewer, image, image_embedding_path,
     model_type, halo, tile_shape, predictor, decoder, is_volumetric,
     precompute_amg_state, checkpoint_path, device, embedding_path,
-    segmentation_path,
+    segmentation_path, initial_seg,
 ):
     if viewer is None:
         viewer = napari.Viewer()
@@ -111,6 +112,8 @@ def _initialize_annotator(
         segmentation_result = imageio.imread(segmentation_path)
     else:
         segmentation_result = None
+    if initial_seg is not None and segmentation_result is None:
+        segmentation_result = initial_seg if isinstance(initial_seg, np.ndarray) else imageio.imread(initial_seg)
     annotator._update_image(segmentation_result=segmentation_result)
 
     # Add the annotator widget to the viewer and sync widgets.
@@ -132,6 +135,7 @@ def image_series_annotator(
     output_folder: str,
     model_type: str = util._DEFAULT_MODEL,
     embedding_path: Optional[str] = None,
+    initial_segmentations: Optional[Union[List[Union[os.PathLike, str]], List[np.ndarray]]] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     viewer: Optional["napari.viewer.Viewer"] = None,
@@ -151,6 +155,9 @@ def image_series_annotator(
         model_type: The Segment Anything model to use. For details on the available models check out
             https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
         embedding_path: Filepath where to save the embeddings.
+        initial_segmentations: Initial segmentations to be corrected.
+            By default no initial segmentations are loaded.
+            If given, the initial segmentations will be loaded into 'committed_objects'.
         tile_shape: Shape of tiles for tiled embedding prediction.
             If `None` then the whole image is passed to Segment Anything.
         halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
@@ -173,6 +180,12 @@ def image_series_annotator(
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
     """
+    if initial_segmentations is not None and len(initial_segmentations) != len(images):
+        raise ValueError(
+            "You have passed initial segmentations, but the number of images and segmentations is not the same: "
+            f"{len(images)} != {len(initial_segmentations)}."
+        )
+
     end_msg = "You have annotated the last image. Do you wish to close napari?"
     os.makedirs(output_folder, exist_ok=True)
 
@@ -227,7 +240,7 @@ def image_series_annotator(
         viewer, image, image_embedding_path,
         model_type, halo, tile_shape, predictor, decoder, is_volumetric,
         precompute_amg_state, checkpoint_path, device, embedding_path,
-        save_path,
+        save_path, None if initial_segmentations is None else initial_segmentations[next_image_id],
     )
 
     def _save_segmentation(image_path, current_idx, segmentation):
@@ -250,19 +263,19 @@ def image_series_annotator(
         # Save the current segmentation.
         _save_segmentation(images[next_image_id], next_image_id, segmentation)
 
+        # Check if we are done.
+        if (next_image_id + 1) == len(images):
+            # Inform the user via dialog.
+            abort = widgets._generate_message("info", end_msg)
+            if not abort:
+                QTimer.singleShot(0, viewer.close)
+            return
+
         # Clear the segmentation already to avoid lagging removal.
         viewer.layers["committed_objects"].data = np.zeros_like(viewer.layers["committed_objects"].data)
 
         # Go to the next image.
         next_image_id += 1
-
-        # Check if we are done.
-        if next_image_id == len(images):
-            # Inform the user via dialog.
-            abort = widgets._generate_message("info", end_msg)
-            if not abort:
-                viewer.close()
-            return
 
         # If we are skipping images that are already segmented, then check if we have to load the next image.
         save_path = _get_save_path(images[next_image_id], next_image_id)
@@ -285,6 +298,11 @@ def image_series_annotator(
                 segmentation_result = imageio.imread(save_path)
             else:
                 segmentation_result = None
+
+        # Load initial segmentation if it exists and if we don't have a segmentation result loaded yet.
+        if initial_segmentations is not None and segmentation_result is None:
+            initial_seg = initial_segmentations[next_image_id]
+            segmentation_result = initial_seg if isinstance(initial_seg, np.ndarray) else imageio.imread(initial_seg)
 
         print(
             "Loading next image:", images[next_image_id] if not have_inputs_as_arrays else f"at index {next_image_id}"
@@ -330,6 +348,8 @@ def image_folder_annotator(
     input_folder: str,
     output_folder: str,
     pattern: str = "*",
+    initial_segmentation_folder: Optional[str] = None,
+    initial_segmentation_pattern: str = "*",
     viewer: Optional["napari.viewer.Viewer"] = None,
     return_viewer: bool = False,
     **kwargs
@@ -339,8 +359,11 @@ def image_folder_annotator(
     Args:
         input_folder: The folder with the images to be annotated.
         output_folder: The folder where the segmentation results are saved.
-        pattern: The glob patter for loading files from `input_folder`.
+        pattern: The glob pattern for loading files from `input_folder`.
             By default all files will be loaded.
+        initial_segmentation_folder: A folder with initial segmentation results.
+            By default no initial segmentations are loaded.
+        initial_segmentation_pattern: The glob pattern for loading files from `initial_segmentation_folder`.
         viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
@@ -351,9 +374,17 @@ def image_folder_annotator(
         The napari viewer, only returned if `return_viewer=True`.
     """
     image_files = sorted(glob(os.path.join(input_folder, pattern)))
+    if initial_segmentation_folder is None:
+        initial_segmentations = None
+    else:
+        initial_segmentations = sorted(glob(os.path.join(
+            initial_segmentation_folder, initial_segmentation_pattern
+        )))
 
     return image_series_annotator(
-        image_files, output_folder, viewer=viewer, return_viewer=return_viewer, **kwargs
+        image_files, output_folder,
+        initial_segmentations=initial_segmentations,
+        viewer=viewer, return_viewer=return_viewer, **kwargs
     )
 
 
@@ -504,6 +535,14 @@ def main():
         "By default all files in the folder will be loaded and annotated."
     )
     parser.add_argument(
+        "--initial_segmentation_folder",
+        help="A folder with initial segmentation results. By default no initial segmentations are loaded."
+    )
+    parser.add_argument(
+        "--initial_segmentation_pattern",
+        help="The glob pattern for loading files from `initial_segmentation_folder`."
+    )
+    parser.add_argument(
         "-e", "--embedding_path",
         help="The filepath for saving/loading the pre-computed image embeddings. "
         "NOTE: It is recommended to pass this argument and store the embeddings, "
@@ -540,6 +579,8 @@ def main():
 
     image_folder_annotator(
         args.input_folder, args.output_folder, args.pattern,
+        initial_segmentation_folder=args.initial_segmentation_folder,
+        initial_segmentation_pattern=args.initial_segmentation_pattern,
         embedding_path=args.embedding_path, model_type=args.model_type,
         tile_shape=args.tile_shape, halo=args.halo, precompute_amg_state=args.precompute_amg_state,
         checkpoint_path=args.checkpoint, device=args.device, is_volumetric=args.is_volumetric,
