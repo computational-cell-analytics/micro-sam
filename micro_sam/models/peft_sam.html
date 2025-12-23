@@ -1956,7 +1956,7 @@ registered hooks while the latter silently ignores them.</p>
 
 <p>Your models should also subclass this class.</p>
 
-<p>Modules can also contain other Modules, allowing them to be nested in
+<p>Modules can also contain other Modules, allowing to nest them in
 a tree structure. You can assign the submodules as regular attributes::</p>
 
 <pre><code>import torch.nn as nn
@@ -1973,8 +1973,8 @@ class Model(nn.Module):
         return F.relu(self.conv2(x))
 </code></pre>
 
-<p>Submodules assigned in this way will be registered, and will also have their
-parameters converted when you call <code><a href="#ScaleShiftLayer.to">to()</a></code>, etc.</p>
+<p>Submodules assigned in this way will be registered, and will have their
+parameters converted too when you call <code><a href="#ScaleShiftLayer.to">to()</a></code>, etc.</p>
 
 <div class="pdoc-alert pdoc-alert-note">
 

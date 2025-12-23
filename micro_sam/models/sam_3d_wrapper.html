@@ -179,7 +179,7 @@
 </span><span id="L-38"><a href="#L-38"><span class="linenos"> 38</span></a>
 </span><span id="L-39"><a href="#L-39"><span class="linenos"> 39</span></a>    <span class="c1"># Make sure not to freeze the encoder when using LoRA.</span>
 </span><span id="L-40"><a href="#L-40"><span class="linenos"> 40</span></a>    <span class="n">_freeze_encoder</span> <span class="o">=</span> <span class="n">freeze_encoder</span> <span class="k">if</span> <span class="n">lora_rank</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">False</span>
-</span><span id="L-41"><a href="#L-41"><span class="linenos"> 41</span></a>    <span class="n">sam_3d</span> <span class="o">=</span> <span class="n">Sam3DWrapper</span><span class="p">(</span><span class="n">sam</span><span class="p">,</span> <span class="n">freeze_encoder</span><span class="o">=</span><span class="n">_freeze_encoder</span><span class="p">,</span> <span class="n">model_type</span><span class="o">=</span><span class="n">model_type</span><span class="p">)</span>
+</span><span id="L-41"><a href="#L-41"><span class="linenos"> 41</span></a>    <span class="n">sam_3d</span> <span class="o">=</span> <span class="n">Sam3DWrapper</span><span class="p">(</span><span class="n">sam</span><span class="p">,</span> <span class="n">freeze_encoder</span><span class="o">=</span><span class="n">_freeze_encoder</span><span class="p">,</span> <span class="n">model_type</span><span class="o">=</span><span class="n">model_type</span><span class="p">[:</span><span class="mi">5</span><span class="p">])</span>
 </span><span id="L-42"><a href="#L-42"><span class="linenos"> 42</span></a>    <span class="n">sam_3d</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
 </span><span id="L-43"><a href="#L-43"><span class="linenos"> 43</span></a>
 </span><span id="L-44"><a href="#L-44"><span class="linenos"> 44</span></a>    <span class="k">return</span> <span class="n">sam_3d</span>
@@ -431,7 +431,7 @@
 </span><span id="get_sam_3d_model-39"><a href="#get_sam_3d_model-39"><span class="linenos">39</span></a>
 </span><span id="get_sam_3d_model-40"><a href="#get_sam_3d_model-40"><span class="linenos">40</span></a>    <span class="c1"># Make sure not to freeze the encoder when using LoRA.</span>
 </span><span id="get_sam_3d_model-41"><a href="#get_sam_3d_model-41"><span class="linenos">41</span></a>    <span class="n">_freeze_encoder</span> <span class="o">=</span> <span class="n">freeze_encoder</span> <span class="k">if</span> <span class="n">lora_rank</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">False</span>
-</span><span id="get_sam_3d_model-42"><a href="#get_sam_3d_model-42"><span class="linenos">42</span></a>    <span class="n">sam_3d</span> <span class="o">=</span> <span class="n">Sam3DWrapper</span><span class="p">(</span><span class="n">sam</span><span class="p">,</span> <span class="n">freeze_encoder</span><span class="o">=</span><span class="n">_freeze_encoder</span><span class="p">,</span> <span class="n">model_type</span><span class="o">=</span><span class="n">model_type</span><span class="p">)</span>
+</span><span id="get_sam_3d_model-42"><a href="#get_sam_3d_model-42"><span class="linenos">42</span></a>    <span class="n">sam_3d</span> <span class="o">=</span> <span class="n">Sam3DWrapper</span><span class="p">(</span><span class="n">sam</span><span class="p">,</span> <span class="n">freeze_encoder</span><span class="o">=</span><span class="n">_freeze_encoder</span><span class="p">,</span> <span class="n">model_type</span><span class="o">=</span><span class="n">model_type</span><span class="p">[:</span><span class="mi">5</span><span class="p">])</span>
 </span><span id="get_sam_3d_model-43"><a href="#get_sam_3d_model-43"><span class="linenos">43</span></a>    <span class="n">sam_3d</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
 </span><span id="get_sam_3d_model-44"><a href="#get_sam_3d_model-44"><span class="linenos">44</span></a>
 </span><span id="get_sam_3d_model-45"><a href="#get_sam_3d_model-45"><span class="linenos">45</span></a>    <span class="k">return</span> <span class="n">sam_3d</span>
@@ -560,7 +560,7 @@
 
 <p>Your models should also subclass this class.</p>
 
-<p>Modules can also contain other Modules, allowing them to be nested in
+<p>Modules can also contain other Modules, allowing to nest them in
 a tree structure. You can assign the submodules as regular attributes::</p>
 
 <pre><code>import torch.nn as nn
@@ -577,8 +577,8 @@ class Model(nn.Module):
         return F.relu(self.conv2(x))
 </code></pre>
 
-<p>Submodules assigned in this way will be registered, and will also have their
-parameters converted when you call <code><a href="#Sam3DWrapper.to">to()</a></code>, etc.</p>
+<p>Submodules assigned in this way will be registered, and will have their
+parameters converted too when you call <code><a href="#Sam3DWrapper.to">to()</a></code>, etc.</p>
 
 <div class="pdoc-alert pdoc-alert-note">
 
@@ -880,7 +880,7 @@ must be made before assignment on the child.</p>
 
 <p>Your models should also subclass this class.</p>
 
-<p>Modules can also contain other Modules, allowing them to be nested in
+<p>Modules can also contain other Modules, allowing to nest them in
 a tree structure. You can assign the submodules as regular attributes::</p>
 
 <pre><code>import torch.nn as nn
@@ -897,8 +897,8 @@ class Model(nn.Module):
         return F.relu(self.conv2(x))
 </code></pre>
 
-<p>Submodules assigned in this way will be registered, and will also have their
-parameters converted when you call <code><a href="#ImageEncoderViT3DWrapper.to">to()</a></code>, etc.</p>
+<p>Submodules assigned in this way will be registered, and will have their
+parameters converted too when you call <code><a href="#ImageEncoderViT3DWrapper.to">to()</a></code>, etc.</p>
 
 <div class="pdoc-alert pdoc-alert-note">
 
@@ -1159,7 +1159,7 @@ registered hooks while the latter silently ignores them.</p>
 
 <p>Your models should also subclass this class.</p>
 
-<p>Modules can also contain other Modules, allowing them to be nested in
+<p>Modules can also contain other Modules, allowing to nest them in
 a tree structure. You can assign the submodules as regular attributes::</p>
 
 <pre><code>import torch.nn as nn
@@ -1176,8 +1176,8 @@ class Model(nn.Module):
         return F.relu(self.conv2(x))
 </code></pre>
 
-<p>Submodules assigned in this way will be registered, and will also have their
-parameters converted when you call <code><a href="#NDBlockWrapper.to">to()</a></code>, etc.</p>
+<p>Submodules assigned in this way will be registered, and will have their
+parameters converted too when you call <code><a href="#NDBlockWrapper.to">to()</a></code>, etc.</p>
 
 <div class="pdoc-alert pdoc-alert-note">
 
