@@ -38,7 +38,7 @@ You can create a new environment and install it like this:
 ```bash
 conda create -c conda-forge -n micro_sam python=3.11 natsort
 conda activate micro_sam
-conda install -c pytorch -c conda-forge "micro_sam>=1.1" "pytorch>=2.4" "protobuf<5" cpuonly
+conda install -c conda-forge "micro_sam>=1.1" "pytorch>=2.4"
 ```
 If you already have an installation of `micro_sam` please update it by running the last command in your respective environment. You can find more information about the installation [here](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation).
 

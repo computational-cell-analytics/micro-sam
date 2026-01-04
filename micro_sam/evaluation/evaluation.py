@@ -14,15 +14,15 @@ import pandas as pd
 import imageio.v3 as imageio
 from skimage.measure import label
 
-from elf.evaluation import mean_segmentation_accuracy
+from elf.evaluation import mean_segmentation_accuracy, matching
 
 from ..util import load_image_data
 
 
 def _run_evaluation(gt_paths, prediction_paths, verbose=True, thresholds=None):
     assert len(gt_paths) == len(prediction_paths)
-    msas, sa50s, sa75s = [], [], []
 
+    msas, sa50s, sa75s, precisions, recalls, f1s = [], [], [], [], [], []
     for gt_path, pred_path in tqdm(
         zip(gt_paths, prediction_paths), desc="Evaluate predictions", total=len(gt_paths), disable=not verbose
     ):
@@ -40,16 +40,21 @@ def _run_evaluation(gt_paths, prediction_paths, verbose=True, thresholds=None):
             assert os.path.exists(pred_path), pred_path
             pred = imageio.imread(pred_path)
 
+        assert gt.shape == pred.shape, f"Expected {gt.shape}, got {pred.shape}"
         msa, scores = mean_segmentation_accuracy(pred, gt, thresholds=thresholds, return_accuracies=True)
+        stats = matching(pred, gt)
         msas.append(msa)
         if thresholds is None:
             sa50, sa75 = scores[0], scores[5]
             sa50s.append(sa50), sa75s.append(sa75)
+        precisions.append(stats["precision"])
+        recalls.append(stats["recall"])
+        f1s.append(stats["f1"])
 
     if thresholds is None:
-        return msas, sa50s, sa75s
+        return (msas, sa50s, sa75s), (precisions, recalls, f1s)
     else:
-        return msas
+        return msas, (precisions, recalls, f1s)
 
 
 def run_evaluation(
@@ -79,15 +84,22 @@ def run_evaluation(
     scores = _run_evaluation(
         gt_paths=gt_paths, prediction_paths=prediction_paths, verbose=verbose, thresholds=thresholds
     )
+
+    sas, other_scores = scores  # Separate all score into two categories.
+    precisions, recalls, f1s = other_scores
+
     if thresholds is None:
-        msas, sa50s, sa75s = scores
+        msas, sa50s, sa75s = sas
     else:
-        msas = scores
+        msas = sas
 
     results = {"mSA": [np.mean(msas)]}
     if thresholds is None:
         results["SA50"] = [np.mean(sa50s)]
         results["SA75"] = [np.mean(sa75s)]
+    results["Precision"] = [np.mean(precisions)]
+    results["Recall"] = [np.mean(recalls)]
+    results["F1 Score"] = [np.mean(f1s)]
 
     results = pd.DataFrame.from_dict(results)
 

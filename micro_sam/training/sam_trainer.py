@@ -134,6 +134,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         - The IOU loss: L2 loss between the predicted IOU and the actual IOU of prediction and target.
         """
         mask_loss, iou_regression_loss = 0.0, 0.0
+        batch_size = len(batched_outputs)
 
         # Loop over the batch.
         for batch_output, targets in zip(batched_outputs, y_one_hot):
@@ -163,6 +164,9 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             mask_loss = mask_loss + torch.mean(dice_scores)
             iou_regression_loss = iou_regression_loss + iou_score
 
+        # Normalize by batch size so that loss/metric are comparable across batch sizes.
+        mask_loss = mask_loss / batch_size
+        iou_regression_loss = iou_regression_loss / batch_size
         loss = mask_loss + iou_regression_loss
 
         return loss, mask_loss, iou_regression_loss
@@ -448,6 +452,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
         val_iteration = 0
         metric_val, loss_val, model_iou_val = 0.0, 0.0, 0.0
+        mask_loss_val, iou_loss_val = 0.0, 0.0
 
         with torch.no_grad():
             for x, y in self.val_loader:
@@ -459,11 +464,15 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
                 loss_val += loss.item()
                 metric_val += metric.item()
+                mask_loss_val += mask_loss.item()
+                iou_loss_val += iou_regression_loss.item()
                 model_iou_val += model_iou.item()
                 val_iteration += 1
 
         loss_val /= len(self.val_loader)
         metric_val /= len(self.val_loader)
+        mask_loss_val /= len(self.val_loader)
+        iou_loss_val /= len(self.val_loader)
         model_iou_val /= len(self.val_loader)
         print()
         print(f"The Average Dice Score for the Current Epoch is {1 - metric_val}")
@@ -471,7 +480,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
         if self.logger is not None:
             self.logger.log_validation(
                 self._iteration, metric_val, loss_val, x, y,
-                sampled_binary_y, mask_loss, iou_regression_loss, model_iou_val
+                sampled_binary_y, mask_loss_val, iou_loss_val, model_iou_val
             )
 
         return metric_val
