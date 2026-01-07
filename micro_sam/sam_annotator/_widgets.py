@@ -1681,33 +1681,45 @@ class SegmentNDWidget(_WidgetBase):
                 # Prepare the prompts
                 point_prompts = self._viewer.layers["point_prompts"]
                 box_prompts = self._viewer.layers["prompts"]
-                z_values = np.round(point_prompts.data[:, 0])
+                z_values_points = np.round(point_prompts.data[:, 0])
                 z_values_boxes = np.concatenate(
                     [box[:1, 0] for box in box_prompts.data]
                 ) if box_prompts.data else np.zeros(0, dtype="int")
 
-                # TODO: Make this modular.
-                if z_values:
-                    frame_id = z_values[0]
-                else:
-                    frame_id = z_values_boxes[0]
-
-                # Get the volume
+                # Get the volumetric data.
                 # TODO: We need to switch later to volume embeddings.
                 volume = self._viewer.layers[0].data  # Assumption is image is in the first index.
 
-                points, labels = vutil.point_layer_to_prompts(point_prompts, frame_id)
-                boxes, masks = vutil.shape_layer_to_prompts(box_prompts, state.image_shape, i=frame_id)
+                # NOTE: Prototype for new design of prompting in volumetric data.
+                from micro_sam2.prompt_based_segmentation import PromptableSegmentation3D
+                segmenter = PromptableSegmentation3D(predictor=state.predictor, volume=volume)
 
-                from micro_sam2.prompt_based_segmentation import promptable_segmentation_3d
-                seg = promptable_segmentation_3d(
-                    predictor=state.predictor,
-                    volume=volume,
-                    frame_id=frame_id,
-                    points=points,
-                    labels=labels,
-                    boxes=boxes,
-                )
+                # Let's do points first.
+                for curr_z_values_point in z_values_points:
+                    # Extract the point prompts from the points layer first.
+                    points, labels = vutil.point_layer_to_prompts(layer=point_prompts, i=curr_z_values_point)
+
+                    # Add prompts one after the other.
+                    [
+                        segmenter.add_point_prompts(
+                            frame_ids=curr_z_values_point,
+                            points=np.array([curr_point]),
+                            point_labels=np.array([curr_label]),
+                        ) for curr_point, curr_label in zip(points, labels)
+                    ]
+
+                # Next, we add box prompts.
+                for curr_z_values_box in z_values_boxes:
+                    # Extract the box prompts from the shapes layer first.
+                    boxes, _ = vutil.shape_layer_to_prompts(
+                        layer=box_prompts, shape=state.image_shape, i=curr_z_values_box,
+                    )
+
+                    # Add prompts one after the other.
+                    segmenter.add_box_prompts(frame_ids=curr_z_values_box, boxes=boxes)
+
+                # Propagate the prompts throughout the volume and combine the propagated segmentations.
+                seg = segmenter.predict()
 
             pbar_signals.pbar_stop.emit()
 
