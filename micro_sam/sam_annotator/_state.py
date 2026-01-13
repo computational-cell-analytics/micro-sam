@@ -84,6 +84,10 @@ class AnnotatorState(metaclass=Singleton):
     previous_features: Optional[np.ndarray] = None
     previous_labels: Optional[np.ndarray] = None
 
+    # SAM2 video predictor state for 3D segmentation
+    inference_state: Optional[Dict] = None
+    _sam2_temp_dir: Optional[str] = None
+
     def initialize_predictor(
         self,
         image_data,
@@ -152,6 +156,10 @@ class AnnotatorState(metaclass=Singleton):
             )
             self.embedding_path = save_path
 
+        # Initialize inference state for SAM2 video predictor (3D only)
+        if is_sam2 and ndim == 3:
+            self._initialize_sam2_inference_state(image_data)
+
         # If we have an embedding path the data signature has already been computed,
         # and we can read it from there.
         if save_path is not None and isinstance(save_path, str):
@@ -188,6 +196,59 @@ class AnnotatorState(metaclass=Singleton):
                         image_embeddings=self.image_embeddings,
                         save_path=save_path, i=i, verbose=False,
                     )
+
+    def _initialize_sam2_inference_state(self, image_data):
+        """Initialize SAM2 inference state for 3D video predictor.
+
+        This method prepares the video frames from the volume slices and
+        initializes the inference state for the SAM2 video predictor.
+        """
+        import os
+        import tempfile
+        import imageio.v3 as imageio
+
+        # Create temporary directory for video frames
+        self._sam2_temp_dir = tempfile.mkdtemp(prefix="sam2_frames_")
+
+        # Determine if image is grayscale or RGB
+        if image_data.ndim == 3:
+            # Grayscale volume (Z, Y, X)
+            n_slices = image_data.shape[0]
+            is_rgb = False
+        elif image_data.ndim == 4:
+            # RGB volume (Z, Y, X, C)
+            n_slices = image_data.shape[0]
+            is_rgb = True
+        else:
+            raise ValueError(f"Unexpected image data dimensions: {image_data.ndim}")
+
+        # Save each slice as an image
+        for i in tqdm(range(n_slices), desc="Preparing SAM2 video frames"):
+            slice_path = os.path.join(self._sam2_temp_dir, f"{i:05d}.png")
+            slice_data = image_data[i]
+
+            # Normalize to 0-255 range
+            if slice_data.dtype != np.uint8:
+                slice_min = slice_data.min()
+                slice_max = slice_data.max()
+                if slice_max > slice_min:
+                    slice_data = ((slice_data - slice_min) / (slice_max - slice_min) * 255).astype(np.uint8)
+                else:
+                    slice_data = np.zeros_like(slice_data, dtype=np.uint8)
+
+            # Convert grayscale to RGB by replicating channels (SAM2 expects RGB)
+            if not is_rgb:
+                slice_data = np.stack([slice_data] * 3, axis=-1)
+
+            # Save the slice
+            imageio.imwrite(slice_path, slice_data)
+
+        # Initialize inference state
+        self.inference_state = self.predictor.init_state(
+            video_path=self._sam2_temp_dir,
+            offload_video_to_cpu=False,  # Keep in GPU for speed
+            verbosity=False,
+        )
 
     # Get the name of the image layer used to compute the embeddings.
     # If the 'image_name' attribute exists we can just use it.
@@ -250,8 +311,20 @@ class AnnotatorState(metaclass=Singleton):
             miss_vars = ", ".join(miss_vars)
             raise RuntimeError(f"Invalid state: the variables {miss_vars} have to be initialized for tracking.")
 
+    def clear_inference_state(self):
+        """Clean up SAM2 inference state and temporary files."""
+        if self._sam2_temp_dir is not None:
+            import shutil
+            try:
+                shutil.rmtree(self._sam2_temp_dir)
+            except Exception:
+                pass
+            self._sam2_temp_dir = None
+        self.inference_state = None
+
     def reset_state(self):
         """Reset state, clear all attributes."""
+        self.clear_inference_state()
         self.image_embeddings = None
         self.predictor = None
         self.image_shape = None

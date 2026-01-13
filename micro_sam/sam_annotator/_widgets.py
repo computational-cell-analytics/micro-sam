@@ -1049,6 +1049,64 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
     viewer.layers["current_object"].refresh()
 
 
+def _segment_slice_sam2(predictor, inference_state, frame_idx, points, labels, boxes, masks, shape):
+    """Segment a single slice using SAM2 video predictor.
+
+    Args:
+        predictor: SAM2VideoPredictor instance.
+        inference_state: Initialized inference state.
+        frame_idx: Slice index to segment.
+        points: Point prompts (N, 2) array.
+        labels: Point labels (N,) array.
+        boxes: List of box prompts.
+        masks: List of mask prompts (can be None).
+        shape: Expected output shape.
+
+    Returns:
+        Segmentation mask for the slice (2D array).
+    """
+    import numpy as np
+
+    # Validate prompts
+    have_points = len(points) > 0
+    have_boxes = len(boxes) > 0
+
+    if not have_points and not have_boxes:
+        return None
+
+    # Use a fixed object ID for single-slice segmentation
+    obj_id = 1
+
+    try:
+        # Prepare prompts
+        box = boxes[0] if have_boxes else None
+
+        # Add prompts to the specific frame
+        _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
+            inference_state=inference_state,
+            frame_idx=frame_idx,
+            obj_id=obj_id,
+            points=points if have_points else None,
+            labels=labels if have_points else None,
+            box=box,
+        )
+
+        # Extract the mask from logits
+        # out_mask_logits shape: (num_objects, 1, H, W)
+        mask_logits = out_mask_logits[0]  # Get first object
+        seg = (mask_logits.squeeze() > 0.0).cpu().numpy()
+
+        # Ensure correct output type
+        seg = seg.astype("uint32")
+
+    finally:
+        # Reset the state to clear this object's prompts
+        # This ensures the next segmentation starts fresh
+        predictor.reset_state(inference_state)
+
+    return seg
+
+
 @magic_factory(call_button="Segment Slice [S]")
 def segment_slice(viewer: "napari.viewer.Viewer") -> None:
     """Segment object for to the current prompts.
@@ -1076,10 +1134,20 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
     points, labels = point_prompts
 
     state = AnnotatorState()
-    seg = vutil.prompt_segmentation(
-        state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
-        image_embeddings=state.image_embeddings, i=z,
-    )
+
+    # Check if using SAM1 or SAM2
+    if isinstance(state.predictor, SamPredictor):
+        # SAM1 path (existing code)
+        seg = vutil.prompt_segmentation(
+            state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
+            image_embeddings=state.image_embeddings, i=z,
+        )
+    else:
+        # SAM2 path (new code)
+        seg = _segment_slice_sam2(
+            state.predictor, state.inference_state, z,
+            points, labels, boxes, masks, shape
+        )
 
     # no prompts were given or prompts were invalid, skip segmentation
     if seg is None:
