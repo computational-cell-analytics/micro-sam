@@ -139,7 +139,7 @@ class AnnotatorState(metaclass=Singleton):
 
         else:  # Otherwise, compute the image embeddings.
             if is_sam2:
-                from micro_sam2.util import precompute_image_embeddings as _comp_embed_fn
+                from micro_sam.v2.util import precompute_image_embeddings as _comp_embed_fn
             else:
                 _comp_embed_fn = util.precompute_image_embeddings
 
