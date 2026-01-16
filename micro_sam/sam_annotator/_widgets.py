@@ -1583,6 +1583,14 @@ class SegmentNDWidget(_WidgetBase):
             )
         setting_values.layout().addLayout(layout)
 
+        # Create the UI element in form of a checkbox for multi-object segmentation.
+        self.batched = False
+        setting_values.layout().addWidget(
+            self._add_boolean_param(
+                "batched", self.batched, title="batched", tooltip=get_tooltip("segmentnd", "batched")
+            )
+        )
+
         # Create the UI element for the motion smoothing (if we have the tracking widget).
         if self.tracking:
             self.motion_smoothing = 0.5
@@ -1694,6 +1702,9 @@ class SegmentNDWidget(_WidgetBase):
                 from micro_sam2.prompt_based_segmentation import PromptableSegmentation3D
                 segmenter = PromptableSegmentation3D(predictor=state.predictor, volume=volume)
 
+                # Whether the user decide to provide batched prompts for multi-object segmentation.
+                is_batched = bool(self.batched)
+
                 # Let's do points first.
                 for curr_z_values_point in z_values_points:
                     # Extract the point prompts from the points layer first.
@@ -1705,7 +1716,8 @@ class SegmentNDWidget(_WidgetBase):
                             frame_ids=curr_z_values_point,
                             points=np.array([curr_point]),
                             point_labels=np.array([curr_label]),
-                        ) for curr_point, curr_label in zip(points, labels)
+                            object_id=i if is_batched else None,
+                        ) for i, (curr_point, curr_label) in enumerate(zip(points, labels), start=1)
                     ]
 
                 # Next, we add box prompts.
