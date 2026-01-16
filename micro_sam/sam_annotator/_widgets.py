@@ -1031,7 +1031,7 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
             multiple_box_prompts=True, batched=batched, previous_segmentation=viewer.layers["current_object"].data,
         )
     else:  # This would be SAM2 predictors.
-        from micro_sam2.prompt_based_segmentation import promptable_segmentation_2d
+        from micro_sam.v2.prompt_based_segmentation import promptable_segmentation_2d
         seg = promptable_segmentation_2d(
             predictor=predictor,
             points=points,
@@ -1475,7 +1475,7 @@ class EmbeddingWidget(_WidgetBase):
             # Define a predictor for SAM2 models.
             predictor = None
             if self.model_type.startswith("h"):  # i.e. SAM2 models.
-                from micro_sam2.util import get_sam2_model
+                from micro_sam.v2.util import get_sam2_model
 
                 if ndim == 2:  # Get the SAM2 model and prepare the image predictor.
                     model = get_sam2_model(model_type=self.model_type, input_type="images")
@@ -1699,7 +1699,7 @@ class SegmentNDWidget(_WidgetBase):
                 volume = self._viewer.layers[0].data  # Assumption is image is in the first index.
 
                 # NOTE: Prototype for new design of prompting in volumetric data.
-                from micro_sam2.prompt_based_segmentation import PromptableSegmentation3D
+                from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D
                 segmenter = PromptableSegmentation3D(predictor=state.predictor, volume=volume)
 
                 # Whether the user decide to provide batched prompts for multi-object segmentation.
