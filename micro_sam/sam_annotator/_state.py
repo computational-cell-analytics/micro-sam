@@ -86,7 +86,6 @@ class AnnotatorState(metaclass=Singleton):
 
     # SAM2 video predictor state for 3D segmentation
     inference_state: Optional[Dict] = None
-    _sam2_temp_dir: Optional[str] = None
 
     def initialize_predictor(
         self,
@@ -200,54 +199,13 @@ class AnnotatorState(metaclass=Singleton):
     def _initialize_sam2_inference_state(self, image_data):
         """Initialize SAM2 inference state for 3D video predictor.
 
-        This method prepares the video frames from the volume slices and
-        initializes the inference state for the SAM2 video predictor.
+        This method initializes the inference state using the volume directly,
+        avoiding the need to save frames to disk.
         """
-        import os
-        import tempfile
-        import imageio.v3 as imageio
-
-        # Create temporary directory for video frames
-        self._sam2_temp_dir = tempfile.mkdtemp(prefix="sam2_frames_")
-
-        # Determine if image is grayscale or RGB
-        if image_data.ndim == 3:
-            # Grayscale volume (Z, Y, X)
-            n_slices = image_data.shape[0]
-            is_rgb = False
-        elif image_data.ndim == 4:
-            # RGB volume (Z, Y, X, C)
-            n_slices = image_data.shape[0]
-            is_rgb = True
-        else:
-            raise ValueError(f"Unexpected image data dimensions: {image_data.ndim}")
-
-        # Save each slice as an image
-        for i in tqdm(range(n_slices), desc="Preparing SAM2 video frames"):
-            slice_path = os.path.join(self._sam2_temp_dir, f"{i:05d}.png")
-            slice_data = image_data[i]
-
-            # Normalize to 0-255 range
-            if slice_data.dtype != np.uint8:
-                slice_min = slice_data.min()
-                slice_max = slice_data.max()
-                if slice_max > slice_min:
-                    slice_data = ((slice_data - slice_min) / (slice_max - slice_min) * 255).astype(np.uint8)
-                else:
-                    slice_data = np.zeros_like(slice_data, dtype=np.uint8)
-
-            # Convert grayscale to RGB by replicating channels (SAM2 expects RGB)
-            if not is_rgb:
-                slice_data = np.stack([slice_data] * 3, axis=-1)
-
-            # Save the slice
-            imageio.imwrite(slice_path, slice_data)
-
-        # Initialize inference state
+        # Initialize inference state with volume data directly
         self.inference_state = self.predictor.init_state(
-            video_path=self._sam2_temp_dir,
-            offload_video_to_cpu=False,  # Keep in GPU for speed
-            verbosity=False,
+            video_path=None,
+            volume=image_data,
         )
 
     # Get the name of the image layer used to compute the embeddings.
@@ -312,14 +270,7 @@ class AnnotatorState(metaclass=Singleton):
             raise RuntimeError(f"Invalid state: the variables {miss_vars} have to be initialized for tracking.")
 
     def clear_inference_state(self):
-        """Clean up SAM2 inference state and temporary files."""
-        if self._sam2_temp_dir is not None:
-            import shutil
-            try:
-                shutil.rmtree(self._sam2_temp_dir)
-            except Exception:
-                pass
-            self._sam2_temp_dir = None
+        """Clean up SAM2 inference state."""
         self.inference_state = None
 
     def reset_state(self):
