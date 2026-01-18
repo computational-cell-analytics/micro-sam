@@ -1096,7 +1096,6 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
         seg_handler = PromptableSegmentation3D(
             predictor=state.predictor,
             volume=volume,
-            inference_state=state.inference_state
         )
 
         # Use the segment_slice method
@@ -1726,6 +1725,7 @@ class SegmentNDWidget(_WidgetBase):
                 volume = self._viewer.layers[0].data  # Assumption is image is in the first index.
 
                 # NOTE: Prototype for new design of prompting in volumetric data.
+                # CP: this looks redundant. We redo the initialization each time a prompt is added.
                 from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D
                 segmenter = PromptableSegmentation3D(predictor=state.predictor, volume=volume)
 

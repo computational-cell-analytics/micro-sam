@@ -132,6 +132,7 @@ class CustomVideoPredictor(SAM2VideoPredictor):
         if (video_path is None) == (volume is None):
             raise ValueError("Only one of 'video_path' or 'volume' must be provided (not both or neither).")
 
+        # CP: this looks redundant. We load the video data each time this is called.
         images, video_height, video_width = _load_video_frames_from_images(
             video_path=video_path,
             volume=volume,
@@ -182,6 +183,7 @@ class CustomVideoPredictor(SAM2VideoPredictor):
         # metadata for each tracking frame (e.g. which direction it's tracked)
         inference_state["frames_tracked_per_obj"] = {}
 
+        # CP: this looks redundant. We compute the embedding each time this is called despite it already being there.
         # Warm up the visual backbone and cache the image feature on frame 0
         self._get_image_feature(inference_state, frame_idx=0, batch_size=1)
         return inference_state

@@ -84,9 +84,6 @@ class AnnotatorState(metaclass=Singleton):
     previous_features: Optional[np.ndarray] = None
     previous_labels: Optional[np.ndarray] = None
 
-    # SAM2 video predictor state for 3D segmentation
-    inference_state: Optional[Dict] = None
-
     def initialize_predictor(
         self,
         image_data,
@@ -155,10 +152,6 @@ class AnnotatorState(metaclass=Singleton):
             )
             self.embedding_path = save_path
 
-        # Initialize inference state for SAM2 video predictor (3D only)
-        if is_sam2 and ndim == 3:
-            self._initialize_sam2_inference_state(image_data)
-
         # If we have an embedding path the data signature has already been computed,
         # and we can read it from there.
         if save_path is not None and isinstance(save_path, str):
@@ -195,18 +188,6 @@ class AnnotatorState(metaclass=Singleton):
                         image_embeddings=self.image_embeddings,
                         save_path=save_path, i=i, verbose=False,
                     )
-
-    def _initialize_sam2_inference_state(self, image_data):
-        """Initialize SAM2 inference state for 3D video predictor.
-
-        This method initializes the inference state using the volume directly,
-        avoiding the need to save frames to disk.
-        """
-        # Initialize inference state with volume data directly
-        self.inference_state = self.predictor.init_state(
-            video_path=None,
-            volume=image_data,
-        )
 
     # Get the name of the image layer used to compute the embeddings.
     # If the 'image_name' attribute exists we can just use it.
@@ -269,13 +250,8 @@ class AnnotatorState(metaclass=Singleton):
             miss_vars = ", ".join(miss_vars)
             raise RuntimeError(f"Invalid state: the variables {miss_vars} have to be initialized for tracking.")
 
-    def clear_inference_state(self):
-        """Clean up SAM2 inference state."""
-        self.inference_state = None
-
     def reset_state(self):
         """Reset state, clear all attributes."""
-        self.clear_inference_state()
         self.image_embeddings = None
         self.predictor = None
         self.image_shape = None
