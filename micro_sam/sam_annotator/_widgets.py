@@ -1099,9 +1099,10 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
         )
 
         # Use the segment_slice method
+        boxes = [box[[1, 0, 3, 2]] for box in boxes]
         seg = seg_handler.segment_slice(
             frame_idx=z,
-            points=points,
+            points=points[:, ::-1].copy(),
             labels=labels,
             boxes=boxes,
             masks=masks
