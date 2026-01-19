@@ -153,12 +153,14 @@ def promptable_segmentation_3d(
 class PromptableSegmentation3D:
     """Promptable segmentation class for volumetric data.
     """
-    def __init__(self, predictor, volume, inference_state=None):
+    def __init__(self, predictor, volume):
         self.predictor = predictor
         self.volume = volume
 
         if self.volume.ndim != 3:
             raise AssertionError(f"The dimensionality of the volume should be 3, got '{self.volume.ndim}'")
+
+        self.init_predictor()
 
         # Store prompts per instance.
         self.running_point_frame_ids: Optional[Union[List[int]]] = None
@@ -170,12 +172,6 @@ class PromptableSegmentation3D:
 
         self.running_mask_frame_ids: Optional[Union[int, List[int]]] = None
         self.running_masks: Optional[np.ndarray] = None
-
-        # Initialize or use existing inference state
-        if inference_state is None:
-            self.init_predictor()
-        else:
-            self.inference_state = inference_state
 
     def init_predictor(self):
         # Initialize the inference state.
