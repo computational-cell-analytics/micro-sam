@@ -481,12 +481,12 @@ msa_results_histopathology = {
 DISPLAY_NAME_MAP = {
     "AMG (vit_b) - without grid search": "AMG (SAM)",
     # "AMG - without grid search": r"AMG ($\mu$SAM)",
-    "AIS - without grid search": r"AIS ($\mu$SAM)",
+    "AIS - without grid search": "AIS (µSAM)",
     "CellPose3": "CellPose 3",
     "CellPoseSAM": "CellPoseSAM",
     "CellSAM": "CellSAM",
     "SAM3": "SAM3",
-    "APG - without grid search (cc)": r"$\mathbf{APG}$",
+    "APG - without grid search (cc)": r"$\mathbf{APG}$ " + r"$\mathbf{(µSAM)}$ ",
     # "APG - with grid search (cc)": r"$\mathbf{APG^{*}}$",
 }
 

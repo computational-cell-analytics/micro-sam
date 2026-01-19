@@ -24,22 +24,22 @@ APG_METHOD = "APG - without grid search (cc)"
 
 AVG_DISPLAY_NAME_MAP = {
     "AMG (vit_b) - without grid search": "SAM",
-    "AIS - without grid search": r"$\mu$SAM",
+    "AIS - without grid search": "AIS (µSAM)",
     "SAM3": "SAM3",
     "CellPose3": "CellPose 3",
     "CellPoseSAM": "CellPoseSAM",
     "CellSAM": "CellSAM",
-    "APG - without grid search (cc)": "APG",
+    "APG - without grid search (cc)": "APG (µSAM)",
 }
 
 AVG_DISPLAY_NAME_MAP_HISTO = AVG_DISPLAY_NAME_MAP.copy()
-AVG_DISPLAY_NAME_MAP_HISTO["AIS - without grid search"] = "PathoSAM"
+AVG_DISPLAY_NAME_MAP_HISTO["AIS - without grid search"] = "AIS (PathoSAM)"
 
 plt.rcParams.update({
-    "axes.titlesize": 10,
-    "axes.labelsize": 9,
-    "xtick.labelsize": 8,
-    "ytick.labelsize": 8,
+    "axes.titlesize": 11,
+    "axes.labelsize": 10,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
 })
 
 
@@ -217,7 +217,7 @@ def plot_overall_averages(
 
         disp_names = [disp_map[m] for m in methods]
         ax.set_xticks(x)
-        ax.set_xticklabels(disp_names, rotation=60, ha="right")
+        ax.set_xticklabels(disp_names, rotation=45, ha="right")
 
         xticklabels = ax.get_xticklabels()
         for idx_lbl, lbl in enumerate(xticklabels):
@@ -231,7 +231,7 @@ def plot_overall_averages(
         ax.set_ylim(0.0, 1.0)
 
     fig.text(
-        0.06, 0.5,
+        0.05, 0.65,
         "Mean Segmentation Accuracy (mSA)",
         va="center",
         ha="center",
