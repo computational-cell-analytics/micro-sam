@@ -1076,10 +1076,37 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
     points, labels = point_prompts
 
     state = AnnotatorState()
-    seg = vutil.prompt_segmentation(
-        state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
-        image_embeddings=state.image_embeddings, i=z,
-    )
+
+    # Check if using SAM1 or SAM2
+    if isinstance(state.predictor, SamPredictor):
+        # SAM1 path (existing code)
+        seg = vutil.prompt_segmentation(
+            state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
+            image_embeddings=state.image_embeddings, i=z,
+        )
+    else:
+        # SAM2 path - use PromptableSegmentation3D class
+        from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D
+
+        # Get the volume from the viewer
+        image_name = state.get_image_name(viewer)
+        volume = viewer.layers[image_name].data
+
+        # Create a PromptableSegmentation3D instance with existing inference state
+        seg_handler = PromptableSegmentation3D(
+            predictor=state.predictor,
+            volume=volume,
+        )
+
+        # Use the segment_slice method
+        boxes = [box[[1, 0, 3, 2]] for box in boxes]
+        seg = seg_handler.segment_slice(
+            frame_idx=z,
+            points=points[:, ::-1].copy(),
+            labels=labels,
+            boxes=boxes,
+            masks=masks
+        )
 
     # no prompts were given or prompts were invalid, skip segmentation
     if seg is None:
@@ -1699,6 +1726,7 @@ class SegmentNDWidget(_WidgetBase):
                 volume = self._viewer.layers[0].data  # Assumption is image is in the first index.
 
                 # NOTE: Prototype for new design of prompting in volumetric data.
+                # CP: this looks redundant. We redo the initialization each time a prompt is added.
                 from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D
                 segmenter = PromptableSegmentation3D(predictor=state.predictor, volume=volume)
 
