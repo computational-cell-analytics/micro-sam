@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from PIL import Image
 import imageio.v3 as imageio
 
 from elf.evaluation import mean_segmentation_accuracy, matching
@@ -30,18 +31,15 @@ def run_baseline_engine(image, method, **kwargs):
 
     # Newer SAM methods.
     elif method == "sam3":  # TODO: Wrap this out in a modular function too?
-        from PIL import Image
-        from sam3.model_builder import build_sam3_image_model
-        from sam3.model.sam3_image_processor import Sam3Processor
-        model = build_sam3_image_model()
-        processor = Sam3Processor(model)
+        processor = kwargs["processor"]
+        # Set the image to the processor
         inference_state = processor.set_image(Image.fromarray(_to_image(image)))
         # Prompt the model with text
         processor.reset_all_prompts(inference_state)
         segmentation = processor.set_text_prompt(state=inference_state, prompt=kwargs["prompt"])
         segmentation = segmentation["masks"]  # Get the masks only.
 
-        if len(segmentation) == 0:
+        if len(segmentation) == 0:  # Handles when no objects are segmented.
             segmentation = np.zeros(image.shape[:2], dtype="uint32")
         else:  # HACK: Let's get a cheap merging strategy
             segmentation = segmentation.squeeze(1).detach().cpu().numpy()
@@ -99,6 +97,10 @@ def run_default_baselines(dataset_name, method, model_type, experiment_folder, t
     elif method == "sam2":
         kwargs["model_type"] = model_type
     elif method == "sam3":
+        from micro_sam3.util import get_sam3_model
+        from sam3.model.sam3_image_processor import Sam3Processor
+        model = get_sam3_model(input_type="image")
+        kwargs["processor"] = Sam3Processor(model)
         kwargs["prompt"] = target
 
     msas, sa50s, precisions, recalls, f1s = [], [], [], [], []
