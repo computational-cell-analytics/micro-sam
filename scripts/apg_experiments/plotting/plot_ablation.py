@@ -205,7 +205,7 @@ def plot_apg_vs_ais_relative(
 
     fig.tight_layout(rect=[0.06, 0.18, 1, 0.97])
     fig.text(
-        0.05, 0.55,
+        0.06, 0.575,
         "Relative Mean Segmentation Accuracy (compared to AIS)",
         va="center",
         ha="center",

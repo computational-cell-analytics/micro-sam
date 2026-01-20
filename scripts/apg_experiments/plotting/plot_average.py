@@ -34,6 +34,7 @@ AVG_DISPLAY_NAME_MAP = {
 
 AVG_DISPLAY_NAME_MAP_HISTO = AVG_DISPLAY_NAME_MAP.copy()
 AVG_DISPLAY_NAME_MAP_HISTO["AIS - without grid search"] = "AIS (PathoSAM)"
+AVG_DISPLAY_NAME_MAP_HISTO["APG - without grid search (cc)"] = "APG \n (PathoSAM)"
 
 plt.rcParams.update({
     "axes.titlesize": 11,
@@ -231,7 +232,7 @@ def plot_overall_averages(
         ax.set_ylim(0.0, 1.0)
 
     fig.text(
-        0.05, 0.65,
+        0.05, 0.575,
         "Mean Segmentation Accuracy (mSA)",
         va="center",
         ha="center",

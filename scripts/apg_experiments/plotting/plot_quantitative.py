@@ -17,7 +17,7 @@ if "AMG - without grid search" in DISPLAY_NAME_MAP_HISTO:
 if "AIS - without grid search" in DISPLAY_NAME_MAP_HISTO:
     DISPLAY_NAME_MAP_HISTO["AIS - without grid search"] = "AIS (PathoSAM)"
 if "APG - without grid search (cc)" in DISPLAY_NAME_MAP_HISTO:
-    DISPLAY_NAME_MAP_HISTO["APG - without grid search (cc)"] = r"$\mathbf{APG}$ " + r"$\mathbf{(PathoSAM)}$ "
+    DISPLAY_NAME_MAP_HISTO["APG - without grid search (cc)"] = r"$\mathbf{APG}$ " + "\n" + r"$\mathbf{(PathoSAM)}$ "
 
 plt.rcParams.update({
     "axes.titlesize": 15,
@@ -150,21 +150,18 @@ def plot_msa_grid(
     for j in range(len(datasets), len(axes)):
         fig.delaxes(axes[j])
 
-    if suptitle is not None:
-        fig.tight_layout(rect=[0.08, 0, 1, 0.95])
-    else:
-        fig.tight_layout(rect=[0.08, 0, 1, 1])
-
     fig.text(
-        0.075, 0.5, "Mean Segmentation Accuracy", va="center", ha="center",
-        rotation="vertical", fontsize=12, fontweight="bold",
+        0.02, 0.525, "Mean Segmentation Accuracy", va="center", ha="center",
+        rotation="vertical", fontsize=14, fontweight="bold",
     )
 
+    fig.subplots_adjust(left=0.075, right=0.98, bottom=0.125, top=0.95, wspace=0.1, hspace=0.9)
+
     if save_path is not None:
-        fig.savefig(save_path, bbox_inches="tight", dpi=300)
+        fig.savefig(save_path, dpi=300)
         root, _ = os.path.splitext(save_path)
         svg_path = root + ".svg"
-        fig.savefig(svg_path, bbox_inches="tight")
+        fig.savefig(svg_path)
 
     return fig, axes
 
