@@ -3,7 +3,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-from util import (
+from plot_util import (
     msa_results,
     msa_results_fluorescence,
     msa_results_label_free,

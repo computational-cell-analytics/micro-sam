@@ -65,14 +65,16 @@ def run_baseline_engine(image, method, **kwargs):
 
 def run_default_baselines(dataset_name, method, model_type, experiment_folder, target=None):
     # Prepare the results folder.
-    res_folder = os.path.join(experiment_folder, "results")
+    res_folder = "./results"  # HACK: I'll store stuff in the cwd for now.
     inference_folder = os.path.join(experiment_folder, "inference", f"{dataset_name}_{method}_{model_type}")
     os.makedirs(res_folder, exist_ok=True)
     os.makedirs(inference_folder, exist_ok=True)
 
-    csv_path = os.path.join(experiment_folder, "results", f"{dataset_name}_{method}_{model_type}.csv")
+    fnext = (target if model_type == "sam3" else model_type)
+    csv_path = os.path.join(res_folder, f"{dataset_name}_{method}_{fnext}.csv")
     if os.path.exists(csv_path):
-        print(f"The results are computed and stored at {csv_path}")
+        print(pd.read_csv(csv_path))
+        print(f"The results are computed and stored at '{csv_path}'.")
         return
 
     # Get the image and label paths.
@@ -137,7 +139,12 @@ def run_default_baselines(dataset_name, method, model_type, experiment_folder, t
     }
     results = pd.DataFrame.from_dict([results])
     results.to_csv(csv_path)
-    print(f"The results are stored at {csv_path}")
+    print(results)
+    print(f"The results above are stored at '{csv_path}'.")
+
+    # HACK: Force remove the inference folder
+    import shutil
+    shutil.rmtree(experiment_folder)
 
 
 def main(args):
