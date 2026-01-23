@@ -1375,7 +1375,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
                 - 'binary_mask': Return a list of dictionaries with masks encoded as binary masks.
                 - 'instance_segmentation': Return masks merged into an instance segmentation in a single array.
                 By default, set to 'instance_segmentation'.
-            mask_threshold: The threshold for turining logits into masks in `micro_sam.inference.batched_inference`.`
+            mask_threshold: The threshold for turning logits into masks in `micro_sam.inference.batched_inference`.`
             refine_with_box_prompts: Whether to refine the mask outputs with another round of box promtps
                 derived from the segmentations after point prompts.
             prompt_function: A custom function for deriving prompts from the segmentation decoder predictions.

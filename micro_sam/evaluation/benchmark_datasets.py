@@ -550,7 +550,7 @@ def _run_automatic_segmentation_per_dataset(
 
     # Get the predictor (and the additional instance segmentation decoder, if available).
     predictor, segmenter = get_predictor_and_segmenter(
-        model_type=model_type, checkpoint=checkpoint_path, device=device, amg=run_amg, is_tiled=False,
+        model_type=model_type, checkpoint=checkpoint_path, device=device, segmentation_mode=run_amg, is_tiled=False,
     )
 
     for image_path in tqdm(image_paths, desc=f"Run {experiment_name} in {ndim}d"):

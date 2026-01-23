@@ -4,7 +4,7 @@ from glob import glob
 from tqdm import tqdm
 from pathlib import Path
 from functools import partial
-from typing import Dict, List, Optional, Union, Tuple
+from typing import Dict, List, Optional, Union, Tuple, Literal
 
 import numpy as np
 import imageio.v3 as imageio
@@ -26,7 +26,7 @@ def get_predictor_and_segmenter(
     model_type: str,
     checkpoint: Optional[Union[os.PathLike, str]] = None,
     device: str = None,
-    segmentation_mode: Optional[str] = None,
+    segmentation_mode: Optional[Literal["amg", "ais", "apg"]] = None,
     is_tiled: bool = False,
     predictor=None,
     state=None,

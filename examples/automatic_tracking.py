@@ -29,7 +29,7 @@ def example_automatic_tracking(use_finetuned_model):
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-ctc.zarr")
         model_type = "vit_h"
 
-    predictor, segmenter = get_predictor_and_segmenter(model_type=model_type, amg=False)
+    predictor, segmenter = get_predictor_and_segmenter(model_type=model_type, segmentation_mode="ais")
 
     masks_tracked, _ = automatic_tracking(
         predictor=predictor,
