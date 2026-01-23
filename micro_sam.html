@@ -55,6 +55,7 @@
     <li><a href="#choosing-a-model">Choosing a Model</a></li>
     <li><a href="#other-models">Other Models</a></li>
   </ul></li>
+  <li><a href="#apg">APG</a></li>
   <li><a href="#community-data-submissions">Community Data Submissions</a></li>
   <li><a href="#faq">FAQ</a>
   <ul>
@@ -131,7 +132,7 @@ We are still working on improving and extending its functionality. The current r
 <ul>
 <li>Releasing more and better finetuned models for the biomedical imaging domain.</li>
 <li>Integrating parameter efficient training and compressed models for efficient fine-tuning and faster inference.</li>
-<li>Support for <a href="https://ai.meta.com/sam2/">SAM2</a>.</li>
+<li>Support for <a href="https://ai.meta.com/sam2/">SAM2</a> and <a href="https://ai.meta.com/sam3/">SAM3</a>.</li>
 </ul>
 
 <p>If you run into any problems or have questions please <a href="https://github.com/computational-cell-analytics/micro-sam/issues/new">open an issue</a> or reach out via <a href="https://forum.image.sc/">image.sc</a> using the tag <code>micro-sam</code>.
@@ -576,18 +577,19 @@ It is then applied to all objects to obtain the semantic segmentation shown in <
 <li>Running <code>$ micro_sam.train</code> for finetuning Segment Anything models on your data.</li>
 <li>Running <code>$ <a href="micro_sam/automatic_segmentation.html">micro_sam.automatic_segmentation</a></code> for automatic instance segmentation.
 <ul>
-<li>We support all post-processing parameters for automatic instance segmentation (for both AMG and AIS).
+<li>We support all post-processing parameters for automatic instance segmentation (for AMG, AIS and APG).
 <ul>
-<li>The automatic segmentation mode can be controlled by: <code>--mode &lt;MODE_NAME&gt;</code>, where the available choice for <code>MODE_NAME</code> is <code>amg</code> / <code>ais</code>.</li>
+<li>The automatic segmentation mode can be controlled by: <code>--mode &lt;MODE_NAME&gt;</code>, where the available choice for <code>MODE_NAME</code> is <code>amg</code> / <code>ais</code> / <code>apg</code>.</li>
 <li>AMG is supported by both default Segment Anything models and <code>micro-sam</code> models / finetuned models.</li>
 <li>AIS is supported by <code>micro-sam</code> models (or finetuned models; subjected to they are trained with the additional instance segmentation decoder)</li>
+<li>APG is supported by <code>micro-sam</code> models (or finetuned models; subjected to they are trained with the additional instance segmentation decoder)</li>
 </ul></li>
 <li>If these parameters are not provided by the user, <code>micro-sam</code> makes use of the best post-processing parameters (depending on the choice of model). </li>
 <li>The post-processing parameters can be changed by parsing the parameters via the CLI using <code>--&lt;PARAMETER_NAME&gt; &lt;VALUE&gt;.</code> For example, one can update the parameter values (eg. <code>pred_iou_thresh</code>, <code>stability_iou_thresh</code>, etc. - supported by AMG) using <code>$ <a href="micro_sam/automatic_segmentation.html">micro_sam.automatic_segmentation</a> ... --pred_iou_thresh 0.6 --stability_iou_thresh 0.6 ...</code>
 <ul>
 <li>Remember to specify the automatic segmentation mode using <code>--mode &lt;MODE_NAME&gt;</code> when using additional post-processing parameters.</li>
 </ul></li>
-<li>You can check details for supported parameters and their respective default values at <code>micro_sam/instance_segmentation.py</code> under the <code>generate</code> method for <code>AutomaticMaskGenerator</code> and <code>InstanceSegmentationWithDecoder</code> class.</li>
+<li>You can check details for supported parameters and their respective default values at <code>micro_sam/instance_segmentation.py</code> under the <code>generate</code> method for <code>AutomaticMaskGenerator</code>, <code>InstanceSegmentationWithDecoder</code> and <code>AutomaticPromptGenerator</code> class.</li>
 <li>A good practice is to set <code>--ndim &lt;NDIM&gt;</code>, where <code>&lt;NDIM&gt;</code> corresponds to the number of dimensions of input images.</li>
 </ul></li>
 <li>Running <code>$ micro_sam.evaluate</code> for evaluating instance segmentation.</li>
@@ -864,6 +866,21 @@ An improved version of the light microscopy that were trained on a larger datase
 <li><a href="https://doi.org/10.5281/zenodo.11117615">Finetuned Models for the user studies</a></li>
 </ul>
 
+<h1 id="apg">APG</h1>
+
+<p><code><a href="">micro_sam</a></code> supports three different modes for instance segmentation:</p>
+
+<ul>
+<li>Automatic Mask Generation (AMG) covers the image with a grid of points. These points are used as prompts and the resulting masks are merged via non-maximum suppression (NMS) to obtain the instance segmentation. This method has been introduced by the original SAM publication.</li>
+<li>Automatic Instance Segmentation (AIS) uses an additional segmentation decoder, which we introduced in the <code><a href="">micro_sam</a></code> publication. This decoder predicts foreground probabilities as well as the normalized distances to cell centroids and boundaries. These predictions are used as input to a waterhsed to obtain the instances.</li>
+<li>Autmatic Prompt Generation (APG) is an instance segmentation approach that we introduced in <a href="https://openreview.net/forum?id=xFO3DFZN45">a new paper</a>. It derives point prompts from the segmentation decoder (see AIS) and merges the resulting masks via NMS.</li>
+</ul>
+
+<p>In our experiments, APG yields the best overall instance segmentation results (compared to AMG and AIS) and is competitive with CellPose-SAM, the state-of-the-art model for cell instance segmentation.</p>
+
+<p>The segmentation mode can be selected with the argument <code>mode</code> or <code>segmentation_mode</code> in the <a href="#using-the-command-line-interface-cli">CLI</a> and <a href="https://computational-cell-analytics.github.io/micro-sam/micro_sam/automatic_segmentation.html">python functionality</a>. For details on how to use the different automatic segmentation modes check out the <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/automatic_segmentation.ipynb">automatic segmentation
+notebook</a>. The code for the experiments comparing the different segmentation modes (from <a href="https://openreview.net/forum?id=xFO3DFZN45">the new paper</a>) can be found <a href="https://github.com/computational-cell-analytics/micro-sam/tree/master/scripts/apg_experiments">here</a>.</p>
+
 <h1 id="community-data-submissions">Community Data Submissions</h1>
 
 <p>We are looking to further improve the <code><a href="">micro_sam</a></code> models by training on more diverse microscopy data.
@@ -1028,7 +1045,7 @@ So please reinstall <code><a href="">micro_sam</a></code>, following <a href="#i
 TODO provide relevant links here.
 --></p>
 
-<h3 id="1-i-have-some-micropscopy-images-can-i-use-the-annotator-tool-for-segmenting-them">1. I have some micropscopy images. Can I use the annotator tool for segmenting them?</h3>
+<h3 id="1-i-have-some-microscopy-images-can-i-use-the-annotator-tool-for-segmenting-them">1. I have some microscopy images. Can I use the annotator tool for segmenting them?</h3>
 
 <p>Yes, you can use the annotator tool for:</p>
 
@@ -1170,26 +1187,30 @@ TODO: we should improve this explanation and add a small image that visualizes t
 <p>You can load your finetuned model by entering the path to its checkpoint in the <code>custom_weights_path</code> field in the <code>Embedding Settings</code> drop-down menu.
 If you are using the python library or CLI you can specify this path with the <code>checkpoint_path</code> parameter.</p>
 
-<h3 id="5-what-is-the-background-of-the-new-ais-automatic-instance-segmentation-feature-in-micro_sam">5. What is the background of the new AIS (Automatic Instance Segmentation) feature in <code><a href="">micro_sam</a></code>?</h3>
+<h3 id="5-what-is-the-background-of-the-ais-automatic-instance-segmentation-feature-in-micro_sam">5. What is the background of the AIS (Automatic Instance Segmentation) feature in <code><a href="">micro_sam</a></code>?</h3>
 
-<p><code><a href="">micro_sam</a></code> introduces a new segmentation decoder to the Segment Anything backbone, for enabling faster and accurate automatic instance segmentation, by predicting the <a href="https://github.com/constantinpape/torch-em/blob/main/torch_em/transform/label.py#L284">distances to the object center and boundary</a> as well as predicting foregrund, and performing <a href="https://github.com/constantinpape/torch-em/blob/main/torch_em/util/segmentation.py#L122">seeded watershed-based postprocessing</a> to obtain the instances.</p>
+<p><code><a href="">micro_sam</a></code> introduces a new segmentation decoder to the Segment Anything backbone, for enabling faster and accurate automatic instance segmentation, by predicting the <a href="https://github.com/constantinpape/torch-em/blob/main/torch_em/transform/label.py#L284">distances to the object center and boundary</a> as well as predicting foreground, and performing <a href="https://github.com/constantinpape/torch-em/blob/main/torch_em/util/segmentation.py#L122">seeded watershed-based postprocessing</a> to obtain the instances.</p>
 
-<h3 id="6-i-want-to-finetune-only-the-segment-anything-model-without-the-additional-instance-decoder">6. I want to finetune only the Segment Anything model without the additional instance decoder.</h3>
+<h3 id="6-what-is-the-background-of-the-new-apg-automatic-prompt-generation-feature-in-micro_sam">6. What is the background of the new APG (Automatic Prompt Generation) feature in <code><a href="">micro_sam</a></code>?</h3>
 
-<p>The instance segmentation decoder is optional. So you can only finetune SAM or SAM and the additional decoder. Finetuning with the decoder will increase training times, but will enable you to use AIS. See <a href="https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/finetuning#example-for-model-finetuning">this example</a> for finetuning with both the objectives.</p>
+<p>With the latest version 1.7.0 onwards, <code><a href="">micro_sam</a></code> introduces a new automatic instance segmentation method, called APG (automatic prompt generation). It builds on <code><a href="">micro_sam</a></code> by extracting prompts from the boundary and center distances predicted by the pretrained segmentation decoder. Once the prompts have been derived, it provides them to the prompt encoder and mask decoder (and additional postprocessing to the outputs) to obtain the instances. The method is compatible with the <code><a href="micro_sam/automatic_segmentation.html">micro_sam.automatic_segmentation</a></code> CLI (by selecting the <code>segmentation_mode="apg"</code>) and the python interface. See <a href="#apg">APG</a> for details.</p>
+
+<h3 id="7-i-want-to-finetune-only-the-segment-anything-model-without-the-additional-instance-decoder">7. I want to finetune only the Segment Anything model without the additional instance decoder.</h3>
+
+<p>The instance segmentation decoder is optional. So you can only finetune SAM or SAM and the additional decoder. Finetuning with the decoder will increase training times, but will enable you to use AIS and APG. See <a href="https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/finetuning#example-for-model-finetuning">this example</a> for finetuning with both the objectives.</p>
 
 <blockquote>
   <p>NOTE: To try out the other way round (i.e. the automatic instance segmentation framework without the interactive capability, i.e. a UNETR: a vision transformer encoder and a convolutional decoder), you can take inspiration from this <a href="https://github.com/constantinpape/torch-em/blob/main/experiments/vision-transformer/unetr/for_vimunet_benchmarking/run_livecell.py">example on LIVECell</a>.</p>
 </blockquote>
 
-<h3 id="7-i-have-a-nvidia-rtx-4090ti-gpu-with-24gb-vram-can-i-finetune-segment-anything">7. I have a NVIDIA RTX 4090Ti GPU with 24GB VRAM. Can I finetune Segment Anything?</h3>
+<h3 id="8-i-have-a-nvidia-rtx-4090ti-gpu-with-24gb-vram-can-i-finetune-segment-anything">8. I have a NVIDIA RTX 4090Ti GPU with 24GB VRAM. Can I finetune Segment Anything?</h3>
 
 <p>Finetuning Segment Anything is possible in most consumer-grade GPU and CPU resources (but training being a lot slower on the CPU). For the mentioned resource, it should be possible to finetune a ViT Base (also abbreviated as <code>vit_b</code>) by reducing the number of objects per image to 15.
 This parameter has the biggest impact on the VRAM consumption and quality of the finetuned model.
 You can find an overview of the resources we have tested for finetuning <a href="#training-your-own-model">here</a>.
 We also provide a the convenience function <code>micro_sam.training.train_sam_for_configuration</code> that selects the best training settings for these configuration. This function is also used by the finetuning UI.</p>
 
-<h3 id="8-i-want-to-create-a-dataloader-for-my-data-to-finetune-segment-anything">8. I want to create a dataloader for my data, to finetune Segment Anything.</h3>
+<h3 id="9-i-want-to-create-a-dataloader-for-my-data-to-finetune-segment-anything">9. I want to create a dataloader for my data, to finetune Segment Anything.</h3>
 
 <p>Thanks to <code>torch-em</code>, a) Creating PyTorch datasets and dataloaders using the python library is convenient and supported for various data formats and data structures.
 See the <a href="https://github.com/constantinpape/torch-em/blob/main/notebooks/tutorial_create_dataloaders.ipynb">tutorial notebook</a> on how to create dataloaders using <code>torch-em</code> and the <a href="https://github.com/constantinpape/torch-em/blob/main/doc/datasets_and_dataloaders.md">documentation</a> for details on creating your own datasets and dataloaders; and b) finetuning using the <code>napari</code> tool eases the aforementioned process, by allowing you to add the input parameters (path to the directory for inputs and labels etc.) directly in the tool.</p>
@@ -1198,7 +1219,7 @@ See the <a href="https://github.com/constantinpape/torch-em/blob/main/notebooks/
   <p>NOTE: If you have images with large input shapes with a sparse density of instance segmentations, we recommend using <a href="https://github.com/constantinpape/torch-em/blob/main/torch_em/data/sampler.py"><code>sampler</code></a> for choosing the patches with valid segmentation for the finetuning purpose (see the <a href="https://github.com/computational-cell-analytics/micro-sam/blob/master/finetuning/specialists/training/light_microscopy/plantseg_root_finetuning.py#L29">example</a> for PlantSeg (Root) specialist model in <code><a href="">micro_sam</a></code>).</p>
 </blockquote>
 
-<h3 id="9-how-can-i-evaluate-a-model-i-have-finetuned">9. How can I evaluate a model I have finetuned?</h3>
+<h3 id="10-how-can-i-evaluate-a-model-i-have-finetuned">10. How can I evaluate a model I have finetuned?</h3>
 
 <p>To validate a Segment Anything model for your data, you have different options, depending on the task you want to solve and whether you have segmentation annotations for your data.</p>
 
@@ -1503,17 +1524,18 @@ In order to use BAND and start <code><a href="">micro_sam</a></code> on it follo
 </span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="sd">.. include:: ../doc/cli_tools.md</span>
 </span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a><span class="sd">.. include:: ../doc/python_library.md</span>
 </span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="sd">.. include:: ../doc/finetuned_models.md</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="sd">.. include:: ../doc/data_submission.md</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="sd">.. include:: ../doc/faq.md</span>
-</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="sd">.. include:: ../doc/contributing.md</span>
-</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="sd">.. include:: ../doc/band.md</span>
-</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>
-</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
-</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>
-</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.__version__</span><span class="w"> </span><span class="kn">import</span> <span class="n">__version__</span>
-</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>
-</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;PYTORCH_ENABLE_MPS_FALLBACK&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;1&quot;</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="sd">.. include:: ../doc/apg.md</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="sd">.. include:: ../doc/data_submission.md</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="sd">.. include:: ../doc/faq.md</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="sd">.. include:: ../doc/contributing.md</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="sd">.. include:: ../doc/band.md</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>
+</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a>
+</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.__version__</span><span class="w"> </span><span class="kn">import</span> <span class="n">__version__</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>
+</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;PYTORCH_ENABLE_MPS_FALLBACK&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;1&quot;</span>
 </span></pre></div>
 
 
