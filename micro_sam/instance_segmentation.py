@@ -8,7 +8,7 @@ import warnings
 from abc import ABC
 from copy import deepcopy
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Literal, List, Optional, Tuple, Union
 
 import vigra
 import numpy as np
@@ -1572,7 +1572,7 @@ def get_instance_segmentation_generator(
     predictor: SamPredictor,
     is_tiled: bool,
     decoder: Optional[torch.nn.Module] = None,
-    segmentation_mode: Optional[str] = None,
+    segmentation_mode: Optional[Literal["amg", "ais", "apg"]] = None,
     **kwargs,
 ) -> Union[AMGBase, InstanceSegmentationWithDecoder]:
     f"""Get the automatic mask generator.
