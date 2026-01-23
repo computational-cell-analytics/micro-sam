@@ -94,7 +94,7 @@ We recommend transferring the model checkpoints to the system-level cache direct
 <!---
 TODO provide relevant links here.
 -->
-### 1. I have some micropscopy images. Can I use the annotator tool for segmenting them?
+### 1. I have some microscopy images. Can I use the annotator tool for segmenting them?
 Yes, you can use the annotator tool for:
 - Segmenting objects in 2d images (using automatic and/or interactive segmentation).
 - Segmenting objects in 3d volumes (using automatic and/or interactive segmentation for the entire object(s)).
