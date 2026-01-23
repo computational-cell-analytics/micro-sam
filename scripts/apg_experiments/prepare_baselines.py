@@ -65,7 +65,7 @@ def run_baseline_engine(image, method, **kwargs):
 
 def run_default_baselines(dataset_name, method, model_type, experiment_folder, target=None):
     # Prepare the results folder.
-    res_folder = "./results"  # HACK: I'll store stuff in the cwd for now.
+    res_folder = os.path.join(experiment_folder, "results")
     inference_folder = os.path.join(experiment_folder, "inference", f"{dataset_name}_{method}_{model_type}")
     os.makedirs(res_folder, exist_ok=True)
     os.makedirs(inference_folder, exist_ok=True)
@@ -141,10 +141,6 @@ def run_default_baselines(dataset_name, method, model_type, experiment_folder, t
     results.to_csv(csv_path)
     print(results)
     print(f"The results above are stored at '{csv_path}'.")
-
-    # HACK: Force remove the inference folder
-    import shutil
-    shutil.rmtree(experiment_folder)
 
 
 def main(args):
