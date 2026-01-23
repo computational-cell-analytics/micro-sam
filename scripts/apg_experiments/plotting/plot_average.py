@@ -23,7 +23,7 @@ AVG_METHODS = [
 APG_METHOD = "APG - without grid search (cc)"
 
 AVG_DISPLAY_NAME_MAP = {
-    "AMG (vit_b) - without grid search": "SAM",
+    "AMG (vit_b) - without grid search": "AMG (SAM)",
     "AIS - without grid search": "AIS (µSAM)",
     "SAM3": "SAM3",
     "CellPose3": "CellPose 3",

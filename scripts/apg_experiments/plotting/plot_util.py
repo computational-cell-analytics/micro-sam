@@ -1,3 +1,6 @@
+# NOTE: All SAM3 prompts are the same: "cell" (matching with the training routine)
+
+
 msa_results = {
     "DSB": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.331},
@@ -10,7 +13,7 @@ msa_results = {
         {"method": "CellPose3", "mSA": 0.484},
         {"method": "CellPoseSAM", "mSA": 0.656},
         {"method": "CellSAM", "mSA": 0.634},
-        {"method": "SAM3", "mSA": 0.383},
+        {"method": "SAM3", "mSA": 0.367},
     ],
     "U20S": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.258},
@@ -23,7 +26,7 @@ msa_results = {
         {"method": "CellPose3", "mSA": 0.787},
         {"method": "CellPoseSAM", "mSA": 0.787},
         {"method": "CellSAM", "mSA": 0.673},
-        {"method": "SAM3", "mSA": 0.636},
+        {"method": "SAM3", "mSA": 0.674},
     ],
     "Arvidsson": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.416},
@@ -36,7 +39,7 @@ msa_results = {
         {"method": "CellPose3", "mSA": 0.611},
         {"method": "CellPoseSAM", "mSA": 0.484},
         {"method": "CellSAM", "mSA": 0.434},
-        {"method": "SAM3", "mSA": 0.488},
+        {"method": "SAM3", "mSA": 0.297},
     ],
     "BitDepth NucSeg": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.224},
@@ -49,7 +52,7 @@ msa_results = {
         {"method": "CellPose3", "mSA": 0.302},
         {"method": "CellPoseSAM", "mSA": 0.377},
         {"method": "CellSAM", "mSA": 0.168},
-        {"method": "SAM3", "mSA": 0.201},
+        {"method": "SAM3", "mSA": 0.182},
     ],
     "IFNuclei": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.293},
@@ -62,7 +65,7 @@ msa_results = {
         {"method": "CellPose3", "mSA": 0.404},
         {"method": "CellPoseSAM", "mSA": 0.728},
         {"method": "CellSAM", "mSA": 0.589},
-        {"method": "SAM3", "mSA": 0.405},
+        {"method": "SAM3", "mSA": 0.301},
     ],
     "DynamicNuclearNet": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.298},
@@ -75,7 +78,7 @@ msa_results = {
         {"method": "CellPose3", "mSA": 0.512},
         {"method": "CellPoseSAM", "mSA": 0.379},
         {"method": "CellSAM", "mSA": 0.455},
-        {"method": "SAM3", "mSA": 0.376},
+        {"method": "SAM3", "mSA": 0.346},
     ],
     "GoNuclear": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.339},
@@ -88,7 +91,7 @@ msa_results = {
         {"method": "CellPose3", "mSA": 0.447},
         {"method": "CellPoseSAM", "mSA": 0.415},
         {"method": "CellSAM", "mSA": 0.112},
-        {"method": "SAM3", "mSA": 0.132},
+        {"method": "SAM3", "mSA": 0.034},
     ],
     "NIS3D": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.216},
@@ -101,7 +104,7 @@ msa_results = {
         {"method": "CellPose3", "mSA": 0.255},
         {"method": "CellPoseSAM", "mSA": 0.246},
         {"method": "CellSAM", "mSA": 0.264},
-        {"method": "SAM3", "mSA": 0.008},
+        {"method": "SAM3", "mSA": 0.031},
     ],
     "Parhyale Regen": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.173},
@@ -114,7 +117,7 @@ msa_results = {
         {"method": "CellPose3", "mSA": 0.138},
         {"method": "CellPoseSAM", "mSA": 0.272},
         {"method": "CellSAM", "mSA": 0.144},
-        {"method": "SAM3", "mSA": 0.039},
+        {"method": "SAM3", "mSA": 0.063},
     ],
 }
 
@@ -130,7 +133,7 @@ msa_results_fluorescence = {
         {"method": "CellPose3", "mSA": 0.154},
         {"method": "CellPoseSAM", "mSA": 0.475},
         {"method": "CellSAM", "mSA": 0.345},
-        {"method": "SAM3", "mSA": 0.089},
+        {"method": "SAM3", "mSA": 0.121},
     ],
     "CellPose": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.147},
@@ -143,7 +146,7 @@ msa_results_fluorescence = {
         {"method": "CellPose3", "mSA": 0.431},
         {"method": "CellPoseSAM", "mSA": 0.566},
         {"method": "CellSAM", "mSA": 0.413},
-        {"method": "SAM3", "mSA": 0.229},
+        {"method": "SAM3", "mSA": 0.299},
     ],
     "PlantSeg (Root)": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.091},
@@ -156,7 +159,7 @@ msa_results_fluorescence = {
         {"method": "CellPose3", "mSA": 0.076},
         {"method": "CellPoseSAM", "mSA": 0.161},
         {"method": "CellSAM", "mSA": 0.096},
-        {"method": "SAM3", "mSA": 0.023},
+        {"method": "SAM3", "mSA": 0.067},
     ],
     "PlantSeg (Ovules)": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.135},
@@ -169,7 +172,7 @@ msa_results_fluorescence = {
         {"method": "CellPose3", "mSA": 0.266},
         {"method": "CellPoseSAM", "mSA": 0.331},
         {"method": "CellSAM", "mSA": 0.333},
-        {"method": "SAM3", "mSA": 0.071},
+        {"method": "SAM3", "mSA": 0.184},
     ],
     "PNAS Arabidopsis": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.145},
@@ -182,7 +185,7 @@ msa_results_fluorescence = {
         {"method": "CellPose3", "mSA": 0.411},
         {"method": "CellPoseSAM", "mSA": 0.471},
         {"method": "CellSAM", "mSA": 0.459},
-        {"method": "SAM3", "mSA": 0.073},
+        {"method": "SAM3", "mSA": 0.241},
     ],
     "Covid-IF": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.007},
@@ -195,7 +198,7 @@ msa_results_fluorescence = {
         {"method": "CellPose3", "mSA": 0.161},
         {"method": "CellPoseSAM", "mSA": 0.333},
         {"method": "CellSAM", "mSA": 0.154},
-        {"method": "SAM3", "mSA": 0.004},
+        {"method": "SAM3", "mSA": 0.005},
     ],
     "HPA": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.043},
@@ -208,7 +211,7 @@ msa_results_fluorescence = {
         {"method": "CellPose3", "mSA": 0.078},
         {"method": "CellPoseSAM", "mSA": 0.431},
         {"method": "CellSAM", "mSA": 0.301},
-        {"method": "SAM3", "mSA": 0.152},
+        {"method": "SAM3", "mSA": 0.155},
     ],
     "CellBinDB": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.177},
@@ -221,7 +224,7 @@ msa_results_fluorescence = {
         {"method": "CellPose3", "mSA": 0.279},
         {"method": "CellPoseSAM", "mSA": 0.342},
         {"method": "CellSAM", "mSA": 0.264},
-        {"method": "SAM3", "mSA": 0.136},
+        {"method": "SAM3", "mSA": 0.137},
     ],
     "Mouse Embryo": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.003},
@@ -234,7 +237,7 @@ msa_results_fluorescence = {
         {"method": "CellPose3", "mSA": 0.109},
         {"method": "CellPoseSAM", "mSA": 0.155},
         {"method": "CellSAM", "mSA": 0.083},
-        {"method": "SAM3", "mSA": 0.073},
+        {"method": "SAM3", "mSA": 0.081},
     ],
 }
 
@@ -250,7 +253,7 @@ msa_results_label_free = {
         {"method": "CellPose3", "mSA": 0.414},
         {"method": "CellPoseSAM", "mSA": 0.444},
         {"method": "CellSAM", "mSA": 0.098},
-        {"method": "SAM3", "mSA": 0.313},
+        {"method": "SAM3", "mSA": 0.331},
     ],
     "OmniPose": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.137},
@@ -263,7 +266,7 @@ msa_results_label_free = {
         {"method": "CellPose3", "mSA": 0.468},
         {"method": "CellPoseSAM", "mSA": 0.644},
         {"method": "CellSAM", "mSA": 0.531},
-        {"method": "SAM3", "mSA": 0.131},
+        {"method": "SAM3", "mSA": 0.356},
     ],
     "DeepBacs": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.057},
@@ -276,7 +279,7 @@ msa_results_label_free = {
         {"method": "CellPose3", "mSA": 0.455},
         {"method": "CellPoseSAM", "mSA": 0.612},
         {"method": "CellSAM", "mSA": 0.441},
-        {"method": "SAM3", "mSA": 0.083},
+        {"method": "SAM3", "mSA": 0.157},
     ],
     "Usiigaci": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.051},
@@ -289,7 +292,7 @@ msa_results_label_free = {
         {"method": "CellPose3", "mSA": 0.291},
         {"method": "CellPoseSAM", "mSA": 0.445},
         {"method": "CellSAM", "mSA": 0.167},
-        {"method": "SAM3", "mSA": 0.377},
+        {"method": "SAM3", "mSA": 0.362},
     ],
     "Vicar": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.115},
@@ -302,7 +305,7 @@ msa_results_label_free = {
         {"method": "CellPose3", "mSA": 0.338},
         {"method": "CellPoseSAM", "mSA": 0.458},
         {"method": "CellSAM", "mSA": 0.426},
-        {"method": "SAM3", "mSA": 0.122},
+        {"method": "SAM3", "mSA": 0.086},
     ],
     "TOIAM": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.009},
@@ -315,7 +318,7 @@ msa_results_label_free = {
         {"method": "CellPose3", "mSA": 0.837},
         {"method": "CellPoseSAM", "mSA": 0.898},
         {"method": "CellSAM", "mSA": 0.631},
-        {"method": "SAM3", "mSA": 0.0},
+        {"method": "SAM3", "mSA": 0.027},
     ],
     "DeepSeas": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.098},
@@ -328,7 +331,7 @@ msa_results_label_free = {
         {"method": "CellPose3", "mSA": 0.191},
         {"method": "CellPoseSAM", "mSA": 0.345},
         {"method": "CellSAM", "mSA": 0.203},
-        {"method": "SAM3", "mSA": 0.227},
+        {"method": "SAM3", "mSA": 0.277},
     ],
     "YeaZ": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.382},
@@ -341,7 +344,7 @@ msa_results_label_free = {
         {"method": "CellPose3", "mSA": 0.817},
         {"method": "CellPoseSAM", "mSA": 0.873},
         {"method": "CellSAM", "mSA": 0.853},
-        {"method": "SAM3", "mSA": 0.764},
+        {"method": "SAM3", "mSA": 0.723},
     ],
     "SegPC": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.027},
@@ -354,7 +357,7 @@ msa_results_label_free = {
         {"method": "CellPose3", "mSA": 0.001},
         {"method": "CellPoseSAM", "mSA": 0.178},
         {"method": "CellSAM", "mSA": 0.069},
-        {"method": "SAM3", "mSA": 0.152},
+        {"method": "SAM3", "mSA": 0.106},
     ],
 }
 
@@ -370,7 +373,7 @@ msa_results_histopathology = {
         {"method": "CellPose3", "mSA": 0.152},
         {"method": "CellPoseSAM", "mSA": 0.342},
         {"method": "CellSAM", "mSA": 0.244},
-        {"method": "SAM3", "mSA": 0.159},
+        {"method": "SAM3", "mSA": 0.341},
     ],
     "IHC TMA": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.236},
@@ -383,7 +386,7 @@ msa_results_histopathology = {
         {"method": "CellPose3", "mSA": 0.297},
         {"method": "CellPoseSAM", "mSA": 0.452},
         {"method": "CellSAM", "mSA": 0.333},
-        {"method": "SAM3", "mSA": 0.353},
+        {"method": "SAM3", "mSA": 0.435},
     ],
     "LynSec": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.233},
@@ -396,7 +399,7 @@ msa_results_histopathology = {
         {"method": "CellPose3", "mSA": 0.163},
         {"method": "CellPoseSAM", "mSA": 0.561},
         {"method": "CellSAM", "mSA": 0.213},
-        {"method": "SAM3", "mSA": 0.003},
+        {"method": "SAM3", "mSA": 0.157},
     ],
     "MoNuSeg": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.182},
@@ -409,7 +412,7 @@ msa_results_histopathology = {
         {"method": "CellPose3", "mSA": 0.125},
         {"method": "CellPoseSAM", "mSA": 0.373},
         {"method": "CellSAM", "mSA": 0.302},
-        {"method": "SAM3", "mSA": 0.207},
+        {"method": "SAM3", "mSA": 0.345},
     ],
     "NuInsSeg": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.161},
@@ -422,7 +425,7 @@ msa_results_histopathology = {
         {"method": "CellPose3", "mSA": 0.144},
         {"method": "CellPoseSAM", "mSA": 0.349},
         {"method": "CellSAM", "mSA": 0.229},
-        {"method": "SAM3", "mSA": 0.287},
+        {"method": "SAM3", "mSA": 0.312},
     ],
     "PUMA": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.232},
@@ -435,7 +438,7 @@ msa_results_histopathology = {
         {"method": "CellPose3", "mSA": 0.101},
         {"method": "CellPoseSAM", "mSA": 0.501},
         {"method": "CellSAM", "mSA": 0.294},
-        {"method": "SAM3", "mSA": 0.324},
+        {"method": "SAM3", "mSA": 0.415},
     ],
     "TNBC": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.209},
@@ -448,7 +451,7 @@ msa_results_histopathology = {
         {"method": "CellPose3", "mSA": 0.075},
         {"method": "CellPoseSAM", "mSA": 0.451},
         {"method": "CellSAM", "mSA": 0.383},
-        {"method": "SAM3", "mSA": 0.359},
+        {"method": "SAM3", "mSA": 0.443},
     ],
     "CryoNuSeg": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.165},
@@ -461,7 +464,7 @@ msa_results_histopathology = {
         {"method": "CellPose3", "mSA": 0.113},
         {"method": "CellPoseSAM", "mSA": 0.295},
         {"method": "CellSAM", "mSA": 0.177},
-        {"method": "SAM3", "mSA": 0.079},
+        {"method": "SAM3", "mSA": 0.118},
     ],
     "CytoDark0": [
         {"method": "AMG (vit_b) - without grid search", "mSA": 0.182},
@@ -474,7 +477,7 @@ msa_results_histopathology = {
         {"method": "CellPose3", "mSA": 0.222},
         {"method": "CellPoseSAM", "mSA": 0.441},
         {"method": "CellSAM", "mSA": 0.315},
-        {"method": "SAM3", "mSA": 0.369},
+        {"method": "SAM3", "mSA": 0.414},
     ],
 }
 
