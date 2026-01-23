@@ -83,7 +83,7 @@ def run_default_baselines(dataset_name, method, model_type, experiment_folder, t
     assert isinstance(method, str)
     kwargs = {}
     if method in ["ais", "amg"]:
-        predictor, segmenter = get_predictor_and_segmenter(model_type=model_type, amg=(method == "amg"))
+        predictor, segmenter = get_predictor_and_segmenter(model_type=model_type, segmentation_mode="amg")
         kwargs["predictor"] = predictor
         kwargs["segmenter"] = segmenter
     elif method == "apg":
