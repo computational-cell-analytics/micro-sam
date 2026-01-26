@@ -687,7 +687,7 @@ def default_sam_dataset(
         raw_paths, raw_key, label_paths, label_key, with_channels, **kwargs
     )
     # Since `is_seg_dataset` is selected and sorted above, let's remove it out of running kwargs, if available.
-    kwargs.pop("is_seg_dataset")
+    kwargs.pop("is_seg_dataset", None)
 
     # Set the data transformations.
     if raw_transform is None:
