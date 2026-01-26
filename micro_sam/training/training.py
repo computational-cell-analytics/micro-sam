@@ -628,6 +628,7 @@ def default_sam_dataset(
     max_sampling_attempts: Optional[int] = None,
     rois: Optional[Union[slice, Tuple[slice, ...]]] = None,
     is_multi_tensor: bool = True,
+    is_seg_dataset: bool = True,
     **kwargs,
 ) -> Dataset:
     """Create a PyTorch Dataset for training a SAM model.
