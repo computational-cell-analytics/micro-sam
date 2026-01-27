@@ -82,8 +82,6 @@ def _get_device(device=None):
         sam2.modeling.sam.transformer.OLD_GPU = True
         sam2.modeling.sam.transformer.USE_FLASH_ATTN = True
         sam2.modeling.sam.transformer.MATH_KERNEL_ON = True
-    elif device == "mps":
-        raise ValueError("The scripts have not been tested on MPS device.")
 
     return device
 
