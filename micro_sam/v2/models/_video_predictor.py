@@ -203,7 +203,7 @@ def _build_sam2_video_predictor(
     from omegaconf import OmegaConf
 
     hydra_overrides = [
-        "++model._target_=micro_sam2.models._video_predictor.CustomVideoPredictor",
+        "++model._target_=micro_sam.v2.models._video_predictor.CustomVideoPredictor",
     ]
     if apply_postprocessing:
         hydra_overrides_extra = hydra_overrides_extra.copy()
