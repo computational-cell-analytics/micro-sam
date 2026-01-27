@@ -214,8 +214,9 @@ def batched_inference(
         # Call get image embeddings, this will throw an error if they have not yet been computed.
         predictor.get_image_embedding()
     else:
+        input_ = image if i is None else image[i]
         image_embeddings = util.precompute_image_embeddings(
-            predictor, image, embedding_path, verbose=verbose_embeddings, i=i,
+            predictor, input_, embedding_path, verbose=verbose_embeddings
         )
         util.set_precomputed(predictor, image_embeddings)
 
