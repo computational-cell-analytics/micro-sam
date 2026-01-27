@@ -416,6 +416,64 @@ class PromptableSegmentation3D:
         video_segments = {**reverse_video_segments, **forward_video_segments}
         return video_segments
 
+    def segment_slice(
+        self,
+        frame_idx: int,
+        points: Optional[np.ndarray] = None,
+        labels: Optional[np.ndarray] = None,
+        boxes: Optional[List] = None,
+        masks: Optional[List] = None,
+        object_id: int = 1,
+    ):
+        """Segment a single slice using SAM2 video predictor.
+
+        Args:
+            frame_idx: Slice index to segment.
+            points: Point prompts (N, 2) array.
+            labels: Point labels (N,) array.
+            boxes: List of box prompts.
+            masks: List of mask prompts (can be None).
+            object_id: Object ID to use for the segmentation (default: 1).
+
+        Returns:
+            Segmentation mask for the slice (2D array), or None if no valid prompts provided.
+        """
+        # Validate prompts
+        have_points = points is not None and len(points) > 0
+        have_boxes = boxes is not None and len(boxes) > 0
+
+        if not have_points and not have_boxes:
+            return None
+
+        try:
+            # Prepare prompts
+            box = boxes[0] if have_boxes else None
+
+            # Add prompts to the specific frame
+            _, out_obj_ids, out_mask_logits = self.predictor.add_new_points_or_box(
+                inference_state=self.inference_state,
+                frame_idx=frame_idx,
+                obj_id=object_id,
+                points=points if have_points else None,
+                labels=labels if have_points else None,
+                box=box,
+            )
+
+            # Extract the mask from logits
+            # out_mask_logits shape: (num_objects, 1, H, W)
+            mask_logits = out_mask_logits[0]  # Get first object
+            seg = (mask_logits.squeeze() > 0.0).cpu().numpy()
+
+            # Ensure correct output type
+            seg = seg.astype("uint32")
+
+        finally:
+            # Reset the state to clear this object's prompts
+            # This ensures the next segmentation starts fresh
+            self.predictor.reset_state(self.inference_state)
+
+        return seg
+
     def predict(self):
         # First, we propagate prompts.
         video_segments = self.propagate_prompts()
