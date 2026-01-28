@@ -472,7 +472,8 @@ def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> Non
         i = int(viewer.dims.point[0])
         vutil.clear_annotations_slice(viewer, i=i)
 
-    # If it's a SAM2 promptable segmentation workflow, we should reset the prompts after clear annotations has been clicked.
+    # If it's a SAM2 promptable segmentation workflow,
+    # we should reset the prompts after clear annotations has been clicked.
     if state.interactive_segmenter is not None:
         state.interactive_segmenter.reset_predictor()
 
@@ -1496,21 +1497,6 @@ class EmbeddingWidget(_WidgetBase):
             if self.automatic_segmentation_mode == "amg":
                 prefer_decoder = False
 
-            # Define a predictor for SAM2 models.
-            predictor = None
-            if self.model_type.startswith("h"):  # i.e. SAM2 models.
-                from micro_sam.v2.util import get_sam2_model
-
-                if ndim == 2:  # Get the SAM2 model and prepare the image predictor.
-                    model = get_sam2_model(model_type=self.model_type, input_type="images")
-                    # Prepare the SAM2 predictor.
-                    from sam2.sam2_image_predictor import SAM2ImagePredictor
-                    predictor = SAM2ImagePredictor(model)
-                elif ndim == 3:  # Get SAM2 video predictor
-                    predictor = get_sam2_model(model_type=self.model_type, input_type="videos")
-                else:
-                    raise ValueError
-
             state.initialize_predictor(
                 image_data,
                 model_type=self.model_type,
@@ -1518,13 +1504,11 @@ class EmbeddingWidget(_WidgetBase):
                 ndim=ndim,
                 device=self.device,
                 checkpoint_path=self.custom_weights,
-                predictor=predictor,
                 tile_shape=tile_shape,
                 halo=halo,
                 prefer_decoder=prefer_decoder,
                 pbar_init=pbar_init,
                 pbar_update=lambda update: pbar_signals.pbar_update.emit(update),
-                is_sam2=self.model_type.startswith("h"),
             )
             pbar_signals.pbar_stop.emit()
 
