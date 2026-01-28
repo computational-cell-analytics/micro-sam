@@ -1,7 +1,7 @@
 import os
 from tqdm import tqdm
 from collections import OrderedDict
-from typing import Optional, Dict, Union
+from typing import Optional, Dict, Union, Any
 
 import numpy as np
 from PIL import Image
@@ -119,7 +119,7 @@ class CustomVideoPredictor(SAM2VideoPredictor):
     def init_state(
         self,
         volume: np.ndarray,
-        volume_embeddings: Optional[np.ndarray] = None,
+        volume_embeddings: Dict[Any],
         device: Optional[Union[str, torch.device]] = None,
         offload_video_to_cpu: bool = False,
         offload_state_to_cpu: bool = False,
@@ -147,7 +147,7 @@ class CustomVideoPredictor(SAM2VideoPredictor):
 
         # Convert the volume or video in expected format.
         images, video_height, video_width = _load_video_frames_from_images(
-            video_path=None,  # NOTE: The feature works. We just don't care about it in our tasks.
+            video_path=None,  # NOTE: This feature works. We just don't care about it in our tasks.
             volume=volume,
             image_size=self.image_size,
             offload_video_to_cpu=offload_video_to_cpu,
@@ -177,68 +177,55 @@ class CustomVideoPredictor(SAM2VideoPredictor):
             "video_width": video_width,
             "device": device,
             "storage_device": torch.device("cpu") if offload_state_to_cpu else device,
+
+            # Inputs on each frame
+            "point_inputs_per_obj": {},
+            "mask_inputs_per_obj": {},
+
+            # Values that don't change across frames (so we only need to hold one copy of them)
+            "constants": {},
+
+            # The mapping between client-side object id and model-side object index
+            "obj_id_to_idx": OrderedDict(),
+            "obj_idx_to_id": OrderedDict(),
+            "obj_ids": [],
+
+            # Slice (view) of each object tracking results, sharing the same memory with "output_dict"
+            "output_dict_per_obj": {},
+
+            # A temporary storage to hold new outputs when user interact with a frame
+            # to add clicks or mask (it's merged into "output_dict" before propagation starts)
+            "temp_output_dict_per_obj": {},
+
+            # Frames that already holds consolidated outputs from click or mask inputs
+            # (we directly use their consolidated outputs during tracking)
+            # metadata for each tracking frame (e.g. which direction it's tracked)
+            "frames_tracked_per_obj": {},
         }
 
-        # inputs on each frame
-        inference_state["point_inputs_per_obj"] = {}
-        inference_state["mask_inputs_per_obj"] = {}
-
-        # values that don't change across frames (so we only need to hold one copy of them)
-        inference_state["constants"] = {}
-
-        # mapping between client-side object id and model-side object index
-        inference_state["obj_id_to_idx"] = OrderedDict()
-        inference_state["obj_idx_to_id"] = OrderedDict()
-        inference_state["obj_ids"] = []
-
-        # Slice (view) of each object tracking results, sharing the same memory with "output_dict"
-        inference_state["output_dict_per_obj"] = {}
-
-        # A temporary storage to hold new outputs when user interact with a frame
-        # to add clicks or mask (it's merged into "output_dict" before propagation starts)
-        inference_state["temp_output_dict_per_obj"] = {}
-
-        # Frames that already holds consolidated outputs from click or mask inputs
-        # (we directly use their consolidated outputs during tracking)
-        # metadata for each tracking frame (e.g. which direction it's tracked)
-        inference_state["frames_tracked_per_obj"] = {}
-
-        # visual features on a small number of recently visited frames for quick interactions
-        if "cached_features" not in inference_state:  # The key does not exists in running 'inference_state'
-            inference_state["cached_features"] = {}
-
+        # Avoids preparing cached features - essential for the embedding precomputation stage.
         if ignore_caching_features:
             return inference_state
 
-        # The backbone here computes the image embeddings (and other necessary things), if not provied
-        def _get_all_backbone_out(frame_idx):
+        # Visual features on all frames (slices) for faster interactions.
+        feats = volume_embeddings["features"]
+        pos_list = volume_embeddings["pos_enc"]
+        fpn_list = volume_embeddings["fpn"]
+
+        # Embeddings have been provided. We just need to pass stuff to 'inference_state' as expected.
+        running_features = {}
+        for frame_idx in range(inference_state["num_frames"]):
             image = images[frame_idx].to(device).float().unsqueeze(0)
-            backbone_out = self.forward_image(image)
-            running_features = inference_state.get("cached_features") or {}
+
+            vision_features = torch.as_tensor(np.asarray(feats[frame_idx]), device=device).float()
+            vision_pos_enc = [torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in pos_list]
+            backbone_fpn = [torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in fpn_list]
+            backbone_out = {
+                "vision_features": vision_features, "vision_pos_enc": vision_pos_enc, "backbone_fpn": backbone_fpn,
+            }
             running_features[frame_idx] = (image, backbone_out)
-            inference_state["cached_features"] = running_features
 
-        if volume_embeddings is None:  # Well, we compute the embeddings here on the fly.
-            [_get_all_backbone_out(i) for i in range(inference_state["num_frames"])]
-
-        else:  # Precomputed embeddings exists. Just provide the expected stuff to inference state.
-            feats = volume_embeddings["features"]
-            pos_list = volume_embeddings["pos_enc"]
-            fpn_list = volume_embeddings["fpn"]
-            running_features = inference_state.get("cached_features") or {}
-
-            for frame_idx in range(inference_state["num_frames"]):
-                image = images[frame_idx].to(device).float().unsqueeze(0)
-
-                vision_features = torch.as_tensor(np.asarray(feats[frame_idx]), device=device).float()
-                vision_pos_enc = [torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in pos_list]
-                backbone_fpn = [torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in fpn_list]
-                backbone_out = {
-                    "vision_features": vision_features, "vision_pos_enc": vision_pos_enc, "backbone_fpn": backbone_fpn,
-                }
-                running_features[frame_idx] = (image, backbone_out)
-
-            inference_state["cached_features"] = running_features
+        inference_state["cached_features"] = running_features
 
         return inference_state
 

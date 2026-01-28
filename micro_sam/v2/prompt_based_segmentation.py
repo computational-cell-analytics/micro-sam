@@ -153,7 +153,7 @@ def promptable_segmentation_3d(
 class PromptableSegmentation3D:
     """Promptable segmentation class for volumetric data.
     """
-    def __init__(self, predictor, volume, volume_embeddings=None):
+    def __init__(self, predictor, volume, volume_embeddings):
         self.predictor = predictor
         self.volume = volume
         self.volume_embeddings = volume_embeddings
