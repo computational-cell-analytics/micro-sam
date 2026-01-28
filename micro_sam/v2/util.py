@@ -325,9 +325,6 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_u
                         f, "pos_enc", curr_pos_enc, dtype="float32", z_slices=n_slices
                     )
                 for i, t in enumerate(curr_pos_enc):
-                    arr = t.detach().cpu().numpy()
-                    if arr.shape != pos_enc_dsets[i][z].shape:
-                        breakpoint()
                     pos_enc_dsets[i][z] = t.detach().cpu().numpy()
 
                 if fpn_dsets is None:
