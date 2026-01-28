@@ -10,11 +10,10 @@ import numpy as np
 import torch
 
 from micro_sam.util import get_device
+from micro_sam.v2.models._video_predictor import _build_sam2_video_predictor
 
 import sam2
 from sam2.build_sam import build_sam2
-
-from .models._video_predictor import _build_sam2_video_predictor
 
 
 # NOTE: The model config is expected to be fetched from the module's relative path location.
@@ -78,7 +77,7 @@ def _get_device(device=None):
         device = get_device()
 
     if device == "cuda":
-        # NOTE: adapt global variables to work with flash attentions.
+        # NOTE: Adapt global variables to work with flash attentions.
         sam2.modeling.sam.transformer.OLD_GPU = True
         sam2.modeling.sam.transformer.USE_FLASH_ATTN = True
         sam2.modeling.sam.transformer.MATH_KERNEL_ON = True
@@ -189,24 +188,68 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
     return image_embeddings
 
 
+def _create_list_dataset_without_data(group, prefix_name, tensors, dtype, z_slices):
+    zarr_major_version = int(zarr.__version__.split(".")[0])
+    subgroup = group.require_group(prefix_name)
+
+    ds_list = []
+    for i, curr_tensor in enumerate(tensors):
+        curr_shape = tuple(curr_tensor.shape)
+        shape = (z_slices,) + curr_shape
+        chunks = (1,) + curr_shape
+        name = str(i)
+
+        if name in subgroup:
+            ds = subgroup[name]
+            if ds.shape != shape:
+                raise RuntimeError(f"Invalid shape for {prefix_name}/{name}: expected {shape}, got {ds.shape}")
+            if getattr(ds, "chunks", None) is not None and ds.chunks != chunks:
+                raise RuntimeError(f"Invalid chunks for {prefix_name}/{name}: expected {chunks}, got {ds.chunks}")
+        else:
+            if zarr_major_version == 2:
+                ds = subgroup.create_dataset(name, shape=shape, dtype=dtype, chunks=chunks, overwrite=False)
+            elif zarr_major_version == 3:
+                ds = subgroup.create_array(name, shape=shape, chunks=chunks, dtype=dtype, overwrite=False)
+            else:
+                raise RuntimeError(f"Unsupported zarr version: {zarr_major_version}")
+
+        ds_list.append(ds)
+
+    return ds_list
+
+
+def _load_list_datasets(group, prefix_name, lazy_loading):
+    if prefix_name not in group:
+        return []
+
+    subgroup = group[prefix_name]
+    out = []
+    i = 0
+    while str(i) in subgroup:
+        ds = subgroup[str(i)]
+        out.append(ds if lazy_loading else ds[:])
+        i += 1
+    return out
+
+
 @torch.no_grad
 def _compute_embeddings_batched_3d(inference_state, predictor, batched_z, batched_images):
-    batched_features, original_sizes = [], []
+    batched_vision_features, batched_pos_enc, batched_backbone_fpn, original_sizes = [], [], [], []
 
     for image, z_id in zip(batched_images, batched_z):
-        _, _, curr_features, _, feat_sizes = predictor._get_image_feature(inference_state, frame_idx=z_id, batch_size=1)
+        # Run the image encoder to extract relevant features
+        predictor._get_image_feature(inference_state, frame_idx=z_id, batch_size=1)
 
-        # Convert features to expected shape
-        curr_feat, curr_feat_size = curr_features[-1], feat_sizes[-1]
-        curr_feat = curr_feat.permute(1, 2, 0).view(1, -1, *curr_feat_size)
+        # Let's extract the current 'cached_features' outputs
+        _, curr_backbone_out = inference_state["cached_features"][z_id]
 
-        # TODO: We probably need 'backbone_out' here too.
-
-        batched_features.append(curr_feat)
+        # Store the vision transformer outputs and other stuff.
+        batched_vision_features.append(curr_backbone_out["vision_features"])
+        batched_pos_enc.append(curr_backbone_out["vision_pos_enc"])
+        batched_backbone_fpn.append(curr_backbone_out["backbone_fpn"])
         original_sizes.append(image.shape[:2])
 
-    tensors = torch.cat(batched_features)
-    return tensors, inference_state, original_sizes
+    return batched_vision_features, batched_pos_enc, batched_backbone_fpn, original_sizes
 
 
 def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_update, batch_size):
@@ -214,20 +257,21 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_u
     if save_path is not None and "original_size" in f.attrs:
         # In this case we load the embeddings.
         features = f["features"] if lazy_loading else f["features"][:]
+        pos_enc = _load_list_datasets(f, "pos_enc", lazy_loading)
+        fpn = _load_list_datasets(f, "fpn", lazy_loading)
         original_size = f.attrs["original_size"]
-        image_embeddings = {"features": features, "original_size": original_size}
+        image_embeddings = {"features": features, "pos_enc": pos_enc, "fpn": fpn, "original_size": original_size}
         return image_embeddings
 
     # Otherwise we have to compute the embeddings.
-
     # First check if we have a save path or not and set things up accordingly.
     if save_path is None:
-        features = []
+        features, pos_encs, fpns = [], [], []
         save_features = False
         partial_features = False
     else:
         save_features = True
-        embed_shape = (1, 256, 64, 64)  # TODO: Check this?
+        embed_shape = (1, 256, 64, 64)
         shape = (input_.shape[0],) + embed_shape
         chunks = (1,) + embed_shape
         if "features" in f:
@@ -241,13 +285,14 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_u
             features = _create_dataset_without_data(f, "features", shape=shape, chunks=chunks, dtype="float32")
 
     # We create the 'inference_state' object which keeps all important components in memory.
-    inference_state = predictor.init_state(video_path=None, volume=input_)
+    inference_state = predictor.init_state(volume=input_, ignore_caching_features=True)
 
     # Initialize the pbar and batches.
     n_slices = input_.shape[0]
     pbar_init(n_slices, "Compute Image Embeddings 3D")
     n_batches = int(np.ceil(n_slices / batch_size))
 
+    pos_enc_dsets, fpn_dsets = None, None
     for batch_id in range(n_batches):
         z_start = batch_id * batch_size
         z_stop = min(z_start + batch_size, n_slices)
@@ -263,25 +308,60 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_u
             batched_images.append(tile_input)
             batched_z.append(z)
 
-        batched_embeddings, inference_state, original_sizes = _compute_embeddings_batched_3d(
-            inference_state, predictor, batched_z, batched_images
-        )
+        (
+            batched_vision_features, batched_pos_enc, batched_backbone_fpn, original_sizes
+        ) = _compute_embeddings_batched_3d(inference_state, predictor, batched_z, batched_images)
 
-        for z, embedding in zip(batched_z, batched_embeddings):
-            embedding = embedding.unsqueeze(0)
+        for z, curr_vision_feats, curr_pos_enc, curr_back_fpn in zip(
+            batched_z, batched_vision_features, batched_pos_enc, batched_backbone_fpn
+        ):
+            if curr_vision_feats.ndim == 3:
+                curr_vision_feats = curr_vision_feats.unsqueeze(0)
+
             if save_features:
-                features[z] = embedding.cpu().numpy()
+                features[z] = curr_vision_feats.detach().cpu().numpy()
+                if pos_enc_dsets is None:
+                    pos_enc_dsets = _create_list_dataset_without_data(
+                        f, "pos_enc", curr_pos_enc, dtype="float32", z_slices=n_slices
+                    )
+                for i, t in enumerate(curr_pos_enc):
+                    arr = t.detach().cpu().numpy()
+                    if arr.shape != pos_enc_dsets[i][z].shape:
+                        breakpoint()
+                    pos_enc_dsets[i][z] = t.detach().cpu().numpy()
+
+                if fpn_dsets is None:
+                    fpn_dsets = _create_list_dataset_without_data(
+                        f, "fpn", curr_back_fpn, dtype="float32", z_slices=n_slices
+                    )
+                for i, t in enumerate(curr_back_fpn):
+                    fpn_dsets[i][z] = t.detach().cpu().numpy()
+
             else:
-                features.append(embedding.unsqueeze(0))
+                features.append(curr_vision_feats)
+                pos_encs.append(curr_pos_enc)
+                fpns.append(curr_back_fpn)
+
             pbar_update(1)
 
     if save_features:
         pass  # TODO: Write the embedding signature?
     else:
-        # Concatenate across the z axis.
+        # Concatenate across the z axis for 'vision_features'.
         features = torch.cat(features).cpu().numpy()
 
-    image_embeddings = {"features": features, "original_size": original_sizes[-1]}
+        # Concatenate across the z axis for other features too.
+        depth = 3  # Corresponds to the depth of both FPN and Positional Embeddings.
+        pos_encs = [torch.stack([p[i] for p in pos_encs]) for i in range(depth)]
+        fpns = [torch.stack([p[i] for p in fpns]) for i in range(depth)]
+
+    pos_enc = _load_list_datasets(f, "pos_enc", lazy_loading) if save_features else pos_encs
+    fpn = _load_list_datasets(f, "fpn", lazy_loading) if save_features else fpns
+
+    # HACK: I'll store 'original_size' at f.attrs just like that.
+    f.attrs["original_size"] = original_sizes[-1]
+
+    image_embeddings = {"features": features, "pos_enc": pos_enc, "fpn": fpn, "original_size": original_sizes[-1]}
     return image_embeddings
 
 
@@ -319,7 +399,7 @@ def precompute_image_embeddings(
     # check tha tthe saved embeedidng in there match the parameters of the function call.abs
     elif os.path.exists(save_path):
         f = zarr.open(save_path, mode="a")
-        _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo)
+        # _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo)  # TODO: Update this.
 
     # We have a save path and it does not exist yet. Create the zarr file to which the
     # embeddings will then be saved.

@@ -1094,8 +1094,7 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
 
         # Create a PromptableSegmentation3D instance with existing inference state
         seg_handler = PromptableSegmentation3D(
-            predictor=state.predictor,
-            volume=volume,
+            predictor=state.predictor, volume=volume, volume_embeddings=state.image_embeddings,
         )
 
         # Use the segment_slice method
@@ -1722,13 +1721,15 @@ class SegmentNDWidget(_WidgetBase):
                 ) if box_prompts.data else np.zeros(0, dtype="int")
 
                 # Get the volumetric data.
-                # TODO: We need to switch later to volume embeddings.
                 volume = self._viewer.layers[0].data  # Assumption is image is in the first index.
+                volume_embeddings = state.image_embeddings
 
                 # NOTE: Prototype for new design of prompting in volumetric data.
                 # CP: this looks redundant. We redo the initialization each time a prompt is added.
                 from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D
-                segmenter = PromptableSegmentation3D(predictor=state.predictor, volume=volume)
+                segmenter = PromptableSegmentation3D(
+                    predictor=state.predictor, volume=volume, volume_embeddings=volume_embeddings,
+                )
 
                 # Whether the user decide to provide batched prompts for multi-object segmentation.
                 is_batched = bool(self.batched)
