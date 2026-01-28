@@ -1095,21 +1095,9 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
             image_embeddings=state.image_embeddings, i=z,
         )
     else:
-        # SAM2 path - use PromptableSegmentation3D class
-        from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D
-
-        # Get the volume from the viewer
-        image_name = state.get_image_name(viewer)
-        volume = viewer.layers[image_name].data
-
-        # Create a PromptableSegmentation3D instance with existing inference state
-        seg_handler = PromptableSegmentation3D(
-            predictor=state.predictor, volume=volume, volume_embeddings=state.image_embeddings,
-        )
-
-        # Use the segment_slice method
+        # Use the segment_slice method for SAM2.
         boxes = [box[[1, 0, 3, 2]] for box in boxes]
-        seg = seg_handler.segment_slice(
+        seg = state.interactive_segmenter.segment_slice(
             frame_idx=z,
             points=points[:, ::-1].copy(),
             labels=labels,
