@@ -1,7 +1,7 @@
 import os
 from tqdm import tqdm
 from collections import OrderedDict
-from typing import Optional, Dict, Union, Any
+from typing import Optional, Dict, Union
 
 import numpy as np
 from PIL import Image
@@ -119,7 +119,7 @@ class CustomVideoPredictor(SAM2VideoPredictor):
     def init_state(
         self,
         volume: np.ndarray,
-        volume_embeddings: Dict[Any],
+        volume_embeddings: Dict,
         device: Optional[Union[str, torch.device]] = None,
         offload_video_to_cpu: bool = False,
         offload_state_to_cpu: bool = False,
@@ -205,6 +205,7 @@ class CustomVideoPredictor(SAM2VideoPredictor):
 
         # Avoids preparing cached features - essential for the embedding precomputation stage.
         if ignore_caching_features:
+            inference_state["cached_features"] = {}  # Create an empty 'cached_features' dictionary to warm up.
             return inference_state
 
         # Visual features on all frames (slices) for faster interactions.
