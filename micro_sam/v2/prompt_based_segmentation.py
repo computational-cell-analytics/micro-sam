@@ -153,9 +153,10 @@ def promptable_segmentation_3d(
 class PromptableSegmentation3D:
     """Promptable segmentation class for volumetric data.
     """
-    def __init__(self, predictor, volume):
+    def __init__(self, predictor, volume, volume_embeddings):
         self.predictor = predictor
         self.volume = volume
+        self.volume_embeddings = volume_embeddings
 
         if self.volume.ndim != 3:
             raise AssertionError(f"The dimensionality of the volume should be 3, got '{self.volume.ndim}'")
@@ -175,7 +176,7 @@ class PromptableSegmentation3D:
 
     def init_predictor(self):
         # Initialize the inference state.
-        self.inference_state = self.predictor.init_state(video_path=None, volume=self.volume)
+        self.inference_state = self.predictor.init_state(volume=self.volume, volume_embeddings=self.volume_embeddings)
 
     def reset_predictor(self):
         # Reset the state after finishing the segmentation round.

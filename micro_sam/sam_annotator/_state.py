@@ -37,6 +37,37 @@ class Singleton(type):
         return cls._instances[cls]
 
 
+# TODO: this should be refactored once we have decided on which models to support.
+# (Likely only SAM2 models)
+def _get_sam_model(model_type, ndim, device, checkpoint_path, use_cli):
+    if model_type.startswith("h"):  # i.e. SAM2 models.
+        from micro_sam.v2.util import get_sam2_model
+
+        if ndim == 2:  # Get the SAM2 model and prepare the image predictor.
+            model = get_sam2_model(model_type=model_type, input_type="images")
+            # Prepare the SAM2 predictor.
+            from sam2.sam2_image_predictor import SAM2ImagePredictor
+            predictor = SAM2ImagePredictor(model)
+        elif ndim == 3:  # Get SAM2 video predictor
+            predictor = get_sam2_model(model_type=model_type, input_type="videos")
+        else:
+            raise ValueError
+        state = {}
+
+    else:
+        def progress_bar_factory(model_type):
+            pbar = tqdm(desc=f"Downloading '{model_type}'. This may take a while")
+            return pbar
+
+        predictor, state = util.get_sam_model(
+            device=device, model_type=model_type,
+            checkpoint_path=checkpoint_path, return_state=True,
+            progress_bar_factory=None if use_cli else progress_bar_factory,
+        )
+
+    return predictor, state
+
+
 @dataclass
 class AnnotatorState(metaclass=Singleton):
 
@@ -84,6 +115,9 @@ class AnnotatorState(metaclass=Singleton):
     previous_features: Optional[np.ndarray] = None
     previous_labels: Optional[np.ndarray] = None
 
+    # Interactive segmentation class for 'micro-sam2'.
+    interactive_segmenter: Optional[Any] = None  # TODO: Create a base class and add it here.
+
     def initialize_predictor(
         self,
         image_data,
@@ -102,21 +136,13 @@ class AnnotatorState(metaclass=Singleton):
         pbar_update=None,
         skip_load=True,
         use_cli=False,
-        is_sam2=False,  # By default, we use SAM1.
     ):
         assert ndim in (2, 3)
+        is_sam2 = model_type.startswith("h")
 
         # Initialize the model if necessary.
         if predictor is None:
-            def progress_bar_factory(model_type):
-                pbar = tqdm(desc=f"Downloading '{model_type}'. This may take a while")
-                return pbar
-
-            self.predictor, state = util.get_sam_model(
-                device=device, model_type=model_type,
-                checkpoint_path=checkpoint_path, return_state=True,
-                progress_bar_factory=None if use_cli else progress_bar_factory,
-            )
+            self.predictor, state = _get_sam_model(model_type, ndim, device, checkpoint_path, use_cli)
             if prefer_decoder and "decoder_state" in state and model_type != "vit_b_medical_imaging":
                 self.decoder = get_decoder(
                     image_encoder=self.predictor.model.image_encoder,
@@ -151,6 +177,13 @@ class AnnotatorState(metaclass=Singleton):
                 pbar_update=pbar_update,
             )
             self.embedding_path = save_path
+
+        # Let's prepare the interactive segmentation class.
+        if is_sam2 and ndim == 3:
+            from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D
+            self.interactive_segmenter = PromptableSegmentation3D(
+                predictor=self.predictor, volume=image_data, volume_embeddings=self.image_embeddings,
+            )
 
         # If we have an embedding path the data signature has already been computed,
         # and we can read it from there.

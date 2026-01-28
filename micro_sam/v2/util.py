@@ -1,6 +1,7 @@
 import os
 import sys
 import pooch
+import warnings
 from pathlib import Path
 from typing import Union, Literal, Optional, Tuple
 
@@ -10,11 +11,10 @@ import numpy as np
 import torch
 
 from micro_sam.util import get_device
+from micro_sam.v2.models._video_predictor import _build_sam2_video_predictor
 
 import sam2
 from sam2.build_sam import build_sam2
-
-from .models._video_predictor import _build_sam2_video_predictor
 
 
 # NOTE: The model config is expected to be fetched from the module's relative path location.
@@ -78,7 +78,7 @@ def _get_device(device=None):
         device = get_device()
 
     if device == "cuda":
-        # NOTE: adapt global variables to work with flash attentions.
+        # NOTE: Adapt global variables to work with flash attentions.
         sam2.modeling.sam.transformer.OLD_GPU = True
         sam2.modeling.sam.transformer.USE_FLASH_ATTN = True
         sam2.modeling.sam.transformer.MATH_KERNEL_ON = True
@@ -148,11 +148,42 @@ def get_sam2_model(
         apply_postprocessing=False,
     )
 
+    if input_type == "videos":
+        model.model_type = model_type
+        model.model_name = model_type  # TODO: What is this exactly?
+
     return model
 
 
-def _check_saved_embeddings():
-    raise NotImplementedError
+def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
+    # We may have an empty zarr file that was already created to save the embeddings in.
+    # In this case the embeddings will be computed and we don't need to perform any checks.
+    if "input_size" not in f.attrs:
+        return
+
+    # Creates all the metadta that is stored along with the embeddings.
+    # TODO: This is currently paired with `micro_sam`-level metadata. Should we get separate for `micro_sam2`?
+    from micro_sam.util import _get_embedding_signature
+    signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
+
+    for key, val in signature.items():
+        # Check whether the key is missing from the attrs or if the value is not matching.
+        if key not in f.attrs or f.attrs[key] != val:
+            # These keys were recently added, so we don't want to fail yet if they don't
+            # match in order to not invalidate previous embedding files.
+            # Instead we just raise a warning. (For the version we probably also don't want to fail
+            # i the future since it should not invalidate the embeddings).
+            if key in ("micro_sam_version", "model_hash", "model_name"):
+                warnings.warn(
+                    f"The signature for {key} in embeddings file {save_path} has a mismatch: "
+                    f"{f.attrs.get(key)} != {val}. This key was recently added, so your embeddings are likely correct. "
+                    "But please recompute them if model predictions don't look as expected."
+                )
+            else:
+                raise RuntimeError(
+                    f"Embeddings file {save_path} is invalid due to mismatch in {key}: "
+                    f"{f.attrs.get(key)} != {val}. Please recompute embeddings in a new file."
+                )
 
 
 def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
@@ -175,36 +206,89 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
     features = predictor.get_image_embedding().cpu().numpy()
     high_res_features = predictor._features.get("high_res_feats")
     original_size = predictor._orig_hw
+    input_size = predictor.image_size
     pbar_update(1)
 
     # Save the embeddings if we have a save_path.
     if save_path is not None:
-        from micro_sam.util import _create_dataset_with_data
+        from micro_sam.util import _create_dataset_with_data, _write_embedding_signature
         _create_dataset_with_data(f, "features", data=features)
-        # TODO: Write the embedding signature.
+        _write_embedding_signature(
+            f, input_, predictor, tile_shape=None, halo=None, input_size=input_size, original_size=original_size,
+        )
 
-    image_embeddings = {"features": features, "high_res_feats": high_res_features, "original_size": original_size}
+    image_embeddings = {
+        "features": features,
+        "high_res_feats": high_res_features,
+        "input_size": input_size,
+        "original_size": original_size,
+    }
     return image_embeddings
+
+
+def _create_list_dataset_without_data(group, prefix_name, tensors, dtype, z_slices):
+    zarr_major_version = int(zarr.__version__.split(".")[0])
+    subgroup = group.require_group(prefix_name)
+
+    ds_list = []
+    for i, curr_tensor in enumerate(tensors):
+        curr_shape = tuple(curr_tensor.shape)
+        shape = (z_slices,) + curr_shape
+        chunks = (1,) + curr_shape
+        name = str(i)
+
+        if name in subgroup:
+            ds = subgroup[name]
+            if ds.shape != shape:
+                raise RuntimeError(f"Invalid shape for {prefix_name}/{name}: expected {shape}, got {ds.shape}")
+            if getattr(ds, "chunks", None) is not None and ds.chunks != chunks:
+                raise RuntimeError(f"Invalid chunks for {prefix_name}/{name}: expected {chunks}, got {ds.chunks}")
+        else:
+            if zarr_major_version == 2:
+                ds = subgroup.create_dataset(name, shape=shape, dtype=dtype, chunks=chunks, overwrite=False)
+            elif zarr_major_version == 3:
+                ds = subgroup.create_array(name, shape=shape, chunks=chunks, dtype=dtype, overwrite=False)
+            else:
+                raise RuntimeError(f"Unsupported zarr version: {zarr_major_version}")
+
+        ds_list.append(ds)
+
+    return ds_list
+
+
+def _load_list_datasets(group, prefix_name, lazy_loading):
+    if prefix_name not in group:
+        return []
+
+    subgroup = group[prefix_name]
+    out = []
+    i = 0
+    while str(i) in subgroup:
+        ds = subgroup[str(i)]
+        out.append(ds if lazy_loading else ds[:])
+        i += 1
+    return out
 
 
 @torch.no_grad
 def _compute_embeddings_batched_3d(inference_state, predictor, batched_z, batched_images):
-    batched_features, original_sizes = [], []
+    batched_vision_features, batched_pos_enc, batched_backbone_fpn, original_sizes, input_sizes = [], [], [], [], []
 
     for image, z_id in zip(batched_images, batched_z):
-        _, _, curr_features, _, feat_sizes = predictor._get_image_feature(inference_state, frame_idx=z_id, batch_size=1)
+        # Run the image encoder to extract relevant features
+        predictor._get_image_feature(inference_state, frame_idx=z_id, batch_size=1)
 
-        # Convert features to expected shape
-        curr_feat, curr_feat_size = curr_features[-1], feat_sizes[-1]
-        curr_feat = curr_feat.permute(1, 2, 0).view(1, -1, *curr_feat_size)
+        # Let's extract the current 'cached_features' outputs
+        _, curr_backbone_out = inference_state["cached_features"][z_id]
 
-        # TODO: We probably need 'backbone_out' here too.
-
-        batched_features.append(curr_feat)
+        # Store the vision transformer outputs and other stuff.
+        batched_vision_features.append(curr_backbone_out["vision_features"])
+        batched_pos_enc.append(curr_backbone_out["vision_pos_enc"])
+        batched_backbone_fpn.append(curr_backbone_out["backbone_fpn"])
         original_sizes.append(image.shape[:2])
+        input_sizes.append(predictor.image_size)
 
-    tensors = torch.cat(batched_features)
-    return tensors, inference_state, original_sizes
+    return batched_vision_features, batched_pos_enc, batched_backbone_fpn, original_sizes, input_sizes
 
 
 def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_update, batch_size):
@@ -212,20 +296,29 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_u
     if save_path is not None and "original_size" in f.attrs:
         # In this case we load the embeddings.
         features = f["features"] if lazy_loading else f["features"][:]
+        pos_enc = _load_list_datasets(f, "pos_enc", lazy_loading)
+        fpn = _load_list_datasets(f, "fpn", lazy_loading)
         original_size = f.attrs["original_size"]
-        image_embeddings = {"features": features, "original_size": original_size}
+        input_size = f.attrs["input_size"]
+        image_embeddings = {
+            "features": features,
+            "pos_enc": pos_enc,
+            "fpn": fpn,
+            "input_size": input_size,
+            "original_size": original_size,
+        }
         return image_embeddings
 
     # Otherwise we have to compute the embeddings.
 
     # First check if we have a save path or not and set things up accordingly.
     if save_path is None:
-        features = []
+        features, pos_encs, fpns = [], [], []
         save_features = False
         partial_features = False
     else:
         save_features = True
-        embed_shape = (1, 256, 64, 64)  # TODO: Check this?
+        embed_shape = (1, 256, 64, 64)
         shape = (input_.shape[0],) + embed_shape
         chunks = (1,) + embed_shape
         if "features" in f:
@@ -239,12 +332,17 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_u
             features = _create_dataset_without_data(f, "features", shape=shape, chunks=chunks, dtype="float32")
 
     # We create the 'inference_state' object which keeps all important components in memory.
-    inference_state = predictor.init_state(video_path=None, volume=input_)
+    inference_state = predictor.init_state(
+        volume=input_,
+        volume_embeddings=None,  # NOTE: It's a mandatory argument, but with the argument below, passing 'None' doesn't matter.  # noqa
+        ignore_caching_features=True
+    )
 
     # Initialize the pbar and batches.
     n_slices = input_.shape[0]
     pbar_init(n_slices, "Compute Image Embeddings 3D")
     n_batches = int(np.ceil(n_slices / batch_size))
+    pos_enc_dsets, fpn_dsets = None, None
 
     for batch_id in range(n_batches):
         z_start = batch_id * batch_size
@@ -261,25 +359,64 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_u
             batched_images.append(tile_input)
             batched_z.append(z)
 
-        batched_embeddings, inference_state, original_sizes = _compute_embeddings_batched_3d(
-            inference_state, predictor, batched_z, batched_images
-        )
+        (
+            batched_vision_features, batched_pos_enc, batched_backbone_fpn, original_sizes, input_sizes
+        ) = _compute_embeddings_batched_3d(inference_state, predictor, batched_z, batched_images)
 
-        for z, embedding in zip(batched_z, batched_embeddings):
-            embedding = embedding.unsqueeze(0)
+        for z, curr_vision_feats, curr_pos_enc, curr_back_fpn in zip(
+            batched_z, batched_vision_features, batched_pos_enc, batched_backbone_fpn
+        ):
+            if curr_vision_feats.ndim == 3:
+                curr_vision_feats = curr_vision_feats.unsqueeze(0)
+
             if save_features:
-                features[z] = embedding.cpu().numpy()
+                features[z] = curr_vision_feats.detach().cpu().numpy()
+                if pos_enc_dsets is None:
+                    pos_enc_dsets = _create_list_dataset_without_data(
+                        f, "pos_enc", curr_pos_enc, dtype="float32", z_slices=n_slices
+                    )
+                for i, t in enumerate(curr_pos_enc):
+                    pos_enc_dsets[i][z] = t.detach().cpu().numpy()
+
+                if fpn_dsets is None:
+                    fpn_dsets = _create_list_dataset_without_data(
+                        f, "fpn", curr_back_fpn, dtype="float32", z_slices=n_slices
+                    )
+                for i, t in enumerate(curr_back_fpn):
+                    fpn_dsets[i][z] = t.detach().cpu().numpy()
+
             else:
-                features.append(embedding.unsqueeze(0))
+                features.append(curr_vision_feats)
+                pos_encs.append(curr_pos_enc)
+                fpns.append(curr_back_fpn)
+
             pbar_update(1)
 
     if save_features:
-        pass  # TODO: Write the embedding signature?
+        from micro_sam.util import _write_embedding_signature
+        _write_embedding_signature(
+            f, input_, predictor, tile_shape=None, halo=None,
+            input_size=input_sizes[-1], original_size=original_sizes[-1],
+        )
     else:
-        # Concatenate across the z axis.
+        # Concatenate across the z axis for 'vision_features'.
         features = torch.cat(features).cpu().numpy()
 
-    image_embeddings = {"features": features, "original_size": original_sizes[-1]}
+        # Concatenate across the z axis for other features too.
+        depth = 3  # Corresponds to the depth of both FPN and Positional Embeddings.
+        pos_encs = [torch.stack([p[i] for p in pos_encs]) for i in range(depth)]
+        fpns = [torch.stack([p[i] for p in fpns]) for i in range(depth)]
+
+    pos_enc = _load_list_datasets(f, "pos_enc", lazy_loading) if save_features else pos_encs
+    fpn = _load_list_datasets(f, "fpn", lazy_loading) if save_features else fpns
+
+    image_embeddings = {
+        "features": features,
+        "pos_enc": pos_enc,
+        "fpn": fpn,
+        "input_size": input_sizes[-1],
+        "original_size": original_sizes[-1],
+    }
     return image_embeddings
 
 
@@ -345,8 +482,9 @@ def precompute_image_embeddings(
 def set_precomputed(
     predictor,
     image_embeddings,
-    i=None,
-    tile_id=None,
+    i: Optional[int] = None,
+    tile_id: Optional[int] = None,
+    input_: Optional[np.ndarray] = None,
 ):
     """Set the precomputed image embeddings for a predictor.
 
@@ -357,7 +495,13 @@ def set_precomputed(
         ...
     """
     if tile_id is not None:
-        raise NotImplementedError
+        tile_features = image_embeddings["features"][str(tile_id)]
+        tile_image_embeddings = {
+            "features": tile_features,
+            "input_size": tile_features.attrs["input_size"],
+            "original_size": tile_features.attrs["original_size"]
+        }
+        return set_precomputed(predictor, tile_image_embeddings, i=i)
 
     try:
         device = predictor.device()  # Works for video predictor.
@@ -370,14 +514,32 @@ def set_precomputed(
         if i is None:
             raise ValueError("The data is 3D so an index i is needed.")
 
-        # NOTE: The assumption is that 'predictor' is a tuple of the
-        # predictor object and the pre-initialized 'inference_state'.
-        _predictor, inference_state = predictor
+        if input_ is None:
+            raise AssertionError("For 3D inputs, you must provide the original multi-dimensional array.")
 
-        # TODO: I need to puzzle this together. I can't find an elegant way atm to initialize stuff.
-        # We need to figure out the "backbone_out' from 'prepare_features'.
+        # Prepare the inference state
+        inference_state = predictor.init_state(
+            volume=input_, volume_embeddings=image_embeddings, ignore_caching_features=True,
+        )
 
-        return _predictor, inference_state
+        # Get other visual features, eg. positional embeddings and FPN outputs to prepare 'backbone_out'.
+        pos_list = image_embeddings["pos_enc"]
+        fpn_list = image_embeddings["fpn"]
+
+        # There's an easy assumption made here. The first dimension of 'features' corresponds to n-slices.
+        running_features = {}
+        for slice_id in range(features.shape[0]):
+            image = inference_state["images"][slice_id].to(device).float().unsqueeze(0)
+            vision_features = torch.as_tensor(np.asarray(features[slice_id]), device=device).float()
+            vision_pos_enc = [torch.as_tensor(np.asarray(t[slice_id]), device=device).float() for t in pos_list]
+            backbone_fpn = [torch.as_tensor(np.asarray(t[slice_id]), device=device).float() for t in fpn_list]
+            backbone_out = {
+                "vision_features": vision_features, "vision_pos_enc": vision_pos_enc, "backbone_fpn": backbone_fpn,
+            }
+            running_features[slice_id] = (image, backbone_out)
+
+        inference_state["cached_features"] = running_features
+        return predictor, inference_state
 
     elif features.ndim == 4:
         if i is not None:

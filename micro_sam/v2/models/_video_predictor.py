@@ -1,7 +1,7 @@
 import os
 from tqdm import tqdm
-from typing import Optional
 from collections import OrderedDict
+from typing import Optional, Dict, Union
 
 import numpy as np
 from PIL import Image
@@ -118,74 +118,116 @@ class CustomVideoPredictor(SAM2VideoPredictor):
     @torch.inference_mode()
     def init_state(
         self,
-        video_path: Optional[str],
-        volume: Optional[np.ndarray] = None,
-        offload_video_to_cpu=False,
-        offload_state_to_cpu=False,
-        async_loading_frames=False,
-        verbosity=True,
+        volume: np.ndarray,
+        volume_embeddings: Dict,
+        device: Optional[Union[str, torch.device]] = None,
+        offload_video_to_cpu: bool = False,
+        offload_state_to_cpu: bool = False,
+        async_loading_frames: bool = False,
+        verbosity: bool = True,
+        ignore_caching_features: bool = False,
     ):
-        """Initialize an inference state."""
-        compute_device = self.device  # device of the model
+        """Initialize an inference state.
 
-        # Either video_path or volume is None. Both cannot be None or passed at the same time.
-        if (video_path is None) == (volume is None):
-            raise ValueError("Only one of 'video_path' or 'volume' must be provided (not both or neither).")
+        Args:
+            volume: The volume as numpy array in memory.
+            volume_embeddings: The precomputed embeddings.
+            device: The torch device.
+            offload_video_to_cpu: Move the video from GPU to CPU.
+            offload_state_to_cpu: Move the inference state components from GPU to CPU.
+            async_loading_frames: Asynchronises the frame loading process.
+            verbosity: The verbosity argument.
+            ignore_caching_features: Avoids ensuring feature caching over all frames.
+        """
 
-        # CP: this looks redundant. We load the video data each time this is called.
+        from micro_sam.v2.util import _get_device
+
+        # Get the expected device.
+        device = _get_device(device)
+
+        # Convert the volume or video in expected format.
         images, video_height, video_width = _load_video_frames_from_images(
-            video_path=video_path,
+            video_path=None,  # NOTE: This feature works. We just don't care about it in our tasks.
             volume=volume,
             image_size=self.image_size,
             offload_video_to_cpu=offload_video_to_cpu,
             async_loading_frames=async_loading_frames,
-            compute_device=compute_device,
+            compute_device=device,
             verbosity=verbosity,
         )
 
-        inference_state = {}
-        inference_state["images"] = images
-        inference_state["num_frames"] = len(images)
-        # whether to offload the video frames to CPU memory
-        # turning on this option saves the GPU memory with only a very small overhead
-        inference_state["offload_video_to_cpu"] = offload_video_to_cpu
-        # whether to offload the inference state to CPU memory
-        # turning on this option saves the GPU memory at the cost of a lower tracking fps
-        # (e.g. in a test case of 768x768 model, fps dropped from 27 to 24 when tracking one object
-        # and from 24 to 21 when tracking two objects)
-        inference_state["offload_state_to_cpu"] = offload_state_to_cpu
-        # the original video height and width, used for resizing final output scores
-        inference_state["video_height"] = video_height
-        inference_state["video_width"] = video_width
-        inference_state["device"] = compute_device
-        if offload_state_to_cpu:
-            inference_state["storage_device"] = torch.device("cpu")
-        else:
-            inference_state["storage_device"] = compute_device
-        # inputs on each frame
-        inference_state["point_inputs_per_obj"] = {}
-        inference_state["mask_inputs_per_obj"] = {}
-        # visual features on a small number of recently visited frames for quick interactions
-        inference_state["cached_features"] = {}
-        # values that don't change across frames (so we only need to hold one copy of them)
-        inference_state["constants"] = {}
-        # mapping between client-side object id and model-side object index
-        inference_state["obj_id_to_idx"] = OrderedDict()
-        inference_state["obj_idx_to_id"] = OrderedDict()
-        inference_state["obj_ids"] = []
-        # Slice (view) of each object tracking results, sharing the same memory with "output_dict"
-        inference_state["output_dict_per_obj"] = {}
-        # A temporary storage to hold new outputs when user interact with a frame
-        # to add clicks or mask (it's merged into "output_dict" before propagation starts)
-        inference_state["temp_output_dict_per_obj"] = {}
-        # Frames that already holds consolidated outputs from click or mask inputs
-        # (we directly use their consolidated outputs during tracking)
-        # metadata for each tracking frame (e.g. which direction it's tracked)
-        inference_state["frames_tracked_per_obj"] = {}
+        # 'inference_state' is the running dictionary which keeps all key details in memory.
+        inference_state = {
+            # Initialize the image and frame details.
+            "images": images,
+            "num_frames": len(images),
 
-        # CP: this looks redundant. We compute the embedding each time this is called despite it already being there.
-        # Warm up the visual backbone and cache the image feature on frame 0
-        self._get_image_feature(inference_state, frame_idx=0, batch_size=1)
+            # Whether to offload the video frames to CPU memory.
+            # Turning on this option saves the GPU memory with only a very small overhead.
+            "offload_video_to_cpu": offload_video_to_cpu,
+
+            # Whether to offload the inference state to CPU memory.
+            # Turning on this option saves the GPU memory at the cost of a lower tracking fps
+            # (e.g. in a test case of 768x768 model, fps dropped from 27 to 24 when tracking one object
+            # and from 24 to 21 when tracking two objects)
+            "offload_state_to_cpu": offload_state_to_cpu,
+
+            # The original video height and width, used for resizing final output scores
+            "video_height": video_height,
+            "video_width": video_width,
+            "device": device,
+            "storage_device": torch.device("cpu") if offload_state_to_cpu else device,
+
+            # Inputs on each frame
+            "point_inputs_per_obj": {},
+            "mask_inputs_per_obj": {},
+
+            # Values that don't change across frames (so we only need to hold one copy of them)
+            "constants": {},
+
+            # The mapping between client-side object id and model-side object index
+            "obj_id_to_idx": OrderedDict(),
+            "obj_idx_to_id": OrderedDict(),
+            "obj_ids": [],
+
+            # Slice (view) of each object tracking results, sharing the same memory with "output_dict"
+            "output_dict_per_obj": {},
+
+            # A temporary storage to hold new outputs when user interact with a frame
+            # to add clicks or mask (it's merged into "output_dict" before propagation starts)
+            "temp_output_dict_per_obj": {},
+
+            # Frames that already holds consolidated outputs from click or mask inputs
+            # (we directly use their consolidated outputs during tracking)
+            # metadata for each tracking frame (e.g. which direction it's tracked)
+            "frames_tracked_per_obj": {},
+        }
+
+        # Avoids preparing cached features - essential for the embedding precomputation stage.
+        if ignore_caching_features:
+            inference_state["cached_features"] = {}  # Create an empty 'cached_features' dictionary to warm up.
+            return inference_state
+
+        # Visual features on all frames (slices) for faster interactions.
+        feats = volume_embeddings["features"]
+        pos_list = volume_embeddings["pos_enc"]
+        fpn_list = volume_embeddings["fpn"]
+
+        # Embeddings have been provided. We just need to pass stuff to 'inference_state' as expected.
+        running_features = {}
+        for frame_idx in range(inference_state["num_frames"]):
+            image = images[frame_idx].to(device).float().unsqueeze(0)
+
+            vision_features = torch.as_tensor(np.asarray(feats[frame_idx]), device=device).float()
+            vision_pos_enc = [torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in pos_list]
+            backbone_fpn = [torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in fpn_list]
+            backbone_out = {
+                "vision_features": vision_features, "vision_pos_enc": vision_pos_enc, "backbone_fpn": backbone_fpn,
+            }
+            running_features[frame_idx] = (image, backbone_out)
+
+        inference_state["cached_features"] = running_features
+
         return inference_state
 
 

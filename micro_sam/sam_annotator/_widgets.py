@@ -464,11 +464,18 @@ def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> Non
         viewer: The napari viewer.
         all_slices: Choose whether to clear the annotations for all or only the current slice.
     """
+    state = AnnotatorState()
+
     if all_slices:
         vutil.clear_annotations(viewer)
     else:
         i = int(viewer.dims.point[0])
         vutil.clear_annotations_slice(viewer, i=i)
+
+    # If it's a SAM2 promptable segmentation workflow,
+    # we should reset the prompts after clear annotations has been clicked.
+    if state.interactive_segmenter is not None:
+        state.interactive_segmenter.reset_predictor()
 
     # Perform garbage collection.
     gc.collect()
@@ -558,6 +565,10 @@ def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
     seg[mask] += id_offset
     viewer.layers["committed_objects"].data[bb][mask] = seg[mask]
     viewer.layers["committed_objects"].refresh()
+
+    # If it's a SAM2 promptable segmentation workflow, we should reset the prompts after commit has been clicked.
+    if state.interactive_segmenter is not None:
+        state.interactive_segmenter.reset_predictor()
 
     return id_offset, seg, mask, bb
 
@@ -1085,22 +1096,9 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
             image_embeddings=state.image_embeddings, i=z,
         )
     else:
-        # SAM2 path - use PromptableSegmentation3D class
-        from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D
-
-        # Get the volume from the viewer
-        image_name = state.get_image_name(viewer)
-        volume = viewer.layers[image_name].data
-
-        # Create a PromptableSegmentation3D instance with existing inference state
-        seg_handler = PromptableSegmentation3D(
-            predictor=state.predictor,
-            volume=volume,
-        )
-
-        # Use the segment_slice method
+        # Use the segment_slice method for SAM2.
         boxes = [box[[1, 0, 3, 2]] for box in boxes]
-        seg = seg_handler.segment_slice(
+        seg = state.interactive_segmenter.segment_slice(
             frame_idx=z,
             points=points[:, ::-1].copy(),
             labels=labels,
@@ -1499,21 +1497,6 @@ class EmbeddingWidget(_WidgetBase):
             if self.automatic_segmentation_mode == "amg":
                 prefer_decoder = False
 
-            # Define a predictor for SAM2 models.
-            predictor = None
-            if self.model_type.startswith("h"):  # i.e. SAM2 models.
-                from micro_sam.v2.util import get_sam2_model
-
-                if ndim == 2:  # Get the SAM2 model and prepare the image predictor.
-                    model = get_sam2_model(model_type=self.model_type, input_type="images")
-                    # Prepare the SAM2 predictor.
-                    from sam2.sam2_image_predictor import SAM2ImagePredictor
-                    predictor = SAM2ImagePredictor(model)
-                elif ndim == 3:  # Get SAM2 video predictor
-                    predictor = get_sam2_model(model_type=self.model_type, input_type="videos")
-                else:
-                    raise ValueError
-
             state.initialize_predictor(
                 image_data,
                 model_type=self.model_type,
@@ -1521,13 +1504,11 @@ class EmbeddingWidget(_WidgetBase):
                 ndim=ndim,
                 device=self.device,
                 checkpoint_path=self.custom_weights,
-                predictor=predictor,
                 tile_shape=tile_shape,
                 halo=halo,
                 prefer_decoder=prefer_decoder,
                 pbar_init=pbar_init,
                 pbar_update=lambda update: pbar_signals.pbar_update.emit(update),
-                is_sam2=self.model_type.startswith("h"),
             )
             pbar_signals.pbar_stop.emit()
 
@@ -1721,15 +1702,6 @@ class SegmentNDWidget(_WidgetBase):
                     [box[:1, 0] for box in box_prompts.data]
                 ) if box_prompts.data else np.zeros(0, dtype="int")
 
-                # Get the volumetric data.
-                # TODO: We need to switch later to volume embeddings.
-                volume = self._viewer.layers[0].data  # Assumption is image is in the first index.
-
-                # NOTE: Prototype for new design of prompting in volumetric data.
-                # CP: this looks redundant. We redo the initialization each time a prompt is added.
-                from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D
-                segmenter = PromptableSegmentation3D(predictor=state.predictor, volume=volume)
-
                 # Whether the user decide to provide batched prompts for multi-object segmentation.
                 is_batched = bool(self.batched)
 
@@ -1740,7 +1712,7 @@ class SegmentNDWidget(_WidgetBase):
 
                     # Add prompts one after the other.
                     [
-                        segmenter.add_point_prompts(
+                        state.interactive_segmenter.add_point_prompts(
                             frame_ids=curr_z_values_point,
                             points=np.array([curr_point]),
                             point_labels=np.array([curr_label]),
@@ -1756,10 +1728,10 @@ class SegmentNDWidget(_WidgetBase):
                     )
 
                     # Add prompts one after the other.
-                    segmenter.add_box_prompts(frame_ids=curr_z_values_box, boxes=boxes)
+                    state.interactive_segmenter.add_box_prompts(frame_ids=curr_z_values_box, boxes=boxes)
 
                 # Propagate the prompts throughout the volume and combine the propagated segmentations.
-                seg = segmenter.predict()
+                seg = state.interactive_segmenter.predict()
 
             pbar_signals.pbar_stop.emit()
 
