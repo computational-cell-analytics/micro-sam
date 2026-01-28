@@ -472,7 +472,7 @@ def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> Non
         i = int(viewer.dims.point[0])
         vutil.clear_annotations_slice(viewer, i=i)
 
-    # If it's a SAM2 promptable segmentation workflow, we should reset the prompts after commit has been clicked.
+    # If it's a SAM2 promptable segmentation workflow, we should reset the prompts after clear annotations has been clicked.
     if state.interactive_segmenter is not None:
         state.interactive_segmenter.reset_predictor()
 
