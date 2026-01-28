@@ -84,6 +84,9 @@ class AnnotatorState(metaclass=Singleton):
     previous_features: Optional[np.ndarray] = None
     previous_labels: Optional[np.ndarray] = None
 
+    # Interactive segmentation class for 'micro-sam2'.
+    interactive_segmenter: Optional[Any] = None  # TODO: Create a base class and add it here.
+
     def initialize_predictor(
         self,
         image_data,
@@ -151,6 +154,13 @@ class AnnotatorState(metaclass=Singleton):
                 pbar_update=pbar_update,
             )
             self.embedding_path = save_path
+
+        # Let's prepare the interactive segmentation class.
+        if is_sam2 and ndim == 3:
+            from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D
+            self.interactive_segmenter = PromptableSegmentation3D(
+                predictor=self.predictor, volume=image_data, volume_embeddings=self.image_embeddings,
+            )
 
         # If we have an embedding path the data signature has already been computed,
         # and we can read it from there.
