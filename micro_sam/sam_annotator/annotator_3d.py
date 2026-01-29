@@ -2,49 +2,24 @@ from typing import Optional, Tuple, Union
 
 import napari
 import numpy as np
-
 import torch
 
 from .. import util
-from . import _widgets as widgets
-from ._state import AnnotatorState
-from ._annotator import _AnnotatorBase
-from .util import _initialize_parser, _sync_embedding_widget, _load_amg_state, _load_is_state
+from .annotator import Annotator, annotator
+from .util import _initialize_parser
 
 
-class Annotator3d(_AnnotatorBase):
-    def _get_widgets(self):
-        autosegment = widgets.AutoSegmentWidget(self._viewer, with_decoder=self._with_decoder, volumetric=True)
-        segment_nd = widgets.SegmentNDWidget(self._viewer, tracking=False)
-        return {
-            "segment": widgets.segment_slice(),
-            "segment_nd": segment_nd,
-            "autosegment": autosegment,
-            "commit": widgets.commit(),
-            "clear": widgets.clear_volume(),
-        }
+class Annotator3d(Annotator):
+    """3D annotator (backward compatibility wrapper).
 
-    def __init__(self, viewer: "napari.viewer.Viewer", reset_state: bool = True) -> None:
-        self._with_decoder = AnnotatorState().decoder is not None
-        super().__init__(viewer=viewer, ndim=3)
+    This class is a thin wrapper around the unified Annotator class,
+    maintaining backward compatibility with existing code.
+    """
 
-        # Set the expected annotator class to the state.
-        state = AnnotatorState()
-
-        # Reset the state.
-        if reset_state:
-            state.reset_state()
-
-        state.annotator = self
-
-    def _update_image(self, segmentation_result=None):
-        super()._update_image(segmentation_result=segmentation_result)
-        # Load the amg state from the embedding path.
-        state = AnnotatorState()
-        if self._with_decoder:
-            state.amg_state = _load_is_state(state.embedding_path)
-        else:
-            state.amg_state = _load_amg_state(state.embedding_path)
+    def __init__(
+        self, viewer: "napari.viewer.Viewer", reset_state: bool = True
+    ) -> None:
+        super().__init__(viewer, ndim=3, reset_state=reset_state)
 
 
 def annotator_3d(
@@ -92,60 +67,47 @@ def annotator_3d(
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
     """
-
-    # Initialize the predictor state.
-    state = AnnotatorState()
-    state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
-    state.initialize_predictor(
-        image, model_type=model_type, save_path=embedding_path,
-        halo=halo, tile_shape=tile_shape, ndim=3, precompute_amg_state=precompute_amg_state,
-        checkpoint_path=checkpoint_path, device=device, prefer_decoder=prefer_decoder,
-        use_cli=True,
-    )
-
-    if viewer is None:
-        viewer = napari.Viewer()
-
-    viewer.add_image(image, name="image")
-    annotator = Annotator3d(viewer, reset_state=False)
-
-    # Trigger layer update of the annotator so that layers have the correct shape.
-    # And initialize the 'committed_objects' with the segmentation result if it was given.
-    annotator._update_image(segmentation_result=segmentation_result)
-
-    # Add the annotator widget to the viewer and sync widgets.
-    viewer.window.add_dock_widget(annotator)
-    _sync_embedding_widget(
-        widget=state.widgets["embeddings"],
-        model_type=model_type if checkpoint_path is None else state.predictor.model_type,
-        save_path=embedding_path,
+    return annotator(
+        image=image,
+        ndim=3,
+        embedding_path=embedding_path,
+        segmentation_result=segmentation_result,
+        model_type=model_type,
+        tile_shape=tile_shape,
+        halo=halo,
+        return_viewer=return_viewer,
+        viewer=viewer,
+        precompute_amg_state=precompute_amg_state,
         checkpoint_path=checkpoint_path,
         device=device,
-        tile_shape=tile_shape,
-        halo=halo
+        prefer_decoder=prefer_decoder,
     )
-
-    if return_viewer:
-        return viewer
-
-    napari.run()
 
 
 def main():
     """@private"""
-    parser = _initialize_parser(description="Run interactive segmentation for an image volume.")
+    parser = _initialize_parser(
+        description="Run interactive segmentation for an image volume."
+    )
     args = parser.parse_args()
     image = util.load_image_data(args.input, key=args.key)
 
     if args.segmentation_result is None:
         segmentation_result = None
     else:
-        segmentation_result = util.load_image_data(args.segmentation_result, key=args.segmentation_key)
+        segmentation_result = util.load_image_data(
+            args.segmentation_result, key=args.segmentation_key
+        )
 
     annotator_3d(
-        image, embedding_path=args.embedding_path,
+        image,
+        embedding_path=args.embedding_path,
         segmentation_result=segmentation_result,
-        model_type=args.model_type, tile_shape=args.tile_shape, halo=args.halo,
-        checkpoint_path=args.checkpoint, device=args.device,
-        precompute_amg_state=args.precompute_amg_state, prefer_decoder=args.prefer_decoder,
+        model_type=args.model_type,
+        tile_shape=args.tile_shape,
+        halo=args.halo,
+        checkpoint_path=args.checkpoint,
+        device=args.device,
+        precompute_amg_state=args.precompute_amg_state,
+        prefer_decoder=args.prefer_decoder,
     )
