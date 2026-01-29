@@ -1,5 +1,9 @@
 # Release Overview
 
+**New in version 1.7.0**
+
+Updates to the automatic instance segmentation pipeline (introduces APG - automatic prompt generation).
+
 **New in version 1.6.2**
 
 Publish improved version of the medical imaging model and minor fixes to image series annotator.

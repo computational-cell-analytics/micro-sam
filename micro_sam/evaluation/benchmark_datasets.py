@@ -23,7 +23,9 @@ from ..training.training import _filter_warnings
 from .inference import run_inference_with_iterative_prompting
 from .evaluation import run_evaluation_for_iterative_prompting
 from .multi_dimensional_segmentation import segment_slices_from_ground_truth
-from ..automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+from ..automatic_segmentation import (
+    automatic_instance_segmentation, get_predictor_and_segmenter, DEFAULT_SEGMENTATION_MODE_WITH_DECODER,
+)
 
 
 LM_2D_DATASETS = [
@@ -513,7 +515,7 @@ def _run_automatic_segmentation_per_dataset(
     ndim: Optional[int] = None,
     device: Optional[Union[torch.device, str]] = None,
     checkpoint_path: Optional[Union[os.PathLike, str]] = None,
-    run_amg: Optional[bool] = None,
+    segmentation_mode: Optional[Literal["amg", "ais", "apg"]] = "ais",
     **auto_seg_kwargs
 ):
     """Functionality to run automatic segmentation for multiple input files at once.
@@ -527,19 +529,16 @@ def _run_automatic_segmentation_per_dataset(
         ndim: The number of input dimensions.
         device: The torch device.
         checkpoint_path: The filepath where the model checkpoints are stored.
-        run_amg: Whether to run automatic segmentation in AMG mode.
+        segmentation_mode: The mode for automatic segmentation.
         auto_seg_kwargs: Additional arguments for automatic segmentation parameters.
     """
-    # First, we check if 'run_amg' is done, whether decoder is available or not.
-    # Depending on that, we can set 'run_amg' to the default best automatic segmentation (i.e. AIS > AMG).
-    if run_amg is None or (not run_amg):  # The 2nd condition checks if you want AIS and if decoder state exists or not.
+    if segmentation_mode is None:  # The 2nd condition checks if you want AIS and if decoder state exists or not.
         _, state = util.get_sam_model(
             model_type=model_type, checkpoint_path=checkpoint_path, device=device, return_state=True
         )
-        run_amg = ("decoder_state" not in state)
+        segmentation_mode = DEFAULT_SEGMENTATION_MODE_WITH_DECODER if "decoder_state" in state else "amg"
 
-    experiment_name = "AMG" if run_amg else "AIS"
-    fname = f"{experiment_name.lower()}_{ndim}d"
+    fname = f"{segmentation_mode}_{ndim}d"
 
     result_path = os.path.join(output_folder, "results", f"{fname}.csv")
     if os.path.exists(result_path):
@@ -550,10 +549,11 @@ def _run_automatic_segmentation_per_dataset(
 
     # Get the predictor (and the additional instance segmentation decoder, if available).
     predictor, segmenter = get_predictor_and_segmenter(
-        model_type=model_type, checkpoint=checkpoint_path, device=device, amg=run_amg, is_tiled=False,
+        model_type=model_type, checkpoint=checkpoint_path, device=device,
+        segmentation_mode=segmentation_mode, is_tiled=False,
     )
 
-    for image_path in tqdm(image_paths, desc=f"Run {experiment_name} in {ndim}d"):
+    for image_path in tqdm(image_paths, desc=f"Run {segmentation_mode} in {ndim}d"):
         output_path = os.path.join(prediction_dir, os.path.basename(image_path))
         if os.path.exists(output_path):
             continue
@@ -667,7 +667,8 @@ def _run_interactive_segmentation_per_dataset(
 
 
 def _run_benchmark_evaluation_series(
-    image_paths, gt_paths, model_type, output_folder, ndim, device, checkpoint_path, run_amg, evaluation_methods,
+    image_paths, gt_paths, model_type, output_folder, ndim, device, checkpoint_path,
+    segmentation_mode, evaluation_methods,
 ):
     seg_kwargs = {
         "image_paths": image_paths,
@@ -687,11 +688,11 @@ def _run_benchmark_evaluation_series(
 
     if evaluation_methods != "interactive":  # Avoid auto. seg. evaluation for 'interactive'-only run choice.
         # i. Run automatic segmentation method supported with the SAM model (AMG or AIS).
-        _run_automatic_segmentation_per_dataset(run_amg=None, **seg_kwargs)
+        _run_automatic_segmentation_per_dataset(segmentation_mode=None, **seg_kwargs)
 
         # ii. Run automatic mask generation (AMG).
         #     NOTE: This would only run if the user wants to. Else by default, it is set to 'False'.
-        _run_automatic_segmentation_per_dataset(run_amg=run_amg, **seg_kwargs)
+        _run_automatic_segmentation_per_dataset(segmentation_mode=segmentation_mode, **seg_kwargs)
 
     if evaluation_methods != "automatic":  # Avoid int. seg. evaluation for 'automatic'-only run choice.
         # b. Run interactive segmentation (supported in both 2d and 3d, wherever relevant)
@@ -746,7 +747,7 @@ def run_benchmark_evaluations(
     model_type: str = util._DEFAULT_MODEL,
     output_folder: Optional[Union[str, os.PathLike]] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
-    run_amg: bool = False,
+    segmentation_mode: Optional[Literal["amg", "ais", "apg"]] = None,
     retain: Optional[List[str]] = None,
     evaluation_methods: Literal["all", "automatic", "interactive"] = "all",
     ignore_warnings: bool = False,
@@ -759,7 +760,7 @@ def run_benchmark_evaluations(
         model_type: The model choice for SAM.
         output_folder: The path to directory where all outputs will be stored.
         checkpoint_path: The checkpoint path
-        run_amg: Whether to run automatic segmentation in AMG mode.
+        segmentation_mode: The segmentation mode. One of 'amg', 'ais', or 'apg'.
         retain: Whether to retain certain parts of the benchmark runs.
             By default, removes everything besides quantitative results.
             There is the choice to retain 'data', 'crops', 'automatic', or 'interactive'.
@@ -799,7 +800,7 @@ def run_benchmark_evaluations(
                 ndim=ndim,
                 device=device,
                 checkpoint_path=checkpoint_path,
-                run_amg=run_amg,
+                segmentation_mode=segmentation_mode,
                 evaluation_methods=evaluation_methods,
             )
 
@@ -814,7 +815,7 @@ def run_benchmark_evaluations(
                     ndim=2,
                     device=device,
                     checkpoint_path=checkpoint_path,
-                    run_amg=run_amg,
+                    segmentation_mode=segmentation_mode,
                     evaluation_methods=evaluation_methods,
                 )
 
@@ -885,7 +886,7 @@ def main():
         model_type=args.model_type,
         output_folder=args.output_folder,
         checkpoint_path=args.checkpoint_path,
-        run_amg=args.amg,
+        segmentation_mode=args.segmentation_mode,
         retain=args.retain,
         evaluation_methods=args.evaluate,
         ignore_warnings=True,
