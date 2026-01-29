@@ -1106,7 +1106,7 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
             masks=masks
         )
 
-    # no prompts were given or prompts were invalid, skip segmentation
+    # No prompts were given or prompts were invalid, skip segmentation.
     if seg is None:
         print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
         return
