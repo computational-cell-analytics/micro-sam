@@ -22,7 +22,7 @@ def _create_images(tmpdir, n_images):
 
 
 @pytest.mark.gui
-@pytest.mark.skipif(platform.system() in ("Windows", "Linux"), reason="Gui test is not working on windows.")
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 def test_image_series_annotator(make_napari_viewer_proxy):
     """Integration test for `image_series_annotator`.
     """
@@ -36,7 +36,8 @@ def test_image_series_annotator(make_napari_viewer_proxy):
         viewer = make_napari_viewer_proxy()
         # test generating image embedding, then adding micro-sam dock widgets to the GUI
         viewer = image_series_annotator(
-            image_paths, output_folder,
+            image_paths,
+            output_folder,
             model_type=model_type,
             viewer=viewer,
             return_viewer=True,
@@ -47,7 +48,7 @@ def test_image_series_annotator(make_napari_viewer_proxy):
 
 
 @pytest.mark.gui
-@pytest.mark.skipif(platform.system() in ("Windows", "Linux"), reason="Gui test is not working on windows.")
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 def test_image_folder_annotator(make_napari_viewer_proxy):
     """Integration test for `image_folder_annotator`.
     """
@@ -61,7 +62,9 @@ def test_image_folder_annotator(make_napari_viewer_proxy):
         viewer = make_napari_viewer_proxy()
         # test generating image embedding, then adding micro-sam dock widgets to the GUI
         viewer = image_folder_annotator(
-            tmpdir, output_folder, "*.png",
+            tmpdir,
+            output_folder,
+            pattern="*.png",
             model_type=model_type,
             viewer=viewer,
             return_viewer=True,
