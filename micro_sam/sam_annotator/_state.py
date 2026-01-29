@@ -117,6 +117,7 @@ class AnnotatorState(metaclass=Singleton):
 
     # Interactive segmentation class for 'micro-sam2'.
     interactive_segmenter: Optional[Any] = None  # TODO: Create a base class and add it here.
+    is_sam2: Optional[bool] = None  # Whether this is a SAM1 or SAM2 model.
 
     def initialize_predictor(
         self,
@@ -138,7 +139,7 @@ class AnnotatorState(metaclass=Singleton):
         use_cli=False,
     ):
         assert ndim in (2, 3)
-        is_sam2 = model_type.startswith("h")
+        self.is_sam2 = model_type.startswith("h")
 
         # Initialize the model if necessary.
         if predictor is None:
@@ -160,7 +161,7 @@ class AnnotatorState(metaclass=Singleton):
             self.embedding_path = None  # setting this to 'None' as we do not have embeddings cached.
 
         else:  # Otherwise, compute the image embeddings.
-            if is_sam2:
+            if self.is_sam2:
                 from micro_sam.v2.util import precompute_image_embeddings as _comp_embed_fn
             else:
                 _comp_embed_fn = util.precompute_image_embeddings
@@ -179,7 +180,7 @@ class AnnotatorState(metaclass=Singleton):
             self.embedding_path = save_path
 
         # Let's prepare the interactive segmentation class.
-        if is_sam2 and ndim == 3:
+        if self.is_sam2 and ndim == 3:
             from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D
             self.interactive_segmenter = PromptableSegmentation3D(
                 predictor=self.predictor, volume=image_data, volume_embeddings=self.image_embeddings,
@@ -299,4 +300,6 @@ class AnnotatorState(metaclass=Singleton):
         self.committed_lineages = None
         self.z_range = None
         self.data_signature = None
+        self.interactive_segmenter = None
+        self.is_sam2 = None
         # Note: we don't clear the widgets here, because they are fixed for a viewer session.
