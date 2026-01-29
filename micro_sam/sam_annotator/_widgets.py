@@ -31,8 +31,6 @@ from magicgui.widgets import ComboBox, Container, create_widget
 # from napari.qt.threading import thread_worker
 from napari.utils import progress
 
-from segment_anything import SamPredictor
-
 from . import util as vutil
 from ._tooltips import get_tooltip
 from ._state import AnnotatorState
@@ -1033,15 +1031,11 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
     boxes, masks = vutil.shape_layer_to_prompts(viewer.layers["prompts"], shape)
     points, labels = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], with_stop_annotation=False)
 
-    predictor = AnnotatorState().predictor
-    image_embeddings = AnnotatorState().image_embeddings
+    state = AnnotatorState()
+    predictor = state.predictor
+    image_embeddings = state.image_embeddings
 
-    if isinstance(predictor, SamPredictor):  # This is SAM1 predictor.
-        seg = vutil.prompt_segmentation(
-            predictor, points, labels, boxes, masks, shape, image_embeddings=image_embeddings,
-            multiple_box_prompts=True, batched=batched, previous_segmentation=viewer.layers["current_object"].data,
-        )
-    else:  # This would be SAM2 predictors.
+    if state.is_sam2:
         from micro_sam.v2.prompt_based_segmentation import promptable_segmentation_2d
         seg = promptable_segmentation_2d(
             predictor=predictor,
@@ -1049,6 +1043,11 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
             labels=labels,
             boxes=boxes,
             masks=masks,
+        )
+    else:
+        seg = vutil.prompt_segmentation(
+            predictor, points, labels, boxes, masks, shape, image_embeddings=image_embeddings,
+            multiple_box_prompts=True, batched=batched, previous_segmentation=viewer.layers["current_object"].data,
         )
 
     # no prompts were given or prompts were invalid, skip segmentation
@@ -1088,14 +1087,7 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
 
     state = AnnotatorState()
 
-    # Check if using SAM1 or SAM2
-    if isinstance(state.predictor, SamPredictor):
-        # SAM1 path (existing code)
-        seg = vutil.prompt_segmentation(
-            state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
-            image_embeddings=state.image_embeddings, i=z,
-        )
-    else:
+    if state.is_sam2:
         # Use the segment_slice method for SAM2.
         boxes = [box[[1, 0, 3, 2]] for box in boxes]
         seg = state.interactive_segmenter.segment_slice(
@@ -1104,6 +1096,11 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
             labels=labels,
             boxes=boxes,
             masks=masks
+        )
+    else:
+        seg = vutil.prompt_segmentation(
+            state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
+            image_embeddings=state.image_embeddings, i=z,
         )
 
     # No prompts were given or prompts were invalid, skip segmentation.
@@ -1674,26 +1671,7 @@ class SegmentNDWidget(_WidgetBase):
             pbar_signals.pbar_total.emit(shape[0])
             pbar_signals.pbar_description.emit("Segment object")
 
-            if isinstance(state.predictor, SamPredictor):  # This is SAM2 predictor.
-                # Step 1: Segment all slices with prompts.
-                seg, slices, stop_lower, stop_upper = vutil.segment_slices_with_prompts(
-                    state.predictor, self._viewer.layers["point_prompts"], self._viewer.layers["prompts"],
-                    state.image_embeddings, shape,
-                    update_progress=lambda update: pbar_signals.pbar_update.emit(update),
-                )
-
-                # Step 2: Segment the rest of the volume based on projecting prompts.
-                seg, (z_min, z_max) = segment_mask_in_volume(
-                    seg, state.predictor, state.image_embeddings, slices,
-                    stop_lower, stop_upper,
-                    iou_threshold=self.iou_threshold, projection=self.projection,
-                    box_extension=self.box_extension,
-                    update_progress=lambda update: pbar_signals.pbar_update.emit(update),
-                )
-
-                state.z_range = (z_min, z_max)
-
-            else:  # This would be SAM2 predictors.
+            if state.is_sam2:
                 # Prepare the prompts
                 point_prompts = self._viewer.layers["point_prompts"]
                 box_prompts = self._viewer.layers["prompts"]
@@ -1732,6 +1710,25 @@ class SegmentNDWidget(_WidgetBase):
 
                 # Propagate the prompts throughout the volume and combine the propagated segmentations.
                 seg = state.interactive_segmenter.predict()
+
+            else:
+                # Step 1: Segment all slices with prompts.
+                seg, slices, stop_lower, stop_upper = vutil.segment_slices_with_prompts(
+                    state.predictor, self._viewer.layers["point_prompts"], self._viewer.layers["prompts"],
+                    state.image_embeddings, shape,
+                    update_progress=lambda update: pbar_signals.pbar_update.emit(update),
+                )
+
+                # Step 2: Segment the rest of the volume based on projecting prompts.
+                seg, (z_min, z_max) = segment_mask_in_volume(
+                    seg, state.predictor, state.image_embeddings, slices,
+                    stop_lower, stop_upper,
+                    iou_threshold=self.iou_threshold, projection=self.projection,
+                    box_extension=self.box_extension,
+                    update_progress=lambda update: pbar_signals.pbar_update.emit(update),
+                )
+
+                state.z_range = (z_min, z_max)
 
             pbar_signals.pbar_stop.emit()
 
