@@ -693,7 +693,8 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
 
     # Update the index for model size, eg. 'base', 'tiny', etc.
     size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
-    model_size = size_map[model_type[4]]
+    size_idx = 5 if model_type.startswith("h") else 4
+    model_size = size_map[model_type[size_idx]]
 
     index = widget.model_size_dropdown.findText(model_size)
     if index > 0:
