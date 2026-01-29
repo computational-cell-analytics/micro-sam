@@ -9,13 +9,14 @@ from . import _widgets as widgets
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
 from .util import (
+    _initialize_parser,
     _load_amg_state,
     _load_is_state,
     _sync_embedding_widget,
 )
 
 
-def _detect_ndim(image: np.ndarray) -> int:
+def detect_ndim(image: np.ndarray) -> int:
     """Auto-detect dimensionality from image shape.
 
     Args:
@@ -105,7 +106,7 @@ class Annotator(_AnnotatorBase):
                 # Get the image from the viewer to detect ndim
                 if "image" in viewer.layers:
                     image = viewer.layers["image"].data
-                    ndim = _detect_ndim(image)
+                    ndim = detect_ndim(image)
                 else:
                     raise ValueError(
                         "Cannot auto-detect ndim: no image layer found in viewer."
@@ -145,6 +146,7 @@ class Annotator(_AnnotatorBase):
 
 def annotator(
     image: np.ndarray,
+    *,
     ndim: Optional[int] = None,
     embedding_path: Optional[Union[str, util.ImageEmbeddings]] = None,
     segmentation_result: Optional[np.ndarray] = None,
@@ -195,14 +197,14 @@ def annotator(
     """
     # Auto-detect ndim if not provided
     if ndim is None:
-        ndim = _detect_ndim(image)
+        ndim = detect_ndim(image)
 
     # Validate ndim
     if ndim not in (2, 3):
         raise ValueError(f"Invalid ndim: {ndim}. Expected 2 or 3.")
 
     # Validate ndim matches image shape
-    detected_ndim = _detect_ndim(image)
+    detected_ndim = detect_ndim(image)
     if ndim != detected_ndim:
         raise ValueError(
             f"Provided ndim={ndim} does not match detected ndim={detected_ndim} from image shape {image.shape}."
@@ -266,3 +268,34 @@ def annotator(
         return viewer
 
     napari.run()
+
+
+def main():
+    """@private"""
+    parser = _initialize_parser(description="Start the μSAM GUI for image segmentation (2D or 3D).")
+    parser.add_argument(
+        "--ndim", help="The number of spatial dimensions (2 or 3). If None, auto-detected from image shape."
+    )
+    args = parser.parse_args()
+    image = util.load_image_data(args.input, key=args.key)
+
+    if args.segmentation_result is None:
+        segmentation_result = None
+    else:
+        segmentation_result = util.load_image_data(
+            args.segmentation_result, key=args.segmentation_key
+        )
+
+    annotator(
+        image,
+        ndim=args.ndim,
+        embedding_path=args.embedding_path,
+        segmentation_result=segmentation_result,
+        model_type=args.model_type,
+        tile_shape=args.tile_shape,
+        halo=args.halo,
+        precompute_amg_state=args.precompute_amg_state,
+        checkpoint_path=args.checkpoint,
+        device=args.device,
+        prefer_decoder=args.prefer_decoder,
+    )

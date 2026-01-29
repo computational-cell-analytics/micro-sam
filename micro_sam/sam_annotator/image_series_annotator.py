@@ -18,8 +18,7 @@ from .. import util
 from . import _widgets as widgets
 from ._tooltips import get_tooltip
 from ._state import AnnotatorState
-from .annotator_2d import Annotator2d
-from .annotator_3d import Annotator3d
+from .annotator import Annotator, detect_ndim
 from .util import _sync_embedding_widget
 from ..instance_segmentation import get_decoder
 from ..precompute_state import _precompute_state_for_files
@@ -66,11 +65,11 @@ def _precompute(
     return predictor, decoder, embedding_paths
 
 
-def _get_input_shape(image, is_volumetric=False):
+def _get_input_shape(image, ndim):
     if image.ndim == 2:
         image_shape = image.shape
     elif image.ndim == 3:
-        if is_volumetric:
+        if ndim == 3:
             image_shape = image.shape
         else:
             image_shape = image.shape[:-1]
@@ -82,7 +81,7 @@ def _get_input_shape(image, is_volumetric=False):
 
 def _initialize_annotator(
     viewer, image, image_embedding_path,
-    model_type, halo, tile_shape, predictor, decoder, is_volumetric,
+    model_type, halo, tile_shape, predictor, decoder, ndim,
     precompute_amg_state, checkpoint_path, device, embedding_path,
     segmentation_path, initial_seg,
 ):
@@ -94,19 +93,12 @@ def _initialize_annotator(
     state.initialize_predictor(
         image, model_type=model_type, save_path=image_embedding_path, halo=halo, tile_shape=tile_shape,
         predictor=predictor, decoder=decoder,
-        ndim=3 if is_volumetric else 2, precompute_amg_state=precompute_amg_state,
+        ndim=ndim, precompute_amg_state=precompute_amg_state,
         checkpoint_path=checkpoint_path, device=device, skip_load=False, use_cli=True,
     )
-    state.image_shape = _get_input_shape(image, is_volumetric)
+    state.image_shape = _get_input_shape(image, ndim)
 
-    if is_volumetric:
-        if image.ndim not in [3, 4]:
-            raise ValueError(f"Invalid image dimensions for 3d annotator, expect 3 or 4 dimensions, got {image.ndim}")
-        annotator = Annotator3d(viewer, reset_state=False)
-    else:
-        if image.ndim not in (2, 3):
-            raise ValueError(f"Invalid image dimensions for 2d annotator, expect 2 or 3 dimensions, got {image.ndim}")
-        annotator = Annotator2d(viewer, reset_state=False)
+    annotator = Annotator(viewer, ndim=ndim, reset_state=False)
 
     if os.path.exists(segmentation_path):
         segmentation_result = imageio.imread(segmentation_path)
@@ -133,6 +125,8 @@ def _initialize_annotator(
 def image_series_annotator(
     images: Union[List[Union[os.PathLike, str]], List[np.ndarray]],
     output_folder: str,
+    *,
+    ndim: Optional[int] = None,
     model_type: str = util._DEFAULT_MODEL,
     embedding_path: Optional[str] = None,
     initial_segmentations: Optional[Union[List[Union[os.PathLike, str]], List[np.ndarray]]] = None,
@@ -142,16 +136,16 @@ def image_series_annotator(
     return_viewer: bool = False,
     precompute_amg_state: bool = False,
     checkpoint_path: Optional[str] = None,
-    is_volumetric: bool = False,
     device: Optional[Union[str, torch.device]] = None,
     prefer_decoder: bool = True,
     skip_segmented: bool = True,
 ) -> Optional["napari.viewer.Viewer"]:
-    """Run the annotation tool for a series of images (supported for both 2d and 3d images).
+    """Run the segmentation annotation tool for a series of images (2d or 3d).
 
     Args:
         images: List of the file paths or list of (set of) slices for the images to be annotated.
         output_folder: The folder where the segmentation results are saved.
+        ndim: The number of spatial dimensions (2 or 3). If None, auto-detected from image shape.
         model_type: The Segment Anything model to use. For details on the available models check out
             https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
         embedding_path: Filepath where to save the embeddings.
@@ -169,7 +163,6 @@ def image_series_annotator(
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster. By default, set to 'False'.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
-        is_volumetric: Whether to use the 3d annotator. By default, set to 'False'.
         prefer_decoder: Whether to use decoder based instance segmentation if
             the model used has an additional decoder for instance segmentation.
             By default, set to 'True'.
@@ -189,14 +182,6 @@ def image_series_annotator(
     end_msg = "You have annotated the last image. Do you wish to close napari?"
     os.makedirs(output_folder, exist_ok=True)
 
-    # Precompute embeddings and amg state (if corresponding options set).
-    predictor, decoder, embedding_paths = _precompute(
-        images, model_type,
-        embedding_path, tile_shape, halo, precompute_amg_state,
-        checkpoint_path=checkpoint_path, device=device,
-        ndim=3 if is_volumetric else 2, prefer_decoder=prefer_decoder,
-    )
-
     next_image_id = 0
     have_inputs_as_arrays = isinstance(images[next_image_id], np.ndarray)
 
@@ -208,12 +193,26 @@ def image_series_annotator(
             fname = os.path.splitext(fname)[0] + ".tif"
         return os.path.join(output_folder, fname)
 
-    def _load_image(image_id):
+    def _load_image(load_embeds=True):
         image = images[next_image_id]
         if not have_inputs_as_arrays:
             image = imageio.imread(image)
+        if not load_embeds:
+            return image
         image_embedding_path = embedding_paths[next_image_id]
         return image, image_embedding_path
+
+    if ndim is None:
+        image = _load_image(load_embeds=False)
+        ndim = detect_ndim(image)
+
+    # Precompute embeddings and amg state (if corresponding options set).
+    predictor, decoder, embedding_paths = _precompute(
+        images, model_type,
+        embedding_path, tile_shape, halo, precompute_amg_state,
+        checkpoint_path=checkpoint_path, device=device,
+        ndim=ndim, prefer_decoder=prefer_decoder,
+    )
 
     # Check which image to load next if we skip segmented images.
     if skip_segmented:
@@ -225,20 +224,20 @@ def image_series_annotator(
             save_path = _get_save_path(images[next_image_id], next_image_id)
             if not os.path.exists(save_path):
                 print("The first image to annotate is image number", next_image_id)
-                image, image_embedding_path = _load_image(next_image_id)
+                image, image_embedding_path = _load_image()
                 break
 
             next_image_id += 1
 
     else:
         save_path = _get_save_path(images[next_image_id], next_image_id)
-        image, image_embedding_path = _load_image(next_image_id)
+        image, image_embedding_path = _load_image()
 
     # Initialize the viewer and annotator for this image.
     state = AnnotatorState()
     viewer, annotator = _initialize_annotator(
         viewer, image, image_embedding_path,
-        model_type, halo, tile_shape, predictor, decoder, is_volumetric,
+        model_type, halo, tile_shape, predictor, decoder, ndim,
         precompute_amg_state, checkpoint_path, device, embedding_path,
         save_path, None if initial_segmentations is None else initial_segmentations[next_image_id],
     )
@@ -322,14 +321,14 @@ def image_series_annotator(
             state.amg.clear_state()
 
         state.initialize_predictor(
-            image, model_type=model_type, ndim=3 if is_volumetric else 2,
+            image, model_type=model_type, ndim=ndim,
             save_path=image_embedding_path,
             tile_shape=tile_shape, halo=halo,
             predictor=predictor, decoder=decoder,
             precompute_amg_state=precompute_amg_state, device=device,
             skip_load=False,
         )
-        state.image_shape = _get_input_shape(image, is_volumetric)
+        state.image_shape = _get_input_shape(image, ndim)
 
         annotator._update_image(segmentation_result=segmentation_result)
 
@@ -347,6 +346,8 @@ def image_series_annotator(
 def image_folder_annotator(
     input_folder: str,
     output_folder: str,
+    *,
+    ndim: Optional[int] = None,
     pattern: str = "*",
     initial_segmentation_folder: Optional[str] = None,
     initial_segmentation_pattern: str = "*",
@@ -354,11 +355,12 @@ def image_folder_annotator(
     return_viewer: bool = False,
     **kwargs
 ) -> Optional["napari.viewer.Viewer"]:
-    """Run the 2d annotation tool for a series of images in a folder.
+    """Run the segmentation annotation tool for a series of images (2d or 3d) in a folder.
 
     Args:
         input_folder: The folder with the images to be annotated.
         output_folder: The folder where the segmentation results are saved.
+        ndim: The number of spatial dimensions (2 or 3). If None, auto-detected from image shape.
         pattern: The glob pattern for loading files from `input_folder`.
             By default all files will be loaded.
         initial_segmentation_folder: A folder with initial segmentation results.
@@ -382,7 +384,7 @@ def image_folder_annotator(
         )))
 
     return image_series_annotator(
-        image_files, output_folder,
+        image_files, output_folder, ndim=ndim,
         initial_segmentations=initial_segmentations,
         viewer=viewer, return_viewer=return_viewer, **kwargs
     )
@@ -439,9 +441,9 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         )
         setting_values.layout().addLayout(layout)
 
-        self.is_volumetric = False
-        setting_values.layout().addWidget(self._add_boolean_param(
-            "is_volumetric", self.is_volumetric, tooltip=get_tooltip("image_series_annotator", "is_volumetric")
+        self.ndim = None
+        setting_values.layout().addWidget(self._add_int_param(
+            "ndim", self.ndim, tooltip=get_tooltip("image_series_annotator", "ndim")
         ))
 
         self.device = "auto"
@@ -504,12 +506,15 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         image_folder_annotator(
             input_folder=self.folder,
             output_folder=self.output_folder,
+            ndim=self.ndim,
             pattern=self.pattern,
             model_type=self.model_type,
             embedding_path=self.embeddings_save_path,
-            tile_shape=tile_shape, halo=halo, checkpoint_path=self.custom_weights,
-            device=self.device, is_volumetric=self.is_volumetric,
-            viewer=self._viewer, return_viewer=True,
+            tile_shape=tile_shape, halo=halo,
+            checkpoint_path=self.custom_weights,
+            device=self.device,
+            viewer=self._viewer,
+            return_viewer=True,
         )
 
 
@@ -528,6 +533,9 @@ def main():
     parser.add_argument(
         "-o", "--output_folder", required=True,
         help="The folder where the segmentation results will be stored."
+    )
+    parser.add_argument(
+        "--ndim", help="The number of spatial dimensions (2 or 3). If None, auto-detected from image shape."
     )
     parser.add_argument(
         "-p", "--pattern", default="*",
@@ -561,9 +569,6 @@ def main():
         help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
         "By default the most performant available device will be selected."
     )
-    parser.add_argument(
-        "--is_volumetric", action="store_true", help="Whether to use the 3d annotator for a set of 3d volumes."
-    )
 
     parser.add_argument(
         "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
@@ -578,11 +583,11 @@ def main():
     args = parser.parse_args()
 
     image_folder_annotator(
-        args.input_folder, args.output_folder, args.pattern,
+        args.input_folder, args.output_folder, pattern=args.pattern, ndim=args.ndim,
         initial_segmentation_folder=args.initial_segmentation_folder,
         initial_segmentation_pattern=args.initial_segmentation_pattern,
         embedding_path=args.embedding_path, model_type=args.model_type,
         tile_shape=args.tile_shape, halo=args.halo, precompute_amg_state=args.precompute_amg_state,
-        checkpoint_path=args.checkpoint, device=args.device, is_volumetric=args.is_volumetric,
+        checkpoint_path=args.checkpoint, device=args.device,
         prefer_decoder=args.prefer_decoder, skip_segmented=args.skip_segmented
     )

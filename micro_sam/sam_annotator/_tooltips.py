@@ -51,7 +51,7 @@ tooltips = {
     "folder": "Select the folder with the images to annotate.",
     "output_folder": "Select the folder for saving the segmentation results.",
     "pattern": "Select a pattern for selecting files. E.g. '*.tif' to only select tif files. By default all files in the input folder are selected.",  # noqa
-    "is_volumetric": "Choose if the data you annotate is volumetric.",
+    "ndim": "The spatial dimensionality of the data.",
   },
   "training": {
     "checkpoint": "Select a checkpoint (saved model) to resume training from.",

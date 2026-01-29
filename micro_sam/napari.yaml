@@ -32,12 +32,9 @@ contributions:
       title: Load segmentation sample data from micro-sam plugin
 
     # Commands for plugins.
-    - id: micro-sam.annotator_2d
-      python_name: micro_sam.sam_annotator.annotator_2d:Annotator2d
-      title: Start the 2d annotator
-    - id: micro-sam.annotator_3d
-      python_name: micro_sam.sam_annotator.annotator_3d:Annotator3d
-      title: Start the 3d annotator
+    - id: micro-sam.annotator
+      python_name: micro_sam.sam_annotator.annotator:Annotator
+      title: Start the segmentation annotator
     - id: micro-sam.annotator_tracking
       python_name: micro_sam.sam_annotator.annotator_tracking:AnnotatorTracking
       title: Start the tracking annotator
@@ -78,12 +75,10 @@ contributions:
       key: micro-sam-segmentation
 
   widgets:
-    - command: micro-sam.annotator_2d
-      display_name: Annotator 2d
-    - command: micro-sam.annotator_3d
-      display_name: Annotator 3d
+    - command: micro-sam.annotator
+      display_name: Segmentation Annotator
     - command: micro-sam.annotator_tracking
-      display_name: Annotator Tracking
+      display_name: Tracking Annotator
     - command: micro-sam.image_series_annotator
       display_name: Image Series Annotator
     - command: micro-sam.object_classifier

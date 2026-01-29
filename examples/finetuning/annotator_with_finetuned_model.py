@@ -1,6 +1,6 @@
 import imageio.v3 as imageio
 
-from micro_sam.sam_annotator import annotator_2d
+from micro_sam.sam_annotator import annotator
 
 
 def run_annotator_with_finetuned_model():
@@ -20,7 +20,7 @@ def run_annotator_with_finetuned_model():
     model_type = "vit_b"  # We finetune a vit_b in the example script.
 
     # Run the 2d annotator with the custom model.
-    annotator_2d(im, model_type=model_type, embedding_path=embedding_path, checkpoint=checkpoint)
+    annotator(im, model_type=model_type, embedding_path=embedding_path, checkpoint=checkpoint)
 
 
 if __name__ == "__main__":

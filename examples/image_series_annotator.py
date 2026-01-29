@@ -18,11 +18,12 @@ def series_annotation(use_finetuned_model):
         model_type = "vit_b_lm"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "series-embeddings")
-        model_type = "vit_h"
+        model_type = "vit_b"
 
     example_data = fetch_image_series_example_data(DATA_CACHE)
     image_folder_annotator(
-        example_data, "./series-segmentation-result",
+        example_data,
+        output_folder="./series-segmentation-result",
         pattern="*.tif",
         embedding_path=embedding_path,
         model_type=model_type,
