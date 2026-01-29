@@ -1,3 +1,5 @@
+import platform
+
 import numpy as np
 import pytest
 from skimage.data import binary_blobs
@@ -56,6 +58,7 @@ class TestDetectNdim:
 
 
 @pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 class TestAnnotatorClass:
     """Test the unified Annotator class."""
 
