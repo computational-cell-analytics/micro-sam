@@ -116,7 +116,7 @@ def run_default_baselines(dataset_name, method, model_type, experiment_folder, t
         # Run the baseline method.
         segmentation = run_baseline_engine(image, method, **kwargs)
 
-        # Evalate results.
+        # Evaluate results.
         msa, sas = mean_segmentation_accuracy(segmentation, labels, return_accuracies=True)
         stats = matching(segmentation, labels)
 
