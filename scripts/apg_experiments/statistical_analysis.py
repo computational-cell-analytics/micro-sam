@@ -54,28 +54,29 @@ def statistical_analysis_pair(datasets, method1, method2, verbose=False):
 def get_datasets(domain):
     # TODO this needs to be double checked.
     domain_to_ds = {
-        "fluo_cells": [  # Only 6 datasets, what is missing?
+        "fluo_cells": [  # 9 datasets
             "cellpose",
             "covid",
             "hpa",
-            "plantseg",
+            "plantseg_root",
+            "plantseg_ovules",
             "pnas",
             "tissuenet",
+            "cellbindb",
+            "mouse",
         ],
-        "fluo_nuclei": [  # 11 datasets -> too much.
+        "fluo_nuclei": [  # 9 datasets
             "arvidsson",
             "bitdepth",
-            "cellbindb",
             "dsb",
             "dynamicnuclearnet",
             "gonuclear",
             "ifnuclei",
-            "mouse",
             "nis3d",
             "parhyale",
             "u20s",
         ],
-        "label_free": [  # 8 datasets, one is missing.
+        "label_free": [  # 9 datasets
             "deepbacs",
             "deepseas",
             "livecell",
@@ -84,8 +85,9 @@ def get_datasets(domain):
             "vicar",
             "yeaz",
             "toiam",
+            "segpc",
         ],
-        "histopatho": [  # 9 datasets, looks correct.
+        "histopatho": [  # 9 datasets
             "cryonuseg",
             "cytodark0",
             "ihc",
