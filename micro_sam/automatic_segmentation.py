@@ -273,11 +273,11 @@ def automatic_instance_segmentation(
 
     # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
     if annotate:
-        from micro_sam.sam_annotator import annotator_2d, annotator_3d
-        annotator_function = annotator_2d if ndim == 2 else annotator_3d
+        from micro_sam.sam_annotator import annotator
 
-        viewer = annotator_function(
+        viewer = annotator(
             image=image_data,
+            ndim=ndim,
             model_type=predictor.model_name,
             embedding_path=image_embeddings,  # Providing the precomputed image embeddings.
             segmentation_result=instances,  # Initializes the automatic segmentation to the annotator.

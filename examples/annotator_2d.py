@@ -2,7 +2,7 @@ import os
 
 import imageio.v3 as imageio
 from micro_sam.util import get_cache_directory
-from micro_sam.sam_annotator import annotator_2d
+from micro_sam.sam_annotator import annotator
 from micro_sam.sample_data import fetch_hela_2d_example_data, fetch_livecell_example_data, fetch_wholeslide_example_data
 
 
@@ -24,9 +24,9 @@ def livecell_annotator(use_finetuned_model):
         model_type = "vit_b_lm"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-livecell.zarr")
-        model_type = "vit_h"
+        model_type = "vit_b"
 
-    annotator_2d(image, embedding_path, model_type=model_type, precompute_amg_state=True)
+    annotator(image, embedding_path=embedding_path, model_type=model_type, precompute_amg_state=True)
 
 
 def hela_2d_annotator(use_finetuned_model):
@@ -40,9 +40,9 @@ def hela_2d_annotator(use_finetuned_model):
         model_type = "vit_b_lm"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-hela2d.zarr")
-        model_type = "vit_h"
+        model_type = "vit_b"
 
-    annotator_2d(image, embedding_path, model_type=model_type)
+    annotator(image, embedding_path=embedding_path, model_type=model_type)
 
 
 def wholeslide_annotator(use_finetuned_model):
@@ -59,9 +59,11 @@ def wholeslide_annotator(use_finetuned_model):
         model_type = "vit_b_lm"
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "whole-slide-embeddings.zarr")
-        model_type = "vit_h"
+        model_type = "vit_b"
 
-    annotator_2d(image, embedding_path, tile_shape=(1024, 1024), halo=(256, 256), model_type=model_type)
+    annotator(
+        image, embedding_path=embedding_path, tile_shape=(1024, 1024), halo=(256, 256), model_type=model_type
+    )
 
 
 def main():
@@ -80,6 +82,6 @@ def main():
 
 # The corresponding CLI call for hela_2d_annotator:
 # (replace with cache directory on your machine)
-# $ micro_sam.annotator_2d -i /home/pape/.cache/micro_sam/sample_data/hela-2d-image.png -e /home/pape/.cache/micro_sam/embeddings/embeddings-hela2d.zarr  # noqa
+# $ micro_sam.annotator -i /home/pape/.cache/micro_sam/sample_data/hela-2d-image.png -e /home/pape/.cache/micro_sam/embeddings/embeddings-hela2d.zarr  # noqa
 if __name__ == "__main__":
     main()

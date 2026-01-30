@@ -45,7 +45,7 @@ pytest
 
 **Napari UI (micro_sam/sam_annotator/):**
 - `_annotator.py` - Base annotator with napari layer/widget/keybinding setup
-- `annotator_2d.py`, `annotator_3d.py`, `annotator_tracking.py` - Dimension-specific UIs
+- `annotator.py`, `annotator_tracking.py` - UIs for interactive and automatic segmentation / tracking
 - `_state.py` - Singleton state manager (predictor, embeddings, AMG generators)
 - `_widgets.py` - Qt widgets for embedding/segmentation/tracking controls
 - `image_series_annotator.py` - Multi-image batch annotation workflow
