@@ -1408,7 +1408,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
 
         # 2.) Apply the predictor to the prompts.
         if prompts is None:  # No prompts were derived, we can't do much further and return empty masks.
-            return np.zeros(foreground.shape, dtype="uint32") if output_mode == "instance_egmentation" else []
+            return np.zeros(foreground.shape, dtype="uint32") if output_mode == "instance_segmentation" else []
         else:
             predictions = batched_inference(
                 self._predictor,
