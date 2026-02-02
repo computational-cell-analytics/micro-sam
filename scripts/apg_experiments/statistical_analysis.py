@@ -119,7 +119,7 @@ def _plot_comparison_heatmap(domain, comparison_df, title=None):
                 parts = comparison_df.iloc[i, j].split(' / ')
                 win_matrix[i, j] = int(parts[0])  # wins for row method
 
-    # Mask the diagonal to exclude it from coloring
+    # Masking the diagonal to exclude it from coloring.
     mask = np.eye(n, dtype=bool)
 
     fig, ax = plt.subplots(figsize=(10, 8))
@@ -129,21 +129,18 @@ def _plot_comparison_heatmap(domain, comparison_df, title=None):
         xticklabels=comparison_df.columns,
         yticklabels=comparison_df.index,
         cbar_kws={'label': 'Wins'}, ax=ax,
-        mask=mask,
-        linewidths=0.5, linecolor='black'
+        mask=mask, linewidths=0.5, linecolor='#A9A9A9'
     )
 
-    # Use custom title if provided, otherwise use default
-    if title is None:
-        title = f'{domain.replace("_", " ").title()} - Method Comparison'
     plt.title(title)
     plt.tight_layout()
-    plt.savefig(f'comparison_heatmap_{domain}.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'comparison_heatmap_{domain}.png', dpi=400, bbox_inches='tight')
+    plt.savefig(f'comparison_heatmap_{domain}.svg', dpi=400, bbox_inches='tight')
     plt.close()
 
 
 def compare_all():
-    # Define method paths: method/variant or just method
+    # Sorting out the paths where the methods' results exist.
     method_configs = {
         "amg": "amg/vit_b",
         "ais_lm": "ais/vit_b_lm",
@@ -156,7 +153,7 @@ def compare_all():
         "apg_histo": "apg/vit_b_histopathology",
     }
 
-    # Define which methods to compare for each domain (ordered as in screenshot)
+    # Sorting the methods we would like to compare stuff with.
     domain_methods = {
         "fluo_cells": ["amg", "ais_lm", "cellpose3", "cellpose4", "cellsam", "sam3", "apg_lm"],
         "fluo_nuclei": ["amg", "ais_lm", "cellpose3", "cellpose4", "cellsam", "sam3", "apg_lm"],
@@ -164,20 +161,20 @@ def compare_all():
         "histopatho": ["amg", "ais_histo", "cellpose3", "cellpose4", "cellsam", "sam3", "apg_histo"],
     }
 
-    # Map internal keys to display names
+    # Let's map the keys to expected names.
     display_names = {
         "amg": "AMG (SAM)",
         "ais_lm": "AIS (μSAM)",
-        "ais_histo": "AIS (μSAM)",
+        "ais_histo": "AIS\n(PathoSAM)",
         "cellsam": "CellSAM",
         "cellpose3": "Cellpose 3",
         "cellpose4": "CellposeSAM",
         "sam3": "SAM3",
-        "apg_lm": "APG (μSAM)",
-        "apg_histo": "APG (μSAM)",
+        "apg_lm": r"$\mathbf{APG}$" + r" $\mathbf{(μSAM)}$",
+        "apg_histo": r"$\mathbf{APG}$" + "\n" + r"$\mathbf{(PathoSAM)}$",
     }
 
-    # Custom titles for each domain
+    # Choosing custom plot titles.
     custom_titles = {
         "fluo_cells": "Fluorescence Microscopy (Cell Segmentation)",
         "fluo_nuclei": "Fluorescence Microscopy (Nucleus Segmentation)",
@@ -208,11 +205,11 @@ def compare_all():
                 )
                 comparison[i, j] = f"{better_row} / {better_col} / {neutral}"
 
-        # Use display names for the DataFrame
+        # Let's use expected display names.
         display_method_names = [display_names[m] for m in methods]
         comparison = pd.DataFrame(comparison, index=display_method_names, columns=display_method_names)
 
-        # Visualize with custom title
+        # Let's visualize the results
         _plot_comparison_heatmap(domain, comparison, title=custom_titles[domain])
         print(f"Generated heatmap for {domain}: comparison_heatmap_{domain}.png")
 

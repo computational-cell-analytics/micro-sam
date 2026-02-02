@@ -21,3 +21,4 @@ The top-level folder contains scripts to evaluate other models with `micro-sam`,
     - `plot_qualitative.py`: Scripts to display qualitative results over all datasets.
     - `plot_quantitative.py`: Scripts to display quantitative results over all datasets.
     - `plot_util.py`: Stores related information helpful for plotting.
+- `statistical_analysis`: Scripts for performing statistical analysis on quantitative results computed per image.
