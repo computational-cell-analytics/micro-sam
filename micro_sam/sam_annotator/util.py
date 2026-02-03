@@ -448,7 +448,7 @@ def _batched_interactive_segmentation(predictor, points, labels, boxes, image_em
     # (This is left here as a reference for how this can be implemented.
     #  I have not decided yet if this is actually a good idea or not.)
     # # If we have no objects: this is the first call for a batched segmentation.
-    # # We treat each positive point or box as a separate obejct.
+    # # We treat each positive point or box as a separate object.
     # if len(seg_ids) == 1:
     #     # Create a list of all prompts.
     #     batched_prompts = [(None, point, label) for point, label in zip(batched_points, batched_labels)]
