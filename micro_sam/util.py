@@ -1360,7 +1360,7 @@ def segmentation_to_one_hot(segmentation: np.ndarray, segmentation_ids: Optional
     masks = masks.unsqueeze(0)  # add dimension to scatter
     masks = torch.zeros(one_hot_shape).scatter_(0, masks, 1)[1:]
 
-    # add the extra singleton dimenion to get shape NUM_OBJECTS x 1 x H x W
+    # add the extra singleton dimension to get shape NUM_OBJECTS x 1 x H x W
     masks = masks.unsqueeze(1)
     return masks
 
