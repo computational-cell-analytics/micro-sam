@@ -84,6 +84,10 @@ def _initialize_parser(description, with_segmentation_result=True, with_instance
         help="Checkpoint from which the SAM model will be loaded loaded."
     )
     parser.add_argument(
+        "--decoder_path", default=None,
+        help="Optional checkpoint path to decoder-only weights to enable decoder-based instance segmentation."
+    )
+    parser.add_argument(
         "-d", "--device", default=None,
         help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
         "By default the most performant available device will be selected."

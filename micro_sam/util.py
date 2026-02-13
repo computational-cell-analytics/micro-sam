@@ -323,6 +323,7 @@ def get_sam_model(
     peft_kwargs: Optional[Dict] = None,
     flexible_load_checkpoint: bool = False,
     progress_bar_factory: Optional[Callable] = None,
+    decoder_path: Optional[Union[str, os.PathLike]] = None,
     **model_kwargs,
 ) -> SamPredictor:
     r"""Get the Segment Anything Predictor.
@@ -361,6 +362,10 @@ def get_sam_model(
         flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
             By default, set to 'False'.
         progress_bar_factory: A function to create a progress bar for the model download.
+        decoder_path: Optional path to weights for a segmentation decoder. If given and
+            `return_state=True`, the decoder state is added to the returned state as
+            'decoder_state'. This can be used to provide decoder-only weights that are
+            separate from the encoder checkpoint.
         model_kwargs: Additional parameters necessary to initialize the Segment Anything model.
 
     Returns:
@@ -376,7 +381,9 @@ def get_sam_model(
     # URL from the model_type. If the model_type is invalid pooch will raise an error.
     _provided_checkpoint_path = checkpoint_path is not None
     if checkpoint_path is None:
-        checkpoint_path, model_hash, decoder_path = _download_sam_model(model_type, progress_bar_factory)
+        checkpoint_path, model_hash, downloaded_decoder_path = _download_sam_model(model_type, progress_bar_factory)
+        if decoder_path is None:
+            decoder_path = downloaded_decoder_path
 
     # checkpoint_path has been passed, we use it instead of downloading a model.
     else:
@@ -386,7 +393,9 @@ def get_sam_model(
         if not os.path.exists(checkpoint_path):
             raise ValueError(f"Checkpoint at '{checkpoint_path}' could not be found.")
         model_hash = _compute_hash(checkpoint_path)
-        decoder_path = None
+
+    if decoder_path is not None and not os.path.exists(decoder_path):
+        raise ValueError(f"Decoder checkpoint at '{decoder_path}' could not be found.")
 
     # Our fine-tuned model types have a suffix "_...". This suffix needs to be stripped
     # before calling sam_model_registry.
