@@ -237,8 +237,11 @@ class _WidgetBase(QtWidgets.QWidget):
         # We store the actual model names mapped to UI labels.
         self.model_size_mapping = {}
         if self.model_family == "Natural Images (SAM)":
-            self.model_size_options = list(self._model_size_map .values())
+            self.model_size_options = list(self._model_size_map.values())
             self.model_size_mapping = {self._model_size_map[k]: f"vit_{k}" for k in self._model_size_map.keys()}
+        elif self.model_family == "Natural Images (SAM2)":
+            self.model_size_options = list(self._model_size_map.values())
+            self.model_size_mapping = {self._model_size_map[k]: f"hvit_{k}" for k in self._model_size_map.keys()}
         else:
             model_suffix = self.supported_dropdown_maps[self.model_family]
             self.model_size_options = []
@@ -278,7 +281,10 @@ class _WidgetBase(QtWidgets.QWidget):
         size_key = next(
             (k for k, v in self._model_size_map.items() if v == self.model_size), "b"
         )
-        self.model_type = f"vit_{size_key}" + self.supported_dropdown_maps[self.model_family]
+        if "SAM2" in self.model_family:
+            self.model_type = f"hvit_{size_key}"
+        else:
+            self.model_type = f"vit_{size_key}" + self.supported_dropdown_maps[self.model_family]
 
         self.model_size_dropdown.setCurrentText(self.model_size)  # Apply the selected text to the dropdown
 
@@ -293,6 +299,7 @@ class _WidgetBase(QtWidgets.QWidget):
         # Create a list of support dropdown values and correspond them to suffixes.
         self.supported_dropdown_maps = {
             "Natural Images (SAM)": "",
+            "Natural Images (SAM2)": "_sam2",
             "Light Microscopy": "_lm",
             "Electron Microscopy": "_em_organelles",
             "Medical Imaging": "_medical_imaging",
@@ -343,7 +350,10 @@ class _WidgetBase(QtWidgets.QWidget):
 
     def _validate_model_type_and_custom_weights(self):
         # Let's get all model combination stuff into the desired `model_type` structure.
-        self.model_type = "vit_" + self.model_size[0] + self.supported_dropdown_maps[self.model_family]
+        if "SAM2" in self.model_family:
+            self.model_type = "hvit_" + self.model_size[0]
+        else:
+            self.model_type = "vit_" + self.model_size[0] + self.supported_dropdown_maps[self.model_family]
 
         # For 'custom_weights', we remove the displayed text on top of the drop-down menu.
         if self.custom_weights:
@@ -452,11 +462,18 @@ def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> Non
         viewer: The napari viewer.
         all_slices: Choose whether to clear the annotations for all or only the current slice.
     """
+    state = AnnotatorState()
+
     if all_slices:
         vutil.clear_annotations(viewer)
     else:
         i = int(viewer.dims.point[0])
         vutil.clear_annotations_slice(viewer, i=i)
+
+    # If it's a SAM2 promptable segmentation workflow,
+    # we should reset the prompts after clear annotations has been clicked.
+    if state.interactive_segmenter is not None:
+        state.interactive_segmenter.reset_predictor()
 
     # Perform garbage collection.
     gc.collect()
@@ -546,6 +563,10 @@ def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
     seg[mask] += id_offset
     viewer.layers["committed_objects"].data[bb][mask] = seg[mask]
     viewer.layers["committed_objects"].refresh()
+
+    # If it's a SAM2 promptable segmentation workflow, we should reset the prompts after commit has been clicked.
+    if state.interactive_segmenter is not None:
+        state.interactive_segmenter.reset_predictor()
 
     return id_offset, seg, mask, bb
 
@@ -1010,12 +1031,24 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
     boxes, masks = vutil.shape_layer_to_prompts(viewer.layers["prompts"], shape)
     points, labels = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], with_stop_annotation=False)
 
-    predictor = AnnotatorState().predictor
-    image_embeddings = AnnotatorState().image_embeddings
-    seg = vutil.prompt_segmentation(
-        predictor, points, labels, boxes, masks, shape, image_embeddings=image_embeddings,
-        multiple_box_prompts=True, batched=batched, previous_segmentation=viewer.layers["current_object"].data,
-    )
+    state = AnnotatorState()
+    predictor = state.predictor
+    image_embeddings = state.image_embeddings
+
+    if state.is_sam2:
+        from micro_sam.v2.prompt_based_segmentation import promptable_segmentation_2d
+        seg = promptable_segmentation_2d(
+            predictor=predictor,
+            points=points,
+            labels=labels,
+            boxes=boxes,
+            masks=masks,
+        )
+    else:
+        seg = vutil.prompt_segmentation(
+            predictor, points, labels, boxes, masks, shape, image_embeddings=image_embeddings,
+            multiple_box_prompts=True, batched=batched, previous_segmentation=viewer.layers["current_object"].data,
+        )
 
     # no prompts were given or prompts were invalid, skip segmentation
     if seg is None:
@@ -1053,10 +1086,22 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
     points, labels = point_prompts
 
     state = AnnotatorState()
-    seg = vutil.prompt_segmentation(
-        state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
-        image_embeddings=state.image_embeddings, i=z,
-    )
+
+    if state.is_sam2:
+        # Use the segment_slice method for SAM2.
+        boxes = [box[[1, 0, 3, 2]] for box in boxes]
+        seg = state.interactive_segmenter.segment_slice(
+            frame_idx=z,
+            points=points[:, ::-1].copy(),
+            labels=labels,
+            boxes=boxes,
+            masks=masks
+        )
+    else:
+        seg = vutil.prompt_segmentation(
+            state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
+            image_embeddings=state.image_embeddings, i=z,
+        )
 
     # no prompts were given or prompts were invalid, skip segmentation
     if seg is None:
@@ -1450,9 +1495,16 @@ class EmbeddingWidget(_WidgetBase):
                 prefer_decoder = False
 
             state.initialize_predictor(
-                image_data, model_type=self.model_type, save_path=save_path, ndim=ndim,
-                device=self.device, checkpoint_path=self.custom_weights, tile_shape=tile_shape, halo=halo,
-                prefer_decoder=prefer_decoder, pbar_init=pbar_init,
+                image_data,
+                model_type=self.model_type,
+                save_path=save_path,
+                ndim=ndim,
+                device=self.device,
+                checkpoint_path=self.custom_weights,
+                tile_shape=tile_shape,
+                halo=halo,
+                prefer_decoder=prefer_decoder,
+                pbar_init=pbar_init,
                 pbar_update=lambda update: pbar_signals.pbar_update.emit(update),
             )
             pbar_signals.pbar_stop.emit()
@@ -1536,6 +1588,14 @@ class SegmentNDWidget(_WidgetBase):
             )
         setting_values.layout().addLayout(layout)
 
+        # Create the UI element in form of a checkbox for multi-object segmentation.
+        self.batched = False
+        setting_values.layout().addWidget(
+            self._add_boolean_param(
+                "batched", self.batched, title="batched", tooltip=get_tooltip("segmentnd", "batched")
+            )
+        )
+
         # Create the UI element for the motion smoothing (if we have the tracking widget).
         if self.tracking:
             self.motion_smoothing = 0.5
@@ -1611,24 +1671,67 @@ class SegmentNDWidget(_WidgetBase):
             pbar_signals.pbar_total.emit(shape[0])
             pbar_signals.pbar_description.emit("Segment object")
 
-            # Step 1: Segment all slices with prompts.
-            seg, slices, stop_lower, stop_upper = vutil.segment_slices_with_prompts(
-                state.predictor, self._viewer.layers["point_prompts"], self._viewer.layers["prompts"],
-                state.image_embeddings, shape,
-                update_progress=lambda update: pbar_signals.pbar_update.emit(update),
-            )
+            if state.is_sam2:
+                # Prepare the prompts
+                point_prompts = self._viewer.layers["point_prompts"]
+                box_prompts = self._viewer.layers["prompts"]
+                z_values_points = np.round(point_prompts.data[:, 0])
+                z_values_boxes = np.concatenate(
+                    [box[:1, 0] for box in box_prompts.data]
+                ) if box_prompts.data else np.zeros(0, dtype="int")
 
-            # Step 2: Segment the rest of the volume based on projecting prompts.
-            seg, (z_min, z_max) = segment_mask_in_volume(
-                seg, state.predictor, state.image_embeddings, slices,
-                stop_lower, stop_upper,
-                iou_threshold=self.iou_threshold, projection=self.projection,
-                box_extension=self.box_extension,
-                update_progress=lambda update: pbar_signals.pbar_update.emit(update),
-            )
+                # Whether the user decide to provide batched prompts for multi-object segmentation.
+                is_batched = bool(self.batched)
+
+                # Let's do points first.
+                for curr_z_values_point in z_values_points:
+                    # Extract the point prompts from the points layer first.
+                    points, labels = vutil.point_layer_to_prompts(layer=point_prompts, i=curr_z_values_point)
+
+                    # Add prompts one after the other.
+                    [
+                        state.interactive_segmenter.add_point_prompts(
+                            frame_ids=curr_z_values_point,
+                            points=np.array([curr_point]),
+                            point_labels=np.array([curr_label]),
+                            object_id=i if is_batched else None,
+                        ) for i, (curr_point, curr_label) in enumerate(zip(points, labels), start=1)
+                    ]
+
+                # Next, we add box prompts.
+                for curr_z_values_box in z_values_boxes:
+                    # Extract the box prompts from the shapes layer first.
+                    boxes, _ = vutil.shape_layer_to_prompts(
+                        layer=box_prompts, shape=state.image_shape, i=curr_z_values_box,
+                    )
+
+                    # Add prompts one after the other.
+                    state.interactive_segmenter.add_box_prompts(frame_ids=curr_z_values_box, boxes=boxes)
+
+                # Propagate the prompts throughout the volume and combine the propagated segmentations.
+                seg = state.interactive_segmenter.predict()
+
+            else:
+                # Step 1: Segment all slices with prompts.
+                seg, slices, stop_lower, stop_upper = vutil.segment_slices_with_prompts(
+                    state.predictor, self._viewer.layers["point_prompts"], self._viewer.layers["prompts"],
+                    state.image_embeddings, shape,
+                    update_progress=lambda update: pbar_signals.pbar_update.emit(update),
+                )
+
+                # Step 2: Segment the rest of the volume based on projecting prompts.
+                seg, (z_min, z_max) = segment_mask_in_volume(
+                    seg, state.predictor, state.image_embeddings, slices,
+                    stop_lower, stop_upper,
+                    iou_threshold=self.iou_threshold, projection=self.projection,
+                    box_extension=self.box_extension,
+                    update_progress=lambda update: pbar_signals.pbar_update.emit(update),
+                )
+
+                state.z_range = (z_min, z_max)
+
             pbar_signals.pbar_stop.emit()
 
-            state.z_range = (z_min, z_max)
             return seg
 
         def update_segmentation(seg):
