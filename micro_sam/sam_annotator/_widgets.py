@@ -849,7 +849,16 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
     label_widget = Container(widgets=[label_menu])
 
     def update_label_menu(event):
-        new_label = str(points_layer.current_properties[label_name][0])
+        current_properties = points_layer.current_properties
+        if label_name not in current_properties:
+            return
+        try:
+            values = current_properties[label_name]
+            if len(values) == 0:
+                return
+            new_label = str(values[0])
+        except Exception:
+            return
         if new_label != label_menu.value:
             label_menu.value = new_label
 
