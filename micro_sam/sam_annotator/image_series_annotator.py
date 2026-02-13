@@ -252,6 +252,13 @@ def image_series_annotator(
     def next_image(*args):
         nonlocal next_image_id
 
+        # Check whether we are already past the last image (eg. button pressed again).
+        if next_image_id >= len(images):
+            abort = widgets._generate_message("info", end_msg)
+            if not abort:
+                QTimer.singleShot(0, viewer.close)
+            return
+
         segmentation = viewer.layers["committed_objects"].data
         abort = False
         if segmentation.sum() == 0:
