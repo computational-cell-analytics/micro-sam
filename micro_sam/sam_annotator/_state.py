@@ -39,7 +39,7 @@ class Singleton(type):
 
 # TODO: this should be refactored once we have decided on which models to support.
 # (Likely only SAM2 models)
-def _get_sam_model(model_type, ndim, device, checkpoint_path, use_cli):
+def _get_sam_model(model_type, ndim, device, checkpoint_path, use_cli, decoder_path):
     if model_type.startswith("h"):  # i.e. SAM2 models.
         from micro_sam.v2.util import get_sam2_model
 
@@ -63,6 +63,7 @@ def _get_sam_model(model_type, ndim, device, checkpoint_path, use_cli):
             device=device, model_type=model_type,
             checkpoint_path=checkpoint_path, return_state=True,
             progress_bar_factory=None if use_cli else progress_bar_factory,
+            decoder_path=decoder_path,
         )
 
     return predictor, state
@@ -129,6 +130,7 @@ class AnnotatorState(metaclass=Singleton):
         predictor=None,
         decoder=None,
         checkpoint_path=None,
+        decoder_path=None,
         tile_shape=None,
         halo=None,
         precompute_amg_state=False,
@@ -143,7 +145,9 @@ class AnnotatorState(metaclass=Singleton):
 
         # Initialize the model if necessary.
         if predictor is None:
-            self.predictor, state = _get_sam_model(model_type, ndim, device, checkpoint_path, use_cli)
+            self.predictor, state = _get_sam_model(
+                model_type, ndim, device, checkpoint_path, use_cli, decoder_path
+            )
             if prefer_decoder and "decoder_state" in state and model_type != "vit_b_medical_imaging":
                 self.decoder = get_decoder(
                     image_encoder=self.predictor.model.image_encoder,

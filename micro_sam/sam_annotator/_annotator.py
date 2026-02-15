@@ -35,7 +35,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
                 widgets._validation_window_for_missing_layer("current_object")
             self._viewer.add_labels(data=dummy_data, name="current_object")
             if image_scale is not None:
-                self.layers["current_objects"].scale = image_scale
+                self._viewer.layers["current_object"].scale = image_scale
 
         if "auto_segmentation" not in self._viewer.layers:
             if (
@@ -46,7 +46,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
                 )
             self._viewer.add_labels(data=dummy_data, name="auto_segmentation")
             if image_scale is not None:
-                self.layers["auto_segmentation"].scale = image_scale
+                self._viewer.layers["auto_segmentation"].scale = image_scale
 
         if "committed_objects" not in self._viewer.layers:
             if (
@@ -59,7 +59,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
             # Randomize colors so it is easy to see when object committed.
             self._viewer.layers["committed_objects"].new_colormap()
             if image_scale is not None:
-                self.layers["committed_objects"].scale = image_scale
+                self._viewer.layers["committed_objects"].scale = image_scale
 
         # Add the point layer for point prompts.
         self._point_labels = ["positive", "negative"]

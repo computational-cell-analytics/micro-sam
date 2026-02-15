@@ -140,7 +140,7 @@ class AnnotatorTracking(_AnnotatorBase):
                 widgets._validation_window_for_missing_layer("current_object")
             self._viewer.add_labels(data=dummy_data, name="current_object")
             if image_scale is not None:
-                self.layers["current_objects"].scale = image_scale
+                self._viewer.layers["current_object"].scale = image_scale
 
         if "auto_segmentation" not in self._viewer.layers:
             if (
@@ -151,7 +151,7 @@ class AnnotatorTracking(_AnnotatorBase):
                 )
             self._viewer.add_labels(data=dummy_data, name="auto_segmentation")
             if image_scale is not None:
-                self.layers["auto_segmentation"].scale = image_scale
+                self._viewer.layers["auto_segmentation"].scale = image_scale
 
         if "committed_objects" not in self._viewer.layers:
             if (
@@ -164,7 +164,7 @@ class AnnotatorTracking(_AnnotatorBase):
             # Randomize colors so it is easy to see when object committed.
             self._viewer.layers["committed_objects"].new_colormap()
             if image_scale is not None:
-                self.layers["committed_objects"].scale = image_scale
+                self._viewer.layers["committed_objects"].scale = image_scale
 
         # Add the point prompts layer.
         self._point_labels = ["positive", "negative"]
@@ -326,6 +326,7 @@ def annotator_tracking(
     viewer: Optional["napari.viewer.Viewer"] = None,
     precompute_amg_state: bool = False,
     checkpoint_path: Optional[str] = None,
+    decoder_path: Optional[str] = None,
     device: Optional[Union[str, torch.device]] = None,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the tracking annotation tool fora given timeseries.
@@ -346,6 +347,7 @@ def annotator_tracking(
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster. By default, set to 'False'.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
+        decoder_path: Path to a custom decoder checkpoint from which to load the 'micro-sam` decoder.
         device: The computational device to use for the SAM model.
             By default, automatically chooses the best available device.
 
@@ -364,6 +366,7 @@ def annotator_tracking(
         prefer_decoder=True,
         ndim=3,
         checkpoint_path=checkpoint_path,
+        decoder_path=decoder_path,
         device=device,
         precompute_amg_state=precompute_amg_state,
         use_cli=True,
@@ -432,5 +435,6 @@ def main():
         tile_shape=args.tile_shape,
         halo=args.halo,
         checkpoint_path=args.checkpoint,
+        decoder_path=args.decoder_path,
         device=args.device,
     )
