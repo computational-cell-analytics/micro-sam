@@ -3,7 +3,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-from util import (
+from plot_util import (
     msa_results,
     msa_results_fluorescence,
     msa_results_label_free,
@@ -16,12 +16,14 @@ if "AMG - without grid search" in DISPLAY_NAME_MAP_HISTO:
     DISPLAY_NAME_MAP_HISTO["AMG - without grid search"] = "AMG (PathoSAM)"
 if "AIS - without grid search" in DISPLAY_NAME_MAP_HISTO:
     DISPLAY_NAME_MAP_HISTO["AIS - without grid search"] = "AIS (PathoSAM)"
+if "APG - without grid search (cc)" in DISPLAY_NAME_MAP_HISTO:
+    DISPLAY_NAME_MAP_HISTO["APG - without grid search (cc)"] = r"$\mathbf{APG}$ " + "\n" + r"$\mathbf{(PathoSAM)}$ "
 
 plt.rcParams.update({
-    "axes.titlesize": 10,
-    "axes.labelsize": 9,
-    "xtick.labelsize": 8,
-    "ytick.labelsize": 8,
+    "axes.titlesize": 15,
+    "axes.labelsize": 12,
+    "xtick.labelsize": 11,
+    "ytick.labelsize": 11,
 })
 
 
@@ -40,13 +42,12 @@ def plot_msa_grid(
     fig, axes = plt.subplots(
         nrows=nrows,
         ncols=ncols,
-        figsize=(figsize_per_subplot[0] * ncols,
-                 figsize_per_subplot[1] * nrows),
+        figsize=(figsize_per_subplot[0] * ncols, figsize_per_subplot[1] * nrows),
         sharey=True,
     )
     axes = np.array(axes).reshape(-1)
 
-    color_top1 = "#1f77b4"   # darkest
+    color_top1 = "#1f77b4"
     color_top2 = "#6baed6"
     color_top3 = "#c6dbef"
     color_rest = "#d9d9d9"
@@ -96,8 +97,7 @@ def plot_msa_grid(
             if IN_DOMAIN.get((dataset, raw_name), False):
                 bar.set_hatch("////")
 
-        apg_indices = [i for i, name in enumerate(raw_methods)
-                       if name.startswith("APG")]
+        apg_indices = [i for i, name in enumerate(raw_methods) if name.startswith("APG")]
 
         ais_idx = None
         for i, name in enumerate(raw_methods):
@@ -119,14 +119,7 @@ def plot_msa_grid(
             bar_height = v
             y_text = min(bar_height + 0.01, 0.98)
 
-            ax.text(
-                x[i],
-                y_text,
-                f"{v:.3f}",
-                ha="center",
-                va="bottom",
-                fontsize=8,
-            )
+            ax.text(x[i], y_text, f"{v:.3f}", ha="center", va="bottom", fontsize=9)
 
         if ais_value is not None:
             for i in apg_indices:
@@ -145,44 +138,30 @@ def plot_msa_grid(
                 y_text = min(bar_height + 0.02, 0.99)
 
                 ax.text(
-                    x[i],
-                    y_text,
-                    f"{diff_pct:+.1f}%",
-                    ha="center",
-                    va="bottom",
-                    fontsize=8,
-                    fontweight="bold",
-                    color=color,
+                    x[i], y_text, f"{diff_pct:+.1f}%", ha="center",
+                    va="bottom", fontsize=10, fontweight="bold", color=color,
                 )
 
         ax.set_title(dataset, fontweight="bold")
         ax.set_xticks(x)
-        ax.set_xticklabels(methods, rotation=60, ha="right")
+        ax.set_xticklabels(methods, rotation=45, ha="right")
         ax.set_ylim(0.0, 1.0)
 
     for j in range(len(datasets), len(axes)):
         fig.delaxes(axes[j])
 
-    if suptitle is not None:
-        fig.tight_layout(rect=[0.08, 0, 1, 0.95])
-    else:
-        fig.tight_layout(rect=[0.08, 0, 1, 1])
-
     fig.text(
-        0.075, 0.5,
-        "Mean Segmentation Accuracy",
-        va="center",
-        ha="center",
-        rotation="vertical",
-        fontsize=11,
-        fontweight="bold",
+        0.02, 0.525, "Mean Segmentation Accuracy", va="center", ha="center",
+        rotation="vertical", fontsize=14, fontweight="bold",
     )
 
+    fig.subplots_adjust(left=0.075, right=0.98, bottom=0.125, top=0.95, wspace=0.1, hspace=0.9)
+
     if save_path is not None:
-        fig.savefig(save_path, bbox_inches="tight", dpi=300)
+        fig.savefig(save_path, dpi=300)
         root, _ = os.path.splitext(save_path)
         svg_path = root + ".svg"
-        fig.savefig(svg_path, bbox_inches="tight")
+        fig.savefig(svg_path)
 
     return fig, axes
 

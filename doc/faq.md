@@ -94,7 +94,7 @@ We recommend transferring the model checkpoints to the system-level cache direct
 <!---
 TODO provide relevant links here.
 -->
-### 1. I have some micropscopy images. Can I use the annotator tool for segmenting them?
+### 1. I have some microscopy images. Can I use the annotator tool for segmenting them?
 Yes, you can use the annotator tool for:
 - Segmenting objects in 2d images (using automatic and/or interactive segmentation).
 - Segmenting objects in 3d volumes (using automatic and/or interactive segmentation for the entire object(s)).
@@ -187,6 +187,11 @@ You can then use those models with the custom checkpoint option, see answer 15 f
 ### 18. I would like to evaluate the instance segmentation quantitatively. Can you suggest how to do that?
 `micro-sam` supports a `micro_sam.evaluate` CLI, which computes the mean segmentation accuracy (introduced in the Pascal VOC challenge) of the predicted instance segmentation with the corresponding ground-truth annotations. Please see our paper (`Methods` -> `Inference and Evaluation` for more details about it) and `$ micro_sam.evaluate -h` for more details about the evaluation CLI.
 
+### 19. I get `RuntimeError: GET was unable to find an engine to execute this computation` on a V100 GPU (*"or any older GPU"*).
+This is a known issue for a combination of older generation GPUs (eg. V100s) and pytorch compiled with the latest CUDA Toolkit (eg. CUDA 12.9 and PyTorch 2.8 has been tested to throw this error on V100s).
+Here's what you can do to solve this issue:
+- Use a PyTorch/CUDA build that is known to work with V100, for example CUDA 12.1 or 11.8 with a compatible PyTorch version (please check your installed CUDA drivers).
+- Run on CPU (slower, but works).
 
 ## Fine-tuning questions
 
@@ -214,30 +219,33 @@ You can load your finetuned model by entering the path to its checkpoint in the 
 If you are using the python library or CLI you can specify this path with the `checkpoint_path` parameter.
 
 
-### 5. What is the background of the new AIS (Automatic Instance Segmentation) feature in `micro_sam`?
-`micro_sam` introduces a new segmentation decoder to the Segment Anything backbone, for enabling faster and accurate automatic instance segmentation, by predicting the [distances to the object center and boundary](https://github.com/constantinpape/torch-em/blob/main/torch_em/transform/label.py#L284) as well as predicting foregrund, and performing [seeded watershed-based postprocessing](https://github.com/constantinpape/torch-em/blob/main/torch_em/util/segmentation.py#L122) to obtain the instances.
+### 5. What is the background of the AIS (Automatic Instance Segmentation) feature in `micro_sam`?
+`micro_sam` introduces a new segmentation decoder to the Segment Anything backbone, for enabling faster and accurate automatic instance segmentation, by predicting the [distances to the object center and boundary](https://github.com/constantinpape/torch-em/blob/main/torch_em/transform/label.py#L284) as well as predicting foreground, and performing [seeded watershed-based postprocessing](https://github.com/constantinpape/torch-em/blob/main/torch_em/util/segmentation.py#L122) to obtain the instances.
 
+### 6. What is the background of the new APG (Automatic Prompt Generation) feature in `micro_sam`?
 
-### 6. I want to finetune only the Segment Anything model without the additional instance decoder.
-The instance segmentation decoder is optional. So you can only finetune SAM or SAM and the additional decoder. Finetuning with the decoder will increase training times, but will enable you to use AIS. See [this example](https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/finetuning#example-for-model-finetuning) for finetuning with both the objectives.
+With the latest version 1.7.0 onwards, `micro_sam` introduces a new automatic instance segmentation method, called APG (automatic prompt generation). It builds on `micro_sam` by extracting prompts from the boundary and center distances predicted by the pretrained segmentation decoder. Once the prompts have been derived, it provides them to the prompt encoder and mask decoder (and additional postprocessing to the outputs) to obtain the instances. The method is compatible with the `micro_sam.automatic_segmentation` CLI (by selecting the `segmentation_mode="apg"`) and the python interface. See [APG](#apg) for details.
+
+### 7. I want to finetune only the Segment Anything model without the additional instance decoder.
+The instance segmentation decoder is optional. So you can only finetune SAM or SAM and the additional decoder. Finetuning with the decoder will increase training times, but will enable you to use AIS and APG. See [this example](https://github.com/computational-cell-analytics/micro-sam/tree/master/examples/finetuning#example-for-model-finetuning) for finetuning with both the objectives.
 
 > NOTE: To try out the other way round (i.e. the automatic instance segmentation framework without the interactive capability, i.e. a UNETR: a vision transformer encoder and a convolutional decoder), you can take inspiration from this [example on LIVECell](https://github.com/constantinpape/torch-em/blob/main/experiments/vision-transformer/unetr/for_vimunet_benchmarking/run_livecell.py).
 
 
-### 7. I have a NVIDIA RTX 4090Ti GPU with 24GB VRAM. Can I finetune Segment Anything?
+### 8. I have a NVIDIA RTX 4090Ti GPU with 24GB VRAM. Can I finetune Segment Anything?
 Finetuning Segment Anything is possible in most consumer-grade GPU and CPU resources (but training being a lot slower on the CPU). For the mentioned resource, it should be possible to finetune a ViT Base (also abbreviated as `vit_b`) by reducing the number of objects per image to 15.
 This parameter has the biggest impact on the VRAM consumption and quality of the finetuned model.
 You can find an overview of the resources we have tested for finetuning [here](#training-your-own-model).
 We also provide a the convenience function `micro_sam.training.train_sam_for_configuration` that selects the best training settings for these configuration. This function is also used by the finetuning UI.
 
              
-### 8. I want to create a dataloader for my data, to finetune Segment Anything.
+### 9. I want to create a dataloader for my data, to finetune Segment Anything.
 Thanks to `torch-em`, a) Creating PyTorch datasets and dataloaders using the python library is convenient and supported for various data formats and data structures.
 See the [tutorial notebook](https://github.com/constantinpape/torch-em/blob/main/notebooks/tutorial_create_dataloaders.ipynb) on how to create dataloaders using `torch-em` and the [documentation](https://github.com/constantinpape/torch-em/blob/main/doc/datasets_and_dataloaders.md) for details on creating your own datasets and dataloaders; and b) finetuning using the `napari` tool eases the aforementioned process, by allowing you to add the input parameters (path to the directory for inputs and labels etc.) directly in the tool.
 > NOTE: If you have images with large input shapes with a sparse density of instance segmentations, we recommend using [`sampler`](https://github.com/constantinpape/torch-em/blob/main/torch_em/data/sampler.py) for choosing the patches with valid segmentation for the finetuning purpose (see the [example](https://github.com/computational-cell-analytics/micro-sam/blob/master/finetuning/specialists/training/light_microscopy/plantseg_root_finetuning.py#L29) for PlantSeg (Root) specialist model in `micro_sam`).
 
 
-### 9. How can I evaluate a model I have finetuned?
+### 10. How can I evaluate a model I have finetuned?
 To validate a Segment Anything model for your data, you have different options, depending on the task you want to solve and whether you have segmentation annotations for your data.
 
 - If you don't have any annotations you will have to validate the model visually. We suggest doing this with the `micro_sam` GUI tools. You can learn how to use them in the `micro_sam` documentation.

@@ -283,7 +283,7 @@ def export_sam_model(
 
     Args:
         image: The image for generating test data.
-        label_image: The segmentation correspoding to `image`.
+        label_image: The segmentation corresponding to `image`.
             It is used to derive prompt inputs for the model.
         model_type: The type of the SAM model.
         name: The name of the exported model.

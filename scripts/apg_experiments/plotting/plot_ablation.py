@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 
-from util import (
+from plot_util import (
     msa_results,
     msa_results_fluorescence,
     msa_results_label_free,
@@ -18,10 +18,10 @@ APG_GS_BD = "APG - with grid search (bd)"
 APG_GS_CC = "APG - with grid search (cc)"
 
 plt.rcParams.update({
-    "axes.titlesize": 10,
+    "axes.titlesize": 11,
     "axes.labelsize": 9,
-    "xtick.labelsize": 8,
-    "ytick.labelsize": 8,
+    "xtick.labelsize": 11,
+    "ytick.labelsize": 10,
 })
 
 
@@ -142,34 +142,10 @@ def plot_apg_vs_ais_relative(
         if max_val > 0:
             ax.axhspan(0, max_val, color="#e0f3db", alpha=0.8, zorder=0)
 
-        bars_wo_bd = ax.bar(
-            x - 1.5 * width,
-            rel_wo_bd,
-            width,
-            color=color_wo_bd,
-            zorder=1,
-        )
-        bars_wo_cc = ax.bar(
-            x - 0.5 * width,
-            rel_wo_cc,
-            width,
-            color=color_wo_cc,
-            zorder=1,
-        )
-        bars_gs_bd = ax.bar(
-            x + 0.5 * width,
-            rel_gs_bd,
-            width,
-            color=color_gs_bd,
-            zorder=1,
-        )
-        bars_gs_cc = ax.bar(
-            x + 1.5 * width,
-            rel_gs_cc,
-            width,
-            color=color_gs_cc,
-            zorder=1,
-        )
+        bars_wo_bd = ax.bar(x - 1.5 * width, rel_wo_bd, width, color=color_wo_bd, zorder=1)
+        bars_wo_cc = ax.bar(x - 0.5 * width, rel_wo_cc, width, color=color_wo_cc, zorder=1)
+        bars_gs_bd = ax.bar(x + 0.5 * width, rel_gs_bd, width, color=color_gs_bd, zorder=1)
+        bars_gs_cc = ax.bar(x + 1.5 * width, rel_gs_cc, width, color=color_gs_cc, zorder=1)
 
         best_mask_wo_bd = []
         best_mask_wo_cc = []
@@ -177,12 +153,7 @@ def plot_apg_vs_ais_relative(
         best_mask_gs_cc = []
 
         for i in range(len(datasets)):
-            vals_i = [
-                rel_wo_bd[i],
-                rel_wo_cc[i],
-                rel_gs_bd[i],
-                rel_gs_cc[i],
-            ]
+            vals_i = [rel_wo_bd[i], rel_wo_cc[i], rel_gs_bd[i], rel_gs_cc[i]]
             max_i = max(vals_i)
 
             best_mask_wo_bd.append(rel_wo_bd[i] == max_i)
@@ -216,7 +187,7 @@ def plot_apg_vs_ais_relative(
                     f"{v:+.1f}%",
                     ha="center",
                     va=va,
-                    fontsize=7,
+                    fontsize=9,
                     rotation=90,
                     fontweight=fontweight,
                 )
@@ -234,31 +205,27 @@ def plot_apg_vs_ais_relative(
 
     fig.tight_layout(rect=[0.06, 0.18, 1, 0.97])
     fig.text(
-        0.05, 0.55,
+        0.06, 0.575,
         "Relative Mean Segmentation Accuracy (compared to AIS)",
         va="center",
         ha="center",
         rotation="vertical",
-        fontsize=11,
+        fontsize=10,
         fontweight="bold",
     )
 
     legend_patches = [
-        Patch(facecolor=color_wo_bd, edgecolor="black",
-              label="APG (Boundary Distance) - Default"),
-        Patch(facecolor=color_wo_cc, edgecolor="black",
-              label="APG (Components) - Default"),
-        Patch(facecolor=color_gs_bd, edgecolor="black",
-              label="APG (Boundary) - GS"),
-        Patch(facecolor=color_gs_cc, edgecolor="black",
-              label="APG (Components) - GS"),
+        Patch(facecolor=color_wo_bd, label="APG (Boundary Distance) - Default"),
+        Patch(facecolor=color_wo_cc, label="APG (Components) - Default"),
+        Patch(facecolor=color_gs_bd, label="APG (Boundary Distance) - Grid Search"),
+        Patch(facecolor=color_gs_cc, label="APG (Components) - Grid Search"),
     ]
 
     fig.legend(
         handles=legend_patches,
         loc="lower center",
-        bbox_to_anchor=(0.5, 0.125),
-        ncol=4,
+        bbox_to_anchor=(0.5, 0.1),
+        ncol=2,
         fontsize=8,
         frameon=True,
     )

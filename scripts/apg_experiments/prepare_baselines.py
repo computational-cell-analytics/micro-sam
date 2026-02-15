@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from PIL import Image
 import imageio.v3 as imageio
 
 from elf.evaluation import mean_segmentation_accuracy, matching
@@ -30,18 +31,15 @@ def run_baseline_engine(image, method, **kwargs):
 
     # Newer SAM methods.
     elif method == "sam3":  # TODO: Wrap this out in a modular function too?
-        from PIL import Image
-        from sam3.model_builder import build_sam3_image_model
-        from sam3.model.sam3_image_processor import Sam3Processor
-        model = build_sam3_image_model()
-        processor = Sam3Processor(model)
+        processor = kwargs["processor"]
+        # Set the image to the processor
         inference_state = processor.set_image(Image.fromarray(_to_image(image)))
         # Prompt the model with text
         processor.reset_all_prompts(inference_state)
         segmentation = processor.set_text_prompt(state=inference_state, prompt=kwargs["prompt"])
         segmentation = segmentation["masks"]  # Get the masks only.
 
-        if len(segmentation) == 0:
+        if len(segmentation) == 0:  # Handles when no objects are segmented.
             segmentation = np.zeros(image.shape[:2], dtype="uint32")
         else:  # HACK: Let's get a cheap merging strategy
             segmentation = segmentation.squeeze(1).detach().cpu().numpy()
@@ -67,14 +65,18 @@ def run_baseline_engine(image, method, **kwargs):
 
 def run_default_baselines(dataset_name, method, model_type, experiment_folder, target=None):
     # Prepare the results folder.
-    res_folder = os.path.join(experiment_folder, "results")
+    res_folder = os.path.join(experiment_folder, "results", method, model_type)
     inference_folder = os.path.join(experiment_folder, "inference", f"{dataset_name}_{method}_{model_type}")
     os.makedirs(res_folder, exist_ok=True)
     os.makedirs(inference_folder, exist_ok=True)
 
-    csv_path = os.path.join(experiment_folder, "results", f"{dataset_name}_{method}_{model_type}.csv")
+    csv_path = os.path.join(res_folder, f"{dataset_name}.csv")
     if os.path.exists(csv_path):
-        print(f"The results are computed and stored at {csv_path}")
+        df = pd.read_csv(csv_path)
+        print(df)
+        mean_msa = df["msa"].mean()
+        print(f"\nThe results are computed and stored at '{csv_path}'.")
+        print(f"Mean MSA for {dataset_name}: {mean_msa:.4f}")
         return
 
     # Get the image and label paths.
@@ -83,7 +85,7 @@ def run_default_baselines(dataset_name, method, model_type, experiment_folder, t
     assert isinstance(method, str)
     kwargs = {}
     if method in ["ais", "amg"]:
-        predictor, segmenter = get_predictor_and_segmenter(model_type=model_type, amg=(method == "amg"))
+        predictor, segmenter = get_predictor_and_segmenter(model_type=model_type, segmentation_mode=method)
         kwargs["predictor"] = predictor
         kwargs["segmenter"] = segmenter
     elif method == "apg":
@@ -99,9 +101,13 @@ def run_default_baselines(dataset_name, method, model_type, experiment_folder, t
     elif method == "sam2":
         kwargs["model_type"] = model_type
     elif method == "sam3":
+        from micro_sam3.util import get_sam3_model
+        from sam3.model.sam3_image_processor import Sam3Processor
+        model = get_sam3_model(input_type="image")
+        kwargs["processor"] = Sam3Processor(model)
         kwargs["prompt"] = target
 
-    msas, sa50s, precisions, recalls, f1s = [], [], [], [], []
+    per_image_results = []
     for curr_image_path, curr_label_path in tqdm(
         zip(image_paths, label_paths), total=len(image_paths),
         desc=f"Run '{method}' baseline for '{model_type}' on '{dataset_name}'",
@@ -120,22 +126,25 @@ def run_default_baselines(dataset_name, method, model_type, experiment_folder, t
         fname = os.path.join(inference_folder, f"{Path(curr_image_path).stem}.tif")
         imageio.imwrite(fname, segmentation, compression="zlib")
 
-        msas.append(msa)
-        sa50s.append(sas[0])
-        precisions.append(stats["precision"])
-        recalls.append(stats["recall"])
-        f1s.append(stats["f1"])
+        # Store per-image metrics
+        per_image_results.append({
+            "image": os.path.basename(curr_image_path),
+            "label": os.path.basename(curr_label_path),
+            "msa": msa,
+            "sa50": sas[0],
+            "precision": stats["precision"],
+            "recall": stats["recall"],
+            "f1": stats["f1"],
+        })
 
-    results = {
-        "mSA": np.mean(msas),
-        "SA50": np.mean(sa50s),
-        "Precision": np.mean(precisions),
-        "Recall": np.mean(recalls),
-        "F1": np.mean(f1s),
-    }
-    results = pd.DataFrame.from_dict([results])
-    results.to_csv(csv_path)
-    print(f"The results are stored at {csv_path}")
+    # Create DataFrame with per-image results
+    results_df = pd.DataFrame(per_image_results)
+    results_df.to_csv(csv_path, index=False)
+    print(results_df)
+
+    # Compute and print mean MSA
+    mean_msa = results_df["msa"].mean()
+    print(f"\nMean MSA for {dataset_name}: {mean_msa:.4f}")
 
 
 def main(args):

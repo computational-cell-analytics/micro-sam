@@ -10,7 +10,7 @@ from micro_sam.sample_data import fetch_hela_2d_example_data, fetch_livecell_exa
 DATA_CACHE = os.path.join(get_cache_directory(), "sample_data")
 
 
-def livecell_automatic_segmentation(model_type, use_amg, generate_kwargs):
+def livecell_automatic_segmentation(model_type, segmentation_mode, generate_kwargs):
     """Run the automatic segmentation for an example image from the LIVECell dataset.
 
     See https://doi.org/10.1038/s41592-021-01249-6 for details on the data.
@@ -21,7 +21,7 @@ def livecell_automatic_segmentation(model_type, use_amg, generate_kwargs):
     predictor, segmenter = get_predictor_and_segmenter(
         model_type=model_type,
         checkpoint=None,  # Replace this with your custom checkpoint.
-        amg=use_amg,
+        segmentation_mode=segmentation_mode,
         is_tiled=False,  # Switch to 'True' in case you would like to perform tiling-window based prediction.
     )
 
@@ -42,7 +42,7 @@ def livecell_automatic_segmentation(model_type, use_amg, generate_kwargs):
     napari.run()
 
 
-def hela_automatic_segmentation(model_type, use_amg, generate_kwargs):
+def hela_automatic_segmentation(model_type, segmentation_mode, generate_kwargs):
     """Run the automatic segmentation for an example image from the Cell Tracking Challenge (HeLa 2d) dataset.
     """
     example_data = fetch_hela_2d_example_data(DATA_CACHE)
@@ -51,7 +51,7 @@ def hela_automatic_segmentation(model_type, use_amg, generate_kwargs):
     predictor, segmenter = get_predictor_and_segmenter(
         model_type=model_type,
         checkpoint=None,  # Replace this with your custom checkpoint.
-        amg=use_amg,
+        segmentation_mode=segmentation_mode,
         is_tiled=False,  # Switch to 'True' in case you would like to perform tiling-window based prediction.
     )
 
@@ -72,7 +72,7 @@ def hela_automatic_segmentation(model_type, use_amg, generate_kwargs):
     napari.run()
 
 
-def wholeslide_automatic_segmentation(model_type, use_amg, generate_kwargs):
+def wholeslide_automatic_segmentation(model_type, segmentation_mode, generate_kwargs):
     """Run the automatic segmentation with tiling for an example whole-slide image from the
     NeurIPS Cell Segmentation challenge.
     """
@@ -82,7 +82,7 @@ def wholeslide_automatic_segmentation(model_type, use_amg, generate_kwargs):
     predictor, segmenter = get_predictor_and_segmenter(
         model_type=model_type,
         checkpoint=None,  # Replace this with your custom checkpoint.
-        amg=use_amg,
+        segmentation_mode=segmentation_mode,
         is_tiled=True,
     )
 
@@ -110,19 +110,19 @@ def main():
     # Whether to use:
     # the automatic mask generation (AMG): supported by all our models.
     # the automatic instance segmentation (AIS): supported by 'micro-sam' models.
-    use_amg = False  # 'False' chooses AIS as the automatic segmentation mode.
+    # the automatic prompt generation (APG): supported by 'micro-sam' models.
+    segmentation_mode = "apg"  # available choices for automatic segmentation modes are 'amg' / 'ais' / 'apg'.
 
     # Post-processing parameters for automatic segmentation.
-    if use_amg:  # AMG parameters
+    if segmentation_mode == "amg":  # AMG parameters
         generate_kwargs = {
             "pred_iou_thresh": 0.88,
             "stability_score_thresh": 0.95,
             "box_nms_thresh": 0.7,
             "crop_nms_thresh": 0.7,
             "min_mask_region_area": 0,
-            "output_mode": "binary_mask",
         }
-    else:  # AIS parameters
+    elif segmentation_mode == "ais":  # AIS parameters
         generate_kwargs = {
             "center_distance_threshold": 0.5,
             "boundary_distance_threshold": 0.5,
@@ -130,17 +130,25 @@ def main():
             "foreground_smoothing": 1.0,
             "distance_smoothing": 1.6,
             "min_size": 0,
-            "output_mode": "binary_mask",
         }
+    elif segmentation_mode == "apg":  # APG parameters
+        generate_kwargs = {
+            "center_distance_threshold": 0.5,
+            "boundary_distance_threshold": 0.5,
+            "foreground_threshold": 0.5,
+            "nms_threshold": 0.9,
+        }
+    else:
+        raise ValueError("The selected 'segmentation_mode' is not a supported segmentation method.")
 
     # Automatic segmentation for livecell data.
-    livecell_automatic_segmentation(model_type, use_amg, generate_kwargs)
+    livecell_automatic_segmentation(model_type, segmentation_mode, generate_kwargs)
 
     # Automatic segmentation for cell tracking challenge hela data.
-    # hela_automatic_segmentation(model_type, use_amg, generate_kwargs)
+    # hela_automatic_segmentation(model_type, segmentation_mode, generate_kwargs)
 
     # Automatic segmentation for a whole slide image.
-    # wholeslide_automatic_segmentation(model_type, use_amg, generate_kwargs)
+    # wholeslide_automatic_segmentation(model_type, segmentation_mode, generate_kwargs)
 
 
 # The corresponding CLI call for hela_automatic_segmentation:
