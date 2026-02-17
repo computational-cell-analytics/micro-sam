@@ -8,25 +8,20 @@ import pickle
 import hashlib
 import warnings
 from concurrent import futures
+from concurrent import futures
 from pathlib import Path
 from collections import OrderedDict
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, Callable
 
-import elf.parallel as parallel_impl
-import imageio.v3 as imageio
-import numpy as np
-import pooch
-import segment_anything.utils.amg as amg_utils
-import torch
-import vigra
-import xxhash
 import zarr
-
-from elf.io import open_file
-from nifty.tools import blocking
+import torch
+import pooch
+import xxhash
+import numpy as np
+import imageio.v3 as imageio
+import segment_anything.utils.amg as amg_utils
 from skimage.measure import regionprops
 from skimage.segmentation import relabel_sequential
-from torchvision.ops.boxes import batched_nms
 
 from .__version__ import __version__
 from . import models as custom_models
@@ -762,6 +757,7 @@ def _get_tiles_in_mask(mask, tiling, halo, z=None):
 
 
 def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update, batch_size, mask):
+    from nifty.tools import blocking
     tiling = blocking([0, 0], input_.shape[:2], tile_shape)
     n_tiles = tiling.numberOfBlocks
 
@@ -850,6 +846,7 @@ class _BatchProvider:
 
 
 def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update, batch_size, mask):
+    from nifty.tools import blocking
     assert input_.ndim == 3
 
     shape = input_.shape[1:]
@@ -1301,6 +1298,7 @@ def get_centers_and_bounding_boxes(
     if mode == "p":
         center_coordinates = {prop.label: prop.centroid for prop in properties}
     elif mode == "v":
+        import vigra
         center_coordinates = vigra.filters.eccentricityCenters(segmentation.astype('float32'))
         center_coordinates = {i: coord for i, coord in enumerate(center_coordinates) if i > 0}
 
@@ -1324,6 +1322,7 @@ def load_image_data(path: str, key: Optional[str] = None, lazy_loading: bool = F
     if key is None:
         image_data = imageio.imread(path)
     else:
+        from elf.io import open_file
         with open_file(path, mode="r") as f:
             image_data = f[key]
             if not lazy_loading:
@@ -1807,6 +1806,7 @@ def mask_data_to_segmentation(
             segmentation[this_mask] = this_seg_id
         seg_id = this_seg_id + 1
 
+    import elf.parallel as parallel_impl
     block_shape = (512, 512)
     if label_masks:
         segmentation_cc = np.zeros_like(segmentation, dtype=segmentation.dtype)
@@ -1889,6 +1889,7 @@ def apply_nms(
     scores = data["iou_preds"] * data["stability_scores"]
     boxes = _xywh_to_xyxy(data["global_boxes"] if is_tiled else data["boxes"])
     if perform_box_nms:
+        from torchvision.ops.boxes import batched_nms
         assert not intersection_over_min  # not implemented
         keep_by_nms = batched_nms(
             boxes,

@@ -12,8 +12,6 @@ from scipy.ndimage import distance_transform_edt
 
 import torch
 
-from nifty.tools import blocking
-
 from segment_anything.predictor import SamPredictor
 from segment_anything.utils.transforms import ResizeLongestSide
 
@@ -155,6 +153,7 @@ def _process_box(box, shape, original_size=None, box_extension=0):
 # and bring the points to the coordinate system of the tile.
 # Discard points that are not in the tile and warn if this happens.
 def _points_to_tile(prompts, shape, tile_shape, halo):
+    from nifty.tools import blocking
     points, labels = prompts
 
     tiling = blocking([0, 0], shape, tile_shape)
@@ -186,6 +185,7 @@ def _points_to_tile(prompts, shape, tile_shape, halo):
 
 
 def _box_to_tile(box, shape, tile_shape, halo):
+    from nifty.tools import blocking
     tiling = blocking([0, 0], shape, tile_shape)
     center = np.array([(box[0] + box[2]) / 2, (box[1] + box[3]) / 2]).round().astype("int").tolist()
     tile_id = tiling.coordinatesToBlockId(center)
@@ -205,6 +205,7 @@ def _box_to_tile(box, shape, tile_shape, halo):
 
 
 def _mask_to_tile(mask, shape, tile_shape, halo):
+    from nifty.tools import blocking
     tiling = blocking([0, 0], shape, tile_shape)
 
     coords = np.where(mask)
