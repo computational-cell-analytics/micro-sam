@@ -1,5 +1,13 @@
 # Release Overview
 
+**New in version 1.7.1**
+
+Fixing minor issues in 1.7.0 (related to trackastra, automatic segmentation and training functions) and adding new section in documentation for our new automatic segmentation pipeline, APG.
+
+**New in version 1.7.0**
+
+Updates to the automatic instance segmentation pipeline (introduces APG - automatic prompt generation).
+
 **New in version 1.6.2**
 
 Publish improved version of the medical imaging model and minor fixes to image series annotator.

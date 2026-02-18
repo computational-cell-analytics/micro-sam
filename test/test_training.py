@@ -258,7 +258,7 @@ class TestTraining(unittest.TestCase):
         self.assertTrue(os.path.exists(export_path))
 
         # Check that this model works for AIS.
-        predictor, segmenter = get_predictor_and_segmenter(model_type, export_path, amg=False)
+        predictor, segmenter = get_predictor_and_segmenter(model_type, export_path, segmentation_mode="ais")
         image_path = os.path.join(self.tmp_folder, "synthetic-data", "images", "test", "data-0.tif")
         segmentation = automatic_instance_segmentation(predictor, segmenter, image_path)
         expected_shape = imageio.imread(image_path).shape

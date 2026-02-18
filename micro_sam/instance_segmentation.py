@@ -8,7 +8,7 @@ import warnings
 from abc import ABC
 from copy import deepcopy
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Literal, List, Optional, Tuple, Union
 
 import vigra
 import numpy as np
@@ -1375,7 +1375,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
                 - 'binary_mask': Return a list of dictionaries with masks encoded as binary masks.
                 - 'instance_segmentation': Return masks merged into an instance segmentation in a single array.
                 By default, set to 'instance_segmentation'.
-            mask_threshold: The threshold for turining logits into masks in `micro_sam.inference.batched_inference`.`
+            mask_threshold: The threshold for turning logits into masks in `micro_sam.inference.batched_inference`.`
             refine_with_box_prompts: Whether to refine the mask outputs with another round of box promtps
                 derived from the segmentations after point prompts.
             prompt_function: A custom function for deriving prompts from the segmentation decoder predictions.
@@ -1408,7 +1408,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
 
         # 2.) Apply the predictor to the prompts.
         if prompts is None:  # No prompts were derived, we can't do much further and return empty masks.
-            return np.zeros(foreground.shape, dtype="uint32") if output_mode == "instance_egmentation" else []
+            return np.zeros(foreground.shape, dtype="uint32") if output_mode == "instance_segmentation" else []
         else:
             predictions = batched_inference(
                 self._predictor,
@@ -1572,7 +1572,7 @@ def get_instance_segmentation_generator(
     predictor: SamPredictor,
     is_tiled: bool,
     decoder: Optional[torch.nn.Module] = None,
-    segmentation_mode: Optional[str] = None,
+    segmentation_mode: Optional[Literal["amg", "ais", "apg"]] = None,
     **kwargs,
 ) -> Union[AMGBase, InstanceSegmentationWithDecoder]:
     f"""Get the automatic mask generator.

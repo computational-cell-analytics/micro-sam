@@ -48,6 +48,7 @@ def annotator_2d(
     viewer: Optional["napari.viewer.Viewer"] = None,
     precompute_amg_state: bool = False,
     checkpoint_path: Optional[str] = None,
+    decoder_path: Optional[str] = None,
     device: Optional[Union[str, torch.device]] = None,
     prefer_decoder: bool = True,
 ) -> Optional["napari.viewer.Viewer"]:
@@ -73,6 +74,7 @@ def annotator_2d(
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster. By default, set to 'False'.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
+        decoder_path: Path to a custom decoder checkpoint from which to load the 'micro-sam` decoder.
         device: The computational device to use for the SAM model.
             By default, automatically chooses the best available device.
         prefer_decoder: Whether to use decoder based instance segmentation if
@@ -89,7 +91,8 @@ def annotator_2d(
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path,
         halo=halo, tile_shape=tile_shape, precompute_amg_state=precompute_amg_state,
-        ndim=2, checkpoint_path=checkpoint_path, device=device, prefer_decoder=prefer_decoder,
+        ndim=2, checkpoint_path=checkpoint_path, decoder_path=decoder_path,
+        device=device, prefer_decoder=prefer_decoder,
         skip_load=False, use_cli=True,
     )
 
@@ -137,5 +140,5 @@ def main():
         segmentation_result=segmentation_result,
         model_type=args.model_type, tile_shape=args.tile_shape, halo=args.halo,
         precompute_amg_state=args.precompute_amg_state, checkpoint_path=args.checkpoint,
-        device=args.device, prefer_decoder=args.prefer_decoder,
+        decoder_path=args.decoder_path, device=args.device, prefer_decoder=args.prefer_decoder,
     )
