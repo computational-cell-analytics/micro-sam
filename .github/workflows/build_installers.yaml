@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build_intaller:
+  build_installer:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
 
@@ -91,7 +91,7 @@ jobs:
           constructor --conda-exe=$(which mamba) --output-dir ./${{ matrix.os }}_x86_64 .
 
       - name: upload installer
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.os }}_x86_64
           path: ./deployment/${{ matrix.os }}_x86_64
