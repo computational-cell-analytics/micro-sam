@@ -58,16 +58,16 @@ jobs:
         env:
           GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
 
-  deploy:
-    # This will upload a Python Package using Twine when a release is created
-    # For more information see: https://help.github.com/en/actions/language-and-framework-guides/using-python-with-github-actions#publishing-to-package-registries
-    #
-    # This job will run when you have tagged a commit, starting with "v*"
-    # or created a release in GitHub which includes a tag starting with "v*"
-    # and requires that you have put your twine API key in your
-    # github secrets (see readme for details)
+  pypi-publish:
+    # Uploads the new release to PyPI using Trusted Publishing
     needs: [update_release_draft]
     runs-on: ubuntu-latest
+    permissions:
+      # IMPORTANT: this permission is mandatory for trusted publishing
+      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/p/<your-pypi-project-name>
     if: contains(github.ref, 'tags')
     steps:
     - uses: actions/checkout@v4
@@ -78,11 +78,9 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        python -m pip install build twine
-    - name: Build and publish
-      env:
-        TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}
-        TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
-      run: |
-        python -m build
-        twine upload dist/*
+        python -m pip install build
+    - name: Build micro-sam python package
+      run: python -m build
+    - name: Publish package distributions to PyPI
+      # This action uploads everything from the dist/ folder to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
