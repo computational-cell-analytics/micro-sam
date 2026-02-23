@@ -4,16 +4,24 @@ https://computational-cell-analytics.github.io/micro-sam/micro_sam.html
 """
 
 import os
+import shutil
+import tempfile
 import warnings
 from abc import ABC
+from contextlib import contextmanager
 from copy import deepcopy
 from collections import OrderedDict
 from typing import Any, Dict, Literal, List, Optional, Tuple, Union
 
-import vigra
 import numpy as np
+import zarr
 from skimage.measure import regionprops
 from skimage.segmentation import find_boundaries
+
+try:
+    import fastfilters as filter_impl
+except ImportError:
+    import vigra.filters as filter_impl
 
 import torch
 from torchvision.ops.boxes import batched_nms, box_area
@@ -23,6 +31,8 @@ from torch_em.util.segmentation import watershed_from_center_and_boundary_distan
 
 import elf.parallel as parallel_impl
 from elf.parallel.filters import apply_filter
+from elf.wrapper.base import MultiTransformationWrapper
+from elf.wrapper.generic import ThresholdWrapper
 
 from nifty.tools import blocking
 
@@ -853,6 +863,23 @@ def get_predictor_and_decoder(
     return predictor, decoder
 
 
+@contextmanager
+def _array_or_zarr(shape, dtype, chunks, use_zarr=False):
+    if not use_zarr:
+        yield np.zeros(shape, dtype=dtype)
+        return
+
+    tmpdir = tempfile.mkdtemp(prefix="tmp-zarr-")
+    try:
+        store_path = os.path.join(tmpdir, "tmp.zarr")
+        root = zarr.open_group(store_path, mode="w")
+        arr = root.create_dataset(name="data", shape=shape, dtype=dtype, chunks=chunks)
+        yield arr
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def _watershed_from_center_and_boundary_distances_parallel(
     center_distances,
     boundary_distances,
@@ -866,6 +893,8 @@ def _watershed_from_center_and_boundary_distances_parallel(
     halo,
     n_threads,
     verbose=False,
+    optimize_memory=False,
+    segmentation=None,
 ):
     center_distances = apply_filter(
         center_distances, "gaussianSmoothing", sigma=distance_smoothing,
@@ -876,30 +905,45 @@ def _watershed_from_center_and_boundary_distances_parallel(
         block_shape=tile_shape, n_threads=n_threads
     )
 
-    fg_mask = foreground_map > foreground_threshold
+    fg_mask = ThresholdWrapper(foreground_map, foreground_threshold, operator=np.greater)
 
-    marker_map = np.logical_and(
-        center_distances < center_distance_threshold, boundary_distances < boundary_distance_threshold
+    marker_map = MultiTransformationWrapper(
+        np.logical_and,
+        ThresholdWrapper(center_distances, center_distance_threshold, operator=np.less),
+        ThresholdWrapper(boundary_distances, boundary_distance_threshold, operator=np.less),
     )
-    marker_map[~fg_mask] = 0
+    marker_map = MultiTransformationWrapper(np.logical_and, marker_map, fg_mask)
 
-    markers = np.zeros(marker_map.shape, dtype="uint64")
-    markers = parallel_impl.label(
-        marker_map, out=markers, block_shape=tile_shape, n_threads=n_threads, verbose=verbose,
-    )
+    with _array_or_zarr(marker_map.shape, dtype="uint64", chunks=tile_shape, use_zarr=optimize_memory) as markers:
+        markers = parallel_impl.label(
+            marker_map, out=markers, block_shape=tile_shape, n_threads=n_threads, verbose=verbose,
+        )
 
-    seg = np.zeros_like(markers, dtype="uint64")
-    seg = parallel_impl.seeded_watershed(
-        boundary_distances, seeds=markers, out=seg, block_shape=tile_shape,
-        halo=halo, n_threads=n_threads, verbose=verbose, mask=fg_mask,
-    )
+        if segmentation is None:
+            segmentation = np.zeros(markers.shape, dtype="uint64")
+        segmentation = parallel_impl.seeded_watershed(
+            boundary_distances, seeds=markers, out=segmentation, block_shape=tile_shape,
+            halo=halo, n_threads=n_threads, verbose=verbose, mask=fg_mask,
+        )
 
-    out = np.zeros_like(seg, dtype="uint64")
-    out = parallel_impl.size_filter(
-        seg, out=out, min_size=min_size, block_shape=tile_shape, n_threads=n_threads, verbose=verbose
-    )
+    if min_size > 0:
+        segmentation = parallel_impl.size_filter(
+            segmentation, out=segmentation, min_size=min_size,
+            block_shape=tile_shape, n_threads=n_threads, verbose=verbose
+        )
 
-    return out
+    return segmentation
+
+
+def _apply_smoothing(foreground, foreground_smoothing, tile_shape, n_threads):
+    if tile_shape is None:
+        foreground = filter_impl.gaussianSmoothing(foreground, foreground_smoothing)
+    else:
+        foreground = apply_filter(
+            foreground, "gaussianSmoothing", sigma=foreground_smoothing,
+            block_shape=tile_shape, n_threads=n_threads
+        )
+    return foreground
 
 
 class InstanceSegmentationWithDecoder:
@@ -1042,6 +1086,8 @@ class InstanceSegmentationWithDecoder:
         tile_shape: Optional[Tuple[int, int]] = None,
         halo: Optional[Tuple[int, int]] = None,
         n_threads: Optional[int] = None,
+        optimize_memory: bool = False,
+        segmentation: Optional[np.ndarray] = None,
     ) -> Union[List[Dict[str, Any]], np.ndarray]:
         """Generate instance segmentation for the currently initialized image.
 
@@ -1067,6 +1113,8 @@ class InstanceSegmentationWithDecoder:
                 If not given then post-processing will not be parallelized.
             halo: Halo for parallel post-processing. See also `tile_shape`.
             n_threads: Number of threads for parallel post-processing. See also `tile_shape`.
+            optimize_memory: Whether to optimize the memory consumption by allocating intermediate files.
+            segmentation: Optional pre-allocated segmentation.
 
         Returns:
             The segmentation masks.
@@ -1075,7 +1123,7 @@ class InstanceSegmentationWithDecoder:
             raise RuntimeError("InstanceSegmentationWithDecoder has not been initialized. Call initialize first.")
 
         if foreground_smoothing > 0:
-            foreground = vigra.filters.gaussianSmoothing(self._foreground, foreground_smoothing)
+            foreground = _apply_smoothing(self._foreground, foreground_smoothing, tile_shape, n_threads)
         else:
             foreground = self._foreground
 
@@ -1106,6 +1154,8 @@ class InstanceSegmentationWithDecoder:
                 halo=halo,
                 n_threads=n_threads,
                 verbose=False,
+                optimize_memory=optimize_memory,
+                segmentation=segmentation,
             )
 
         if output_mode != "instance_segmentation":

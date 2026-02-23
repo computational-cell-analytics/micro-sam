@@ -127,10 +127,9 @@ def automatic_tracking(
         The lineages representing cell divisions, stored as a dictionary.
     """
     # Load the input image file.
-    if isinstance(input_path, np.ndarray):
-        image_data = input_path
-    else:
-        image_data = util.load_image_data(input_path, key)
+    # We assume that it has to be read from file if it is a str or pathlike.
+    # Otherwise we assume it is a numpy array like object.
+    image_data = util.load_image_data(input_path, key) if isinstance(input_path, (str, os.PathLike)) else input_path
 
     if (image_data.ndim != 3) and (image_data.ndim != 4 and image_data.shape[-1] != 3):
         raise ValueError(f"The inputs does not match the shape expectation of 3d inputs: {image_data.shape}")
@@ -168,7 +167,9 @@ def automatic_instance_segmentation(
     input_path: Union[Union[os.PathLike, str], np.ndarray],
     output_path: Optional[Union[os.PathLike, str]] = None,
     embedding_path: Optional[Union[os.PathLike, str]] = None,
+    mask_path: Optional[Union[Union[os.PathLike, str], np.ndarray]] = None,
     key: Optional[str] = None,
+    mask_key: Optional[str] = None,
     ndim: Optional[int] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
@@ -187,8 +188,10 @@ def automatic_instance_segmentation(
             or a container file (e.g. hdf5 or zarr).
         output_path: The output path where the instance segmentations will be saved.
         embedding_path: The path where the embeddings are cached already / will be saved.
+        mask_path: The path to an optional foreground mask. Areas outside of the foreground will not be processed.
         key: The key to the input file. This is needed for container files (eg. hdf5 or zarr)
             or to load several images as 3d volume. Provide a glob patterm, eg. "*.tif", for this case.
+        mask_key: The key to the (optional) foreground mask.
         ndim: The dimensionality of the data. By default the dimensionality of the data will be used.
             If you have RGB data you have to specify this explicitly, e.g. pass ndim=2 for 2d segmentation of RGB.
         tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
@@ -212,11 +215,9 @@ def automatic_instance_segmentation(
             print(f"The segmentation results are already stored at '{os.path.abspath(output_path)}'.")
             return
 
-    # Load the input image file.
-    if isinstance(input_path, np.ndarray):
-        image_data = input_path
-    else:
-        image_data = util.load_image_data(input_path, key)
+    # We assume that it has to be read from file if it is a str or pathlike.
+    # Otherwise we assume it is a numpy array like object.
+    image_data = util.load_image_data(input_path, key) if isinstance(input_path, (str, os.PathLike)) else input_path
 
     ndim = image_data.ndim if ndim is None else ndim
 
@@ -243,6 +244,11 @@ def automatic_instance_segmentation(
         if isinstance(segmenter, InstanceSegmentationWithDecoder) and tile_shape is not None:
             generate_kwargs.update({"tile_shape": tile_shape, "halo": halo})
             initialize_kwargs["batch_size"] = batch_size
+
+        # Load the mask defining foreground if it was given.
+        if mask_path is not None:
+            mask = util.load_image_data(mask_path, mask_key) if isinstance(mask_path, (str, os.PathLike)) else mask_path
+            initialize_kwargs["mask"] = mask
 
         segmenter.initialize(**initialize_kwargs)
         instances = segmenter.generate(**generate_kwargs)
