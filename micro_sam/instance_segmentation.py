@@ -744,6 +744,7 @@ def get_unetr(
     device: Optional[Union[str, torch.device]] = None,
     out_channels: int = 3,
     flexible_load_checkpoint: bool = False,
+    final_activation: Optional[str] = "Sigmoid",
 ) -> torch.nn.Module:
     """Get UNETR model for automatic instance segmentation.
 
@@ -755,6 +756,7 @@ def get_unetr(
         out_channels: The number of output channels. By default, set to '3'.
         flexible_load_checkpoint: Whether to allow reinitialization of parameters
             which could not be found in the provided decoder state. By default, set to 'False'.
+        final_activation: The activation applied to the network output. By default uses a Sigmoid activation.
 
     Returns:
         The UNETR model.
@@ -777,7 +779,7 @@ def get_unetr(
         encoder=image_encoder,
         out_channels=out_channels,
         use_sam_stats=True,
-        final_activation="Sigmoid",
+        final_activation=final_activation,
         use_skip_connection=False,
         resize_input=True,
         use_conv_transpose=use_conv_transpose,
