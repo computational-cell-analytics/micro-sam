@@ -221,6 +221,12 @@ def automatic_instance_segmentation(
 
     ndim = image_data.ndim if ndim is None else ndim
 
+    # Load the mask defining foreground if it was given.
+    if mask_path is None:
+        mask = None
+    else:
+        mask = util.load_image_data(mask_path, mask_key) if isinstance(mask_path, (str, os.PathLike)) else mask_path
+
     if ndim == 2:
         if (image_data.ndim != 2) and (image_data.ndim != 3 and image_data.shape[-1] != 3):
             raise ValueError(f"The inputs does not match the shape expectation of 2d inputs: {image_data.shape}")
@@ -235,8 +241,11 @@ def automatic_instance_segmentation(
             halo=halo,
             verbose=verbose,
             batch_size=batch_size,
+            mask=mask,
         )
         initialize_kwargs = dict(image=image_data, image_embeddings=image_embeddings, verbose=verbose)
+        if mask is not None:
+            initialize_kwargs["mask"] = mask
 
         # If we run AIS with tiling then we use the same tile shape for the watershed postprocessing.
         # In this case, we also add the batch size to the initialize kwargs,
@@ -245,17 +254,14 @@ def automatic_instance_segmentation(
             generate_kwargs.update({"tile_shape": tile_shape, "halo": halo})
             initialize_kwargs["batch_size"] = batch_size
 
-        # Load the mask defining foreground if it was given.
-        if mask_path is not None:
-            mask = util.load_image_data(mask_path, mask_key) if isinstance(mask_path, (str, os.PathLike)) else mask_path
-            initialize_kwargs["mask"] = mask
-
         segmenter.initialize(**initialize_kwargs)
         instances = segmenter.generate(**generate_kwargs)
 
     else:
         if (image_data.ndim != 3) and (image_data.ndim != 4 and image_data.shape[-1] != 3):
             raise ValueError(f"The inputs does not match the shape expectation of 3d inputs: {image_data.shape}")
+        if mask is not None:
+            raise NotImplementedError
 
         instances, image_embeddings = automatic_3d_segmentation(
             volume=image_data,
