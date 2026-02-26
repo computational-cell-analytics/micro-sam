@@ -789,16 +789,21 @@ def get_unetr(
         unetr_state_dict = unetr.state_dict()
         for k, v in unetr_state_dict.items():
             if not k.startswith("encoder"):
-                if flexible_load_checkpoint:  # Whether allow reinitalization of params, if not found.
+                # Whether allow reinitalization of params, if not found or mismatched.
+                if flexible_load_checkpoint:
                     if k in decoder_state:  # First check whether the key is available in the provided decoder state.
-                        unetr_state_dict[k] = decoder_state[k]
+                        if v.shape != decoder_state[k].shape:   # Then check if the sizes mismatch.
+                            warnings.warn(f"Shape of '{k}' did not match. Hence, we reinitialize it.")
+                            unetr_state_dict[k] = v
+                        else:
+                            unetr_state_dict[k] = decoder_state[k]
                     else:  # Otherwise, allow it to initialize it.
                         warnings.warn(f"Could not find '{k}' in the pretrained state dict. Hence, we reinitialize it.")
                         unetr_state_dict[k] = v
 
-                else:  # Whether be strict on finding the parameter in the decoder state.
+                else:  # Be strict on finding the parameter in the decoder state.
                     if k not in decoder_state:
-                        raise RuntimeError(f"The parameters for '{k}' could not be found.")
+                        raise RuntimeError(f"The parameters for '{k}' could not be found or has a size mismatch.")
                     unetr_state_dict[k] = decoder_state[k]
 
         unetr.load_state_dict(unetr_state_dict)
