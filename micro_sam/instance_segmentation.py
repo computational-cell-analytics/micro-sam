@@ -1148,6 +1148,12 @@ class InstanceSegmentationWithDecoder:
         else:
             if halo is None:
                 raise ValueError("You must pass a value for halo if tile_shape is given.")
+
+            # Shards are not thread-safe for parallel writing! So if we have shards we have to use them for tiling.
+            # This is ok in terms efficiency as GPU tiles are small; shards should still be manegable for the watershed.
+            if isinstance(segmentation, zarr.Array) and getattr(segmentation, "shards", None) is not None:
+                tile_shape = segmentation.shards
+
             segmentation = _watershed_from_center_and_boundary_distances_parallel(
                 center_distances=self._center_distances,
                 boundary_distances=self._boundary_distances,
