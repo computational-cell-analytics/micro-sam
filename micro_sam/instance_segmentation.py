@@ -789,16 +789,21 @@ def get_unetr(
         unetr_state_dict = unetr.state_dict()
         for k, v in unetr_state_dict.items():
             if not k.startswith("encoder"):
-                if flexible_load_checkpoint:  # Whether allow reinitalization of params, if not found.
+                # Whether allow reinitalization of params, if not found or mismatched.
+                if flexible_load_checkpoint:
                     if k in decoder_state:  # First check whether the key is available in the provided decoder state.
-                        unetr_state_dict[k] = decoder_state[k]
+                        if v.shape != decoder_state[k].shape:   # Then check if the sizes mismatch.
+                            warnings.warn(f"Shape of '{k}' did not match. Hence, we reinitialize it.")
+                            unetr_state_dict[k] = v
+                        else:
+                            unetr_state_dict[k] = decoder_state[k]
                     else:  # Otherwise, allow it to initialize it.
                         warnings.warn(f"Could not find '{k}' in the pretrained state dict. Hence, we reinitialize it.")
                         unetr_state_dict[k] = v
 
-                else:  # Whether be strict on finding the parameter in the decoder state.
+                else:  # Be strict on finding the parameter in the decoder state.
                     if k not in decoder_state:
-                        raise RuntimeError(f"The parameters for '{k}' could not be found.")
+                        raise RuntimeError(f"The parameters for '{k}' could not be found or has a size mismatch.")
                     unetr_state_dict[k] = decoder_state[k]
 
         unetr.load_state_dict(unetr_state_dict)
@@ -1143,6 +1148,12 @@ class InstanceSegmentationWithDecoder:
         else:
             if halo is None:
                 raise ValueError("You must pass a value for halo if tile_shape is given.")
+
+            # Shards are not thread-safe for parallel writing! So if we have shards we have to use them for tiling.
+            # This is ok in terms efficiency as GPU tiles are small; shards should still be manegable for the watershed.
+            if isinstance(segmentation, zarr.Array) and getattr(segmentation, "shards", None) is not None:
+                tile_shape = segmentation.shards
+
             segmentation = _watershed_from_center_and_boundary_distances_parallel(
                 center_distances=self._center_distances,
                 boundary_distances=self._boundary_distances,
