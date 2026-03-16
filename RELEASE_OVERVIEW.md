@@ -1,5 +1,13 @@
 # Release Overview
 
+**New in version 1.7.3 - 1.7.5**
+
+Minor extensions and improvements to several functions' input arguments.
+
+**New in version 1.7.2**
+
+Handful patch fixes to minor issues.
+
 **New in version 1.7.1**
 
 Fixing minor issues in 1.7.0 (related to trackastra, automatic segmentation and training functions) and adding new section in documentation for our new automatic segmentation pipeline, APG.
