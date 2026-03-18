@@ -65,16 +65,18 @@ def run_baseline_engine(image, method, **kwargs):
 
 def run_default_baselines(dataset_name, method, model_type, experiment_folder, target=None):
     # Prepare the results folder.
-    res_folder = os.path.join(experiment_folder, "results")
+    res_folder = os.path.join(experiment_folder, "results", method, model_type)
     inference_folder = os.path.join(experiment_folder, "inference", f"{dataset_name}_{method}_{model_type}")
     os.makedirs(res_folder, exist_ok=True)
     os.makedirs(inference_folder, exist_ok=True)
 
-    fnext = (target if model_type == "sam3" else model_type)
-    csv_path = os.path.join(res_folder, f"{dataset_name}_{method}_{fnext}.csv")
+    csv_path = os.path.join(res_folder, f"{dataset_name}.csv")
     if os.path.exists(csv_path):
-        print(pd.read_csv(csv_path))
-        print(f"The results are computed and stored at '{csv_path}'.")
+        df = pd.read_csv(csv_path)
+        print(df)
+        mean_msa = df["msa"].mean()
+        print(f"\nThe results are computed and stored at '{csv_path}'.")
+        print(f"Mean MSA for {dataset_name}: {mean_msa:.4f}")
         return
 
     # Get the image and label paths.
@@ -83,7 +85,7 @@ def run_default_baselines(dataset_name, method, model_type, experiment_folder, t
     assert isinstance(method, str)
     kwargs = {}
     if method in ["ais", "amg"]:
-        predictor, segmenter = get_predictor_and_segmenter(model_type=model_type, segmentation_mode="amg")
+        predictor, segmenter = get_predictor_and_segmenter(model_type=model_type, segmentation_mode=method)
         kwargs["predictor"] = predictor
         kwargs["segmenter"] = segmenter
     elif method == "apg":
@@ -105,7 +107,7 @@ def run_default_baselines(dataset_name, method, model_type, experiment_folder, t
         kwargs["processor"] = Sam3Processor(model)
         kwargs["prompt"] = target
 
-    msas, sa50s, precisions, recalls, f1s = [], [], [], [], []
+    per_image_results = []
     for curr_image_path, curr_label_path in tqdm(
         zip(image_paths, label_paths), total=len(image_paths),
         desc=f"Run '{method}' baseline for '{model_type}' on '{dataset_name}'",
@@ -124,23 +126,25 @@ def run_default_baselines(dataset_name, method, model_type, experiment_folder, t
         fname = os.path.join(inference_folder, f"{Path(curr_image_path).stem}.tif")
         imageio.imwrite(fname, segmentation, compression="zlib")
 
-        msas.append(msa)
-        sa50s.append(sas[0])
-        precisions.append(stats["precision"])
-        recalls.append(stats["recall"])
-        f1s.append(stats["f1"])
+        # Store per-image metrics
+        per_image_results.append({
+            "image": os.path.basename(curr_image_path),
+            "label": os.path.basename(curr_label_path),
+            "msa": msa,
+            "sa50": sas[0],
+            "precision": stats["precision"],
+            "recall": stats["recall"],
+            "f1": stats["f1"],
+        })
 
-    results = {
-        "mSA": np.mean(msas),
-        "SA50": np.mean(sa50s),
-        "Precision": np.mean(precisions),
-        "Recall": np.mean(recalls),
-        "F1": np.mean(f1s),
-    }
-    results = pd.DataFrame.from_dict([results])
-    results.to_csv(csv_path)
-    print(results)
-    print(f"The results above are stored at '{csv_path}'.")
+    # Create DataFrame with per-image results
+    results_df = pd.DataFrame(per_image_results)
+    results_df.to_csv(csv_path, index=False)
+    print(results_df)
+
+    # Compute and print mean MSA
+    mean_msa = results_df["msa"].mean()
+    print(f"\nMean MSA for {dataset_name}: {mean_msa:.4f}")
 
 
 def main(args):

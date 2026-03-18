@@ -94,6 +94,7 @@ class AnnotatorState(metaclass=Singleton):
         predictor=None,
         decoder=None,
         checkpoint_path=None,
+        decoder_path=None,
         tile_shape=None,
         halo=None,
         precompute_amg_state=False,
@@ -113,7 +114,7 @@ class AnnotatorState(metaclass=Singleton):
 
             self.predictor, state = util.get_sam_model(
                 device=device, model_type=model_type,
-                checkpoint_path=checkpoint_path, return_state=True,
+                checkpoint_path=checkpoint_path, decoder_path=decoder_path, return_state=True,
                 progress_bar_factory=None if use_cli else progress_bar_factory,
             )
             if prefer_decoder and "decoder_state" in state and model_type != "vit_b_medical_imaging":

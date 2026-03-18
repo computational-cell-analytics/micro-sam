@@ -187,6 +187,11 @@ You can then use those models with the custom checkpoint option, see answer 15 f
 ### 18. I would like to evaluate the instance segmentation quantitatively. Can you suggest how to do that?
 `micro-sam` supports a `micro_sam.evaluate` CLI, which computes the mean segmentation accuracy (introduced in the Pascal VOC challenge) of the predicted instance segmentation with the corresponding ground-truth annotations. Please see our paper (`Methods` -> `Inference and Evaluation` for more details about it) and `$ micro_sam.evaluate -h` for more details about the evaluation CLI.
 
+### 19. I get `RuntimeError: GET was unable to find an engine to execute this computation` on a V100 GPU (*"or any older GPU"*).
+This is a known issue for a combination of older generation GPUs (eg. V100s) and pytorch compiled with the latest CUDA Toolkit (eg. CUDA 12.9 and PyTorch 2.8 has been tested to throw this error on V100s).
+Here's what you can do to solve this issue:
+- Use a PyTorch/CUDA build that is known to work with V100, for example CUDA 12.1 or 11.8 with a compatible PyTorch version (please check your installed CUDA drivers).
+- Run on CPU (slower, but works).
 
 ## Fine-tuning questions
 

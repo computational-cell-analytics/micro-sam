@@ -269,7 +269,7 @@ class SelectiveSurgery(nn.Module):
         Args:
             prefix: Matches the part of parameter name in front.
             suffix: Matches the part of parameter name at the end.
-            infix: Matches parts of parameter name occuring in between.
+            infix: Matches parts of parameter name occurring in between.
         """
         for k, v in self.block.named_parameters():
             if prefix is not None and k.startswith(tuple(prefix)):

@@ -567,7 +567,7 @@ def _filter_lineages(lineages, tracking_result):
 def _tracking_impl(timeseries, segmentation, mode, min_time_extent, output_folder=None):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = Trackastra.from_pretrained("general_2d", device=device)
-    lineage_graph = model.track(timeseries, segmentation, mode=mode)
+    lineage_graph, _ = model.track(timeseries, segmentation, mode=mode)
     track_data, parent_graph, _ = graph_to_napari_tracks(lineage_graph)
     node_to_track, lineages = _extract_tracks_and_lineages(segmentation, track_data, parent_graph)
     tracking_result = recolor_segmentation(segmentation, node_to_track)

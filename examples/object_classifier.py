@@ -82,7 +82,7 @@ def _get_livecell_data():
 
     embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-livecell-vit_b_lm.zarr")
 
-    # This is the vit-b-lm segmentation and a test annotaiton.
+    # This is the vit-b-lm segmentation and a test annotation.
     segmentation = imageio.imread("./clf-test-data/livecell-test-seg.tif")
     annotations = imageio.imread("./clf-test-data/livecell-test-annotations.tif")
 
@@ -97,7 +97,7 @@ def _get_wholeslide_data():
 
     embedding_path = os.path.join(EMBEDDING_CACHE, "whole-slide-embeddings-vit_b_lm.zarr")
 
-    # This is the vit-b-lm segmentation and a test annotaiton.
+    # This is the vit-b-lm segmentation and a test annotation.
     segmentation = imageio.imread("./clf-test-data/whole-slide-seg.tif")
     annotations = imageio.imread("./clf-test-data/wholeslide-annotations.tif")
 

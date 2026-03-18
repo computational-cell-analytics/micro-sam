@@ -84,6 +84,10 @@ def _initialize_parser(description, with_segmentation_result=True, with_instance
         help="Checkpoint from which the SAM model will be loaded loaded."
     )
     parser.add_argument(
+        "--decoder_path", default=None,
+        help="Optional checkpoint path to decoder-only weights to enable decoder-based instance segmentation."
+    )
+    parser.add_argument(
         "-d", "--device", default=None,
         help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
         "By default the most performant available device will be selected."
@@ -448,7 +452,7 @@ def _batched_interactive_segmentation(predictor, points, labels, boxes, image_em
     # (This is left here as a reference for how this can be implemented.
     #  I have not decided yet if this is actually a good idea or not.)
     # # If we have no objects: this is the first call for a batched segmentation.
-    # # We treat each positive point or box as a separate obejct.
+    # # We treat each positive point or box as a separate object.
     # if len(seg_ids) == 1:
     #     # Create a list of all prompts.
     #     batched_prompts = [(None, point, label) for point, label in zip(batched_points, batched_labels)]
