@@ -5,6 +5,7 @@ from natsort import natsorted
 
 import h5py
 import numpy as np
+from skimage.measure import label as connected_components
 
 from elf.io import open_file
 from elf.evaluation import mean_segmentation_accuracy
@@ -128,6 +129,12 @@ def evaluate_predictions(view=False):
         pred_finetuned1 = f["predictions/ais/finetuned_vit_b"][:]
         pred_finetuned2 = f["predictions/ais/finetuned_vit_b_lm"][:]
 
+        # Apply connected components to the labels.
+        labels = connected_components(labels).astype(labels.dtype)
+
+        if raw.shape > (1024, 1024):  # HACK: Just bump out bigger images from evaluation.
+            continue
+
         # Let's filter out big nuclei and only stick to micronuclei (but do this only in the default model).
         area_threshold = 300  # NOTE: As used in the experiments.
 
@@ -143,9 +150,10 @@ def evaluate_predictions(view=False):
             v = napari.Viewer()
             v.add_image(raw)
             v.add_labels(labels)
-            v.add_labels(pred_default, "predictions/default")
-            v.add_labels(pred_finetuned1, "predictions/finetuned_vit_b")
-            v.add_labels(pred_finetuned2, "predictions/finetuned_vit_b_lm")
+            v.add_labels(pred_default, name="predictions/default")
+            v.add_labels(pred_finetuned1, name="predictions/finetuned_vit_b")
+            v.add_labels(pred_finetuned2, name="predictions/finetuned_vit_b_lm")
+            napari.run()
 
     # Calculate the average mSA per setup.
     msa_default = np.mean(running_msa_default)
@@ -156,14 +164,14 @@ def evaluate_predictions(view=False):
 
 def main():
     # Run the default models
-    # run_default_model("ais")
+    run_default_model("ais")
 
     # Run the finetuned models
-    # run_finetuned_model("vit_b", "ais")
-    # run_finetuned_model("vit_b_lm", "ais")
+    run_finetuned_model("vit_b", "ais")
+    run_finetuned_model("vit_b_lm", "ais")
 
     # Evaluate predictions
-    evaluate_predictions(view=True)
+    evaluate_predictions(False)
 
 
 if __name__ == "__main__":

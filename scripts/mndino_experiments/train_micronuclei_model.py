@@ -26,7 +26,7 @@ def get_dataloader(split):
     loader = get_mndino_loader(
         path=os.path.join(ROOT, "mndino_data"),
         batch_size=1,
-        patch_shape=(512, 512),
+        patch_shape=(256, 256),
         num_workers=16,
         shuffle=True,
         split=split,
