@@ -30,18 +30,17 @@ def inverse_size_filter(seg: np.ndarray, max_size: int):
     return out
 
 
-def run_default_model(view=False):
+def run_default_model(mode):
     # Evaluates the OG MicroSAM LM Generalist model.
 
     # Load the MicroSAM model.
-    mode = "ais"
     predictor, segmenter = get_predictor_and_segmenter(
         model_type="vit_b_lm", segmentation_mode=mode, is_tiled=True,
     )
 
     # Iterate over each image.
     fpaths = get_mndino_paths(path=os.path.join(ROOT, "mndino_data"), split="test", download=True)
-    for i, curr_fpath in tqdm(enumerate(fpaths)):
+    for i, curr_fpath in tqdm(enumerate(fpaths), total=len(fpaths)):
         # Get the raw image and corresponding micronuclei annotations.
         f = open_file(curr_fpath, "r")
         raw = f["raw"][:]
@@ -65,29 +64,27 @@ def run_default_model(view=False):
         # Store all stuff in an exclusive path.
         with h5py.File(f"mnseg_{i}.h5", "a") as f:
             if "raw" not in f:
-                f.create_dataset("raw", raw, compression="gzip")
+                f.create_dataset("raw", data=raw, compression="gzip")
             if "labels" not in f:
-                f.create_dataset("labels", labels, compression="gzip")
+                f.create_dataset("labels", data=labels, compression="gzip")
 
-            f.create_dataset(f"predictions/{mode}/vit_b_lm", instances, compression="gzip")
+            f.create_dataset(f"predictions/{mode}/default_vit_b_lm", data=instances, compression="gzip")
 
 
-def run_finetuned_model(view=False):
+def run_finetuned_model(initial_model, mode):
     # Evaluates the finetuned models (starting either 'vit_b' or 'vit_b_lm').
-    inital_model = "vit_b"
 
     # Load the MicroSAM model.
-    mode = "ais"
     predictor, segmenter = get_predictor_and_segmenter(
         model_type="vit_b",
-        checkpoint=f"./checkpoints/microsam-mn-{inital_model}/best.pt",
+        checkpoint=f"./checkpoints/microsam-mn-{initial_model}/best.pt",
         segmentation_mode=mode,
         is_tiled=True,
     )
 
     # Iterate over each image.
     fpaths = get_mndino_paths(path=os.path.join(ROOT, "mndino_data"), split="test")
-    for i, curr_fpath in tqdm(enumerate(fpaths)):
+    for i, curr_fpath in tqdm(enumerate(fpaths), total=len(fpaths)):
         # Get the raw image and corresponding micronuclei annotations.
         f = open_file(curr_fpath, "r")
         raw = f["raw"][:]
@@ -111,39 +108,62 @@ def run_finetuned_model(view=False):
         # Store the new predictions in an exclusive path.
         with h5py.File(f"mnseg_{i}.h5", "a") as f:
             if "raw" not in f:
-                f.create_dataset("raw", raw, compression="gzip")
+                f.create_dataset("raw", data=raw, compression="gzip")
             if "labels" not in f:
-                f.create_dataset("labels", labels, compression="gzip")
+                f.create_dataset("labels", data=labels, compression="gzip")
 
-            f.create_dataset(f"predictions/{mode}/finetuned_{inital_model}", instances, compression="gzip")
+            f.create_dataset(f"predictions/{mode}/finetuned_{initial_model}", data=instances, compression="gzip")
 
 
-def evaluate_predictions():
+def evaluate_predictions(view=False):
     fpaths = natsorted(glob("mnseg_*.h5"))
 
-    running_msa = []
+    running_msa_default, running_msa_finetuned1, running_msa_finetuned2 = [], [], []
     for curr_fpath in tqdm(fpaths):
         # Get the raw image and corresponding micronuclei annotations.
         f = open_file(curr_fpath, "r")
         raw = f["raw"][:]
         labels = f["labels"][:]
+        pred_default = f["predictions/ais/default_vit_b_lm"][:]
+        pred_finetuned1 = f["predictions/ais/finetuned_vit_b"][:]
+        pred_finetuned2 = f["predictions/ais/finetuned_vit_b_lm"][:]
 
-        breakpoint()
-
-        # Let's filter out big nuclei and only stick to micronuclei.
+        # Let's filter out big nuclei and only stick to micronuclei (but do this only in the default model).
         area_threshold = 300  # NOTE: As used in the experiments.
-        instances = inverse_size_filter(seg=instances, max_size=area_threshold)
 
         # And evaluate the results.
-        running_msa.append(mean_segmentation_accuracy(instances, labels))
+        running_msa_default.append(
+            mean_segmentation_accuracy(inverse_size_filter(seg=pred_default, max_size=area_threshold), labels)
+        )
+        running_msa_finetuned1.append(mean_segmentation_accuracy(pred_finetuned1, labels))
+        running_msa_finetuned2.append(mean_segmentation_accuracy(pred_finetuned2, labels))
 
-    # Calculate the average mSA
-    mean_msa = np.mean(running_msa)
-    print(mean_msa)
+        if view:
+            import napari
+            v = napari.Viewer()
+            v.add_image(raw)
+            v.add_labels(labels)
+            v.add_labels(pred_default, "predictions/default")
+            v.add_labels(pred_finetuned1, "predictions/finetuned_vit_b")
+            v.add_labels(pred_finetuned2, "predictions/finetuned_vit_b_lm")
+
+    # Calculate the average mSA per setup.
+    msa_default = np.mean(running_msa_default)
+    msa_finetuned1 = np.mean(running_msa_finetuned1)
+    msa_finetuned2 = np.mean(running_msa_finetuned2)
+    print(msa_default, msa_finetuned1, msa_finetuned2)
 
 
 def main():
-    run_default_model(view=False)
+    # Run the default models
+    # run_default_model("ais")
+
+    # Run the finetuned models
+    # run_finetuned_model("vit_b", "ais")
+    # run_finetuned_model("vit_b_lm", "ais")
+
+    # Evaluate predictions
+    evaluate_predictions(view=True)
 
 
 if __name__ == "__main__":

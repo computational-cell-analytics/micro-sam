@@ -250,7 +250,9 @@ def automatic_instance_segmentation(
         # If we run AIS with tiling then we use the same tile shape for the watershed postprocessing.
         # In this case, we also add the batch size to the initialize kwargs,
         # so that the segmentation decoder can be applied in a batched fashion.
-        if isinstance(segmenter, InstanceSegmentationWithDecoder) and tile_shape is not None:
+        if tile_shape is not None and type(segmenter) in (
+            InstanceSegmentationWithDecoder, TiledInstanceSegmentationWithDecoder
+        ):
             generate_kwargs.update({"tile_shape": tile_shape, "halo": halo})
             initialize_kwargs["batch_size"] = batch_size
 
