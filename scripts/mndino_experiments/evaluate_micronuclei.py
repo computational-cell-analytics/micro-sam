@@ -1,6 +1,9 @@
 import os
 from tqdm import tqdm
+from glob import glob
+from natsort import natsorted
 
+import h5py
 import numpy as np
 
 from elf.io import open_file
@@ -27,20 +30,18 @@ def inverse_size_filter(seg: np.ndarray, max_size: int):
     return out
 
 
-def evaluate_default_model(view=False):
+def run_default_model(view=False):
     # Evaluates the OG MicroSAM LM Generalist model.
 
     # Load the MicroSAM model.
+    mode = "ais"
     predictor, segmenter = get_predictor_and_segmenter(
-        model_type="vit_b_lm", segmentation_mode="ais", is_tiled=True,
+        model_type="vit_b_lm", segmentation_mode=mode, is_tiled=True,
     )
 
     # Iterate over each image.
-    fpaths = get_mndino_paths(path=os.path.join(ROOT, "mndino_data"), split="test")
-
-    running_msa = []
-    for curr_fpath in tqdm(fpaths):
-
+    fpaths = get_mndino_paths(path=os.path.join(ROOT, "mndino_data"), split="test", download=True)
+    for i, curr_fpath in tqdm(enumerate(fpaths)):
         # Get the raw image and corresponding micronuclei annotations.
         f = open_file(curr_fpath, "r")
         raw = f["raw"][:]
@@ -61,43 +62,32 @@ def evaluate_default_model(view=False):
             verbose=False,
         )
 
-        # Let's filter out big nuclei and only stick to micronuclei.
-        area_threshold = 300  # NOTE: As used in the experiments.
-        instances = inverse_size_filter(seg=instances, max_size=area_threshold)
+        # Store all stuff in an exclusive path.
+        with h5py.File(f"mnseg_{i}.h5", "a") as f:
+            if "raw" not in f:
+                f.create_dataset("raw", raw, compression="gzip")
+            if "labels" not in f:
+                f.create_dataset("labels", labels, compression="gzip")
 
-        if view:
-            import napari
-            v = napari.Viewer()
-            v.add_image(raw)
-            v.add_labels(labels)
-            v.add_labels(instances)
-            napari.run()
-
-        # And evaluate the results.
-        running_msa.append(mean_segmentation_accuracy(instances, labels))
-
-    # Calculate the average mSA
-    mean_msa = np.mean(running_msa)
-    print(mean_msa)
+            f.create_dataset(f"predictions/{mode}/vit_b_lm", instances, compression="gzip")
 
 
-def evaluate_finetuned_model(view=False):
+def run_finetuned_model(view=False):
     # Evaluates the finetuned models (starting either 'vit_b' or 'vit_b_lm').
+    inital_model = "vit_b"
 
     # Load the MicroSAM model.
+    mode = "ais"
     predictor, segmenter = get_predictor_and_segmenter(
         model_type="vit_b",
-        checkpoint="./checkpoints/microsam-mn-vit_b/best.pt"
-        segmentation_mode="ais",
+        checkpoint=f"./checkpoints/microsam-mn-{inital_model}/best.pt",
+        segmentation_mode=mode,
         is_tiled=True,
     )
 
     # Iterate over each image.
     fpaths = get_mndino_paths(path=os.path.join(ROOT, "mndino_data"), split="test")
-
-    running_msa = []
-    for curr_fpath in tqdm(fpaths):
-
+    for i, curr_fpath in tqdm(enumerate(fpaths)):
         # Get the raw image and corresponding micronuclei annotations.
         f = open_file(curr_fpath, "r")
         raw = f["raw"][:]
@@ -118,17 +108,31 @@ def evaluate_finetuned_model(view=False):
             verbose=False,
         )
 
+        # Store the new predictions in an exclusive path.
+        with h5py.File(f"mnseg_{i}.h5", "a") as f:
+            if "raw" not in f:
+                f.create_dataset("raw", raw, compression="gzip")
+            if "labels" not in f:
+                f.create_dataset("labels", labels, compression="gzip")
+
+            f.create_dataset(f"predictions/{mode}/finetuned_{inital_model}", instances, compression="gzip")
+
+
+def evaluate_predictions():
+    fpaths = natsorted(glob("mnseg_*.h5"))
+
+    running_msa = []
+    for curr_fpath in tqdm(fpaths):
+        # Get the raw image and corresponding micronuclei annotations.
+        f = open_file(curr_fpath, "r")
+        raw = f["raw"][:]
+        labels = f["labels"][:]
+
+        breakpoint()
+
         # Let's filter out big nuclei and only stick to micronuclei.
         area_threshold = 300  # NOTE: As used in the experiments.
         instances = inverse_size_filter(seg=instances, max_size=area_threshold)
-
-        if view:
-            import napari
-            v = napari.Viewer()
-            v.add_image(raw)
-            v.add_labels(labels)
-            v.add_labels(instances)
-            napari.run()
 
         # And evaluate the results.
         running_msa.append(mean_segmentation_accuracy(instances, labels))
@@ -139,7 +143,7 @@ def evaluate_finetuned_model(view=False):
 
 
 def main():
-    evaluate_default_model()
+    run_default_model(view=False)
 
 
 if __name__ == "__main__":
