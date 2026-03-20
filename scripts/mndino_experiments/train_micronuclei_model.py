@@ -55,7 +55,7 @@ def run_mndino_training(model_type):
         model_type=model_type,
         train_loader=train_loader,
         val_loader=val_loader,
-        n_epochs=100,
+        n_epochs=25,
         early_stopping=None,
         n_objects_per_batch=n_objects_per_batch,
         with_segmentation_decoder=True,
@@ -65,7 +65,7 @@ def run_mndino_training(model_type):
 
 def main():
     # One could choose to finetune either `vit_b` / `vit_b_lm`.
-    model_type = "vit_b_lm"
+    model_type = "vit_b"
 
     run_mndino_training(model_type)
 
