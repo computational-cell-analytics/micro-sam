@@ -81,7 +81,7 @@ def _initialize_parser(description, with_segmentation_result=True, with_instance
     )
     parser.add_argument(
         "-c", "--checkpoint", default=None,
-        help="Checkpoint from which the SAM model will be loaded loaded."
+        help="Checkpoint from which the SAM model will be loaded."
     )
     parser.add_argument(
         "--decoder_path", default=None,

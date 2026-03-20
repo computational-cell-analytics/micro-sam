@@ -424,7 +424,7 @@ class AutomaticMaskGenerator(AMGBase):
             verbose: Whether to print computation progress. By default, set to 'False'.
             pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
                 Can be used together with pbar_update to handle napari progress bar in other thread.
-                To enables using this function within a threadworker.
+                To enable using this function within a threadworker.
             pbar_update: Callback to update an external progress bar.
         """
         original_size = image.shape[:2]
@@ -627,7 +627,7 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
             verbose: Whether to print computation progress. By default, set to 'False'.
             pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
                 Can be used together with pbar_update to handle napari progress bar in other thread.
-                To enables using this function within a threadworker.
+                To enable using this function within a threadworker.
             pbar_update: Callback to update an external progress bar.
             batch_size: The batch size for image embedding prediction. By default, set to '1'.
             mask: An optional mask to define areas that are ignored in the segmentation.
@@ -1008,7 +1008,7 @@ class InstanceSegmentationWithDecoder:
             verbose: Whether to be verbose. By default, set to 'False'.
             pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
                 Can be used together with pbar_update to handle napari progress bar in other thread.
-                To enables using this function within a threadworker.
+                To enable using this function within a threadworker.
             pbar_update: Callback to update an external progress bar.
             ndim: The dimensionality of the data. If not given will be deduced from the input data. By default, 2.
         """
@@ -1253,7 +1253,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
             verbose: Dummy input to be compatible with other function signatures. By default, set to 'False'.
             pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
                 Can be used together with pbar_update to handle napari progress bar in other thread.
-                To enables using this function within a threadworker.
+                To enable using this function within a threadworker.
             pbar_update: Callback to update an external progress bar.
             batch_size: The batch size for image embedding computation and segmentation decoder prediction.
             mask: An optional mask to define areas that are ignored in the segmentation.

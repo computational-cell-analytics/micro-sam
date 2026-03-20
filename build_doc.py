@@ -14,7 +14,7 @@ def check_docs_completeness():
     import micro_sam
 
     # We don't search in subfolders anymore, to allow putting additional documentation
-    # (e.g. for bioimage.io mdoels) that should not be included in the main documentation here.
+    # (e.g. for bioimage.io models) that should not be included in the main documentation here.
     markdown_doc_files = glob.glob("doc/*.md", recursive=True)
     rst_doc_files = glob.glob("doc/*.rst", recursive=True)
     all_doc_files = markdown_doc_files + rst_doc_files

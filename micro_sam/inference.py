@@ -412,7 +412,7 @@ def batched_tiled_inference(
         i: Index for the image data. Required if `image` has three spatial dimensions
             or a time dimension and two spatial dimensions.
         nms_kwargs: Keyword arguments for the NMS operations that is used for optimize_memory=True.
-            Does not have any effcet for optimize_memory=False.
+            Does not have any effect for optimize_memory=False.
 
     Returns:
         The predicted segmentation masks.

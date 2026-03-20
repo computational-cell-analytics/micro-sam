@@ -160,7 +160,7 @@ def image_series_annotator(
             If given, the initial segmentations will be loaded into 'committed_objects'.
         tile_shape: Shape of tiles for tiled embedding prediction.
             If `None` then the whole image is passed to Segment Anything.
-        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
+        halo: Shape of the overlap between tiles, which is needed to segment objects on tile borders.
         viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
@@ -554,7 +554,7 @@ def main():
     )
     parser.add_argument(
         "-c", "--checkpoint", default=None,
-        help="Checkpoint from which the SAM model will be loaded loaded."
+        help="Checkpoint from which the SAM model will be loaded."
     )
     parser.add_argument(
         "-d", "--device", default=None,

@@ -78,7 +78,7 @@ def upload_segmentation(conn, args):
 def main():
     parser = omero_credential_parser()
     parser.add_argument("-i", "--input", required=True)
-    # If this is activated then we upload the annotations as a binary mask instead of as polygon (the defaulto)
+    # If this is activated then we upload the annotations as a binary mask instead of as polygon (the default)
     # Note: this does not yet work due to a possible bug in omero-py
     parser.add_argument("--as_mask", action="store_true")
     args = parser.parse_args()
