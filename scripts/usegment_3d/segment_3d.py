@@ -1,3 +1,4 @@
+import logging
 from tqdm import tqdm
 from functools import partial
 
@@ -5,6 +6,13 @@ import numpy as np
 
 import segment3D.usegment3d as uSegment3D
 import segment3D.parameters as uSegment3D_params
+
+
+# Suppress noisy Dask distributed worker/nanny startup logs.
+for _logger in (
+    "distributed", "distributed.nanny", "distributed.worker", "distributed.scheduler", "distributed.core"
+):
+    logging.getLogger(_logger).setLevel(logging.WARNING)
 
 
 def run_usegment3d_with_microsam(volume):
@@ -25,14 +33,16 @@ def run_usegment3d_with_microsam(volume):
     instances_xz = np.stack(
         [seg_runner(input_path=curr_slice) for curr_slice in tqdm(volume.transpose(1, 0, 2), desc="xz")]
     )
-    # skip 'yz' for now
-    instances_yz = []
+    instances_yz = np.stack(
+        [seg_runner(input_path=curr_slice) for curr_slice in tqdm(volume.transpose(1, 2, 0), desc="yz")]
+    )
 
     # Get the default parameters first.
     params = uSegment3D_params.get_2D_to_3D_aggregation_params()
 
     # The available choices are "cellpose_improve", "fmm", "cellpose_skel", "fmm_skel", "edt".
     params["indirect_method"]["dtform_method"] = "cellpose_improve"
+    params["indirect_method"]["n_cpu"] = 4  # default spawns (cpu_count-1)//2 dask workers
 
     # Run the uSegment3d's 'indirect' method for the most amount of flexibility.
     segmentation_3d, _ = uSegment3D.aggregate_2D_to_3D_segmentation_indirect_method(
@@ -54,7 +64,7 @@ def run_usegment3d_with_microsam(volume):
 def main():
     # Let's work with the 'cell3d' example data in scikit-image.
     from skimage.data import cells3d
-    volume = cells3d()[:, 0]  # input has shape of (60, 256, 256).
+    volume = cells3d()[:, 1]  # input has shape of (60, 256, 256).
     run_usegment3d_with_microsam(volume)
 
 
