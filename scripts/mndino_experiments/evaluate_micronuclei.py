@@ -57,8 +57,8 @@ def run_default_model(mode):
             segmenter=segmenter,
             input_path=raw,
             ndim=2,
-            tile_shape=(384, 384),
-            halo=(64, 64),
+            tile_shape=(64, 64),
+            halo=(32, 32),
             verbose=False,
         )
 
@@ -101,8 +101,8 @@ def run_finetuned_model(initial_model, mode):
             segmenter=segmenter,
             input_path=raw,
             ndim=2,
-            tile_shape=(384, 384),
-            halo=(64, 64),
+            tile_shape=(64, 64),
+            halo=(32, 32),
             verbose=False,
         )
 
@@ -140,10 +140,16 @@ def evaluate_predictions(view=False):
 
         # And evaluate the results.
         running_msa_default.append(
-            mean_segmentation_accuracy(inverse_size_filter(seg=pred_default, max_size=area_threshold), labels)
+            mean_segmentation_accuracy(
+                inverse_size_filter(seg=pred_default, max_size=area_threshold), labels, return_accuracies=True
+            )[-1][0]
         )
-        running_msa_finetuned1.append(mean_segmentation_accuracy(pred_finetuned1, labels))
-        running_msa_finetuned2.append(mean_segmentation_accuracy(pred_finetuned2, labels))
+        running_msa_finetuned1.append(
+            mean_segmentation_accuracy(pred_finetuned1, labels, return_accuracies=True)[-1][0]
+        )
+        running_msa_finetuned2.append(
+            mean_segmentation_accuracy(pred_finetuned2, labels, return_accuracies=True)[-1][0]
+        )
 
         if view:
             import napari
@@ -163,12 +169,12 @@ def evaluate_predictions(view=False):
 
 
 def main():
-    # Run the default models
-    run_default_model("ais")
+    # # Run the default models
+    # run_default_model("ais")
 
-    # Run the finetuned models
-    run_finetuned_model("vit_b", "ais")
-    run_finetuned_model("vit_b_lm", "ais")
+    # # Run the finetuned models
+    # run_finetuned_model("vit_b", "ais")
+    # run_finetuned_model("vit_b_lm", "ais")
 
     # Evaluate predictions
     evaluate_predictions(False)

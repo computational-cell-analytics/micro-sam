@@ -26,7 +26,7 @@ def get_dataloader(split):
     loader = get_mndino_loader(
         path=os.path.join(ROOT, "mndino_data"),
         batch_size=1,
-        patch_shape=(256, 256),
+        patch_shape=(128, 128),
         num_workers=16,
         shuffle=True,
         split=split,
@@ -35,6 +35,7 @@ def get_dataloader(split):
         download=True,
         label_transform=label_transform,
         sampler=MinInstanceSampler(),
+        n_samples=1000,
     )
 
     return loader
@@ -65,7 +66,7 @@ def run_mndino_training(model_type):
 
 def main():
     # One could choose to finetune either `vit_b` / `vit_b_lm`.
-    model_type = "vit_b"
+    model_type = "vit_b_lm"
 
     run_mndino_training(model_type)
 
