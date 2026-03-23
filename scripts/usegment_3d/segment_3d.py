@@ -34,12 +34,6 @@ def run_usegment3d_with_microsam(volume):
     # The available choices are "cellpose_improve", "fmm", "cellpose_skel", "fmm_skel", "edt".
     params["indirect_method"]["dtform_method"] = "cellpose_improve"
 
-    # And a few other parameters.
-    params["indirect_method"]["dtform_method"] = "cellpose_improve"
-    params["gradient_descent"]["gradient_decay"] = None
-    params["indirect_method"]["smooth_skel_sigma"] = None
-    params["indirect_method"]["edt_fixed_point_percentile"] = None
-
     # Run the uSegment3d's 'indirect' method for the most amount of flexibility.
     segmentation_3d, _ = uSegment3D.aggregate_2D_to_3D_segmentation_indirect_method(
         segmentations=[instances_xy, instances_xz, instances_yz],
