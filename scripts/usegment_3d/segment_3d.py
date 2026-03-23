@@ -31,6 +31,7 @@ def run_microsam3d(volume, labels=None, save_path="test.h5"):
 
 def run_usegment3d_with_microsam(volume, labels=None, save_path="test.h5"):
     # Run MicroSAM on 3d volume along all three directions.
+    # NOTE: Install uSegment3D using `pip install u-Segment3D`.
     import segment3D.usegment3d as uSegment3D
     import segment3D.parameters as uSegment3D_params
 
@@ -112,8 +113,8 @@ def main():
     # Run / evaluate segmentation models.
     save_path = "embedseg_mouse_skull_nuclei.h5"
 
-    # run_usegment3d_with_microsam(volume, labels, save_path)
-    # run_microsam3d(volume, labels, save_path)
+    run_usegment3d_with_microsam(volume, labels, save_path)
+    run_microsam3d(volume, labels, save_path)
 
     # Observations on Mouse-Skull-Nuclei-CBG data:
     # MicroSAM3d: 0.359 | MicroSAM2d + uSegment3d: 0.479
