@@ -333,7 +333,7 @@ def merge_instance_segmentation_3d(
         verbose: Verbosity flag. By default, set to 'True'.
         pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
             Can be used together with pbar_update to handle napari progress bar in other thread.
-            To enables using this function within a threadworker.
+            To enable using this function within a threadworker.
         pbar_update: Callback to update an external progress bar.
 
     Returns:
@@ -582,7 +582,7 @@ def _tracking_impl(timeseries, segmentation, mode, min_time_extent, output_folde
         raise NotImplementedError
 
     # Filter out pruned lineages.
-    # Mmay either be missing due to track filtering or non-consectutive track numbering in trackastra.
+    # May either be missing due to track filtering or non-consecutive track numbering in trackastra.
     lineages = _filter_lineages(lineages, tracking_result)
 
     return tracking_result, lineages

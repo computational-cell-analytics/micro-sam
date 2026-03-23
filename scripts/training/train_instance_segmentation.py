@@ -2,7 +2,7 @@
 """
 import os
 
-# This function downloads the DSB dataset, which we use as exaple data for this script.
+# This function downloads the DSB dataset, which we use as example data for this script.
 # You can use any other data with images and associated label masks for training,
 # for example images and label masks stored in a .tif format.
 from torch_em.data.datasets.light_microscopy.dsb import get_dsb_paths

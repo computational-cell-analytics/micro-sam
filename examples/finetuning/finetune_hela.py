@@ -19,7 +19,7 @@ def get_dataloader(split, patch_shape, batch_size, train_instance_segmentation):
     where `x` is the image data and `y` are the labels.
     The labels have to be in a label mask instance segmentation format.
     i.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
-    Important: the ID 0 is reseved for background, and the IDs must be consecutive
+    Important: the ID 0 is reserved for background, and the IDs must be consecutive
 
     Here, we use `torch_em.default_segmentation_loader` for creating a suitable data loader from
     the example hela data. You can either adapt this for your own data (see comments below)

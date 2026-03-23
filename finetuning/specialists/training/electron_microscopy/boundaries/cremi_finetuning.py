@@ -30,7 +30,7 @@ def get_dataloaders(patch_shape, data_path, cell_type=None):
     that retuns `x, y` tensors, where `x` is the image data and `y` are the labels.
     The labels have to be in a label mask instance segmentation format.
     I.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
-    Important: the ID 0 is reseved for background, and the IDs must be consecutive
+    Important: the ID 0 is reserved for background, and the IDs must be consecutive
     """
     _check_dataset_available_for_rois(data_path, patch_shape)
 
