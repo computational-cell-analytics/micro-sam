@@ -76,7 +76,7 @@ def _local_otsu_threshold(images: torch.Tensor, window_size: int = 31, num_bins:
     # Work in float32 for stability even if input is fp16
     x = x.to(torch.float32)
 
-    # --- per-image min/max for normalization to [0, 1] ---
+    # per-image min/max for normalization to [0, 1]
     x_flat = x.view(B, -1)
     x_min = x_flat.min(dim=1).values.view(B, 1, 1, 1)
     x_max = x_flat.max(dim=1).values.view(B, 1, 1, 1)
@@ -84,16 +84,16 @@ def _local_otsu_threshold(images: torch.Tensor, window_size: int = 31, num_bins:
 
     x_norm = (x - x_min) / x_range  # (B,1,H,W), in [0,1]
 
-    # --- extract local patches via unfold ---
+    # extract local patches via unfold
     pad = window_size // 2
     patches = F.unfold(x_norm, kernel_size=window_size, padding=pad)  # (B, P, L)
     # P = window_size * window_size, L = H * W
     B_, P, L = patches.shape
 
-    # --- quantize to bins ---
+    # quantize to bins
     bin_idx = (patches * (num_bins - 1)).long().clamp(0, num_bins - 1)  # (B, P, L)
 
-    # --- build histograms per patch ---
+    # build histograms per patch
     # one_hot: (B, L, num_bins)
     one_hot = torch.zeros(B, L, num_bins, device=device, dtype=torch.float32)
     idx = bin_idx.transpose(1, 2)  # (B, L, P)
@@ -102,15 +102,15 @@ def _local_otsu_threshold(images: torch.Tensor, window_size: int = 31, num_bins:
     # hist: (B, num_bins, L)
     hist = one_hot.permute(0, 2, 1)
 
-    # --- Otsu per patch (vectorized) ---
+    # Otsu per patch (vectorized)
     # p: (B, bins, L)
     p = hist / hist.sum(dim=1, keepdim=True).clamp_min(eps)
 
     bins = torch.arange(num_bins, device=device, dtype=torch.float32).view(1, num_bins, 1)
 
-    omega1 = torch.cumsum(p, dim=1)              # (B, bins, L)
-    mu = torch.cumsum(p * bins, dim=1)           # (B, bins, L)
-    mu_T = mu[:, -1:, :]                         # (B, 1, L)
+    omega1 = torch.cumsum(p, dim=1)  # (B, bins, L)
+    mu = torch.cumsum(p * bins, dim=1)  # (B, bins, L)
+    mu_T = mu[:, -1:, :]  # (B, 1, L)
 
     omega2 = 1.0 - omega1
 
@@ -120,10 +120,10 @@ def _local_otsu_threshold(images: torch.Tensor, window_size: int = 31, num_bins:
     sigma_b2 = omega1 * omega2 * (mu1 - mu2) ** 2  # (B, bins, L)
 
     # argmax over bins gives local threshold bin per patch
-    t_bin = torch.argmax(sigma_b2, dim=1)        # (B, L)
+    t_bin = torch.argmax(sigma_b2, dim=1)  # (B, L)
     t_norm = t_bin.to(torch.float32) / (num_bins - 1)  # normalized [0,1]
 
-    # --- map thresholds back to original intensity scale (per-image) ---
+    # map thresholds back to original intensity scale (per-image)
     # x_min, x_range: (B,1,1,1) -> flatten batch dims
     thr_vals = x_min.view(B, 1) + t_norm * x_range.view(B, 1)  # (B, L)
     # clamp to >= 0 because foreground is positive
