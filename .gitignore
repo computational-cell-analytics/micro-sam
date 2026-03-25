@@ -202,3 +202,4 @@ clf-test-data
 data/
 embeddings/
 *.zarr
+*.h5
