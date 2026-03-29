@@ -12,7 +12,7 @@ from skimage.measure import label
 
 class TestInstanceSegmentation(unittest.TestCase):
     model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"
-    model_type_ais = "vit_t_lm"
+    model_type_ais = "vit_t_lm" if util.VIT_T_SUPPORT else "vit_b_lm"
     tile_shape = (512, 512)
     halo = (96, 96)
 
