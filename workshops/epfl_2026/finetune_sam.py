@@ -1,237 +1,132 @@
 """Finetuning Segment Anything using 'µsam'.
 
-This python script shows how to use Segment Anything for Microscopy to fine-tune a Segment Anything Model (SAM)
-on open-source microscopy images with multiple channels.
+This python script shows how to use µsam to fine-tune (improve) for a specific segmentation task.
+Note: You need a GPU to fine-tune a model in reasonable time.
 
-We use confocal microscopy images from the HPA Kaggle Challenge for protein identification
-(from Ouyang et al. - https://doi.org/10.1038/s41592-019-0658-6) in this script for the cell segmentation task.
-The functionalities shown here should work for your (microscopy) images too.
+Here, we use confocal microscopy images from the HPA Kaggle Challenge for protein identification
+(from Ouyang et al. - https://doi.org/10.1038/s41592-019-0658-6).
+This example should work for your (microscopy) images with a few minor adaptations.
+
+Note that finetuning requires annotated images. This means that images and the corresponding segmentation masks
+are needed. Check out the examples from the HPA data in 'data/hpa/train/images' and 'data/hpa/train/labels' if
+you are unsure about the exact format.
 """
 
 import os
-from typing import Union, Tuple, Literal, Optional, List
+from glob import glob
 
 import imageio.v3 as imageio
-from matplotlib import pyplot as plt
-from skimage.measure import label as connected_components
-
-import torch
-from torch.utils.data import DataLoader
 
 from torch_em.util.debug import check_loader
 from torch_em.util.util import get_random_colors
 
-from micro_sam import util
 import micro_sam.training as sam_training
 from micro_sam.training.util import normalize_to_8bit
 from micro_sam.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
 
-from download_datasets import _get_hpa_data_paths
 
+def load_images_and_labels(folder, view):
+    images, labels = [], []
+    image_paths = sorted(glob(os.path.join(folder, "images", "*.tif")))
+    label_paths = sorted(glob(os.path.join(folder, "labels", "*.tif")))
+    assert len(image_paths) == len(label_paths)
 
-def download_dataset(
-    path: Union[os.PathLike, str], split: Literal['train', 'val', 'test'], download: bool = True,
-) -> Tuple[List[str], List[str]]:
-    """Download the HPA dataset.
-
-    This functionality downloads the images and corresponding labels stored as `tif` files.
-
-    Args:
-        path: Filepath to the directory where the data will be stored.
-        split: The choice of data split. Either 'train', 'val' or 'test'.
-        download: Whether to download the dataset.
-
-    Returns:
-        List of filepaths for the image data.
-        List of filepaths for the label data.
-    """
-    image_paths, label_paths = _get_hpa_data_paths(path=path, split=split, download=download)
-    return image_paths, label_paths
-
-
-def verify_inputs(image_paths: List[str], label_paths: List[str]):
-    """Verify the downloaded inputs and understand the inputs' data structure.
-
-    Args:
-        image_paths: List of filepaths for the image data.
-        label_paths: List of filepaths for the label data.
-    """
-    for image_path, label_path in zip(image_paths, label_paths):
+    for i, (image_path, label_path) in enumerate(zip(image_paths, label_paths)):
         image = imageio.imread(image_path)
-        labels = imageio.imread(label_path)
-
-        # The images should be of shape: H, W, 4 -> where, 4 is the number of channels.
-        if (image.ndim == 3 and image.shape[-1] == 3) or image.ndim == 2:
-            print(f"Inputs '{image.shape}' match the channel expectations.")
-        else:
-            print(f"Inputs '{image.shape}' must match the channel expectations (of either one or three channels).")
-
-        # The labels should be of shape: H, W
-        print(f"Shape of corresponding labels: '{labels.shape}'")
-
-        break  # comment this line out in case you would like to verify the shapes for all inputs.
-
-
-def preprocess_inputs(image_paths: List[str]):
-    """Preprocess the input images.
-
-    NOTE: For this part, we choose to keep `microtubules`, `proten` and `nuclei` channels as the first,
-    second and third channels respectively for finetuning Segment Anything.
-
-    Args:
-        image_paths: List of filepaths for the image data.
-    """
-    # We remove the 'er' channel, i.e. the last channel.
-    for image_path in image_paths:
-        image = imageio.imread(image_path)
-
+        label = imageio.imread(label_path)
+        # We remove the 'er' channel, i.e. the last channel.
         if image.ndim == 3 and image.shape[-1] == 4:  # Convert 4 channel inputs to 3 channels.
             image = image[..., :-1]
-            imageio.imwrite(image_path, image)
+
+        # Check out the first 5 images if view was set to true.
+        if view and i < 5:
+            import napari
+
+            v = napari.Viewer()
+            v.add_image(image)
+            v.add_labels(label)
+            napari.run()
+
+        # And we move the channel into the first position, which is expected by pytorch
+        image = image.transpose((2, 0, 1))
+        images.append(image)
+        labels.append(label)
+
+    return images, labels
 
 
-def visualize_inputs(image_paths: List[str], label_paths: List[str]):
-    """Visualize the images and corresponding labels.
+def get_dataloaders(input_root, view):
+    """Create the data loaders for processing and feeding the training data.
 
-    Args:
-        image_paths: List of filepaths for the image data.
-        label_paths: List of filepaths for the label data.
+    Note: The values here are optimized for the HPA dataset.
+    The places where you should change this for your data are marked with a comment: 'CHANGE'.
     """
-    for image_path, label_path in zip(image_paths, label_paths):
-        image = imageio.imread(image_path)
-        labels = imageio.imread(label_path)
+    # CHANGE: For your own data you have to adapt these folder names.
+    train_folder = os.path.join(input_root, "hpa/train")
+    val_folder = os.path.join(input_root, "hpa/val")
 
-        fig, ax = plt.subplots(1, 2, figsize=(10, 10))
-        ax[0].imshow(image, cmap="gray")
-        ax[0].set_title("Input Image")
-        ax[0].axis("off")
+    train_images, train_labels = load_images_and_labels(train_folder, view=view)
+    val_images, val_labels = load_images_and_labels(val_folder, view=view)
 
-        labels = connected_components(labels)
-        ax[1].imshow(labels, cmap=get_random_colors(labels), interpolation="nearest")
-        ax[1].set_title("Ground Truth Instances")
-        ax[1].axis("off")
+    # CHANGE: The batch size determines how many images are used for one batch during training.
+    # You can usually leave this at 1, but if you have a powerful GPU may set it to 2.
+    batch_size = 1
+    # CHANGE: This is the size of one patch used for training. It should be chose such that several cells
+    # are visible within a typical patch of this size.
+    # We usually recommend to go with 512 x 512.
+    patch_shape = (1024, 1024)
 
-        plt.show()
-        plt.close()
-
-        break  # comment this out in case you want to visualize all the images
-
-
-def get_dataloaders(
-    train_image_paths: List[str],
-    train_label_paths: List[str],
-    val_image_paths: List[str],
-    val_label_paths: List[str],
-    view: bool,
-    train_instance_segmentation: bool,
-) -> Tuple[DataLoader, DataLoader]:
-    """Get the HPA dataloaders for cell segmentation.
-
-    NOTE: `micro_sam.training.default_sam_loader` is a convenience function to build a torch dataloader
-    from the image data and labels for training segmentation models.
-    This is wrapped around the `torch_em.default_segmentation_loader`.
-    It suppoirts image data in various formats. Here, we load image data and corresponding labels by providing
-    filepaths to the respective tif files that were downloaded and preprocessed using the functionality above.
-
-    For more information, here is the documentation:
-    https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/README.md
-
-    Here is a detailed notebook on finetuning Segment Anything:
-    https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb
-
-    Args:
-        train_image_paths: List of filepaths for the training image data.
-        train_label_paths: List of filepaths for the training label data.
-        val_image_paths: List of filepaths for the validation image data.
-        val_label_paths: List of filepaths for the validation label data.
-        view: Whether to view the samples out of training dataloader.
-        train_instance_segmentation: Whether to finetune SAM with additional instance segmentation decoder.
-
-    Returns:
-        The PyTorch DataLoader for training.
-        The PyTorch DataLoader for validation.
-    """
-    # Load images from tif stacks by setting `raw_key` and `label_key` to None.
-    raw_key, label_key = None, None
-
-    batch_size = 1  # the training batch size
-    patch_shape = (1024, 1024)  # the size of patches for training
-
-    # The dataloader internally takes care of adding label transforms: i.e. used to convert the ground-truth
-    # labels to the desired instances for finetuning Segment Anythhing, or, to learn the foreground and distances
-    # to the object centers and object boundaries for automatic segmentation.
-
+    # The data loaders take care of all the data loading and pre-processing.
     train_loader = sam_training.default_sam_loader(
-        raw_paths=train_image_paths,
-        raw_key=raw_key,
-        label_paths=train_label_paths,
-        label_key=label_key,
-        is_seg_dataset=False,
+        raw_paths=train_images,
+        raw_key=None,
+        label_paths=train_labels,
+        label_key=None,
         patch_shape=patch_shape,
         with_channels=True,
-        with_segmentation_decoder=train_instance_segmentation,
+        with_segmentation_decoder=True,
         batch_size=batch_size,
         shuffle=True,
         raw_transform=normalize_to_8bit,
         n_samples=100,
     )
-
     val_loader = sam_training.default_sam_loader(
-        raw_paths=val_image_paths,
-        raw_key=raw_key,
-        label_paths=val_label_paths,
-        label_key=label_key,
+        raw_paths=val_images,
+        raw_key=None,
+        label_paths=val_labels,
+        label_key=None,
         is_seg_dataset=False,
         patch_shape=patch_shape,
         with_channels=True,
-        with_segmentation_decoder=train_instance_segmentation,
+        with_segmentation_decoder=True,
         batch_size=batch_size,
         shuffle=True,
         raw_transform=normalize_to_8bit,
+        n_samples=10,
     )
 
     if view:
         # Let's check how our samples look from the dataloader.
-        check_loader(train_loader, 4, plt=True)
+        check_loader(train_loader, 4)
 
     return train_loader, val_loader
 
 
-def run_finetuning(
-    train_loader: DataLoader,
-    val_loader: DataLoader,
-    save_root: Optional[Union[os.PathLike, str]],
-    train_instance_segmentation: bool,
-    device: Union[torch.device, str],
-    model_type: str,
-    overwrite: bool,
-) -> str:
+def run_finetuning(model_name, train_loader, val_loader, model_type, overwrite, n_epochs):
     """Run finetuning for the Segment Anything model on microscopy images.
 
     Args:
         train_loader: The PyTorch dataloader used for training.
         val_loader: The PyTorch dataloader used for validation.
-        save_root: The filepath to the folder where the model checkpoints and tensorboard logs are stored.
-        train_instance_segmentation: Whether to finetune SAM with additional instance segmentation decoder.
-        device: The torch device.
         model_type: The choice of Segment Anything model (connotated by the size of image encoder).
         overwrite: Whether to overwrite the already finetuned model checkpoints.
+        n_epochs: The maximal number of epochs to train for.
 
     Returns:
         Filepath where the (best) model checkpoint is stored.
     """
-    # All hyperparameters for training.
-    n_objects_per_batch = 5  # the number of objects per batch that will be sampled
-    n_epochs = 5  # how long we train (in epochs)
-
-    # The name of the checkpoint. The checkpoints will be stored in './checkpoints/<checkpoint_name>'
-    checkpoint_name = "sam_hpa"
-
-    # Let's spot our best checkpoint and run inference for automatic instance segmentation.
-    if save_root is None:
-        save_root = os.getcwd()
-
-    best_checkpoint = os.path.join(save_root, "checkpoints", checkpoint_name, "best.pt")
+    save_root = os.getcwd()
+    best_checkpoint = os.path.join(save_root, "checkpoints", model_name, "best.pt")
     if os.path.exists(best_checkpoint) and not overwrite:
         print(
             "It looks like the training has completed. You must pass the argument '--overwrite' to overwrite "
@@ -240,24 +135,21 @@ def run_finetuning(
         return best_checkpoint
 
     # Run training
-    sam_training.train_sam(
-        name=checkpoint_name,
+    sam_training.train_sam_for_configuration(
+        name=model_name,
         save_root=save_root,
         model_type=model_type,
         train_loader=train_loader,
         val_loader=val_loader,
         n_epochs=n_epochs,
-        n_objects_per_batch=n_objects_per_batch,
-        with_segmentation_decoder=train_instance_segmentation,
-        device=device,
+        with_segmentation_decoder=True,
     )
 
     return best_checkpoint
 
 
-def run_instance_segmentation_with_decoder(
-    test_image_paths: List[str], model_type: str, checkpoint: Union[os.PathLike, str], device: Union[torch.device, str],
-):
+# TODO
+def run_instance_segmentation_with_decoder(input_root, model_type, checkpoint):
     """Run automatic instance segmentation (AIS).
 
     Args:
@@ -303,80 +195,49 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="Run finetuning for Segment Anything model for microscopy images.")
     parser.add_argument(
+        "-n", "--model_name", type=str, default="sam-hpa",
+        help="The name of the checkpoint. The checkpoints will be stored in './checkpoints/<model_name>'"
+
+    )
+    parser.add_argument(
         "-i", "--input_path", type=str, default="./data",
         help="The filepath to the folder where the image data will be downloaded. "
         "By default, the data will be stored in your current working directory at './data'."
     )
     parser.add_argument(
-        "-s", "--save_root", type=str, default=None,
-        help="The filepath to store the model checkpoint and tensorboard logs. "
-        "By default, they will be stored in your current working directory at 'checkpoints' and 'logs'."
-    )
-    parser.add_argument(
         "--view", action="store_true",
-        help="Whether to visualize the raw inputs, samples from the dataloader, instance segmentation outputs, etc."
+        help="Whether to visualize samples from the dataloader, instance segmentation outputs, etc."
     )
     parser.add_argument(
         "--overwrite", action="store_true", help="Whether to overwrite the already finetuned model checkpoints."
     )
     parser.add_argument(
-        "--device", type=str, default=None, help="The choice of device to run training and inference."
+        "--n_epochs", type=int, default=50,
+        help="The maximum number of epochs to train for."
     )
     args = parser.parse_args()
 
-    device = util.get_device(args.device)  # the device / GPU used for training and inference.
-
     # The model_type determines which base model is used to initialize the weights that are finetuned.
-    # We use vit_b here because it can be trained faster. Note that vit_h usually yields higher quality results.
-    model_type = "vit_b"
+    # We use vit_b_lm here, which is the model we trained for light microscopy segmentation.
+    # Other choices are:
+    # - vit_b_em_organelles: For organelle segmentation in electron microscopy.
+    # - vit_b_histopathology: For nucleus segmentation in histopathology.
+    model_type = "vit_b_lm"
 
-    # Train an additional convolutional decoder for end-to-end automatic instance segmentation
-    train_instance_segmentation = True
-
-    # Step 1: Download the dataset.
-    train_image_paths, train_label_paths = download_dataset(path=args.input_path, split="train")
-    val_image_paths, val_label_paths = download_dataset(path=args.input_path, split="val")
-    test_image_paths, _ = download_dataset(path=args.input_path, split="test")
-
-    # Step 2: Verify the spatial shape of inputs (only for the 'train' split)
-    verify_inputs(image_paths=train_image_paths, label_paths=train_label_paths)
-
-    # Step 3: Preprocess input images.
-    # NOTE: Segment Anything accepts inputs of either 1 channel or 3 channels. To finetune SAM on your data,
-    # it is necessary to select either 1 channel or 3 channels out of the 4 channels available in the data.
-    preprocess_inputs(image_paths=train_image_paths)
-    preprocess_inputs(image_paths=val_image_paths)
-    preprocess_inputs(image_paths=test_image_paths)
-
-    if args.view:
-        # Step 3(a): Visualize the images and corresponding labels (only for the  'train' split)
-        visualize_inputs(image_paths=train_image_paths, label_paths=train_label_paths)
-
-    # Step 4: Get the dataloaders.
-    train_loader, val_loader = get_dataloaders(
-        train_image_paths=train_image_paths,
-        train_label_paths=train_label_paths,
-        val_image_paths=val_image_paths,
-        val_label_paths=val_label_paths,
-        view=args.view,
-        train_instance_segmentation=train_instance_segmentation,
-    )
-
-    # Step 5: Run the finetuning for Segment Anything Model.
+    train_loader, val_loader = get_dataloaders(args.input_path, view=args.view)
     checkpoint_path = run_finetuning(
+        model_name=args.model_name,
         train_loader=train_loader,
         val_loader=val_loader,
-        save_root=args.save_root,
-        train_instance_segmentation=train_instance_segmentation,
-        device=device,
         model_type=model_type,
         overwrite=args.overwrite,
+        n_epochs=args.n_epochs,
     )
 
-    # Step 6: Run automatic instance segmentation using the finetuned model.
-    run_instance_segmentation_with_decoder(
-        test_image_paths=test_image_paths, model_type=model_type, checkpoint=checkpoint_path, device=device,
-    )
+    # TODO
+    # run_instance_segmentation_with_decoder(
+    #     test_image_paths=test_image_paths, model_type=model_type, checkpoint=checkpoint_path, device=device,
+    # )
 
 
 if __name__ == "__main__":
