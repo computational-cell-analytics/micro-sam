@@ -18,7 +18,6 @@ from glob import glob
 import imageio.v3 as imageio
 
 from torch_em.util.debug import check_loader
-from torch_em.util.util import get_random_colors
 
 import micro_sam.training as sam_training
 from micro_sam.training.util import normalize_to_8bit
@@ -129,8 +128,8 @@ def run_finetuning(model_name, train_loader, val_loader, model_type, overwrite, 
     best_checkpoint = os.path.join(save_root, "checkpoints", model_name, "best.pt")
     if os.path.exists(best_checkpoint) and not overwrite:
         print(
-            "It looks like the training has completed. You must pass the argument '--overwrite' to overwrite "
-            "the already finetuned model (or provide a new filepath at '--save_root' for training new models)."
+            "It looks like the training has completed. Pass the argument '--overwrite' to overwrite "
+            "the already finetuned model (or train a model with a new name using the argument '--model_name')."
         )
         return best_checkpoint
 
@@ -148,45 +147,41 @@ def run_finetuning(model_name, train_loader, val_loader, model_type, overwrite, 
     return best_checkpoint
 
 
-# TODO
 def run_instance_segmentation_with_decoder(input_root, model_type, checkpoint):
-    """Run automatic instance segmentation (AIS).
+    """Run automatic instance segmentation with the fine-tuned model.
 
     Args:
         test_image_paths: List of filepaths for the test image data.
         model_type: The choice of Segment Anything model (connotated by the size of image encoder).
         checkpoint: Filepath to the finetuned model checkpoints.
-        device: The torch device used for inference.
     """
     assert os.path.exists(checkpoint), "Please train the model first to run inference on the finetuned model."
 
-    # Get the 'predictor' and 'segmenter' to perform automatic instance segmentation.
-    predictor, segmenter = get_predictor_and_segmenter(
-        model_type=model_type, checkpoint=checkpoint, device=device, is_tiled=True
-    )
+    # CHANGE: For your own data you have to adapt these folder names.
+    folder = os.path.join(input_root, "hpa/test/images")
+    image_paths = glob(os.path.join(folder, "*.tif"))
+    print(len(image_paths))
 
-    for image_path in test_image_paths:
+    # Get the 'predictor' and 'segmenter' to perform automatic instance segmentation.
+    predictor, segmenter = get_predictor_and_segmenter(model_type=model_type, checkpoint=checkpoint, is_tiled=True)
+
+    # Iterate over the training images to run the segmentation and visualize the result in napari.
+    for image_path in image_paths:
         image = imageio.imread(image_path)
         image = normalize_to_8bit(image)
 
-        # Predicting the instances.
+        # CHANGE: Update the values for 'tile_shape' and 'halo' so that they match the patch_shape used in training,
+        # according to: patch_shape = tile_shape + 2 * halo.
+        # For example, if you used patch_shape = (512, 512), you can use tile_shape = (384, 384) and halo = (64, 64)
         prediction = automatic_instance_segmentation(
             predictor=predictor, segmenter=segmenter, input_path=image, ndim=2, tile_shape=(768, 768), halo=(128, 128)
         )
 
-        # Visualize the predictions
-        fig, ax = plt.subplots(1, 2, figsize=(10, 10))
-
-        ax[0].imshow(image)
-        ax[0].axis("off")
-        ax[0].set_title("Input Image")
-
-        ax[1].imshow(prediction, cmap=get_random_colors(prediction), interpolation="nearest")
-        ax[1].axis("off")
-        ax[1].set_title("Predictions (AIS)")
-
-        plt.show()
-        plt.close()
+        import napari
+        v = napari.Viewer()
+        v.add_image(image)
+        v.add_labels(prediction)
+        napari.run()
 
         break  # comment this out in case you want to run inference for all images.
 
@@ -224,6 +219,7 @@ def main():
     # - vit_b_histopathology: For nucleus segmentation in histopathology.
     model_type = "vit_b_lm"
 
+    # Get the data loaders and run the training.
     train_loader, val_loader = get_dataloaders(args.input_path, view=args.view)
     checkpoint_path = run_finetuning(
         model_name=args.model_name,
@@ -233,11 +229,12 @@ def main():
         overwrite=args.overwrite,
         n_epochs=args.n_epochs,
     )
+    assert os.path.exists(checkpoint_path), checkpoint_path
 
-    # TODO
-    # run_instance_segmentation_with_decoder(
-    #     test_image_paths=test_image_paths, model_type=model_type, checkpoint=checkpoint_path, device=device,
-    # )
+    # Use the fine-tuned model for instance segmentation on test data to verify that it worked.
+    # Note: You can also use the fine-tuned model within the micro_sam napari plugin
+    # or within other python functions from the micro_sam library.
+    run_instance_segmentation_with_decoder(args.input_path, model_type=model_type, checkpoint=checkpoint_path)
 
 
 if __name__ == "__main__":
