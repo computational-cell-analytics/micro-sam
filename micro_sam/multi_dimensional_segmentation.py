@@ -625,7 +625,7 @@ def track_across_frames(
     """
     if Trackastra is None:
         raise RuntimeError(
-            "The automatic tracking requires trackastra. You can install it via 'pip install trackastra'."
+            "The automatic tracking functionality requires trackastra. You can install it via 'pip install trackastra'."
         )
 
     _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init=pbar_init, pbar_update=pbar_update)
