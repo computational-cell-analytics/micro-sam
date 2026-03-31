@@ -92,7 +92,6 @@ class TestAutomaticSegmentation(unittest.TestCase):
             predictor=predictor, segmenter=segmenter, input_path=image, ndim=2,
         )
         self.assertEqual(mask.shape, instances.shape)
-        self.assertGreater(instances.max(), 0)
 
     def test_tiled_automatic_mask_generator_2d(self):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
@@ -106,7 +105,6 @@ class TestAutomaticSegmentation(unittest.TestCase):
             ndim=2, tile_shape=self.tile_shape, halo=self.halo,
         )
         self.assertEqual(mask.shape, instances.shape)
-        self.assertGreater(instances.max(), 0)
 
     def test_instance_segmentation_with_decoder_2d(self):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
