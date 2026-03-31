@@ -30,6 +30,8 @@ try:
     from trackastra.tracking import graph_to_ctc, graph_to_napari_tracks
 except ImportError:
     Trackastra = None
+    graph_to_ctc = None
+    graph_to_napari_tracks = None
 
 
 from . import util
@@ -621,6 +623,11 @@ def track_across_frames(
             with each dict encoding a lineage, where keys correspond to parent track ids.
             Each key either maps to a list with two child track ids (cell division) or to an empty list (no division).
     """
+    if Trackastra is None:
+        raise RuntimeError(
+            "The automatic tracking requires trackastra. You can install it via 'pip install trackastra'."
+        )
+
     _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init=pbar_init, pbar_update=pbar_update)
 
     if gap_closing is not None and gap_closing > 0:
