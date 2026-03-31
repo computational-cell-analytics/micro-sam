@@ -3,6 +3,7 @@
 
 import os
 import multiprocessing as mp
+import warnings
 from concurrent import futures
 from typing import Dict, List, Optional, Union, Tuple
 
@@ -569,8 +570,19 @@ def _filter_lineages(lineages, tracking_result):
 def _tracking_impl(timeseries, segmentation, mode, min_time_extent, output_folder=None):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = Trackastra.from_pretrained("general_2d", device=device)
-    lineage_graph, _ = model.track(timeseries, segmentation, mode=mode)
+    result = model.track(timeseries, segmentation, mode=mode)
+    try:
+        lineage_graph, _ = result
+    except ValueError:
+        lineage_graph = result
+
     track_data, parent_graph, _ = graph_to_napari_tracks(lineage_graph)
+    if track_data.size == 0:
+        warnings.warn("Tracking result is empty.")
+        tracking_result = np.zeros_like(segmentation)
+        lineages = []
+        return tracking_result, lineages
+
     node_to_track, lineages = _extract_tracks_and_lineages(segmentation, track_data, parent_graph)
     tracking_result = recolor_segmentation(segmentation, node_to_track)
 
@@ -625,7 +637,7 @@ def track_across_frames(
     """
     if Trackastra is None:
         raise RuntimeError(
-            "The automatic tracking functionality requires trackastra. You can install it via 'pip install trackastra'."
+            "Automatic tracking requires trackastra. You can install it via 'pip install trackastra'."
         )
 
     _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init=pbar_init, pbar_update=pbar_update)

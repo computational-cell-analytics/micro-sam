@@ -2,10 +2,17 @@ import unittest
 
 import numpy as np
 import torch
+from scipy.ndimage import shift
 from skimage.draw import disk
 from skimage.measure import label as connected_components
 
 import micro_sam.util as util
+
+try:
+    from trackastra.model import Trackastra  # noqa
+    WITH_TRACKASTRA = True
+except ImportError:
+    WITH_TRACKASTRA = False
 
 HAVE_CUDA = torch.cuda.is_available()
 
@@ -43,9 +50,15 @@ class TestAutomaticSegmentation(unittest.TestCase):
     def _get_3d_inputs(cls, shape):
         mask, image = cls._get_2d_inputs(shape[-2:])
 
-        # Create volumes by stacking the input image and respective mask.
-        volume = np.stack([image] * shape[0])
-        labels = np.stack([mask] * shape[0])
+        # Create volumes by stacking the input image and respective mask with small shifts.
+        labels, volume = [mask], [image]
+        for _ in range(shape[0] - 1):
+            shift_vector = (np.random.randint(1, 4), np.random.randint(1, 4))
+            labels.append(shift(mask, shift=shift_vector, order=0, mode="constant", cval=0))
+            volume.append(shift(image, shift=shift_vector, order=0, mode="constant", cval=0))
+
+        volume = np.stack(volume)
+        labels = np.stack(labels)
         return labels, volume
 
     @classmethod
@@ -79,6 +92,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
             predictor=predictor, segmenter=segmenter, input_path=image, ndim=2,
         )
         self.assertEqual(mask.shape, instances.shape)
+        self.assertGreater(instances.max(), 0)
 
     def test_tiled_automatic_mask_generator_2d(self):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
@@ -92,6 +106,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
             ndim=2, tile_shape=self.tile_shape, halo=self.halo,
         )
         self.assertEqual(mask.shape, instances.shape)
+        self.assertGreater(instances.max(), 0)
 
     def test_instance_segmentation_with_decoder_2d(self):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
@@ -104,6 +119,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
             predictor=predictor, segmenter=segmenter, input_path=image, ndim=2,
         )
         self.assertEqual(mask.shape, instances.shape)
+        self.assertGreater(instances.max(), 0)
 
     def test_tiled_instance_segmentation_with_decoder_2d(self):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
@@ -118,6 +134,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
             batch_size=2,
         )
         self.assertEqual(mask.shape, instances.shape)
+        self.assertGreater(instances.max(), 0)
 
     @unittest.skipUnless(HAVE_CUDA, "Skipping long running tests unless we have a GPU.")
     def test_automatic_mask_generator_3d(self):
@@ -131,6 +148,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
             predictor=predictor, segmenter=segmenter, input_path=volume, ndim=3,
         )
         self.assertEqual(labels.shape, instances.shape)
+        self.assertGreater(instances.max(), 0)
 
     @unittest.skipUnless(HAVE_CUDA, "Skipping long running tests unless we have a GPU.")
     def test_tiled_automatic_mask_generator_3d(self):
@@ -145,6 +163,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
             ndim=3, tile_shape=self.tile_shape, halo=self.halo,
         )
         self.assertEqual(labels.shape, instances.shape)
+        self.assertGreater(instances.max(), 0)
 
     def test_instance_segmentation_with_decoder_3d(self):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
@@ -157,6 +176,19 @@ class TestAutomaticSegmentation(unittest.TestCase):
             predictor=predictor, segmenter=segmenter, input_path=volume, ndim=3,
         )
         self.assertEqual(labels.shape, instances.shape)
+        self.assertGreater(instances.max(), 0)
+
+    @unittest.skipUnless(WITH_TRACKASTRA, "Needs trackastra")
+    def test_automatic_tracking(self):
+        from micro_sam.automatic_segmentation import automatic_tracking, get_predictor_and_segmenter
+
+        labels, volume = self.labels, self.volume
+        predictor, segmenter = get_predictor_and_segmenter(
+            model_type=self.model_type_ais, segmentation_mode="ais", is_tiled=False
+        )
+        instances, _ = automatic_tracking(predictor=predictor, segmenter=segmenter, input_path=volume)
+        self.assertEqual(labels.shape, instances.shape)
+        self.assertGreater(instances.max(), 0)
 
     def test_tiled_instance_segmentation_with_decoder_3d(self):
         from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
@@ -170,6 +202,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
             ndim=3, tile_shape=self.tile_shape, halo=self.halo,
         )
         self.assertEqual(labels.shape, instances.shape)
+        self.assertGreater(instances.max(), 0)
 
 
 if __name__ == "__main__":
