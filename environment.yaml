@@ -10,7 +10,8 @@ dependencies:
     - pip
     - pooch
     - pyqt6
-    - qt6-wayland  # [linux]
+    # Note: Linux-users are expected to install Qt6 Wayland module. 
+    # - qt6-wayland  # [linux]
     - python-xxhash
     - python-elf >=0.7.1
     # Note: installing the pytorch package from conda-forge will generally
