@@ -32,6 +32,7 @@ jobs:
           environment-file: 'environment.yaml'
           create-args: >-
             python=${{ matrix.python-version }}
+            ${{ runner.os == 'Linux' && 'qt6-wayland' || '' }}
 
       # Setup Qt libraries for GUI testing on Linux
       - uses: tlambert03/setup-qt-libs@v1
