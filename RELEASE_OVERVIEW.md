@@ -1,5 +1,9 @@
 # Release Overview
 
+**New in version 1.7.6**
+
+Minor fixes for automatic tracking pipeline using trackastra.
+
 **New in version 1.7.3 - 1.7.5**
 
 Minor extensions and improvements to several functions' input arguments.
