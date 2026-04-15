@@ -4,7 +4,6 @@ rem This script searches for the 'freetype.dll' file within a specific directory
 rem and attempts to move it to the target directory during post-installation on Windows.
 rem If not found locally, it downloads the DLL from a defined URL.
 
-
 rem Define download URL (replace with the actual URL for your desired version)
 set DOWNLOAD_URL=https://raw.githubusercontent.com/ubawurinna/freetype-windows-binaries/master/release%20dll/win64/freetype.dll
 
