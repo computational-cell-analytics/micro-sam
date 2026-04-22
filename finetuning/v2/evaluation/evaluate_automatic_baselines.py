@@ -1,4 +1,4 @@
-"""Benchmark evaluation of baseline automatic segmentation methods.
+"""Benchmark evaluation of automatic segmentation baselines.
 
 Supported methods:
   cellpose: CellPose3 generalist models (cyto3, cpsam)
@@ -10,35 +10,28 @@ Supported methods:
   segneuron: SegNeuron (3D EM only)
 
 Usage examples:
-    python evaluate_baselines.py -d livecell -e <exp> --method cellpose -m cyto3
-    python evaluate_baselines.py -d livecell -e <exp> --method stardist
-    python evaluate_baselines.py -d livecell -e <exp> --method cellsam
-    python evaluate_baselines.py -d livecell -e <exp> --method microsam_amg -m vit_b
-    python evaluate_baselines.py -d embedseg -e <exp> --method microsam_ais -m vit_b
-    python evaluate_baselines.py -d lucchi   -e <exp> --method segneuron
+    python evaluate_automatic_baselines.py -d livecell -e <exp> --method cellpose -m cyto3
+    python evaluate_automatic_baselines.py -d livecell -e <exp> --method stardist
+    python evaluate_automatic_baselines.py -d livecell -e <exp> --method cellsam
+    python evaluate_automatic_baselines.py -d livecell -e <exp> --method microsam_amg -m vit_b
+    python evaluate_automatic_baselines.py -d embedseg -e <exp> --method microsam_ais -m vit_b
+    python evaluate_automatic_baselines.py -d lucchi   -e <exp> --method segneuron
 """
 
 import os
 
 import numpy as np
-import imageio.v3 as imageio
 from tqdm import tqdm
-from skimage.measure import label as connected_components
 
 import torch
-
-from elf.io import open_file
-from torch_em.transform.raw import normalize
 
 from micro_sam.evaluation.evaluation import run_evaluation
 
 from common import (
     DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_3D_EM,
-    get_data_paths, load_volume, _center_crop_roi,
+    get_data_paths,
 )
-
-CROP_SHAPE_2D = (512, 512)
-CROP_SHAPE_3D = (8, 512, 512)
+from baselines_common import _load_data
 
 _LM_DATASETS = set(DATASETS_2D + DATASETS_3D_LM)
 _EM_DATASETS = set(DATASETS_3D_EM)
@@ -192,38 +185,6 @@ def _segment_microsam_v1(image_or_volume, predictor, segmenter, ndim):
     return seg.astype("uint32") if seg is not None else np.zeros(image_or_volume.shape, dtype="uint32")
 
 
-def _read_2d(path, key):
-    """Read a 2D array from an image file or from an H5/zarr file using key."""
-    if key is not None:
-        arr = open_file(path, mode="r")[key][:]
-    else:
-        arr = np.asarray(imageio.imread(path))
-    # Transpose channel-first (C, H, W) to channel-last (H, W, C).
-    if arr.ndim == 3 and arr.shape[0] <= 4 and arr.shape[1] > arr.shape[0] and arr.shape[2] > arr.shape[0]:
-        arr = arr.transpose(1, 2, 0)
-    return arr
-
-
-def _load_data(dataset_name, data_root, ndim):
-    """Yield (image_or_volume, labels) pairs for the given dataset."""
-    if ndim == 3:
-        raw_paths, label_paths, raw_key, label_key = get_data_paths(dataset_name, data_root)
-        for raw_path, label_path in zip(raw_paths, label_paths):
-            raw, labels = load_volume(raw_path, label_path, raw_key, label_key, dataset_name, CROP_SHAPE_3D)
-            yield raw, labels
-    else:
-        image_paths, gt_paths, raw_key, label_key = get_data_paths(dataset_name, data_root)
-        for img_path, gt_path in zip(image_paths, gt_paths):
-            image = _read_2d(img_path, raw_key)
-            if image.max() > 255:
-                image = normalize(image) * 255
-            roi = _center_crop_roi(image.shape[:2], CROP_SHAPE_2D)
-            image = image[roi].astype("float32")
-            gt = _read_2d(gt_path, label_key)
-            gt = connected_components(gt[roi]).astype("uint32")
-            yield image, gt
-
-
 def _run_evaluation(segment_fn, dataset_name, data_root, ndim, save_path, desc):
     if os.path.exists(save_path):
         print(f"Results already stored at '{save_path}'.")
@@ -297,7 +258,7 @@ def run_microsam_v1_evaluation(dataset_name, data_root, experiment_folder, metho
 def main():
     import argparse
     all_datasets = sorted(_LM_DATASETS) + sorted(_EM_DATASETS)
-    parser = argparse.ArgumentParser(description="Evaluate baseline automatic segmentation methods.")
+    parser = argparse.ArgumentParser(description="Evaluate automatic segmentation baselines.")
     parser.add_argument("-d", "--dataset_name", required=True, choices=all_datasets)
     parser.add_argument("-i", "--input_path", type=str, default=DATA_ROOT)
     parser.add_argument("-e", "--experiment_folder", type=str, required=True)
@@ -305,7 +266,7 @@ def main():
     parser.add_argument("-m", "--model_type", type=str, default=None,
                         help="CellPose model type (default: cyto3) or micro-sam v1 model type (default: vit_b).")
     parser.add_argument("-c", "--checkpoint", type=str, default=None,
-                        help="Checkpoint path for micro-sam v1 methods.")
+                        help="Checkpoint path for micro-sam v1 / segneuron methods.")
     args = parser.parse_args()
 
     print("Device:", torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU")
