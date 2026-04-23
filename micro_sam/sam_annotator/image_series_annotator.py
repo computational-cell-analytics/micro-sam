@@ -209,10 +209,10 @@ def image_series_annotator(
         return os.path.join(output_folder, fname)
 
     def _load_image(image_id):
-        image = images[next_image_id]
+        image = images[image_id]
         if not have_inputs_as_arrays:
             image = imageio.imread(image)
-        image_embedding_path = embedding_paths[next_image_id]
+        image_embedding_path = embedding_paths[image_id]
         return image, image_embedding_path
 
     # Check which image to load next if we skip segmented images.
@@ -244,7 +244,7 @@ def image_series_annotator(
     )
 
     def _save_segmentation(image_path, current_idx, segmentation):
-        save_path = _get_save_path(image_path, next_image_id)
+        save_path = _get_save_path(image_path, current_idx)
         imageio.imwrite(save_path, segmentation, compression="zlib")
 
     # Add functionality for going to the next image.
@@ -279,8 +279,8 @@ def image_series_annotator(
 
         # If we are skipping images that are already segmented, then check if we have to load the next image.
         save_path = _get_save_path(images[next_image_id], next_image_id)
+        segmentation_result = None
         if skip_segmented:
-            segmentation_result = None
             while os.path.exists(save_path):
                 next_image_id += 1
 
