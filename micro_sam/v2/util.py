@@ -88,7 +88,7 @@ def _get_device(device=None):
 
 def _get_checkpoint(model_type=_DEFAULT_MODEL, backbone=BACKBONE):
     # Let's first create a cache directory.
-    save_directory = os.path.expanduser(pooch.os_cache("micro_sam2/models"))
+    save_directory = os.path.expanduser(pooch.os_cache("micro_sam/v2/models"))
 
     # Download the checkpoint paths if the user does not provide them.
     fname = f"{model_type}_{backbone}"
@@ -162,7 +162,7 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
         return
 
     # Creates all the metadta that is stored along with the embeddings.
-    # TODO: This is currently paired with `micro_sam`-level metadata. Should we get separate for `micro_sam2`?
+    # TODO: This is currently paired with `micro_sam`-level metadata. Should we get separate for `micro_sam.v2`?
     from micro_sam.util import _get_embedding_signature
     signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
 
