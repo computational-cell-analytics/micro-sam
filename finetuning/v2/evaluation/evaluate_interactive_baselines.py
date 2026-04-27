@@ -2,12 +2,12 @@
 
 Supported methods:
   nninteractive: nnInteractive interactive segmentation (3D only)
-  sam:           Pretrained SAM v1 interactive segmentation (2D and 3D)
-  sam2:          Pretrained SAM2 interactive segmentation (2D and 3D)
-  micro-sam:     micro-sam v1 finetuned interactive (vit_b_lm LM / vit_b_em_organelles_v1 EM)
-  micro-samv2:   Finetuned SAM2 interactive segmentation (2D and 3D)
-  microsam1:     micro-sam v1 interactive segmentation with iterative prompting (2D and 3D)
-  sam3:          SAM3 interactive segmentation (2D and 3D)
+  sam: Pretrained SAM v1 interactive segmentation (2D and 3D)
+  sam2: Pretrained SAM2 interactive segmentation (2D and 3D)
+  micro-sam: micro-sam v1 finetuned interactive (vit_b_lm LM / vit_b_em_organelles_v1 EM)
+  micro-samv2: Finetuned SAM2 interactive segmentation (2D and 3D)
+  microsam1: micro-sam v1 interactive segmentation with iterative prompting (2D and 3D)
+  sam3: SAM3 interactive segmentation (2D and 3D)
 
 Usage examples:
     python evaluate_interactive_baselines.py -d lucchi   -e <exp> --method nninteractive -p box

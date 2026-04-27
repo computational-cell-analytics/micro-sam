@@ -1,17 +1,17 @@
 """Benchmark evaluation of automatic segmentation baselines.
 
 Supported methods:
-  cellpose:    CellPose3 generalist models (cyto3, cpsam)
-  stardist:    StarDist pretrained (2D_versatile_fluo / 3D_demo)
-  cellsam:     CellSAM pipeline (2D-only)
-  sam:         Pretrained SAM v1 with Automatic Mask Generation (AMG)
-  sam2:        Pretrained SAM2 with Automatic Mask Generation (AMG)
-  micro-sam:   micro-sam v1 finetuned (vit_b_lm for LM, vit_b_em_organelles_v1 for EM)
+  cellpose: CellPose3 generalist models (cyto3, cpsam)
+  stardist: StarDist pretrained (2D_versatile_fluo / 3D_demo)
+  cellsam: CellSAM pipeline (2D-only)
+  sam: Pretrained SAM v1 with Automatic Mask Generation (AMG)
+  sam2: Pretrained SAM2 with Automatic Mask Generation (AMG)
+  micro-sam: micro-sam v1 finetuned (vit_b_lm for LM, vit_b_em_organelles_v1 for EM)
   micro-samv2: UniSAM2 finetuned (directed distance model)
   microsam_amg: micro-sam v1 Automatic Mask Generation
   microsam_ais: micro-sam v1 Automatic Instance Segmentation
   microsam_apg: micro-sam v1 Automatic Prompt Generation
-  segneuron:   SegNeuron (3D EM only)
+  segneuron: SegNeuron (3D EM only)
 
 Usage examples:
     python evaluate_automatic_baselines.py -d livecell -e <exp> --method cellpose -m cyto3
