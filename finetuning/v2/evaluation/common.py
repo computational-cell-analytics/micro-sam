@@ -427,7 +427,7 @@ _DATASET_SPACING: dict = {
 def load_unisam2_model(checkpoint_path, device):
     import torch
     from micro_sam.v2.models.util import UniSAM2
-    model = UniSAM2(model_type="hvit_t", output_channels=4)
+    model = UniSAM2(encoder="hvit_t", output_channels=4)
     state = torch.load(checkpoint_path, weights_only=False, map_location=device)
     model.load_state_dict(state["model_state"])
     model.to(device)
