@@ -1,9 +1,6 @@
 """Training functionality for SAM2-based segmentation models."""
 
-from .trainable_sam2 import TrainableSAM2  # noqa: F401
 from .util import (  # noqa: F401
-    get_trainable_sam2_model,
-    ConvertToSam2Inputs,
     get_sam2_train_model,
     ConvertToSam2VideoBatch,
     MixedLoader,
