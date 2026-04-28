@@ -425,8 +425,35 @@ _DATASET_SPACING: dict = {
 
 
 def load_unisam2_model(checkpoint_path, device):
+    import sys
+    import types
     import torch
+    import micro_sam.v2.datasets.sampler as datasets_sampler
+    import micro_sam.v2.datasets.wrapper as datasets_wrapper
+    import micro_sam.v2.transforms.labels as transforms_labels
+    import micro_sam.v2.transforms.raw as transforms_raw
     from micro_sam.v2.models.util import UniSAM2
+
+    # Older checkpoints were saved while this package lived under the
+    # "micro_sam2" namespace. Alias the moved modules for torch.load.
+    root = sys.modules.setdefault("micro_sam2", types.ModuleType("micro_sam2"))
+    root.__path__ = []
+    datasets = sys.modules.setdefault("micro_sam2.datasets", types.ModuleType("micro_sam2.datasets"))
+    datasets.__path__ = []
+    transforms = sys.modules.setdefault("micro_sam2.transforms", types.ModuleType("micro_sam2.transforms"))
+    transforms.__path__ = []
+
+    sys.modules["micro_sam2.datasets.sampler"] = datasets_sampler
+    sys.modules["micro_sam2.datasets.wrapper"] = datasets_wrapper
+    sys.modules["micro_sam2.transforms.labels"] = transforms_labels
+    sys.modules["micro_sam2.transforms.raw"] = transforms_raw
+    setattr(root, "datasets", datasets)
+    setattr(root, "transforms", transforms)
+    setattr(datasets, "sampler", datasets_sampler)
+    setattr(datasets, "wrapper", datasets_wrapper)
+    setattr(transforms, "labels", transforms_labels)
+    setattr(transforms, "raw", transforms_raw)
+
     model = UniSAM2(encoder="hvit_t", output_channels=4)
     state = torch.load(checkpoint_path, weights_only=False, map_location=device)
     model.load_state_dict(state["model_state"])
@@ -444,9 +471,10 @@ def predict_unisam2(model, raw, ndim, device):
     is_3d = (ndim == 3)
     block_shape = (4, 384, 384) if is_3d else (1, 384, 384)
     halo = (2, 64, 64) if is_3d else (0, 64, 64)
-    out = np.zeros((4, *raw.shape), dtype="float32")
+    input_ = raw[np.newaxis].astype("float32") if is_3d else raw[np.newaxis, np.newaxis].astype("float32")
+    out = np.zeros((4, *raw.shape), dtype="float32") if is_3d else np.zeros((4, 1, *raw.shape), dtype="float32")
     out = predict_with_halo(
-        input_=raw[np.newaxis].astype("float32"),
+        input_=input_,
         model=model,
         block_shape=block_shape,
         halo=halo,

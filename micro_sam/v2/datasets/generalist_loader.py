@@ -24,6 +24,12 @@ from ..transforms.labels import (
 )
 
 
+def _ensure_native_byte_order(y):
+    # tifffile.memmap returns big-endian >f4 for some TIFFs; byteswap to native so that
+    # Kornia augmentation and skimage/vigra C extensions receive correctly ordered bytes.
+    return y.byteswap().newbyteorder() if not y.dtype.isnative else y
+
+
 def _prepare_data_loader(dataset, batch_size, shuffle, batch_size_per_group=None, num_workers=32):
     if isinstance(dataset, ConcatDataset) and (batch_size > 1 or batch_size_per_group):
         batch_sampler = UniBatchSampler(
@@ -410,6 +416,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
 
     base_sampler = MinInstanceSampler(min_num_instances=1, exclude_ids=[0])
     base_kwargs = {k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]}
+    base_kwargs["label_transform"] = _ensure_native_byte_order
 
     for z in z_slices:
         em_label_trafo_fn = (
