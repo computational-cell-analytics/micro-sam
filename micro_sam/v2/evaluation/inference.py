@@ -24,7 +24,23 @@ from micro_sam.evaluation.inference import (
     _get_batched_prompts, _get_batched_iterative_prompts, _save_segmentation,
 )
 
-from micro_sam.v2.util import _get_device, get_sam2_model
+from micro_sam.v2.util import _get_device, get_sam2_model, precompute_image_embeddings
+
+
+def _embedding_tensors_to_numpy(embeddings):
+    """Move SAM2 video embeddings to CPU arrays for CustomVideoPredictor.init_state."""
+    def _convert(value):
+        if hasattr(value, "detach"):
+            return value.detach().cpu().numpy()
+        if isinstance(value, list):
+            return [_convert(v) for v in value]
+        if isinstance(value, tuple):
+            return tuple(_convert(v) for v in value)
+        if isinstance(value, dict):
+            return {k: _convert(v) for k, v in value.items()}
+        return value
+
+    return _convert(embeddings)
 
 
 #
@@ -341,7 +357,6 @@ def run_interactive_segmentation_3d(
     min_size: int = 0,
     batch_size: int = 16,
     n_iterations: int = 8,
-    use_masks: bool = False,
     run_connected_components: bool = True,
 ) -> str:
     """Run interactive segmentation on 3d inputs using Segment Anything 2.
@@ -363,21 +378,15 @@ def run_interactive_segmentation_3d(
         min_size: The minimum pixel criterion to accept instance objects for interactive segmentation.
         batch_size: The batch size to compute prompts.
         n_iterations: The number of iterations for iterative prompting.
-        use_masks: Whether to use masks in iterative prompting.
         run_connected_components: Whether to ensure individual instances and filter out small objects.
 
     Returns:
         The folder where segmentations are stored.
     """
     prediction_dir = os.path.join(
-        prediction_dir, "interactive_segmentation_3d", "start_with_box" if start_with_box_prompt else "start_with_point"
+        prediction_dir, "interactive_segmentation_3d", "start_with_box" if start_with_box_prompt else "start_with_point",
+        "without_masks",
     )
-
-    if use_masks:
-        print("The iterative prompting will make use of logits masks from previous iterations.")
-        prediction_dir = os.path.join(prediction_dir, "with_masks")
-    else:
-        prediction_dir = os.path.join(prediction_dir, "without_masks")
 
     prediction_paths = [
         os.path.join(
@@ -397,10 +406,6 @@ def run_interactive_segmentation_3d(
         # NOTE: There are some objects covering very few pixels, eg. in lucchi, causing troubles in iterative prompting.
         labels = size_filter(seg=labels, min_size=min_size)
 
-    # This step converts the input volume to individual slices and stores them in sequence in a directory.
-    frames_dir = os.path.join(prediction_dir, "vframes")
-    image_dir = _convert_volumes_to_frames(raw=raw, frames_dir=frames_dir)
-
     # Preparing prompts for the first iteration
     if start_with_box_prompt:
         use_boxes, use_points = True, False
@@ -413,9 +418,15 @@ def run_interactive_segmentation_3d(
     predictor = get_sam2_model(
         model_type=model_type, device=device, checkpoint_path=checkpoint_path, input_type="videos", backbone=backbone,
     )
+    # Match training: frames that receive correction clicks become conditioning frames so
+    # their corrected predictions are preserved and used as memory for neighboring frames.
+    predictor.add_all_frames_to_correct_as_cond = True
 
     # Initialize the inference state
-    inference_state = predictor.init_state(video_path=image_dir)
+    volume_embeddings = _embedding_tensors_to_numpy(
+        precompute_image_embeddings(predictor=predictor, input_=raw, ndim=3)
+    )
+    inference_state = predictor.init_state(volume=raw, volume_embeddings=volume_embeddings)
 
     gt_ids = list(np.unique(labels))[1:]  # Ignoring the background label
     segmentation = []
@@ -432,7 +443,6 @@ def run_interactive_segmentation_3d(
             dilation=dilation,
             batch_size=batch_size,
             n_iterations=n_iterations,
-            use_masks=use_masks,
         )
 
         for _iter in range(n_iterations):
@@ -444,9 +454,6 @@ def run_interactive_segmentation_3d(
     for i, prediction_path in enumerate(prediction_paths):
         os.makedirs(Path(prediction_path).parent, exist_ok=True)
         imageio.imwrite(os.path.join(prediction_path), segmentation[i], compression="zlib")
-
-    # Remove the video directory
-    shutil.rmtree(frames_dir)
 
     return prediction_dir
 
@@ -464,7 +471,6 @@ def _run_interactive_segmentation_3d_per_object(
     dilation: int = 5,
     batch_size: int = 32,
     n_iterations: int = 8,
-    use_masks: bool = False,
 ):
     """Functionality for interactive segmentation using iterative prompting.
     """
@@ -490,7 +496,6 @@ def _run_interactive_segmentation_3d_per_object(
         predictor=predictor,
         batch_size=batch_size,
         n_iterations=n_iterations,
-        use_masks=use_masks,
     )
 
     assert len(gt_ids) == len(preds_per_object), "The number of label ids should match the number of objects segmented."
@@ -547,7 +552,7 @@ def _extract_prompts_per_object(
 
 @torch.no_grad()
 def _get_iteratively_prompted_segmentation_per_image_dir(
-    inference_state, labels, id_to_prompts, predictor, batch_size=32, n_iterations=8, use_masks=True,
+    inference_state, labels, id_to_prompts, predictor, batch_size=32, n_iterations=8,
 ):
     """Functionality for inference of 3d interactive segmentation.
     """
@@ -555,62 +560,54 @@ def _get_iteratively_prompted_segmentation_per_image_dir(
     prompt_generator = IterativePromptGenerator()
 
     pred_per_object = []
-    # Next, we add the points / box for the particular object
     for _obj_id, _input_prompts in id_to_prompts.items():
-        z_choice, _point, _label, _box = _input_prompts
+        z_cond, _point, _label, _box = _input_prompts  # z_cond stays fixed for all iterations
 
         list_of_iterations = list(range(n_iterations))
         pred_per_iteration = []
-        predictions = None  # 'predictions' are overwritten by predictions per object and gets updated for n_iterations.
+        _corr_points = None  # (x,y) correction points for the next iteration
+        _corr_labels = None
+        _corr_frame = None   # z-slice where corrections will be applied
+
         for iteration in list_of_iterations:
-            # Add prompts (points / box) in a frame with it's respective object id.
-            if isinstance(z_choice, list):  # placing prompts at multiple frames
-                for per_z_choice, per_point, per_label in zip(z_choice, _point, _label):
-                    _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
-                        inference_state=inference_state, frame_idx=per_z_choice, obj_id=_obj_id,
-                        points=np.array([per_point]), labels=np.array([per_label]),
-                        box=None,  # in iterative prompting, we do not place box prompts after the first iteration.
-                        clear_old_points=False,  # whether to make use of old points in memory.
-                    )
-            else:  # placing prompt in a single frame.
+            if iteration == 0:
+                # First iteration: initial box or point at the conditioning frame.
                 _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
-                    inference_state=inference_state, frame_idx=z_choice, obj_id=_obj_id,
+                    inference_state=inference_state, frame_idx=z_cond, obj_id=_obj_id,
                     points=_point, labels=_label, box=_box,
                 )
+            else:
+                # Subsequent iterations: add corrective points at the worst-predicted frame.
+                # The video predictor automatically loads prev_sam_mask_logits from the
+                # previous propagation at that frame, matching the mask_inputs feedback used
+                # during training (SAM2Train._iter_correct_pt_sampling, line 492).
+                for per_point, per_label in zip(_corr_points, _corr_labels):
+                    _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
+                        inference_state=inference_state, frame_idx=_corr_frame, obj_id=_obj_id,
+                        points=np.array([per_point]), labels=np.array([per_label]),
+                        box=None, clear_old_points=False,
+                    )
 
-            # Next, we propagate the masklets throughout the frames using the input prompts in selected frames
+            # Propagate the masklets throughout the frames using the input prompts in selected frames
             forward_video_segments = {}
             for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state):
                 forward_video_segments[out_frame_idx] = {
                     out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, out_obj_id in enumerate(out_obj_ids)
                 }
 
-            if use_masks and predictions is not None:
-                # Reuse the previous iteration's predicted masks as mask prompts for each frame.
-                for frame_idx, per_mask in enumerate(predictions):
-                    _, out_obj_ids, out_mask_logits = predictor.add_new_mask(
-                        inference_state=inference_state,
-                        frame_idx=frame_idx,
-                        obj_id=_obj_id,
-                        mask=per_mask,  # This expects 2d masks, i.e. frame-wise, without additional dimensions.
-                    )
-
-            # Let's do the propagation reverse in time now.
+            # Propagate reverse in time if needed.
             reverse_video_segments = {}
-            if len(forward_video_segments) < labels.shape[0]:  # Perform reverse propagation only if necessary
+            if len(forward_video_segments) < labels.shape[0]:
                 for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(
                     inference_state, reverse=True,
                 ):
                     reverse_video_segments[out_frame_idx] = {
                         out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, out_obj_id in enumerate(out_obj_ids)
                     }
-                # NOTE: The order is reversed to stitch the reverse propagation with forward.
                 reverse_video_segments = dict(reversed(list(reverse_video_segments.items())))
 
-            # We stitch the segmented slices together.
             video_segments = {**reverse_video_segments, **forward_video_segments}
 
-            # Now, let's merge the segmented objects per frame back together as instances per slice.
             segmentation = []
             for slice_idx in video_segments.keys():
                 per_slice_seg = np.zeros(labels.shape[-2:])
@@ -621,27 +618,30 @@ def _get_iteratively_prompted_segmentation_per_image_dir(
             segmentation = (np.stack(segmentation) > 0).astype("uint64")
             pred_per_iteration.append(segmentation)
 
-            # We generate further prompts for iterative prompts
-            # If the user does not want to do iterative prompting (i.e. "n_iterations=1") OR
-            # if it is the last iteration, we do not perform the step below.
             if len(list_of_iterations) > 1 and iteration < list_of_iterations[-1]:
-                # Compare the current prediction against the GT to derive the next corrective prompts.
-                # Store the predicted masks so they can be reused as mask prompts in the next iteration.
-                gt_mask = (labels == _obj_id)
-                predictions = segmentation
-                next_coords, next_labels = _get_batched_iterative_prompts(
-                    sampled_binary_gt=torch.from_numpy(gt_mask)[None, None].to(torch.float32),
-                    masks=torch.from_numpy(segmentation)[None, None].to(torch.float32),
-                    batch_size=batch_size,
-                    prompt_generator=prompt_generator
-                )
-                next_coords, next_labels = next_coords.detach().cpu().numpy(), next_labels.detach().cpu().numpy()
+                # Find the z-slice where the prediction is worst for this object.
+                # Restrict to slices where the object exists so IterativePromptGenerator
+                # always has FN pixels (or overlap) to sample a positive point from.
+                gt_3d = (labels == _obj_id)
+                obj_z_slices = np.where(gt_3d.any(axis=(1, 2)))[0]
+                errors_per_slice = np.array([
+                    np.sum(gt_3d[z] != (segmentation[z] > 0)) for z in obj_z_slices
+                ])
+                z_worst = int(obj_z_slices[np.argmax(errors_per_slice)])
 
-                # Let's extract the z-dimension values for putting in the slice values.
-                z_choice = [_coords[-1] for _coords in next_coords.tolist()[0]]
-                # Next, we replace the set of coordinates with a new pair to add them and continue propagation.
-                _point = [_coords[:2] for _coords in next_coords.tolist()[0]]
-                _label = next_labels.tolist()[0]
+                gt_slice = gt_3d[z_worst].astype("int64")
+                pred_slice = (segmentation[z_worst] > 0).astype("int64")
+                next_coords, next_labels = _get_batched_iterative_prompts(
+                    sampled_binary_gt=torch.from_numpy(gt_slice)[None, None].to(torch.float32),
+                    masks=torch.from_numpy(pred_slice)[None, None].to(torch.float32),
+                    batch_size=batch_size,
+                    prompt_generator=prompt_generator,
+                )
+                next_coords = next_coords.detach().cpu().numpy()  # [1, 2, 2]: (obj, pos+neg, xy)
+                next_labels = next_labels.detach().cpu().numpy()  # [1, 2]
+                _corr_points = next_coords[0]   # [[x_pos, y_pos], [x_neg, y_neg]]
+                _corr_labels = next_labels[0]   # [1, 0]
+                _corr_frame = z_worst
 
         pred_per_object.append(pred_per_iteration)
 

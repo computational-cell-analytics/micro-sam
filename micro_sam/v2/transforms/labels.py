@@ -8,6 +8,17 @@ from skimage.measure import label as connected_components
 import vigra
 
 
+def _instance_labels(labels):
+    """Relabel each connected region as a unique integer instance.
+
+    Wraps skimage.measure.label so that disconnected regions with the same
+    label ID get separate consecutive IDs.  Used as label_transform2 in the
+    interactive generalist dataloaders.
+    """
+    from skimage.measure import label as connected_components
+    return connected_components(labels).astype("int64")
+
+
 def _axondeepseg_pre_label_transform(y):
     """Extract axon instances from AxonDeepSeg semantic labels via connected components.
 
@@ -41,9 +52,28 @@ def _plantseg_label_trafo(y, data, label_trafo):
     else:
         raise ValueError
 
+    if label_trafo is None:
+        return y
+
     y = label_trafo(y)
 
     return y
+
+
+def _joint_em_cell_label_trafo(y, label_trafo):
+    """EM label transform for joint training — keeps instance IDs as channel 0.
+
+    Like :func:`_em_cell_label_trafo` but returns
+    ``[instance_ids, expected_fg, d_x, d_y, d_z]`` (5 channels) instead of
+    dropping the instance channel.  ``label_trafo`` must produce a 5-channel
+    array (i.e. be a :class:`_JointLabelTransform` / ``instances=True``).
+    """
+    y = label_trafo(y)          # (5, H, W) or (5, Z, H, W)
+    instances = y[0]
+    bd = find_boundaries(instances.astype("uint32"), mode="outer").astype("uint8")
+    fg = (instances > 0).astype("uint8")
+    expected_fg = (fg & ~bd).astype("uint8")
+    return np.concatenate([instances[None], expected_fg[None], y[2:]], axis=0)
 
 
 class DirectedPerObjectBoundaryDistanceTransform:
@@ -96,6 +126,10 @@ class DirectedPerObjectBoundaryDistanceTransform:
         if labels.ndim == 2:
             labels = labels[None]
 
+        # skimage/vigra C extensions read raw bytes assuming native byte order; swap if needed.
+        if not labels.dtype.isnative:
+            labels = labels.byteswap().newbyteorder()
+
         if self.apply_label:
             labels = connected_components(labels).astype("uint32")
         else:  # Otherwise just relabel the segmentation.
@@ -147,3 +181,18 @@ class DirectedPerObjectBoundaryDistanceTransform:
             distances = distances.squeeze(1)
 
         return distances
+
+
+class _JointLabelTransform(DirectedPerObjectBoundaryDistanceTransform):
+    """Distance transform for joint interactive + automatic training.
+
+    Identical to :class:`DirectedPerObjectBoundaryDistanceTransform` but
+    defaults to ``instances=True`` so the output always has 5 channels:
+    ``[instance_ids, foreground_mask, d_x, d_y, d_z]``.
+
+    The interactive branch uses channel 0 (cast to int64 as instance IDs)
+    and the automatic branch uses channels 1-4.
+    """
+
+    def __init__(self, instances: bool = True, **kwargs):
+        super().__init__(instances=instances, **kwargs)

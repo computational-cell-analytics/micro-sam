@@ -83,6 +83,86 @@ class UniBatchSampler(Sampler[List[int]]):
         random.seed(epoch)
 
 
+class DistributedUniBatchSampler(Sampler[List[int]]):
+    """Distributed version of UniBatchSampler for DDP training.
+
+    Shards batches **within each group** across ranks, so every rank receives
+    the same proportion of 2D and 3D batches each epoch.  This avoids the load
+    imbalance that arises when a globally-shuffled list is interleaved across
+    ranks, because 2D and 3D batches have very different compute costs.
+
+    All ranks use the same shuffle seed (set via :meth:`set_epoch`) so they
+    independently produce identical per-group batch lists, then each takes its
+    own non-overlapping slice.
+
+    Call :meth:`set_epoch` before each epoch so the shuffle seed changes and
+    all ranks stay in sync.
+
+    Args:
+        group_per_index: Same as :class:`UniBatchSampler`.
+        batch_size: Default batch size.
+        batch_size_per_group: Per-group batch size overrides.
+        shuffle: Whether to shuffle batches each epoch.
+        drop_last: Whether to drop the last incomplete batch per group.
+        rank: This process's rank (0-based).
+        world_size: Total number of DDP processes.
+    """
+
+    def __init__(
+        self,
+        group_per_index: List,
+        batch_size: int = 1,
+        batch_size_per_group: Optional[Dict] = None,
+        shuffle: bool = True,
+        drop_last: bool = False,
+        rank: int = 0,
+        world_size: int = 1,
+    ):
+        self._base = UniBatchSampler(
+            group_per_index, batch_size, batch_size_per_group, shuffle, drop_last
+        )
+        self.rank = rank
+        self.world_size = world_size
+
+    def set_epoch(self, epoch: int) -> None:
+        """Seed the shuffle for *epoch* — must be called identically on all ranks."""
+        self._base.set_epoch(epoch)
+
+    def __iter__(self):
+        per_rank_batches: List[List[int]] = []
+
+        for group_key, indices in self._base._groups.items():
+            bs = self._base._get_batch_size(group_key)
+            group_indices = list(indices)
+
+            if self._base.shuffle:
+                random.shuffle(group_indices)
+
+            group_batches: List[List[int]] = []
+            for i in range(0, len(group_indices), bs):
+                batch = group_indices[i:i + bs]
+                if self._base.drop_last and len(batch) < bs:
+                    continue
+                group_batches.append(batch)
+
+            # Shard this group's batches across ranks before merging.
+            per_rank_batches.extend(group_batches[self.rank::self.world_size])
+
+        if self._base.shuffle:
+            random.shuffle(per_rank_batches)
+
+        yield from per_rank_batches
+
+    def __len__(self) -> int:
+        total = 0
+        for group_key, indices in self._base._groups.items():
+            bs = self._base._get_batch_size(group_key)
+            n = len(indices)
+            n_batches = n // bs if self._base.drop_last else (n + bs - 1) // bs
+            total += n_batches // self.world_size
+        return total
+
+
 def _build_group_map(concat_dataset: ConcatDataset) -> List:
     """Build a flat list mapping each global index to its group key.
 
