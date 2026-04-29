@@ -376,8 +376,12 @@ def load_volume(
     crop_shape: Tuple[int, ...] = (8, 512, 512),
     ensure_8bit: bool = True,
     ensure_instances: bool = True,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Load a 3D volume, apply dataset-specific preprocessing, and center-crop."""
+) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+    """Load a 3D volume, apply dataset-specific preprocessing, and center-crop.
+
+    Returns (raw, labels, valid_roi) where valid_roi is a boolean mask (True = annotated)
+    for partially annotated datasets (platynereis_nuclei), or None for all others.
+    """
     if raw_key is None:
         raw = load_image(raw_path)
     else:
@@ -392,8 +396,10 @@ def load_volume(
         # Restrict to holdout slices [0:70]; training used slices 70+.
         raw, labels = raw[:70], labels[:70]
 
+    valid_roi = None
     if dataset_name == "platynereis_nuclei":
         labels = labels.astype("int64")
+        valid_roi = labels != -1
         labels[labels == -1] = 0
 
     if ensure_8bit and raw.max() > 255:
@@ -401,12 +407,14 @@ def load_volume(
 
     roi = _center_crop_roi(raw.shape, crop_shape)
     raw, labels = raw[roi], labels[roi]
+    if valid_roi is not None:
+        valid_roi = valid_roi[roi]
 
     if ensure_instances:
         labels = connected_components(labels)
 
     assert raw.shape == labels.shape, f"Shape mismatch: raw {raw.shape} vs labels {labels.shape}"
-    return raw.astype("float32"), labels.astype("uint32")
+    return raw.astype("float32"), labels.astype("uint32"), valid_roi
 
 
 # UniSAM2 helpers shared between evaluate_2d and evaluate_3d

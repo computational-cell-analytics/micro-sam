@@ -193,10 +193,12 @@ def run_nninteractive_evaluation(
     all_gt = []
     all_seg_per_iter = [[] for _ in range(n_iterations)]
 
-    for raw, labels in tqdm(_load_data(dataset_name, data_root, ndim=3), total=n, desc="nninteractive"):
+    for raw, labels, valid_roi in tqdm(_load_data(dataset_name, data_root, ndim=3), total=n, desc="nninteractive"):
         segs = _segment_nninteractive_iterative(raw, labels, session, start_with_box, n_iterations)
         all_gt.append(labels)
         for it, seg in enumerate(segs):
+            if valid_roi is not None:
+                seg[~valid_roi] = 0
             all_seg_per_iter[it].append(seg)
 
     os.makedirs(results_dir, exist_ok=True)
@@ -215,7 +217,7 @@ def _load_sam_v1(model_type, checkpoint, device):
 def _write_sam_v1_2d_inputs(dataset_name, data_root, input_dir, gt_dir):
     image_paths, gt_paths = [], []
     n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
-    for sample_id, (raw, labels) in enumerate(tqdm(_load_data(dataset_name, data_root, 2), total=n, desc="save-crops")):
+    for sample_id, (raw, labels, _) in enumerate(tqdm(_load_data(dataset_name, data_root, 2), total=n, desc="save-crops")):
         image_path = os.path.join(input_dir, f"{sample_id:05d}.tif")
         gt_path = os.path.join(gt_dir, f"{sample_id:05d}.tif")
         raw = np.clip(np.round(raw), 0, 255).astype("uint8")
@@ -229,7 +231,7 @@ def _write_sam_v1_2d_inputs(dataset_name, data_root, input_dir, gt_dir):
 def _write_sam2_2d_inputs(dataset_name, data_root, input_dir, gt_dir):
     image_paths, gt_paths = [], []
     n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
-    for sample_id, (raw, labels) in enumerate(tqdm(_load_data(dataset_name, data_root, 2), total=n, desc="save-crops")):
+    for sample_id, (raw, labels, _) in enumerate(tqdm(_load_data(dataset_name, data_root, 2), total=n, desc="save-crops")):
         image_path = os.path.join(input_dir, f"{sample_id:05d}.tif")
         gt_path = os.path.join(gt_dir, f"{sample_id:05d}.tif")
         imageio.imwrite(image_path, _to_sam2_uint8(raw), compression="zlib")
@@ -334,7 +336,7 @@ def run_sam3_evaluation(
     all_gt = []
     all_seg_per_iter = [[] for _ in range(n_iterations)]
 
-    for raw, labels in tqdm(_load_data(dataset_name, data_root, ndim), total=n, desc=f"sam3-{ndim}d"):
+    for raw, labels, valid_roi in tqdm(_load_data(dataset_name, data_root, ndim), total=n, desc=f"sam3-{ndim}d"):
         if ndim == 2:
             segs = run_interactive_segmentation_2d_sam3(
                 image=raw, gt=labels, model=model, processor=processor,
@@ -347,6 +349,8 @@ def run_sam3_evaluation(
             )
         all_gt.append(labels)
         for it, seg in enumerate(segs):
+            if valid_roi is not None:
+                seg[~valid_roi] = 0
             all_seg_per_iter[it].append(seg)
 
     os.makedirs(results_dir, exist_ok=True)
@@ -417,9 +421,10 @@ def run_sam2_evaluation(
         n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
         prediction_root = os.path.join(experiment_folder, "predictions", name_tag)
         all_gt = []
+        all_valid_rois = []
         pred_paths_per_iter = [[] for _ in range(n_iterations)]
 
-        for sample_id, (raw, labels) in enumerate(
+        for sample_id, (raw, labels, valid_roi) in enumerate(
             tqdm(_load_data(dataset_name, data_root, ndim=3), total=n, desc=f"{name_tag}-3d")
         ):
             sample_prediction_dir = run_interactive_segmentation_3d(
@@ -435,6 +440,7 @@ def run_sam2_evaluation(
                 n_iterations=n_iterations,
             )
             all_gt.append(labels)
+            all_valid_rois.append(valid_roi)
             for it in range(n_iterations):
                 pred_paths_per_iter[it].append(
                     os.path.join(sample_prediction_dir, f"iteration{it}", f"{sample_id:05d}.tif")
@@ -444,7 +450,13 @@ def run_sam2_evaluation(
         for it, save_path in enumerate(save_paths):
             if os.path.exists(save_path):
                 continue
-            results = run_evaluation(gt_paths=all_gt, prediction_paths=pred_paths_per_iter[it], save_path=save_path)
+            preds = []
+            for pred_path, valid_roi in zip(pred_paths_per_iter[it], all_valid_rois):
+                pred = imageio.imread(pred_path)
+                if valid_roi is not None:
+                    pred[~valid_roi] = 0
+                preds.append(pred)
+            results = run_evaluation(gt_paths=all_gt, prediction_paths=preds, save_path=save_path)
             print(f"Iteration {it:02d}: {results}")
 
 

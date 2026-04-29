@@ -44,14 +44,18 @@ def _sorted_path_pairs(raw_paths, label_paths):
 
 
 def _load_data(dataset_name, data_root, ndim):
-    """Yield (image_or_volume, labels) pairs for the given dataset."""
+    """Yield (image_or_volume, labels, valid_roi) triples for the given dataset.
+
+    valid_roi is a boolean mask (True = annotated) for partially annotated datasets
+    (platynereis_nuclei), or None for all others.
+    """
     if ndim == 3:
         raw_paths, label_paths, raw_key, label_key = get_data_paths(dataset_name, data_root)
         path_pairs = _sorted_path_pairs(raw_paths, label_paths)[:MAX_EVALUATION_SAMPLES]
         for raw_path, label_path in path_pairs:
-            raw, labels = load_volume(raw_path, label_path, raw_key, label_key, dataset_name, CROP_SHAPE_3D)
+            raw, labels, valid_roi = load_volume(raw_path, label_path, raw_key, label_key, dataset_name, CROP_SHAPE_3D)
             raw = _ensure_8bit_range(raw)
-            yield raw, labels
+            yield raw, labels, valid_roi
     else:
         image_paths, gt_paths, raw_key, label_key = get_data_paths(dataset_name, data_root)
         path_pairs = _sorted_path_pairs(image_paths, gt_paths)[:MAX_EVALUATION_SAMPLES]
@@ -62,4 +66,4 @@ def _load_data(dataset_name, data_root, ndim):
             image = image[roi]
             gt = _read_2d(gt_path, label_key)
             gt = connected_components(gt[roi]).astype("uint32")
-            yield image, gt
+            yield image, gt, None

@@ -57,7 +57,7 @@ def run_micro_sam_volumetric_evaluation(
 
     n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
     rows = []
-    for sample_id, (raw, labels) in enumerate(tqdm(_load_data(dataset_name, data_root, 3), total=n, desc="micro-sam-3d")):
+    for sample_id, (raw, labels, _) in enumerate(tqdm(_load_data(dataset_name, data_root, 3), total=n, desc="micro-sam-3d")):
         sample_name = f"sample_{sample_id:05d}"
         result_dir = os.path.join(
             experiment_folder, "results", f"{dataset_name}_micro-sam_{model_type}_3d_{prompt_choice}", sample_name,

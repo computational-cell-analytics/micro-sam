@@ -61,7 +61,7 @@ def run_interactive_evaluation_3d(
 
     fname_list, label_list = [], []
     for raw_path, label_path in zip(raw_paths, label_paths):
-        raw, labels = load_volume(
+        raw, labels, _ = load_volume(
             raw_path=raw_path,
             label_path=label_path,
             raw_key=raw_key,
@@ -130,7 +130,7 @@ def run_automatic_evaluation_3d(
     for raw_path, label_path in tqdm(
         zip(raw_paths, label_paths), total=len(raw_paths), desc="automatic 3D"
     ):
-        raw, labels = load_volume(
+        raw, labels, valid_roi = load_volume(
             raw_path=raw_path,
             label_path=label_path,
             raw_key=raw_key,
@@ -143,6 +143,8 @@ def run_automatic_evaluation_3d(
 
         out = predict_unisam2(model, raw, ndim=3, device=device)
         seg = postprocess_unisam2(out, dataset_name)
+        if valid_roi is not None:
+            seg[~valid_roi] = 0
 
         all_gt.append(labels)
         all_seg.append(seg)

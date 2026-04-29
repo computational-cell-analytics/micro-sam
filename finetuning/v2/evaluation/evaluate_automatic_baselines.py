@@ -239,8 +239,10 @@ def _run_evaluation(segment_fn, dataset_name, data_root, ndim, save_path, desc):
 
     n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
     all_gt, all_seg = [], []
-    for image_or_volume, labels in tqdm(_load_data(dataset_name, data_root, ndim), total=n, desc=desc):
+    for image_or_volume, labels, valid_roi in tqdm(_load_data(dataset_name, data_root, ndim), total=n, desc=desc):
         seg = segment_fn(image_or_volume)
+        if valid_roi is not None:
+            seg[~valid_roi] = 0
         all_gt.append(labels)
         all_seg.append(seg)
 
