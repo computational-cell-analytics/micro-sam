@@ -61,7 +61,7 @@ _SAM2_BACKBONE = "sam2.1"
 _SAM2_MODEL_TYPE = "hvit_t"
 
 # micro-sam v1 model types
-_SAM_V1_MODEL_TYPE = "vit_b"
+_SAM_V1_MODEL_TYPE = "vit_b_lm"
 
 # Per-dataset z/xy anisotropy for CellPose do_3D mode (z_voxel / xy_voxel).
 _DATASET_ANISOTROPY = {
@@ -91,8 +91,6 @@ def _load_cellpose(model_type, device):
     use_gpu = (device != "cpu") and torch.cuda.is_available()
     if model_type in ("cyto", "cyto2", "cyto3", "nuclei"):
         return models.Cellpose(gpu=use_gpu, model_type=model_type)
-    elif model_type == "cpsam":
-        return models.CellposeModel(gpu=use_gpu)
     else:
         return models.CellposeModel(gpu=use_gpu, model_type=model_type)
 
@@ -408,7 +406,7 @@ def main():
     elif args.method in ("microsam_ais", "microsam_apg"):
         run_microsam_v1_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder,
-            method=args.method, model_type=args.model_type or "vit_b",
+            method=args.method, model_type=args.model_type or _SAM_V1_MODEL_TYPE,
             checkpoint=args.checkpoint, device=device,
         )
 

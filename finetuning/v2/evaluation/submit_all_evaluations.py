@@ -62,11 +62,19 @@ DATASETS_3D_EM = ("lucchi", "platynereis_nuclei", "cremi", "snemi", "humanneuron
 DATASETS = tuple(sorted(set(DATASETS_2D + DATASETS_3D_LM + DATASETS_3D_EM)))
 
 # Automatic methods that cannot run on EM datasets.
-_MICROSAM_V1_METHODS = ("microsam_ais", "microsam_apg")
-# Interactive methods that are 2D-only (SAM v1 raises ValueError for 3D).
-_SAM_V1_INTERACTIVE_METHODS = ("sam", "micro-sam")
+_MICROSAM_V1_METHODS = ("sam", "microsam_ais", "microsam_apg")
+# Automatic methods that are 2D-only.
+_2D_ONLY_AUTO_METHODS = ("cellsam", "sam2")
+# Interactive methods that are 2D-only.
+_SAM_V1_INTERACTIVE_METHODS = ("sam", "micro-sam", "sam3")
 # Interactive methods that are 3D-only.
-_3D_ONLY_INTERACTIVE_METHODS = ("microsam_vol",)
+_3D_ONLY_INTERACTIVE_METHODS = ("microsam_vol", "nninteractive")
+
+# Methods that require a non-default conda environment.
+_METHOD_ENV = {
+    "cellpose": "cp3",
+    "stardist": "sd",
+}
 
 
 def _sanitize(name: str) -> str:
@@ -142,18 +150,20 @@ def _write_batch_script(args: argparse.Namespace) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     script_path = job_folder / f"{timestamp}_{tag}.sh"
     command = _command_from_args(args)
+    env = _METHOD_ENV.get(args.method, "super")
 
     batch_script = f"""#!/bin/bash
 #SBATCH -c 8
 #SBATCH --mem 64G
 #SBATCH -t 24:00:00
-#SBATCH -p grete:shared
-#SBATCH -G A100:1
+#SBATCH -p grete-h100:shared
+#SBATCH -G H100:1
 #SBATCH -A nim00007
 #SBATCH --job-name=micro_sam2-eval
+#SBATCH --constraint=inet
 
 source ~/.bashrc
-micromamba activate super
+micromamba activate {env}
 
 {" ".join(command)}
 """
@@ -216,6 +226,8 @@ def main(argv: Optional[list[str]] = None) -> None:
             datasets = DATASETS
         if args.method in _MICROSAM_V1_METHODS:
             datasets = tuple(d for d in datasets if d not in DATASETS_3D_EM)
+        if args.segmentation_mode == "automatic" and args.method in _2D_ONLY_AUTO_METHODS:
+            datasets = tuple(d for d in datasets if d in DATASETS_2D)
         if args.segmentation_mode == "interactive" and args.method in _SAM_V1_INTERACTIVE_METHODS:
             datasets = tuple(d for d in datasets if d in DATASETS_2D)
         if args.segmentation_mode == "interactive" and args.method in _3D_ONLY_INTERACTIVE_METHODS:
