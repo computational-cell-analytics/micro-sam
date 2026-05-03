@@ -673,7 +673,8 @@ def train_joint_sam2(
     z_slices: Optional[List[int]] = None,
     dataset_choice: str = "both",
     n_workers: int = 16,
-    n_iterations: int = int(2e5),
+    n_epochs: int = 100,
+    n_iterations: Optional[int] = None,
     early_stopping: Optional[int] = None,
     max_num_objects: int = 20,
     checkpoint_path=None,
@@ -708,7 +709,8 @@ def train_joint_sam2(
         z_slices: Z-slice counts for 3D groups (default [8]).
         dataset_choice: ``"lm"``, ``"em"``, or ``"both"``.
         n_workers: DataLoader workers.
-        n_iterations: Training iterations.
+        n_epochs: Number of training epochs. Ignored if n_iterations is set.
+        n_iterations: If set, train for this many iterations instead of epochs.
         early_stopping: Stop after this many epochs without improvement (None = off).
         max_num_objects: Max objects per interactive step.
         checkpoint_path: SAM2 checkpoint path. Downloads default if None.
@@ -800,7 +802,8 @@ def train_joint_sam2(
         clip_grad_norm=clip_grad_norm,
     )
 
-    fit_kwargs = {"iterations": n_iterations, "overwrite_training": overwrite_training}
+    fit_kwargs = {"epochs": n_epochs} if n_iterations is None else {"iterations": n_iterations}
+    fit_kwargs["overwrite_training"] = overwrite_training
     if save_every_kth_epoch is not None:
         fit_kwargs["save_every_kth_epoch"] = save_every_kth_epoch
     trainer.fit(**fit_kwargs)
@@ -812,7 +815,8 @@ def _train_joint_rank(
     name: str,
     model_type: str,
     input_path: str,
-    n_iterations: int,
+    n_epochs: int,
+    n_iterations: Optional[int],
     early_stopping: Optional[int],
     max_num_objects: int,
     checkpoint_path,
@@ -931,7 +935,8 @@ def _train_joint_rank(
         clip_grad_norm=clip_grad_norm,
     )
 
-    fit_kwargs = {"iterations": n_iterations, "overwrite_training": overwrite_training}
+    fit_kwargs = {"epochs": n_epochs} if n_iterations is None else {"iterations": n_iterations}
+    fit_kwargs["overwrite_training"] = overwrite_training
     if save_every_kth_epoch is not None:
         fit_kwargs["save_every_kth_epoch"] = save_every_kth_epoch
     try:
@@ -949,7 +954,8 @@ def train_joint_sam2_multi_gpu(
     z_slices: Optional[List[int]] = None,
     dataset_choice: str = "both",
     n_workers: int = 16,
-    n_iterations: int = int(2e5),
+    n_epochs: int = 100,
+    n_iterations: Optional[int] = None,
     early_stopping: Optional[int] = None,
     max_num_objects: int = 20,
     checkpoint_path=None,
@@ -986,7 +992,8 @@ def train_joint_sam2_multi_gpu(
         z_slices: Z-slice counts for 3D groups (default [8]).
         dataset_choice: ``"lm"``, ``"em"``, or ``"both"``.
         n_workers: DataLoader workers per GPU.
-        n_iterations: Training iterations.
+        n_epochs: Number of training epochs. Ignored if n_iterations is set.
+        n_iterations: If set, train for this many iterations instead of epochs.
         early_stopping: Stop after this many epochs without improvement.
         max_num_objects: Max objects per interactive step.
         checkpoint_path: SAM2 checkpoint path. Downloads default if None.
@@ -1024,6 +1031,7 @@ def train_joint_sam2_multi_gpu(
         name=name,
         model_type=model_type,
         input_path=input_path,
+        n_epochs=n_epochs,
         n_iterations=n_iterations,
         early_stopping=early_stopping,
         max_num_objects=max_num_objects,

@@ -4,8 +4,8 @@ import torch
 def main():
     model_type = "hvit_t"
     data_path = "/mnt/vast-nhr/projects/cidas/cca/data"
-    # save_root = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v2"
-    save_root = None
+    save_root = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v2"
+    n_epochs = 150
 
     n_gpus = torch.cuda.device_count()
     name = f"joint_sam2_{model_type}_{'multi' if n_gpus > 1 else 'single'}_gpu"
@@ -19,7 +19,7 @@ def main():
         z_slices=[8],
         dataset_choice="both",
         n_workers=16,
-        n_iterations=int(2e5),
+        n_epochs=n_epochs,
         lr=1e-5,
         save_root=save_root,
         checkpoint_path=None,  # downloads default SAM2 weights if None
