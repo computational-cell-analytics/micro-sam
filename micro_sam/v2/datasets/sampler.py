@@ -124,6 +124,12 @@ class DistributedUniBatchSampler(Sampler[List[int]]):
         self.rank = rank
         self.world_size = world_size
 
+    def _make_evenly_shardable(self, batches: List[List[int]]) -> List[List[int]]:
+        """Drop trailing batches so all ranks receive the same group count."""
+        n_batches = len(batches)
+        n_batches -= n_batches % self.world_size
+        return batches[:n_batches]
+
     def set_epoch(self, epoch: int) -> None:
         """Seed the shuffle for *epoch* — must be called identically on all ranks."""
         self._base.set_epoch(epoch)
@@ -145,6 +151,8 @@ class DistributedUniBatchSampler(Sampler[List[int]]):
                     continue
                 group_batches.append(batch)
 
+            group_batches = self._make_evenly_shardable(group_batches)
+
             # Shard this group's batches across ranks before merging.
             per_rank_batches.extend(group_batches[self.rank::self.world_size])
 
@@ -159,6 +167,7 @@ class DistributedUniBatchSampler(Sampler[List[int]]):
             bs = self._base._get_batch_size(group_key)
             n = len(indices)
             n_batches = n // bs if self._base.drop_last else (n + bs - 1) // bs
+            n_batches -= n_batches % self.world_size
             total += n_batches // self.world_size
         return total
 
