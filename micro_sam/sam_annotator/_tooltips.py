@@ -58,7 +58,7 @@ tooltips = {
     "device": "Select the computational device to use for processing.",
     "initial_model": "Select the model name used as starting point for training.",
     "label_key": "Define the key that holds to the segmentation labels. Use a pattern, e.g. \"*.tif\" select multiple files or an internal path for hdf5, zarr or similar formats.",  # noqa
-    "label_path": "Specify the path to the segmentaiton labels for training. Can either point to a directory or single file.",  # noqa
+    "label_path": "Specify the path to the segmentation labels for training. Can either point to a directory or single file.",  # noqa
     "label_path_val": "Specify the path to the segmentation labels for validation. Can either point to a directory or single file.",  # noqa
     "name": "Enter the name of the model that will be trained.",
     "patch": "Select the size of image patches used for training.",

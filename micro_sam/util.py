@@ -1166,7 +1166,7 @@ def precompute_image_embeddings(
             in the mask will be excluded from the computation. It does not have any effect for non-tiled embeddings.
         pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
             Can be used together with pbar_update to handle napari progress bar in other thread.
-            To enables using this function within a threadworker.
+            To enable using this function within a threadworker.
         pbar_update: Callback to update an external progress bar.
 
     Returns:
