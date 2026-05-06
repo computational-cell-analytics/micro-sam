@@ -64,6 +64,18 @@ def _cellpose_raw_trafo(x):
     return x
 
 
+def _resize_to_512(x, is_label=False):
+    """Resize (Z, H, W) to (Z, 512, 512) via ResizeLongestSideInputs, then pad to square."""
+    from torch_em.transform.generic import ResizeLongestSideInputs
+    return ResizeLongestSideInputs(target_shape=(512, 512), is_label=is_label)(x)
+
+
+def _resize_raw_to_512(x):
+    """Resize small raw volume patch to 512×512 and normalize."""
+    x = _resize_to_512(x, is_label=False)
+    return _identity(x)
+
+
 def _normalize_percentile(x, axis=None):
     """Transforms input images with percentile normalization.
 

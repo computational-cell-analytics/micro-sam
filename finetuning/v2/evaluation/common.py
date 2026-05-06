@@ -49,13 +49,13 @@ DATASETS_3D_LM = [
 ]
 
 # 3D EM datasets
-DATASETS_3D_EM = ["lucchi", "platynereis_nuclei", "cremi", "snemi", "humanneurons"]
+DATASETS_3D_EM = ["platynereis_nuclei", "cremi", "snemi", "humanneurons"]
 
 DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM
 
 
 def _get_2d_data_paths(
-    dataset_name: str, data_root: str
+    dataset_name: str, data_root: str, download: bool = False
 ) -> Tuple[List[str], List[str], Optional[str], Optional[str]]:
     p = data_root
 
@@ -65,35 +65,31 @@ def _get_2d_data_paths(
 
     if dataset_name == "arvidsson":
         img, gt = datasets.arvidsson.get_arvidsson_paths(
-            path=os.path.join(p, "arvidsson"), split="test", download=False,
+            path=os.path.join(p, "arvidsson"), split="test", download=download,
         )
         return sorted(img), sorted(gt), None, None
 
     if dataset_name == "bitdepth_nucseg":
         img, gt = datasets.bitdepth_nucseg.get_bitdepth_nucseg_paths(
-            path=os.path.join(p, "bitdepth_nucseg"), download=False,
+            path=os.path.join(p, "bitdepth_nucseg"), download=download,
         )
         return sorted(img), sorted(gt), None, None
 
     if dataset_name == "cellbindb":
         img, gt = datasets.cellbindb.get_cellbindb_paths(
-            path=os.path.join(p, "cellbindb"), download=False,
+            path=os.path.join(p, "cellbindb"), download=download,
         )
         return sorted(img), sorted(gt), None, None
 
     if dataset_name == "cellpose_data":
-        img, gt = [], []
-        for choice in ("cyto", "cyto2"):
-            i, g = datasets.cellpose.get_cellpose_paths(
-                path=os.path.join(p, "cellpose"), split="test", choice=choice, download=False,
-            )
-            img.extend(i)
-            gt.extend(g)
+        img, gt = datasets.cellpose.get_cellpose_paths(
+            path=os.path.join(p, "cellpose"), split="test", choice="cyto", download=download,
+        )
         return sorted(img), sorted(gt), None, None
 
     if dataset_name == "covid_if":
         paths = datasets.covid_if.get_covid_if_paths(
-            path=os.path.join(p, "covid_if"), download=False,
+            path=os.path.join(p, "covid_if"), download=download,
         )
         return sorted(paths), sorted(paths), "raw/nuclei/s0", "labels/nuclei/s0"
 
@@ -101,7 +97,7 @@ def _get_2d_data_paths(
         img, gt = [], []
         for stain in ("cell", "dapi"):
             i, g = datasets.cvz_fluo.get_cvz_fluo_paths(
-                path=os.path.join(p, "cvz"), stain_choice=stain, download=False,
+                path=os.path.join(p, "cvz"), stain_choice=stain, download=download,
             )
             img.extend(i)
             gt.extend(g)
@@ -109,7 +105,7 @@ def _get_2d_data_paths(
 
     if dataset_name == "deepbacs":
         img_folder, label_folder = datasets.deepbacs.get_deepbacs_paths(
-            path=os.path.join(p, "deepbacs"), bac_type="mixed", split="test", download=False,
+            path=os.path.join(p, "deepbacs"), bac_type="mixed", split="test", download=download,
         )
         img = sorted(glob(os.path.join(img_folder, "*.tif")))
         gt = sorted(glob(os.path.join(label_folder, "*.tif")))
@@ -117,31 +113,31 @@ def _get_2d_data_paths(
 
     if dataset_name == "deepseas":
         img, gt = datasets.deepseas.get_deepseas_paths(
-            path=os.path.join(p, "deepseas"), split="test", download=False,
+            path=os.path.join(p, "deepseas"), split="test", download=download,
         )
         return sorted(img), sorted(gt), None, None
 
     if dataset_name == "dic_hepg2":
         img, gt = datasets.dic_hepg2.get_dic_hepg2_paths(
-            path=os.path.join(p, "dic_hepg2"), split="test", download=False,
+            path=os.path.join(p, "dic_hepg2"), split="test", download=download,
         )
         return sorted(img), sorted(gt), None, None
 
     if dataset_name == "dsb":
         img, gt = datasets.dsb.get_dsb_paths(
-            path=os.path.join(p, "dsb"), source="full", split="test", download=False,
+            path=os.path.join(p, "dsb"), source="full", split=None, download=download,
         )
         return sorted(img), sorted(gt), None, None
 
     if dataset_name == "dynamicnuclearnet":
         paths = datasets.dynamicnuclearnet.get_dynamicnuclearnet_paths(
-            path=os.path.join(p, "dynamicnuclearnet"), split="test", download=False,
+            path=os.path.join(p, "dynamicnuclearnet"), split="test", download=download,
         )
         return sorted(paths), sorted(paths), "raw", "labels"
 
     if dataset_name == "hpa":
         paths = datasets.hpa.get_hpa_segmentation_paths(
-            path=os.path.join(p, "hpa"), split="test", download=False,
+            path=os.path.join(p, "hpa"), split="val", download=download,
         )
         # protein channel for cell body segmentation (peft-sam convention)
         return sorted(paths), sorted(paths), "raw/protein", "labels"
@@ -149,13 +145,13 @@ def _get_2d_data_paths(
     if dataset_name == "microbeseg":
         img, gt = datasets.microbeseg.get_microbeseg_paths(
             path=os.path.join(p, "microbeseg"), split="test",
-            annotation_type="30min-man", download=False,
+            annotation_type="30min-man", download=download,
         )
         return sorted(img), sorted(gt), None, None
 
     if dataset_name == "neurips_cellseg":
         img, gt = datasets.neurips_cell_seg.get_neurips_cellseg_paths(
-            root=os.path.join(p, "neurips_cellseg"), split="test", download=False,
+            root=os.path.join(p, "neurips_cellseg"), split="test", download=download,
         )
         return sorted(img), sorted(gt), None, None
 
@@ -165,7 +161,7 @@ def _get_2d_data_paths(
             try:
                 i, g = datasets.omnipose.get_omnipose_paths(
                     path=os.path.join(p, "omnipose"), split="test",
-                    data_choice=choice, download=False,
+                    data_choice=choice, download=download,
                 )
                 img.extend(i)
                 gt.extend(g)
@@ -176,13 +172,13 @@ def _get_2d_data_paths(
     if dataset_name == "segpc":
         # No test split; use validation.
         paths = datasets.segpc.get_segpc_paths(
-            path=os.path.join(p, "segpc"), split="validation", download=False,
+            path=os.path.join(p, "segpc"), split="validation", download=download,
         )
         return sorted(paths), sorted(paths), "raw", "labels/cells"
 
     if dataset_name == "tissuenet":
         paths = datasets.tissuenet.get_tissuenet_paths(
-            path=os.path.join(p, "tissuenet"), split="test", download=False,
+            path=os.path.join(p, "tissuenet"), split="test", download=download,
         )
         # rgb composite + cell labels matches training convention
         return sorted(paths), sorted(paths), "raw/rgb", "labels/cell"
@@ -190,13 +186,13 @@ def _get_2d_data_paths(
     if dataset_name == "usiigaci":
         # No test split; use val.
         img, gt = datasets.usiigaci.get_usiigaci_paths(
-            path=os.path.join(p, "usiigaci"), split="val", download=False,
+            path=os.path.join(p, "usiigaci"), split="val", download=download,
         )
         return sorted(img), sorted(gt), None, None
 
     if dataset_name == "vicar":
         img, gt = datasets.vicar.get_vicar_paths(
-            path=os.path.join(p, "vicar"), download=False,
+            path=os.path.join(p, "vicar"), download=download,
         )
         return sorted(img), sorted(gt), None, None
 
@@ -204,7 +200,7 @@ def _get_2d_data_paths(
         img, gt = [], []
         for choice in ("bf", "phc"):
             i, g = datasets.yeaz.get_yeaz_paths(
-                path=os.path.join(p, "yeaz"), choice=choice, split="test", download=False,
+                path=os.path.join(p, "yeaz"), choice=choice, split="test", download=download,
             )
             img.extend(i)
             gt.extend(g)
@@ -214,77 +210,83 @@ def _get_2d_data_paths(
 
 
 def _get_3d_lm_data_paths(
-    dataset_name: str, data_root: str
+    dataset_name: str, data_root: str, download: bool = False
 ) -> Tuple[List[str], List[str], Optional[str], Optional[str]]:
     p = data_root
 
     if dataset_name == "blastospim":
         paths = datasets.blastospim.get_blastospim_paths(
-            path=os.path.join(p, "blastospim"), download=False,
+            path=os.path.join(p, "blastospim"), download=download,
         )
         return sorted(paths), sorted(paths), "raw", "labels"
 
     if dataset_name == "cartocell":
-        img, gt = [], []
-        for name in ("eggChambers", "embryoids", "MDCK-Normoxia", "MDCK-Hypoxia"):
-            try:
-                i, g = datasets.cartocell.get_cartocell_paths(
-                    path=os.path.join(p, "cartocell"), split="test", name=name, download=False,
-                )
-                img.extend(i)
-                gt.extend(g)
-            except Exception as e:
-                warnings.warn(f"Skipping cartocell name '{name}': {e}")
+        cartocell_root = os.path.join(p, "cartocell")
+        current_data_root = os.path.join(cartocell_root, "CartoCell")
+        if os.path.exists(current_data_root):
+            img = sorted(glob(os.path.join(current_data_root, "test", "x", "*.tif")))
+            gt = [ipath.replace(os.sep + "x" + os.sep, os.sep + "y" + os.sep) for ipath in img]
+        else:
+            img, gt = [], []
+            for name in ("eggChambers", "embryoids", "MDCK-Normoxia", "MDCK-Hypoxia"):
+                try:
+                    i, g = datasets.cartocell.get_cartocell_paths(
+                        path=cartocell_root, split="test", name=name, download=download,
+                    )
+                    img.extend(i)
+                    gt.extend(g)
+                except Exception as e:
+                    warnings.warn(f"Skipping cartocell name '{name}': {e}")
         return sorted(img), sorted(gt), None, None
 
     if dataset_name == "celegans_atlas":
         img, gt = datasets.celegans_atlas.get_celegans_atlas_paths(
-            path=os.path.join(p, "celegans_atlas"), split="test", download=False,
+            path=os.path.join(p, "celegans_atlas"), split="test", download=download,
         )
         return sorted(img), sorted(gt), None, None
 
     if dataset_name == "cellseg_3d":
         img, gt = datasets.cellseg_3d.get_cellseg_3d_paths(
-            path=os.path.join(p, "cellseg_3d"), download=False,
+            path=os.path.join(p, "cellseg_3d"), download=download,
         )
         return sorted(img), sorted(gt), None, None
 
     if dataset_name == "embedseg":
         img, gt = datasets.embedseg_data.get_embedseg_paths(
             path=os.path.join(p, "embedseg"),
-            name="Mouse-Skull-Nuclei-CBG", split="test", download=False,
+            name="Mouse-Skull-Nuclei-CBG", split="test", download=download,
         )
         return list(img), list(gt), None, None
 
     if dataset_name == "gonuclear":
         paths = datasets.gonuclear.get_gonuclear_paths(
-            path=os.path.join(p, "gonuclear"), download=False,
+            path=os.path.join(p, "gonuclear"), download=download,
         )
         return sorted(paths), sorted(paths), "raw/nuclei", "labels/nuclei"
 
     if dataset_name == "mouse_embryo":
         # No test split; use val.
         paths = datasets.mouse_embryo.get_mouse_embryo_paths(
-            path=os.path.join(p, "mouse_embryo"), name="nuclei", split="val", download=False,
+            path=os.path.join(p, "mouse_embryo"), name="nuclei", split="val", download=download,
         )
         return sorted(paths), sorted(paths), "raw", "label"
 
     if dataset_name == "nis3d":
         img, gt = datasets.nis3d.get_nis3d_paths(
-            path=os.path.join(p, "nis3d"), split="test", download=False,
+            path=os.path.join(p, "nis3d"), split="test", split_type="cross-image", download=download,
         )
         return sorted(img), sorted(gt), None, None
 
     if dataset_name == "plantseg":
         all_paths = []
-        for name, folder in (
-            ("nuclei", "plantseg"),
-            ("ovules", "plantseg_ovules"),
-            ("root", "plantseg_root"),
+        for name, folder, split in (
+            ("nuclei", "plantseg", "train"),
+            ("ovules", "plantseg_ovules", "test"),
+            ("root", "plantseg_root", "test"),
         ):
             try:
                 ps = datasets.plantseg.get_plantseg_paths(
-                    path=os.path.join(p, folder), name=name, split="test", download=False,
+                    path=os.path.join(p, folder), name=name, split=split, download=download,
                 )
                 all_paths.extend(ps)
             except Exception as e:
@@ -293,7 +295,7 @@ def _get_3d_lm_data_paths(
 
     if dataset_name == "pnas_arabidopsis":
         paths = datasets.pnas_arabidopsis.get_pnas_arabidopsis_paths(
-            path=os.path.join(p, "pnas_arabidopsis"), download=False,
+            path=os.path.join(p, "pnas_arabidopsis"), download=download,
         )
         return sorted(paths), sorted(paths), "raw", "labels"
 
@@ -301,38 +303,32 @@ def _get_3d_lm_data_paths(
 
 
 def _get_3d_em_data_paths(
-    dataset_name: str, data_root: str
+    dataset_name: str, data_root: str, download: bool = False
 ) -> Tuple[List[str], List[str], Optional[str], Optional[str]]:
     p = data_root
 
-    if dataset_name == "lucchi":
-        path = datasets.lucchi.get_lucchi_paths(
-            path=os.path.join(p, "lucchi"), split="test", download=False,
-        )
-        return [path], [path], "raw", "labels"
-
     if dataset_name == "platynereis_nuclei":
         paths = datasets.platynereis.get_platynereis_paths(
-            path=os.path.join(p, "platynereis"), sample_ids=None, name="nuclei", download=False,
+            path=os.path.join(p, "platynereis"), sample_ids=None, name="nuclei", download=download,
         )
         return paths, paths, "volumes/raw", "volumes/labels/nucleus_instance_labels"
 
     if dataset_name == "cremi":
         paths = datasets.cremi.get_cremi_paths(
-            path=os.path.join(p, "cremi"), samples=("A", "B", "C"), download=False,
+            path=os.path.join(p, "cremi"), samples=("A", "B", "C"), download=download,
         )
         return sorted(paths), sorted(paths), "volumes/raw", "volumes/labels/neuron_ids"
 
     if dataset_name == "snemi":
         # The test file has no labels; training used train-slices 70+, so slices [0:70] are holdout.
         path = datasets.snemi.get_snemi_paths(
-            path=os.path.join(p, "snemi"), sample="train", download=False,
+            path=os.path.join(p, "snemi"), sample="train", download=download,
         )
         return [path], [path], "volumes/raw", "volumes/labels/neuron_ids"
 
     if dataset_name == "humanneurons":
         paths = datasets.humanneurons.get_humanneurons_paths(
-            path=os.path.join(p, "humanneurons"), download=False,
+            path=os.path.join(p, "humanneurons"), download=download,
         )
         return sorted(paths), sorted(paths), "raw", "labels"
 
@@ -340,7 +336,7 @@ def _get_3d_em_data_paths(
 
 
 def get_data_paths(
-    dataset_name: str, data_root: str
+    dataset_name: str, data_root: str, download: bool = False
 ) -> Tuple[List[str], List[str], Optional[str], Optional[str]]:
     """Return (raw_paths, label_paths, raw_key, label_key) for a dataset's test split.
 
@@ -351,10 +347,10 @@ def get_data_paths(
         f"Unsupported dataset: '{dataset_name}'. Choose from {all_datasets}."
     )
     if dataset_name in DATASETS_2D:
-        return _get_2d_data_paths(dataset_name, data_root)
+        return _get_2d_data_paths(dataset_name, data_root, download=download)
     if dataset_name in DATASETS_3D_LM:
-        return _get_3d_lm_data_paths(dataset_name, data_root)
-    return _get_3d_em_data_paths(dataset_name, data_root)
+        return _get_3d_lm_data_paths(dataset_name, data_root, download=download)
+    return _get_3d_em_data_paths(dataset_name, data_root, download=download)
 
 
 def _center_crop_roi(shape, crop_shape):
@@ -376,8 +372,12 @@ def load_volume(
     crop_shape: Tuple[int, ...] = (8, 512, 512),
     ensure_8bit: bool = True,
     ensure_instances: bool = True,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Load a 3D volume, apply dataset-specific preprocessing, and center-crop."""
+) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+    """Load a 3D volume, apply dataset-specific preprocessing, and center-crop.
+
+    Returns (raw, labels, valid_roi) where valid_roi is a boolean mask (True = annotated)
+    for partially annotated datasets (platynereis_nuclei), or None for all others.
+    """
     if raw_key is None:
         raw = load_image(raw_path)
     else:
@@ -392,8 +392,10 @@ def load_volume(
         # Restrict to holdout slices [0:70]; training used slices 70+.
         raw, labels = raw[:70], labels[:70]
 
+    valid_roi = None
     if dataset_name == "platynereis_nuclei":
         labels = labels.astype("int64")
+        valid_roi = labels != -1
         labels[labels == -1] = 0
 
     if ensure_8bit and raw.max() > 255:
@@ -401,12 +403,14 @@ def load_volume(
 
     roi = _center_crop_roi(raw.shape, crop_shape)
     raw, labels = raw[roi], labels[roi]
+    if valid_roi is not None:
+        valid_roi = valid_roi[roi]
 
     if ensure_instances:
         labels = connected_components(labels)
 
     assert raw.shape == labels.shape, f"Shape mismatch: raw {raw.shape} vs labels {labels.shape}"
-    return raw.astype("float32"), labels.astype("uint32")
+    return raw.astype("float32"), labels.astype("uint32"), valid_roi
 
 
 # UniSAM2 helpers shared between evaluate_2d and evaluate_3d
@@ -414,7 +418,7 @@ def load_volume(
 _UNISAM2_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/automatic/v1"
 UNISAM2_CHECKPOINT = os.path.join(_UNISAM2_ROOT, "checkpoints", "unisam2-both", "best.pt")
 
-_EM_DATASETS = {"lucchi", "platynereis_nuclei", "cremi", "snemi", "humanneurons"}
+_EM_DATASETS = {"platynereis_nuclei", "cremi", "snemi", "humanneurons"}
 
 _DATASET_SPACING: dict = {
     # z/xy voxel ratios from published acquisition parameters
@@ -425,9 +429,36 @@ _DATASET_SPACING: dict = {
 
 
 def load_unisam2_model(checkpoint_path, device):
+    import sys
+    import types
     import torch
+    import micro_sam.v2.datasets.sampler as datasets_sampler
+    import micro_sam.v2.datasets.wrapper as datasets_wrapper
+    import micro_sam.v2.transforms.labels as transforms_labels
+    import micro_sam.v2.transforms.raw as transforms_raw
     from micro_sam.v2.models.util import UniSAM2
-    model = UniSAM2(model_type="hvit_t", output_channels=4)
+
+    # Older checkpoints were saved while this package lived under the
+    # "micro_sam2" namespace. Alias the moved modules for torch.load.
+    root = sys.modules.setdefault("micro_sam2", types.ModuleType("micro_sam2"))
+    root.__path__ = []
+    datasets = sys.modules.setdefault("micro_sam2.datasets", types.ModuleType("micro_sam2.datasets"))
+    datasets.__path__ = []
+    transforms = sys.modules.setdefault("micro_sam2.transforms", types.ModuleType("micro_sam2.transforms"))
+    transforms.__path__ = []
+
+    sys.modules["micro_sam2.datasets.sampler"] = datasets_sampler
+    sys.modules["micro_sam2.datasets.wrapper"] = datasets_wrapper
+    sys.modules["micro_sam2.transforms.labels"] = transforms_labels
+    sys.modules["micro_sam2.transforms.raw"] = transforms_raw
+    setattr(root, "datasets", datasets)
+    setattr(root, "transforms", transforms)
+    setattr(datasets, "sampler", datasets_sampler)
+    setattr(datasets, "wrapper", datasets_wrapper)
+    setattr(transforms, "labels", transforms_labels)
+    setattr(transforms, "raw", transforms_raw)
+
+    model = UniSAM2(encoder="hvit_t", output_channels=4)
     state = torch.load(checkpoint_path, weights_only=False, map_location=device)
     model.load_state_dict(state["model_state"])
     model.to(device)
@@ -444,9 +475,10 @@ def predict_unisam2(model, raw, ndim, device):
     is_3d = (ndim == 3)
     block_shape = (4, 384, 384) if is_3d else (1, 384, 384)
     halo = (2, 64, 64) if is_3d else (0, 64, 64)
-    out = np.zeros((4, *raw.shape), dtype="float32")
+    input_ = raw[np.newaxis].astype("float32") if is_3d else raw[np.newaxis, np.newaxis].astype("float32")
+    out = np.zeros((4, *raw.shape), dtype="float32") if is_3d else np.zeros((4, 1, *raw.shape), dtype="float32")
     out = predict_with_halo(
-        input_=raw[np.newaxis].astype("float32"),
+        input_=input_,
         model=model,
         block_shape=block_shape,
         halo=halo,
@@ -472,3 +504,68 @@ def postprocess_unisam2(out, dataset_name):
         spacing = _DATASET_SPACING.get(dataset_name, None)
         seg = flow_instance_segmentation(fg, out[1:], spacing=spacing)
     return seg.astype("uint32")
+
+
+def _check_key(path: str, key: Optional[str], kind: str) -> None:
+    if key is None:
+        return
+    try:
+        with open_file(path, mode="r") as f:
+            if key not in f:
+                raise RuntimeError(f"Missing {kind} key '{key}' in '{path}'.")
+    except Exception as e:
+        raise RuntimeError(f"Could not open {kind} data key '{key}' in '{path}': {e}") from e
+
+
+def check_data_download(dataset_name: str, data_root: str, download: bool = True) -> None:
+    """Fail fast if a dataset cannot be resolved from the local data root.
+
+    This intentionally calls the dataset-specific torch-em `get_*_paths` helpers
+    via `get_data_paths(..., download=download)`, so missing downloads, invalid
+    splits, and unavailable cached files are caught before model loading. By
+    default this check is allowed to download missing datasets once, while the
+    actual evaluation code still reads cached local data afterwards.
+    """
+    try:
+        raw_paths, label_paths, raw_key, label_key = get_data_paths(dataset_name, data_root, download=download)
+    except Exception as e:
+        raise RuntimeError(
+            f"Data check failed for dataset '{dataset_name}' in '{data_root}'. "
+            "The dataset-specific get_*_paths helper could not resolve local data."
+        ) from e
+
+    if not raw_paths:
+        raise RuntimeError(
+            f"Data check failed for dataset '{dataset_name}' in '{data_root}': "
+            "no raw paths were found. The data is probably missing or all subsets were skipped."
+        )
+    if not label_paths:
+        raise RuntimeError(
+            f"Data check failed for dataset '{dataset_name}' in '{data_root}': "
+            "no label paths were found. The data is probably missing or all subsets were skipped."
+        )
+    if len(raw_paths) != len(label_paths):
+        raise RuntimeError(
+            f"Data check failed for dataset '{dataset_name}' in '{data_root}': "
+            f"found {len(raw_paths)} raw paths but {len(label_paths)} label paths."
+        )
+
+    missing = []
+    for raw_path, label_path in zip(raw_paths, label_paths):
+        if not os.path.exists(raw_path):
+            missing.append(raw_path)
+        if label_path != raw_path and not os.path.exists(label_path):
+            missing.append(label_path)
+
+    if missing:
+        examples = "\n".join(f"  - {path}" for path in missing[:10])
+        suffix = "" if len(missing) <= 10 else f"\n  ... and {len(missing) - 10} more"
+        raise RuntimeError(
+            f"Data check failed for dataset '{dataset_name}' in '{data_root}': "
+            f"{len(missing)} referenced file(s) do not exist:\n{examples}{suffix}"
+        )
+
+    _check_key(raw_paths[0], raw_key, "raw")
+    _check_key(label_paths[0], label_key, "label")
+
+    print(f"Data check passed for '{dataset_name}': {len(raw_paths)} sample(s).")

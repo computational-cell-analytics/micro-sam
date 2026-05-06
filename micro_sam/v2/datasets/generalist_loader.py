@@ -1,3 +1,4 @@
+import json
 import os
 from functools import partial
 
@@ -7,17 +8,26 @@ from sklearn.model_selection import train_test_split
 import torch
 
 import torch_em
-from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.data import datasets, MinInstanceSampler, ConcatDataset
 
 from elf.io import open_file
 
 from .wrapper import UniDataWrapper
 from .sampler import UniBatchSampler, _build_group_map
-from ..transforms.raw import _identity, _cellpose_raw_trafo, _to_8bit, _normalize_percentile
-from ..transforms.labels import (
-    _em_cell_label_trafo, _plantseg_label_trafo, _axondeepseg_pre_label_transform
+from ..transforms.raw import (
+    _identity, _cellpose_raw_trafo, _to_8bit, _normalize_percentile, _resize_raw_to_512, _resize_to_512,
 )
+from ..transforms.labels import (
+    _em_cell_label_trafo, _joint_em_cell_label_trafo,
+    _plantseg_label_trafo, _axondeepseg_pre_label_transform, _instance_labels,
+    _JointLabelTransform,
+)
+
+
+def _ensure_native_byte_order(y):
+    # tifffile.memmap returns big-endian >f4 for some TIFFs; byteswap to native so that
+    # Kornia augmentation and skimage/vigra C extensions receive correctly ordered bytes.
+    return y.byteswap().newbyteorder() if not y.dtype.isnative else y
 
 
 def _prepare_data_loader(dataset, batch_size, shuffle, batch_size_per_group=None, num_workers=32):
@@ -39,101 +49,10 @@ def _prepare_data_loader(dataset, batch_size, shuffle, batch_size_per_group=None
     return loader
 
 
-def get_debug_loaders(ndim, input_path, label_trafo, batch_size=1, batch_size_2d=None, z_slices=None):
-    """Get debug dataloaders for training UniSAM2.
-
-    Args:
-        ndim: Dimensionality of the data (2, 3, or None for both).
-        input_path: Root path to the data.
-        label_trafo: Label transform class (instantiated internally).
-        batch_size: Default batch size (used for 3D groups).
-        batch_size_2d: Optional larger batch size for 2D groups.
-            Falls back to *batch_size* when not provided.
-        z_slices: List of z-slice counts to use for 3D data (e.g. [2, 4, 6, 8]).
-            Each value creates a separate dataset group so that batches have uniform z.
-            Defaults to [8] (original behavior).
-    """
-    if z_slices is None:
-        z_slices = [8]
-    if batch_size_2d is None:
-        batch_size_2d = batch_size
-
-    def _get_embedseg_datasets(split_choice, patch_shape, expected_ndim, n_samples=None):
-        return datasets.get_embedseg_dataset(
-            path=os.path.join(input_path, "embedseg"),
-            name="Mouse-Skull-Nuclei-CBG",
-            patch_shape=patch_shape,
-            ndim=expected_ndim,
-            split=split_choice,
-            raw_transform=_to_8bit,
-            label_transform2=label_trafo(),  # NOTE: We must do this after the `transform` has finished.
-            sampler=MinInstanceSampler(min_num_instances=3),
-            label_dtype=torch.float32,
-            n_samples=n_samples,
-            download=True,
-        )
-
-    # Prepare the dataloaders depending on `ndim`.
-    if ndim is None:
-        n_samples_per_z = max(1, 200 // len(z_slices))
-
-        train_ds = [UniDataWrapper(_get_embedseg_datasets("train", (1, 512, 512), 2, 200), source_ndim=2)]
-        val_ds = [UniDataWrapper(_get_embedseg_datasets("test", (1, 512, 512), 2, 200), source_ndim=2)]
-        for z in z_slices:
-            train_ds.append(UniDataWrapper(
-                _get_embedseg_datasets("train", (z, 512, 512), 3, n_samples_per_z),
-                source_ndim=3, group_key=(3, z),
-            ))
-            val_ds.append(UniDataWrapper(
-                _get_embedseg_datasets("test", (z, 512, 512), 3, n_samples_per_z),
-                source_ndim=3, group_key=(3, z),
-            ))
-
-        train_ds = ConcatDataset(*train_ds)
-        val_ds = ConcatDataset(*val_ds)
-
-    elif ndim == 2:
-        train_ds = _get_embedseg_datasets("train", (1, 512, 512), 2)
-        val_ds = _get_embedseg_datasets("test", (1, 512, 512), 2)
-        train_ds = UniDataWrapper(train_ds, source_ndim=2)
-        val_ds = UniDataWrapper(val_ds, source_ndim=2)
-
-    elif ndim == 3:
-        if len(z_slices) > 1:
-            n_samples_per_z = max(1, 200 // len(z_slices))
-            train_ds, val_ds = [], []
-            for z in z_slices:
-                train_ds.append(UniDataWrapper(
-                    _get_embedseg_datasets("train", (z, 512, 512), 3, n_samples_per_z),
-                    source_ndim=3, group_key=(3, z),
-                ))
-                val_ds.append(UniDataWrapper(
-                    _get_embedseg_datasets("test", (z, 512, 512), 3, n_samples_per_z),
-                    source_ndim=3, group_key=(3, z),
-                ))
-            train_ds = ConcatDataset(*train_ds)
-            val_ds = ConcatDataset(*val_ds)
-        else:
-            z = z_slices[0]
-            train_ds = _get_embedseg_datasets("train", (z, 512, 512), 3)
-            val_ds = _get_embedseg_datasets("test", (z, 512, 512), 3)
-            train_ds = UniDataWrapper(train_ds, source_ndim=3)
-            val_ds = UniDataWrapper(val_ds, source_ndim=3)
-    else:
-        raise ValueError(f"Invalid ndim: {ndim}")
-
-    # Determine effective batch sizes.
-    effective_batch_size = batch_size_2d if ndim == 2 else batch_size
-    batch_size_per_group = None
-    if ndim is None and batch_size_2d != batch_size:
-        batch_size_per_group = {2: batch_size_2d}
-
-    train_loader = _prepare_data_loader(
-        train_ds, batch_size=effective_batch_size, shuffle=True, batch_size_per_group=batch_size_per_group,
-    )
-    val_loader = _prepare_data_loader(val_ds, batch_size=1, shuffle=False)
-
-    return train_loader, val_loader
+def _resize_then_em_label_trafo(y, em_trafo_fn):
+    """Resize small label patch to 512×512 then apply the EM label transform."""
+    y = _resize_to_512(y, is_label=True)
+    return em_trafo_fn(y)
 
 
 def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
@@ -219,7 +138,10 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
                 split=split_choice,
                 raw_transform=_to_8bit,
                 n_samples=max(1, 200 // n_z),
-                label_transform2=label_trafo(sampling=embedseg_sampling[name]),
+                label_transform2=(
+                    label_trafo(sampling=embedseg_sampling[name])
+                    if label_trafo is not None else kwargs.get("label_transform2")
+                ),
                 **{k: v for k, v in kwargs.items() if k not in ["raw_transform", "label_transform2"]}
             ) for name in names
         ]
@@ -250,7 +172,11 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             "patch_shape": (z, *patch_shape),
             "raw_transform": _to_8bit,
             "n_samples": max(1, 200 // n_z),
-            "label_transform2": label_trafo(sampling=None),  # NIS3D Drosophila: isotropic 1µm x 1µm x 1µm
+            # NIS3D Drosophila: isotropic 1µm x 1µm x 1µm
+            "label_transform2": (
+                label_trafo(sampling=None)
+                if label_trafo is not None else kwargs.get("label_transform2")
+            ),
             **{k: v for k, v in kwargs.items() if k not in ["raw_transform", "label_transform2"]},
         }
 
@@ -282,11 +208,15 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         }
 
         for ds_name in ["root", "ovules"]:
+            _plantseg_trafo = partial(
+                _plantseg_label_trafo, data=ds_name,
+                label_trafo=label_trafo() if label_trafo is not None else kwargs.get("label_transform2"),
+            )
             train_ds.append(
                 UniDataWrapper(
                     datasets.get_plantseg_dataset(
                         name=ds_name, split="train",
-                        label_transform2=partial(_plantseg_label_trafo, data=ds_name, label_trafo=label_trafo()),
+                        label_transform2=_plantseg_trafo,
                         **plantseg_kwargs
                     ), source_ndim=3, group_key=(3, z),
                 )
@@ -295,7 +225,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
                 UniDataWrapper(
                     datasets.get_plantseg_dataset(
                         name=ds_name, split="val",
-                        label_transform2=partial(_plantseg_label_trafo, data=ds_name, label_trafo=label_trafo()),
+                        label_transform2=_plantseg_trafo,
                         **plantseg_kwargs
                     ), source_ndim=3, group_key=(3, z),
                 )
@@ -322,7 +252,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     livecell_kwargs = {
         "path": os.path.join(input_path, "livecell"),
         "patch_shape": patch_shape,
-        "sampler": MinInstanceSampler(min_num_instances=6),
+        "sampler": MinInstanceSampler(min_num_instances=6, exclude_ids=[0]),
         **{k: v for k, v in kwargs.items() if k != "sampler"}
     }
     train_ds.extend(
@@ -413,12 +343,20 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     return train_ds, val_ds
 
 
-def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
+def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em_label_trafo=None):
     """Get all electron microscopy (EM) datasets for generalist training.
+
+    Args:
+        _em_label_trafo: EM cell label transform function to use.  Defaults to
+            :func:`_em_cell_label_trafo`.  Pass :func:`_joint_em_cell_label_trafo`
+            when building joint interactive+automatic datasets.
 
     Returns:
         Tuple of (train_ds, val_ds) lists of UniDataWrapper instances.
     """
+    if _em_label_trafo is None:
+        _em_label_trafo = _em_cell_label_trafo
+
     train_ds, val_ds = [], []
     n_z = len(z_slices)
 
@@ -430,8 +368,9 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             "path": os.path.join(input_path, "cremi"),
             "patch_shape": (z, *patch_shape),
             "n_samples": max(1, 500 // n_z),
-            "label_transform2": partial(
-                _em_cell_label_trafo, label_trafo=label_trafo(instances=True, sampling=(10, 1, 1))
+            "label_transform2": (
+                partial(_em_label_trafo, label_trafo=label_trafo(instances=True, sampling=(10, 1, 1)))
+                if label_trafo is not None else kwargs.get("label_transform2")
             ),
             "sampler": MinInstanceSampler(min_num_instances=1, exclude_ids=[0]),
             "defect_augmentation_kwargs": {
@@ -456,32 +395,84 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
 
     # 2. EMNeuron (neuron segmentation in vEM)
     # NOTE: Large neurons — use min_num_instances=1 (same reasoning as CREMI).
-    for z in z_slices:
-        emneuron_kwargs = {
-            "path": os.path.join(input_path, "emneuron"),
-            "patch_shape": (z, *patch_shape),
-            "label_transform2": partial(
-                _em_cell_label_trafo, label_trafo=label_trafo(instances=True)
-            ),  # sampling=None: mixed sources
-            "sampler": MinInstanceSampler(min_num_instances=1, exclude_ids=[0]),
-            **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
-        }
+    # J0126-sbem (train: 150×150 or 256×256 XY) and FIB25 (val: 250×250 XY) are too small
+    # for the standard 512×512 patch shape — they get their own 128×128 patch group with a
+    # resize-to-512 transform applied to both raw and label before the EM label transform.
+    from torch_em.data.datasets.electron_microscopy.emneuron import get_emneuron_paths
 
-        train_ds.append(
-            UniDataWrapper(
-                datasets.get_emneuron_dataset(split="train", n_samples=max(1, 500 // n_z), **emneuron_kwargs),
-                source_ndim=3, group_key=(3, z),
-            )
+    emneuron_path = os.path.join(input_path, "emneuron")
+    all_train_raw, all_train_lbl = get_emneuron_paths(emneuron_path, "train")
+    all_val_raw, all_val_lbl = get_emneuron_paths(emneuron_path, "val")
+
+    def _split(raw_paths, label_paths, small_keys):
+        small_r = [r for r in raw_paths if any(k in r for k in small_keys)]
+        small_l = [l for r, l in zip(raw_paths, label_paths) if any(k in r for k in small_keys)]
+        rest_r = [r for r in raw_paths if not any(k in r for k in small_keys)]
+        rest_l = [l for r, l in zip(raw_paths, label_paths) if not any(k in r for k in small_keys)]
+        return small_r, small_l, rest_r, rest_l
+
+    sm_train_r, sm_train_l, rest_train_r, rest_train_l = _split(all_train_raw, all_train_lbl, ["J0126"])
+    sm_val_r, sm_val_l, rest_val_r, rest_val_l = _split(all_val_raw, all_val_lbl, ["J0126", "FIB25"])
+
+    base_sampler = MinInstanceSampler(min_num_instances=1, exclude_ids=[0])
+    base_kwargs = {k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]}
+    base_kwargs["label_transform"] = _ensure_native_byte_order
+
+    for z in z_slices:
+        em_label_trafo_fn = (
+            partial(_em_label_trafo, label_trafo=label_trafo(instances=True))
+            if label_trafo is not None else kwargs.get("label_transform2")
         )
-        val_ds.append(
-            UniDataWrapper(
-                datasets.get_emneuron_dataset(split="val", n_samples=max(1, 450 // n_z), **emneuron_kwargs),
-                source_ndim=3, group_key=(3, z),
-            )
-        )
+
+        # Normal volumes (XY >= 512)
+        rest_kwargs = {
+            "patch_shape": (z, *patch_shape),
+            "label_transform2": em_label_trafo_fn,
+            "sampler": base_sampler,
+            **base_kwargs,
+        }
+        train_ds.append(UniDataWrapper(
+            torch_em.default_segmentation_dataset(
+                raw_paths=rest_train_r, raw_key=None, label_paths=rest_train_l, label_key=None,
+                is_seg_dataset=True, n_samples=max(1, 500 // n_z), **rest_kwargs,
+            ), source_ndim=3, group_key=(3, z),
+        ))
+        val_ds.append(UniDataWrapper(
+            torch_em.default_segmentation_dataset(
+                raw_paths=rest_val_r, raw_key=None, label_paths=rest_val_l, label_key=None,
+                is_seg_dataset=True, n_samples=max(1, 450 // n_z), **rest_kwargs,
+            ), source_ndim=3, group_key=(3, z),
+        ))
+
+        # Small volumes (J0126 train; J0126+FIB25 val): 128×128 patches → resize to 512×512
+        small_kwargs = {
+            "patch_shape": (z, 128, 128),
+            "raw_transform": _resize_raw_to_512,
+            "label_transform2": partial(_resize_then_em_label_trafo, em_trafo_fn=em_label_trafo_fn),
+            "sampler": base_sampler,
+            **{k: v for k, v in base_kwargs.items() if k != "raw_transform"},
+        }
+        train_ds.append(UniDataWrapper(
+            torch_em.default_segmentation_dataset(
+                raw_paths=sm_train_r, raw_key=None, label_paths=sm_train_l, label_key=None,
+                is_seg_dataset=True, n_samples=max(1, 500 // n_z), **small_kwargs,
+            ), source_ndim=3, group_key=(3, z),
+        ))
+        val_ds.append(UniDataWrapper(
+            torch_em.default_segmentation_dataset(
+                raw_paths=sm_val_r, raw_key=None, label_paths=sm_val_l, label_key=None,
+                is_seg_dataset=True, n_samples=max(1, 450 // n_z), **small_kwargs,
+            ), source_ndim=3, group_key=(3, z),
+        ))
 
     # 3. Platynereis (cell segmentation in vEM)
     def _compute_platy_rois(root, sample_ids, ignore_label, file_template, label_key):
+        cache_path = os.path.join(root, f"_roi_cache_{'_'.join(map(str, sample_ids))}.json")
+        if os.path.exists(cache_path):
+            with open(cache_path) as f:
+                data = json.load(f)
+            return {int(k): tuple(slice(s[0], s[1]) for s in v) for k, v in data.items()}
+
         rois = {}
         for sample_id in sample_ids:
             path = os.path.join(root, (file_template % sample_id))
@@ -490,6 +481,12 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             valid_coordinates = np.where(labels != ignore_label)
             roi = tuple(slice(int(coord.min()), int(coord.max()) + 1) for coord in valid_coordinates)
             rois[sample_id] = roi
+
+        tmp_path = cache_path + f".tmp{os.getpid()}"
+        with open(tmp_path, "w") as f:
+            json.dump({str(k): [(s.start, s.stop) for s in v] for k, v in rois.items()}, f)
+        os.replace(tmp_path, cache_path)
+
         return rois
 
     platy_root = os.path.join(input_path, "platynereis")
@@ -507,9 +504,11 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         platynereis_kwargs = {
             "path": os.path.join(input_path, "platynereis"),
             "patch_shape": (z, *patch_shape),
-            "label_transform2": partial(
-                _em_cell_label_trafo, label_trafo=label_trafo(instances=True)
-            ),  # sampling=None: ~20nm isotropic
+            # sampling=None: ~20nm isotropic
+            "label_transform2": (
+                partial(_em_label_trafo, label_trafo=label_trafo(instances=True))
+                if label_trafo is not None else kwargs.get("label_transform2")
+            ),
             "sampler": MinInstanceSampler(min_num_instances=1, exclude_ids=[0]),
             "n_samples": max(1, 500 // n_z),
             **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]}
@@ -541,8 +540,9 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             "path": os.path.join(input_path, "snemi"),
             "patch_shape": (z, *patch_shape),
             "n_samples": max(1, 500 // n_z),
-            "label_transform2": partial(
-                _em_cell_label_trafo, label_trafo=label_trafo(instances=True, sampling=(5, 1, 1))
+            "label_transform2": (
+                partial(_em_label_trafo, label_trafo=label_trafo(instances=True, sampling=(5, 1, 1)))
+                if label_trafo is not None else kwargs.get("label_transform2")
             ),
             "sampler": MinInstanceSampler(min_num_instances=1, exclude_ids=[0]),
             **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
@@ -567,7 +567,10 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         "patch_shape": patch_shape,
         "raw_transform": _to_8bit,  # ensures C=3 input for the model (SEM/TEM are grayscale)
         "pre_label_transform": _axondeepseg_pre_label_transform,  # semantic to instances before sampler
-        "label_transform2": partial(_em_cell_label_trafo, label_trafo=label_trafo(instances=True)),
+        "label_transform2": (
+            partial(_em_label_trafo, label_trafo=label_trafo(instances=True))
+            if label_trafo is not None else kwargs.get("label_transform2")
+        ),
         "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
         "n_samples": 300,
         **{
@@ -595,11 +598,12 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
 
 def get_dataloaders(
     input_path,
-    label_trafo=PerObjectDistanceTransform,
+    label_trafo=None,
     batch_size=1,
     batch_size_2d=None,
     z_slices=None,
     dataset_choice="both",
+    n_workers=32,
 ):
     """Get generalist dataloaders for training UniSAM2.
 
@@ -620,6 +624,10 @@ def get_dataloaders(
     if dataset_choice not in ("lm", "em", "both"):
         raise ValueError(f"Invalid dataset_choice: {dataset_choice!r}. Expected 'lm', 'em', or 'both'.")
 
+    if label_trafo is None:
+        from micro_sam.v2.transforms.labels import DirectedPerObjectBoundaryDistanceTransform
+        label_trafo = DirectedPerObjectBoundaryDistanceTransform
+
     if z_slices is None:
         z_slices = [8]
     if batch_size_2d is None:
@@ -631,7 +639,7 @@ def get_dataloaders(
     kwargs = {
         "raw_transform": _identity,
         "label_transform2": label_trafo(),
-        "sampler": MinInstanceSampler(min_num_instances=3),  # this means, atleast two objects should be picked.
+        "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
         "label_dtype": torch.float32,
     }
 
@@ -658,10 +666,180 @@ def get_dataloaders(
 
     # And prepare the dataloaders for them.
     train_loader = _prepare_data_loader(
-        train_ds, batch_size=batch_size, shuffle=True, batch_size_per_group=batch_size_per_group,
+        train_ds, batch_size=batch_size, shuffle=True,
+        batch_size_per_group=batch_size_per_group, num_workers=n_workers,
     )
     val_loader = _prepare_data_loader(
-        val_ds, batch_size=batch_size, shuffle=False, batch_size_per_group=batch_size_per_group,
+        val_ds, batch_size=batch_size, shuffle=False,
+        batch_size_per_group=batch_size_per_group, num_workers=n_workers,
     )
 
     return train_loader, val_loader
+
+
+def get_interactive_dataloaders(
+    input_path,
+    batch_size=1,
+    batch_size_2d=None,
+    z_slices=None,
+    dataset_choice="both",
+    n_workers=32,
+):
+    """Get generalist dataloaders for SAM2 interactive segmentation training.
+
+    Identical dataset composition to :func:`get_dataloaders` but returns raw
+    integer instance labels (``label_dtype=torch.int64``) instead of distance
+    transforms.  Used with :class:`micro_sam.v2.training.ConvertToSam2VideoBatch`.
+
+    Args:
+        input_path: Root path to the generalist training data.
+        batch_size: Default batch size (used for 3D groups).
+        batch_size_2d: Optional larger batch size for 2D groups.
+            Falls back to *batch_size* when not provided.
+        z_slices: List of z-slice counts for 3D data (e.g. [8]).
+            Defaults to [8].
+        dataset_choice: Which dataset domain to include — ``"lm"``, ``"em"``,
+            or ``"both"`` (default).
+        n_workers: Number of DataLoader worker processes.
+
+    Returns:
+        Tuple of (train_loader, val_loader).
+    """
+    if dataset_choice not in ("lm", "em", "both"):
+        raise ValueError(f"Invalid dataset_choice: {dataset_choice!r}. Expected 'lm', 'em', or 'both'.")
+
+    if z_slices is None:
+        z_slices = [8]
+    if batch_size_2d is None:
+        batch_size_2d = batch_size
+
+    train_ds, val_ds = _build_interactive_datasets(input_path, z_slices, dataset_choice)
+
+    batch_size_per_group = None
+    if batch_size_2d != batch_size:
+        batch_size_per_group = {2: batch_size_2d}
+
+    train_loader = _prepare_data_loader(
+        train_ds, batch_size=batch_size, shuffle=True,
+        batch_size_per_group=batch_size_per_group, num_workers=n_workers,
+    )
+    val_loader = _prepare_data_loader(
+        val_ds, batch_size=batch_size, shuffle=False,
+        batch_size_per_group=batch_size_per_group, num_workers=n_workers,
+    )
+
+    return train_loader, val_loader
+
+
+def _build_automatic_datasets(input_path, z_slices, dataset_choice):
+    """Build train/val ConcatDatasets for automatic UniSAM2 training.
+
+    Separated from :func:`get_dataloaders` so that each DDP rank can
+    independently construct its own dataset (required by
+    :class:`DistributedUniBatchSampler`).
+
+    Returns:
+        Tuple of (train_ds, val_ds) as :class:`ConcatDataset` instances.
+    """
+    from micro_sam.v2.transforms.labels import DirectedPerObjectBoundaryDistanceTransform
+
+    patch_shape = (512, 512)
+    label_trafo = DirectedPerObjectBoundaryDistanceTransform
+
+    kwargs = {
+        "raw_transform": _identity,
+        "label_transform2": label_trafo(),
+        "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
+        "label_dtype": torch.float32,
+    }
+
+    train_ds, val_ds = [], []
+
+    if dataset_choice in ("lm", "both"):
+        lm_train, lm_val = _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
+        train_ds.extend(lm_train)
+        val_ds.extend(lm_val)
+
+    if dataset_choice in ("em", "both"):
+        em_train, em_val = _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
+        train_ds.extend(em_train)
+        val_ds.extend(em_val)
+
+    return ConcatDataset(*train_ds), ConcatDataset(*val_ds)
+
+
+def _build_interactive_datasets(input_path, z_slices, dataset_choice):
+    """Build train/val ConcatDatasets for interactive SAM2 training.
+
+    Separated from :func:`get_interactive_dataloaders` so that each DDP rank
+    can independently construct its own dataset (required by
+    :class:`DistributedUniBatchSampler`).
+
+    Returns:
+        Tuple of (train_ds, val_ds) as :class:`ConcatDataset` instances.
+    """
+    patch_shape = (512, 512)
+
+    kwargs = {
+        "raw_transform": _identity,
+        "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
+        "label_dtype": torch.int64,
+        "label_transform2": _instance_labels,
+    }
+
+    train_ds, val_ds = [], []
+
+    if dataset_choice in ("lm", "both"):
+        lm_train, lm_val = _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo=None)
+        train_ds.extend(lm_train)
+        val_ds.extend(lm_val)
+
+    if dataset_choice in ("em", "both"):
+        em_train, em_val = _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo=None)
+        train_ds.extend(em_train)
+        val_ds.extend(em_val)
+
+    return ConcatDataset(*train_ds), ConcatDataset(*val_ds)
+
+
+def _build_joint_datasets(input_path, z_slices, dataset_choice):
+    """Build train/val datasets for joint interactive + automatic SAM2 training.
+
+    Labels have **5 channels**: ``[instance_ids, fg, d_x, d_y, d_z]``.
+
+    - Channel 0 (int64): instance IDs → interactive branch via ``ConvertToSam2VideoBatch``.
+    - Channels 1-4 (float32): foreground + directed distances → automatic branch via
+      ``DirectedDistanceLoss``.
+
+    Unlike building two separate datasets, this shares a single data pipeline so both
+    branches always see the same image patch.
+
+    Returns:
+        Tuple of (train_ds, val_ds) as :class:`ConcatDataset` instances.
+    """
+    patch_shape = (512, 512)
+    label_trafo = _JointLabelTransform  # instances=True by default → 5-channel output
+
+    kwargs = {
+        "raw_transform": _identity,
+        "label_transform2": label_trafo(),
+        "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
+        "label_dtype": torch.float32,
+    }
+
+    train_ds, val_ds = [], []
+
+    if dataset_choice in ("lm", "both"):
+        lm_train, lm_val = _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
+        train_ds.extend(lm_train)
+        val_ds.extend(lm_val)
+
+    if dataset_choice in ("em", "both"):
+        em_train, em_val = _get_em_datasets(
+            input_path, patch_shape, z_slices, kwargs, label_trafo,
+            _em_label_trafo=_joint_em_cell_label_trafo,
+        )
+        train_ds.extend(em_train)
+        val_ds.extend(em_val)
+
+    return ConcatDataset(*train_ds), ConcatDataset(*val_ds)

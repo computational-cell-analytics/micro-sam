@@ -18,7 +18,7 @@ from sam2.build_sam import build_sam2
 
 
 # NOTE: The model config is expected to be fetched from the module's relative path location.
-sys.path.append(Path(sam2.__file__).parents[0])
+sys.path.append(str(Path(sam2.__file__).parents[0]))
 
 
 _DEFAULT_MODEL = "hvit_t"
