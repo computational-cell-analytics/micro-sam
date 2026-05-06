@@ -18,6 +18,7 @@ from micro_sam.evaluation.multi_dimensional_segmentation import run_multi_dimens
 
 from baselines_common import MAX_EVALUATION_SAMPLES, _load_data
 from common import DATA_ROOT, DATASETS_3D, DATASETS_3D_EM, get_data_paths
+from common import check_data_download
 
 
 _MICROSAM_V1_LM_MODEL = "vit_b_lm"
@@ -47,7 +48,9 @@ def run_micro_sam_volumetric_evaluation(
         raise ValueError(f"Volumetric micro-sam v1 evaluation is 3D-only; got '{dataset_name}'.")
 
     if dataset_name in DATASETS_3D_EM:
-        raise ValueError(f"Volumetric micro-sam v1 only supports LM datasets (vit_b_lm); got EM dataset '{dataset_name}'.")
+        raise ValueError(
+            f"Volumetric micro-sam v1 only supports LM datasets (vit_b_lm); got EM dataset '{dataset_name}'."
+        )
 
     if model_type is None:
         model_type = _MICROSAM_V1_LM_MODEL
@@ -57,7 +60,8 @@ def run_micro_sam_volumetric_evaluation(
 
     n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
     rows = []
-    for sample_id, (raw, labels, _) in enumerate(tqdm(_load_data(dataset_name, data_root, 3), total=n, desc="micro-sam-3d")):
+    it = tqdm(_load_data(dataset_name, data_root, 3), total=n, desc="micro-sam-3d")
+    for sample_id, (raw, labels, _) in enumerate(it):
         sample_name = f"sample_{sample_id:05d}"
         result_dir = os.path.join(
             experiment_folder, "results", f"{dataset_name}_micro-sam_{model_type}_3d_{prompt_choice}", sample_name,
@@ -108,6 +112,8 @@ def main():
     parser.add_argument("--no_store_segmentation", action="store_true")
     parser.add_argument("--min_size", type=int, default=0)
     args = parser.parse_args()
+
+    check_data_download(args.dataset_name, args.input_path)
 
     run_micro_sam_volumetric_evaluation(
         dataset_name=args.dataset_name,

@@ -40,6 +40,7 @@ from common import (
     get_data_paths,
 )
 from baselines_common import MAX_EVALUATION_SAMPLES, _load_data
+from common import check_data_download
 
 _LM_DATASETS = set(DATASETS_2D + DATASETS_3D_LM)
 _EM_DATASETS = set(DATASETS_3D_EM)
@@ -366,6 +367,8 @@ def main():
         help="Checkpoint path for micro-sam v1 / segneuron / micro_sam2 / sam2 methods."
     )
     args = parser.parse_args()
+
+    check_data_download(args.dataset_name, args.input_path)
 
     print("Device:", torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU")
     device = "cuda" if torch.cuda.is_available() else "cpu"

@@ -1,5 +1,6 @@
 import os
 import shutil
+import warnings
 from tqdm import tqdm
 from pathlib import Path
 from typing import Union, Optional, List
@@ -383,10 +384,8 @@ def run_interactive_segmentation_3d(
     Returns:
         The folder where segmentations are stored.
     """
-    prediction_dir = os.path.join(
-        prediction_dir, "interactive_segmentation_3d", "start_with_box" if start_with_box_prompt else "start_with_point",
-        "without_masks",
-    )
+    box_or_pt = "start_with_box" if start_with_box_prompt else "start_with_point"
+    prediction_dir = os.path.join(prediction_dir, "interactive_segmentation_3d", box_or_pt, "without_masks")
 
     prediction_paths = [
         os.path.join(
@@ -394,8 +393,17 @@ def run_interactive_segmentation_3d(
         ) for i in range(n_iterations)
     ]
     if all([os.path.exists(_path) for _path in prediction_paths]):
-        print(f"The results are stored at '{prediction_dir}'.")
-        return prediction_dir
+        cached = imageio.imread(prediction_paths[0])
+        if cached.shape == labels.shape:
+            print(f"The results are stored at '{prediction_dir}'.")
+            return prediction_dir
+        warnings.warn(
+            f"Stale cache: '{prediction_paths[0]}' has shape {cached.shape} "
+            f"but labels have shape {labels.shape}. Deleting and recomputing."
+        )
+        for path in prediction_paths:
+            if os.path.exists(path):
+                os.remove(path)
 
     # Get the device.
     device = _get_device(device)

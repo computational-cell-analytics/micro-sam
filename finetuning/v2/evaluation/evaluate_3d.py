@@ -3,14 +3,14 @@
 Volumes are center-cropped to (8, 512, 512) before inference.
 
 Usage examples:
-    # Interactive 3D on lucchi, start with box prompt
-    python evaluate_3d.py -d lucchi -i <data_root> -e <experiment_folder> --mode interactive -p box
+    # Interactive 3D on embedseg, start with box prompt
+    python evaluate_3d.py -d embedseg -i <data_root> -e <experiment_folder> --mode interactive -p box
 
     # Interactive 3D on embedseg, start with point, use logits masks
     python evaluate_3d.py -d embedseg -i <data_root> -e <experiment_folder> --mode interactive -p point --use_masks
 
-    # Automatic segmentation on lucchi
-    python evaluate_3d.py -d lucchi -i <data_root> -e <experiment_folder> --mode automatic
+    # Automatic segmentation on embedseg
+    python evaluate_3d.py -d embedseg -i <data_root> -e <experiment_folder> --mode automatic
 """
 
 import os
@@ -30,6 +30,7 @@ from common import (
     CHECKPOINT_PATHS, DATA_ROOT, DATASETS_3D, get_data_paths, load_volume,
     UNISAM2_CHECKPOINT, load_unisam2_model, predict_unisam2, postprocess_unisam2,
 )
+from common import check_data_download
 
 CROP_SHAPE_3D = (8, 512, 512)
 
@@ -85,7 +86,6 @@ def run_interactive_evaluation_3d(
             device=device,
             min_size=min_size,
             n_iterations=n_iterations,
-            use_masks=use_masks,
         )
 
         fname_list.append(fname)
@@ -176,6 +176,8 @@ def main():
         help="Which evaluations to run: 'all' runs interactive + automatic, or pick one.",
     )
     args = parser.parse_args()
+
+    check_data_download(args.dataset_name, args.input_path)
 
     print("Device:", torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU")
     device = "cuda" if torch.cuda.is_available() else "cpu"

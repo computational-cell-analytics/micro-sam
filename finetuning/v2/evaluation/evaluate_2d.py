@@ -34,6 +34,7 @@ from common import (
     CHECKPOINT_PATHS, DATA_ROOT, DATASETS_2D, get_data_paths,
     UNISAM2_CHECKPOINT, load_unisam2_model, predict_unisam2, postprocess_unisam2,
 )
+from common import check_data_download
 
 CROP_SHAPE_2D = (512, 512)
 
@@ -283,6 +284,8 @@ def main():
         help="Which evaluations to run: 'all' runs AMG + interactive + automatic, or pick one.",
     )
     args = parser.parse_args()
+
+    check_data_download(args.dataset_name, args.input_path)
 
     print("Device:", torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU")
     device = "cuda" if torch.cuda.is_available() else "cpu"

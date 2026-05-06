@@ -9,15 +9,15 @@ Supported methods:
   sam3: SAM3 interactive segmentation (2D and 3D)
 
 Usage examples:
-    python evaluate_interactive_baselines.py -d lucchi -e <exp> --method nninteractive -p box
-    python evaluate_interactive_baselines.py -d lucchi -e <exp> --method nninteractive -p point -iter 4
+    python evaluate_interactive_baselines.py -d embedseg -e <exp> --method nninteractive -p box
+    python evaluate_interactive_baselines.py -d embedseg -e <exp> --method nninteractive -p point -iter 4
     python evaluate_interactive_baselines.py -d livecell -e <exp> --method sam
     python evaluate_interactive_baselines.py -d livecell -e <exp> --method sam2
     python evaluate_interactive_baselines.py -d livecell -e <exp> --method micro-sam
     python evaluate_interactive_baselines.py -d livecell -e <exp> --method micro_sam2
     python evaluate_micro_sam_volumetric.py -d embedseg -e <exp> -m vit_b_lm -p box
     python evaluate_interactive_baselines.py -d livecell -e <exp> --method sam3
-    python evaluate_interactive_baselines.py -d lucchi -e <exp> --method sam3 --ndim 3
+    python evaluate_interactive_baselines.py -d embedseg -e <exp> --method sam3 --ndim 3
 """
 
 import os
@@ -36,6 +36,7 @@ from micro_sam.evaluation.evaluation import run_evaluation
 
 from common import DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_EM, CHECKPOINT_PATHS, get_data_paths
 from baselines_common import MAX_EVALUATION_SAMPLES, _load_data
+from common import check_data_download
 
 _METHODS = ["nninteractive", "sam3", "sam", "sam2", "micro-sam", "micro_sam2"]
 
@@ -217,7 +218,8 @@ def _load_sam_v1(model_type, checkpoint, device):
 def _write_sam_v1_2d_inputs(dataset_name, data_root, input_dir, gt_dir):
     image_paths, gt_paths = [], []
     n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
-    for sample_id, (raw, labels, _) in enumerate(tqdm(_load_data(dataset_name, data_root, 2), total=n, desc="save-crops")):
+    it = tqdm(_load_data(dataset_name, data_root, 2), total=n, desc="save-crops")
+    for sample_id, (raw, labels, _) in enumerate(it):
         image_path = os.path.join(input_dir, f"{sample_id:05d}.tif")
         gt_path = os.path.join(gt_dir, f"{sample_id:05d}.tif")
         raw = np.clip(np.round(raw), 0, 255).astype("uint8")
@@ -231,7 +233,8 @@ def _write_sam_v1_2d_inputs(dataset_name, data_root, input_dir, gt_dir):
 def _write_sam2_2d_inputs(dataset_name, data_root, input_dir, gt_dir):
     image_paths, gt_paths = [], []
     n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
-    for sample_id, (raw, labels, _) in enumerate(tqdm(_load_data(dataset_name, data_root, 2), total=n, desc="save-crops")):
+    it = tqdm(_load_data(dataset_name, data_root, 2), total=n, desc="save-crops")
+    for sample_id, (raw, labels, _) in enumerate(it):
         image_path = os.path.join(input_dir, f"{sample_id:05d}.tif")
         gt_path = os.path.join(gt_dir, f"{sample_id:05d}.tif")
         imageio.imwrite(image_path, _to_sam2_uint8(raw), compression="zlib")
@@ -491,6 +494,8 @@ def main():
         help="Use previous logits/masks as mask prompts during SAM2 iterative prompting."
     )
     args = parser.parse_args()
+
+    check_data_download(args.dataset_name, args.input_path)
 
     print("Device:", torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU")
     device = "cuda" if torch.cuda.is_available() else "cpu"

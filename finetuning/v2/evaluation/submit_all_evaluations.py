@@ -58,7 +58,7 @@ DATASETS_3D_LM = (
     "blastospim", "cartocell", "celegans_atlas", "cellseg_3d", "embedseg",
     "gonuclear", "mouse_embryo", "nis3d", "plantseg", "pnas_arabidopsis",
 )
-DATASETS_3D_EM = ("lucchi", "platynereis_nuclei", "cremi", "snemi", "humanneurons")
+DATASETS_3D_EM = ("platynereis_nuclei", "cremi", "snemi", "humanneurons")
 DATASETS = tuple(sorted(set(DATASETS_2D + DATASETS_3D_LM + DATASETS_3D_EM)))
 
 # Automatic methods that cannot run on EM datasets.
