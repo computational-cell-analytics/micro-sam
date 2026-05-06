@@ -293,7 +293,7 @@ def _require_tiled_embeddings(
     if image_embeddings is None:
         assert image is not None
         assert (tile_shape is not None) and (halo is not None)
-        shape = image.shape
+        shape = image.shape[:2]
         image_embeddings = util.precompute_image_embeddings(
             predictor, image, embedding_path, ndim=2, tile_shape=tile_shape, halo=halo, verbose=verbose_embeddings
         )
