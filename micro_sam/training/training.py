@@ -220,6 +220,7 @@ def train_sam(
     verify_n_labels_in_loader: Optional[int] = 50,
     box_distortion_factor: Optional[float] = 0.025,
     overwrite_training: bool = True,
+    strict_decoder_loading: bool = True,
     **model_kwargs,
 ) -> None:
     """Run training for a SAM model.
@@ -265,6 +266,10 @@ def train_sam(
         overwrite_training: Whether to overwrite the trained model stored at the same location.
             By default, overwrites the trained model at each run.
             If set to 'False', it will avoid retraining the model if the previous run was completed.
+        strict_decoder_loading: Whether to require that the pre-trained decoder in the checkpoint, if present,
+            exactly matches the instance segmentation decoder. Decoders may have a mismatch in the output
+            channels if they were pre-trained for a different task. If set to False, decoders with a different
+            output dimension can be loaded; the output channels will be re-initialized.
         model_kwargs: Additional keyword arguments for the `micro_sam.util.get_sam_model`.
     """
     with _filter_warnings(ignore_warnings):
@@ -294,7 +299,8 @@ def train_sam(
 
             # Get the UNETR.
             unetr = get_unetr(
-                image_encoder=model.sam.image_encoder, decoder_state=state.get("decoder_state", None), device=device,
+                image_encoder=model.sam.image_encoder, decoder_state=state.get("decoder_state", None),
+                device=device, flexible_load_checkpoint=not strict_decoder_loading,
             )
 
             # Get the parameters for SAM and the decoder from UNETR.
@@ -435,6 +441,7 @@ def train_instance_segmentation(
     peft_kwargs: Optional[Dict] = None,
     ignore_warnings: bool = True,
     overwrite_training: bool = True,
+    strict_decoder_loading: bool = True,
     **model_kwargs,
 ) -> None:
     """Train a UNETR for instance segmentation using the SAM encoder as backbone.
@@ -481,6 +488,10 @@ def train_instance_segmentation(
         overwrite_training: Whether to overwrite the trained model stored at the same location.
             By default, overwrites the trained model at each run.
             If set to 'False', it will avoid retraining the model if the previous run was completed.
+        strict_decoder_loading: Whether to require that the pre-trained decoder in the checkpoint, if present,
+            exactly matches the instance segmentation decoder. Decoders may have a mismatch in the output
+            channels if they were pre-trained for a different task. If set to False, decoders with a different
+            output dimension can be loaded; the output channels will be re-initialized.
         model_kwargs: Additional keyword arguments for the `micro_sam.util.get_sam_model`.
     """
 
@@ -498,7 +509,8 @@ def train_instance_segmentation(
         )
         device = get_device(device)
         model = get_unetr(
-            image_encoder=sam_model.sam.image_encoder, decoder_state=state.get("decoder_state", None), device=device,
+            image_encoder=sam_model.sam.image_encoder, decoder_state=state.get("decoder_state", None),
+            device=device, flexible_load_checkpoint=not strict_decoder_loading,
         )
 
         optimizer, scheduler = _get_optimizer_and_scheduler(

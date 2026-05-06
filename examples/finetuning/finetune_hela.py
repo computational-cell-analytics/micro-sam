@@ -1,13 +1,11 @@
 import os
 import numpy as np
 
-import torch
-
 import torch_em
 from torch_em.transform.label import PerObjectDistanceTransform
 
 import micro_sam.training as sam_training
-from micro_sam.util import export_custom_sam_model
+from micro_sam.util import export_custom_sam_model, get_device
 from micro_sam.sample_data import fetch_tracking_example_data, fetch_tracking_segmentation_data
 
 
@@ -21,7 +19,7 @@ def get_dataloader(split, patch_shape, batch_size, train_instance_segmentation):
     where `x` is the image data and `y` are the labels.
     The labels have to be in a label mask instance segmentation format.
     i.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
-    Important: the ID 0 is reseved for background, and the IDs must be consecutive
+    Important: the ID 0 is reserved for background, and the IDs must be consecutive
 
     Here, we use `torch_em.default_segmentation_loader` for creating a suitable data loader from
     the example hela data. You can either adapt this for your own data (see comments below)
@@ -82,7 +80,7 @@ def run_training(checkpoint_name, model_type, train_instance_segmentation):
     batch_size = 1  # the training batch size
     patch_shape = (1, 512, 512)  # the size of patches for training
     n_objects_per_batch = 25  # the number of objects per batch that will be sampled
-    device = torch.device("cuda")  # the device used for training
+    device = get_device()  # the device used for training
 
     # Get the dataloaders.
     train_loader = get_dataloader("train", patch_shape, batch_size, train_instance_segmentation)

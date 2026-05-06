@@ -333,7 +333,7 @@ def merge_instance_segmentation_3d(
         verbose: Verbosity flag. By default, set to 'True'.
         pbar_init: Callback to initialize an external progress bar. Must accept number of steps and description.
             Can be used together with pbar_update to handle napari progress bar in other thread.
-            To enables using this function within a threadworker.
+            To enable using this function within a threadworker.
         pbar_update: Callback to update an external progress bar.
 
     Returns:
@@ -567,7 +567,7 @@ def _filter_lineages(lineages, tracking_result):
 def _tracking_impl(timeseries, segmentation, mode, min_time_extent, output_folder=None):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = Trackastra.from_pretrained("general_2d", device=device)
-    lineage_graph = model.track(timeseries, segmentation, mode=mode)
+    lineage_graph, _ = model.track(timeseries, segmentation, mode=mode)
     track_data, parent_graph, _ = graph_to_napari_tracks(lineage_graph)
     node_to_track, lineages = _extract_tracks_and_lineages(segmentation, track_data, parent_graph)
     tracking_result = recolor_segmentation(segmentation, node_to_track)
@@ -582,7 +582,7 @@ def _tracking_impl(timeseries, segmentation, mode, min_time_extent, output_folde
         raise NotImplementedError
 
     # Filter out pruned lineages.
-    # Mmay either be missing due to track filtering or non-consectutive track numbering in trackastra.
+    # May either be missing due to track filtering or non-consecutive track numbering in trackastra.
     lineages = _filter_lineages(lineages, tracking_result)
 
     return tracking_result, lineages

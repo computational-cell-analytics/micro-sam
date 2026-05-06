@@ -1,27 +1,29 @@
-from typing import Optional, Tuple, Union, List
-
-import numpy as np
-
-import torch
+from typing import List, Optional, Tuple, Union
 
 import napari
+import numpy as np
+import torch
 from magicgui.widgets import ComboBox, Container
 
 from .. import util
-from . import util as vutil
 from . import _widgets as widgets
-from ._tooltips import get_tooltip
-from ._state import AnnotatorState
+from . import util as vutil
 from ._annotator import _AnnotatorBase
-
+from ._state import AnnotatorState
+from ._tooltips import get_tooltip
 
 # Cyan (track) and Magenta (division)
-STATE_COLOR_CYCLE = ["#00FFFF", "#FF00FF", ]
+STATE_COLOR_CYCLE = [
+    "#00FFFF",
+    "#FF00FF",
+]
 """@private"""
 
 
 # This solution is a bit hacky, so I won't move it to _widgets.py yet.
-def create_tracking_menu(points_layer, box_layer, states, track_ids, tracking_widget=None):
+def create_tracking_menu(
+    points_layer, box_layer, states, track_ids, tracking_widget=None
+):
     """@private"""
     state = AnnotatorState()
 
@@ -33,10 +35,14 @@ def create_tracking_menu(points_layer, box_layer, states, track_ids, tracking_wi
 
     if tracking_widget is None:
         state_menu = ComboBox(
-            label="track_state", choices=states, tooltip=get_tooltip("annotator_tracking", "track_state")
+            label="track_state",
+            choices=states,
+            tooltip=get_tooltip("annotator_tracking", "track_state"),
         )
         track_id_menu = ComboBox(
-            label="track_id", choices=list(map(str, track_ids)), tooltip=get_tooltip("annotator_tracking", "track_id")
+            label="track_id",
+            choices=list(map(str, track_ids)),
+            tooltip=get_tooltip("annotator_tracking", "track_id"),
         )
         tracking_widget = Container(widgets=[state_menu, track_id_menu])
     else:
@@ -128,27 +134,37 @@ class AnnotatorTracking(_AnnotatorBase):
 
         # Before adding new layers, we always check whether a layer with this name already exists or not.
         if "current_object" not in self._viewer.layers:
-            if layer_choices and "current_object" in layer_choices:  # Check at 'commit' call button.
+            if (
+                layer_choices and "current_object" in layer_choices
+            ):  # Check at 'commit' call button.
                 widgets._validation_window_for_missing_layer("current_object")
             self._viewer.add_labels(data=dummy_data, name="current_object")
             if image_scale is not None:
-                self.layers["current_objects"].scale = image_scale
+                self._viewer.layers["current_object"].scale = image_scale
 
         if "auto_segmentation" not in self._viewer.layers:
-            if layer_choices and "auto_segmentation" in layer_choices:  # Check at 'commit' call button.
-                widgets._validation_window_for_missing_layer("auto_segmentation")
+            if (
+                layer_choices and "auto_segmentation" in layer_choices
+            ):  # Check at 'commit' call button.
+                widgets._validation_window_for_missing_layer(
+                    "auto_segmentation"
+                )
             self._viewer.add_labels(data=dummy_data, name="auto_segmentation")
             if image_scale is not None:
-                self.layers["auto_segmentation"].scale = image_scale
+                self._viewer.layers["auto_segmentation"].scale = image_scale
 
         if "committed_objects" not in self._viewer.layers:
-            if layer_choices and "committed_objects" in layer_choices:  # Check at 'commit' call button.
-                widgets._validation_window_for_missing_layer("committed_objects")
+            if (
+                layer_choices and "committed_objects" in layer_choices
+            ):  # Check at 'commit' call button.
+                widgets._validation_window_for_missing_layer(
+                    "committed_objects"
+                )
             self._viewer.add_labels(data=dummy_data, name="committed_objects")
             # Randomize colors so it is easy to see when object committed.
             self._viewer.layers["committed_objects"].new_colormap()
             if image_scale is not None:
-                self.layers["committed_objects"].scale = image_scale
+                self._viewer.layers["committed_objects"].scale = image_scale
 
         # Add the point prompts layer.
         self._point_labels = ["positive", "negative"]
@@ -162,8 +178,12 @@ class AnnotatorTracking(_AnnotatorBase):
         point_layer_mismatch = True
         if "point_prompts" in self._viewer.layers:
             # Check whether the 'property_choices' match or not.
-            curr_property_choices = self._viewer.layers["point_prompts"].property_choices
-            point_layer_mismatch = set(curr_property_choices.keys()) != set(_point_prompt_property_choices.keys())
+            curr_property_choices = self._viewer.layers[
+                "point_prompts"
+            ].property_choices
+            point_layer_mismatch = set(curr_property_choices.keys()) != set(
+                _point_prompt_property_choices.keys()
+            )
 
         if point_layer_mismatch and "point_prompts" not in self._viewer.layers:
             self._point_prompt_layer = self._viewer.add_points(
@@ -191,8 +211,12 @@ class AnnotatorTracking(_AnnotatorBase):
         box_layer_mismatch = True
         if "prompts" in self._viewer.layers:
             # Check whether the 'property_choices' match or not.
-            curr_property_choices = self._viewer.layers["prompts"].property_choices
-            box_layer_mismatch = set(curr_property_choices.keys()) != set(_box_prompt_property_choices.keys())
+            curr_property_choices = self._viewer.layers[
+                "prompts"
+            ].property_choices
+            box_layer_mismatch = set(curr_property_choices.keys()) != set(
+                _box_prompt_property_choices.keys()
+            )
 
         if box_layer_mismatch and "prompts" not in self._viewer.layers:
             # Using the box layer to set divisions currently doesn't work.
@@ -241,24 +265,30 @@ class AnnotatorTracking(_AnnotatorBase):
         else:
             self._tracking_widget = state.widgets.get("tracking")
 
-        segment_nd = widgets.SegmentNDWidget(self._viewer, tracking=True)
-        autotrack = widgets.AutoTrackWidget(self._viewer, with_decoder=self._with_decoder, volumetric=True)
+        autotrack = widgets.AutoTrackWidget(
+            self._viewer, with_decoder=self._with_decoder, volumetric=True
+        )
         return {
             "tracking": self._tracking_widget,
-            "segment": widgets.segment_frame(),
-            "segment_nd": segment_nd,
+            "segment": widgets.UnifiedSegmentWidget(
+                self._viewer, tracking=True
+            ),
             "autosegment": autotrack,
             "commit": widgets.commit_track(),
             "clear": widgets.clear_track(),
         }
 
-    def __init__(self, viewer: "napari.viewer.Viewer", reset_state: bool = True) -> None:
+    def __init__(
+        self, viewer: "napari.viewer.Viewer", reset_state: bool = True
+    ) -> None:
         # Initialize the state for tracking.
         self._init_track_state()
         self._with_decoder = AnnotatorState().decoder is not None
         super().__init__(viewer=viewer, ndim=3)
         # Go to t=0.
-        self._viewer.dims.current_step = (0, 0, 0) + tuple(sh // 2 for sh in self._shape[1:])
+        self._viewer.dims.current_step = (0, 0, 0) + tuple(
+            sh // 2 for sh in self._shape[1:]
+        )
 
         # Set the expected annotator class to the state.
         state = AnnotatorState()
@@ -296,6 +326,7 @@ def annotator_tracking(
     viewer: Optional["napari.viewer.Viewer"] = None,
     precompute_amg_state: bool = False,
     checkpoint_path: Optional[str] = None,
+    decoder_path: Optional[str] = None,
     device: Optional[Union[str, torch.device]] = None,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the tracking annotation tool fora given timeseries.
@@ -307,7 +338,7 @@ def annotator_tracking(
             https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
         tile_shape: Shape of tiles for tiled embedding prediction.
             If `None` then the whole image is passed to Segment Anything.
-        halo: Shape of the overlap between tiles, which is needed to segment objects on tile boarders.
+        halo: Shape of the overlap between tiles, which is needed to segment objects on tile borders.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
             By default, does not return the napari viewer.
         viewer: The viewer to which the Segment Anything functionality should be added.
@@ -316,6 +347,7 @@ def annotator_tracking(
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster. By default, set to 'False'.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
+        decoder_path: Path to a custom decoder checkpoint from which to load the 'micro-sam` decoder.
         device: The computational device to use for the SAM model.
             By default, automatically chooses the best available device.
 
@@ -326,10 +358,18 @@ def annotator_tracking(
     # Initialize the predictor state.
     state = AnnotatorState()
     state.initialize_predictor(
-        image, model_type=model_type, save_path=embedding_path,
-        halo=halo, tile_shape=tile_shape, prefer_decoder=True,
-        ndim=3, checkpoint_path=checkpoint_path, device=device,
-        precompute_amg_state=precompute_amg_state, use_cli=True,
+        image,
+        model_type=model_type,
+        save_path=embedding_path,
+        halo=halo,
+        tile_shape=tile_shape,
+        prefer_decoder=True,
+        ndim=3,
+        checkpoint_path=checkpoint_path,
+        decoder_path=decoder_path,
+        device=device,
+        precompute_amg_state=precompute_amg_state,
+        use_cli=True,
     )
     state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
 
@@ -346,7 +386,11 @@ def annotator_tracking(
     viewer.window.add_dock_widget(annotator)
     vutil._sync_embedding_widget(
         widget=state.widgets["embeddings"],
-        model_type=model_type if checkpoint_path is None else state.predictor.model_type,
+        model_type=(
+            model_type
+            if checkpoint_path is None
+            else state.predictor.model_type
+        ),
         save_path=embedding_path,
         checkpoint_path=checkpoint_path,
         device=device,
@@ -385,7 +429,12 @@ def main():
     image = util.load_image_data(args.input, key=args.key)
 
     annotator_tracking(
-        image, embedding_path=args.embedding_path, model_type=args.model_type,
-        tile_shape=args.tile_shape, halo=args.halo,
-        checkpoint_path=args.checkpoint, device=args.device,
+        image,
+        embedding_path=args.embedding_path,
+        model_type=args.model_type,
+        tile_shape=args.tile_shape,
+        halo=args.halo,
+        checkpoint_path=args.checkpoint,
+        decoder_path=args.decoder_path,
+        device=args.device,
     )

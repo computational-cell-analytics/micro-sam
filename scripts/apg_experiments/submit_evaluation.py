@@ -9,13 +9,8 @@ def write_batch_script(
 ):
     """Writing scripts to submit multiple evaluations relevant for APG.
     """
-    if method == "cellpose":
-        if model_type == "cyto3":
-            env = "cp3"
-        elif model_type == "cpsam":
-            env = "cp4"
-        else:
-            raise ValueError
+    if method == "cellpose" and model_type == "cyto3":
+        env = "cp3"
     else:
         env = "super"
 
@@ -23,12 +18,12 @@ def write_batch_script(
 #SBATCH -t 2-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH -p grete:shared
-#SBATCH -G A100:1
+#SBATCH -p grete-h100:shared
+#SBATCH -G H100:1
 #SBATCH -A nim00007
 #SBATCH -c 16
 #SBATCH --mem 64G
-#SBATCH --constraint=inet,80gb
+#SBATCH --constraint=inet
 #SBATCH --job-name=apg_evaluation
 
 source ~/.bashrc
@@ -83,33 +78,36 @@ def submit_slurm(args):
 
     method_combinations = [
         # SAM-based models
-        # ["amg", "vit_b"],
-        # ["amg", generalist_model],
-        # ["ais", generalist_model],
+        ["amg", "vit_b"],
+        ["ais", generalist_model],
         ["apg", generalist_model],
         # SAM3
-        # ["sam3", "cells"],
+        ["sam3", "cell"],
         # And other external methods.
-        # ["cellpose", "cyto3"],
-        # ["cellpose", "cpsam"],
-        # ["cellsam", "cellsam"],
+        ["cellpose", "cyto3"],
+        ["cellpose", "cpsam"],
+        ["cellsam", "cellsam"],
     ]
 
     if dataset_name is None:
         if generalist_model == "vit_b_lm":
             datasets = [
                 # Label-free
-                "livecell", "omnipose", "deepbacs", "usiigaci", "vicar", "deepseas", "toiam",
+                "livecell", "omnipose", "deepbacs", "usiigaci", "vicar",
+                "deepseas", "toiam", "yeaz", "segpc",
                 # Fluo (nuclei)
                 "dynamicnuclearnet", "u20s", "arvidsson", "ifnuclei",
                 "gonuclear", "nis3d", "parhyale_regen", "dsb", "bitdepth_nucseg",
                 # Fluo (cells)
                 "cellpose", "cellbindb", "tissuenet", "plantseg_root", "covid_if",
-                "hpa", "plantseg_ovules", "pnas_arabidopsis",
+                "hpa", "plantseg_ovules", "pnas_arabidopsis", "mouse_embryo",
             ]
         else:  # Histopatholgoy
             assert generalist_model == "vit_b_histopathology"
-            datasets = ["ihc_tma", "lynsec", "pannuke", "monuseg", "tnbc", "nuinsseg", "puma", "cytodark0"]
+            datasets = [
+                "ihc_tma", "lynsec", "pannuke", "monuseg", "tnbc",
+                "nuinsseg", "puma", "cytodark0", "cryonuseg"
+            ]
     else:
         datasets = [dataset_name]
 

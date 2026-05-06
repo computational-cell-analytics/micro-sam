@@ -135,7 +135,7 @@ def compute_object_features(
     # Otherwise, we compute the features by iterating over slices and/or tiles,
     # compute the features for each slice / tile and accumulate them.
 
-    # Fist, we compute the segmentation ids and initialize the required data structures.
+    # First, we compute the segmentation ids and initialize the required data structures.
     seg_ids = np.unique(segmentation).tolist()
     if seg_ids[0] == 0:
         seg_ids = seg_ids[1:]
@@ -175,7 +175,7 @@ def compute_object_features(
 
         # Features that were already visited can be merged.
         if len(visited_idx) > 0:
-            # Get ths sizes, which are needed for computing the mean.
+            # Get the sizes, which are needed for computing the mean.
             prev_size = features[visited_idx, 0:1]
             this_size = this_features[this_visited_idx, 0:1]
 
@@ -235,7 +235,7 @@ def run_prediction_with_object_classifier(
 
     Args:
         images: The images, either given as a list of numpy array or filepaths.
-        segmentations: The segmentaitons, either given as a list of numpy array or filepaths.
+        segmentations: The segmentations, either given as a list of numpy array or filepaths.
         predictor:
         rf_path:
         image_key:
