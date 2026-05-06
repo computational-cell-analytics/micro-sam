@@ -25,7 +25,7 @@ def get_dataloaders(patch_shape, data_path, n_images):
     that retuns `x, y` tensors, where `x` is the image data and `y` are the labels.
     The labels have to be in a label mask instance segmentation format.
     i.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
-    Important: the ID 0 is reseved for background, and the IDs must be consecutive
+    Important: the ID 0 is reserved for background, and the IDs must be consecutive
     """
     num_workers = 8 if torch.cuda.is_available() else 0
 

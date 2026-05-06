@@ -78,6 +78,31 @@ class TestUtil(unittest.TestCase):
             x1, x2 = (np.random.rand(32, 32) > 0.5), (np.random.rand(32, 32) > 0.5)
             self.assertTrue(0.0 < compute_iou(x1, x2) < 1.0)
 
+    def test_apply_nms_tiled_border_masks(self):
+        from micro_sam.util import apply_nms
+
+        predictions = [
+            {
+                "segmentation": torch.ones((4, 4), dtype=torch.bool),
+                "bbox": [0, 0, 4, 4],
+                "global_bbox": [0, 0, 4, 4],
+                "predicted_iou": 1.0,
+                "stability_score": 1.0,
+            },
+            {
+                "segmentation": torch.ones((4, 2), dtype=torch.bool),
+                "bbox": [0, 0, 2, 4],
+                "global_bbox": [5, 0, 2, 4],
+                "predicted_iou": 1.0,
+                "stability_score": 1.0,
+            },
+        ]
+
+        segmentation = apply_nms(predictions, min_size=0)
+
+        self.assertEqual(segmentation.shape, (4, 7))
+        self.assertEqual(segmentation.max(), 2)
+
     def _check_predictor_initialization(self, predictor, embeddings, i=None, tile_id=None):
         # We need to do a full reset of the predictor; the orginal_size and input_size
         # are not being reset.

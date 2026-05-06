@@ -176,7 +176,7 @@ class TestPromptGenerators(unittest.TestCase):
 
                 self.assertTrue(agree.all())
 
-                # the condition only holds if we have a negative area (predicition mask where we don't have true mask)
+                # the condition only holds if we have a negative area (prediction mask where we don't have true mask)
                 if ((pred_mask - mask) > 0).sum() > 0:
                     self.assertTrue(diff.all())
 

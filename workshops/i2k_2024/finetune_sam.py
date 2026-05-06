@@ -130,7 +130,7 @@ def get_dataloaders(
     NOTE: `micro_sam.training.default_sam_loader` is a convenience function to build a torch dataloader
     from the image data and labels for training segmentation models.
     This is wrapped around the `torch_em.default_segmentation_loader`.
-    It suppoirts image data in various formats. Here, we load image data and corresponding labels by providing
+    It supports image data in various formats. Here, we load image data and corresponding labels by providing
     filepaths to the respective tif files that were downloaded and preprocessed using the functionality above.
 
     For more information, here is the documentation:
@@ -158,7 +158,7 @@ def get_dataloaders(
     patch_shape = (1024, 1024)  # the size of patches for training
 
     # The dataloader internally takes care of adding label transforms: i.e. used to convert the ground-truth
-    # labels to the desired instances for finetuning Segment Anythhing, or, to learn the foreground and distances
+    # labels to the desired instances for finetuning Segment Anything, or, to learn the foreground and distances
     # to the object centers and object boundaries for automatic segmentation.
 
     train_loader = sam_training.default_sam_loader(
