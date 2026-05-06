@@ -197,8 +197,11 @@ iterative_prompting_results/
 *MACOSX
 hela_ctc
 clf-test-data
+*.h5
+.claude/
 
 # Related to i2k workshop folders.
 data/
 embeddings/
 *.zarr
+

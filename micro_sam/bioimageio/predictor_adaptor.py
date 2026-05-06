@@ -63,6 +63,10 @@ class PredictorAdaptor(nn.Module):
         if batch_size != 1:
             raise ValueError
 
+        # Cast to float for MPS compatibility: F.interpolate with antialias=True
+        # only supports floating-point dtypes on MPS (Apple Silicon).
+        image_float = image.float() if not image.is_floating_point() else image
+
         # We have image embeddings set and image embeddings were not passed.
         if self.sam.is_image_set and embeddings is None:
             pass   # do nothing
@@ -71,12 +75,12 @@ class PredictorAdaptor(nn.Module):
         elif embeddings is not None:
             self.sam.features = embeddings
             self.sam.orig_h, self.sam.orig_w = image.shape[2:]
-            self.sam.input_h, self.sam.input_w = self.sam.transform.apply_image_torch(image).shape[2:]
+            self.sam.input_h, self.sam.input_w = self.sam.transform.apply_image_torch(image_float).shape[2:]
             self.sam.is_image_set = True
 
         # We don't have image embeddings set and they were not passed.
         elif not self.sam.is_image_set:
-            input_ = self.sam.transform.apply_image_torch(image)
+            input_ = self.sam.transform.apply_image_torch(image_float)
             self.sam.set_torch_image(input_, original_image_size=image.shape[2:])
             self.sam.orig_h, self.sam.orig_w = self.sam.original_size
             self.sam.input_h, self.sam.input_w = self.sam.input_size
