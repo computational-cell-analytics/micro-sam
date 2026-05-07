@@ -273,7 +273,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             iou_regression_loss = iou_regression_loss + net_iou_regression_loss
             mean_model_iou = mean_model_iou + net_mean_model_iou
 
-            if i < (num_subiter - 1):   # We need not update the prompts for the last iteration.
+            if i < (num_subiter - 1):  # We need not update the prompts for the last iteration.
                 # Determine the next prompts based on current predictions.
                 with torch.no_grad():
                     # Get the mask and logit predictions corresponding to the predicted object

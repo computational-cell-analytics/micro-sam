@@ -1717,7 +1717,8 @@ def _calculate_tiled_mask_overlap_matrix(masks, boxes, global_boxes, intersectio
                 overlap[0] - offset_j[0]:overlap[2] - offset_j[0],
             ]
             intersection = torch.logical_and(mask_i, mask_j).sum()
-            denominator = torch.minimum(areas[i], areas[j]) if intersection_over_min else areas[i] + areas[j] - intersection
+            min_area = torch.minimum(areas[i], areas[j])
+            denominator = min_area if intersection_over_min else areas[i] + areas[j] - intersection
             overlap_scores[i, j] = intersection / denominator
 
     overlap_scores = overlap_scores + overlap_scores.T
