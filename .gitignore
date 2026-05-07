@@ -199,6 +199,7 @@ hela_ctc
 clf-test-data
 *.h5
 .claude/
+.codex
 
 # Related to i2k workshop folders.
 data/

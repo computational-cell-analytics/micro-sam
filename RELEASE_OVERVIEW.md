@@ -1,5 +1,9 @@
 # Release Overview
 
+**New in version 1.7.7**
+
+Fixes for tiled NMS and MPS inference, plus a new example for instance segmentation-only finetuning.
+
 **New in version 1.7.6**
 
 Minor fixes for automatic tracking pipeline using trackastra.
