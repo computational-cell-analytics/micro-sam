@@ -69,7 +69,7 @@ class PredictorAdaptor(nn.Module):
 
         # We have image embeddings set and image embeddings were not passed.
         if self.sam.is_image_set and embeddings is None:
-            pass   # do nothing
+            pass  # do nothing
 
         # The embeddings are passed, so we set them.
         elif embeddings is not None:

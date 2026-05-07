@@ -792,7 +792,7 @@ def get_unetr(
                 # Whether allow reinitalization of params, if not found or mismatched.
                 if flexible_load_checkpoint:
                     if k in decoder_state:  # First check whether the key is available in the provided decoder state.
-                        if v.shape != decoder_state[k].shape:   # Then check if the sizes mismatch.
+                        if v.shape != decoder_state[k].shape:  # Then check if the sizes mismatch.
                             warnings.warn(f"Shape of '{k}' did not match. Hence, we reinitialize it.")
                             unetr_state_dict[k] = v
                         else:
@@ -961,7 +961,7 @@ class InstanceSegmentationWithDecoder:
     Use this class as follows:
     ```python
     segmenter = InstanceSegmentationWithDecoder(predictor, decoder)
-    segmenter.initialize(image)   # Predict the image embeddings and decoder outputs.
+    segmenter.initialize(image)  # Predict the image embeddings and decoder outputs.
     masks = segmenter.generate(center_distance_threshold=0.75)  # Generate the instance segmentation.
     ```
 
