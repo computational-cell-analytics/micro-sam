@@ -251,7 +251,8 @@ def automatic_instance_segmentation(
         # In this case, we also add the batch size to the initialize kwargs,
         # so that the segmentation decoder can be applied in a batched fashion.
         if isinstance(segmenter, InstanceSegmentationWithDecoder) and tile_shape is not None:
-            generate_kwargs.update({"tile_shape": tile_shape, "halo": halo})
+            if not isinstance(segmenter, TiledAutomaticPromptGenerator):
+                generate_kwargs.update({"tile_shape": tile_shape, "halo": halo})
             initialize_kwargs["batch_size"] = batch_size
 
         segmenter.initialize(**initialize_kwargs)
