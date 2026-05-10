@@ -122,7 +122,7 @@ def _postprocess_em(distances, beta, density_threshold, sigma):
 
 
 def _postprocess_em_blockwise(
-    distances, beta, density_threshold, sigma, block_shape=(10, 512, 512), halo=(2, 32, 32), n_levels=2
+    distances, beta, density_threshold, sigma, block_shape=(10, 512, 512), halo=(2, 32, 32), n_levels=1
 ):
     """Slice-wise oversegmentation + blockwise multicut for large EM volumes.
 
@@ -181,7 +181,7 @@ def _postprocess_em_blockwise(
     overseg += np.cumsum(offsets)[:, None, None]
 
     print("Building RAG ...")
-    rag = compute_rag(overseg)
+    rag = compute_rag(overseg, n_threads=n_threads)
     feats = compute_boundary_mean_and_length(rag, boundary_map)
     z_edges = compute_z_edge_mask(rag, overseg)
     costs = compute_edge_costs(
