@@ -399,7 +399,7 @@ class PEFT_Sam(nn.Module):
         peft_module: Wrapper to operate on the image encoder blocks for the PEFT method.
         attention_layers_to_update: Which specific layers we apply PEFT methods to.
             For reference, the total number of blocks for 'vit_b' is 12, for 'vit_l' is 24 and for 'vit_h' is 32.
-            By default, applies the PEFT method to all attention layers. 
+            By default, applies the PEFT method to all attention layers.
         quantize: Whether to quantize the model for lower precision training. By default, does not quantize the model.
         module_kwargs: The additional arguments for the respective PEFT modules.
     """
@@ -423,7 +423,7 @@ class PEFT_Sam(nn.Module):
         )
         if attention_layers_to_update:
             self.peft_layers = attention_layers_to_update
-        else:   # Applies PEFT to the image encoder by default
+        else:  # Applies PEFT to the image encoder by default
             self.peft_layers = list(range(len(model.image_encoder.blocks)))
 
         self.peft_module = peft_module
