@@ -108,9 +108,10 @@ class ConvertToSam2VideoBatch:
     _PIXEL_STD = [0.229, 0.224, 0.225]
     _SAM2_SIZE = 1024
 
-    def __init__(self, max_num_objects: int = 20):
+    def __init__(self, max_num_objects: int = 20, largest_first: bool = False):
         self.max_num_objects = max_num_objects
-        self.init_kwargs = {"max_num_objects": max_num_objects}
+        self.largest_first = largest_first
+        self.init_kwargs = {"max_num_objects": max_num_objects, "largest_first": largest_first}
 
     def _to_sam2_image(self, x: torch.Tensor) -> torch.Tensor:
         """(B,C,H,W) float [0,1] → (B,3,1024,1024) ImageNet-normalized."""
@@ -132,10 +133,20 @@ class ConvertToSam2VideoBatch:
         """Return up to max_num_objects non-zero unique IDs from a 2-D label map."""
         ids = torch.unique(label_2d)
         ids = ids[ids > 0]
-        if len(ids) > self.max_num_objects:
+        if len(ids) <= self.max_num_objects:
+            return ids
+        if not self.largest_first:
             perm = torch.randperm(len(ids), device=ids.device)[:self.max_num_objects]
-            ids = ids[perm]
-        return ids
+            return ids[perm]
+        # Mixed: first n//2 by descending size, remaining n - n//2 at random.
+        n_largest = self.max_num_objects // 2
+        n_random = self.max_num_objects - n_largest
+        counts = torch.bincount(label_2d.flatten().long(), minlength=int(ids.max().item()) + 1)
+        sorted_idx = torch.argsort(counts[ids], descending=True)
+        largest_ids = ids[sorted_idx[:n_largest]]
+        perm = torch.randperm(len(ids) - n_largest, device=ids.device)[:n_random]
+        random_ids = ids[sorted_idx[n_largest:]][perm]
+        return torch.cat([largest_ids, random_ids])
 
     def __call__(self, x: torch.Tensor, y: torch.Tensor):
         """

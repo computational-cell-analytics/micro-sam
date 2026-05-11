@@ -18,7 +18,7 @@ def main():
         batch_size_2d=8,
         z_slices=[8],
         dataset_choice="both",
-        n_workers=16,
+        n_workers=8,
         n_epochs=n_epochs,
         lr=1e-5,
         save_root=save_root,
@@ -29,6 +29,7 @@ def main():
         prob_to_sample_from_gt=0.1,
         add_all_frames_to_correct_as_cond=True,
         clip_grad_norm=0.1,
+        largest_first=True,
     )
 
     if n_gpus > 1:

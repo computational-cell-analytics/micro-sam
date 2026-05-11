@@ -39,7 +39,8 @@ def _prepare_data_loader(dataset, batch_size, shuffle, batch_size_per_group=None
             shuffle=shuffle,
         )
         loader = torch.utils.data.DataLoader(
-            dataset, batch_sampler=batch_sampler, num_workers=num_workers, pin_memory=True,
+            dataset, batch_sampler=batch_sampler, num_workers=num_workers,
+            pin_memory=True, persistent_workers=True,
         )
         # Monkey-patch shuffle attribute for torch_em DefaultTrainer compatibility.
         loader.shuffle = shuffle

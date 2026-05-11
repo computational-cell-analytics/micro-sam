@@ -159,50 +159,36 @@ class JointSam2Trainer(Sam2Trainer):
         self.model.eval()
         self.unetr.eval()
 
-        inter_loss_val = 0.0
         auto_loss_val = 0.0
         n_iter = 0
         input_check_done = False
-        last_x = last_y = last_batch = last_outputs = last_y_dist = last_pred = None
+        last_x = last_y = last_y_dist = last_pred = None
 
         with torch.no_grad():
             for x, y in self.val_loader:
                 input_check_done = self._check_input_normalization(x, input_check_done)
                 with forward_context():
-                    try:
-                        inter_loss, batch, outputs = self._interactive_step(x, y)
-                    except RuntimeError as e:
-                        if "no objects found" in str(e):
-                            continue
-                        raise
-                with forward_context():
                     auto_loss, y_dist, pred = self._automatic_step(x, y)
-                inter_loss_val += inter_loss.item()
                 auto_loss_val += auto_loss.item()
                 n_iter += 1
                 last_x, last_y = x, y
-                last_batch, last_outputs = batch, outputs
                 last_y_dist, last_pred = y_dist, pred
 
         n_iter = max(n_iter, 1)
-        inter_loss_val /= n_iter
         auto_loss_val /= n_iter
 
         if dist.is_available() and dist.is_initialized():
-            t_inter = torch.tensor(inter_loss_val, device=self.device)
             t_auto = torch.tensor(auto_loss_val, device=self.device)
-            dist.all_reduce(t_inter, op=dist.ReduceOp.AVG)
             dist.all_reduce(t_auto, op=dist.ReduceOp.AVG)
-            inter_loss_val = t_inter.item()
             auto_loss_val = t_auto.item()
 
         if self.logger is not None:
             self.logger.log_validation(
-                self._iteration, inter_loss_val, auto_loss_val,
-                last_x, last_y, last_batch, last_outputs, last_y_dist, last_pred,
+                self._iteration, auto_loss_val,
+                last_x, last_y, last_y_dist, last_pred,
             )
 
-        return inter_loss_val + auto_loss_val
+        return auto_loss_val
 
 
 class JointSam2Logger(TorchEmLogger):
@@ -268,13 +254,9 @@ class JointSam2Logger(TorchEmLogger):
             self._log_interactive_images(step, x, y, batch, outputs, "train")
             self._log_automatic_images(step, x, y_dist, pred, "train")
 
-    def log_validation(self, step, inter_loss, auto_loss,
-                       x=None, y=None, batch=None, outputs=None, y_dist=None, pred=None):
+    def log_validation(self, step, auto_loss, x=None, y=None, y_dist=None, pred=None):
         if self.tb is None:
             return
-        self.tb.add_scalar("validation/interactive_loss", inter_loss, global_step=step)
         self.tb.add_scalar("validation/automatic_loss", auto_loss, global_step=step)
-        self.tb.add_scalar("validation/total_loss", inter_loss + auto_loss, global_step=step)
         if x is not None:
-            self._log_interactive_images(step, x, y, batch, outputs, "validation")
             self._log_automatic_images(step, x, y_dist, pred, "validation")

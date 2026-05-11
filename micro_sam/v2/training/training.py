@@ -50,6 +50,7 @@ def train_sam2(
     add_all_frames_to_correct_as_cond: bool = True,
     num_correction_pt_per_frame: int = 7,
     clip_grad_norm: Optional[float] = 0.1,
+    largest_first: bool = False,
 ) -> None:
     """Train SAM2 for interactive segmentation with SAM2's native prompting strategy.
 
@@ -120,7 +121,7 @@ def train_sam2(
         focal_alpha_obj_score=-1.0,
     )
 
-    convert_inputs = ConvertToSam2VideoBatch(max_num_objects=max_num_objects)
+    convert_inputs = ConvertToSam2VideoBatch(max_num_objects=max_num_objects, largest_first=largest_first)
 
     optimizer = _build_optimizer(model, lr=lr, vision_lr=vision_lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode="min", factor=0.9, patience=10)
@@ -185,6 +186,7 @@ def _train_sam2_rank(
     dataset_choice: str,
     n_workers: int,
     find_unused_parameters: bool,
+    largest_first: bool,
 ):
     """Single-rank worker spawned by train_sam2_multi_gpu."""
     from torch_em.multi_gpu_training import DDP
@@ -223,11 +225,13 @@ def _train_sam2_rank(
     )
 
     train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_sampler=train_sampler, num_workers=n_workers, pin_memory=True,
+        train_ds, batch_sampler=train_sampler, num_workers=n_workers,
+        pin_memory=True, persistent_workers=True,
     )
     train_loader.shuffle = True
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_sampler=val_sampler, num_workers=n_workers, pin_memory=True,
+        val_ds, batch_sampler=val_sampler, num_workers=n_workers,
+        pin_memory=True, persistent_workers=True,
     )
     val_loader.shuffle = False
 
@@ -254,7 +258,7 @@ def _train_sam2_rank(
         focal_alpha_obj_score=-1.0,
     )
 
-    convert_inputs = ConvertToSam2VideoBatch(max_num_objects=max_num_objects)
+    convert_inputs = ConvertToSam2VideoBatch(max_num_objects=max_num_objects, largest_first=largest_first)
 
     optimizer = _build_optimizer(model, lr=lr, vision_lr=vision_lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -320,6 +324,7 @@ def train_sam2_multi_gpu(
     clip_grad_norm: Optional[float] = 0.1,
     n_gpus: Optional[int] = None,
     find_unused_parameters: bool = True,
+    largest_first: bool = False,
 ) -> None:
     """Train SAM2 for interactive segmentation across multiple GPUs with DDP.
 
@@ -406,6 +411,7 @@ def train_sam2_multi_gpu(
         dataset_choice=dataset_choice,
         n_workers=n_workers,
         find_unused_parameters=find_unused_parameters,
+        largest_first=largest_first,
     )
     torch.multiprocessing.spawn(train_fn, args=(), nprocs=world_size, join=True)
 
@@ -539,11 +545,13 @@ def _train_automatic_rank(
     )
 
     train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_sampler=train_sampler, num_workers=n_workers, pin_memory=True,
+        train_ds, batch_sampler=train_sampler, num_workers=n_workers,
+        pin_memory=True, persistent_workers=True,
     )
     train_loader.shuffle = True
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_sampler=val_sampler, num_workers=n_workers, pin_memory=True,
+        val_ds, batch_sampler=val_sampler, num_workers=n_workers,
+        pin_memory=True, persistent_workers=True,
     )
     val_loader.shuffle = False
 
@@ -692,6 +700,7 @@ def train_joint_sam2(
     prob_to_sample_from_gt: float = 0.1,
     add_all_frames_to_correct_as_cond: bool = True,
     clip_grad_norm: Optional[float] = 0.1,
+    largest_first: bool = False,
 ) -> None:
     """Train SAM2Train and UniSAM2 jointly with a shared image encoder (single GPU).
 
@@ -772,7 +781,7 @@ def train_joint_sam2(
         focal_alpha_obj_score=-1.0,
     )
     automatic_loss = DirectedDistanceLoss(mask_distances_in_bg=True)
-    convert_inputs = ConvertToSam2VideoBatch(max_num_objects=max_num_objects)
+    convert_inputs = ConvertToSam2VideoBatch(max_num_objects=max_num_objects, largest_first=largest_first)
 
     if scheduler_kwargs is None:
         scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10}
@@ -839,6 +848,7 @@ def _train_joint_rank(
     dataset_choice: str,
     n_workers: int,
     find_unused_parameters: bool,
+    largest_first: bool,
 ):
     """Single-rank worker spawned by train_joint_sam2_multi_gpu."""
     from torch_em.multi_gpu_training import DDP
@@ -872,11 +882,13 @@ def _train_joint_rank(
         shuffle=False, rank=rank, world_size=world_size,
     )
     train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_sampler=train_sampler, num_workers=n_workers, pin_memory=True,
+        train_ds, batch_sampler=train_sampler, num_workers=n_workers,
+        pin_memory=True, persistent_workers=True,
     )
     train_loader.shuffle = True
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_sampler=val_sampler, num_workers=n_workers, pin_memory=True,
+        val_ds, batch_sampler=val_sampler, num_workers=n_workers,
+        pin_memory=True, persistent_workers=True,
     )
     val_loader.shuffle = False
 
@@ -904,7 +916,7 @@ def _train_joint_rank(
         focal_alpha_obj_score=-1.0,
     )
     automatic_loss = DirectedDistanceLoss(mask_distances_in_bg=True)
-    convert_inputs = ConvertToSam2VideoBatch(max_num_objects=max_num_objects)
+    convert_inputs = ConvertToSam2VideoBatch(max_num_objects=max_num_objects, largest_first=largest_first)
 
     if scheduler_kwargs is None:
         scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10}
@@ -974,6 +986,7 @@ def train_joint_sam2_multi_gpu(
     clip_grad_norm: Optional[float] = 0.1,
     n_gpus: Optional[int] = None,
     find_unused_parameters: bool = True,
+    largest_first: bool = False,
 ) -> None:
     """Train SAM2Train and UniSAM2 jointly across multiple GPUs with DDP.
 
@@ -1055,5 +1068,6 @@ def train_joint_sam2_multi_gpu(
         dataset_choice=dataset_choice,
         n_workers=n_workers,
         find_unused_parameters=find_unused_parameters,
+        largest_first=largest_first,
     )
     torch.multiprocessing.spawn(train_fn, args=(), nprocs=world_size, join=True)
