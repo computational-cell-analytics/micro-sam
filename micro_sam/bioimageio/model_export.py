@@ -235,10 +235,10 @@ def _check_model(model_description, input_paths, result_paths):
                 "mask_prompts": mask_prompts,
                 "embeddings": embeddings,
             },
-        ).as_single_block()
-        prediction = pp.predict_sample_block(sample)
+        )
+        prediction = pp.predict_sample_without_blocking(sample)
 
-        predicted_mask = prediction.blocks["masks"].data.data
+        predicted_mask = prediction.members["masks"].data
         assert predicted_mask.shape == mask.shape
         assert np.allclose(mask, predicted_mask)
 
@@ -261,9 +261,9 @@ def _check_model(model_description, input_paths, result_paths):
         for kwargs in prompt_kwargs:
             sample = create_sample_for_model(
                 model=model_description, inputs={"image": image, "embeddings": embeddings, **kwargs},
-            ).as_single_block()
-            prediction = pp.predict_sample_block(sample)
-            predicted_mask = prediction.blocks["masks"].data.data
+            )
+            prediction = pp.predict_sample_without_blocking(sample)
+            predicted_mask = prediction.members["masks"].data
             assert predicted_mask.shape == mask.shape
 
 
