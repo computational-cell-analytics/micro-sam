@@ -27,7 +27,7 @@ from ..transforms.labels import (
 def _ensure_native_byte_order(y):
     # tifffile.memmap returns big-endian >f4 for some TIFFs; byteswap to native so that
     # Kornia augmentation and skimage/vigra C extensions receive correctly ordered bytes.
-    return y.byteswap().newbyteorder() if not y.dtype.isnative else y
+    return y.byteswap().view(y.dtype.newbyteorder()) if not y.dtype.isnative else y
 
 
 def _prepare_data_loader(dataset, batch_size, shuffle, batch_size_per_group=None, num_workers=32):
