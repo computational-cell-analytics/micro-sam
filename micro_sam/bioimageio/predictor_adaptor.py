@@ -32,7 +32,7 @@ class PredictorAdaptor(nn.Module):
         self.sam = SamPredictor(self.sam_model)
 
     def load_state_dict(self, state, **kwargs):
-        self.sam.model.load_state_dict(state, **kwargs)
+        return self.sam.model.load_state_dict(state, **kwargs)
 
     @torch.no_grad()
     def forward(
