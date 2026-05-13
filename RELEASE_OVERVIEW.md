@@ -63,9 +63,9 @@ Fixing minor issues with 1.2.1 for making automatic segmentation CLI more flexib
 **New in version 1.2.1**
 This version introduces several changes that are part of three of our recent publications that are built on top of micro_sam:
 
-- [medico-sam](https://github.com/computational-cell-analytics/medico-sam), which improves SAM for medical images
-- [peft-sam](https://github.com/computational-cell-analytics/peft-sam), which investigates parameter efficient finetuning for SAM
-- [patho-sam](https://github.com/computational-cell-analytics/patho-sam), which improves SAM for histopathology
+- [medico-sam](https://github.com/computational-cell-analytics/medico-sam), which improves SAM for medical images.
+- [peft-sam](https://github.com/computational-cell-analytics/peft-sam), which investigates parameter efficient finetuning for SAM.
+- [patho-sam](https://github.com/computational-cell-analytics/patho-sam), which improves SAM for histopathology.
 
 **New in version 1.2.0**
 
@@ -83,10 +83,10 @@ Fixing minor issues with 1.1.0 and enabling pytorch 2.5 support.
 
 This version introduces several improvements:
 
-- Bugfixes and several minor improvements
-- Compatibility with napari >=0.5
-- Automatic instance segmentation CLI
-- Initial support for parameter efficient fine-tuning and automatic semantic segmentation in 2d and 3d (not available in napari plugin, part of the python library)
+- Bugfixes and several minor improvements.
+- Compatibility with napari >=0.5.
+- Automatic instance segmentation CLI.
+- Initial support for parameter efficient fine-tuning and automatic semantic segmentation in 2d and 3d (not available in napari plugin, part of the python library).
 
 **New in version 1.0.1**
 
@@ -110,16 +110,16 @@ This version includes a lot of new functionality and improvements. The most impo
 
 **New in version 0.4.0**
 
-- Significantly improved model finetuning
-- Update the finetuned models for microscopy, see [details in the doc](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models)
-- Training decoder for direct instance segmentation (not available via the GUI yet)
-- Refactored model download functionality using [pooch](https://pypi.org/project/pooch/)
+- Significantly improved model finetuning.
+- Update the finetuned models for microscopy, see [details in the doc](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models).
+- Training decoder for direct instance segmentation (not available via the GUI yet).
+- Refactored model download functionality using [pooch](https://pypi.org/project/pooch/).
 
 **New in version 0.3.0**
 
-- Support for ellipse and polygon prompts
-- Support for automatic segmentation in 3d
-- Training refactoring and speed-up of fine-tuning
+- Support for ellipse and polygon prompts.
+- Support for automatic segmentation in 3d.
+- Training refactoring and speed-up of fine-tuning.
 
 **New in version 0.2.1 and 0.2.2**
 
@@ -127,16 +127,16 @@ This version includes a lot of new functionality and improvements. The most impo
 
 **New in version 0.2.0**
 
-- Functionality for training / finetuning and evaluation of Segment Anything Models
-- Full support for our finetuned segment anything models
-- Improvements of the automated instance segmentation functionality in the 2d annotator
-- And several other small improvements
+- Functionality for training / finetuning and evaluation of Segment Anything Models.
+- Full support for our finetuned segment anything models.
+- Improvements of the automated instance segmentation functionality in the 2d annotator.
+- And several other small improvements.
 
 **New in version 0.1.1**
 
-- Fine-tuned segment anything models for microscopy (experimental)
-- Simplified instance segmentation menu
-- Menu for clearing annotations
+- Fine-tuned segment anything models for microscopy (experimental).
+- Simplified instance segmentation menu.
+- Menu for clearing annotations.
 
 **New in version 0.1.0**
 
