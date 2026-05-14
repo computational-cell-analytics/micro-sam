@@ -1,6 +1,5 @@
 import os
 import time
-from functools import partial
 from typing import Any, Dict, List, Optional, Union
 
 import torch
@@ -158,7 +157,7 @@ def train_sam2(
 
 def _train_sam2_rank(
     rank: int,
-    world_size: int,
+    local_rank: int,
     name: str,
     model_type: str,
     input_path: str,
@@ -188,18 +187,17 @@ def _train_sam2_rank(
     find_unused_parameters: bool,
     largest_first: bool,
 ):
-    """Single-rank worker spawned by train_sam2_multi_gpu."""
+    """Single-rank torchrun worker for train_sam2_multi_gpu."""
     from torch_em.multi_gpu_training import DDP
 
     from micro_sam.v2.datasets.generalist_loader import _build_interactive_datasets
     from micro_sam.v2.datasets.sampler import DistributedUniBatchSampler, _build_group_map
     from training.loss_fns import MultiStepMultiMasksAndIous
 
-    os.environ.setdefault("MASTER_ADDR", "localhost")
-    os.environ.setdefault("MASTER_PORT", "12355")
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    dist.init_process_group("nccl")
+    world_size = dist.get_world_size()
 
-    device = torch.device(f"cuda:{rank}")
+    device = torch.device(f"cuda:{local_rank}")
     torch.cuda.set_device(device)
 
     # Each rank builds its own copy of the datasets.
@@ -247,7 +245,7 @@ def _train_sam2_rank(
         add_all_frames_to_correct_as_cond=add_all_frames_to_correct_as_cond,
         num_correction_pt_per_frame=num_correction_pt_per_frame,
     )
-    ddp_model = DDP(model, device_ids=[rank], find_unused_parameters=find_unused_parameters)
+    ddp_model = DDP(model, device_ids=[local_rank], find_unused_parameters=find_unused_parameters)
 
     interactive_loss = MultiStepMultiMasksAndIous(
         weight_dict={"loss_mask": 20, "loss_dice": 1, "loss_iou": 1, "loss_class": 1},
@@ -322,22 +320,18 @@ def train_sam2_multi_gpu(
     add_all_frames_to_correct_as_cond: bool = True,
     num_correction_pt_per_frame: int = 7,
     clip_grad_norm: Optional[float] = 0.1,
-    n_gpus: Optional[int] = None,
     find_unused_parameters: bool = True,
     largest_first: bool = False,
 ) -> None:
     """Train SAM2 for interactive segmentation across multiple GPUs with DDP.
 
-    Mirrors :func:`train_sam2` but launches one process per GPU via
-    ``torch.multiprocessing.spawn``.  The dataset is built independently in
-    each rank; batches are sharded across ranks by
-    :class:`~micro_sam.v2.datasets.sampler.DistributedUniBatchSampler`, which
-    preserves group-homogeneous batching while ensuring no rank sees the same
-    batch as another.
+    Must be launched via ``torchrun`` — one process per GPU, on one or more nodes.
+    Example (single node): ``torchrun --nproc_per_node=4 train_sam2.py``
+    Example (multi-node):  ``srun torchrun --nnodes=$SLURM_NNODES --nproc_per_node=4 train_sam2.py``
 
-    Unlike :func:`train_sam2`, this function takes ``input_path`` instead of
-    pre-built dataloaders, because each spawned process must construct its own
-    dataset objects.
+    Each rank reads its identity from the ``RANK``, ``LOCAL_RANK``, and
+    ``WORLD_SIZE`` environment variables set by torchrun and builds its own
+    dataset independently.
 
     Args:
         name: Checkpoint/log folder name.
@@ -374,16 +368,17 @@ def train_sam2_multi_gpu(
     if batch_size_2d is None:
         batch_size_2d = batch_size
 
-    world_size = n_gpus or torch.cuda.device_count()
-    if world_size < 2:
-        raise ValueError(
-            f"train_sam2_multi_gpu requires at least 2 GPUs, found {world_size}. "
-            "Use train_sam2() for single-GPU training."
+    if "RANK" not in os.environ:
+        raise RuntimeError(
+            "train_sam2_multi_gpu must be launched via torchrun, not called directly. "
+            "Example: torchrun --nproc_per_node=4 train_sam2.py"
         )
+    rank = int(os.environ["RANK"])
+    local_rank = int(os.environ["LOCAL_RANK"])
 
-    train_fn = partial(
-        _train_sam2_rank,
-        world_size=world_size,
+    _train_sam2_rank(
+        rank=rank,
+        local_rank=local_rank,
         name=name,
         model_type=model_type,
         input_path=input_path,
@@ -413,7 +408,6 @@ def train_sam2_multi_gpu(
         find_unused_parameters=find_unused_parameters,
         largest_first=largest_first,
     )
-    torch.multiprocessing.spawn(train_fn, args=(), nprocs=world_size, join=True)
 
 
 def train_automatic(
@@ -490,7 +484,7 @@ def train_automatic(
 
 def _train_automatic_rank(
     rank: int,
-    world_size: int,
+    local_rank: int,
     name: str,
     model_type: str,
     input_path: str,
@@ -508,7 +502,7 @@ def _train_automatic_rank(
     n_workers: int,
     find_unused_parameters: bool,
 ):
-    """Single-rank worker spawned by train_automatic_multi_gpu."""
+    """Single-rank torchrun worker for train_automatic_multi_gpu."""
     import torch_em
     from torch_em.multi_gpu_training import DDP
 
@@ -516,11 +510,10 @@ def _train_automatic_rank(
     from micro_sam.v2.datasets.sampler import DistributedUniBatchSampler, _build_group_map
     from micro_sam.v2.models.util import UniSAM2
 
-    os.environ.setdefault("MASTER_ADDR", "localhost")
-    os.environ.setdefault("MASTER_PORT", "12355")
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    dist.init_process_group("nccl")
+    world_size = dist.get_world_size()
 
-    device = torch.device(f"cuda:{rank}")
+    device = torch.device(f"cuda:{local_rank}")
     torch.cuda.set_device(device)
 
     train_ds, val_ds = _build_automatic_datasets(input_path, z_slices, dataset_choice)
@@ -556,7 +549,7 @@ def _train_automatic_rank(
     val_loader.shuffle = False
 
     model = UniSAM2(encoder=model_type, output_channels=4).to(device)
-    ddp_model = DDP(model, device_ids=[rank], find_unused_parameters=find_unused_parameters)
+    ddp_model = DDP(model, device_ids=[local_rank], find_unused_parameters=find_unused_parameters)
 
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10}
     loss = DirectedDistanceLoss(mask_distances_in_bg=True)
@@ -642,16 +635,17 @@ def train_automatic_multi_gpu(
     if batch_size_2d is None:
         batch_size_2d = batch_size
 
-    world_size = n_gpus or torch.cuda.device_count()
-    if world_size < 2:
-        raise ValueError(
-            f"train_automatic_multi_gpu requires at least 2 GPUs, found {world_size}. "
-            "Use train_automatic() for single-GPU training."
+    if "RANK" not in os.environ:
+        raise RuntimeError(
+            "train_automatic_multi_gpu must be launched via torchrun, not called directly. "
+            "Example: torchrun --nproc_per_node=4 train_automatic.py"
         )
+    rank = int(os.environ["RANK"])
+    local_rank = int(os.environ["LOCAL_RANK"])
 
-    train_fn = partial(
-        _train_automatic_rank,
-        world_size=world_size,
+    _train_automatic_rank(
+        rank=rank,
+        local_rank=local_rank,
         name=name,
         model_type=model_type,
         input_path=input_path,
@@ -669,7 +663,6 @@ def train_automatic_multi_gpu(
         n_workers=n_workers,
         find_unused_parameters=find_unused_parameters,
     )
-    torch.multiprocessing.spawn(train_fn, args=(), nprocs=world_size, join=True)
 
 
 def train_joint_sam2(
@@ -820,7 +813,7 @@ def train_joint_sam2(
 
 def _train_joint_rank(
     rank: int,
-    world_size: int,
+    local_rank: int,
     name: str,
     model_type: str,
     input_path: str,
@@ -850,7 +843,7 @@ def _train_joint_rank(
     find_unused_parameters: bool,
     largest_first: bool,
 ):
-    """Single-rank worker spawned by train_joint_sam2_multi_gpu."""
+    """Single-rank torchrun worker for train_joint_sam2_multi_gpu."""
     from torch_em.multi_gpu_training import DDP
     from training.loss_fns import MultiStepMultiMasksAndIous
 
@@ -858,11 +851,10 @@ def _train_joint_rank(
     from micro_sam.v2.datasets.sampler import DistributedUniBatchSampler, _build_group_map
     from micro_sam.v2.models.util import UniSAM2
 
-    os.environ.setdefault("MASTER_ADDR", "localhost")
-    os.environ.setdefault("MASTER_PORT", "12355")
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    dist.init_process_group("nccl")
+    world_size = dist.get_world_size()
 
-    device = torch.device(f"cuda:{rank}")
+    device = torch.device(f"cuda:{local_rank}")
     torch.cuda.set_device(device)
 
     batch_size_per_group = {2: batch_size_2d} if batch_size_2d != batch_size else None
@@ -905,7 +897,7 @@ def _train_joint_rank(
     unetr = UniSAM2(encoder=sam2_model.image_encoder, output_channels=4).to(device)
 
     # Only DDP-wrap sam2_model; unetr decoder grads are synced manually.
-    ddp_model = DDP(sam2_model, device_ids=[rank], find_unused_parameters=find_unused_parameters)
+    ddp_model = DDP(sam2_model, device_ids=[local_rank], find_unused_parameters=find_unused_parameters)
 
     interactive_loss = MultiStepMultiMasksAndIous(
         weight_dict={"loss_mask": 20, "loss_dice": 1, "loss_iou": 1, "loss_class": 1},
@@ -984,17 +976,18 @@ def train_joint_sam2_multi_gpu(
     prob_to_sample_from_gt: float = 0.1,
     add_all_frames_to_correct_as_cond: bool = True,
     clip_grad_norm: Optional[float] = 0.1,
-    n_gpus: Optional[int] = None,
     find_unused_parameters: bool = True,
     largest_first: bool = False,
 ) -> None:
     """Train SAM2Train and UniSAM2 jointly across multiple GPUs with DDP.
 
-    Mirrors :func:`train_joint_sam2` but launches one process per GPU via
-    ``torch.multiprocessing.spawn``.  Both the interactive and automatic
-    datasets are constructed independently in each rank.  Only the SAM2 model
-    is DDP-wrapped; UniSAM2 decoder gradients are manually all_reduced after
-    each backward so the shared encoder is not double-reduced.
+    Must be launched via ``torchrun`` — one process per GPU, on one or more nodes.
+    Example (single node): ``torchrun --nproc_per_node=4 train_joint.py``
+    Example (multi-node):  ``srun torchrun --nnodes=$SLURM_NNODES --nproc_per_node=4 train_joint.py``
+
+    Both the interactive and automatic datasets are constructed independently in
+    each rank.  Only the SAM2 model is DDP-wrapped; UniSAM2 decoder gradients are
+    manually all_reduced after each backward so the shared encoder is not double-reduced.
 
     Args:
         name: Checkpoint / log folder name.
@@ -1031,16 +1024,17 @@ def train_joint_sam2_multi_gpu(
     if batch_size_2d is None:
         batch_size_2d = batch_size
 
-    world_size = n_gpus or torch.cuda.device_count()
-    if world_size < 2:
-        raise ValueError(
-            f"train_joint_sam2_multi_gpu requires at least 2 GPUs, found {world_size}. "
-            "Use train_joint_sam2() for single-GPU training."
+    if "RANK" not in os.environ:
+        raise RuntimeError(
+            "train_joint_sam2_multi_gpu must be launched via torchrun, not called directly. "
+            "Example: torchrun --nproc_per_node=4 train_joint.py"
         )
+    rank = int(os.environ["RANK"])
+    local_rank = int(os.environ["LOCAL_RANK"])
 
-    train_fn = partial(
-        _train_joint_rank,
-        world_size=world_size,
+    _train_joint_rank(
+        rank=rank,
+        local_rank=local_rank,
         name=name,
         model_type=model_type,
         input_path=input_path,
@@ -1070,4 +1064,3 @@ def train_joint_sam2_multi_gpu(
         find_unused_parameters=find_unused_parameters,
         largest_first=largest_first,
     )
-    torch.multiprocessing.spawn(train_fn, args=(), nprocs=world_size, join=True)

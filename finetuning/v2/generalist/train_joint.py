@@ -1,14 +1,14 @@
-import torch
+import os
 
 
 def main():
     model_type = "hvit_t"
     data_path = "/mnt/vast-nhr/projects/cidas/cca/data"
-    save_root = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v2"
+    save_root = os.environ.get("SAVE_ROOT", "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v1")
     n_epochs = 150
 
-    n_gpus = torch.cuda.device_count()
-    name = f"joint_sam2_{model_type}_{'multi' if n_gpus > 1 else 'single'}_gpu"
+    is_multi_gpu = "LOCAL_RANK" in os.environ
+    name = f"joint_sam2_{model_type}_{'multi' if is_multi_gpu else 'single'}_gpu"
 
     common = dict(
         name=name,
@@ -32,9 +32,9 @@ def main():
         largest_first=True,
     )
 
-    if n_gpus > 1:
+    if is_multi_gpu:
         from micro_sam.v2.training import train_joint_sam2_multi_gpu
-        train_joint_sam2_multi_gpu(n_gpus=n_gpus, **common)
+        train_joint_sam2_multi_gpu(**common)
     else:
         from micro_sam.v2.training import train_joint_sam2
         train_joint_sam2(**common)

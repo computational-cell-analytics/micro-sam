@@ -44,7 +44,7 @@ CHECKPOINT_PATHS = {
     ),
     "joint": os.path.join(
         "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2",
-        "joint/v2/checkpoints", "joint_sam2_hvit_t_multi_gpu", "best.pt",
+        "joint/v1/checkpoints", "joint_sam2_hvit_t_multi_gpu", "best.pt",
     ),
 }
 

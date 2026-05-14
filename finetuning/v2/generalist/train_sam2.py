@@ -1,4 +1,4 @@
-import torch
+import os
 
 
 def main():
@@ -6,8 +6,8 @@ def main():
     data_path = "/mnt/vast-nhr/projects/cidas/cca/data"
     save_root = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/interactive/v2"
 
-    n_gpus = torch.cuda.device_count()
-    name = f"sam2_interactive_{model_type}_{'multi' if n_gpus > 1 else 'single'}_gpu"
+    is_multi_gpu = "LOCAL_RANK" in os.environ
+    name = f"sam2_interactive_{model_type}_{'multi' if is_multi_gpu else 'single'}_gpu"
 
     loader_kwargs = dict(
         batch_size=1,
@@ -31,9 +31,9 @@ def main():
         clip_grad_norm=0.1,  # max gradient norm; None to disable
     )
 
-    if n_gpus > 1:
+    if is_multi_gpu:
         from micro_sam.v2.training import train_sam2_multi_gpu
-        train_sam2_multi_gpu(input_path=data_path, n_gpus=n_gpus, **loader_kwargs, **trainer_kwargs)
+        train_sam2_multi_gpu(input_path=data_path, **loader_kwargs, **trainer_kwargs)
     else:
         from micro_sam.v2.datasets.generalist_loader import get_interactive_dataloaders
         from micro_sam.v2.training import train_sam2
