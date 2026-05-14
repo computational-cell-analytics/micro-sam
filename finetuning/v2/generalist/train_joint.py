@@ -1,11 +1,16 @@
 import os
+import argparse
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--n_epochs", type=int, default=100)
+    parser.add_argument("--n_iterations", type=int, default=None)
+    args = parser.parse_args()
+
     model_type = "hvit_t"
     data_path = "/mnt/vast-nhr/projects/cidas/cca/data"
     save_root = os.environ.get("SAVE_ROOT", "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v1")
-    n_epochs = 150
 
     is_multi_gpu = "LOCAL_RANK" in os.environ
     name = f"joint_sam2_{model_type}_{'multi' if is_multi_gpu else 'single'}_gpu"
@@ -19,7 +24,8 @@ def main():
         z_slices=[8],
         dataset_choice="both",
         n_workers=8,
-        n_epochs=n_epochs,
+        n_epochs=args.n_epochs,
+        n_iterations=args.n_iterations,
         lr=1e-5,
         save_root=save_root,
         checkpoint_path=None,  # downloads default SAM2 weights if None

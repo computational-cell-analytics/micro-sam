@@ -128,7 +128,7 @@ class DirectedPerObjectBoundaryDistanceTransform:
 
         # skimage/vigra C extensions read raw bytes assuming native byte order; swap if needed.
         if not labels.dtype.isnative:
-            labels = labels.byteswap().newbyteorder()
+            labels = labels.byteswap().view(labels.dtype.newbyteorder())
 
         if self.apply_label:
             labels = connected_components(labels).astype("uint32")
