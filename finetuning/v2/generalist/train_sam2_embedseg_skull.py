@@ -62,10 +62,9 @@ def get_embedseg_skull_dataloaders(input_path, batch_size=1, n_workers=16):
 def main():
     model_type = "hvit_t"
     data_path = "/mnt/vast-nhr/projects/cidas/cca/data"
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    save_root = os.path.join(script_dir, "test_run")
+    save_root = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/interactive/debug/embedseg_skull"
 
-    name = f"sam2_interactive_{model_type}_embedseg_skull_meta_defaults"
+    name = f"sam2_interactive_{model_type}_embedseg_skull_no_corrections"
 
     from micro_sam.v2.training import train_sam2
     train_loader, val_loader = get_embedseg_skull_dataloaders(input_path=data_path, batch_size=1, n_workers=16)
@@ -74,14 +73,13 @@ def main():
         val_loader=val_loader,
         name=name,
         model_type=model_type,
-        n_epochs=40,
-        lr=5e-6,
-        vision_lr=3e-6,
+        n_epochs=10,
+        lr=1e-5,
         save_root=save_root,
         checkpoint_path=None,
-        max_num_objects=3,
-        num_frames_to_correct=2,
-        rand_frames_to_correct=True,
+        max_num_objects=8,
+        num_frames_to_correct=0,
+        rand_frames_to_correct=False,
         prob_to_sample_from_gt=0.1,
         add_all_frames_to_correct_as_cond=True,
         clip_grad_norm=0.1,
