@@ -12,15 +12,17 @@ from pathlib import Path
 from collections import OrderedDict
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, Callable
 
-import zarr
-import torch
-import pooch
-import xxhash
-import numpy as np
 import imageio.v3 as imageio
+import numpy as np
+import pooch
 import segment_anything.utils.amg as amg_utils
+import torch
+import xxhash
+import zarr
+
 from skimage.measure import regionprops
 from skimage.segmentation import relabel_sequential
+from torchvision.ops.boxes import batched_nms
 
 from .__version__ import __version__
 from . import models as custom_models
@@ -1888,7 +1890,6 @@ def apply_nms(
     scores = data["iou_preds"] * data["stability_scores"]
     boxes = _xywh_to_xyxy(data["global_boxes"] if is_tiled else data["boxes"])
     if perform_box_nms:
-        from torchvision.ops.boxes import batched_nms
         assert not intersection_over_min  # not implemented
         keep_by_nms = batched_nms(
             boxes,

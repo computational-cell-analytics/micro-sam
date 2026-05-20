@@ -1,6 +1,101 @@
 [build-system]
-requires = ["setuptools>=42.0.0", "wheel"]
+requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "micro-sam"
+description = "Segment Anything For Microscopy"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [
+    {name = "Anwai Archit"},
+    {name = "Paul Hilt"},
+    {name = "Genevieve Buckley"},
+    {name = "Constantin Pape"},
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Framework :: napari",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+dynamic = ["version"]
+dependencies = [
+    "imageio",
+    "numpy",
+    "pooch",
+    "scikit-image",
+    "scipy",
+    "segment-anything",
+    "torch>=2.5",
+    "torchvision",
+    "tqdm",
+    "xxhash",
+    "zarr",
+]
+
+[project.optional-dependencies]
+gui = [
+    "h5py",
+    "magicgui",
+    "napari<0.7",
+    "natsort",
+    "PyQt5",
+]
+training = [
+    "timm",
+    "torch-em>=0.8",
+]
+tracking = [
+    "trackastra>=0.5.3",
+]
+bioimageio = [
+    "bioimageio.core",
+    "bioimageio.spec",
+    "matplotlib",
+    "xarray",
+]
+mobile = [
+    "mobile-sam @ git+https://github.com/ChaoningZhang/MobileSAM.git",
+]
+
+[project.urls]
+Homepage = "https://github.com/computational-cell-analytics/micro-sam"
+Documentation = "https://computational-cell-analytics.github.io/micro-sam/micro_sam.html"
+Repository = "https://github.com/computational-cell-analytics/micro-sam"
+Issues = "https://github.com/computational-cell-analytics/micro-sam/issues"
+
+[project.scripts]
+"micro_sam.annotator_2d" = "micro_sam.sam_annotator.annotator_2d:main"
+"micro_sam.annotator_3d" = "micro_sam.sam_annotator.annotator_3d:main"
+"micro_sam.annotator_tracking" = "micro_sam.sam_annotator.annotator_tracking:main"
+"micro_sam.image_series_annotator" = "micro_sam.sam_annotator.image_series_annotator:main"
+"micro_sam.precompute_embeddings" = "micro_sam.precompute_state:main"
+"micro_sam.automatic_segmentation" = "micro_sam.automatic_segmentation:main"
+"micro_sam.train" = "micro_sam.training.training:main"
+"micro_sam.evaluate" = "micro_sam.evaluation.evaluation:main"
+"micro_sam.info" = "micro_sam.util:micro_sam_info"
+"micro_sam.benchmark_sam" = "micro_sam.evaluation.benchmark_datasets:main"
+
+[project.entry-points."napari.manifest"]
+micro-sam = "micro_sam:napari.yaml"
+
+[tool.setuptools.dynamic]
+version = {attr = "micro_sam.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml"]
 
 [tool.pytest.ini_options]
 addopts = "-v --durations=10 --cov=micro_sam --cov-report xml:coverage.xml --cov-report term-missing"
