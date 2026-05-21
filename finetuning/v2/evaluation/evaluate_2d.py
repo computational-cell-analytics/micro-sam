@@ -228,6 +228,7 @@ def run_automatic_evaluation_2d(
     crop_shape=CROP_SHAPE_2D,
     raw_key=None,
     label_key=None,
+    backend="python",
 ):
     """Run automatic segmentation (directed distances) and evaluate on 2D crops."""
     if checkpoint_path is None:
@@ -253,7 +254,7 @@ def run_automatic_evaluation_2d(
         image = imageio.imread(img_path).astype("float32")
         gt = connected_components(imageio.imread(gt_path)).astype("uint32")
         out = predict_unisam2(model, image, ndim=2, device=device)
-        seg = postprocess_unisam2(out, dataset_name)
+        seg = postprocess_unisam2(out, dataset_name, backend=backend)
         all_gt.append(gt)
         all_seg.append(seg)
 

@@ -338,14 +338,16 @@ def run_sam2_auto_evaluation(
     )
 
 
-def run_microsam2_auto_evaluation(dataset_name, data_root, experiment_folder, device, checkpoint_path=None):
+def run_microsam2_auto_evaluation(
+    dataset_name, data_root, experiment_folder, device, checkpoint_path=None, backend="python"
+):
     if checkpoint_path is None:
         checkpoint_path = UNISAM2_CHECKPOINT
     ndim = 3 if dataset_name in DATASETS_3D else 2
     model = load_unisam2_model(checkpoint_path, device)
     save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_micro_sam2_auto.csv")
     _run_evaluation(
-        lambda x: postprocess_unisam2(predict_unisam2(model, x, ndim, device), dataset_name),
+        lambda x: postprocess_unisam2(predict_unisam2(model, x, ndim, device), dataset_name, backend=backend),
         dataset_name, data_root, ndim, save_path, desc="micro_sam2-auto",
     )
 

@@ -1,34 +1,43 @@
-"""Grid search over postprocessing hyperparameters for UniSAM2 cached predictions.
+"""Grid search over postprocessing hyperparameters for UniSAM2 predictions.
 
-Loads cached H5 prediction files, sweeps postprocessing parameters, evaluates
-mSA against ground truth, and saves results to CSV.
+Runs the UniSAM2 model live on one sample per dataset, sweeps postprocessing
+parameters for both the python and cpp backends, evaluates mSA against ground
+truth, and saves combined results to CSV.
 
-LM datasets (nis3d, plantseg_root) use flow_instance_segmentation.
-EM datasets (snemi) use run_multicut.
+LM datasets (nis3d, plantseg_ovules) use flow_instance_segmentation.
+EM datasets (humanneurons) use run_multicut.
 
 Results are stored one CSV per (dataset, model) pair:
     <output_dir>/<dataset>/<model>.csv
 
 Usage:
-    python grid_search_postprocessing.py -d snemi -m automatic
-    python grid_search_postprocessing.py -d nis3d -m joint
-    python grid_search_postprocessing.py -d plantseg_root -m automatic
+    python grid_search_postprocessing.py -d humanneurons -m automatic
+    python grid_search_postprocessing.py -d nis3d -m automatic
+    python grid_search_postprocessing.py -d plantseg_ovules -m automatic
 """
 
 import argparse
 import itertools
 import os
+import sys
+import time
 
-import h5py
-import pandas as pd
-from tqdm import tqdm
+sys.path.insert(0, "/mnt/vast-kisski/home/archit/u28048/micro-sam/finetuning/v2/evaluation")
 
-from elf.evaluation import mean_segmentation_accuracy
-from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut
+import h5py  # noqa
+import pandas as pd  # noqa
+from tqdm import tqdm  # noqa
+
+from elf.evaluation import mean_segmentation_accuracy  # noqa
+from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut  # noqa
+from common import (  # noqa
+    DATA_ROOT, UNISAM2_CHECKPOINT, load_unisam2_model, load_volume, predict_unisam2,
+)
 
 
 PREDICTIONS_ROOT = "/mnt/vast-nhr/home/archit/u12090/micro-sam/finetuning/v2/generalist/predictions"
-OUTPUT_ROOT = "/mnt/vast-nhr/home/archit/u12090/micro-sam/finetuning/v2/generalist/grid_search_results"
+OUTPUT_ROOT = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/grid-search-experiments"
+DEVICE = "cuda"
 
 DATASETS = [
     "snemi", "nis3d", "plantseg_root", "cremi", "humanneurons",
@@ -74,6 +83,64 @@ def _center_crop(arr, crop_shape):
     return arr[full_roi]
 
 
+def _get_data_paths_grid_search(dataset_name):
+    """Return (raw_paths, label_paths, raw_key, label_key) for grid-search datasets.
+
+    Handles plantseg sub-variants (ovules, root) that are not top-level entries
+    in common.get_data_paths.
+    """
+    import torch_em.data.datasets as datasets
+    p = DATA_ROOT
+    if dataset_name == "plantseg_ovules":
+        paths = datasets.plantseg.get_plantseg_paths(
+            path=os.path.join(p, "plantseg_ovules"), name="ovules", split="test",
+        )
+        return sorted(paths), sorted(paths), "raw", "label"
+    if dataset_name == "plantseg_root":
+        paths = datasets.plantseg.get_plantseg_paths(
+            path=os.path.join(p, "plantseg_root"), name="root", split="test",
+        )
+        return sorted(paths), sorted(paths), "raw", "label"
+    from common import get_data_paths
+    return get_data_paths(dataset_name, p)
+
+
+def _generate_live_predictions(dataset_name, model, crop_shape=None):
+    """Run model inference on the first test sample and return (raw, distances, labels, valid_roi).
+
+    If crop_shape is None, the full volume is loaded without cropping.
+    """
+    raw_paths, label_paths, raw_key, label_key = _get_data_paths_grid_search(dataset_name)
+    if crop_shape is not None:
+        raw, labels, valid_roi = load_volume(
+            raw_path=raw_paths[0],
+            label_path=label_paths[0],
+            raw_key=raw_key,
+            label_key=label_key,
+            dataset_name=dataset_name,
+            crop_shape=crop_shape,
+        )
+    else:
+        from elf.io import open_file
+        from skimage.measure import label as connected_components
+        from torch_em.transform.raw import normalize
+        from torch_em.util.image import load_image
+        if raw_key is None:
+            raw = load_image(raw_paths[0]).astype("float32")
+            labels = connected_components(load_image(label_paths[0])).astype("uint32")
+        else:
+            with open_file(raw_paths[0], mode="r") as f:
+                raw = f[raw_key][:].astype("float32")
+            with open_file(label_paths[0], mode="r") as f:
+                labels = connected_components(f[label_key][:]).astype("uint32")
+        if raw.max() > 255:
+            raw = normalize(raw) * 255
+        valid_roi = None
+    print(f"Running inference on {raw_paths[0]} (shape={raw.shape}) ...")
+    distances = predict_unisam2(model, raw, ndim=3, device=DEVICE)
+    return raw, distances, labels, valid_roi
+
+
 def _load_predictions(dataset_name, model_name, predictions_root, crop_shape=None):
     """Load distances and labels from a cached H5 prediction file.
 
@@ -98,7 +165,9 @@ def _load_predictions(dataset_name, model_name, predictions_root, crop_shape=Non
     return raw, distances, labels
 
 
-def _postprocess_lm(distances, dataset_name, foreground_threshold, density_threshold, min_size, sigma):
+def _postprocess_lm(
+    distances, dataset_name, foreground_threshold, density_threshold, min_size, sigma, backend="python"
+):
     return flow_instance_segmentation(
         foreground=distances[0],
         directed_distances=distances[1:],
@@ -106,10 +175,11 @@ def _postprocess_lm(distances, dataset_name, foreground_threshold, density_thres
         density_threshold=density_threshold,
         min_size=min_size,
         sigma=sigma,
+        backend=backend,
     ).astype("uint32")
 
 
-def _postprocess_em(distances, beta, density_threshold, sigma):
+def _postprocess_em(distances, beta, density_threshold, sigma, backend="python"):
     fg = distances[0]
     boundary_map = fg.max() - fg
     boundary_map /= boundary_map.max()
@@ -118,11 +188,13 @@ def _postprocess_em(distances, beta, density_threshold, sigma):
         beta=beta,
         density_threshold=density_threshold,
         sigma=sigma,
+        backend=backend,
     ).astype("uint32")
 
 
 def _postprocess_em_blockwise(
-    distances, beta, density_threshold, sigma, block_shape=(10, 512, 512), halo=(2, 32, 32), n_levels=1
+    distances, beta, density_threshold, sigma, block_shape=(10, 512, 512), halo=(2, 32, 32), n_levels=1,
+    backend="python",
 ):
     """Slice-wise oversegmentation + blockwise multicut for large EM volumes.
 
@@ -165,7 +237,7 @@ def _postprocess_em_blockwise(
         bd = boundary_map[z]
         dists = dist_2d[:, z]
         fg_mask = np.ones(bd.shape, dtype="bool")
-        density = _compute_flow_density(dists, fg_mask, n_iter=50, dt=0.5, sigma=sigma, verbose=False)
+        density = _compute_flow_density(dists, fg_mask, n_iter=50, dt=0.5, sigma=sigma, verbose=False, backend=backend)
         seeds = label(density > density_threshold)
         wsz = watershed(bd, markers=seeds)
         overseg[z] = wsz
@@ -205,30 +277,31 @@ def _postprocess_em_blockwise(
     return seg.astype("uint32")
 
 
-def run_grid_search(dataset_name, model_name, predictions_root, output_dir):
-    """Run hyperparameter grid search for one (dataset, model) pair.
+def run_grid_search(dataset_name, model_name, output_dir):
+    """Run hyperparameter grid search for one (dataset, model) pair using the cpp backend.
+
+    Runs model inference once, sweeps all postprocessing combos, and saves
+    mSA and wall-clock time per combo to CSV.
 
     Args:
         dataset_name: one of DATASETS.
         model_name: 'automatic' or 'joint'.
-        predictions_root: root directory of H5 prediction files.
         output_dir: root directory to write CSV result files.
     """
     save_dir = os.path.join(output_dir, dataset_name)
     os.makedirs(save_dir, exist_ok=True)
     csv_path = os.path.join(save_dir, f"{model_name}.csv")
-    h5_path = os.path.join(save_dir, f"{model_name}_best.h5")
-
-    crop = GRID_SEARCH_CROP[dataset_name]
-    print(f"Loading predictions for {dataset_name}/{model_name} (crop={crop}) ...")
-    raw, distances, labels = _load_predictions(dataset_name, model_name, predictions_root, crop_shape=crop)
-
-    is_em = dataset_name in EM_DATASETS
 
     if os.path.exists(csv_path):
-        print(f"CSV already exists at {csv_path!r}, loading best params ...")
+        print(f"CSV already exists at {csv_path!r}, skipping.")
         df = pd.read_csv(csv_path)
     else:
+        crop = GRID_SEARCH_CROP[dataset_name]
+        print(f"Loading model and generating predictions for {dataset_name}/{model_name} ...")
+        model = load_unisam2_model(UNISAM2_CHECKPOINT, DEVICE)
+        raw, distances, labels, _ = _generate_live_predictions(dataset_name, model, crop)
+
+        is_em = dataset_name in EM_DATASETS
         grid = EM_GRID if is_em else LM_GRID
         keys = list(grid.keys())
         combos = list(itertools.product(*[grid[k] for k in keys]))
@@ -237,43 +310,30 @@ def run_grid_search(dataset_name, model_name, predictions_root, output_dir):
         rows = []
         for combo in tqdm(combos, desc=f"{dataset_name}/{model_name}"):
             params = dict(zip(keys, combo))
+            t0 = time.perf_counter()
             if is_em:
-                seg = _postprocess_em(distances, **params)
+                seg = _postprocess_em(distances, backend="cpp", **params)
             else:
-                seg = _postprocess_lm(distances, dataset_name, **params)
+                seg = _postprocess_lm(distances, dataset_name, backend="cpp", **params)
+            elapsed = time.perf_counter() - t0
             msa = mean_segmentation_accuracy(seg, labels)
-            rows.append({**params, "msa": msa})
+            rows.append({**params, "msa": msa, "time_s": elapsed})
 
         df = pd.DataFrame(rows)
         df.to_csv(csv_path, index=False)
         print(f"  Saved {csv_path}.")
-        print(df.sort_values("msa", ascending=False).head(5).to_string(index=False))
 
     best = df.sort_values("msa", ascending=False).iloc[0]
-    best_params = best.drop("msa").to_dict()
-    print(f"  Best params: {best_params} -> mSA={best['msa']:.4f}")
-
-    if os.path.exists(h5_path):
-        print(f"  Best segmentation already saved at {h5_path!r}.")
-    else:
-        if is_em:
-            best_seg = _postprocess_em(distances, **best_params)
-        else:
-            best_seg = _postprocess_lm(distances, dataset_name, **best_params)
-        with h5py.File(h5_path, "w") as f:
-            f.create_dataset("raw", data=raw, compression="gzip")
-            f.create_dataset("labels", data=labels, compression="gzip")
-            f.create_dataset("predicted_instances", data=best_seg, compression="gzip")
-        print(f"  Saved best segmentation to {h5_path}.")
+    best_params = {k: best[k] for k in df.columns if k not in ("msa", "time_s")}
+    print(f"  Best params: {best_params} -> mSA={best['msa']:.4f}, mean time/combo={df['time_s'].mean():.2f}s")
 
 
-def run_best_on_full_volume(dataset_name, model_name, predictions_root, output_dir):
-    """Run postprocessing with best grid-search params on the full uncropped volume.
+def run_best_on_full_volume(dataset_name, model_name, output_dir):
+    """Run postprocessing with best grid-search params on the full uncropped first test sample.
 
     Args:
         dataset_name: one of DATASETS.
         model_name: 'automatic' or 'joint'.
-        predictions_root: root directory of H5 prediction files.
         output_dir: root directory containing CSV results and where H5 will be written.
     """
     csv_path = os.path.join(output_dir, dataset_name, f"{model_name}.csv")
@@ -287,19 +347,33 @@ def run_best_on_full_volume(dataset_name, model_name, predictions_root, output_d
 
     df = pd.read_csv(csv_path)
     best = df.sort_values("msa", ascending=False).iloc[0]
-    best_params = best.drop("msa").to_dict()
+    best_params = {k: best[k] for k in df.columns if k not in ("msa", "time_s")}
     print(f"Best params for {dataset_name}/{model_name}: {best_params} (mSA={best['msa']:.4f})")
 
-    print("Loading full volume ...")
-    raw, distances, labels = _load_predictions(dataset_name, model_name, predictions_root, crop_shape=None)
+    print("Loading model and generating full-volume predictions ...")
+    model = load_unisam2_model(UNISAM2_CHECKPOINT, DEVICE)
+    raw, distances, labels, _ = _generate_live_predictions(dataset_name, model, crop_shape=None)
     print(f"  Volume shape: {raw.shape}")
 
     is_em = dataset_name in EM_DATASETS
     print("Running postprocessing ...")
+    t0 = time.perf_counter()
     if is_em:
-        seg = _postprocess_em(distances, **best_params)
+        seg = _postprocess_em(distances, backend="cpp", **best_params)
     else:
-        seg = _postprocess_lm(distances, dataset_name, **best_params)
+        seg = _postprocess_lm(distances, dataset_name, backend="cpp", **best_params)
+    elapsed = time.perf_counter() - t0
+
+    msa = mean_segmentation_accuracy(seg, labels)
+    if is_em:
+        from elf.evaluation import cremi_score
+        vi_split, vi_merge, _, cremi = cremi_score(seg, labels)
+        print(
+            f"  mSA={msa:.4f}, VI-split={vi_split:.4f}, VI-merge={vi_merge:.4f}, "
+            f"CREMI={cremi:.4f}, time={elapsed:.1f}s"
+        )
+    else:
+        print(f"  mSA={msa:.4f}, time={elapsed:.1f}s")
 
     with h5py.File(h5_path, "w") as f:
         f.create_dataset("raw", data=raw, compression="gzip")
@@ -361,7 +435,7 @@ def main():
     )
     parser.add_argument(
         "-p", "--predictions_dir", type=str, default=PREDICTIONS_ROOT,
-        help="Root directory of H5 prediction files.",
+        help="Root directory of H5 prediction files (used by --copy_params_from / --full_volume).",
     )
     parser.add_argument(
         "-o", "--output_dir", type=str, default=OUTPUT_ROOT,
@@ -387,16 +461,16 @@ def main():
             raise FileNotFoundError(f"Source CSV not found: {source_csv!r}")
         df = pd.read_csv(source_csv)
         best = df.sort_values("msa", ascending=False).iloc[0]
-        params = best.drop("msa").to_dict()
+        params = {k: best[k] for k in df.columns if k not in ("msa", "time_s")}
         print(f"Using params from {args.copy_params_from}: {params}")
         run_with_fixed_params(
             args.dataset, args.model, params, args.predictions_dir, args.output_dir,
             block_z=args.block_z,
         )
     elif args.full_volume:
-        run_best_on_full_volume(args.dataset, args.model, args.predictions_dir, args.output_dir)
+        run_best_on_full_volume(args.dataset, args.model, args.output_dir)
     else:
-        run_grid_search(args.dataset, args.model, args.predictions_dir, args.output_dir)
+        run_grid_search(args.dataset, args.model, args.output_dir)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,8 @@ from skimage.segmentation import watershed
 from scipy.ndimage import map_coordinates
 from tqdm import tqdm, trange
 
+FLOW_BACKENDS = ("python", "cpp")
+
 
 def _compute_flow_density(
     directed_distances: np.ndarray,
@@ -28,6 +30,7 @@ def _compute_flow_density(
     sigma: float = 1.0,
     spacing: Optional[Tuple] = None,
     verbose: bool = False,
+    backend: str = "python",
 ) -> np.ndarray:
     """Integrate a flow field and return a convergence-density map.
 
@@ -44,11 +47,27 @@ def _compute_flow_density(
         sigma: Gaussian smoothing sigma applied to the density map.
         spacing: Anisotropic voxel spacing for 3D data, e.g. (4, 1, 1).
             Used for physically-isotropic Gaussian smoothing.
-        verbose: Show tqdm progress bar.
+        verbose: Show tqdm progress bar (python backend only).
+        backend: Flow computation backend. ``"python"`` uses the pure-Python
+            Euler integrator; ``"cpp"`` uses ``bioimage_cpp.flow.compute_flow_density``
+            (requires bioimage-cpp to be installed).
 
     Returns:
         Smoothed convergence-density map, same spatial shape as fg_mask.
     """
+    if backend not in FLOW_BACKENDS:
+        raise ValueError(f"backend must be one of {FLOW_BACKENDS}, got '{backend}'.")
+
+    if backend == "cpp":
+        from bioimage_cpp.flow import compute_flow_density
+        # cpp backend uses RK2 (midpoint) integration vs Euler in the python backend.
+        # This gives slightly different (and marginally better) density maps at the same
+        # n_iter/dt, so scores are not bit-identical across backends.
+        return compute_flow_density(
+            -directed_distances, fg_mask,
+            n_iter=n_iter, dt=dt, sigma=sigma, spacing=spacing,
+        )
+
     shape, ndim = fg_mask.shape, fg_mask.ndim
     flow = (-directed_distances).astype(np.float32)
 
@@ -96,6 +115,7 @@ def flow_instance_segmentation(
     density_threshold: float = 10.0,
     min_size: int = 10,
     verbose: bool = False,
+    backend: str = "python",
 ) -> np.ndarray:
     """Instance segmentation from directed-distance predictions via flow following.
 
@@ -118,7 +138,8 @@ def flow_instance_segmentation(
         spacing: Anisotropic voxel spacing for 3D inputs, e.g. (4, 1, 1).
         density_threshold: Convergence-density threshold for seed extraction.
         min_size: Minimum object size (pixels/voxels) to keep.
-        verbose: Show tqdm progress bar during flow integration.
+        verbose: Show tqdm progress bar during flow integration (python backend only).
+        backend: Flow computation backend, ``"python"`` or ``"cpp"``.
 
     Returns:
         Instance segmentation, uint32 array, same spatial shape as foreground.
@@ -134,7 +155,7 @@ def flow_instance_segmentation(
 
     density = _compute_flow_density(
         directed_distances, fg_mask,
-        n_iter=n_iter, dt=dt, sigma=sigma, spacing=spacing, verbose=verbose,
+        n_iter=n_iter, dt=dt, sigma=sigma, spacing=spacing, verbose=verbose, backend=backend,
     )
 
     seeds = label(density > density_threshold)
@@ -160,6 +181,7 @@ def run_multicut(
     dt: float = 0.5,
     sigma: float = 1.0,
     n_threads: int = 8,
+    backend: str = "python",
 ) -> np.ndarray:
     """Instance segmentation for 3D EM data via slice-wise oversegmentation + multicut.
 
@@ -178,6 +200,7 @@ def run_multicut(
         dt: Flow integration step size.
         sigma: Gaussian sigma for smoothing the convergence-density map.
         n_threads: Number of threads for the parallel slice-wise oversegmentation.
+        backend: Flow computation backend, ``"python"`` or ``"cpp"``.
 
     Returns:
         Instance segmentation, uint64 array, shape (Z, Y, X).
@@ -196,7 +219,7 @@ def run_multicut(
         dists = distances[:, z]
         fg_mask = np.ones(bd.shape, dtype="bool")
         density = _compute_flow_density(
-            dists, fg_mask, n_iter=n_iter, dt=dt, sigma=sigma, verbose=False,
+            dists, fg_mask, n_iter=n_iter, dt=dt, sigma=sigma, verbose=False, backend=backend,
         )
         seeds = label(density > density_threshold)
         wsz = watershed(bd, markers=seeds)
