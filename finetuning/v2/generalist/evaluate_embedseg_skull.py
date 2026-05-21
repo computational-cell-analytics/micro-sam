@@ -5,6 +5,12 @@ Prompting matches SAM2Train training setup:
 - add_all_frames_to_correct_as_cond=True (corrected frames become memory).
 - Corrections: 1 pos + 1 neg from error region on worst-predicted frame.
 - n_iterations correction rounds; mSA reported at each round.
+
+--match_training mode engineers eval to match training conditions exactly:
+- Pads each 512x256 frame to 512x512 (symmetric zero-pad on width) so aspect
+  ratio matches the (8, 512, 512) training patch shape.
+- Prompts from the first frame of each object's z-range (not center) and
+  propagates forward only, matching SAM2Train's start_frame_idx=0 convention.
 """
 
 import os
@@ -55,11 +61,27 @@ def load_test_volumes(min_size=10):
     return samples
 
 
-def propagate_chunked(predictor, inference_state, z_center, num_frames, chunk_size):
+def pad_to_square(vol):
+    """Pad (Z, H, W) volume symmetrically on the shorter spatial axis to make frames square."""
+    _, H, W = vol.shape
+    if H == W:
+        return vol, 0, 0
+    if H > W:
+        pad_total = H - W
+        left = pad_total // 2
+        right = pad_total - left
+        return np.pad(vol, ((0, 0), (0, 0), (left, right))), left, right
+    pad_total = W - H
+    top = pad_total // 2
+    bottom = pad_total - top
+    return np.pad(vol, ((0, 0), (top, bottom), (0, 0))), top, bottom
+
+
+def propagate_chunked(predictor, inference_state, z_start, num_frames, chunk_size, forward_only=False):
     """Propagate in fixed-length chunks so memory chain length matches training."""
     video_segments = {}
 
-    chunk_start = z_center
+    chunk_start = z_start
     while chunk_start < num_frames:
         for out_frame, _, out_logits in predictor.propagate_in_video(
             inference_state, start_frame_idx=chunk_start, max_frame_num_to_track=chunk_size
@@ -67,37 +89,55 @@ def propagate_chunked(predictor, inference_state, z_center, num_frames, chunk_si
             video_segments[out_frame] = (out_logits[0] > 0).cpu().numpy().squeeze()
         chunk_start += chunk_size
 
-    chunk_start = z_center
-    while chunk_start >= 0:
-        for out_frame, _, out_logits in predictor.propagate_in_video(
-            inference_state, start_frame_idx=chunk_start, max_frame_num_to_track=chunk_size, reverse=True
-        ):
-            if out_frame not in video_segments:
-                video_segments[out_frame] = (out_logits[0] > 0).cpu().numpy().squeeze()
-        chunk_start -= chunk_size
+    if not forward_only:
+        chunk_start = z_start
+        while chunk_start >= 0:
+            for out_frame, _, out_logits in predictor.propagate_in_video(
+                inference_state, start_frame_idx=chunk_start, max_frame_num_to_track=chunk_size, reverse=True
+            ):
+                if out_frame not in video_segments:
+                    video_segments[out_frame] = (out_logits[0] > 0).cpu().numpy().squeeze()
+            chunk_start -= chunk_size
 
     return video_segments
 
 
 @torch.no_grad()
-def segment_volume(raw, labels, predictor, n_iterations, use_box=False, chunk_size=None):
-    """Run iterative 3D interactive segmentation for all objects in a volume."""
+def segment_volume(raw, labels, predictor, n_iterations, use_box=False, chunk_size=None, match_training=False):
+    """Run iterative 3D interactive segmentation for all objects in a volume.
+
+    When match_training=True, eval conditions are engineered to match training:
+    - Frames are padded to square (to match training patch aspect ratio).
+    - Each object is prompted from its first z-frame and propagated forward only
+      (matching SAM2Train's start_frame_idx=0 convention).
+    """
+    if match_training:
+        raw_proc = pad_to_square(raw)[0]
+        labels_proc = pad_to_square(labels)[0]
+    else:
+        raw_proc = raw
+        labels_proc = labels
+
     volume_embeddings = _embedding_tensors_to_numpy(
-        precompute_image_embeddings(predictor=predictor, input_=raw, ndim=3)
+        precompute_image_embeddings(predictor=predictor, input_=raw_proc, ndim=3)
     )
-    inference_state = predictor.init_state(volume=raw, volume_embeddings=volume_embeddings)
+    inference_state = predictor.init_state(volume=raw_proc, volume_embeddings=volume_embeddings)
 
     prompt_generator = IterativePromptGenerator()
-    gt_ids = sorted(np.unique(labels)[1:].tolist())
+    gt_ids = sorted(np.unique(labels_proc)[1:].tolist())
 
-    seg_per_iter = [np.zeros_like(labels) for _ in range(n_iterations)]
+    seg_per_iter_proc = [np.zeros_like(labels_proc) for _ in range(n_iterations)]
 
     for obj_id in tqdm(gt_ids, desc="Objects", leave=False):
-        gt_3d = labels == obj_id
+        gt_3d = labels_proc == obj_id
         obj_zs = np.where(gt_3d.any(axis=(1, 2)))[0]
-        z_center = int(np.ceil(np.mean([obj_zs.min(), obj_zs.max()])))
 
-        gt_slice = (labels[z_center] == obj_id).astype("uint32")
+        if match_training:
+            z_prompt = int(obj_zs.min())
+        else:
+            z_prompt = int(np.ceil(np.mean([obj_zs.min(), obj_zs.max()])))
+
+        gt_slice = (labels_proc[z_prompt] == obj_id).astype("uint32")
         points, point_labels, boxes = _get_batched_prompts(
             gt=gt_slice, gt_ids=[1],
             use_points=not use_box, use_boxes=use_box,
@@ -111,7 +151,7 @@ def segment_volume(raw, labels, predictor, n_iterations, use_box=False, chunk_si
             if iteration == 0:
                 predictor.add_new_points_or_box(
                     inference_state=inference_state,
-                    frame_idx=z_center, obj_id=obj_id,
+                    frame_idx=z_prompt, obj_id=obj_id,
                     points=points, labels=point_labels,
                     box=boxes[0] if use_box else None,
                 )
@@ -126,27 +166,28 @@ def segment_volume(raw, labels, predictor, n_iterations, use_box=False, chunk_si
 
             if chunk_size is not None:
                 video_segments = propagate_chunked(
-                    predictor, inference_state, z_center, labels.shape[0], chunk_size
+                    predictor, inference_state, z_prompt, labels_proc.shape[0], chunk_size,
+                    forward_only=match_training,
                 )
             else:
                 video_segments = {}
                 for out_frame, _, out_logits in predictor.propagate_in_video(
-                    inference_state, start_frame_idx=z_center
+                    inference_state, start_frame_idx=z_prompt
                 ):
                     video_segments[out_frame] = (out_logits[0] > 0).cpu().numpy().squeeze()
 
-                if len(video_segments) < labels.shape[0]:
+                if not match_training and len(video_segments) < labels_proc.shape[0]:
                     for out_frame, _, out_logits in predictor.propagate_in_video(
-                        inference_state, start_frame_idx=z_center, reverse=True
+                        inference_state, start_frame_idx=z_prompt, reverse=True
                     ):
                         if out_frame not in video_segments:
                             video_segments[out_frame] = (out_logits[0] > 0).cpu().numpy().squeeze()
 
-            seg_3d = np.zeros(labels.shape, dtype=bool)
+            seg_3d = np.zeros(labels_proc.shape, dtype=bool)
             for z, mask in video_segments.items():
                 seg_3d[z] = mask
 
-            seg_per_iter[iteration][seg_3d] = obj_id
+            seg_per_iter_proc[iteration][seg_3d] = obj_id
 
             if iteration < n_iterations - 1:
                 errors = np.array([np.sum(gt_3d[z] != seg_3d[z]) for z in obj_zs])
@@ -163,6 +204,19 @@ def segment_volume(raw, labels, predictor, n_iterations, use_box=False, chunk_si
                 corr_frame = z_worst
 
         predictor.reset_state(inference_state)
+
+    # Strip padding from segmentation if frames were padded, then re-evaluate against original labels.
+    if match_training:
+        _, H_orig, W_orig = labels.shape
+        _, H_proc, W_proc = labels_proc.shape
+        h_pad = (H_proc - H_orig) // 2
+        w_pad = (W_proc - W_orig) // 2
+        seg_per_iter = [
+            s[:, h_pad:h_pad + H_orig, w_pad:w_pad + W_orig] if h_pad or w_pad else s
+            for s in seg_per_iter_proc
+        ]
+    else:
+        seg_per_iter = seg_per_iter_proc
 
     return seg_per_iter
 
@@ -202,6 +256,9 @@ def main():
     parser.add_argument("--min_size", type=int, default=10)
     parser.add_argument("--prompt", choices=["point", "box"], default="point")
     parser.add_argument("--chunk_size", type=int, default=None)
+    parser.add_argument("--match_training", action="store_true",
+                        help="Engineer eval to match training: pad frames to square, "
+                             "prompt from first object frame, propagate forward only.")
     args = parser.parse_args()
 
     predictor = get_predictor(
@@ -219,6 +276,7 @@ def main():
         seg_per_iter = segment_volume(
             raw, labels, predictor, n_iterations=args.n_iterations,
             use_box=args.prompt == "box", chunk_size=args.chunk_size,
+            match_training=args.match_training,
         )
         rows = evaluate_volume(labels, seg_per_iter)
         for row in rows:

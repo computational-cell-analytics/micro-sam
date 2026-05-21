@@ -78,7 +78,7 @@ def main():
         save_root=save_root,
         checkpoint_path=None,
         max_num_objects=8,
-        num_frames_to_correct=0,
+        num_frames_to_correct=1,
         rand_frames_to_correct=False,
         prob_to_sample_from_gt=0.1,
         add_all_frames_to_correct_as_cond=True,
