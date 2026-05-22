@@ -5,7 +5,7 @@ from torch_em.data import datasets, MinInstanceSampler
 
 from micro_sam.v2.datasets.generalist_loader import _prepare_data_loader
 from micro_sam.v2.datasets.wrapper import UniDataWrapper
-from micro_sam.v2.transforms.raw import _to_8bit
+from micro_sam.v2.transforms.raw import _to_8bit, VideoAugmentTransform
 from micro_sam.v2.transforms.labels import _instance_labels
 
 
@@ -28,6 +28,7 @@ def get_embedseg_skull_dataloaders(input_path, batch_size=1, n_workers=16):
         "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
         "label_dtype": torch.int64,
         "label_transform2": _instance_labels,
+        "transform": VideoAugmentTransform(),
     }
 
     train_ds = UniDataWrapper(
@@ -64,7 +65,7 @@ def main():
     data_path = "/mnt/vast-nhr/projects/cidas/cca/data"
     save_root = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/interactive/debug/embedseg_skull"
 
-    name = f"sam2_interactive_{model_type}_embedseg_skull_no_corrections"
+    name = f"sam2_interactive_{model_type}_embedseg_skull"
 
     from micro_sam.v2.training import train_sam2
     train_loader, val_loader = get_embedseg_skull_dataloaders(input_path=data_path, batch_size=1, n_workers=16)
@@ -73,16 +74,19 @@ def main():
         val_loader=val_loader,
         name=name,
         model_type=model_type,
-        n_epochs=10,
+        n_epochs=20,
         lr=1e-5,
+        vision_lr=6e-6,
         save_root=save_root,
         checkpoint_path=None,
         max_num_objects=8,
-        num_frames_to_correct=1,
-        rand_frames_to_correct=False,
+        num_frames_to_correct=2,
+        rand_frames_to_correct=True,
         prob_to_sample_from_gt=0.1,
         add_all_frames_to_correct_as_cond=True,
+        num_init_cond_frames=2,
         clip_grad_norm=0.1,
+        layer_decay=0.9,
     )
 
 

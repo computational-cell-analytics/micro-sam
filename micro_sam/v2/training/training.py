@@ -1,4 +1,6 @@
+import math
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Union
 
@@ -9,20 +11,116 @@ from torch.utils.data import DataLoader
 from micro_sam.util import get_device
 from micro_sam.v2.loss.directed_distance_based import DirectedDistanceLoss
 
+from micro_sam.v2.transforms.raw import VideoAugment
 from .util import get_sam2_train_model, ConvertToSam2VideoBatch
 from .sam2_trainer import Sam2Trainer, Sam2Logger, UniSAM2Trainer, UniSAM2Logger
 from .joint_sam2_trainer import JointSam2Trainer, JointSam2Logger
 
 
-def _build_optimizer(model, lr, vision_lr=None):
+def _no_wd_names(model):
+    """Return the set of parameter names that should have weight_decay=0.
+
+    Matches the MOSE finetune config: bias params and all LayerNorm params.
+    """
+    names = set()
+    for mn, m in model.named_modules():
+        if isinstance(m, torch.nn.LayerNorm):
+            for pn, _ in m.named_parameters(recurse=False):
+                names.add(f"{mn}.{pn}" if mn else pn)
+    for pn, _ in model.named_parameters():
+        if "bias" in pn:
+            names.add(pn)
+    return names
+
+
+def _param_lr_map(model, lr, vision_lr, layer_decay):
+    """Return {param_name: learning_rate} for layer-decayed vision encoder params.
+
+    Per the MOSE finetune YAML:
+    - pos_embed gets vision_lr (no decay, override to scale=1.0 in YAML)
+    - trunk block k gets vision_lr * layer_decay^(n_blocks - k)
+      (block 0 is shallowest, gets the most decay)
+    - other trunk params (patch_embed, stem norm, etc.) get vision_lr * layer_decay^n_blocks
+    - non-trunk encoder params (neck, fpn, etc.) get vision_lr unchanged
+    - non-encoder params get lr
+    """
+    n_blocks = 0
+    for name, _ in model.named_parameters():
+        m = re.search(r"image_encoder\.trunk\.blocks\.(\d+)\.", name)
+        if m:
+            n_blocks = max(n_blocks, int(m.group(1)) + 1)
+
+    param_lr = {}
+    for name, _ in model.named_parameters():
+        if not name.startswith("image_encoder"):
+            param_lr[name] = lr
+        elif "pos_embed" in name:
+            param_lr[name] = vision_lr
+        else:
+            m = re.search(r"image_encoder\.trunk\.blocks\.(\d+)\.", name)
+            if m:
+                k = int(m.group(1))
+                param_lr[name] = vision_lr * (layer_decay ** (n_blocks - k))
+            elif name.startswith("image_encoder.trunk"):
+                param_lr[name] = vision_lr * (layer_decay ** n_blocks)
+            else:
+                param_lr[name] = vision_lr
+    return param_lr
+
+
+def _build_optimizer(model, lr, vision_lr=None, layer_decay=1.0):
+    no_wd = _no_wd_names(model)
+
     if vision_lr is None:
-        return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.1)
-    encoder_params = [p for n, p in model.named_parameters() if n.startswith("image_encoder")]
-    other_params = [p for n, p in model.named_parameters() if not n.startswith("image_encoder")]
-    return torch.optim.AdamW([
-        {"params": other_params, "lr": lr},
-        {"params": encoder_params, "lr": vision_lr},
-    ], weight_decay=0.1)
+        decay = [p for n, p in model.named_parameters() if n not in no_wd and p.requires_grad]
+        no_decay = [p for n, p in model.named_parameters() if n in no_wd and p.requires_grad]
+        return torch.optim.AdamW([
+            {"params": decay, "weight_decay": 0.1},
+            {"params": no_decay, "weight_decay": 0.0},
+        ], lr=lr)
+
+    p_lr_map = _param_lr_map(model, lr=lr, vision_lr=vision_lr, layer_decay=layer_decay)
+    groups = {}
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        p_lr = p_lr_map[name]
+        p_wd = 0.0 if name in no_wd else 0.1
+        key = (f"{p_lr:.12e}", p_wd)
+        if key not in groups:
+            groups[key] = {"params": [], "lr": p_lr, "weight_decay": p_wd}
+        groups[key]["params"].append(param)
+    return torch.optim.AdamW(list(groups.values()))
+
+
+class _CosineScheduler(torch.optim.lr_scheduler.LambdaLR):
+    """LambdaLR subclass that ignores positional args passed by torch-em's DefaultTrainer.
+
+    DefaultTrainer calls lr_scheduler.step(current_metric) after each validation
+    (designed for ReduceLROnPlateau). LambdaLR interprets that as the epoch index,
+    which would advance the schedule by the metric value instead of 1. Overriding
+    step() to always call super().step() with no arguments fixes this.
+    """
+
+    def step(self, *_, **__):
+        super().step()
+
+
+def _build_scheduler(optimizer, lr, n_epochs, n_iterations, train_loader):
+    """Cosine LR schedule that decays each param group from its initial LR to LR/10.
+
+    Mirrors the SAM2 MOSE finetune config (CosineParamScheduler, start -> start/10).
+    Works correctly with multiple param groups (e.g. separate vision_lr) because
+    LambdaLR multiplies each group's base_lr by the same cosine factor.
+    """
+    if n_iterations is not None:
+        t_max = max(1, math.ceil(n_iterations / len(train_loader)))
+    else:
+        t_max = n_epochs
+    return _CosineScheduler(
+        optimizer,
+        lr_lambda=lambda epoch: 0.1 + 0.9 * 0.5 * (1.0 + math.cos(math.pi * epoch / t_max)),
+    )
 
 
 def train_sam2(
@@ -48,20 +146,23 @@ def train_sam2(
     prob_to_sample_from_gt: float = 0.1,
     add_all_frames_to_correct_as_cond: bool = True,
     num_correction_pt_per_frame: int = 7,
+    num_init_cond_frames: int = 2,
     clip_grad_norm: Optional[float] = 0.1,
+    layer_decay: float = 1.0,
     largest_first: bool = False,
+    augment: bool = False,
 ) -> None:
     """Train SAM2 for interactive segmentation with SAM2's native prompting strategy.
 
     Uses SAM2Train (full model with video memory) which handles both 2D (T=1) and
-    3D/video (T>1) batches.  All prompting logic — initial point/box/mask selection
-    and iterative correction from error regions — is embedded in the model forward
+    3D/video (T>1) batches. All prompting logic - initial point/box/mask selection
+    and iterative correction from error regions - is embedded in the model forward
     pass.  Pass a MixedLoader(loader_2d, loader_3d) as train_loader for joint 2D+3D
     training.
 
     Args:
         name: Checkpoint/log folder name.
-        model_type: SAM2 variant — one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
+        model_type: SAM2 variant - one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
         train_loader: DataLoader yielding (x, y) tuples with integer instance labels.
             x: (B,C,H,W) for 2D or (B,C,Z,H,W) for 3D in [0, 255].
             y: (B,1,H,W) or (B,1,Z,H,W) with integer instance IDs.
@@ -85,13 +186,21 @@ def train_sam2(
         rand_frames_to_correct: Randomly sample 1..num_frames_to_correct frames to
             correct per step rather than always correcting the maximum.
         prob_to_sample_from_gt: Probability of sampling a correction click from GT
-            instead of the error region — reduces overfitting to error patterns.
+            instead of the error region - reduces overfitting to error patterns.
         add_all_frames_to_correct_as_cond: Add frames that receive correction clicks
             as conditioning frames for memory propagation.
         num_correction_pt_per_frame: Number of correction clicks per frame per correction
             round. SAM2 default is 7.
+        num_init_cond_frames: Number of initial conditioning frames (frames that receive
+            the first prompt before any correction round). The MOSE finetune config uses 2.
         clip_grad_norm: Max gradient norm for clipping (None = disabled). Matches
             SAM2's own finetuning default of 0.1.
+        layer_decay: Multiplicative LR decay applied per trunk block toward shallower
+            layers (block 0 gets vision_lr * layer_decay^n_blocks). The MOSE finetune
+            config uses 0.9. Only active when vision_lr is set. Default 1.0 = no decay.
+        augment: Apply SAM2 MOSE-style data augmentations (RandomHorizontalFlip,
+            RandomAffine, ColorJitter, RandomGrayscale) before each forward pass.
+            Augmentations are applied consistently across frames for 3D volumes.
     """
     from training.loss_fns import MultiStepMultiMasksAndIous
 
@@ -109,6 +218,7 @@ def train_sam2(
         prob_to_sample_from_gt=prob_to_sample_from_gt,
         add_all_frames_to_correct_as_cond=add_all_frames_to_correct_as_cond,
         num_correction_pt_per_frame=num_correction_pt_per_frame,
+        num_init_cond_frames_for_train=num_init_cond_frames,
     )
 
     interactive_loss = MultiStepMultiMasksAndIous(
@@ -120,10 +230,15 @@ def train_sam2(
         focal_alpha_obj_score=-1.0,
     )
 
-    convert_inputs = ConvertToSam2VideoBatch(max_num_objects=max_num_objects, largest_first=largest_first)
+    augmentor = VideoAugment() if augment else None
+    convert_inputs = ConvertToSam2VideoBatch(
+        max_num_objects=max_num_objects, largest_first=largest_first, augmentor=augmentor,
+    )
 
-    optimizer = _build_optimizer(model, lr=lr, vision_lr=vision_lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode="min", factor=0.9, patience=10)
+    optimizer = _build_optimizer(model, lr=lr, vision_lr=vision_lr, layer_decay=layer_decay)
+    scheduler = _build_scheduler(
+        optimizer, lr=lr, n_epochs=n_epochs, n_iterations=n_iterations, train_loader=train_loader,
+    )
 
     trainer = Sam2Trainer(
         name=name,
@@ -135,7 +250,6 @@ def train_sam2(
         lr_scheduler=scheduler,
         logger=Sam2Logger,
         log_image_interval=100,
-        mixed_precision=True,
         compile_model=False,
         early_stopping=early_stopping,
         save_root=save_root,
@@ -177,7 +291,9 @@ def _train_sam2_rank(
     prob_to_sample_from_gt: float,
     add_all_frames_to_correct_as_cond: bool,
     num_correction_pt_per_frame: int,
+    num_init_cond_frames: int,
     clip_grad_norm: Optional[float],
+    layer_decay: float,
     vision_lr: Optional[float],
     batch_size: int,
     batch_size_2d: int,
@@ -186,6 +302,7 @@ def _train_sam2_rank(
     n_workers: int,
     find_unused_parameters: bool,
     largest_first: bool,
+    augment: bool,
 ):
     """Single-rank torchrun worker for train_sam2_multi_gpu."""
     from torch_em.multi_gpu_training import DDP
@@ -244,6 +361,7 @@ def _train_sam2_rank(
         prob_to_sample_from_gt=prob_to_sample_from_gt,
         add_all_frames_to_correct_as_cond=add_all_frames_to_correct_as_cond,
         num_correction_pt_per_frame=num_correction_pt_per_frame,
+        num_init_cond_frames_for_train=num_init_cond_frames,
     )
     ddp_model = DDP(model, device_ids=[local_rank], find_unused_parameters=find_unused_parameters)
 
@@ -256,11 +374,14 @@ def _train_sam2_rank(
         focal_alpha_obj_score=-1.0,
     )
 
-    convert_inputs = ConvertToSam2VideoBatch(max_num_objects=max_num_objects, largest_first=largest_first)
+    augmentor = VideoAugment() if augment else None
+    convert_inputs = ConvertToSam2VideoBatch(
+        max_num_objects=max_num_objects, largest_first=largest_first, augmentor=augmentor,
+    )
 
-    optimizer = _build_optimizer(model, lr=lr, vision_lr=vision_lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer=optimizer, mode="min", factor=0.9, patience=10,
+    optimizer = _build_optimizer(model, lr=lr, vision_lr=vision_lr, layer_decay=layer_decay)
+    scheduler = _build_scheduler(
+        optimizer, lr=lr, n_epochs=n_epochs, n_iterations=n_iterations, train_loader=train_loader,
     )
 
     trainer = Sam2Trainer(
@@ -273,7 +394,6 @@ def _train_sam2_rank(
         lr_scheduler=scheduler,
         logger=Sam2Logger,
         log_image_interval=100,
-        mixed_precision=True,
         compile_model=False,
         early_stopping=early_stopping,
         save_root=save_root,
@@ -319,13 +439,16 @@ def train_sam2_multi_gpu(
     prob_to_sample_from_gt: float = 0.1,
     add_all_frames_to_correct_as_cond: bool = True,
     num_correction_pt_per_frame: int = 7,
+    num_init_cond_frames: int = 2,
     clip_grad_norm: Optional[float] = 0.1,
+    layer_decay: float = 1.0,
     find_unused_parameters: bool = True,
     largest_first: bool = False,
+    augment: bool = False,
 ) -> None:
     """Train SAM2 for interactive segmentation across multiple GPUs with DDP.
 
-    Must be launched via ``torchrun`` — one process per GPU, on one or more nodes.
+    Must be launched via ``torchrun`` - one process per GPU, on one or more nodes.
     Example (single node): ``torchrun --nproc_per_node=4 train_sam2.py``
     Example (multi-node):  ``srun torchrun --nnodes=$SLURM_NNODES --nproc_per_node=4 train_sam2.py``
 
@@ -335,7 +458,7 @@ def train_sam2_multi_gpu(
 
     Args:
         name: Checkpoint/log folder name.
-        model_type: SAM2 variant — one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
+        model_type: SAM2 variant - one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
         input_path: Root path to the generalist training data.
         batch_size: Batch size per GPU for 3D groups.
         batch_size_2d: Batch size per GPU for 2D groups (falls back to batch_size).
@@ -398,7 +521,9 @@ def train_sam2_multi_gpu(
         prob_to_sample_from_gt=prob_to_sample_from_gt,
         add_all_frames_to_correct_as_cond=add_all_frames_to_correct_as_cond,
         num_correction_pt_per_frame=num_correction_pt_per_frame,
+        num_init_cond_frames=num_init_cond_frames,
         clip_grad_norm=clip_grad_norm,
+        layer_decay=layer_decay,
         vision_lr=vision_lr,
         batch_size=batch_size,
         batch_size_2d=batch_size_2d,
@@ -407,6 +532,7 @@ def train_sam2_multi_gpu(
         n_workers=n_workers,
         find_unused_parameters=find_unused_parameters,
         largest_first=largest_first,
+        augment=augment,
     )
 
 
@@ -434,7 +560,7 @@ def train_automatic(
 
     Args:
         name: Checkpoint / log folder name.
-        model_type: SAM2 encoder variant — one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
+        model_type: SAM2 encoder variant - one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
         train_loader: DataLoader yielding (x, y) tuples with directed-distance targets.
         val_loader: Same format, used for validation.
         n_epochs: Number of training epochs (default 100). Ignored if n_iterations is set.
@@ -613,7 +739,7 @@ def train_automatic_multi_gpu(
 
     Args:
         name: Checkpoint / log folder name.
-        model_type: SAM2 encoder variant — one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
+        model_type: SAM2 encoder variant - one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
         input_path: Root path to the generalist training data.
         batch_size: Batch size per GPU for 3D groups.
         batch_size_2d: Batch size per GPU for 2D groups (falls back to batch_size).
@@ -704,7 +830,7 @@ def train_joint_sam2(
 
     Args:
         name: Checkpoint / log folder name.
-        model_type: SAM2 encoder variant — one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
+        model_type: SAM2 encoder variant - one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
         input_path: Root path to the generalist training data.
         batch_size: Batch size for 3D groups (both branches).
         batch_size_2d: Batch size for 2D groups (both branches). Defaults to ``batch_size``.
@@ -981,7 +1107,7 @@ def train_joint_sam2_multi_gpu(
 ) -> None:
     """Train SAM2Train and UniSAM2 jointly across multiple GPUs with DDP.
 
-    Must be launched via ``torchrun`` — one process per GPU, on one or more nodes.
+    Must be launched via ``torchrun`` - one process per GPU, on one or more nodes.
     Example (single node): ``torchrun --nproc_per_node=4 train_joint.py``
     Example (multi-node):  ``srun torchrun --nnodes=$SLURM_NNODES --nproc_per_node=4 train_joint.py``
 
@@ -991,7 +1117,7 @@ def train_joint_sam2_multi_gpu(
 
     Args:
         name: Checkpoint / log folder name.
-        model_type: SAM2 encoder variant — one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
+        model_type: SAM2 encoder variant - one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
         input_path: Root path to the generalist training data.
         batch_size: Batch size per GPU for 3D groups (both branches).
         batch_size_2d: Batch size per GPU for 2D groups. Defaults to ``batch_size``.

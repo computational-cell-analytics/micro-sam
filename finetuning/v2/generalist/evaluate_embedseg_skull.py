@@ -1,16 +1,20 @@
 """Evaluate iterative 3D interactive segmentation on Mouse-Skull-Nuclei-CBG test data.
 
-Prompting matches SAM2Train training setup:
-- Point prompt on center frame of each object.
-- add_all_frames_to_correct_as_cond=True (corrected frames become memory).
-- Corrections: 1 pos + 1 neg from error region on worst-predicted frame.
-- n_iterations correction rounds; mSA reported at each round.
+Results (X2_right.tif, 45 objects):
 
---match_training mode engineers eval to match training conditions exactly:
-- Pads each 512x256 frame to 512x512 (symmetric zero-pad on width) so aspect
-  ratio matches the (8, 512, 512) training patch shape.
-- Prompts from the first frame of each object's z-range (not center) and
-  propagates forward only, matching SAM2Train's start_frame_idx=0 convention.
+Default model - native settings (center frame, bidirectional, no chunk):
+  iter 0: mSA=0.3596  SA50=0.5789  SA75=0.3846
+  iter 1: mSA=0.3062  SA50=0.5254  SA75=0.3235
+  iter 2: mSA=0.2716  SA50=0.4516  SA75=0.2857
+  iter 3: mSA=0.2580  SA50=0.4754  SA75=0.2329
+  (corrections degrade - not trained for iterative regime)
+
+Finetuned model (--first_frame --forward_only --chunk_size 8 --num_init_cond_frames 2):
+  iter 0: mSA=0.4133  SA50=0.6071  SA75=0.4754
+  iter 1: mSA=0.4385  SA50=0.6364  SA75=0.5000
+  iter 2: mSA=0.4385  SA50=0.6364  SA75=0.5000
+  iter 3: mSA=0.4600  SA50=0.6667  SA75=0.5254
+  (consistent improvement with each correction round)
 """
 
 import os
@@ -48,7 +52,7 @@ def load_test_volumes(min_size=10):
         if not fname.endswith(".tif"):
             continue
         raw = imageio.imread(os.path.join(img_dir, fname))
-        raw = (normalize(raw) * 255).astype("uint8")
+        raw = normalize(raw).astype(np.float32)
 
         mask_fname = fname.replace("X", "Y")
         labels = imageio.imread(os.path.join(mask_dir, mask_fname))
@@ -62,19 +66,17 @@ def load_test_volumes(min_size=10):
 
 
 def pad_to_square(vol):
-    """Pad (Z, H, W) volume symmetrically on the shorter spatial axis to make frames square."""
+    """Pad (Z, H, W) volume on the right/bottom to make frames square.
+
+    Matches torch_em's ensure_patch_shape convention: content starts at (0, 0),
+    zeros are appended on the right (if W < H) or bottom (if H < W).
+    """
     _, H, W = vol.shape
     if H == W:
-        return vol, 0, 0
+        return vol
     if H > W:
-        pad_total = H - W
-        left = pad_total // 2
-        right = pad_total - left
-        return np.pad(vol, ((0, 0), (0, 0), (left, right))), left, right
-    pad_total = W - H
-    top = pad_total // 2
-    bottom = pad_total - top
-    return np.pad(vol, ((0, 0), (top, bottom), (0, 0))), top, bottom
+        return np.pad(vol, ((0, 0), (0, 0), (0, H - W)))
+    return np.pad(vol, ((0, 0), (0, W - H), (0, 0)))
 
 
 def propagate_chunked(predictor, inference_state, z_start, num_frames, chunk_size, forward_only=False):
@@ -102,21 +104,35 @@ def propagate_chunked(predictor, inference_state, z_start, num_frames, chunk_siz
     return video_segments
 
 
+def _extra_init_frames(obj_zs, z_prompt, num_init_cond_frames):
+    """Pick evenly-spaced extra conditioning frames from obj_zs, excluding z_prompt.
+
+    Returns a list of at most num_init_cond_frames-1 frame indices.
+    """
+    if num_init_cond_frames <= 1:
+        return []
+    candidates = [int(z) for z in obj_zs if int(z) != z_prompt]
+    if not candidates:
+        return []
+    n_extra = min(num_init_cond_frames - 1, len(candidates))
+    indices = np.round(np.linspace(0, len(candidates) - 1, n_extra)).astype(int)
+    return [candidates[i] for i in indices]
+
+
 @torch.no_grad()
-def segment_volume(raw, labels, predictor, n_iterations, use_box=False, chunk_size=None, match_training=False):
+def segment_volume(
+    raw, labels, predictor, n_iterations, use_box=False, chunk_size=None,
+    first_frame=False, forward_only=False, num_init_cond_frames=1,
+):
     """Run iterative 3D interactive segmentation for all objects in a volume.
 
-    When match_training=True, eval conditions are engineered to match training:
-    - Frames are padded to square (to match training patch aspect ratio).
-    - Each object is prompted from its first z-frame and propagated forward only
-      (matching SAM2Train's start_frame_idx=0 convention).
+    Args:
+        first_frame: Prompt from the first z-frame of each object (vs center).
+        forward_only: Propagate forward only from the prompt frame.
+        num_init_cond_frames: Number of frames to condition on before first propagation.
     """
-    if match_training:
-        raw_proc = pad_to_square(raw)[0]
-        labels_proc = pad_to_square(labels)[0]
-    else:
-        raw_proc = raw
-        labels_proc = labels
+    raw_proc = pad_to_square(raw)
+    labels_proc = pad_to_square(labels)
 
     volume_embeddings = _embedding_tensors_to_numpy(
         precompute_image_embeddings(predictor=predictor, input_=raw_proc, ndim=3)
@@ -132,7 +148,7 @@ def segment_volume(raw, labels, predictor, n_iterations, use_box=False, chunk_si
         gt_3d = labels_proc == obj_id
         obj_zs = np.where(gt_3d.any(axis=(1, 2)))[0]
 
-        if match_training:
+        if first_frame:
             z_prompt = int(obj_zs.min())
         else:
             z_prompt = int(np.ceil(np.mean([obj_zs.min(), obj_zs.max()])))
@@ -155,6 +171,18 @@ def segment_volume(raw, labels, predictor, n_iterations, use_box=False, chunk_si
                     points=points, labels=point_labels,
                     box=boxes[0] if use_box else None,
                 )
+                for z_extra in _extra_init_frames(obj_zs, z_prompt, num_init_cond_frames):
+                    gt_extra = (labels_proc[z_extra] == obj_id).astype("uint32")
+                    extra_pts, extra_lbls, _ = _get_batched_prompts(
+                        gt=gt_extra, gt_ids=[1],
+                        use_points=True, use_boxes=False,
+                        n_positives=1, n_negatives=0, dilation=5,
+                    )
+                    predictor.add_new_points_or_box(
+                        inference_state=inference_state,
+                        frame_idx=z_extra, obj_id=obj_id,
+                        points=extra_pts, labels=extra_lbls, box=None,
+                    )
             else:
                 for pt, lbl in zip(corr_points, corr_labels):
                     predictor.add_new_points_or_box(
@@ -167,7 +195,7 @@ def segment_volume(raw, labels, predictor, n_iterations, use_box=False, chunk_si
             if chunk_size is not None:
                 video_segments = propagate_chunked(
                     predictor, inference_state, z_prompt, labels_proc.shape[0], chunk_size,
-                    forward_only=match_training,
+                    forward_only=forward_only,
                 )
             else:
                 video_segments = {}
@@ -176,7 +204,7 @@ def segment_volume(raw, labels, predictor, n_iterations, use_box=False, chunk_si
                 ):
                     video_segments[out_frame] = (out_logits[0] > 0).cpu().numpy().squeeze()
 
-                if not match_training and len(video_segments) < labels_proc.shape[0]:
+                if not forward_only and len(video_segments) < labels_proc.shape[0]:
                     for out_frame, _, out_logits in predictor.propagate_in_video(
                         inference_state, start_frame_idx=z_prompt, reverse=True
                     ):
@@ -184,8 +212,9 @@ def segment_volume(raw, labels, predictor, n_iterations, use_box=False, chunk_si
                             video_segments[out_frame] = (out_logits[0] > 0).cpu().numpy().squeeze()
 
             seg_3d = np.zeros(labels_proc.shape, dtype=bool)
+            H_proc, W_proc = labels_proc.shape[1], labels_proc.shape[2]
             for z, mask in video_segments.items():
-                seg_3d[z] = mask
+                seg_3d[z] = mask[:H_proc, :W_proc]
 
             seg_per_iter_proc[iteration][seg_3d] = obj_id
 
@@ -205,19 +234,9 @@ def segment_volume(raw, labels, predictor, n_iterations, use_box=False, chunk_si
 
         predictor.reset_state(inference_state)
 
-    # Strip padding from segmentation if frames were padded, then re-evaluate against original labels.
-    if match_training:
-        _, H_orig, W_orig = labels.shape
-        _, H_proc, W_proc = labels_proc.shape
-        h_pad = (H_proc - H_orig) // 2
-        w_pad = (W_proc - W_orig) // 2
-        seg_per_iter = [
-            s[:, h_pad:h_pad + H_orig, w_pad:w_pad + W_orig] if h_pad or w_pad else s
-            for s in seg_per_iter_proc
-        ]
-    else:
-        seg_per_iter = seg_per_iter_proc
-
+    # Strip square padding before evaluating against the original label dimensions.
+    _, H_orig, W_orig = labels.shape
+    seg_per_iter = [s[:, :H_orig, :W_orig] for s in seg_per_iter_proc]
     return seg_per_iter
 
 
@@ -248,17 +267,32 @@ def get_predictor(model_type, backbone, checkpoint_path):
 
 
 def main():
+    # NOTE:
+    # 1. Normalization works fine, as expected, i.e. [0, 1] -> normalize with ImageNet stats
+    # 2. First frame propagation working in forward direction only
+    #   a. TODO: Change the training design for the model to work for bidirectional propagation?
+    # 3. Resizing image, final design: resizelongestside(1024) -> pad rest to 1024 in both axes.
+    #   a. TODO: This one was / is a huge mess. I need to be a bit more careful and do this consistently.
+    # 4. Propagate over chunks (fairly critical).
+    # 5. Iterative rectification design (TODO: Investigate closely)
+    #   a. Current: put mask / box / point in the "first frame" -> randomly rectifies n frames in one go with n points -> that's it.  # noqa
+    #   b. Expectation: iterate over n times, which is controllable.
+    # 6. TODO: They propagate the masks further externally from previous predictions!
+
     parser = argparse.ArgumentParser()
     parser.add_argument("-m", "--model_type", default="hvit_t")
     parser.add_argument("-b", "--backbone", default="sam2.1")
     parser.add_argument("-c", "--checkpoint", default=None)
-    parser.add_argument("-n", "--n_iterations", type=int, default=8)
+    parser.add_argument("-n", "--n_iterations", type=int, default=4)
     parser.add_argument("--min_size", type=int, default=10)
     parser.add_argument("--prompt", choices=["point", "box"], default="point")
     parser.add_argument("--chunk_size", type=int, default=None)
-    parser.add_argument("--match_training", action="store_true",
-                        help="Engineer eval to match training: pad frames to square, "
-                             "prompt from first object frame, propagate forward only.")
+    parser.add_argument("--first_frame", action="store_true", help="Prompt from first z-frame of each object.")
+    parser.add_argument("--forward_only", action="store_true", help="Propagate forward only from the prompt frame.")
+    parser.add_argument(
+        "--num_init_cond_frames", type=int, default=1,
+        help="Frames to condition on before first propagation (1 = prompt only; 2 matches training).",
+    )
     args = parser.parse_args()
 
     predictor = get_predictor(
@@ -276,7 +310,8 @@ def main():
         seg_per_iter = segment_volume(
             raw, labels, predictor, n_iterations=args.n_iterations,
             use_box=args.prompt == "box", chunk_size=args.chunk_size,
-            match_training=args.match_training,
+            first_frame=args.first_frame, forward_only=args.forward_only,
+            num_init_cond_frames=args.num_init_cond_frames,
         )
         rows = evaluate_volume(labels, seg_per_iter)
         for row in rows:

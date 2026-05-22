@@ -1,3 +1,4 @@
+import contextlib
 import os
 import time
 import warnings
@@ -19,7 +20,7 @@ def _get_cmap():
 
 
 def _colorize_instance_map(label_hw):
-    """(H,W) int64 numpy → (3,H,W) float32 [0,1], one tab20 color per instance ID."""
+    """(H,W) int64 numpy -> (3,H,W) float32 [0,1], one tab20 color per instance ID."""
     cmap = _get_cmap()
     H, W = label_hw.shape
     rgb = np.zeros((H, W, 3), dtype=np.float32)
@@ -31,7 +32,7 @@ def _colorize_instance_map(label_hw):
 
 
 def _overlay_binary_masks(masks_ohw, target_hw=None):
-    """(O,H,W) bool tensor → (3,H,W) float32 [0,1] overlay, one tab20 color per object."""
+    """(O,H,W) bool tensor -> (3,H,W) float32 [0,1] overlay, one tab20 color per object."""
     cmap = _get_cmap()
     O, H, W = masks_ohw.shape
     rgb = np.zeros((H, W, 3), dtype=np.float32)
@@ -71,13 +72,23 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
         convert_inputs: Callable,
         loss: torch.nn.Module,
         clip_grad_norm: Optional[float] = 0.1,
+        amp_dtype: Optional[torch.dtype] = torch.bfloat16,
         **kwargs,
     ):
-        super().__init__(loss=loss, metric=loss, **kwargs)
+        # Sam2Trainer manages AMP internally via amp_dtype; prevent the parent from
+        # setting up a float16 GradScaler which is incompatible with bfloat16.
+        kwargs.pop("mixed_precision", None)
+        super().__init__(loss=loss, metric=loss, mixed_precision=False, **kwargs)
         self.convert_inputs = convert_inputs
         self.clip_grad_norm = clip_grad_norm
+        self.amp_dtype = amp_dtype
         self.interactive_loss = loss
         self._kwargs = kwargs
+
+    def _amp_context(self):
+        if self.amp_dtype is not None:
+            return torch.amp.autocast(device_type="cuda", dtype=self.amp_dtype)
+        return contextlib.nullcontext()
 
     def _check_input_normalization(self, x, input_check_done):
         if not input_check_done:
@@ -128,7 +139,7 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
             input_check_done = self._check_input_normalization(x, input_check_done)
             self.optimizer.zero_grad()
 
-            with forward_context():
+            with self._amp_context():
                 loss, batch, outputs = self._interactive_step(x, y)
 
             self._sam2_backprop(loss)
@@ -162,7 +173,7 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
         with torch.no_grad():
             for x, y in self.val_loader:
                 input_check_done = self._check_input_normalization(x, input_check_done)
-                with forward_context():
+                with self._amp_context():
                     loss, batch, outputs = self._interactive_step(x, y)
                     val_loss += loss.item()
                 n_iter += 1
@@ -199,10 +210,10 @@ class Sam2Logger(TorchEmLogger):
     """TensorBoard logger for Sam2Trainer.
 
     Logs scalars every step; logs four image panels at log_image_interval:
-      raw          — input image (first batch item, first frame)
-      gt_all       — colorized instance map (all objects in the patch)
-      gt_chosen    — overlay of the objects sampled for this training step
-      predictions  — model's predicted masks for the chosen objects
+      raw - input image (first batch item, first frame)
+      gt_all - colorized instance map (all objects in the patch)
+      gt_chosen - overlay of the objects sampled for this training step
+      predictions - model's predicted masks for the chosen objects
     Only rank 0 writes; all other ranks are no-ops.
     """
 
@@ -234,7 +245,7 @@ class Sam2Logger(TorchEmLogger):
     def _log_images(self, step, x, y, batch, outputs, prefix):
         is_3d = (x.ndim == 5)
 
-        # Raw: first batch item, first frame, first 3 channels — already [0, 1]
+        # Raw: first batch item, first frame, first 3 channels - already [0, 1]
         raw = x[0, :3, 0].cpu().float() if is_3d else x[0, :3].cpu().float()
         H, W = raw.shape[-2:]
         self.tb.add_image(f"{prefix}/raw", raw, step)

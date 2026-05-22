@@ -1,5 +1,5 @@
 import os
-from typing import List, Optional, Union
+from typing import Callable, List, Optional, Union
 
 import torch
 import torch.nn.functional as F
@@ -22,6 +22,7 @@ def get_sam2_train_model(
     prob_to_sample_from_gt: float = 0.1,
     add_all_frames_to_correct_as_cond: bool = True,
     num_correction_pt_per_frame: int = 7,
+    num_init_cond_frames_for_train: int = 1,
 ) -> torch.nn.Module:
     """Build a SAM2Train model for interactive segmentation training.
 
@@ -30,9 +31,9 @@ def get_sam2_train_model(
     3D (T=Z, video) batches in a single training run.
 
     Args:
-        model_type: SAM2 variant — one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
-        device: Target device.  Auto-selects if None.
-        checkpoint_path: Path to a custom checkpoint.  Downloads default weights if None.
+        model_type: SAM2 variant - one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
+        device: Target device. Auto-selects if None.
+        checkpoint_path: Path to a custom checkpoint. Downloads default weights if None.
         freeze: Component name prefixes to freeze (e.g. ["image_encoder"]).
         backbone: SAM2 backbone version, "sam2.0" or "sam2.1".
         prob_to_use_pt_input: Probability of using point/box prompts (vs mask propagation).
@@ -42,11 +43,14 @@ def get_sam2_train_model(
         rand_frames_to_correct: If True, randomly sample 1..num_frames_to_correct frames
             to correct per step (more robust than always correcting the maximum).
         prob_to_sample_from_gt: Probability of sampling a correction click from the GT
-            mask instead of the error region — reduces overfitting to error patterns.
+            mask instead of the error region - reduces overfitting to error patterns.
         add_all_frames_to_correct_as_cond: If True, any frame that receives a correction
             click is also added as a conditioning frame for memory propagation.
         num_correction_pt_per_frame: Number of correction clicks sampled per frame per
             correction round. SAM2 default is 7.
+        num_init_cond_frames_for_train: Number of initial conditioning frames (frames that
+            receive the first prompt before any correction round). SAM2 default is 1;
+            the MOSE finetune config uses 2.
 
     Returns:
         SAM2Train model on the target device in train mode.
@@ -73,6 +77,7 @@ def get_sam2_train_model(
             f"++model.prob_to_sample_from_gt_for_train={prob_to_sample_from_gt}",
             f"++model.add_all_frames_to_correct_as_cond={add_all_frames_to_correct_as_cond}",
             f"++model.num_correction_pt_per_frame={num_correction_pt_per_frame}",
+            f"++model.num_init_cond_frames_for_train={num_init_cond_frames_for_train}",
         ],
         apply_postprocessing=False,
     )
@@ -93,7 +98,7 @@ class ConvertToSam2VideoBatch:
     3D inputs (x: B,C,Z,H,W  /  y: B,1,Z,H,W): Z-slices become video frames (T=Z).
 
     Images are converted to SAM2 input format:
-    - [0, 1] range → ImageNet-normalized → resized to 1024×1024
+    - [0, 1] range -> ImageNet-normalized -> resized to 1024x1024
     - Single-channel inputs are broadcast to 3 channels.
 
     Masks are resized to 1024×1024 (required so that get_next_point returns
@@ -108,25 +113,43 @@ class ConvertToSam2VideoBatch:
     _PIXEL_STD = [0.229, 0.224, 0.225]
     _SAM2_SIZE = 1024
 
-    def __init__(self, max_num_objects: int = 20, largest_first: bool = False):
+    def __init__(self, max_num_objects: int = 20, largest_first: bool = False, augmentor: Optional[Callable] = None):
         self.max_num_objects = max_num_objects
         self.largest_first = largest_first
+        self.augmentor = augmentor
         self.init_kwargs = {"max_num_objects": max_num_objects, "largest_first": largest_first}
 
+    def _to_sam2_size(self, x: torch.Tensor, mode: str) -> torch.Tensor:
+        """Resize longest side to SAM2_SIZE then zero-pad to square.
+
+        Matches SAM2's standard preprocessing (RandomResizeAPI + square padding in
+        the MOSE finetune config), preserving aspect ratio rather than stretching.
+        Padding is applied to the right and bottom edges.
+        """
+        H, W = x.shape[-2:]
+        scale = self._SAM2_SIZE / max(H, W)
+        new_h, new_w = int(round(H * scale)), int(round(W * scale))
+        kw = {"align_corners": False} if mode == "bilinear" else {}
+        x = F.interpolate(x, size=(new_h, new_w), mode=mode, **kw)
+        pad_h, pad_w = self._SAM2_SIZE - new_h, self._SAM2_SIZE - new_w
+        if pad_h > 0 or pad_w > 0:
+            x = F.pad(x, (0, pad_w, 0, pad_h))
+        return x
+
     def _to_sam2_image(self, x: torch.Tensor) -> torch.Tensor:
-        """(B,C,H,W) float [0,1] → (B,3,1024,1024) ImageNet-normalized."""
+        """(B,C,H,W) float [0,1] -> (B,3,1024,1024) ImageNet-normalized."""
         x = x.float()
         if x.shape[1] == 1:
             x = x.expand(-1, 3, -1, -1)
         mean = torch.tensor(self._PIXEL_MEAN, dtype=x.dtype, device=x.device).view(1, 3, 1, 1)
         std = torch.tensor(self._PIXEL_STD, dtype=x.dtype, device=x.device).view(1, 3, 1, 1)
         x = (x - mean) / std
-        return F.interpolate(x, size=(self._SAM2_SIZE, self._SAM2_SIZE), mode="bilinear", align_corners=False)
+        return self._to_sam2_size(x, mode="bilinear")
 
     def _resize_masks(self, masks: torch.Tensor) -> torch.Tensor:
-        """(O,H,W) bool → (O,1024,1024) bool via nearest-neighbor resize."""
+        """(O,H,W) bool -> (O,1024,1024) bool, aspect-ratio preserving + padded."""
         m = masks.float().unsqueeze(1)  # (O,1,H,W)
-        m = F.interpolate(m, size=(self._SAM2_SIZE, self._SAM2_SIZE), mode="nearest")
+        m = self._to_sam2_size(m, mode="nearest")
         return m.squeeze(1).bool()
 
     def _sample_obj_ids(self, label_2d: torch.Tensor) -> torch.Tensor:
@@ -151,13 +174,16 @@ class ConvertToSam2VideoBatch:
     def __call__(self, x: torch.Tensor, y: torch.Tensor):
         """
         Args:
-            x: Images — (B,C,H,W) for 2D or (B,C,Z,H,W) for 3D, in [0, 1].
-            y: Instance labels — (B,1,H,W) or (B,1,Z,H,W) with integer IDs.
+            x: Images - (B,C,H,W) for 2D or (B,C,Z,H,W) for 3D, in [0, 1].
+            y: Instance labels - (B,1,H,W) or (B,1,Z,H,W) with integer IDs.
 
         Returns:
             BatchedVideoDatapoint compatible with SAM2Train.forward().
         """
         from training.utils.data_utils import BatchedVideoDatapoint, BatchedVideoMetaData
+
+        if self.augmentor is not None:
+            x = self.augmentor(x)
 
         is_3d = (x.ndim == 5)
         B = x.shape[0]
