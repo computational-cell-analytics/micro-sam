@@ -15,9 +15,9 @@ DATASET_H5 = {
     "nis3d": os.path.join(OUTPUT_ROOT, "nis3d/automatic_best_full.h5"),
     "ovules": os.path.join(OUTPUT_ROOT, "plantseg_ovules/automatic_best_full.h5"),
     "mitoem": os.path.join(OUTPUT_ROOT, "mitoem/automatic_best_full.h5"),
-    "cremi_padded": os.path.join(OUTPUT_ROOT, "cremi_padded/automatic_best_full.h5"),
-    "liconn": os.path.join(OUTPUT_ROOT, "liconn/automatic_best_full.h5"),
-    "microns": os.path.join(OUTPUT_ROOT, "microns_minnie65/automatic_best_full.h5"),
+    "cremi_padded": "/home/anwai/data/for_usam2/cremi_padded_automatic_best_full.h5",
+    "liconn": "/home/anwai/data/for_usam2/liconn_automatic_best_full.h5",
+    "microns": "/home/anwai/data/for_usam2/microns_automatic_best_full.h5",
 }
 
 # Physical voxel sizes (ZYX)
@@ -27,7 +27,7 @@ DATASET_SCALE = {
     "mitoem": (30.0, 8.0, 8.0),
     "cremi_padded": (40.0, 4.0, 4.0),
     "liconn": (8.0, 8.0, 8.0),
-    "microns": (8.0, 8.0, 8.0),
+    "microns": (12.95, 9.7, 9.7),
 }
 
 DATASET_SCALE_UNIT = {
@@ -42,12 +42,15 @@ DATASET_DS = {
     "mitoem": 0.125,
     "cremi_padded": 0.25,
     "liconn": 0.5,
-    "microns": 0.125,
+    "microns": 0.25,
 }
 
 NIS3D_GAP = 100
 OVULES_GAP = 25
 EM_GAP = 100
+CREMI_GAP = 50
+LICONN_Z_MAX = 312
+LICONN_GAP = 150
 EM_TOP_N = 25
 EM_SHOW_3D = True
 EM_Z_2D = None
@@ -276,15 +279,255 @@ def run_mitoem():
 
 
 def run_cremi_padded():
-    _run_em_style("cremi_padded")
+    from napari.utils.colormaps.colormap import DirectLabelColormap
+
+    name = "cremi_padded"
+    ds = DATASET_DS[name]
+    h5_path = DATASET_H5[name]
+    scale = _vis_scale(name, ds)
+    unit = DATASET_SCALE_UNIT[name]
+
+    print(f"Loading {name} ...")
+    seg_full = _load_rescaled(h5_path, "predicted_instances", ds, order=0)
+
+    nonempty_z = np.where(seg_full.any(axis=(1, 2)))[0]
+    z0_ds, z1_ds = int(nonempty_z[0]), int(nonempty_z[-1]) + 1
+    seg_ds = seg_full[z0_ds:z1_ds]
+    n_z_ds, n_y_ds, n_x_ds = seg_ds.shape
+
+    first_z_full = round(z0_ds / ds)
+    with h5py.File(h5_path, "r") as f:
+        raw_2d = sk_rescale(
+            f["raw"][first_z_full][:].astype("float32"), ds, order=1, anti_aliasing=True, channel_axis=None
+        )[:n_y_ds, :n_x_ds]
+
+    clim = (float(raw_2d.min()), float(raw_2d.max()) + 1e-6)
+    topn_np, rest_np = _split_seg_topn(seg_ds, EM_TOP_N)
+    fg = topn_np.ravel()
+    fg = fg[fg > 0]
+    ids, cnts = np.unique(fg, return_counts=True)
+    top_ids = ids[np.argsort(cnts)[::-1]].tolist()
+    color_dict = _make_color_dict(top_ids)
+
+    seg_start = CREMI_GAP + 1
+    raw_vol = np.zeros((seg_start + n_z_ds, n_y_ds, n_x_ds), dtype=raw_2d.dtype)
+    raw_vol[0] = raw_2d
+    seg_topn = _pad_z(topn_np, seg_start, 0)
+    seg_rest = _pad_z(rest_np, seg_start, 0)
+
+    if EM_SHOW_3D:
+        viewer = napari.Viewer(title=f"{name} 3D (ds={ds})")
+        viewer.add_image(raw_vol, name="raw", scale=scale, contrast_limits=clim)
+        viewer.add_labels(seg_rest, name="seg rest", scale=scale, opacity=0.25)
+        topn_layer = viewer.add_labels(seg_topn, name=f"seg top{EM_TOP_N}", scale=scale, opacity=1.0)
+        topn_layer.colormap = DirectLabelColormap(color_dict=color_dict)
+        viewer.dims.current_step = (0, 0, 0)
+        viewer.dims.axis_labels = ("z", "y", "x")
+        viewer.axes.visible = True
+        _set_axes_label_offset(viewer)
+        viewer.scale_bar.visible = True
+        viewer.scale_bar.unit = unit
+        napari.run()
+
+    z_2d_ds = z0_ds + (n_z_ds // 2)
+    z_2d_full = round(z_2d_ds / ds)
+    with h5py.File(h5_path, "r") as f:
+        raw_2d_view = f["raw"][z_2d_full][:].astype("float32")
+        seg_2d = f["predicted_instances"][z_2d_full][:]
+
+    top_set = set(top_ids)
+    mask_2d = np.isin(seg_2d, list(top_set))
+    topn_2d = np.where(mask_2d, seg_2d, 0).astype(seg_2d.dtype)
+    rest_2d = np.where(mask_2d | (seg_2d == 0), 0, seg_2d).astype(seg_2d.dtype)
+    clim_2d = (float(raw_2d_view.min()), float(raw_2d_view.max()) + 1e-6)
+
+    viewer2d = napari.Viewer(title=f"{name} 2D z={z_2d_full}")
+    viewer2d.add_image(raw_2d_view, name="raw", scale=scale[1:], contrast_limits=clim_2d)
+    viewer2d.add_labels(rest_2d, name="seg rest", scale=scale[1:], opacity=0.25)
+    fill_layer = viewer2d.add_labels(
+        topn_2d, name=f"seg top{EM_TOP_N}", scale=scale[1:], opacity=0.7, blending="additive"
+    )
+    fill_layer.colormap = DirectLabelColormap(color_dict=color_dict)
+    border_layer = viewer2d.add_labels(
+        topn_2d, name=f"seg top{EM_TOP_N} border", scale=scale[1:], opacity=1.0, blending="additive"
+    )
+    border_layer.colormap = DirectLabelColormap(color_dict=color_dict)
+    border_layer.contour = EM_BORDER_WIDTH
+    viewer2d.dims.axis_labels = ("y", "x")
+    viewer2d.axes.visible = True
+    _set_axes_label_offset(viewer2d)
+    viewer2d.scale_bar.visible = True
+    viewer2d.scale_bar.unit = unit
+    napari.run()
 
 
 def run_liconn():
-    _run_em_style("liconn")
+    from napari.utils.colormaps.colormap import DirectLabelColormap
+
+    name = "liconn"
+    ds = DATASET_DS[name]
+    h5_path = DATASET_H5[name]
+    scale = _vis_scale(name, ds)
+    unit = DATASET_SCALE_UNIT[name]
+
+    print(f"Loading {name} ...")
+    seg_full = _load_rescaled(h5_path, "predicted_instances", ds, order=0)
+    seg_ds = seg_full[:LICONN_Z_MAX]
+    n_z_ds, n_y_ds, n_x_ds = seg_ds.shape
+
+    with h5py.File(h5_path, "r") as f:
+        raw_2d = sk_rescale(
+            f["raw"][0][:].astype("float32"), ds, order=1, anti_aliasing=True, channel_axis=None
+        )[:n_y_ds, :n_x_ds]
+
+    clim = (float(raw_2d.min()), float(raw_2d.max()) + 1e-6)
+
+    last_slice = seg_ds[LICONN_Z_MAX - 1]
+    fg_last = last_slice.ravel()
+    fg_last = fg_last[fg_last > 0]
+    ids_last, cnts_last = np.unique(fg_last, return_counts=True)
+    top_ids = ids_last[np.argsort(cnts_last)[::-1]][:EM_TOP_N].tolist()
+    top_set = set(top_ids)
+    mask = np.isin(seg_ds, list(top_set))
+    topn_np = np.where(mask, seg_ds, 0).astype(seg_ds.dtype)
+    rest_np = np.where(mask | (seg_ds == 0), 0, seg_ds).astype(seg_ds.dtype)
+    color_dict = _make_color_dict(top_ids)
+
+    seg_start = LICONN_GAP + 1
+    raw_vol = np.zeros((seg_start + n_z_ds, n_y_ds, n_x_ds), dtype=raw_2d.dtype)
+    raw_vol[0] = raw_2d
+    seg_topn = _pad_z(topn_np, seg_start, 0)
+    seg_rest = _pad_z(rest_np, seg_start, 0)
+
+    if EM_SHOW_3D:
+        viewer = napari.Viewer(title=f"{name} 3D z=0..{LICONN_Z_MAX - 1} top10-last-slice (ds={ds})")
+        viewer.add_image(raw_vol, name="raw", scale=scale, contrast_limits=clim)
+        viewer.add_labels(seg_rest, name="seg rest", scale=scale, opacity=0.25)
+        topn_layer = viewer.add_labels(seg_topn, name=f"seg top{EM_TOP_N}", scale=scale, opacity=1.0)
+        topn_layer.colormap = DirectLabelColormap(color_dict=color_dict)
+        viewer.dims.current_step = (0, 0, 0)
+        viewer.dims.axis_labels = ("z", "y", "x")
+        viewer.axes.visible = True
+        _set_axes_label_offset(viewer)
+        viewer.scale_bar.visible = True
+        viewer.scale_bar.unit = unit
+        napari.run()
+
+    z_2d_ds = LICONN_Z_MAX - 1
+    z_2d_full = round(z_2d_ds / ds)
+    with h5py.File(h5_path, "r") as f:
+        raw_2d_view = f["raw"][z_2d_full][:].astype("float32")
+        seg_2d = f["predicted_instances"][z_2d_full][:]
+
+    mask_2d = np.isin(seg_2d, list(top_set))
+    topn_2d = np.where(mask_2d, seg_2d, 0).astype(seg_2d.dtype)
+    rest_2d = np.where(mask_2d | (seg_2d == 0), 0, seg_2d).astype(seg_2d.dtype)
+    clim_2d = (float(raw_2d_view.min()), float(raw_2d_view.max()) + 1e-6)
+
+    viewer2d = napari.Viewer(title=f"{name} 2D z={z_2d_full}")
+    viewer2d.add_image(raw_2d_view, name="raw", scale=scale[1:], contrast_limits=clim_2d)
+    viewer2d.add_labels(rest_2d, name="seg rest", scale=scale[1:], opacity=0.25)
+    fill_layer = viewer2d.add_labels(
+        topn_2d, name=f"seg top{EM_TOP_N}", scale=scale[1:], opacity=0.7, blending="additive"
+    )
+    fill_layer.colormap = DirectLabelColormap(color_dict=color_dict)
+    border_layer = viewer2d.add_labels(
+        topn_2d, name=f"seg top{EM_TOP_N} border", scale=scale[1:], opacity=1.0, blending="additive"
+    )
+    border_layer.colormap = DirectLabelColormap(color_dict=color_dict)
+    border_layer.contour = EM_BORDER_WIDTH
+    viewer2d.dims.axis_labels = ("y", "x")
+    viewer2d.axes.visible = True
+    _set_axes_label_offset(viewer2d)
+    viewer2d.scale_bar.visible = True
+    viewer2d.scale_bar.unit = unit
+    napari.run()
 
 
 def run_microns():
-    _run_em_style("microns")
+    from napari.utils.colormaps.colormap import DirectLabelColormap
+
+    name = "microns"
+    ds = DATASET_DS[name]
+    h5_path = DATASET_H5[name]
+    scale = _vis_scale(name, ds)
+    unit = DATASET_SCALE_UNIT[name]
+
+    print(f"Loading {name} ...")
+    seg_full = _load_rescaled(h5_path, "predicted_instances", ds, order=0)
+
+    nonempty_z = np.where(seg_full.any(axis=(1, 2)))[0]
+    z0_ds, z1_ds = int(nonempty_z[0]), int(nonempty_z[-1]) + 1
+    seg_ds = seg_full[z0_ds:z1_ds]
+    n_z_ds, n_y_ds, n_x_ds = seg_ds.shape
+
+    first_z_full = round(z0_ds / ds)
+    with h5py.File(h5_path, "r") as f:
+        raw_2d = sk_rescale(
+            f["raw"][first_z_full][:].astype("float32"), ds, order=1, anti_aliasing=True, channel_axis=None
+        )[:n_y_ds, :n_x_ds]
+
+    clim = (float(raw_2d.min()), float(raw_2d.max()) + 1e-6)
+
+    last_slice = seg_ds[-1]
+    fg_last = last_slice.ravel()
+    fg_last = fg_last[fg_last > 0]
+    ids_last, cnts_last = np.unique(fg_last, return_counts=True)
+    top_ids = ids_last[np.argsort(cnts_last)[::-1]][:EM_TOP_N].tolist()
+    top_set = set(top_ids)
+    mask = np.isin(seg_ds, list(top_set))
+    topn_np = np.where(mask, seg_ds, 0).astype(seg_ds.dtype)
+    rest_np = np.where(mask | (seg_ds == 0), 0, seg_ds).astype(seg_ds.dtype)
+    color_dict = _make_color_dict(top_ids)
+
+    seg_start = EM_GAP + 1
+    raw_vol = np.zeros((seg_start + n_z_ds, n_y_ds, n_x_ds), dtype=raw_2d.dtype)
+    raw_vol[0] = raw_2d
+    seg_topn = _pad_z(topn_np, seg_start, 0)
+    seg_rest = _pad_z(rest_np, seg_start, 0)
+
+    if EM_SHOW_3D:
+        viewer = napari.Viewer(title=f"{name} 3D (ds={ds})")
+        viewer.add_image(raw_vol, name="raw", scale=scale, contrast_limits=clim)
+        viewer.add_labels(seg_rest, name="seg rest", scale=scale, opacity=0.25)
+        topn_layer = viewer.add_labels(seg_topn, name=f"seg top{EM_TOP_N}", scale=scale, opacity=1.0)
+        topn_layer.colormap = DirectLabelColormap(color_dict=color_dict)
+        viewer.dims.current_step = (0, 0, 0)
+        viewer.dims.axis_labels = ("z", "y", "x")
+        viewer.axes.visible = True
+        _set_axes_label_offset(viewer)
+        viewer.scale_bar.visible = True
+        viewer.scale_bar.unit = unit
+        napari.run()
+
+    z_last_full = round((z0_ds + n_z_ds - 1) / ds)
+    with h5py.File(h5_path, "r") as f:
+        raw_2d_view = f["raw"][z_last_full][:].astype("float32")
+        seg_2d = f["predicted_instances"][z_last_full][:]
+
+    mask_2d = np.isin(seg_2d, list(top_set))
+    topn_2d = np.where(mask_2d, seg_2d, 0).astype(seg_2d.dtype)
+    rest_2d = np.where(mask_2d | (seg_2d == 0), 0, seg_2d).astype(seg_2d.dtype)
+    clim_2d = (float(raw_2d_view.min()), float(raw_2d_view.max()) + 1e-6)
+
+    viewer2d = napari.Viewer(title=f"{name} 2D z={z_last_full}")
+    viewer2d.add_image(raw_2d_view, name="raw", scale=scale[1:], contrast_limits=clim_2d)
+    viewer2d.add_labels(rest_2d, name="seg rest", scale=scale[1:], opacity=0.25)
+    fill_layer = viewer2d.add_labels(
+        topn_2d, name=f"seg top{EM_TOP_N}", scale=scale[1:], opacity=0.7, blending="additive"
+    )
+    fill_layer.colormap = DirectLabelColormap(color_dict=color_dict)
+    border_layer = viewer2d.add_labels(
+        topn_2d, name=f"seg top{EM_TOP_N} border", scale=scale[1:], opacity=1.0, blending="additive"
+    )
+    border_layer.colormap = DirectLabelColormap(color_dict=color_dict)
+    border_layer.contour = EM_BORDER_WIDTH
+    viewer2d.dims.axis_labels = ("y", "x")
+    viewer2d.axes.visible = True
+    _set_axes_label_offset(viewer2d)
+    viewer2d.scale_bar.visible = True
+    viewer2d.scale_bar.unit = unit
+    napari.run()
 
 
 def main():
