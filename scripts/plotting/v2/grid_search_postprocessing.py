@@ -61,9 +61,11 @@ MITOEM_EVAL_ROI = (slice(None), slice(1536, 2560), slice(1536, 2560))
 # Derived from the labels offset attribute [1480, 3644, 3644] divided by resolution [40, 4, 4].
 CREMI_PADDED_LABEL_ROI = (slice(37, 162), slice(911, 2161), slice(911, 2161))
 
-# Fixed 100 x 1024 x 1024 sub-volume for microns_minnie65 evaluation.
-# Each zarr box is 512 x 4097 x 4096; take 100 central Z-slices and centre 1024 x 1024 XY.
+# Fixed 100 x 1024 x 1024 sub-volume for microns_minnie65 grid-search evaluation.
+# Each zarr box is 512 x 4096 x 4096; take 100 central Z-slices and centre 1024 x 1024 XY.
 MICRONS_MINNIE65_EVAL_ROI = (slice(206, 306), slice(1536, 2560), slice(1536, 2560))
+# 200 x 2048 x 2048 central sub-volume for full-volume evaluation (~35 min total).
+MICRONS_MINNIE65_FULL_ROI = (slice(156, 356), slice(1024, 3072), slice(1024, 3072))
 # 69882d21db4e has 261 instances in the 32x512x512 grid-search crop (best among all boxes).
 MICRONS_MINNIE65_GRID_SEARCH_ZARR = "69882d21db4e.zarr"
 
@@ -211,8 +213,8 @@ def _generate_live_predictions(dataset_name, model, crop_shape=None):
             raw = _center_crop(raw, crop_shape)
             labels = _center_crop(labels, crop_shape)
         else:
-            raw = store["raw"][:].astype("float32")
-            labels = store["labels"][:]
+            raw = store["raw"][MICRONS_MINNIE65_FULL_ROI].astype("float32")
+            labels = store["labels"][MICRONS_MINNIE65_FULL_ROI]
         labels = connected_components(labels).astype("uint32")
         valid_roi = None
     elif crop_shape is not None:
