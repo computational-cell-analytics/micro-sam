@@ -48,10 +48,17 @@ CHECKPOINT_PATHS = {
     ),
 }
 
+# Chosen datasets for now: NIS3d, PlantSeg Ovules, LICONN | MitoEM, CREMI (Padded), Microns (Minnie65).
 DATASETS = [
     "snemi", "nis3d", "plantseg_root", "cremi", "humanneurons",
     "plantseg_ovules", "pnas_arabidopsis", "celegans_atlas", "mitoem",
+    "cremi_padded", "microns_minnie65",
 ]
+
+# Fixed eval ROI for microns_minnie65: 100 central Z-slices, centre 1024x1024 XY.
+# Store chosen for having the most instances (261) in the 32x512x512 grid-search crop.
+MICRONS_MINNIE65_EVAL_ROI = (slice(206, 306), slice(1536, 2560), slice(1536, 2560))
+MICRONS_MINNIE65_ZARR = "69882d21db4e.zarr"
 
 OUTPUT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "predictions")
 
@@ -280,6 +287,22 @@ def _iter_volumes(dataset_name, data_root, max_samples=None):
             n += 1
             if max_samples is not None and n >= max_samples:
                 return
+
+    elif dataset_name == "cremi_padded":
+        padded_path = os.path.join(p, "cremi", "sampleB_padded.h5")
+        with open_file(padded_path, mode="r") as f:
+            raw = f["volumes/raw"][:].astype("float32")
+            labels = connected_components(f["volumes/labels/neuron_ids"][:]).astype("uint32")
+        yield "sample_000", raw, labels
+
+    elif dataset_name == "microns_minnie65":
+        import zarr as zarr_mod
+        store = zarr_mod.open(
+            os.path.join(p, "microns-minnie65", MICRONS_MINNIE65_ZARR), mode="r",
+        )
+        raw = store["raw"][MICRONS_MINNIE65_EVAL_ROI].astype("float32")
+        labels = connected_components(store["labels"][MICRONS_MINNIE65_EVAL_ROI]).astype("uint32")
+        yield "sample_000", raw, labels
 
     else:
         raise ValueError(f"Unknown dataset: {dataset_name!r}")

@@ -38,10 +38,11 @@ Grid search CSVs and full-volume H5s are written to:
 Full-volume evaluation on the first test sample per dataset (no crop).
 mSA: higher is better. VI-split / VI-merge: lower is better (EM only).
 
-| dataset | shape (Z x Y x X) | mSA | SA50 | VI-split | VI-merge | CREMI |
-|---------|-------------------|-----|------|----------|----------|-------|
-| nis3d | 198 x 978 x 987 | 0.4562 | 0.8069 | - | - | - |
-| plantseg_ovules | 320 x 960 x 1000 | 0.3771 | 0.5941 | - | - | - |
-| humanneurons (EM) | 64 x 2048 x 2048 | 0.0179 | 0.0505 | 3.3183 | 1.1899 | 2.0375 |
-| cremi (EM) | 125 x 1250 x 1250 | 0.0081 | 0.0135 | 1.0537 | 0.4314 | 0.5728 |
-| snemi (EM) | 100 x 1024 x 1024 | 0.0608 | 0.1189 | 2.2171 | 0.7810 | 1.3634 |
+| dataset | shape (Z x Y x X) | mSA | SA50 | VI-split | VI-merge | CREMI | time (total) |
+|---------|-------------------|-----|------|----------|----------|-------|--------------|
+| nis3d | 198 x 978 x 987 | 0.4562 | 0.8069 | - | - | - | 5m48s |
+| plantseg_ovules | 320 x 960 x 1000 | 0.3771 | 0.5941 | - | - | - | 12m33s |
+| liconn (EM protocol) | 700 x 700 x 700 | 0.0004 | - | 8.2262 | 1.4307 | 3.1045 | 11m28s |
+| mitoem-human (EM) | 100 x 4096 x 4096 | 0.0000 | - | 9.7326 | 0.2464 | 3.0998 | 46m14s |
+| cremi-padded sampleB (EM) | 200 x 3072 x 3072 | 0.0180 | - | 2.0314 | 1.0036 | 0.9379 | 46m44s |
+| microns minnie65 (EM) | 512 x 4096 x 4096 | - | - | - | - | - | - |
