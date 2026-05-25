@@ -45,4 +45,4 @@ mSA: higher is better. VI-split / VI-merge: lower is better (EM only).
 | liconn (EM protocol) | 700 x 700 x 700 | 0.0004 | - | 8.2262 | 1.4307 | 3.1045 | 11m28s |
 | mitoem-human (EM) | 100 x 4096 x 4096 | 0.0000 | - | 9.7326 | 0.2464 | 3.0998 | 46m14s |
 | cremi-padded sampleB (EM) | 200 x 3072 x 3072 | 0.0180 | - | 2.0314 | 1.0036 | 0.9379 | 46m44s |
-| microns minnie65 (EM) | 512 x 4096 x 4096 | - | - | - | - | - | - |
+| microns minnie65 (EM) | 200 x 2048 x 2048 | 0.0015 | - | 3.4523 | 2.4439 | 1.6291 | 28m18s |
