@@ -557,17 +557,21 @@ def run_eval_2d(dataset, samples, predictor, args):
 
 
 def main():
-    # NOTE:
-    # 1. Normalization works fine, as expected
+    # NOTE: THINGS TAKEN CARE OF
+    # 1. Normalization works fine, as expected.
     #   - i.e. [0, 1] -> normalize with ImageNet stats
-    # 2. First frame propagation working in forward direction only
-    #   a. TODO: Change the training design for the model to work for bidirectional propagation? 
+    # 2. Random frame prompting + bidirectional propagation at training works as expected.
+    #   - i.e. exactly how a user would like to do prompting.
     # 3. Resizing image, final design: resizelongestside(1024) -> pad rest to 1024 in both axes.
-    #   a. TODO: This one was / is a huge mess. I need to be a bit more careful and do this consistently.
-    # 4. Propagate over chunks (fairly critical).
+
+    # WIP
     # 5. Iterative rectification design (TODO: Investigate closely)
     #   a. Current: put mask / box / point in the "first frame" -> randomly rectifies n frames in one go with n points -> that's it.  # noqa
     #   b. Expectation: iterate over n times, which is controllable.
+
+    # UPCOMING CONSIDERATIONS
+    # 4. Propagate over chunks (fairly critical).
+    
     # 6. TODO: They propagate the masks further externally from previous predictions!
 
     parser = argparse.ArgumentParser()

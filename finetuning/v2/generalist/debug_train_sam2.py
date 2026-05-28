@@ -33,7 +33,7 @@ def get_embedseg_skull_dataloaders(input_path, batch_size=1, n_workers=16):
         "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
         "label_dtype": torch.int64,
         "label_transform2": _instance_labels,
-        "transform": VideoAugmentTransform(),
+        "transform": VideoAugmentTransform(p_zflip=0.5),
     }
     train_ds = UniDataWrapper(
         tem_datasets.get_embedseg_dataset(
@@ -74,7 +74,7 @@ def get_lucchi_dataloaders(input_path, batch_size=1, n_workers=16):
         "sampler": MinInstanceSampler(min_num_instances=1, exclude_ids=[0]),
         "label_dtype": torch.int64,
         "label_transform2": _instance_labels,
-        "transform": VideoAugmentTransform(),
+        "transform": VideoAugmentTransform(p_zflip=0.5),
     }
     train_ds = UniDataWrapper(
         tem_datasets.get_lucchi_dataset(
@@ -169,6 +169,7 @@ def train_one(dataset, model_type):
         num_init_cond_frames=num_init_cond_frames,
         clip_grad_norm=0.1,
         layer_decay=0.9,
+        bidirectional=(dataset!="livecell"),
     )
 
 

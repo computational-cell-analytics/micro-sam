@@ -151,6 +151,7 @@ def train_sam2(
     layer_decay: float = 1.0,
     largest_first: bool = False,
     augment: bool = False,
+    bidirectional: bool = False,
 ) -> None:
     """Train SAM2 for interactive segmentation with SAM2's native prompting strategy.
 
@@ -201,6 +202,9 @@ def train_sam2(
         augment: Apply SAM2 MOSE-style data augmentations (RandomHorizontalFlip,
             RandomAffine, ColorJitter, RandomGrayscale) before each forward pass.
             Augmentations are applied consistently across frames for 3D volumes.
+        bidirectional: If True, use bidirectional propagation during training: a random
+            z-frame is chosen as the start frame each step, with propagation and correction
+            clicks applied in both directions. No effect for 2D (T=1) batches.
     """
     from training.loss_fns import MultiStepMultiMasksAndIous
 
@@ -219,6 +223,7 @@ def train_sam2(
         add_all_frames_to_correct_as_cond=add_all_frames_to_correct_as_cond,
         num_correction_pt_per_frame=num_correction_pt_per_frame,
         num_init_cond_frames_for_train=num_init_cond_frames,
+        bidirectional=bidirectional,
     )
 
     interactive_loss = MultiStepMultiMasksAndIous(

@@ -200,6 +200,8 @@ class VideoAugmentTransform:
     Args:
         p_hflip: Horizontal flip probability.
         p_vflip: Vertical flip probability.
+        p_zflip: Z-axis (depth) flip probability. Reverses frame order, teaching the model
+            to propagate in both directions. Default 0.0; set to 0.5 for bidirectional training.
         brightness: Volume-consistent brightness jitter bound.
         contrast: Volume-consistent contrast jitter bound.
         saturation: Volume-consistent saturation jitter bound.
@@ -212,6 +214,7 @@ class VideoAugmentTransform:
         self,
         p_hflip: float = 0.5,
         p_vflip: float = 0.5,
+        p_zflip: float = 0.0,
         brightness: float = 0.1,
         contrast: float = 0.03,
         saturation: float = 0.03,
@@ -221,6 +224,7 @@ class VideoAugmentTransform:
     ):
         self.p_hflip = p_hflip
         self.p_vflip = p_vflip
+        self.p_zflip = p_zflip
         self._cj_vol = ColorJitter(brightness=brightness, contrast=contrast, saturation=saturation)
         self._cj_frame = ColorJitter(
             brightness=per_frame_brightness, contrast=per_frame_contrast, saturation=per_frame_saturation,
@@ -247,6 +251,10 @@ class VideoAugmentTransform:
         if random.random() < self.p_vflip:
             raw_t = TF.vflip(raw_t)
             labels_t = TF.vflip(labels_t)
+        if random.random() < self.p_zflip:
+            z_dim = 1 if raw_t.ndim == 4 else 0
+            raw_t = torch.flip(raw_t, dims=[z_dim])
+            labels_t = torch.flip(labels_t, dims=[z_dim])
 
         # Color jitter on raw only. TF functions expect (C, H, W), so we iterate over Z.
         # For (Z, H, W) input, treat each Z-slice as a (1, H, W) single-channel frame.
