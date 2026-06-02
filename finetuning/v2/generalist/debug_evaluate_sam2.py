@@ -567,7 +567,7 @@ def main():
     # 6. They propagate the masks further externally from previous predictions! (align train and eval)
 
     # NOTE: DOES NOT WORK AS EXPECTED
-    # 5. Iterative rectification design (TODO: Investigate closely)
+    # 5. Iterative rectification design.
     #   a. Current: put mask / box / point in the "first frame" -> randomly rectifies n frames in one go with n points -> that's it.  # noqa
     #   b. Expectation: iterate over n times, which is controllable.
 

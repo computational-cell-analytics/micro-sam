@@ -93,11 +93,11 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
     def _check_input_normalization(self, x, input_check_done):
         if not input_check_done:
             data_min, data_max = x.min(), x.max()
-            if (data_min < 0) or (data_max < 1):
+            if (data_min < 0) or (data_max > 1):
                 warnings.warn(
-                    "It looks like you are normalizing the training data. "
-                    "SAM2 takes care of normalization internally, so it is better not to do this. "
-                    "We recommend removing data normalization and providing inputs in the range [0, 255]."
+                    "It looks like the training inputs are not in the [0, 1] range. "
+                    "The SAM2 training pipeline expects inputs in [0, 1] and applies ImageNet "
+                    "normalization internally. We recommend providing inputs in the range [0, 1]."
                 )
             input_check_done = True
         return input_check_done
