@@ -162,14 +162,15 @@ def train_one(dataset, model_type):
         save_root=os.path.join(SAVE_ROOT, dataset),
         checkpoint_path=None,
         max_num_objects=8,
+        # Always prompt with a point or box, never the GT mask.
+        # (prob_to_use_pt_input=1.0 disables SAM2's mask-input regime where the GT mask is planted as the prompt).
+        prob_to_use_pt_input=1.0,
         num_frames_to_correct=2,
-        rand_frames_to_correct=True,
-        prob_to_sample_from_gt=0.1,
-        add_all_frames_to_correct_as_cond=True,
+        num_correction_pt_per_frame=7,
         num_init_cond_frames=num_init_cond_frames,
         clip_grad_norm=0.1,
         layer_decay=0.9,
-        bidirectional=(dataset!="livecell"),
+        bidirectional=(dataset != "livecell"),
     )
 
 

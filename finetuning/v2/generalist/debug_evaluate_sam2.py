@@ -563,16 +563,13 @@ def main():
     # 2. Random frame prompting + bidirectional propagation at training works as expected.
     #   - i.e. exactly how a user would like to do prompting.
     # 3. Resizing image, final design: resizelongestside(1024) -> pad rest to 1024 in both axes.
+    # 4. Propagate over chunks (fairly critical).
+    # 6. They propagate the masks further externally from previous predictions! (align train and eval)
 
-    # WIP
+    # NOTE: DOES NOT WORK AS EXPECTED
     # 5. Iterative rectification design (TODO: Investigate closely)
     #   a. Current: put mask / box / point in the "first frame" -> randomly rectifies n frames in one go with n points -> that's it.  # noqa
     #   b. Expectation: iterate over n times, which is controllable.
-
-    # UPCOMING CONSIDERATIONS
-    # 4. Propagate over chunks (fairly critical).
-    
-    # 6. TODO: They propagate the masks further externally from previous predictions!
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-m", "--model_type", default="hvit_t")

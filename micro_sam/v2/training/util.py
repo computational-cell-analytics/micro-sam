@@ -77,7 +77,7 @@ def get_sam2_train_model(
             "++model._target_=training.model.sam2.SAM2Train",
             f"++model.prob_to_use_pt_input_for_train={prob_to_use_pt_input}",
             f"++model.prob_to_use_box_input_for_train={prob_to_use_box_input}",
-            f"++model.num_frames_to_correct_for_train={num_frames_to_correct}",
+            f"++model.num_frames_to_correct_for_train={max(num_frames_to_correct, num_init_cond_frames_for_train)}",
             f"++model.rand_frames_to_correct_for_train={rand_frames_to_correct}",
             f"++model.prob_to_sample_from_gt_for_train={prob_to_sample_from_gt}",
             f"++model.add_all_frames_to_correct_as_cond={add_all_frames_to_correct_as_cond}",
