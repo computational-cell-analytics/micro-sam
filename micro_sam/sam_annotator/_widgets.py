@@ -11,9 +11,13 @@ from typing import Optional
 import h5py
 import json
 import zarr
-import z5py
 import napari
 import numpy as np
+
+try:
+    import z5py
+except ImportError:
+    z5py = None
 
 from bioimage_cpp.utils import segmentation_overlap
 
@@ -587,6 +591,12 @@ def _get_promptable_segmentation_options(state, object_ids):
 
 
 def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
+
+    if z5py is None:
+        raise RuntimeError(
+            "Committing annotations to file requires z5py, which is only available via conda. "
+            "Install it with 'conda install -c conda-forge z5py'."
+        )
 
     # NOTE: zarr-python is quite inefficient and writes empty blocks.
     # So we have to use z5py here.
