@@ -5,7 +5,7 @@ from typing import List, Optional, Sequence, Tuple, Union
 import numpy as np
 import pandas as pd
 
-from nifty.tools import blocking, takeDict
+from bioimage_cpp.utils import Blocking, take_dict
 from skimage.measure import regionprops_table
 from skimage.transform import resize
 
@@ -63,8 +63,8 @@ def _create_seg_and_embed_generator(segmentation, image_embeddings, is_tiled, is
     if is_tiled:
         tile_embeds = image_embeddings["features"]
         tile_shape, halo = tile_embeds.attrs["tile_shape"], tile_embeds.attrs["halo"]
-        tiling = blocking([0, 0], tile_embeds.attrs["shape"], tile_shape)
-        length = tiling.numberOfBlocks * segmentation.shape[0] if is_3d else tiling.numberOfBlocks
+        tiling = Blocking([0, 0], tile_embeds.attrs["shape"], tile_shape)
+        length = tiling.number_of_blocks * segmentation.shape[0] if is_3d else tiling.number_of_blocks
     else:
         tiling = None
         length = segmentation.shape[0]
@@ -73,13 +73,13 @@ def _create_seg_and_embed_generator(segmentation, image_embeddings, is_tiled, is
         def generator():
             for z in range(segmentation.shape[0]):
                 seg_z = segmentation[z]
-                for block_id in range(tiling.numberOfBlocks):
-                    block = tiling.getBlockWithHalo(block_id, halo)
+                for block_id in range(tiling.number_of_blocks):
+                    block = tiling.get_block_with_halo(block_id, halo)
 
                     # Get the embeddings and segmentation for this block and slice.
                     embeds = tile_embeds[str(block_id)][z].squeeze()
 
-                    bb = tuple(slice(beg, end) for beg, end in zip(block.outerBlock.begin, block.outerBlock.end))
+                    bb = tuple(slice(beg, end) for beg, end in zip(block.outer_block.begin, block.outer_block.end))
                     seg = seg_z[bb]
 
                     yield seg, embeds
@@ -94,11 +94,11 @@ def _create_seg_and_embed_generator(segmentation, image_embeddings, is_tiled, is
     else:  # 2d data with tiling
         def generator():
             for block_id in range(length):
-                block = tiling.getBlockWithHalo(block_id, halo)
+                block = tiling.get_block_with_halo(block_id, halo)
 
                 # Get the embeddings and segmentation for this block.
                 embeds = tile_embeds[str(block_id)][:].squeeze()
-                bb = tuple(slice(beg, end) for beg, end in zip(block.outerBlock.begin, block.outerBlock.end))
+                bb = tuple(slice(beg, end) for beg, end in zip(block.outer_block.begin, block.outer_block.end))
                 seg = segmentation[bb]
 
                 yield seg, embeds
@@ -214,7 +214,7 @@ def project_prediction_to_segmentation(
     # Such objects may get removed in the resizing operations.
     missing_ids = np.setdiff1d(np.unique(segmentation), seg_ids)
     prediction.update({missing_id: 0 for missing_id in missing_ids})
-    return takeDict(prediction, segmentation)
+    return take_dict(prediction, segmentation)
 
 
 # TODO handle images / segmentations as file paths

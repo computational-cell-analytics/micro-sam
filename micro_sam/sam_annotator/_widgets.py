@@ -15,7 +15,7 @@ import z5py
 import napari
 import numpy as np
 
-import nifty.ground_truth as ngt
+from bioimage_cpp.utils import segmentation_overlap
 
 import elf.parallel
 
@@ -483,11 +483,12 @@ def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None
 
 def _mask_matched_objects(seg, prev_seg, preservation_threshold):
     prev_ids = np.unique(prev_seg)
-    ovlp = ngt.overlap(prev_seg, seg)
+    ovlp = segmentation_overlap(prev_seg, seg)
 
     mask_ids, prev_mask_ids = [], []
     for prev_id in prev_ids:
-        seg_ids, overlaps = ovlp.overlapArrays(prev_id, True)
+        ovlp_table = ovlp.overlaps_for_label_a(prev_id)
+        seg_ids, overlaps = ovlp_table["label"], ovlp_table["count"]
         if seg_ids[0] != 0 and overlaps[0] >= preservation_threshold:
             mask_ids.append(seg_ids[0])
             prev_mask_ids.append(prev_id)

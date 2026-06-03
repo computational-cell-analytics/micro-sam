@@ -2,7 +2,6 @@ name: sam
 channels:
     - conda-forge
 dependencies:
-    - nifty >=1.2.3
     - imagecodecs
     - magicgui
     - napari <0.7  # Note: See https://github.com/napari/napari/issues/8808 for more details.
@@ -30,4 +29,5 @@ dependencies:
     - xarray
     - zarr
     - pip:
+        - bioimage-cpp
         - git+https://github.com/ChaoningZhang/MobileSAM.git
