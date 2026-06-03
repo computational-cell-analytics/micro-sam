@@ -26,6 +26,7 @@ from bioimage_cpp.utils import Blocking
 from bioimage_cpp.distance import distance_transform
 from bioimage_cpp.segmentation import relabel_sequential
 from skimage.measure import regionprops
+from skimage.segmentation import find_boundaries
 from torchvision.ops.boxes import batched_nms
 
 from .__version__ import __version__
@@ -1305,15 +1306,24 @@ def get_centers_and_bounding_boxes(
         # Use the point of maximal distance to the object boundary as the center.
         # In contrast to the centroid, this point is guaranteed to lie inside the object,
         # also for concave shapes. This replaces vigra.filters.eccentricityCenters.
+        # Compute the boundaries and a single distance transform for the whole
+        # segmentation, instead of one distance transform per object.
+        ndim = segmentation.ndim
+        # Pad so objects touching the image border also get a boundary there,
+        # matching a per-object padded distance transform.
+        padded = np.pad(segmentation, 1)
+        boundaries = find_boundaries(padded, mode="inner")
+        distances = distance_transform(boundaries == 0)
+
         center_coordinates = {}
         for prop in properties:
-            # Pad the object mask so the distance transform measures the distance to the
-            # true object boundary (also for objects touching their bounding box).
-            mask = np.pad(prop.image, 1)
-            distances = distance_transform(mask)
-            center_local = np.unravel_index(int(np.argmax(distances)), distances.shape)
-            offset = prop.bbox[:prop.image.ndim]
-            center_coordinates[prop.label] = tuple(int(c - 1 + o) for c, o in zip(center_local, offset))
+            bbox = prop.bbox
+            # Slice the global distance field to this object's bbox (shifted by the
+            # pad of 1) and restrict the argmax to the object's own pixels.
+            region = distances[tuple(slice(b + 1, e + 1) for b, e in zip(bbox[:ndim], bbox[ndim:]))]
+            masked = np.where(prop.image, region, -1.0)
+            center_local = np.unravel_index(int(np.argmax(masked)), masked.shape)
+            center_coordinates[prop.label] = tuple(int(c + o) for c, o in zip(center_local, bbox[:ndim]))
 
     bbox_coordinates = {prop.label: prop.bbox for prop in properties}
 
