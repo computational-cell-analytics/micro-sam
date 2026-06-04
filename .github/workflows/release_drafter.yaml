@@ -4,7 +4,7 @@ on:
   push:
     # branches to consider in the event; optional, defaults to all
     branches:
-      - master
+      - main
   # # pull_request event is required only for autolabeler
   # pull_request:
   #   # Only following types are handled by the action, but one can default to all as well
@@ -50,7 +50,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           custom_tag: ${{ steps.check-version.outputs.current-version }}
 
-      # Drafts your next Release notes as Pull Requests are merged into "master"
+      # Drafts your next Release notes as Pull Requests are merged into "main"
       - name: Publish the release notes
         uses: release-drafter/release-drafter@v6.0.0
         with:

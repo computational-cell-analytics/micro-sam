@@ -40,7 +40,7 @@ conda install -c conda-forge micro_sam "libtorch=*=cuda11*"
 ## From source
 
 To install `micro_sam` from source, we recommend to first set up an environment with the necessary requirements:
-- [environment.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/master/environment.yaml): to set up an environment on Windows, Linux or Mac OS.
+- [environment.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/main/environment.yaml): to set up an environment on Windows, Linux or Mac OS.
 
 To create one of these environments and install `micro_sam` into it follow these steps
 
