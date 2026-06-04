@@ -39,9 +39,13 @@ jobs:
       - name: Install micro-sam via pip (with dependencies)
         run: python -m pip install -e ".[mobilesam]"
 
+      # A standalone mask prompt is build-dependent with the PyPI torch wheels used here;
+      # MICRO_SAM_SKIP_STANDALONE_MASK_PROMPT skips that single assertion (see the test).
+      # Set it via GITHUB_ENV so it is exported to the headless-gui step's environment.
+      - name: Configure test environment
+        run: echo "MICRO_SAM_SKIP_STANDALONE_MASK_PROMPT=1" >> "$GITHUB_ENV"
+
       - name: Run non-gui tests
         uses: aganders3/headless-gui@v2
         with:
-          # A standalone mask prompt is build-dependent with the PyPI torch wheels used here;
-          # MICRO_SAM_SKIP_STANDALONE_MASK_PROMPT skips that single assertion (see the test).
-          run: MICRO_SAM_SKIP_STANDALONE_MASK_PROMPT=1 pytest -m "not gui"
+          run: pytest -m "not gui"
