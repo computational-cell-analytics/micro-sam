@@ -40,7 +40,7 @@ conda install -c conda-forge micro_sam "libtorch=*=cuda11*"
 ## From source
 
 To install `micro_sam` from source, we recommend to first set up an environment with the necessary requirements:
-- [environment.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/master/environment.yaml): to set up an environment on Windows, Linux or Mac OS.
+- [environment.yaml](https://github.com/computational-cell-analytics/micro-sam/blob/main/environment.yaml): to set up an environment on Windows, Linux or Mac OS.
 
 To create one of these environments and install `micro_sam` into it follow these steps
 
@@ -81,6 +81,15 @@ You can install it with pip:
 ```bash
 conda activate sam
 pip install trackastra
+```
+
+## MobileSAM installation
+
+To use the `vit_t` (MobileSAM) model, you have to install [MobileSAM](https://github.com/ChaoningZhang/MobileSAM) in the environment where `micro_sam` is installed.
+It is not available on PyPI, so it has to be installed from GitHub with pip:
+```bash
+conda activate sam
+pip install git+https://github.com/ChaoningZhang/MobileSAM.git
 ```
 
 ## From installer

@@ -185,4 +185,4 @@ For more details about how to use memray, see [the documentation](https://bloomb
 
 ## Creating a new release
 
-To create a new release you have to edit the version number in [micro_sam/__version__.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/micro_sam/__version__.py) in a PR. After merging this PR the release will automatically be done by the CI.
+To create a new release you have to edit the version number in [micro_sam/__version__.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/micro_sam/__version__.py) in a PR. After merging this PR the release will automatically be done by the CI.
