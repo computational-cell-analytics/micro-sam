@@ -35,7 +35,7 @@ jobs:
       - name: Setup micromamba
         uses: mamba-org/setup-micromamba@v1
         with:
-          environment-file: .github/doc_env.yaml
+          environment-file: environment.yaml
 
       # pdoc imports the napari-based submodules (micro_sam.sam_annotator) while
       # generating the docs, so the Qt system libraries must be present.
@@ -44,6 +44,12 @@ jobs:
       - name: Install package
         shell: bash -l {0}
         run: pip install --no-deps -e .
+
+      # pdoc is only needed to build the documentation, so we install it here
+      # instead of adding it to the standard environment.yaml.
+      - name: Install pdoc
+        shell: bash -l {0}
+        run: pip install pdoc
 
       # We use a custom build script for pdoc itself, ideally you just run
       # `pdoc -o docs/ ...` here. Run under a headless display so the napari
