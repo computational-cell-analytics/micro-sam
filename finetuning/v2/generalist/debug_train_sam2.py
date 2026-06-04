@@ -7,7 +7,7 @@ from torch_em.data import datasets as tem_datasets, MinInstanceSampler
 from micro_sam.v2.datasets.generalist_loader import _prepare_data_loader
 from micro_sam.v2.datasets.wrapper import UniDataWrapper
 from micro_sam.v2.training import train_sam2
-from micro_sam.v2.transforms.raw import _to_8bit, VideoAugmentTransform
+from micro_sam.v2.transforms.raw import _to_8bit, VideoAugmentTransform, ImageAugmentTransform
 from micro_sam.v2.transforms.labels import _instance_labels
 
 
@@ -106,12 +106,14 @@ def get_livecell_dataloaders(input_path, batch_size=1, n_workers=16):
     """
     patch_shape = (512, 512)
     livecell_path = os.path.join(input_path, "livecell")
-    # VideoAugmentTransform expects 3D input, so it is not used for 2D LIVECell data.
-    # label_dtype is handled by the livecell API directly (default int64).
+    # ImageAugmentTransform is the 2D analogue of VideoAugmentTransform (flips + ColorJitter),
+    # giving LIVECell the same intensity augmentation as the 3D datasets instead of the
+    # torch-em default (flips only). label_dtype is handled by the livecell API (default int64).
     kwargs = {
         "raw_transform": _to_8bit,
         "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
         "label_transform2": _instance_labels,
+        "transform": ImageAugmentTransform(),
     }
     train_ds = UniDataWrapper(
         tem_datasets.get_livecell_dataset(

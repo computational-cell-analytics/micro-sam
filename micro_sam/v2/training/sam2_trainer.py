@@ -1,5 +1,6 @@
 import contextlib
 import os
+import random
 import time
 import warnings
 from typing import Callable, Optional
@@ -12,6 +13,36 @@ import torch_em
 from torch_em.trainer.logger_base import TorchEmLogger
 
 from training.trainer import CORE_LOSS_KEY  # SAM2 repo
+
+# Fixed seed for the main-process randomness during validation (prompt/correction-click
+# sampling in SAM2Train, object subsampling in ConvertToSam2VideoBatch). Worker-side crop
+# randomness is pinned separately via the val loader's deterministic worker_init_fn.
+VALIDATION_SEED = 42
+
+
+def _snapshot_rng():
+    """Capture the global RNG state so it can be restored after deterministic validation."""
+    cuda_state = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    return random.getstate(), np.random.get_state(), torch.get_rng_state(), cuda_state
+
+
+def _restore_rng(state):
+    """Restore the global RNG state captured by _snapshot_rng."""
+    py_state, np_state, torch_state, cuda_state = state
+    random.setstate(py_state)
+    np.random.set_state(np_state)
+    torch.set_rng_state(torch_state)
+    if cuda_state is not None:
+        torch.cuda.set_rng_state_all(cuda_state)
+
+
+def _seed_all(seed):
+    """Seed the python, numpy, and torch (CPU + CUDA) global RNGs."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def _get_cmap():
@@ -170,14 +201,24 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
         input_check_done = False
         last_x = last_y = last_batch = last_outputs = None
 
-        with torch.no_grad():
-            for x, y in self.val_loader:
-                input_check_done = self._check_input_normalization(x, input_check_done)
-                with self._amp_context():
-                    loss, batch, outputs = self._interactive_step(x, y)
-                    val_loss += loss.item()
-                n_iter += 1
-                last_x, last_y, last_batch, last_outputs = x, y, batch, outputs
+        # Pin the main-process RNG so the per-frame prompts and correction clicks sampled inside
+        # SAM2Train (and object subsampling in ConvertToSam2VideoBatch) are identical every epoch,
+        # making the validation metric comparable across epochs. Restore the state afterwards so
+        # training randomness is unaffected. Worker-side crop randomness is pinned via the val
+        # loader's deterministic worker_init_fn.
+        rng_state = _snapshot_rng()
+        _seed_all(VALIDATION_SEED)
+        try:
+            with torch.no_grad():
+                for x, y in self.val_loader:
+                    input_check_done = self._check_input_normalization(x, input_check_done)
+                    with self._amp_context():
+                        loss, batch, outputs = self._interactive_step(x, y)
+                        val_loss += loss.item()
+                    n_iter += 1
+                    last_x, last_y, last_batch, last_outputs = x, y, batch, outputs
+        finally:
+            _restore_rng(rng_state)
 
         val_loss /= max(n_iter, 1)
 

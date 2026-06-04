@@ -294,7 +294,7 @@ class ConvertToSam2VideoBatch:
         n_largest = self.max_num_objects // 2
         n_random = self.max_num_objects - n_largest
         counts = torch.bincount(label_2d.flatten().long(), minlength=int(ids.max().item()) + 1)
-        sorted_idx = torch.argsort(counts[ids], descending=True)
+        sorted_idx = torch.argsort(counts[ids.long()], descending=True)
         largest_ids = ids[sorted_idx[:n_largest]]
         perm = torch.randperm(len(ids) - n_largest, device=ids.device)[:n_random]
         random_ids = ids[sorted_idx[n_largest:]][perm]

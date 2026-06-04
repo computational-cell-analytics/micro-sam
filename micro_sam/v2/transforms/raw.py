@@ -282,6 +282,71 @@ class VideoAugmentTransform:
         return raw_t.numpy(), labels_t.numpy()
 
 
+class ImageAugmentTransform:
+    """torch-em dataset transform with flips + ColorJitter for 2D microscopy images.
+
+    The 2D analogue of VideoAugmentTransform: horizontal/vertical flips are applied
+    to both raw and labels, and two-stage ColorJitter (matching the MOSE finetune
+    bounds) to the raw image only. Expects (C, H, W) raw in [0, 1] - i.e. it runs
+    after the raw_transform - and an integer label of matching spatial shape.
+
+    Args:
+        p_hflip: Horizontal flip probability.
+        p_vflip: Vertical flip probability.
+        brightness: First-stage brightness jitter bound.
+        contrast: First-stage contrast jitter bound.
+        saturation: First-stage saturation jitter bound.
+        per_frame_brightness: Second-stage brightness jitter bound.
+        per_frame_contrast: Second-stage contrast jitter bound.
+        per_frame_saturation: Second-stage saturation jitter bound.
+    """
+
+    def __init__(
+        self,
+        p_hflip: float = 0.5,
+        p_vflip: float = 0.5,
+        brightness: float = 0.1,
+        contrast: float = 0.03,
+        saturation: float = 0.03,
+        per_frame_brightness: float = 0.1,
+        per_frame_contrast: float = 0.05,
+        per_frame_saturation: float = 0.05,
+    ):
+        self.p_hflip = p_hflip
+        self.p_vflip = p_vflip
+        self._cj_1 = ColorJitter(brightness=brightness, contrast=contrast, saturation=saturation)
+        self._cj_2 = ColorJitter(
+            brightness=per_frame_brightness, contrast=per_frame_contrast, saturation=per_frame_saturation,
+        )
+
+    def __call__(self, raw, labels):
+        """Apply augmentation to a single 2D sample.
+
+        Args:
+            raw: (C, H, W) float array in [0, 1].
+            labels: integer array with the same spatial shape as raw.
+
+        Returns:
+            Tuple of (augmented raw, augmented labels).
+        """
+        raw_t = torch.from_numpy(np.ascontiguousarray(raw, dtype=np.float32))
+        labels_t = torch.from_numpy(np.ascontiguousarray(labels, dtype=np.int64))
+
+        if random.random() < self.p_hflip:
+            raw_t = TF.hflip(raw_t)
+            labels_t = TF.hflip(labels_t)
+        if random.random() < self.p_vflip:
+            raw_t = TF.vflip(raw_t)
+            labels_t = TF.vflip(labels_t)
+
+        for cj in (self._cj_1, self._cj_2):
+            fn_idx, b, c, s, _ = cj.get_params(cj.brightness, cj.contrast, cj.saturation, cj.hue)
+            raw_t = VideoAugment._cj_apply(raw_t, fn_idx, b, c, s)
+        raw_t = raw_t.clamp(0.0, 1.0)
+
+        return raw_t.numpy(), labels_t.numpy()
+
+
 def _normalize_percentile(x, axis=None):
     """Transforms input images with percentile normalization.
 

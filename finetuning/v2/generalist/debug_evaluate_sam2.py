@@ -209,10 +209,29 @@ def _extra_init_frames(obj_zs, z_prompt, num_init_cond_frames):
     return [candidates[i] for i in indices]
 
 
+def _jitter_box(box, H, W, rng, noise=0.1, noise_bound=20, image_size=1024):
+    """Jitter box corners following SAM2's sample_box_points scheme.
+
+    Each corner of the [x0, y0, x1, y1] box is perturbed by a uniform offset in
+    +-min(noise * side_length, bound), where bound is noise_bound pixels at
+    image_size resolution scaled to the frame. The result is clamped to the frame.
+    Matches the box noising SAM2 applies to box prompts during training.
+    """
+    x0, y0, x1, y1 = (float(v) for v in box)
+    bw, bh = x1 - x0, y1 - y0
+    bound = noise_bound * max(H, W) / image_size
+    max_dx, max_dy = min(bw * noise, bound), min(bh * noise, bound)
+    offsets = rng.uniform(-1, 1, size=4) * np.array([max_dx, max_dy, max_dx, max_dy])
+    jittered = np.array([x0, y0, x1, y1]) + offsets
+    jittered[[0, 2]] = np.clip(jittered[[0, 2]], 0, W - 1)
+    jittered[[1, 3]] = np.clip(jittered[[1, 3]], 0, H - 1)
+    return jittered.astype(box.dtype)
+
+
 @torch.no_grad()
 def segment_volume(
     raw, labels, predictor, n_iterations, use_box=False, chunk_size=None,
-    first_frame=False, forward_only=False, num_init_cond_frames=1,
+    first_frame=False, forward_only=False, num_init_cond_frames=1, box_jitter=False,
 ):
     """Run iterative 3D interactive segmentation for all objects in a volume.
 
@@ -226,6 +245,7 @@ def segment_volume(
         first_frame: Prompt from the first z-frame of each object (vs center).
         forward_only: Propagate forward only from the prompt frame.
         num_init_cond_frames: Number of frames to condition on before first propagation.
+        box_jitter: Jitter the box prompt like SAM2 training (only used with use_box).
 
     Returns:
         List of segmentation arrays (one per iteration), each of shape (Z, H, W).
@@ -240,6 +260,7 @@ def segment_volume(
 
     prompt_generator = IterativePromptGenerator()
     gt_ids = sorted(np.unique(labels_proc)[1:].tolist())
+    rng = np.random.default_rng(0)
 
     seg_per_iter_proc = [np.zeros_like(labels_proc) for _ in range(n_iterations)]
 
@@ -258,6 +279,9 @@ def segment_volume(
             use_points=not use_box, use_boxes=use_box,
             n_positives=0 if use_box else 1, n_negatives=0, dilation=5,
         )
+        if use_box and box_jitter:
+            boxes = boxes.copy()
+            boxes[0] = _jitter_box(boxes[0], labels_proc.shape[1], labels_proc.shape[2], rng)
 
         corr_points = corr_labels = None
         corr_frame = None
@@ -340,7 +364,9 @@ def segment_volume(
 
 
 @torch.no_grad()
-def segment_image_2d(raw, labels, predictor, n_iterations, use_box=False, batch_size=32):
+def segment_image_2d(
+    raw, labels, predictor, n_iterations, use_box=False, batch_size=32, box_jitter=False, pad_square=True,
+):
     """Run iterative 2D interactive segmentation using SAM2ImagePredictor.
 
     Closely follows the existing micro_sam.v2.evaluation.inference implementation:
@@ -354,10 +380,21 @@ def segment_image_2d(raw, labels, predictor, n_iterations, use_box=False, batch_
         n_iterations: Number of prompt/correction rounds.
         use_box: Use bounding-box prompts instead of points.
         batch_size: Number of objects per inference batch.
+        box_jitter: Jitter the box prompts like SAM2 training (only used with use_box).
+        pad_square: Zero-pad the image to a square before inference so SAM2's internal
+            resize to 1024 is aspect-preserving (resize-longest + pad, matching training)
+            instead of stretching. Predictions are cropped back to the original shape.
+            Default True; pass --no_pad_square to use the stretch resize instead.
 
     Returns:
         List of segmentation arrays (one per iteration), each of shape (H, W).
     """
+    H_orig, W_orig = labels.shape
+    if pad_square and H_orig != W_orig:
+        s = max(H_orig, W_orig)
+        raw = np.pad(raw, ((0, s - H_orig), (0, s - W_orig)))
+        labels = np.pad(labels, ((0, s - H_orig), (0, s - W_orig)))
+
     img_uint8 = (raw * 255).astype("uint8")
     if img_uint8.ndim == 2:
         img_uint8 = np.stack([img_uint8] * 3, axis=-1)
@@ -376,6 +413,12 @@ def segment_image_2d(raw, labels, predictor, n_iterations, use_box=False, batch_
         use_points=use_points, use_boxes=use_boxes,
         n_positives=n_positive, n_negatives=0, dilation=5,
     )
+    if use_boxes and box_jitter:
+        rng = np.random.default_rng(0)
+        H, W = labels.shape
+        boxes = boxes.copy()
+        for i in range(len(boxes)):
+            boxes[i] = _jitter_box(boxes[i], H, W, rng)
 
     sampled_binary_y = segmentation_to_one_hot(
         segmentation=labels.astype("int64"), segmentation_ids=gt_ids
@@ -442,6 +485,8 @@ def segment_image_2d(raw, labels, predictor, n_iterations, use_box=False, batch_
             else:
                 point_labels = next_labels
 
+    if pad_square:
+        seg_per_iter = [s[:H_orig, :W_orig] for s in seg_per_iter]
     return seg_per_iter
 
 
@@ -512,7 +557,7 @@ def run_eval_3d(dataset, samples, predictor, args):
             raw, labels, predictor, n_iterations=args.n_iterations,
             use_box=args.prompt == "box", chunk_size=args.chunk_size,
             first_frame=args.first_frame, forward_only=args.forward_only,
-            num_init_cond_frames=args.num_init_cond_frames,
+            num_init_cond_frames=args.num_init_cond_frames, box_jitter=args.box_jitter,
         )
         rows = evaluate_volume(labels, seg_per_iter)
         for row in rows:
@@ -541,7 +586,7 @@ def run_eval_2d(dataset, samples, predictor, args):
         print(f"\nImage: {fname}")
         seg_per_iter = segment_image_2d(
             raw, labels, predictor, n_iterations=args.n_iterations,
-            use_box=args.prompt == "box",
+            use_box=args.prompt == "box", box_jitter=args.box_jitter, pad_square=args.pad_square,
         )
         rows = evaluate_volume(labels, seg_per_iter)
         for row in rows:
@@ -571,6 +616,9 @@ def main():
     #   a. Current: put mask / box / point in the "first frame" -> randomly rectifies n frames in one go with n points -> that's it.  # noqa
     #   b. Expectation: iterate over n times, which is controllable.
 
+    # TODO:
+    # a) Work with boxes over iterations for new corrections as well.
+
     parser = argparse.ArgumentParser()
     parser.add_argument("-m", "--model_type", default="hvit_t")
     parser.add_argument("-b", "--backbone", default="sam2.1")
@@ -581,6 +629,8 @@ def main():
     parser.add_argument("--chunk_size", type=int, default=None)
     parser.add_argument("--first_frame", action="store_true", help="Prompt from first z-frame of each object.")
     parser.add_argument("--forward_only", action="store_true", help="Propagate forward only from the prompt frame.")
+    parser.add_argument("--box_jitter", action="store_true", help="Jitter box prompts like SAM2 training.")
+    parser.add_argument("--no_pad_square", dest="pad_square", action="store_false", help="2D: use stretch resize.")
     parser.add_argument(
         "--num_init_cond_frames", type=int, default=1,
         help="Frames to condition on before first propagation (1 = prompt only; 2 matches training).",

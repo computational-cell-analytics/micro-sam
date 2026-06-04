@@ -5,9 +5,11 @@ import torch
 
 
 class UniDataWrapper(torch.utils.data.Dataset):
-    def __init__(self, ds, source_ndim=None, group_key=None):
+    def __init__(self, ds, source_ndim=None, group_key=None, max_samples=None):
         self.ds = ds
         self.ndim = 3
+        # Optional cap on the number of samples drawn (e.g. to shrink the validation set).
+        self.max_samples = max_samples
 
         # Track the source dimensionality for batching (2D vs 3D grouping).
         if source_ndim is not None:
@@ -22,7 +24,8 @@ class UniDataWrapper(torch.utils.data.Dataset):
         self.group_key = group_key if group_key is not None else self.source_ndim
 
     def __len__(self):
-        return len(self.ds)
+        n = len(self.ds)
+        return min(n, self.max_samples) if self.max_samples is not None else n
 
     def _to_czyx(self, t):
         t = t if torch.is_tensor(t) else torch.as_tensor(t)

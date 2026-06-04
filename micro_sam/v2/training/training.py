@@ -308,11 +308,12 @@ def _train_sam2_rank(
     find_unused_parameters: bool,
     largest_first: bool,
     augment: bool,
+    bidirectional: bool = False,
 ):
     """Single-rank torchrun worker for train_sam2_multi_gpu."""
     from torch_em.multi_gpu_training import DDP
 
-    from micro_sam.v2.datasets.generalist_loader import _build_interactive_datasets
+    from micro_sam.v2.datasets.generalist_loader import _build_interactive_datasets, seed_worker
     from micro_sam.v2.datasets.sampler import DistributedUniBatchSampler, _build_group_map
     from training.loss_fns import MultiStepMultiMasksAndIous
 
@@ -349,9 +350,11 @@ def _train_sam2_rank(
         pin_memory=True, persistent_workers=True,
     )
     train_loader.shuffle = True
+    # Non-persistent workers + a deterministic worker_init_fn re-seed each epoch, so the
+    # validation crops are identical across epochs (see seed_worker / Sam2Trainer._validate_impl).
     val_loader = torch.utils.data.DataLoader(
         val_ds, batch_sampler=val_sampler, num_workers=n_workers,
-        pin_memory=True, persistent_workers=True,
+        pin_memory=True, persistent_workers=False, worker_init_fn=seed_worker,
     )
     val_loader.shuffle = False
 
@@ -367,6 +370,7 @@ def _train_sam2_rank(
         add_all_frames_to_correct_as_cond=add_all_frames_to_correct_as_cond,
         num_correction_pt_per_frame=num_correction_pt_per_frame,
         num_init_cond_frames_for_train=num_init_cond_frames,
+        bidirectional=bidirectional,
     )
     ddp_model = DDP(model, device_ids=[local_rank], find_unused_parameters=find_unused_parameters)
 
@@ -450,6 +454,7 @@ def train_sam2_multi_gpu(
     find_unused_parameters: bool = True,
     largest_first: bool = False,
     augment: bool = False,
+    bidirectional: bool = False,
 ) -> None:
     """Train SAM2 for interactive segmentation across multiple GPUs with DDP.
 
@@ -538,6 +543,7 @@ def train_sam2_multi_gpu(
         find_unused_parameters=find_unused_parameters,
         largest_first=largest_first,
         augment=augment,
+        bidirectional=bidirectional,
     )
 
 
