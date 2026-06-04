@@ -37,7 +37,11 @@ jobs:
         run: python -m pip install -r requirements-dev.txt
 
       - name: Install micro-sam via pip (with dependencies)
-        run: python -m pip install -e ".[mobilesam]"
+        run: python -m pip install -e .
+
+      # MobileSAM (vit_t backend) is not on PyPI; install it from GitHub to keep vit_t coverage.
+      - name: Install MobileSAM
+        run: python -m pip install git+https://github.com/ChaoningZhang/MobileSAM.git
 
       # A standalone mask prompt is build-dependent with the PyPI torch wheels used here;
       # MICRO_SAM_SKIP_STANDALONE_MASK_PROMPT skips that single assertion (see the test).
