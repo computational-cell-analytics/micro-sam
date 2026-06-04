@@ -3,6 +3,7 @@ channels:
     - conda-forge
 dependencies:
     - bioimage-cpp >=0.3
+    - bioimageio.core
     - imagecodecs
     - magicgui
     - napari <0.7  # Note: See https://github.com/napari/napari/issues/8808 for more details.

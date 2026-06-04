@@ -60,6 +60,17 @@ jobs:
           shell: bash -l {0}
           run: python build_doc.py --out
 
+      # Defense-in-depth: fail with a clear message if pdoc produced nothing,
+      # instead of the opaque "tar: tmp/: Cannot open" error in the upload step.
+      - name: Verify documentation was built
+        shell: bash -l {0}
+        run: |
+          if [ ! -s tmp/index.html ]; then
+            echo "::error::pdoc did not produce tmp/index.html - documentation build failed."
+            ls -la tmp/ 2>/dev/null || echo "tmp/ does not exist"
+            exit 1
+          fi
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: tmp/

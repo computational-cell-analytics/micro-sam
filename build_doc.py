@@ -43,4 +43,4 @@ if __name__ == "__main__":
         cmd.extend(["--out", "tmp/"])
     cmd.append("micro_sam")
 
-    run(cmd)
+    run(cmd, check=True)
