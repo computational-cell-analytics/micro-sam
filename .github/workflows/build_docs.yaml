@@ -36,6 +36,11 @@ jobs:
         uses: mamba-org/setup-micromamba@v1
         with:
           environment-file: environment.yaml
+          # Pin Python to the version verified by the test suite (test.yaml).
+          # Without this, micromamba resolves the newest Python (e.g. 3.14),
+          # where napari<0.7 + pydantic v1 crash on import and abort the build.
+          create-args: >-
+            python=3.12
 
       # pdoc imports the napari-based submodules (micro_sam.sam_annotator) while
       # generating the docs, so the Qt system libraries must be present.
