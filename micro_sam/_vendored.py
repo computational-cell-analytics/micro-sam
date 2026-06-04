@@ -21,10 +21,13 @@ except (ImportError, SystemError):
     def njit(func):
         return func
 
-try:
-    from nifty.tools import computeRLE as _compute_rle_nifty
-except ImportError:
-    _compute_rle_nifty = None
+from bioimage_cpp.utils import compute_rle as _compute_rle_cpp
+
+
+def _compute_rle_bioimage_cpp(mask):
+    # bioimage-cpp returns an int64 numpy array; convert to a list to match the
+    # numpy/numba implementations and the COCO/SAM RLE format.
+    return _compute_rle_cpp(mask).tolist()
 
 
 def batched_mask_to_box(masks: torch.Tensor) -> torch.Tensor:
@@ -109,7 +112,7 @@ def _compute_rle_numpy(mask):
 
 
 def mask_to_rle_pytorch(
-    tensor: torch.Tensor, rle_implementation: Literal["default", "numpy", "numba", "nifty"] = "default"
+    tensor: torch.Tensor, rle_implementation: Literal["default", "numpy", "numba", "bioimage_cpp"] = "default"
 ) -> List[Dict[str, Any]]:
     """Calculates the runlength encoding of binary input masks.
 
@@ -127,23 +130,19 @@ def mask_to_rle_pytorch(
     tensor = tensor.detach().cpu().numpy()
 
     if rle_implementation == "default":
-        rle_implementation = "numpy"
-        if _compute_rle_nifty is not None:
-            rle_implementation = "nifty"
-        elif HAVE_NUMBA:
-            rle_implementation = "numba"
+        rle_implementation = "bioimage_cpp"
 
     if rle_implementation == "numba":
         assert HAVE_NUMBA
         rle_impl = _compute_rle_numba
     elif rle_implementation == "numpy":
         rle_impl = _compute_rle_numpy
-    elif rle_implementation == "nifty":
-        assert _compute_rle_nifty is not None
-        rle_impl = _compute_rle_nifty
+    elif rle_implementation == "bioimage_cpp":
+        rle_impl = _compute_rle_bioimage_cpp
     else:
         raise ValueError(
-            f"RLE implementation {rle_implementation} is not available. Has to be one of 'numpy', 'numba' or 'nifty'."
+            f"RLE implementation {rle_implementation} is not available. "
+            "Has to be one of 'numpy', 'numba' or 'bioimage_cpp'."
         )
 
     out = []

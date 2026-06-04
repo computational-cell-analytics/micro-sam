@@ -5,14 +5,14 @@ import warnings
 from typing import Optional, Tuple
 
 import numpy as np
-from skimage.filters import gaussian
 from skimage.feature import peak_local_max
 from skimage.segmentation import find_boundaries
-from scipy.ndimage import distance_transform_edt
 
 import torch
 
-from nifty.tools import blocking
+from bioimage_cpp.utils import Blocking
+from bioimage_cpp.distance import distance_transform
+from bioimage_cpp.filters import gaussian_smoothing
 
 from segment_anything.predictor import SamPredictor
 from segment_anything.utils.transforms import ResizeLongestSide
@@ -46,7 +46,7 @@ def _compute_points_from_mask(mask, original_size, box_extension, use_single_poi
     # crop the mask and compute distances
     cropped_mask = mask[bb]
     object_boundaries = find_boundaries(cropped_mask, mode="outer")
-    distances = gaussian(distance_transform_edt(object_boundaries == 0))
+    distances = gaussian_smoothing(distance_transform(object_boundaries == 0), sigma=1.0)
     inner_distances = distances.copy()
     cropped_mask = cropped_mask.astype("bool")
     inner_distances[~cropped_mask] = 0.0
@@ -86,37 +86,30 @@ def _compute_logits_from_mask(mask, eps=1e-3):
     def inv_sigmoid(x):
         return np.log(x / (1 - x))
 
-    logits = np.zeros(mask.shape, dtype="float32")
-    logits[mask == 1] = 1 - eps
-    logits[mask == 0] = eps
-    logits = inv_sigmoid(logits)
-
     # resize to the expected mask shape of SAM (256x256)
-    assert logits.ndim == 2
+    assert mask.ndim == 2
     expected_shape = (256, 256)
 
-    if logits.shape == expected_shape:  # shape matches, do nothing
-        pass
+    # Resize the *binary* mask (instead of the inverse-sigmoid logits) to SAM's expected
+    # mask shape and re-binarize afterwards. This keeps small objects from being washed out
+    # by the antialiased downscaling that ResizeLongestSide applies, which otherwise makes
+    # the mask prompt too weak for small objects in large (and non-square) images.
+    binary_mask = (mask == 1).astype("float32")
 
-    elif logits.shape[0] == logits.shape[1]:  # shape is square
+    if binary_mask.shape != expected_shape:
         trafo = ResizeLongestSide(expected_shape[0])
-        logits = trafo.apply_image_torch(torch.from_numpy(logits[None, None]))
-        logits = logits.numpy().squeeze()
+        binary_mask = trafo.apply_image_torch(torch.from_numpy(binary_mask[None, None]))
+        binary_mask = binary_mask.numpy().squeeze()
 
-    else:  # shape is not square
-        # resize the longest side to expected shape
-        trafo = ResizeLongestSide(expected_shape[0])
-        logits = trafo.apply_image_torch(torch.from_numpy(logits[None, None]))
-        logits = logits.numpy().squeeze()
+        if binary_mask.shape != expected_shape:  # shape is not square -> pad the other side
+            h, w = binary_mask.shape
+            padh = expected_shape[0] - h
+            padw = expected_shape[1] - w
+            # IMPORTANT: need to pad with zero, otherwise SAM doesn't understand the padding
+            pad_width = ((0, padh), (0, padw))
+            binary_mask = np.pad(binary_mask, pad_width, mode="constant", constant_values=0)
 
-        # pad the other side
-        h, w = logits.shape
-        padh = expected_shape[0] - h
-        padw = expected_shape[1] - w
-        # IMPORTANT: need to pad with zero, otherwise SAM doesn't understand the padding
-        pad_width = ((0, padh), (0, padw))
-        logits = np.pad(logits, pad_width, mode="constant", constant_values=0)
-
+    logits = np.where(binary_mask > 0.5, inv_sigmoid(1 - eps), inv_sigmoid(eps)).astype("float32")
     logits = logits[None]
     assert logits.shape == (1, 256, 256), f"{logits.shape}"
     return logits
@@ -157,11 +150,11 @@ def _process_box(box, shape, original_size=None, box_extension=0):
 def _points_to_tile(prompts, shape, tile_shape, halo):
     points, labels = prompts
 
-    tiling = blocking([0, 0], shape, tile_shape)
+    tiling = Blocking([0, 0], shape, tile_shape)
     center = np.mean(points, axis=0).round().astype("int").tolist()
-    tile_id = tiling.coordinatesToBlockId(center)
+    tile_id = tiling.coordinates_to_block_id(center)
 
-    tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
+    tile = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
     offset = tile.begin
     this_tile_shape = tile.shape
 
@@ -186,11 +179,11 @@ def _points_to_tile(prompts, shape, tile_shape, halo):
 
 
 def _box_to_tile(box, shape, tile_shape, halo):
-    tiling = blocking([0, 0], shape, tile_shape)
+    tiling = Blocking([0, 0], shape, tile_shape)
     center = np.array([(box[0] + box[2]) / 2, (box[1] + box[3]) / 2]).round().astype("int").tolist()
-    tile_id = tiling.coordinatesToBlockId(center)
+    tile_id = tiling.coordinates_to_block_id(center)
 
-    tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
+    tile = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
     offset = tile.begin
     this_tile_shape = tile.shape
 
@@ -205,13 +198,13 @@ def _box_to_tile(box, shape, tile_shape, halo):
 
 
 def _mask_to_tile(mask, shape, tile_shape, halo):
-    tiling = blocking([0, 0], shape, tile_shape)
+    tiling = Blocking([0, 0], shape, tile_shape)
 
     coords = np.where(mask)
     center = np.array([np.mean(coords[0]), np.mean(coords[1])]).round().astype("int").tolist()
-    tile_id = tiling.coordinatesToBlockId(center)
+    tile_id = tiling.coordinates_to_block_id(center)
 
-    tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
+    tile = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
     bb = tuple(slice(beg, end) for beg, end in zip(tile.begin, tile.end))
 
     mask_in_tile = mask[bb]

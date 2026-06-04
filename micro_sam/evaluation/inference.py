@@ -9,7 +9,8 @@ from copy import deepcopy
 from typing import Any, Dict, List, Optional, Union, Tuple
 
 import imageio.v3 as imageio
-from skimage.segmentation import relabel_sequential
+
+from bioimage_cpp.segmentation import relabel_sequential
 
 import torch
 

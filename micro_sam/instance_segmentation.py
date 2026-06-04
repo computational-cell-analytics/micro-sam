@@ -18,10 +18,7 @@ import zarr
 from skimage.measure import regionprops
 from skimage.segmentation import find_boundaries
 
-try:
-    import fastfilters as filter_impl
-except ImportError:
-    import vigra.filters as filter_impl
+from bioimage_cpp import filters as filter_impl
 
 import torch
 from torchvision.ops.boxes import batched_nms, box_area
@@ -34,7 +31,7 @@ from elf.parallel.filters import apply_filter
 from elf.wrapper.base import MultiTransformationWrapper
 from elf.wrapper.generic import ThresholdWrapper
 
-from nifty.tools import blocking
+from bioimage_cpp.utils import Blocking
 
 import segment_anything.utils.amg as amg_utils
 from segment_anything.predictor import SamPredictor
@@ -640,16 +637,16 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
             verbose=verbose, batch_size=batch_size, mask=mask, i=i,
         )
 
-        tiling = blocking([0, 0], original_size, tile_shape)
+        tiling = Blocking([0, 0], original_size, tile_shape)
         if tiles_in_mask is None:
-            n_tiles = tiling.numberOfBlocks
+            n_tiles = tiling.number_of_blocks
             tile_ids = range(n_tiles)
         else:
             n_tiles = len(tiles_in_mask)
             tile_ids = tiles_in_mask
 
         # The crop box is always the full local tile.
-        tiles = [tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock for tile_id in tile_ids]
+        tiles = [tiling.get_block_with_halo(tile_id, list(halo)).outer_block for tile_id in tile_ids]
         crop_boxes = [[tile.begin[1], tile.begin[0], tile.end[1], tile.end[0]] for tile in tiles]
 
         _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
@@ -944,7 +941,7 @@ def _watershed_from_center_and_boundary_distances_parallel(
 
 def _apply_smoothing(foreground, foreground_smoothing, tile_shape, n_threads):
     if tile_shape is None:
-        foreground = filter_impl.gaussianSmoothing(foreground, foreground_smoothing)
+        foreground = filter_impl.gaussian_smoothing(foreground, sigma=foreground_smoothing)
     else:
         foreground = apply_filter(
             foreground, "gaussianSmoothing", sigma=foreground_smoothing,
@@ -1263,7 +1260,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
             self._predictor, image, image_embeddings, tile_shape, halo,
             verbose=verbose, batch_size=batch_size, mask=mask, i=i,
         )
-        tiling = blocking([0, 0], original_size, tile_shape)
+        tiling = Blocking([0, 0], original_size, tile_shape)
 
         _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
 
@@ -1273,7 +1270,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
 
         msg = "Initialize tiled instance segmentation with decoder"
         if tiles_in_mask is None:
-            n_tiles = tiling.numberOfBlocks
+            n_tiles = tiling.number_of_blocks
             all_tile_ids = list(range(n_tiles))
         else:
             n_tiles = len(tiles_in_mask)
@@ -1301,11 +1298,11 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
                 assert output.shape[0] == 3
 
                 # Set the predictions in the output for this tile.
-                block = tiling.getBlockWithHalo(tile_id, halo=list(halo))
+                block = tiling.get_block_with_halo(tile_id, halo=list(halo))
                 local_bb = tuple(
-                    slice(beg, end) for beg, end in zip(block.innerBlockLocal.begin, block.innerBlockLocal.end)
+                    slice(beg, end) for beg, end in zip(block.inner_block_local.begin, block.inner_block_local.end)
                 )
-                inner_bb = tuple(slice(beg, end) for beg, end in zip(block.innerBlock.begin, block.innerBlock.end))
+                inner_bb = tuple(slice(beg, end) for beg, end in zip(block.inner_block.begin, block.inner_block.end))
 
                 foreground[inner_bb] = output[0][local_bb]
                 center_distances[inner_bb] = output[1][local_bb]
