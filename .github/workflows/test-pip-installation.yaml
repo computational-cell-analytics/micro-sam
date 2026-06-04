@@ -37,7 +37,9 @@ jobs:
         run: python -m pip install -r requirements-dev.txt
 
       - name: Install micro-sam via pip (with dependencies)
-        run: python -m pip install -e .
+        run: python -m pip install -e ".[mobilesam]"
 
       - name: Run non-gui tests
-        run: pytest -m "not gui"
+        uses: aganders3/headless-gui@v2
+        with:
+          run: pytest -m "not gui"
