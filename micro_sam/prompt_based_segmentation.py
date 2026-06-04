@@ -86,37 +86,30 @@ def _compute_logits_from_mask(mask, eps=1e-3):
     def inv_sigmoid(x):
         return np.log(x / (1 - x))
 
-    logits = np.zeros(mask.shape, dtype="float32")
-    logits[mask == 1] = 1 - eps
-    logits[mask == 0] = eps
-    logits = inv_sigmoid(logits)
-
     # resize to the expected mask shape of SAM (256x256)
-    assert logits.ndim == 2
+    assert mask.ndim == 2
     expected_shape = (256, 256)
 
-    if logits.shape == expected_shape:  # shape matches, do nothing
-        pass
+    # Resize the *binary* mask (instead of the inverse-sigmoid logits) to SAM's expected
+    # mask shape and re-binarize afterwards. This keeps small objects from being washed out
+    # by the antialiased downscaling that ResizeLongestSide applies, which otherwise makes
+    # the mask prompt too weak for small objects in large (and non-square) images.
+    binary_mask = (mask == 1).astype("float32")
 
-    elif logits.shape[0] == logits.shape[1]:  # shape is square
+    if binary_mask.shape != expected_shape:
         trafo = ResizeLongestSide(expected_shape[0])
-        logits = trafo.apply_image_torch(torch.from_numpy(logits[None, None]))
-        logits = logits.numpy().squeeze()
+        binary_mask = trafo.apply_image_torch(torch.from_numpy(binary_mask[None, None]))
+        binary_mask = binary_mask.numpy().squeeze()
 
-    else:  # shape is not square
-        # resize the longest side to expected shape
-        trafo = ResizeLongestSide(expected_shape[0])
-        logits = trafo.apply_image_torch(torch.from_numpy(logits[None, None]))
-        logits = logits.numpy().squeeze()
+        if binary_mask.shape != expected_shape:  # shape is not square -> pad the other side
+            h, w = binary_mask.shape
+            padh = expected_shape[0] - h
+            padw = expected_shape[1] - w
+            # IMPORTANT: need to pad with zero, otherwise SAM doesn't understand the padding
+            pad_width = ((0, padh), (0, padw))
+            binary_mask = np.pad(binary_mask, pad_width, mode="constant", constant_values=0)
 
-        # pad the other side
-        h, w = logits.shape
-        padh = expected_shape[0] - h
-        padw = expected_shape[1] - w
-        # IMPORTANT: need to pad with zero, otherwise SAM doesn't understand the padding
-        pad_width = ((0, padh), (0, padw))
-        logits = np.pad(logits, pad_width, mode="constant", constant_values=0)
-
+    logits = np.where(binary_mask > 0.5, inv_sigmoid(1 - eps), inv_sigmoid(eps)).astype("float32")
     logits = logits[None]
     assert logits.shape == (1, 256, 256), f"{logits.shape}"
     return logits
