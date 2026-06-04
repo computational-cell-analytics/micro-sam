@@ -25,12 +25,14 @@ If you have any troubles in the aforementioned steps, remember to first check th
 
 
 ### 1. How to install `micro_sam`?
-The [installation](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation) for `micro_sam` is supported in three ways: [from conda](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-conda) (recommended), [from source](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-source) and [from installers](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-installer). Check out our [tutorial video](https://youtu.be/gcv0fa84mCc) to get started with `micro_sam`, briefly walking you through the installation process and how to start the tool.
+The [installation](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#installation) for `micro_sam` is supported in four ways: [from pip](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-pip), [from conda](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-conda), [from source](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-source), and [from installers](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-installer).
+We recommend installation from pip or conda for most users.
+Check out our [tutorial video](https://youtu.be/gcv0fa84mCc) to get started with `micro_sam`, briefly walking you through the installation process and how to start the tool.
 
 
 ### 2. I cannot install `micro_sam` using the installer, I am getting some errors.
 The installer should work out-of-the-box on Windows and Linux platforms. Please open an issue to report the error you encounter.
->NOTE: The installers enable using `micro_sam` without conda. However, we recommend the installation from conda or from source to use all its features seamlessly. Specifically, the installers currently only support the CPU and won't enable you to use the GPU (if you have one). 
+>NOTE: The installers enable using `micro_sam` without conda. However, we recommend the installation from pip, from conda, or from source to use all its features seamlessly. Specifically, the installers are out-of-date and currently only support the CPU and won't enable you to use the GPU (if you have one). 
 
 
 ### 3. What is the minimum system requirement for `micro_sam`?
@@ -61,17 +63,17 @@ Having a GPU will significantly speed up the annotation tools and especially the
 With the latest release 1.0.0, the installation from conda and source should take care of this and install all the relevant packages for you.
 So please reinstall `micro_sam`, following [the installation guide](#installation).
 
+
 ### 6. Can I install `micro_sam` using pip?
-We do *not* recommend installing `micro-sam` with pip. It has several dependencies that are only avaoiable from conda-forge, which will not install correctly via pip.
 
-Please see [the installation guide](#installation) for the recommended way to install `micro-sam`.
+Yes! We recently made available `micro_sam` with pip. Check out [the installation guide](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-pip) for details.
 
-The PyPI page for `micro-sam` exists only so that the [napari-hub](https://www.napari-hub.org/) can find it.
 
 ### 7. I get the following error: `importError: cannot import name 'UNETR' from 'torch_em.model'`.
 It's possible that you have an older version of `torch-em` installed. Similar errors could often be raised from other libraries, the reasons being: a) Outdated packages installed, or b) Some non-existent module being called. If the source of such error is from `micro_sam`, then `a)` is most likely the reason . We recommend installing the latest version following the [installation instructions](https://github.com/constantinpape/torch-em?tab=readme-ov-file#installation).
 
-### 8. My system does not support internet connection. Where should I put the model checkpoints for the `micro-sam` models?
+
+### 8. My system does not have a internet connection. Where should I put the model checkpoints for the `micro-sam` models?
 We recommend transferring the model checkpoints to the system-level cache directory (you can find yours by running the following in terminal: `python -c "from micro_sam import util; print(util.microsam_cachedir())`). Once you have identified the cache directory, you need to create an additional `models` directory inside the `micro-sam` cache directory (if not present already) and move the model checkpoints there. At last, you **must** rename the transferred checkpoints as per the respective [key values](https://github.com/computational-cell-analytics/micro-sam/blob/main/micro_sam/util.py#L87) in the url dictionaries located in the `micro_sam.util.models` function (below mentioned is an example for Linux users).
 
 ```bash
