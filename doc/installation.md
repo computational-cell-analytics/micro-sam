@@ -1,13 +1,26 @@
 # Installation
 
-There are three ways to install `micro_sam`:
-- [From conda](#from-conda) is the recommended way if you want to use all functionality.
+There are four ways to install `micro_sam`:
+- [From pip](#from-pip) to use all functionality and install via pip.
+- [From conda](#from-conda) to use all functionality and install in an encapsulated environment.
 - [From source](#from-source) for setting up a development environment to use the latest version and to change and contribute to our software.
-- [From installer](#from-installer) to install it without having to use conda (supported platforms: Windows and Linux, supports only CPU). 
+- [From installer](#from-installer) to install it without having to use pip or conda (supported platforms: Windows and Linux, supports only CPU, deprecated). 
 
 You can find more information on the installation and how to troubleshoot it in [the FAQ section](#installation-questions).
 
-We do **not support** installing `micro_sam` with pip.
+## From pip
+
+`pip` is the default python package manager. You can install `micro_sam` via pip with the command:
+```bash
+pip install micro_sam
+```
+
+Note: when using pip you have to manage your python environments yourself. For example, you could create a conda environment and install `micro_sam` via pip in there, or use `venv` for this.
+
+To use the `vit_t` (MobileSAM) model, you have to additionally install [MobileSAM](https://github.com/ChaoningZhang/MobileSAM) in the environment where `micro_sam` was installed via pip. It is not available on PyPI, so it has to be installed from GitHub:
+```bash
+pip install git+https://github.com/ChaoningZhang/MobileSAM.git
+```
 
 ## From conda
 
@@ -74,27 +87,9 @@ conda activate sam
 pip install -e .
 ```
 
-## Trackastra installation
-
-To use [automatic tracking](#annotator-tracking), you have to install [trackastra](https://github.com/weigertlab/trackastra) in the conda environment where `micro_sam` is installed.
-You can install it with pip:
-```bash
-conda activate sam
-pip install trackastra
-```
-
-## MobileSAM installation
-
-To use the `vit_t` (MobileSAM) model, you have to install [MobileSAM](https://github.com/ChaoningZhang/MobileSAM) in the environment where `micro_sam` is installed.
-It is not available on PyPI, so it has to be installed from GitHub with pip:
-```bash
-conda activate sam
-pip install git+https://github.com/ChaoningZhang/MobileSAM.git
-```
-
 ## From installer
 
-**Note: The installers are not yet up-to-date with the latest version of micro-sam (v1.4.0 onwards). We will update them in the next few weeks.**
+**Note: The installers are not yet up-to-date with the latest version of micro-sam (v1.4.0 onwards). We recommend installing micro-sam via pip or conda instead.**
 
 We also provide installers for Linux and Windows:
 - [Linux](https://owncloud.gwdg.de/index.php/s/Fyf57WZuiX1NyXs)
@@ -103,7 +98,7 @@ We also provide installers for Linux and Windows:
 - [Mac](https://owncloud.gwdg.de/index.php/s/7YupGgACw9SHy2P)
 -->
 
-The installers will not enable you to use a GPU, so if you have one then please consider installing `micro_sam` via [conda](#from-conda) instead. They will also not enable using the python library.
+The installers will not enable you to use a GPU, so if you have one then please consider installing `micro_sam` via [pip](#from-pip) or [conda](#from-conda) instead.
 
 ### Linux Installer:
 
