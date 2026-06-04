@@ -122,6 +122,8 @@ You can add content to the documentation in two ways:
 2. By adding or editing markdown files in the micro-sam `doc` directory.
     * If you add a new markdown file to the documentation, you must tell [pdoc](https://pdoc.dev/docs/pdoc.html) that it exists by adding a line to the `micro_sam/__init__.py` module docstring (eg: `.. include:: ../doc/my_amazing_new_docs_page.md`). Otherwise it will not be included in the final documentation build!
 
+The documentation is built and deployed to [GitHub Pages](https://computational-cell-analytics.github.io/micro-sam/) automatically by the [`build_documentation` GitHub Action](https://github.com/computational-cell-analytics/micro-sam/blob/main/.github/workflows/build_docs.yaml); there is no need to build and deploy it manually. This workflow runs whenever a new release is created, on pushes to `main` that touch the Python or markdown documentation files, and on manual dispatch from the Actions tab.
+
 ### Optional: Benchmark performance
 
 There are a number of options you can use to benchmark performance, and identify problems like slow run times or high memory use in micro-sam.
