@@ -7,7 +7,7 @@ Segment Anything is a model for interactive and automatic instance segmentation.
 We improve it for histopathology by finetuning on a large and diverse microscopy dataset.
 It should perform well for nucleus segmentation in histopathology datasets.
 
-See [the dataset overview](https://github.com/computational-cell-analytics/micro-sam/blob/master/doc/datasets/histopathology_v%i.md) for further informations on the training data and the [micro_sam documentation](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html) for details on how to use the model for interactive and automatic segmentation.
+See [the dataset overview](https://github.com/computational-cell-analytics/micro-sam/blob/main/doc/datasets/histopathology_v%i.md) for further informations on the training data and the [micro_sam documentation](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html) for details on how to use the model for interactive and automatic segmentation.
 
 ## Validation
 

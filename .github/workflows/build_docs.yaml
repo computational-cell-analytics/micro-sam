@@ -1,21 +1,29 @@
 name: build_documentation
 
-# build the documentation for a new release
+# Build and deploy the documentation:
+# - on each new release
+# - on pushes to main (keep the published docs in sync with main)
+# - manually via the Actions tab
 on:
   release:
     types: created
-
-# # for debugging
-# on: [push, pull_request]
+  push:
+    branches:
+      - main
+    paths:
+      - "micro_sam/**/*.py"   # Trigger on any changes in python files.
+      - "doc/**/*.md"  # And any changes in the doc files.
+  workflow_dispatch:
 
 # security: restrict permissions for CI jobs.
 permissions:
   contents: read
 
-# NOTE: importing of napari fails with CI and I am not quite sure why
-# I tried to adjust it based on the napari CI tests, but that didn't seem to help
+# Allow only one concurrent Pages deployment; let in-progress runs finish.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
 
-# https://github.com/napari/napari/blob/main/.github/workflows/test_comprehensive.yml
 jobs:
   # Build the documentation and upload the static HTML files as an artifact.
   build:
@@ -27,18 +35,32 @@ jobs:
       - name: Setup micromamba
         uses: mamba-org/setup-micromamba@v1
         with:
-          environment-file: .github/doc_env.yaml
+          environment-file: environment.yaml
+
+      # pdoc imports the napari-based submodules (micro_sam.sam_annotator) while
+      # generating the docs, so the Qt system libraries must be present.
+      - uses: tlambert03/setup-qt-libs@v1
 
       - name: Install package
         shell: bash -l {0}
         run: pip install --no-deps -e .
 
-      # We use a custom build script for pdoc itself, ideally you just run `pdoc -o docs/ ...` here.
-      - name: Run pdoc
+      # pdoc is only needed to build the documentation, so we install it here
+      # instead of adding it to the standard environment.yaml.
+      - name: Install pdoc
         shell: bash -l {0}
-        run: python build_doc.py --out
+        run: pip install pdoc
 
-      - uses: actions/upload-pages-artifact@v1
+      # We use a custom build script for pdoc itself, ideally you just run
+      # `pdoc -o docs/ ...` here. Run under a headless display so the napari
+      # import succeeds in CI.
+      - name: Run pdoc
+        uses: aganders3/headless-gui@v2
+        with:
+          shell: bash -l {0}
+          run: python build_doc.py --out
+
+      - uses: actions/upload-pages-artifact@v3
         with:
           path: tmp/
 
@@ -55,4 +77,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v2
+        uses: actions/deploy-pages@v4

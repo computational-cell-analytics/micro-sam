@@ -2,7 +2,7 @@
 
 This folder contains evaluaton code for applying the new APG method, built on `micro-sam` to microscopy data using the `micro_sam` library. This code was used for our experiments in preparation of the [manuscript](https://openreview.net/forum?id=xFO3DFZN45).
 
-Please note that this folder may become outdated due to changes in function signatures, etc., and often does not use the functionality that we recommend to users. We also will not actively maintain the code here. Please refer to the [example notebooks](https://github.com/computational-cell-analytics/micro-sam/tree/master/notebooks) and [example scripts](https://github.com/computational-cell-analytics/micro-sam/tree/master/examples) for well maintained and documented `micro-sam`'s APG examples.
+Please note that this folder may become outdated due to changes in function signatures, etc., and often does not use the functionality that we recommend to users. We also will not actively maintain the code here. Please refer to the [example notebooks](https://github.com/computational-cell-analytics/micro-sam/tree/main/notebooks) and [example scripts](https://github.com/computational-cell-analytics/micro-sam/tree/main/examples) for well maintained and documented `micro-sam`'s APG examples.
 
 ### Evaluation Scripts:
 
