@@ -1,5 +1,13 @@
 # Release Overview
 
+**New in version 1.8.1**
+
+Rename the package to `micro_sam` on PyPI (now installable via `pip install micro_sam`).
+
+**New in version 1.8.0**
+
+`micro_sam` is now available on PyPI, alongside minor documentation updates.
+
 **New in version 1.7.7**
 
 Fixes for tiled NMS and MPS inference, plus a new example for instance segmentation-only finetuning.
