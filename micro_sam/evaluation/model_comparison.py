@@ -15,7 +15,9 @@ import matplotlib.pyplot as plt
 import skimage.draw as draw
 from skimage import exposure
 from scipy.ndimage import binary_dilation
-from skimage.segmentation import relabel_sequential, find_boundaries
+from skimage.segmentation import find_boundaries
+
+from bioimage_cpp.segmentation import relabel_sequential
 
 import torch
 

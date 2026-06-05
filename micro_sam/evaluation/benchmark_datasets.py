@@ -8,9 +8,8 @@ from typing import Union, Optional, List, Literal
 import numpy as np
 import pandas as pd
 import imageio.v3 as imageio
-from skimage.measure import label as connected_components
-
-from nifty.tools import blocking
+from bioimage_cpp.segmentation import label as connected_components
+from bioimage_cpp.utils import Blocking
 
 import torch
 
@@ -448,9 +447,9 @@ def _extract_slices_from_dataset(path, dataset_choice, crops_per_input=10):
 
 
 def _get_crops_for_input(image, gt, ndim, tile_shape, skip_smaller_shape, crops_per_input):
-    tiling = blocking([0] * ndim, gt.shape, tile_shape)
-    n_tiles = tiling.numberOfBlocks
-    tiles = [tiling.getBlock(tile_id) for tile_id in range(n_tiles)]
+    tiling = Blocking([0] * ndim, gt.shape, tile_shape)
+    n_tiles = tiling.number_of_blocks
+    tiles = [tiling.get_block(tile_id) for tile_id in range(n_tiles)]
     crop_boxes = [
         tuple(slice(beg, end) for beg, end in zip(tile.begin, tile.end)) for tile in tiles
     ]

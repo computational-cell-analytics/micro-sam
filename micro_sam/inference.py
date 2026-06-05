@@ -5,8 +5,7 @@ from typing import Any, Dict, List, Optional, Union, Tuple
 import numpy as np
 import torch
 import torch.nn.functional as F
-from nifty.tools import blocking
-import nifty.ground_truth as ngt
+from bioimage_cpp.utils import Blocking, segmentation_overlap
 
 import segment_anything.utils.amg as amg_utils
 from segment_anything import SamPredictor
@@ -315,13 +314,14 @@ def _require_tiled_embeddings(
 
 def _merge_segmentations(this_seg, prev_seg, overlap_threshold=0.75):
     # Discard new ids with too much overlap.
-    ovlp = ngt.overlap(this_seg, prev_seg)
+    ovlp = segmentation_overlap(this_seg, prev_seg)
     ids = np.unique(this_seg)
     if ids[0] == 0:
         ids = ids[1:]
     discard_ids = []
     for seg_id in ids:
-        ovlp_ids, ovlp_vals = ovlp.overlapArraysNormalized(seg_id, True)
+        ovlp_table = ovlp.overlaps_for_label_a(seg_id, normalize=True)
+        ovlp_ids, ovlp_vals = ovlp_table["label"], ovlp_table["fraction"]
         ovlp_vals = ovlp_vals[ovlp_ids != 0]
         if ovlp_vals.size > 0 and ovlp_vals[0] > overlap_threshold:
             discard_ids.append(seg_id)
@@ -431,7 +431,7 @@ def batched_tiled_inference(
     )
 
     # Order the prompts by tile and then iterate over the tiles.
-    tiling = blocking([0, 0], shape, tile_shape)
+    tiling = Blocking([0, 0], shape, tile_shape)
     box_to_tile, point_to_tile, label_to_tile, logits_to_tile = {}, {}, {}, {}
     tile_ids = []
 
@@ -445,8 +445,8 @@ def batched_tiled_inference(
         if have_boxes:
             box = boxes[prompt_id]
             center = np.array([(box[1] + box[3]) / 2, (box[0] + box[2]) / 2]).round().astype("int").tolist()
-            this_tile_id = tiling.coordinatesToBlockId(center)
-            tile = tiling.getBlockWithHalo(this_tile_id, list(halo)).outerBlock
+            this_tile_id = tiling.coordinates_to_block_id(center)
+            tile = tiling.get_block_with_halo(this_tile_id, list(halo)).outer_block
             offset = tile.begin
             this_tile_shape = tile.shape
             box_in_tile = np.array(
@@ -463,10 +463,10 @@ def batched_tiled_inference(
         if have_points:
             point = points[prompt_id, 0][::-1].round().astype("int").tolist()
             if this_tile_id is None:
-                this_tile_id = tiling.coordinatesToBlockId(point)
+                this_tile_id = tiling.coordinates_to_block_id(point)
             else:
-                assert this_tile_id == tiling.coordinatesToBlockId(point)
-            tile = tiling.getBlockWithHalo(this_tile_id, list(halo)).outerBlock
+                assert this_tile_id == tiling.coordinates_to_block_id(point)
+            tile = tiling.get_block_with_halo(this_tile_id, list(halo)).outer_block
             offset = tile.begin
             point_in_tile = (points[prompt_id, 0] - np.array(offset)[::-1])[None, None]
             label_in_tile = point_labels[prompt_id][None]
@@ -519,7 +519,7 @@ def batched_tiled_inference(
             masks.append(segmentation)
         else:
             # Add the offset for the current tile to the bounding box.
-            tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
+            tile = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
             offset = np.array(tile.begin[::-1] + [0, 0])
             this_masks = [
                 {**mask, "global_bbox": (np.array(mask["bbox"]) + offset).tolist()} for mask in this_masks

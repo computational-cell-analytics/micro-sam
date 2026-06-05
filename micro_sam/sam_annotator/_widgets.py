@@ -11,13 +11,17 @@ from typing import Optional
 import elf.parallel
 import h5py
 import napari
-import nifty.ground_truth as ngt
 import numpy as np
-import z5py
 import zarr
+
+try:
+    import z5py
+except ImportError:
+    z5py = None
+
+from bioimage_cpp.utils import segmentation_overlap
 from magicgui import magic_factory
 from magicgui.widgets import ComboBox, Container, create_widget
-
 # We have disabled the thread workers for now because they result in a
 # massive slowdown in napari >= 0.5.
 # See also https://forum.image.sc/t/napari-thread-worker-leads-to-massive-slowdown/103786
@@ -640,11 +644,12 @@ def clear_track(
 
 def _mask_matched_objects(seg, prev_seg, preservation_threshold):
     prev_ids = np.unique(prev_seg)
-    ovlp = ngt.overlap(prev_seg, seg)
+    ovlp = segmentation_overlap(prev_seg, seg)
 
     mask_ids, prev_mask_ids = [], []
     for prev_id in prev_ids:
-        seg_ids, overlaps = ovlp.overlapArrays(prev_id, True)
+        ovlp_table = ovlp.overlaps_for_label_a(prev_id)
+        seg_ids, overlaps = ovlp_table["label"], ovlp_table["count"]
         if seg_ids[0] != 0 and overlaps[0] >= preservation_threshold:
             mask_ids.append(seg_ids[0])
             prev_mask_ids.append(prev_id)
@@ -764,6 +769,12 @@ def _get_promptable_segmentation_options(state, object_ids):
 
 
 def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
+
+    if z5py is None:
+        raise RuntimeError(
+            "Committing annotations to file requires z5py, which is only available via conda. "
+            "Install it with 'conda install -c conda-forge z5py'."
+        )
 
     # NOTE: zarr-python is quite inefficient and writes empty blocks.
     # So we have to use z5py here.
