@@ -563,13 +563,13 @@ def _compute_movement(seg, t0, t1):
     def compute_center(t):
         # computation with center of mass
         center = np.where(seg[t] == 1)
-        center = np.array(np.mean(center[0]), np.mean(center[1]))
+        center = np.array([np.mean(center[0]), np.mean(center[1])])
         return center
 
     center0 = compute_center(t0)
     center1 = compute_center(t1)
 
-    move = center1 - center0
+    move = center0 - center1
     return move.astype("float64")
 
 

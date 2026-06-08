@@ -17,7 +17,7 @@ class JointSamTrainer(SamTrainer):
     """Trainer class for jointly training the Segment Anything model with an additional convolutional decoder.
 
     This class is inherited from `SamTrainer`.
-    Check out https://github.com/computational-cell-analytics/micro-sam/blob/master/micro_sam/training/sam_trainer.py
+    Check out https://github.com/computational-cell-analytics/micro-sam/blob/main/micro_sam/training/sam_trainer.py
     for details on its implementation.
 
     Args:

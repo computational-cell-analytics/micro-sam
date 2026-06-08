@@ -6,7 +6,7 @@ from typing import Tuple
 import numpy as np
 from skimage.transform import resize
 
-from nifty.tools import blocking
+from bioimage_cpp.utils import Blocking
 
 from elf.segmentation.embeddings import embedding_pca
 
@@ -76,8 +76,8 @@ def _project_embeddings(embeddings, shape, apply_crop=True, n_components=3, as_r
 
 
 def _project_embeddings_to_tile(tile, tile_embeds):
-    outer_tile = tile.outerBlock
-    inner_tile_local = tile.innerBlockLocal
+    outer_tile = tile.outer_block
+    inner_tile_local = tile.inner_block_local
 
     embed_shape = tile_embeds.shape[-2:]
     outer_tile_shape = tuple(end - beg for beg, end in zip(outer_tile.begin, outer_tile.end))
@@ -112,21 +112,21 @@ def _resize_and_cocatenate(arrays, axis):
 def _project_tiled_embeddings(image_embeddings, n_components, as_rgb):
     features = image_embeddings["features"]
     tile_shape, halo, shape = features.attrs["tile_shape"], features.attrs["halo"], features.attrs["shape"]
-    tiling = blocking([0, 0], shape, tile_shape)
+    tiling = Blocking([0, 0], shape, tile_shape)
 
-    tile_grid = tiling.blocksPerAxis
+    tile_grid = tiling.blocks_per_axis
 
     embeds = {
         i: {j: None for j in range(tile_grid[1])} for i in range(tile_grid[0])
     }
 
-    for tile_id in range(tiling.numberOfBlocks):
+    for tile_id in range(tiling.number_of_blocks):
         tile_embeds = features[str(tile_id)][:]
         assert tile_embeds.ndim in (4, 5)
 
         # extract the embeddings corresponding to the inner tile
-        tile = tiling.getBlockWithHalo(tile_id, list(halo))
-        tile_coords = tiling.blockGridPosition(tile_id)
+        tile = tiling.get_block_with_halo(tile_id, list(halo))
+        tile_coords = tiling.block_grid_position(tile_id)
         this_embeds = _project_embeddings_to_tile(tile, tile_embeds)
 
         i, j = tile_coords

@@ -7,7 +7,7 @@ class SimpleSamTrainer(SamTrainer):
     """Trainer class for creating a simple SAM trainer for limited prompt-based segmentation.
 
     This class is inherited from `SamTrainer`.
-    Check out https://github.com/computational-cell-analytics/micro-sam/blob/master/micro_sam/training/sam_trainer.py
+    Check out https://github.com/computational-cell-analytics/micro-sam/blob/main/micro_sam/training/sam_trainer.py
     for details on its implementation.
 
     Args:
@@ -62,7 +62,7 @@ class MedSAMTrainer(SimpleSamTrainer):
 
     This class is inherited from `SimpleSamTrainer`.
     Check out
-    https://github.com/computational-cell-analytics/micro-sam/blob/master/micro_sam/training/simple_sam_trainer.py
+    https://github.com/computational-cell-analytics/micro-sam/blob/main/micro_sam/training/simple_sam_trainer.py
     for details on its implementation.
     """
 

@@ -6,11 +6,11 @@ Code for finetuning segment anything data on multiple microscopy datasets.
 
 - `training/`: The finetuning scripts for different microscopy datasets.
     - `light_microscopy/`
-        - `obtain_lm_datasets.py`: Script to get the dataloaders for multiple light microscopy datasets. See [here](https://github.com/computational-cell-analytics/micro-sam/blob/master/doc/bioimageio/lm_v2.md) for details on the datasets used.
+        - `obtain_lm_datasets.py`: Script to get the dataloaders for multiple light microscopy datasets. See [here](https://github.com/computational-cell-analytics/micro-sam/blob/main/doc/bioimageio/lm_v2.md) for details on the datasets used.
         - `train_lm_generalist.py`: Finetuning on Light Microscopy datasets.
     - `electron_microscopy/`
         - `mito_nuc/`
-            - `obtain_mito_nuc_em_datasets.py`: Scripts to get the dataloaders for multiple electron microscopy datasets for mitochondria and nuclei segmentation. See [here](https://github.com/computational-cell-analytics/micro-sam/blob/master/doc/bioimageio/em_organelles_v2.md) for details on the datasets used.
+            - `obtain_mito_nuc_em_datasets.py`: Scripts to get the dataloaders for multiple electron microscopy datasets for mitochondria and nuclei segmentation. See [here](https://github.com/computational-cell-analytics/micro-sam/blob/main/doc/bioimageio/em_organelles_v2.md) for details on the datasets used.
             - `train_mito_nuc_em_generalist.py`: Finetuning on Electron Microscopy datasets for Mitochondria and Nuclei.
 
 > For details on how to run the scripts from above: `python <GENERALIST_FINETUNING_SCRIPT>.py -h`
