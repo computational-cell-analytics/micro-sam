@@ -17,11 +17,38 @@ import os
 from glob import glob
 
 import numpy as np
+import pooch
 
 from torch_em.transform.raw import normalize_percentile
 
 import micro_sam.training as sam_training
 from micro_sam.util import get_device
+
+
+DATA_URL = "https://github.com/user-attachments/files/28712031/data.zip"
+DATA_HASH = "f3d63143f2fd16c99d09498620ce5a0e0b4fa1bb4da1d8ee18b43cac226b6d4e"
+
+
+def download_data(save_directory):
+    """Download and extract the example data from issue #1214.
+
+    The archive contains '<name>.tif' images and matching '<name>_label.tif' label files.
+
+    Args:
+        save_directory: Folder to download and extract the data into.
+
+    Returns:
+        The folder containing the extracted '.tif' files.
+    """
+    os.makedirs(save_directory, exist_ok=True)
+    fname = "data.zip"
+    pooch.retrieve(
+        url=DATA_URL, known_hash=DATA_HASH, fname=fname, path=save_directory,
+        progressbar=True, processor=pooch.Unzip(),
+    )
+    data_dir = os.path.join(save_directory, f"{fname}.unzip")
+    print("Example data directory is:", os.path.abspath(data_dir))
+    return data_dir
 
 
 def normalize_to_8bit(raw):
@@ -94,7 +121,7 @@ def get_loaders(data_root, patch_shape, batch_size, with_channels):
     used for validation and the rest for training. Adapt this to your own data layout as needed.
 
     Args:
-        data_root: The root directory containing 'images' and 'labels' subdirectories.
+        data_root: The directory containing '<name>.tif' images and matching '<name>_label.tif' labels.
         patch_shape: The shape of patches for training.
         batch_size: The training batch size.
         with_channels: Whether the input images have an explicit channel axis.
@@ -102,12 +129,20 @@ def get_loaders(data_root, patch_shape, batch_size, with_channels):
     Returns:
         The train and validation loaders.
     """
-    image_paths = sorted(glob(os.path.join(data_root, "images", "*.tif")))
-    label_paths = sorted(glob(os.path.join(data_root, "labels", "*.tif")))
-    assert len(image_paths) == len(label_paths) > 0, f"No matching data found in '{data_root}'."
+    image_paths = sorted(p for p in glob(os.path.join(data_root, "*.tif")) if not p.endswith("_label.tif"))
+    label_paths = [p.replace(".tif", "_label.tif") for p in image_paths]
+    assert len(image_paths) > 0, f"No images found in '{data_root}'."
+    for label_path in label_paths:
+        assert os.path.exists(label_path), f"Missing label file '{label_path}'."
 
-    train_image_paths, val_image_paths = image_paths[:-1], image_paths[-1:]
-    train_label_paths, val_label_paths = label_paths[:-1], label_paths[-1:]
+    # Use the last sample for validation and the rest for training. If only a single sample is
+    # available (e.g. the downloaded example), reuse it for both splits.
+    if len(image_paths) == 1:
+        train_image_paths, val_image_paths = image_paths, image_paths
+        train_label_paths, val_label_paths = label_paths, label_paths
+    else:
+        train_image_paths, val_image_paths = image_paths[:-1], image_paths[-1:]
+        train_label_paths, val_label_paths = label_paths[:-1], label_paths[-1:]
 
     print(f"Train images ({len(train_image_paths)}), val images ({len(val_image_paths)})")
 
@@ -155,8 +190,9 @@ def main():
     # The base model used to initialize the weights. 'vit_b_lm' is a good default for light microscopy.
     model_type = "vit_b_lm"
 
-    # The directory containing 'images' and 'labels' subdirectories with matching '.tif' files.
-    data_root = "/path/to/data"
+    # Download the example data from issue #1214. To train on your own data, replace this with the
+    # path to a directory containing '<name>.tif' images and matching '<name>_label.tif' labels.
+    data_root = download_data("./calbicans_data")
 
     # Where checkpoints and logs are stored (under '<save_root>/checkpoints/<checkpoint_name>').
     save_root = "./calbicans_instance_segmentation"
