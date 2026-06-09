@@ -4,22 +4,7 @@ Datasets:
 - Mouse-Skull-Nuclei-CBG (3D nuclei, EmbedSeg)
 - Lucchi (3D EM mitochondria)
 - LIVECell (2D phase-contrast cells)
-
-Results - Mouse-Skull-Nuclei-CBG (X2_right.tif, 45 objects):
-
-Default model - native settings (center frame, bidirectional, no chunk):
-  iter 0: mSA=0.3596  SA50=0.5789  SA75=0.3846
-  iter 1: mSA=0.3062  SA50=0.5254  SA75=0.3235
-  iter 2: mSA=0.2716  SA50=0.4516  SA75=0.2857
-  iter 3: mSA=0.2580  SA50=0.4754  SA75=0.2329
-  (corrections degrade - not trained for iterative regime)
-
-Finetuned model (--first_frame --forward_only --chunk_size 8 --num_init_cond_frames 2):
-  iter 0: mSA=0.4133  SA50=0.6071  SA75=0.4754
-  iter 1: mSA=0.4385  SA50=0.6364  SA75=0.5000
-  iter 2: mSA=0.4385  SA50=0.6364  SA75=0.5000
-  iter 3: mSA=0.4600  SA50=0.6667  SA75=0.5254
-  (consistent improvement with each correction round)
+- CREMI (3D neuron segemntation)
 
 Results - Lucchi (lucchi_test.h5, 36 objects):
 
@@ -35,19 +20,104 @@ Finetuned model (--first_frame --forward_only --chunk_size 8 --num_init_cond_fra
   iter 2: mSA=0.5198  SA50=0.8000  SA75=0.5319
   iter 3: mSA=0.5217  SA50=0.8000  SA75=0.5319
 
-Results - LIVECell (20 images, mean, SAM2ImagePredictor with logits between iters):
+Results - Generalist best.pt (multi-GPU, dataset_choice="both"), held-out test splits:
 
-Default model:
-  iter 0: mSA=0.0909  SA50=0.1634  SA75=0.0942
-  iter 1: mSA=0.1536  SA50=0.2641  SA75=0.1663
-  iter 2: mSA=0.2339  SA50=0.4094  SA75=0.2480
-  iter 3: mSA=0.3295  SA50=0.6000  SA75=0.3261
+EmbedSeg Mouse-Skull-Nuclei-CBG (X2_right.tif, 45 objects):
+  Generalist regimes: (a) first_frame+forward_only (--first_frame --forward_only --chunk_size 8
+  --num_init_cond_frames 2); (b) center+bidirectional (drop --first_frame/--forward_only, keep chunk8/2cond).
+  (b) matches the random-start-frame bidirectional training and stays monotonic, edging ahead by iter 3.
+  Specialist (debug/skull/.../best.pt, skull only) uses regime (a). Default uses native settings
+  (center frame, bidirectional, no chunk, 1 cond); it is untrained for iterative correction, so it degrades.
+  All rows from the same pipeline (same min_size, volume).
+  box (default):
+    iter 0: mSA=0.4383 SA50=0.6667 SA75=0.4754
+    iter 1: mSA=0.3143 SA50=0.5254 SA75=0.3433
+    iter 2: mSA=0.3144 SA50=0.5254 SA75=0.3043
+    iter 3: mSA=0.2857 SA50=0.5000 SA75=0.3043
+  box (specialist):
+    iter 0: mSA=0.4173 SA50=0.5789 SA75=0.5000
+    iter 1: mSA=0.4388 SA50=0.6071 SA75=0.5517
+    iter 2: mSA=0.4479 SA50=0.6071 SA75=0.5517
+    iter 3: mSA=0.4421 SA50=0.6071 SA75=0.5254
+  box (generalist, first_frame+forward_only):
+    iter 0: mSA=0.4847 SA50=0.6667 SA75=0.5789
+    iter 1: mSA=0.5113 SA50=0.6981 SA75=0.6071
+    iter 2: mSA=0.5175 SA50=0.7308 SA75=0.6364
+    iter 3: mSA=0.4971 SA50=0.6667 SA75=0.6071
+  box (generalist, center+bidirectional):
+    iter 0: mSA=0.4748 SA50=0.6667 SA75=0.5517
+    iter 1: mSA=0.5112 SA50=0.6981 SA75=0.5789
+    iter 2: mSA=0.5112 SA50=0.6981 SA75=0.5789
+    iter 3: mSA=0.5153 SA50=0.6981 SA75=0.6071
+  point (default):
+    iter 0: mSA=0.3596 SA50=0.5789 SA75=0.3846
+    iter 1: mSA=0.2957 SA50=0.5000 SA75=0.3043
+    iter 2: mSA=0.2594 SA50=0.4754 SA75=0.2500
+    iter 3: mSA=0.2526 SA50=0.4286 SA75=0.2329
+  point (specialist):
+    iter 0: mSA=0.3840 SA50=0.5517 SA75=0.4516
+    iter 1: mSA=0.3978 SA50=0.5517 SA75=0.4754
+    iter 2: mSA=0.4010 SA50=0.5517 SA75=0.4754
+    iter 3: mSA=0.4412 SA50=0.6071 SA75=0.5254
+  point (generalist, first_frame+forward_only):
+    iter 0: mSA=0.4809 SA50=0.6667 SA75=0.5789
+    iter 1: mSA=0.4821 SA50=0.6667 SA75=0.5789
+    iter 2: mSA=0.4870 SA50=0.6667 SA75=0.6071
+    iter 3: mSA=0.4754 SA50=0.6667 SA75=0.5789
+  point (generalist, center+bidirectional):
+    iter 0: mSA=0.4694 SA50=0.6667 SA75=0.5517
+    iter 1: mSA=0.4542 SA50=0.6364 SA75=0.5254
+    iter 2: mSA=0.4851 SA50=0.6667 SA75=0.5517
+    iter 3: mSA=0.4864 SA50=0.6667 SA75=0.5517
 
-Finetuned model:
-  iter 0: mSA=0.3905  SA50=0.6607  SA75=0.4168
-  iter 1: mSA=0.4805  SA50=0.7776  SA75=0.5208
-  iter 2: mSA=0.5533  SA50=0.8506  SA75=0.6115
-  iter 3: mSA=0.6118  SA50=0.9041  SA75=0.6829
+LIVECell (20 images, SAM2ImagePredictor with logits between iters):
+  Default and generalist share the 2D regime (no chunking in 2D); unlike skull, the default
+  improves with corrections here because the image predictor's logit carry-over is in-distribution.
+  box (default):
+    iter 0: mSA=0.4159 SA50=0.8042 SA75=0.3971
+    iter 1: mSA=0.4887 SA50=0.8626 SA75=0.4993
+    iter 2: mSA=0.5483 SA50=0.9058 SA75=0.5855
+    iter 3: mSA=0.5864 SA50=0.9278 SA75=0.6487
+  box (generalist):
+    iter 0: mSA=0.5687 SA50=0.9189 SA75=0.6321
+    iter 1: mSA=0.6281 SA50=0.9549 SA75=0.7125
+    iter 2: mSA=0.6700 SA50=0.9698 SA75=0.7721
+    iter 3: mSA=0.6949 SA50=0.9747 SA75=0.8070
+  point (default):
+    iter 0: mSA=0.0630 SA50=0.1087 SA75=0.0701
+    iter 1: mSA=0.1279 SA50=0.2265 SA75=0.1331
+    iter 2: mSA=0.2101 SA50=0.3871 SA75=0.2112
+    iter 3: mSA=0.3056 SA50=0.5757 SA75=0.2909
+  point (generalist):
+    iter 0: mSA=0.3178 SA50=0.5421 SA75=0.3489
+    iter 1: mSA=0.4050 SA50=0.6633 SA75=0.4458
+    iter 2: mSA=0.4800 SA50=0.7744 SA75=0.5212
+    iter 3: mSA=0.5496 SA50=0.8542 SA75=0.6022
+
+CREMI sample C ROI [0:16, 0:512, 0:512] (3D EM neurons). VI split/merge and CREMI score:
+lower is better. These numbers used connected components on the GT (171 objects); the loader
+now uses neuron_ids directly (no CC), so a no-CC re-run will differ. Default = native regime;
+generalist = center+bidirectional, chunk8, 2cond.
+  box (default):
+    iter 0: mSA=0.0717 SA50=0.1837 SA75=0.0498 VI_split=0.1494 VI_merge=4.7872 CREMI=2.0616
+    iter 1: mSA=0.0711 SA50=0.2053 SA75=0.0315 VI_split=0.1053 VI_merge=4.8344 CREMI=2.0652
+    iter 2: mSA=0.0941 SA50=0.2527 SA75=0.0507 VI_split=0.1009 VI_merge=4.8253 CREMI=2.0624
+    iter 3: mSA=0.1092 SA50=0.2514 SA75=0.0751 VI_split=0.0970 VI_merge=4.8158 CREMI=2.0596
+  point (default):
+    iter 0: mSA=0.0000 SA50=0.0000 SA75=0.0000 VI_split=0.0662 VI_merge=5.0635 CREMI=2.1036
+    iter 1: mSA=0.0005 SA50=0.0053 SA75=0.0000 VI_split=0.0394 VI_merge=5.0683 CREMI=2.1005
+    iter 2: mSA=0.0011 SA50=0.0109 SA75=0.0000 VI_split=0.0494 VI_merge=5.0528 CREMI=2.0993
+    iter 3: mSA=0.0011 SA50=0.0106 SA75=0.0000 VI_split=0.0537 VI_merge=5.0326 CREMI=2.0959
+  box (generalist):
+    iter 0: mSA=0.1365 SA50=0.2302 SA75=0.1438 VI_split=0.6556 VI_merge=0.7799 CREMI=0.3963
+    iter 1: mSA=0.1359 SA50=0.2302 SA75=0.1438 VI_split=0.6232 VI_merge=0.8005 CREMI=0.3873
+    iter 2: mSA=0.1531 SA50=0.2574 SA75=0.1672 VI_split=0.5642 VI_merge=0.7436 CREMI=0.3676
+    iter 3: mSA=0.1524 SA50=0.2620 SA75=0.1672 VI_split=0.5812 VI_merge=0.7510 CREMI=0.3719
+  point (generalist):
+    iter 0: mSA=0.1154 SA50=0.1793 SA75=0.1287 VI_split=0.8875 VI_merge=0.8773 CREMI=0.6087
+    iter 1: mSA=0.1352 SA50=0.2128 SA75=0.1438 VI_split=0.6089 VI_merge=0.7855 CREMI=0.3832
+    iter 2: mSA=0.1289 SA50=0.2171 SA75=0.1325 VI_split=0.6135 VI_merge=0.8743 CREMI=0.4462
+    iter 3: mSA=0.1455 SA50=0.2391 SA75=0.1515 VI_split=0.5807 VI_merge=0.8354 CREMI=0.4294
 """
 
 import os
@@ -68,7 +138,7 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 from torch_em.transform.raw import normalize
 from torch_em.util.segmentation import size_filter
 
-from elf.evaluation import mean_segmentation_accuracy
+from elf.evaluation import mean_segmentation_accuracy, cremi_score
 
 from micro_sam.util import segmentation_to_one_hot
 from micro_sam.prompt_generators import IterativePromptGenerator
@@ -81,6 +151,12 @@ from micro_sam.v2.evaluation.inference import _embedding_tensors_to_numpy
 SKULL_DATA = "/mnt/vast-nhr/projects/cidas/cca/data/embedseg/Mouse-Skull-Nuclei-CBG/test"
 LUCCHI_DATA = "/mnt/vast-nhr/projects/cidas/cca/data/lucchi"
 LIVECELL_DATA = "/mnt/vast-nhr/projects/cidas/cca/data/livecell"
+CREMI_DATA = "/mnt/vast-nhr/projects/cidas/cca/data/cremi"
+
+# Held-out CREMI ROI from sample C. Training used samples A and B for gradient updates and C only
+# for validation, so a sub-volume of C is the cleanest held-out CREMI. A 16x512x512 crop keeps the
+# object count tractable while matching the 512 xy training scale (2x upscale to 1024).
+CREMI_TEST_ROI = np.s_[0:16, 0:512, 0:512]
 
 
 def load_test_volumes_skull(min_size=10):
@@ -126,6 +202,33 @@ def load_test_volumes_lucchi(min_size=10):
     labels = connected_components(labels).astype("uint32")
     labels = size_filter(labels, min_size=min_size)
     fname = "lucchi_test.h5"
+    print(f"Loaded {fname}: raw {raw.shape}, {len(np.unique(labels)) - 1} objects")
+    return [(fname, raw, labels)]
+
+
+def load_test_volumes_cremi(min_size=500):
+    """Load a held-out CREMI sample C ROI (3D EM neurons).
+
+    Samples A and B were used for training; C only for validation, so a sub-volume of C is the
+    cleanest held-out CREMI test. The neuron_ids are used directly as instances (no connected
+    components, which would wrongly split disconnected fragments of the same neuron); ids are only
+    relabelled to consecutive integers so they fit in uint32.
+
+    Args:
+        min_size: Minimum instance size in voxels.
+
+    Returns:
+        List of (filename, raw, labels) tuples with 3D arrays.
+    """
+    test_path = os.path.join(CREMI_DATA, "sampleC.h5")
+    with h5py.File(test_path, "r") as f:
+        raw = f["volumes/raw"][CREMI_TEST_ROI]
+        labels = f["volumes/labels/neuron_ids"][CREMI_TEST_ROI]
+    raw = normalize(raw.astype(np.float32))
+    _, labels = np.unique(labels, return_inverse=True)
+    labels = labels.reshape(raw.shape).astype("uint32")
+    labels = size_filter(labels, min_size=min_size)
+    fname = "sampleC_roi.h5"
     print(f"Loaded {fname}: raw {raw.shape}, {len(np.unique(labels)) - 1} objects")
     return [(fname, raw, labels)]
 
@@ -490,20 +593,29 @@ def segment_image_2d(
     return seg_per_iter
 
 
-def evaluate_volume(labels, seg_per_iter):
+def evaluate_volume(labels, seg_per_iter, extra_metrics=False):
     """Compute per-iteration segmentation accuracy metrics.
 
     Args:
         labels: Ground-truth label array.
         seg_per_iter: List of segmentation arrays, one per iteration.
+        extra_metrics: Also compute the CREMI metrics (VI split/merge and CREMI score),
+            useful for dense EM neuron segmentation.
 
     Returns:
-        List of dicts with 'iteration', 'mSA', 'SA50', 'SA75'.
+        List of dicts with 'iteration', 'mSA', 'SA50', 'SA75' (plus 'VI_split', 'VI_merge',
+        'CREMI' when extra_metrics is set).
     """
     rows = []
     for i, seg in enumerate(seg_per_iter):
         msa, sa = mean_segmentation_accuracy(seg, labels, return_accuracies=True)
-        rows.append({"iteration": i, "mSA": round(msa, 4), "SA50": round(sa[0], 4), "SA75": round(sa[5], 4)})
+        row = {"iteration": i, "mSA": round(msa, 4), "SA50": round(sa[0], 4), "SA75": round(sa[5], 4)}
+        if extra_metrics:
+            vi_split, vi_merge, _, cremi = cremi_score(seg, labels)
+            row["VI_split"] = round(vi_split, 4)
+            row["VI_merge"] = round(vi_merge, 4)
+            row["CREMI"] = round(cremi, 4)
+        rows.append(row)
     return rows
 
 
@@ -559,7 +671,7 @@ def run_eval_3d(dataset, samples, predictor, args):
             first_frame=args.first_frame, forward_only=args.forward_only,
             num_init_cond_frames=args.num_init_cond_frames, box_jitter=args.box_jitter,
         )
-        rows = evaluate_volume(labels, seg_per_iter)
+        rows = evaluate_volume(labels, seg_per_iter, extra_metrics=args.extra_metrics)
         for row in rows:
             row["volume"] = fname
         all_rows.extend(rows)
@@ -588,7 +700,7 @@ def run_eval_2d(dataset, samples, predictor, args):
             raw, labels, predictor, n_iterations=args.n_iterations,
             use_box=args.prompt == "box", box_jitter=args.box_jitter, pad_square=args.pad_square,
         )
-        rows = evaluate_volume(labels, seg_per_iter)
+        rows = evaluate_volume(labels, seg_per_iter, extra_metrics=args.extra_metrics)
         for row in rows:
             row["volume"] = fname
         all_rows.extend(rows)
@@ -636,10 +748,11 @@ def main():
         help="Frames to condition on before first propagation (1 = prompt only; 2 matches training).",
     )
     parser.add_argument(
-        "--dataset", choices=["skull", "lucchi", "livecell"], default=None,
+        "--dataset", choices=["skull", "lucchi", "livecell", "cremi"], default=None,
         help="Dataset to evaluate (default: all three sequentially).",
     )
     parser.add_argument("--n_eval_images", type=int, default=20, help="Number of LIVECell test images to evaluate.")
+    parser.add_argument("--extra_metrics", action="store_true", help="Also report CREMI VI split/merge and score.")
     args = parser.parse_args()
 
     run_datasets = [args.dataset] if args.dataset else ["skull", "lucchi", "livecell"]
@@ -659,6 +772,11 @@ def main():
             samples = load_test_images_livecell(n_images=args.n_eval_images, min_size=args.min_size)
             predictor = get_image_predictor(args.model_type, args.backbone, args.checkpoint)
             run_eval_2d(ds, samples, predictor, args)
+        elif ds == "cremi":
+            samples = load_test_volumes_cremi(min_size=args.min_size)
+            predictor = get_predictor(args.model_type, args.backbone, args.checkpoint)
+            predictor.add_all_frames_to_correct_as_cond = True
+            run_eval_3d(ds, samples, predictor, args)
 
 
 if __name__ == "__main__":
