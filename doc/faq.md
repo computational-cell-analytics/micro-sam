@@ -203,9 +203,8 @@ This can have multiple reasons that you can address by choosing the best setting
     - `vit_b_em_organelles` for segmenting mitochondria or nuclei in electron microscopy. Note: this model does not yet support other organelles.
     - `vit_b_histopathology` for segmenting nuclei in H&E stained images or other typical image data from histopathology.
 - If you have multi-channel images then you have to pass those in a format and channel order compatible with `micro_sam`:
-    - If your image has 3 channels you can use it as is. Pass it with the channel as last axis.
-    - If your image has 2 channels, you have to add a third empty channel (all zeros) to it.
-    - If you have images with a fluorescent marker staining the cytosol or membrane and another marker staining the nucleus, then pass the cytosol/membrane maker as first channel and the nucleus marker as second channel. 
+    - If your image has 2 or 3 channels you can use it as is. The channels must be given in the last axis.
+        - If you have images with a fluorescent marker staining the cytosol or membrane and another marker staining the nucleus, then pass the cytosol/membrane maker as first channel and the nucleus marker as second channel.
     - If you have more than 3 channels then you have to reduce the number of channels to 3, either by selecting the most relevant channels (see previous item) or by averaging or otherwise combining channels in a suitable fashion.
 - If you have large images (>~ 700 x 700 pixels) you should activate tiling by passing the `tile_shape` and `halo` parameters (if you use CLI or python) or by setting `tile_x` / `tile_y`, `halo_x` / `halo_y` in the `Advanced Settings` of the `Embedding Widget` (if you use the napari tool).
     - The recommended values for tile shape and halo are `(384, 384)` and `(64, 64)`, respectively.
