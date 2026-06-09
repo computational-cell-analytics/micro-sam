@@ -195,8 +195,25 @@ Here's what you can do to solve this issue:
 - Use a PyTorch/CUDA build that is known to work with V100, for example CUDA 12.1 or 11.8 with a compatible PyTorch version (please check your installed CUDA drivers).
 - Run on CPU (slower, but works).
 
-## Fine-tuning questions
+### 20. The automatic instance segmentation does a very poor job for my microscopy images.
 
+This can have multiple reasons that you can address by choosing the best settings for your image:
+- First, choose the most suitable model for your image type and segmentation task:
+    - `vit_b_lm` for any cell or nucleus segmentation task in light microscopy or related tasks such as segmentation of organoids or similar structures.
+    - `vit_b_em_organelles` for segmenting mitochondria or nuclei in electron microscopy. Note: this model does not yet support other organelles.
+    - `vit_b_histopathology` for segmenting nuclei in H&E stained images or other typical image data from histopathology.
+- If you have multi-channel images then you have to pass those in a format and channel order compatible with `micro_sam`:
+    - If your image has 3 channels you can use it as is. Pass it with the channel as last axis.
+    - If your image has 2 channels, you have to add a third empty channel (all zeros) to it.
+    - If you have images with a fluorescent marker staining the cytosol or membrane and another marker staining the nucleus, then pass the cytosol/membrane maker as first channel and the nucleus marker as second channel. 
+    - If you have more than 3 channels then you have to reduce the number of channels to 3, either by selecting the most relevant channels (see previous item) or by averaging or otherwise combining channels in a suitable fashion.
+- If you have large images (>~ 700 x 700 pixels) you should activate tiling by passing the `tile_shape` and `halo` parameters (if you use CLI or python) or by setting `tile_x` / `tile_y`, `halo_x` / `halo_y` in the `Advanced Settings` of the `Embedding Widget` (if you use the napari tool).
+    - The recommended values for tile shape and halo are `(384, 384)` and `(64, 64)`, respectively.
+- If your image contains very small objects that you want to segment then decrease the minimum object size by passing a low value (e.g. 10) for `min_size` to the CLI / python function you are using or by setting it in the `Automatic Segmentation Settings` of the instance segmentation widget. 
+
+If none of these steps help then the available `micro_sam` models are likely not well suited for your data. Note that you can still use `micro_sam` for your segmentation problem, but you will have to fine-tune your own model (see the next section). 
+
+## Fine-tuning questions
 
 ### 1. I have a microscopy dataset I would like to fine-tune Segment Anything for. Is it possible using `micro_sam`?
 Yes, you can fine-tune Segment Anything on your own dataset. Here's how you can do it:
