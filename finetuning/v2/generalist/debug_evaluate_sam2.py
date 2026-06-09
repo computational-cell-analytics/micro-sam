@@ -94,30 +94,31 @@ LIVECell (20 images, SAM2ImagePredictor with logits between iters):
     iter 2: mSA=0.4800 SA50=0.7744 SA75=0.5212
     iter 3: mSA=0.5496 SA50=0.8542 SA75=0.6022
 
-CREMI sample C ROI [0:16, 0:512, 0:512] (3D EM neurons). VI split/merge and CREMI score:
-lower is better. These numbers used connected components on the GT (171 objects); the loader
-now uses neuron_ids directly (no CC), so a no-CC re-run will differ. Default = native regime;
-generalist = center+bidirectional, chunk8, 2cond.
+CREMI sample C ROI [0:16, 0:512, 0:512] (3D EM neurons, neuron_ids used directly, no connected
+components -> 119 objects). VI split/merge, adapted Rand error (aRAND) and CREMI score: lower is
+better (mSA/SA50/SA75 are uninformative for dense neurons and not reported). Default = native
+regime; generalist = center+bidirectional, chunk8, 2cond. The default massively over-merges
+(VI_merge ~4-5, aRAND ~0.84); the generalist separates the neurons (aRAND ~0.07-0.14).
   box (default):
-    iter 0: mSA=0.0717 SA50=0.1837 SA75=0.0498 VI_split=0.1494 VI_merge=4.7872 CREMI=2.0616
-    iter 1: mSA=0.0711 SA50=0.2053 SA75=0.0315 VI_split=0.1053 VI_merge=4.8344 CREMI=2.0652
-    iter 2: mSA=0.0941 SA50=0.2527 SA75=0.0507 VI_split=0.1009 VI_merge=4.8253 CREMI=2.0624
-    iter 3: mSA=0.1092 SA50=0.2514 SA75=0.0751 VI_split=0.0970 VI_merge=4.8158 CREMI=2.0596
+    iter 0: VI_split=0.1598 VI_merge=4.2177 aRAND=0.8363 CREMI=1.9134
+    iter 1: VI_split=0.1420 VI_merge=4.2088 aRAND=0.8365 CREMI=1.9077
+    iter 2: VI_split=0.1359 VI_merge=4.1958 aRAND=0.8363 CREMI=1.9033
+    iter 3: VI_split=0.1302 VI_merge=4.1903 aRAND=0.8362 CREMI=1.9008
   point (default):
-    iter 0: mSA=0.0000 SA50=0.0000 SA75=0.0000 VI_split=0.0662 VI_merge=5.0635 CREMI=2.1036
-    iter 1: mSA=0.0005 SA50=0.0053 SA75=0.0000 VI_split=0.0394 VI_merge=5.0683 CREMI=2.1005
-    iter 2: mSA=0.0011 SA50=0.0109 SA75=0.0000 VI_split=0.0494 VI_merge=5.0528 CREMI=2.0993
-    iter 3: mSA=0.0011 SA50=0.0106 SA75=0.0000 VI_split=0.0537 VI_merge=5.0326 CREMI=2.0959
+    iter 0: VI_split=0.0573 VI_merge=4.6553 aRAND=0.8454 CREMI=1.9960
+    iter 1: VI_split=0.0777 VI_merge=4.6087 aRAND=0.8453 CREMI=1.9903
+    iter 2: VI_split=0.1753 VI_merge=4.6061 aRAND=0.8479 CREMI=2.0134
+    iter 3: VI_split=0.1699 VI_merge=4.6139 aRAND=0.8482 CREMI=2.0143
   box (generalist):
-    iter 0: mSA=0.1365 SA50=0.2302 SA75=0.1438 VI_split=0.6556 VI_merge=0.7799 CREMI=0.3963
-    iter 1: mSA=0.1359 SA50=0.2302 SA75=0.1438 VI_split=0.6232 VI_merge=0.8005 CREMI=0.3873
-    iter 2: mSA=0.1531 SA50=0.2574 SA75=0.1672 VI_split=0.5642 VI_merge=0.7436 CREMI=0.3676
-    iter 3: mSA=0.1524 SA50=0.2620 SA75=0.1672 VI_split=0.5812 VI_merge=0.7510 CREMI=0.3719
+    iter 0: VI_split=0.8516 VI_merge=0.7481 aRAND=0.1375 CREMI=0.4691
+    iter 1: VI_split=0.7493 VI_merge=0.7127 aRAND=0.0779 CREMI=0.3375
+    iter 2: VI_split=0.6706 VI_merge=0.6336 aRAND=0.0737 CREMI=0.3099
+    iter 3: VI_split=0.6753 VI_merge=0.6480 aRAND=0.0727 CREMI=0.3101
   point (generalist):
-    iter 0: mSA=0.1154 SA50=0.1793 SA75=0.1287 VI_split=0.8875 VI_merge=0.8773 CREMI=0.6087
-    iter 1: mSA=0.1352 SA50=0.2128 SA75=0.1438 VI_split=0.6089 VI_merge=0.7855 CREMI=0.3832
-    iter 2: mSA=0.1289 SA50=0.2171 SA75=0.1325 VI_split=0.6135 VI_merge=0.8743 CREMI=0.4462
-    iter 3: mSA=0.1455 SA50=0.2391 SA75=0.1515 VI_split=0.5807 VI_merge=0.8354 CREMI=0.4294
+    iter 0: VI_split=0.8970 VI_merge=0.7953 aRAND=0.0926 CREMI=0.3959
+    iter 1: VI_split=0.6560 VI_merge=0.6165 aRAND=0.0694 CREMI=0.2972
+    iter 2: VI_split=0.6587 VI_merge=0.6536 aRAND=0.0755 CREMI=0.3147
+    iter 3: VI_split=0.6289 VI_merge=0.6587 aRAND=0.0886 CREMI=0.3378
 """
 
 import os
@@ -374,7 +375,10 @@ def segment_volume(
         if first_frame:
             z_prompt = int(obj_zs.min())
         else:
-            z_prompt = int(np.ceil(np.mean([obj_zs.min(), obj_zs.max()])))
+            # Pick the middle slice among those the object actually appears in. For objects that are
+            # disconnected across z (e.g. CREMI neurons without connected components), the geometric
+            # midpoint can land in a gap with no object, giving an empty prompt slice.
+            z_prompt = int(obj_zs[len(obj_zs) // 2])
 
         gt_slice = (labels_proc[z_prompt] == obj_id).astype("uint32")
         points, point_labels, boxes = _get_batched_prompts(
@@ -599,22 +603,28 @@ def evaluate_volume(labels, seg_per_iter, extra_metrics=False):
     Args:
         labels: Ground-truth label array.
         seg_per_iter: List of segmentation arrays, one per iteration.
-        extra_metrics: Also compute the CREMI metrics (VI split/merge and CREMI score),
-            useful for dense EM neuron segmentation.
+        extra_metrics: Report the CREMI metrics (VI split/merge, adapted Rand error and CREMI
+            score) instead of mSA/SA50/SA75. Used for dense EM neuron segmentation, where the
+            instance-matching scores are not informative.
 
     Returns:
-        List of dicts with 'iteration', 'mSA', 'SA50', 'SA75' (plus 'VI_split', 'VI_merge',
-        'CREMI' when extra_metrics is set).
+        List of dicts with 'iteration' and either 'mSA'/'SA50'/'SA75' (default) or
+        'VI_split'/'VI_merge'/'aRAND'/'CREMI' (when extra_metrics is set).
     """
     rows = []
     for i, seg in enumerate(seg_per_iter):
-        msa, sa = mean_segmentation_accuracy(seg, labels, return_accuracies=True)
-        row = {"iteration": i, "mSA": round(msa, 4), "SA50": round(sa[0], 4), "SA75": round(sa[5], 4)}
         if extra_metrics:
-            vi_split, vi_merge, _, cremi = cremi_score(seg, labels)
-            row["VI_split"] = round(vi_split, 4)
-            row["VI_merge"] = round(vi_merge, 4)
-            row["CREMI"] = round(cremi, 4)
+            vi_split, vi_merge, arand, cremi = cremi_score(seg, labels)
+            row = {
+                "iteration": i,
+                "VI_split": round(vi_split, 4),
+                "VI_merge": round(vi_merge, 4),
+                "aRAND": round(arand, 4),
+                "CREMI": round(cremi, 4),
+            }
+        else:
+            msa, sa = mean_segmentation_accuracy(seg, labels, return_accuracies=True)
+            row = {"iteration": i, "mSA": round(msa, 4), "SA50": round(sa[0], 4), "SA75": round(sa[5], 4)}
         rows.append(row)
     return rows
 
@@ -752,7 +762,7 @@ def main():
         help="Dataset to evaluate (default: all three sequentially).",
     )
     parser.add_argument("--n_eval_images", type=int, default=20, help="Number of LIVECell test images to evaluate.")
-    parser.add_argument("--extra_metrics", action="store_true", help="Also report CREMI VI split/merge and score.")
+    parser.add_argument("--extra_metrics", action="store_true", help="CREMI metrics: VI split/merge, aRAND, score.")
     args = parser.parse_args()
 
     run_datasets = [args.dataset] if args.dataset else ["skull", "lucchi", "livecell"]
