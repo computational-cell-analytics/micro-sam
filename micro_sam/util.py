@@ -18,14 +18,15 @@ import numpy as np
 import pooch
 import segment_anything.utils.amg as amg_utils
 import torch
-import vigra
 import xxhash
 import zarr
 
 from elf.io import open_file
-from nifty.tools import blocking
+from bioimage_cpp.utils import Blocking
+from bioimage_cpp.distance import distance_transform
+from bioimage_cpp.segmentation import relabel_sequential
 from skimage.measure import regionprops
-from skimage.segmentation import relabel_sequential
+from skimage.segmentation import find_boundaries
 from torchvision.ops.boxes import batched_nms
 
 from .__version__ import __version__
@@ -748,8 +749,8 @@ def _write_batch(features, tile_ids, batched_embeddings, original_sizes, input_s
 
 def _get_tiles_in_mask(mask, tiling, halo, z=None):
     def _check_mask(tile_id):
-        tile = tiling.getBlockWithHalo(tile_id, list(halo))
-        outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end))
+        tile = tiling.get_block_with_halo(tile_id, list(halo))
+        outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outer_block.begin, tile.outer_block.end))
         if z is not None:
             outer_tile = (z,) + outer_tile
         tile_mask = mask[outer_tile].astype("bool")
@@ -757,13 +758,13 @@ def _get_tiles_in_mask(mask, tiling, halo, z=None):
 
     n_threads = mp.cpu_count()
     with futures.ThreadPoolExecutor(n_threads) as tp:
-        tiles_in_mask = tp.map(_check_mask, range(tiling.numberOfBlocks))
+        tiles_in_mask = tp.map(_check_mask, range(tiling.number_of_blocks))
     return sorted([tile_id for tile_id in tiles_in_mask if tile_id is not None])
 
 
 def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update, batch_size, mask):
-    tiling = blocking([0, 0], input_.shape[:2], tile_shape)
-    n_tiles = tiling.numberOfBlocks
+    tiling = Blocking([0, 0], input_.shape[:2], tile_shape)
+    n_tiles = tiling.number_of_blocks
 
     features = f.require_group("features")
     features.attrs["shape"] = input_.shape[:2]
@@ -786,8 +787,8 @@ def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init
     for tile_ids in tile_ids_for_batches:
         batched_images = []
         for tile_id in tile_ids:
-            tile = tiling.getBlockWithHalo(tile_id, list(halo))
-            outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end))
+            tile = tiling.get_block_with_halo(tile_id, list(halo))
+            outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outer_block.begin, tile.outer_block.end))
             tile_input = _to_image(input_[outer_tile])
             batched_images.append(tile_input)
 
@@ -853,13 +854,13 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init
     assert input_.ndim == 3
 
     shape = input_.shape[1:]
-    tiling = blocking([0, 0], shape, tile_shape)
+    tiling = Blocking([0, 0], shape, tile_shape)
     features = f.require_group("features")
     features.attrs["shape"] = shape
     features.attrs["tile_shape"] = tile_shape
     features.attrs["halo"] = halo
 
-    n_tiles_per_plane = tiling.numberOfBlocks
+    n_tiles_per_plane = tiling.number_of_blocks
     n_slices = input_.shape[0]
 
     msg = "Compute Image Embeddings 3D tiled"
@@ -878,9 +879,9 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init
     for slices, tile_ids in batch_provider:
         batched_images = []
         for z, tile_id in zip(slices, tile_ids):
-            tile = tiling.getBlockWithHalo(tile_id, list(halo))
+            tile = tiling.get_block_with_halo(tile_id, list(halo))
             outer_tile = (z,) + tuple(
-                slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end)
+                slice(beg, end) for beg, end in zip(tile.outer_block.begin, tile.outer_block.end)
             )
             tile_input = _to_image(input_[outer_tile])
             batched_images.append(tile_input)
@@ -1287,22 +1288,42 @@ def get_centers_and_bounding_boxes(
     Args:
         segmentation: The segmentation.
         mode: Determines the functionality used for computing the centers.
-            If 'v', the object's eccentricity centers computed by vigra are used.
+            If 'v', the point of maximal distance to the object boundary is used as center.
+            This center is guaranteed to lie inside the object, also for concave shapes.
             If 'p' the object's centroids computed by skimage are used.
 
     Returns:
         A dictionary that maps object ids to the corresponding centroid.
         A dictionary that maps object_ids to the corresponding bounding box.
     """
-    assert mode in ["p", "v"], "Choose either 'p' for regionprops or 'v' for vigra"
+    assert mode in ["p", "v"], "Choose either 'p' for regionprops centroids or 'v' for distance-based centers"
 
     properties = regionprops(segmentation)
 
     if mode == "p":
         center_coordinates = {prop.label: prop.centroid for prop in properties}
     elif mode == "v":
-        center_coordinates = vigra.filters.eccentricityCenters(segmentation.astype('float32'))
-        center_coordinates = {i: coord for i, coord in enumerate(center_coordinates) if i > 0}
+        # Use the point of maximal distance to the object boundary as the center.
+        # In contrast to the centroid, this point is guaranteed to lie inside the object,
+        # also for concave shapes. This replaces vigra.filters.eccentricityCenters.
+        # Compute the boundaries and a single distance transform for the whole
+        # segmentation, instead of one distance transform per object.
+        ndim = segmentation.ndim
+        # Pad so objects touching the image border also get a boundary there,
+        # matching a per-object padded distance transform.
+        padded = np.pad(segmentation, 1)
+        boundaries = find_boundaries(padded, mode="inner")
+        distances = distance_transform(boundaries == 0)
+
+        center_coordinates = {}
+        for prop in properties:
+            bbox = prop.bbox
+            # Slice the global distance field to this object's bbox (shifted by the
+            # pad of 1) and restrict the argmax to the object's own pixels.
+            region = distances[tuple(slice(b + 1, e + 1) for b, e in zip(bbox[:ndim], bbox[ndim:]))]
+            masked = np.where(prop.image, region, -1.0)
+            center_local = np.unravel_index(int(np.argmax(masked)), masked.shape)
+            center_coordinates[prop.label] = tuple(int(c + o) for c, o in zip(center_local, bbox[:ndim]))
 
     bbox_coordinates = {prop.label: prop.bbox for prop in properties}
 

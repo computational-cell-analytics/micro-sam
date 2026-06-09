@@ -137,7 +137,7 @@ def get_dataloaders(
     https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/README.md
 
     Here is a detailed notebook on finetuning Segment Anything:
-    https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb
+    https://github.com/computational-cell-analytics/micro-sam/blob/main/notebooks/sam_finetuning.ipynb
 
     Args:
         train_image_paths: List of filepaths for the training image data.

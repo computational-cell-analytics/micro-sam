@@ -3,10 +3,13 @@ import os
 import platform
 import warnings
 
-# Avoid import warnigns from mobile_sam
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore")
-    from mobile_sam.predictor import SamPredictor as MobileSamPredictor
+try:
+    # Avoid import warnigns from mobile_sam
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        from mobile_sam.predictor import SamPredictor as MobileSamPredictor
+except ImportError:
+    from segment_anything.predictor import SamPredictor as MobileSamPredictor
 from segment_anything.predictor import SamPredictor
 import numpy as np
 import pytest

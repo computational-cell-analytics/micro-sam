@@ -8,12 +8,14 @@ from concurrent import futures
 from typing import Dict, List, Optional, Union, Tuple
 
 import networkx as nx
-import nifty
 import numpy as np
 import torch
 from scipy.ndimage import binary_closing
-from skimage.measure import label, regionprops
-from skimage.segmentation import relabel_sequential
+from skimage.measure import regionprops
+
+from bioimage_cpp.segmentation import label, relabel_sequential
+from bioimage_cpp.graph import UndirectedGraph
+from bioimage_cpp.utils import segmentation_overlap
 
 import elf.segmentation as seg_utils
 import elf.tracking.tracking_utils as track_utils
@@ -257,9 +259,9 @@ def _preprocess_closing(slice_segmentation, gap_closing, pbar_update):
         # We take objects from the closed segmentation unless they
         # have overlap with more than one object from the initial segmentation.
         # This indicates wrong merging of closeby objects that we want to prevent.
-        matches = nifty.ground_truth.overlap(closed_z, seg_z)
+        matches = segmentation_overlap(closed_z, seg_z)
         matches = {
-            seg_id: matches.overlapArrays(seg_id, sorted=False)[0] for seg_id in range(1, int(closed_z.max() + 1))
+            seg_id: matches.overlaps_for_label_a(seg_id)["label"] for seg_id in range(1, int(closed_z.max() + 1))
         }
         matches = {k: v[v != 0] for k, v in matches.items()}
 
@@ -359,8 +361,8 @@ def merge_instance_segmentation_3d(
     overlaps = np.array([edge["score"] for edge in edges])
 
     n_nodes = int(slice_segmentation.max() + 1)
-    graph = nifty.graph.undirectedGraph(n_nodes)
-    graph.insertEdges(uv_ids)
+    graph = UndirectedGraph(n_nodes)
+    graph.insert_edges(uv_ids)
 
     costs = seg_utils.multicut.compute_edge_costs(overlaps)
     # Set background weights to be maximally repulsive.
@@ -370,7 +372,7 @@ def merge_instance_segmentation_3d(
 
     node_labels = seg_utils.multicut.multicut_decomposition(graph, 1.0 - costs, beta=beta)
 
-    segmentation = nifty.tools.take(node_labels, slice_segmentation)
+    segmentation = node_labels[slice_segmentation]
     if min_z_extent is not None and min_z_extent > 0:
         segmentation = _filter_z_extent(segmentation, min_z_extent)
 
