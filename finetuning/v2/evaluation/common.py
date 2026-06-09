@@ -492,17 +492,17 @@ def predict_unisam2(model, raw, ndim, device):
     return out
 
 
-def postprocess_unisam2(out, dataset_name):
+def postprocess_unisam2(out, dataset_name, backend="python"):
     from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut
     fg = out[0]
     if dataset_name in _EM_DATASETS:
         boundary_map = fg.max() - fg
         boundary_map /= boundary_map.max()
         distances = np.stack([out[2], out[3]])
-        seg = run_multicut(boundary_map, distances)
+        seg = run_multicut(boundary_map, distances, backend=backend)
     else:
         spacing = _DATASET_SPACING.get(dataset_name, None)
-        seg = flow_instance_segmentation(fg, out[1:], spacing=spacing)
+        seg = flow_instance_segmentation(fg, out[1:], spacing=spacing, backend=backend)
     return seg.astype("uint32")
 
 

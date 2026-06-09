@@ -1,5 +1,6 @@
 import json
 import os
+import random
 from functools import partial
 
 import numpy as np
@@ -24,13 +25,40 @@ from ..transforms.labels import (
 )
 
 
+# Cap on validation samples drawn per dataset, to keep the per-epoch validation pass cheap.
+# Each access is a random crop (see UniDataWrapper.max_samples), so this is N random samples.
+N_SAMPLES_VAL = 25
+
+# Fixed seed for deterministic validation. The same value is used to seed the main process
+# (prompt sampling in SAM2Train, object subsampling in ConvertToSam2VideoBatch) in
+# Sam2Trainer._validate_impl, so the validation metric is comparable across epochs.
+VALIDATION_SEED = 42
+
+
+def seed_worker(worker_id):
+    """DataLoader worker_init_fn that pins per-worker RNG for deterministic validation crops.
+
+    The torch_em datasets draw a fresh random crop and random object subset on every
+    __getitem__ inside the worker process. Seeding each worker deterministically (and using
+    non-persistent workers so this runs every epoch) makes those crops identical across epochs.
+    """
+    seed = VALIDATION_SEED + worker_id
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
 def _ensure_native_byte_order(y):
     # tifffile.memmap returns big-endian >f4 for some TIFFs; byteswap to native so that
     # Kornia augmentation and skimage/vigra C extensions receive correctly ordered bytes.
     return y.byteswap().view(y.dtype.newbyteorder()) if not y.dtype.isnative else y
 
 
-def _prepare_data_loader(dataset, batch_size, shuffle, batch_size_per_group=None, num_workers=32):
+def _prepare_data_loader(dataset, batch_size, shuffle, batch_size_per_group=None, num_workers=32, deterministic=False):
+    # For deterministic validation, re-seed workers every epoch via worker_init_fn.
+    # This requires non-persistent workers, since persistent workers run worker_init_fn only once.
+    persistent = not deterministic
+    worker_init = seed_worker if deterministic else None
     if isinstance(dataset, ConcatDataset) and (batch_size > 1 or batch_size_per_group):
         batch_sampler = UniBatchSampler(
             group_per_index=_build_group_map(dataset),
@@ -40,12 +68,15 @@ def _prepare_data_loader(dataset, batch_size, shuffle, batch_size_per_group=None
         )
         loader = torch.utils.data.DataLoader(
             dataset, batch_sampler=batch_sampler, num_workers=num_workers,
-            pin_memory=True, persistent_workers=True,
+            pin_memory=True, persistent_workers=persistent, worker_init_fn=worker_init,
         )
         # Monkey-patch shuffle attribute for torch_em DefaultTrainer compatibility.
         loader.shuffle = shuffle
     else:
-        loader = torch_em.get_data_loader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
+        loader = torch_em.get_data_loader(
+            dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
+            persistent_workers=persistent, worker_init_fn=worker_init,
+        )
 
     return loader
 
@@ -726,7 +757,7 @@ def get_interactive_dataloaders(
     )
     val_loader = _prepare_data_loader(
         val_ds, batch_size=batch_size, shuffle=False,
-        batch_size_per_group=batch_size_per_group, num_workers=n_workers,
+        batch_size_per_group=batch_size_per_group, num_workers=n_workers, deterministic=True,
     )
 
     return train_loader, val_loader
@@ -799,6 +830,11 @@ def _build_interactive_datasets(input_path, z_slices, dataset_choice):
         em_train, em_val = _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo=None)
         train_ds.extend(em_train)
         val_ds.extend(em_val)
+
+    # Cap each validation dataset to N_SAMPLES_VAL random samples so the per-epoch
+    # validation pass stays cheap (train datasets are left at full size).
+    for w in val_ds:
+        w.max_samples = N_SAMPLES_VAL
 
     return ConcatDataset(*train_ds), ConcatDataset(*val_ds)
 

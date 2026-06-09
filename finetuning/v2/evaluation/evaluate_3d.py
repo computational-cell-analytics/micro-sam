@@ -113,6 +113,7 @@ def run_automatic_evaluation_3d(
     device,
     checkpoint_path=None,
     crop_shape=CROP_SHAPE_3D,
+    backend="python",
 ):
     """Run automatic segmentation (directed distances) and evaluate on 3D volumes."""
     if checkpoint_path is None:
@@ -142,7 +143,7 @@ def run_automatic_evaluation_3d(
         print(f"  {fname}: raw {raw.shape}, {len(np.unique(labels)) - 1} instances")
 
         out = predict_unisam2(model, raw, ndim=3, device=device)
-        seg = postprocess_unisam2(out, dataset_name)
+        seg = postprocess_unisam2(out, dataset_name, backend=backend)
         if valid_roi is not None:
             seg[~valid_roi] = 0
 

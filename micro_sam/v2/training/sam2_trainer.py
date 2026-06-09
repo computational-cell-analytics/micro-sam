@@ -1,4 +1,6 @@
+import contextlib
 import os
+import random
 import time
 import warnings
 from typing import Callable, Optional
@@ -12,6 +14,36 @@ from torch_em.trainer.logger_base import TorchEmLogger
 
 from training.trainer import CORE_LOSS_KEY  # SAM2 repo
 
+# Fixed seed for the main-process randomness during validation (prompt/correction-click
+# sampling in SAM2Train, object subsampling in ConvertToSam2VideoBatch). Worker-side crop
+# randomness is pinned separately via the val loader's deterministic worker_init_fn.
+VALIDATION_SEED = 42
+
+
+def _snapshot_rng():
+    """Capture the global RNG state so it can be restored after deterministic validation."""
+    cuda_state = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    return random.getstate(), np.random.get_state(), torch.get_rng_state(), cuda_state
+
+
+def _restore_rng(state):
+    """Restore the global RNG state captured by _snapshot_rng."""
+    py_state, np_state, torch_state, cuda_state = state
+    random.setstate(py_state)
+    np.random.set_state(np_state)
+    torch.set_rng_state(torch_state)
+    if cuda_state is not None:
+        torch.cuda.set_rng_state_all(cuda_state)
+
+
+def _seed_all(seed):
+    """Seed the python, numpy, and torch (CPU + CUDA) global RNGs."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
 
 def _get_cmap():
     from matplotlib import colormaps
@@ -19,7 +51,7 @@ def _get_cmap():
 
 
 def _colorize_instance_map(label_hw):
-    """(H,W) int64 numpy → (3,H,W) float32 [0,1], one tab20 color per instance ID."""
+    """(H,W) int64 numpy -> (3,H,W) float32 [0,1], one tab20 color per instance ID."""
     cmap = _get_cmap()
     H, W = label_hw.shape
     rgb = np.zeros((H, W, 3), dtype=np.float32)
@@ -31,7 +63,7 @@ def _colorize_instance_map(label_hw):
 
 
 def _overlay_binary_masks(masks_ohw, target_hw=None):
-    """(O,H,W) bool tensor → (3,H,W) float32 [0,1] overlay, one tab20 color per object."""
+    """(O,H,W) bool tensor -> (3,H,W) float32 [0,1] overlay, one tab20 color per object."""
     cmap = _get_cmap()
     O, H, W = masks_ohw.shape
     rgb = np.zeros((H, W, 3), dtype=np.float32)
@@ -71,22 +103,32 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
         convert_inputs: Callable,
         loss: torch.nn.Module,
         clip_grad_norm: Optional[float] = 0.1,
+        amp_dtype: Optional[torch.dtype] = torch.bfloat16,
         **kwargs,
     ):
-        super().__init__(loss=loss, metric=loss, **kwargs)
+        # Sam2Trainer manages AMP internally via amp_dtype; prevent the parent from
+        # setting up a float16 GradScaler which is incompatible with bfloat16.
+        kwargs.pop("mixed_precision", None)
+        super().__init__(loss=loss, metric=loss, mixed_precision=False, **kwargs)
         self.convert_inputs = convert_inputs
         self.clip_grad_norm = clip_grad_norm
+        self.amp_dtype = amp_dtype
         self.interactive_loss = loss
         self._kwargs = kwargs
+
+    def _amp_context(self):
+        if self.amp_dtype is not None:
+            return torch.amp.autocast(device_type="cuda", dtype=self.amp_dtype)
+        return contextlib.nullcontext()
 
     def _check_input_normalization(self, x, input_check_done):
         if not input_check_done:
             data_min, data_max = x.min(), x.max()
-            if (data_min < 0) or (data_max < 1):
+            if (data_min < 0) or (data_max > 1):
                 warnings.warn(
-                    "It looks like you are normalizing the training data. "
-                    "SAM2 takes care of normalization internally, so it is better not to do this. "
-                    "We recommend removing data normalization and providing inputs in the range [0, 255]."
+                    "It looks like the training inputs are not in the [0, 1] range. "
+                    "The SAM2 training pipeline expects inputs in [0, 1] and applies ImageNet "
+                    "normalization internally. We recommend providing inputs in the range [0, 1]."
                 )
             input_check_done = True
         return input_check_done
@@ -128,7 +170,7 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
             input_check_done = self._check_input_normalization(x, input_check_done)
             self.optimizer.zero_grad()
 
-            with forward_context():
+            with self._amp_context():
                 loss, batch, outputs = self._interactive_step(x, y)
 
             self._sam2_backprop(loss)
@@ -159,14 +201,24 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
         input_check_done = False
         last_x = last_y = last_batch = last_outputs = None
 
-        with torch.no_grad():
-            for x, y in self.val_loader:
-                input_check_done = self._check_input_normalization(x, input_check_done)
-                with forward_context():
-                    loss, batch, outputs = self._interactive_step(x, y)
-                    val_loss += loss.item()
-                n_iter += 1
-                last_x, last_y, last_batch, last_outputs = x, y, batch, outputs
+        # Pin the main-process RNG so the per-frame prompts and correction clicks sampled inside
+        # SAM2Train (and object subsampling in ConvertToSam2VideoBatch) are identical every epoch,
+        # making the validation metric comparable across epochs. Restore the state afterwards so
+        # training randomness is unaffected. Worker-side crop randomness is pinned via the val
+        # loader's deterministic worker_init_fn.
+        rng_state = _snapshot_rng()
+        _seed_all(VALIDATION_SEED)
+        try:
+            with torch.no_grad():
+                for x, y in self.val_loader:
+                    input_check_done = self._check_input_normalization(x, input_check_done)
+                    with self._amp_context():
+                        loss, batch, outputs = self._interactive_step(x, y)
+                        val_loss += loss.item()
+                    n_iter += 1
+                    last_x, last_y, last_batch, last_outputs = x, y, batch, outputs
+        finally:
+            _restore_rng(rng_state)
 
         val_loss /= max(n_iter, 1)
 
@@ -199,10 +251,10 @@ class Sam2Logger(TorchEmLogger):
     """TensorBoard logger for Sam2Trainer.
 
     Logs scalars every step; logs four image panels at log_image_interval:
-      raw          — input image (first batch item, first frame)
-      gt_all       — colorized instance map (all objects in the patch)
-      gt_chosen    — overlay of the objects sampled for this training step
-      predictions  — model's predicted masks for the chosen objects
+      raw - input image (first batch item, first frame)
+      gt_all - colorized instance map (all objects in the patch)
+      gt_chosen - overlay of the objects sampled for this training step
+      predictions - model's predicted masks for the chosen objects
     Only rank 0 writes; all other ranks are no-ops.
     """
 
@@ -234,7 +286,7 @@ class Sam2Logger(TorchEmLogger):
     def _log_images(self, step, x, y, batch, outputs, prefix):
         is_3d = (x.ndim == 5)
 
-        # Raw: first batch item, first frame, first 3 channels — already [0, 1]
+        # Raw: first batch item, first frame, first 3 channels - already [0, 1]
         raw = x[0, :3, 0].cpu().float() if is_3d else x[0, :3].cpu().float()
         H, W = raw.shape[-2:]
         self.tb.add_image(f"{prefix}/raw", raw, step)

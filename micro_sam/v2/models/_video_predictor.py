@@ -15,28 +15,49 @@ from sam2.utils.misc import AsyncVideoFrameLoader
 
 
 def _load_img_as_tensor(img_path, image_size):
+    """Load a single frame as a float32 [0, 1] tensor of shape (3, image_size, image_size).
+
+    For file-path inputs: PIL loads the image, resizes via plain square stretch (JPEG convention).
+    For numpy inputs: accepts uint8 [0, 255] or float32 [0, 1]; resizes using aspect-ratio
+    preserving scale to image_size on the longest side, then zero-pads to a square - matching
+    ConvertToSam2VideoBatch._to_sam2_size used during training.
+
+    Returns:
+        img: (3, image_size, image_size) float32 tensor, ImageNet-normalised by the caller.
+        video_height: max(H, W) of the original frame - used as the effective square dimension
+            for SAM2's coordinate normalization so prompts map into the resized content region.
+        video_width: same as video_height.
+    """
     if isinstance(img_path, str):
         img_pil = Image.open(img_path)
         img_np = np.array(img_pil.convert("RGB").resize((image_size, image_size)))
-        video_width, video_height = img_pil.size  # the original video size
-    else:
-        img_np = img_path
-        img_np = np.stack([img_np] * 3, axis=-1) if img_np.ndim == 2 else img_np  # Make it in RGB style.
-        img_np = resize(
-            img_np,
-            output_shape=(image_size, image_size, 3),
-            order=0,
-            anti_aliasing=False,
-            preserve_range=True,
-        ).astype(img_np.dtype)
-        video_height, video_width = img_path.shape
-
-    if img_np.dtype == np.uint8:  # np.uint8 is expected for JPEG images
+        video_width, video_height = img_pil.size
         img_np = img_np / 255.0
     else:
-        raise RuntimeError(f"Unknown image dtype: {img_np.dtype} on {img_path}")
+        img_np = img_path
+        img_np = np.stack([img_np] * 3, axis=-1) if img_np.ndim == 2 else img_np
 
-    img = torch.from_numpy(img_np).permute(2, 0, 1)
+        if img_np.dtype == np.uint8:
+            img_np = img_np.astype(np.float32) / 255.0
+        elif img_np.dtype in (np.float32, np.float64):
+            img_np = img_np.astype(np.float32)
+        else:
+            raise RuntimeError(f"Unsupported image dtype: {img_np.dtype}")
+
+        # Aspect-ratio preserving scale + zero-pad, matching _to_sam2_size in training.
+        # video_height/video_width are set to max(H, W) so SAM2's coordinate normalization
+        # (which divides by these and scales to image_size) correctly maps original-frame
+        # coordinates into the resized content region rather than the zero-padded area.
+        H, W = img_np.shape[:2]
+        video_height = video_width = max(H, W)
+        scale = image_size / max(H, W)
+        new_h, new_w = int(round(H * scale)), int(round(W * scale))
+        img_np = resize(img_np, output_shape=(new_h, new_w, 3), order=1, anti_aliasing=True, preserve_range=True)
+        pad_h, pad_w = image_size - new_h, image_size - new_w
+        if pad_h > 0 or pad_w > 0:
+            img_np = np.pad(img_np, ((0, pad_h), (0, pad_w), (0, 0)))
+
+    img = torch.from_numpy(img_np.astype(np.float32)).permute(2, 0, 1)
     return img, video_height, video_width
 
 
@@ -113,6 +134,10 @@ def _load_video_frames_from_images(
 
 class CustomVideoPredictor(SAM2VideoPredictor):
     """The video predictor class inherited from the original predictor class to update 'init_state'.
+
+    Overrides init_state to accept a numpy volume and a precomputed embeddings dict directly,
+    bypassing SAM2's default frame-loading path. All other predictor behaviour (add_new_points_or_box,
+    propagate_in_video, reset_state, etc.) is inherited unchanged from SAM2VideoPredictor.
     """
 
     @torch.inference_mode()
