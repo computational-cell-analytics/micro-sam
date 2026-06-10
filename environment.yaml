@@ -11,6 +11,7 @@ dependencies:
     - pip
     - pooch
     - pyqt
+    - python <3.14  # Note: napari <0.7 currently does not work on python 3.14. We will release this pin once we support napari 0.7.
     - python-xxhash
     - python-elf >=0.9
     # Note: installing the pytorch package from conda-forge will generally
