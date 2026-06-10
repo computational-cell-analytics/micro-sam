@@ -1,4 +1,4 @@
-name: micro-sam
+name: micro_sam
 display_name: Segment Anything for Microscopy
 # see https://napari.org/stable/plugins/manifest.html for valid categories
 categories: ["Segmentation", "Annotation"]
@@ -9,81 +9,81 @@ contributions:
     # because the image series annotator cannot be called for image layers in napari (yet),
     # but it has to be called with the path to the folder where the images are stored.
     # So providing the sample data in napari would be confusing.
-    # - id: micro-sam.sample_data_image_series
+    # - id: micro_sam.sample_data_image_series
     #   python_name: micro_sam.sample_data:sample_data_image_series
-    #   title: Load image series sample data from micro-sam plugin
-    - id: micro-sam.sample_data_wholeslide
+    #   title: Load image series sample data from micro_sam plugin
+    - id: micro_sam.sample_data_wholeslide
       python_name: micro_sam.sample_data:sample_data_wholeslide
-      title: Load WholeSlide sample data from micro-sam plugin
-    - id: micro-sam.sample_data_livecell
+      title: Load WholeSlide sample data from micro_sam plugin
+    - id: micro_sam.sample_data_livecell
       python_name: micro_sam.sample_data:sample_data_livecell
-      title: Load LiveCell sample data from micro-sam plugin
-    - id: micro-sam.sample_data_hela_2d
+      title: Load LiveCell sample data from micro_sam plugin
+    - id: micro_sam.sample_data_hela_2d
       python_name: micro_sam.sample_data:sample_data_hela_2d
-      title: Load 2D Hela sample data from micro-sam plugin
-    - id: micro-sam.sample_data_3d
+      title: Load 2D Hela sample data from micro_sam plugin
+    - id: micro_sam.sample_data_3d
       python_name: micro_sam.sample_data:sample_data_3d
-      title: Load Lucchi++ 3D sample data from micro-sam plugin
-    - id: micro-sam.sample_data_tracking
+      title: Load Lucchi++ 3D sample data from micro_sam plugin
+    - id: micro_sam.sample_data_tracking
       python_name: micro_sam.sample_data:sample_data_tracking
-      title: Load tracking sample data from micro-sam plugin
-    - id: micro-sam.sample_data_segmentation
+      title: Load tracking sample data from micro_sam plugin
+    - id: micro_sam.sample_data_segmentation
       python_name: micro_sam.sample_data:sample_data_segmentation
-      title: Load segmentation sample data from micro-sam plugin
+      title: Load segmentation sample data from micro_sam plugin
 
     # Commands for plugins.
-    - id: micro-sam.annotator
+    - id: micro_sam.annotator
       python_name: micro_sam.sam_annotator.annotator:Annotator
       title: Start the segmentation annotator
     - id: micro-sam.annotator_tracking
       python_name: micro_sam.sam_annotator.annotator_tracking:AnnotatorTracking
       title: Start the tracking annotator
-    - id: micro-sam.image_series_annotator
+    - id: micro_sam.image_series_annotator
       python_name: micro_sam.sam_annotator.image_series_annotator:ImageSeriesAnnotator
       title: Run the annotator for multiple images in a folder
-    - id: micro-sam.object_classifier
+    - id: micro_sam.object_classifier
       python_name: micro_sam.sam_annotator.object_classifier:ObjectClassifier
       title: Start the SAM based object classifier
-    - id: micro-sam.training
+    - id: micro_sam.training
       python_name: micro_sam.sam_annotator.training_ui:TrainingWidget
       title: Finetune SAM model
-    - id: micro-sam.settings
+    - id: micro_sam.settings
       python_name: micro_sam.sam_annotator._widgets:settings_widget
       title: Set cache directory
 
   sample_data:
-    # - command: micro-sam.sample_data_image_series
+    # - command: micro_sam.sample_data_image_series
     #   display_name: Image series example data
-    #   key: micro-sam-image-series
-    - command: micro-sam.sample_data_wholeslide
+    #   key: micro_sam-image-series
+    - command: micro_sam.sample_data_wholeslide
       display_name: WholeSlide example data
-      key: micro-sam-wholeslide
-    - command: micro-sam.sample_data_livecell
+      key: micro_sam-wholeslide
+    - command: micro_sam.sample_data_livecell
       display_name: LiveCell 2d example data
-      key: micro-sam-livecell
-    - command: micro-sam.sample_data_hela_2d
+      key: micro_sam-livecell
+    - command: micro_sam.sample_data_hela_2d
       display_name: HeLa 2d example data
-      key: micro-sam-hela2d
-    - command: micro-sam.sample_data_3d
+      key: micro_sam-hela2d
+    - command: micro_sam.sample_data_3d
       display_name: Lucchi++ 3d dataset
-      key: micro-sam-lucchi
-    - command: micro-sam.sample_data_tracking
+      key: micro_sam-lucchi
+    - command: micro_sam.sample_data_tracking
       display_name: Tracking sample dataset
-      key: micro-sam-tracking
-    - command: micro-sam.sample_data_segmentation
+      key: micro_sam-tracking
+    - command: micro_sam.sample_data_segmentation
       display_name: Segmentation sample dataset
-      key: micro-sam-segmentation
+      key: micro_sam-segmentation
 
   widgets:
-    - command: micro-sam.annotator
+    - command: micro_sam.annotator
       display_name: Segmentation Annotator
-    - command: micro-sam.annotator_tracking
+    - command: micro_sam.annotator_tracking
       display_name: Tracking Annotator
-    - command: micro-sam.image_series_annotator
+    - command: micro_sam.image_series_annotator
       display_name: Image Series Annotator
-    - command: micro-sam.object_classifier
+    - command: micro_sam.object_classifier
       display_name: Object Classifier
-    - command: micro-sam.training
+    - command: micro_sam.training
       display_name: Finetuning
-    - command: micro-sam.settings
+    - command: micro_sam.settings
       display_name: Settings
