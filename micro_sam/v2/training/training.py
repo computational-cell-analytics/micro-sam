@@ -1,4 +1,3 @@
-import math
 import os
 import re
 import time
@@ -10,6 +9,7 @@ from torch.utils.data import DataLoader
 
 from micro_sam.util import get_device
 from micro_sam.v2.loss.directed_distance_based import DirectedDistanceLoss
+from micro_sam.v2.loss.custom_sam2_loss import CustomSAM2Loss
 
 from micro_sam.v2.transforms.raw import VideoAugment
 from .util import get_sam2_train_model, ConvertToSam2VideoBatch
@@ -93,33 +93,15 @@ def _build_optimizer(model, lr, vision_lr=None, layer_decay=1.0):
     return torch.optim.AdamW(list(groups.values()))
 
 
-class _CosineScheduler(torch.optim.lr_scheduler.LambdaLR):
-    """LambdaLR subclass that ignores positional args passed by torch-em's DefaultTrainer.
+def _build_scheduler(optimizer, patience=5, factor=0.9, mode="min"):
+    """ReduceLROnPlateau scheduler keyed on the validation metric.
 
-    DefaultTrainer calls lr_scheduler.step(current_metric) after each validation
-    (designed for ReduceLROnPlateau). LambdaLR interprets that as the epoch index,
-    which would advance the schedule by the metric value instead of 1. Overriding
-    step() to always call super().step() with no arguments fixes this.
+    torch-em's DefaultTrainer calls lr_scheduler.step(current_metric) after each
+    validation, so the LR is multiplied by `factor` after `patience` epochs without
+    improvement in the validation metric (lower is better).
     """
-
-    def step(self, *_, **__):
-        super().step()
-
-
-def _build_scheduler(optimizer, lr, n_epochs, n_iterations, train_loader):
-    """Cosine LR schedule that decays each param group from its initial LR to LR/10.
-
-    Mirrors the SAM2 MOSE finetune config (CosineParamScheduler, start -> start/10).
-    Works correctly with multiple param groups (e.g. separate vision_lr) because
-    LambdaLR multiplies each group's base_lr by the same cosine factor.
-    """
-    if n_iterations is not None:
-        t_max = max(1, math.ceil(n_iterations / len(train_loader)))
-    else:
-        t_max = n_epochs
-    return _CosineScheduler(
-        optimizer,
-        lr_lambda=lambda epoch: 0.1 + 0.9 * 0.5 * (1.0 + math.cos(math.pi * epoch / t_max)),
+    return torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode=mode, factor=factor, patience=patience,
     )
 
 
@@ -152,6 +134,10 @@ def train_sam2(
     largest_first: bool = False,
     augment: bool = False,
     bidirectional: bool = False,
+    use_focal_loss: bool = False,
+    focal_weight: float = 20.0,
+    use_object_score_loss: bool = False,
+    average_over_frames: bool = False,
 ) -> None:
     """Train SAM2 for interactive segmentation with SAM2's native prompting strategy.
 
@@ -205,9 +191,15 @@ def train_sam2(
         bidirectional: If True, use bidirectional propagation during training: a random
             z-frame is chosen as the start frame each step, with propagation and correction
             clicks applied in both directions. No effect for 2D (T=1) batches.
+        use_focal_loss: Add SAM2's sigmoid focal mask loss on top of the Dice loss in
+            CustomSAM2Loss. Off by default for a simpler micro_sam-style loss.
+        focal_weight: Weight of the focal mask loss when enabled. SAM2 uses 20; set to 1
+            to keep it on equal footing with the Dice loss.
+        use_object_score_loss: Supervise SAM2's object-presence score with a BCE loss in
+            CustomSAM2Loss. Off by default for a simpler micro_sam-style loss.
+        average_over_frames: Average the interactive loss over frames instead of summing,
+            so 2D and 3D batches share a scale when training on mixed 2D + 3D data.
     """
-    from training.loss_fns import MultiStepMultiMasksAndIous
-
     t_start = time.time()
 
     device = get_device(device)
@@ -226,13 +218,9 @@ def train_sam2(
         bidirectional=bidirectional,
     )
 
-    interactive_loss = MultiStepMultiMasksAndIous(
-        weight_dict={"loss_mask": 20, "loss_dice": 1, "loss_iou": 1, "loss_class": 1},
-        supervise_all_iou=True,
-        iou_use_l1_loss=True,
-        pred_obj_scores=True,
-        focal_gamma_obj_score=0.0,
-        focal_alpha_obj_score=-1.0,
+    interactive_loss = CustomSAM2Loss(
+        use_focal_loss=use_focal_loss, focal_weight=focal_weight,
+        use_object_score_loss=use_object_score_loss, average_over_frames=average_over_frames,
     )
 
     augmentor = VideoAugment() if augment else None
@@ -241,9 +229,7 @@ def train_sam2(
     )
 
     optimizer = _build_optimizer(model, lr=lr, vision_lr=vision_lr, layer_decay=layer_decay)
-    scheduler = _build_scheduler(
-        optimizer, lr=lr, n_epochs=n_epochs, n_iterations=n_iterations, train_loader=train_loader,
-    )
+    scheduler = _build_scheduler(optimizer)
 
     trainer = Sam2Trainer(
         name=name,
@@ -309,13 +295,16 @@ def _train_sam2_rank(
     largest_first: bool,
     augment: bool,
     bidirectional: bool = False,
+    use_focal_loss: bool = False,
+    focal_weight: float = 20.0,
+    use_object_score_loss: bool = False,
+    average_over_frames: bool = False,
 ):
     """Single-rank torchrun worker for train_sam2_multi_gpu."""
     from torch_em.multi_gpu_training import DDP
 
     from micro_sam.v2.datasets.generalist_loader import _build_interactive_datasets, seed_worker
     from micro_sam.v2.datasets.sampler import DistributedUniBatchSampler, _build_group_map
-    from training.loss_fns import MultiStepMultiMasksAndIous
 
     dist.init_process_group("nccl")
     world_size = dist.get_world_size()
@@ -374,13 +363,9 @@ def _train_sam2_rank(
     )
     ddp_model = DDP(model, device_ids=[local_rank], find_unused_parameters=find_unused_parameters)
 
-    interactive_loss = MultiStepMultiMasksAndIous(
-        weight_dict={"loss_mask": 20, "loss_dice": 1, "loss_iou": 1, "loss_class": 1},
-        supervise_all_iou=True,
-        iou_use_l1_loss=True,
-        pred_obj_scores=True,
-        focal_gamma_obj_score=0.0,
-        focal_alpha_obj_score=-1.0,
+    interactive_loss = CustomSAM2Loss(
+        use_focal_loss=use_focal_loss, focal_weight=focal_weight,
+        use_object_score_loss=use_object_score_loss, average_over_frames=average_over_frames,
     )
 
     augmentor = VideoAugment() if augment else None
@@ -389,9 +374,7 @@ def _train_sam2_rank(
     )
 
     optimizer = _build_optimizer(model, lr=lr, vision_lr=vision_lr, layer_decay=layer_decay)
-    scheduler = _build_scheduler(
-        optimizer, lr=lr, n_epochs=n_epochs, n_iterations=n_iterations, train_loader=train_loader,
-    )
+    scheduler = _build_scheduler(optimizer)
 
     trainer = Sam2Trainer(
         name=name,
@@ -455,6 +438,10 @@ def train_sam2_multi_gpu(
     largest_first: bool = False,
     augment: bool = False,
     bidirectional: bool = False,
+    use_focal_loss: bool = False,
+    focal_weight: float = 20.0,
+    use_object_score_loss: bool = False,
+    average_over_frames: bool = False,
 ) -> None:
     """Train SAM2 for interactive segmentation across multiple GPUs with DDP.
 
@@ -544,6 +531,10 @@ def train_sam2_multi_gpu(
         largest_first=largest_first,
         augment=augment,
         bidirectional=bidirectional,
+        use_focal_loss=use_focal_loss,
+        focal_weight=focal_weight,
+        use_object_score_loss=use_object_score_loss,
+        average_over_frames=average_over_frames,
     )
 
 

@@ -12,7 +12,7 @@ from micro_sam.v2.transforms.labels import _instance_labels
 
 
 DATA_PATH = "/mnt/vast-nhr/projects/cidas/cca/data"
-SAVE_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/interactive/debug"
+SAVE_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/interactive/debug/v3"
 
 
 def get_embedseg_skull_dataloaders(input_path, batch_size=1, n_workers=16):
@@ -160,19 +160,21 @@ def train_one(dataset, model_type):
         model_type=model_type,
         n_epochs=20,
         lr=1e-5,
-        vision_lr=6e-6,
         save_root=os.path.join(SAVE_ROOT, dataset),
         checkpoint_path=None,
-        max_num_objects=8,
+        max_num_objects=5,  # reduced from 8: focal loss memory OOMs at 8 on a single 80GB GPU
         # Always prompt with a point or box, never the GT mask.
         # (prob_to_use_pt_input=1.0 disables SAM2's mask-input regime where the GT mask is planted as the prompt).
         prob_to_use_pt_input=1.0,
         num_frames_to_correct=2,
         num_correction_pt_per_frame=7,
         num_init_cond_frames=num_init_cond_frames,
-        clip_grad_norm=0.1,
-        layer_decay=0.9,
+        clip_grad_norm=None,
         bidirectional=(dataset != "livecell"),
+        use_focal_loss=True,  # add SAM2's focal mask loss on top of dice
+        focal_weight=1.0,  # keep focal on equal footing with dice (SAM2 uses 20)
+        use_object_score_loss=True,  # supervise the object-presence score with BCE
+        average_over_frames=False,  # set True to put 2D and 3D batches on the same loss scale
     )
 
 

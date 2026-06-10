@@ -27,7 +27,7 @@ from ..transforms.labels import (
 
 # Cap on validation samples drawn per dataset, to keep the per-epoch validation pass cheap.
 # Each access is a random crop (see UniDataWrapper.max_samples), so this is N random samples.
-N_SAMPLES_VAL = 25
+N_SAMPLES_VAL = 50
 
 # Fixed seed for deterministic validation. The same value is used to seed the main process
 # (prompt sampling in SAM2Train, object subsampling in ConvertToSam2VideoBatch) in
