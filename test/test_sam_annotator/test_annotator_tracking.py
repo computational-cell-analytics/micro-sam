@@ -10,7 +10,7 @@ from micro_sam._test_util import check_layer_initialization
 
 
 @pytest.mark.gui
-@pytest.mark.skipif(platform.system() in ("Windows", "Linux"), reason="Gui test is not working on windows.")
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 def test_annotator_tracking(make_napari_viewer_proxy):
     """Integration test for annotator_tracking.
     """
