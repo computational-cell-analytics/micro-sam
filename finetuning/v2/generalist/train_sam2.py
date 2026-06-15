@@ -6,9 +6,10 @@ def main():
     data_path = "/mnt/vast-nhr/projects/cidas/cca/data"
 
     # NOTE:
-    # -> v2 - best working model with OG loss.
-    # -> v3 - simplified loss with averaging over frames for 3d + 1x weighting across all components.
-    save_root = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/interactive/v3"
+    # -> v2 - best working model with OG loss (focal weight 20, cosine LR, vision_lr, grad clip 0.1).
+    # -> v3 - simplified CustomSAM2Loss, 1x weighting, average over frames; trails v2 on 3D.
+    # -> v4 - v3 but sum over frames is restored (average_over_frames=False) to test the 3D deficit.
+    save_root = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/interactive/v4"
 
     is_multi_gpu = "LOCAL_RANK" in os.environ
     name = f"sam2_interactive_{model_type}_{'multi' if is_multi_gpu else 'single'}_gpu"
@@ -42,7 +43,7 @@ def main():
         use_focal_loss=True,  # add SAM2's focal mask loss on top of dice
         focal_weight=1.0,  # keep focal on equal footing with dice (SAM2 uses 20)
         use_object_score_loss=True,  # supervise object presence (needed for 3D propagation)
-        average_over_frames=True,  # 2D and 3D batches share a loss scale (no 3D domination)
+        average_over_frames=False,  # sum over frames so 3D keeps its per-slice weight (like v2)
     )
 
     if is_multi_gpu:

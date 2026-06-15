@@ -105,7 +105,9 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         **{k: v for k, v in kwargs.items() if k != "raw_transform"}
     }
 
-    train_ds.append(UniDataWrapper(datasets.get_cellpose_dataset(split="train", **cellpose_kwargs), source_ndim=2))
+    train_ds.append(
+        UniDataWrapper(datasets.get_cellpose_dataset(split="train", n_samples=600, **cellpose_kwargs), source_ndim=2)
+    )
     val_ds.append(UniDataWrapper(datasets.get_cellpose_dataset(split="test", **cellpose_kwargs), source_ndim=2))
 
     # 2. CVZ Fluo (cell and nucleus segmentation in (2d) fluorescence CODEX images)
@@ -124,7 +126,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             is_seg_dataset=False,
             patch_shape=patch_shape,
             raw_transform=_to_8bit,
-            n_samples=100,
+            n_samples=200 if split_choice == "train" else 100,
             **{k: v for k, v in kwargs.items() if k != "raw_transform"}
         )
         return ds
@@ -137,7 +139,9 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     # 3. DSB dataset (nucleus segmentation in fluorescence images)
     dsb_kwargs = {"path": os.path.join(input_path, "dsb"), "patch_shape": patch_shape, "domain": "fluo", **kwargs}
 
-    train_ds.append(UniDataWrapper(datasets.get_dsb_dataset(split="train", **dsb_kwargs), source_ndim=2))
+    train_ds.append(
+        UniDataWrapper(datasets.get_dsb_dataset(split="train", n_samples=600, **dsb_kwargs), source_ndim=2)
+    )
     val_ds.append(UniDataWrapper(datasets.get_dsb_dataset(split="test", **dsb_kwargs), source_ndim=2))
 
     # 4. EmbedSeg (cell and nucleus segmentation in fluorescence microscopy images)
@@ -274,7 +278,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     }
 
     train_ds.append(
-        UniDataWrapper(datasets.get_tissuenet_dataset(split="train", n_samples=400, **tissuenet_kwargs), source_ndim=2)
+        UniDataWrapper(datasets.get_tissuenet_dataset(split="train", n_samples=1000, **tissuenet_kwargs), source_ndim=2)
     )
     val_ds.append(
         UniDataWrapper(datasets.get_tissuenet_dataset(split="val", n_samples=100, **tissuenet_kwargs), source_ndim=2)
@@ -290,7 +294,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     train_ds.extend(
         [
             UniDataWrapper(
-                datasets.get_livecell_dataset(split="train", cell_types=[ctype], n_samples=100, **livecell_kwargs),
+                datasets.get_livecell_dataset(split="train", cell_types=[ctype], n_samples=400, **livecell_kwargs),
                 source_ndim=2,
             ) for ctype in datasets.livecell.CELL_TYPES
         ]
@@ -310,35 +314,46 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         "patch_shape": patch_shape,
         "bac_type": "mixed",
         "raw_transform": _to_8bit,
-        "n_samples": 200,
         **{k: v for k, v in kwargs.items() if k != "raw_transform"}
     }
 
-    train_ds.append(UniDataWrapper(datasets.get_deepbacs_dataset(split="train", **deepbacs_kwargs), source_ndim=2))
-    val_ds.append(UniDataWrapper(datasets.get_deepbacs_dataset(split="test", **deepbacs_kwargs), source_ndim=2))
+    train_ds.append(
+        UniDataWrapper(datasets.get_deepbacs_dataset(split="train", n_samples=400, **deepbacs_kwargs), source_ndim=2)
+    )
+    val_ds.append(
+        UniDataWrapper(datasets.get_deepbacs_dataset(split="test", n_samples=200, **deepbacs_kwargs), source_ndim=2)
+    )
 
     # 10. OrgaSegment (organoid segmentation in bright field images)
     orgasegment_kwargs = {
-        "path": os.path.join(input_path, "orgasegment"), "patch_shape": patch_shape, "n_samples": 150, **kwargs
+        "path": os.path.join(input_path, "orgasegment"), "patch_shape": patch_shape, **kwargs
     }
 
     train_ds.append(
-        UniDataWrapper(datasets.get_orgasegment_dataset(split="train", **orgasegment_kwargs), source_ndim=2)
+        UniDataWrapper(
+            datasets.get_orgasegment_dataset(split="train", n_samples=300, **orgasegment_kwargs), source_ndim=2,
+        )
     )
     val_ds.append(
-        UniDataWrapper(datasets.get_orgasegment_dataset(split="val", **orgasegment_kwargs), source_ndim=2)
+        UniDataWrapper(
+            datasets.get_orgasegment_dataset(split="val", n_samples=150, **orgasegment_kwargs), source_ndim=2,
+        )
     )
 
     # 11. OrganoidNet (pancreatic organoid segmentation)
     organoidnet_kwargs = {
-        "path": os.path.join(input_path, "organoidnet"), "patch_shape": patch_shape, "n_samples": 200, **kwargs
+        "path": os.path.join(input_path, "organoidnet"), "patch_shape": patch_shape, **kwargs
     }
 
     train_ds.append(
-        UniDataWrapper(datasets.get_organoidnet_dataset(split="Training", **organoidnet_kwargs), source_ndim=2)
+        UniDataWrapper(
+            datasets.get_organoidnet_dataset(split="Training", n_samples=700, **organoidnet_kwargs), source_ndim=2,
+        )
     )
     val_ds.append(
-        UniDataWrapper(datasets.get_organoidnet_dataset(split="Validation", **organoidnet_kwargs), source_ndim=2)
+        UniDataWrapper(
+            datasets.get_organoidnet_dataset(split="Validation", n_samples=200, **organoidnet_kwargs), source_ndim=2,
+        )
     )
 
     # 12. Omnipose (bacteria and worm segmentation in mixed modality microscopy images)
@@ -346,12 +361,15 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         "path": os.path.join(input_path, "omnipose"),
         "patch_shape": patch_shape,
         "raw_transform": _to_8bit,
-        "n_samples": 200,
         **{k: v for k, v in kwargs.items() if k != "raw_transform"}
     }
 
-    train_ds.append(UniDataWrapper(datasets.get_omnipose_dataset(split="train", **omnipose_kwargs), source_ndim=2))
-    val_ds.append(UniDataWrapper(datasets.get_omnipose_dataset(split="test", **omnipose_kwargs), source_ndim=2))
+    train_ds.append(
+        UniDataWrapper(datasets.get_omnipose_dataset(split="train", n_samples=500, **omnipose_kwargs), source_ndim=2)
+    )
+    val_ds.append(
+        UniDataWrapper(datasets.get_omnipose_dataset(split="test", n_samples=200, **omnipose_kwargs), source_ndim=2)
+    )
 
     # 13. CTC (cell segmentation from Cell Tracking Challenge)
     # NOTE: CTC only supports the train split; no validation data added for CTC.
@@ -878,5 +896,10 @@ def _build_joint_datasets(input_path, z_slices, dataset_choice):
         )
         train_ds.extend(em_train)
         val_ds.extend(em_val)
+
+    # Cap each validation dataset to N_SAMPLES_VAL random samples so the per-epoch
+    # validation pass stays cheap (matches the interactive builder; train datasets are full size).
+    for w in val_ds:
+        w.max_samples = N_SAMPLES_VAL
 
     return ConcatDataset(*train_ds), ConcatDataset(*val_ds)

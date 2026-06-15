@@ -28,7 +28,7 @@ def main():
     )
 
     if n_gpus > 1:  # i.e. for multiple GPUs
-        train_automatic_multi_gpu(input_path=data_path, n_gpus=n_gpus, **loader_kwargs, **trainer_kwargs)
+        train_automatic_multi_gpu(input_path=data_path, **loader_kwargs, **trainer_kwargs)
     else:  # i.e. for single GPU
         train_loader, val_loader = get_dataloaders(input_path=data_path, **loader_kwargs)
         train_automatic(train_loader=train_loader, val_loader=val_loader, **trainer_kwargs)
