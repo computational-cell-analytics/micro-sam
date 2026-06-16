@@ -98,7 +98,7 @@ def get_trainable_sam_model(
         peft_kwargs: Keyword arguments for the PEFT wrapper class.
         flexible_load_checkpoint: Whether to adjust mismatching params while loading pretrained checkpoints.
             By default, set to 'False'.
-        model_kwargs: Additional keyword arguments for the `util.get_sam_model`.
+        model_kwargs: Additional keyword arguments for the `micro_sam.v1.util.get_sam_model`.
 
     Returns:
         The trainable segment anything model.

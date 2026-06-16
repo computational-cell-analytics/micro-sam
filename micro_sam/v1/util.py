@@ -182,7 +182,7 @@ def get_sam_model(
 
     Args:
         model_type: The Segment Anything model to use. Will use the 'vit_b_lm' model by default.
-            To get a list of all available model names you can call `micro_sam.util.get_model_names`.
+            To get a list of all available model names you can call `micro_sam.v1.util.get_model_names`.
         device: The device for the model. If 'None' is provided, will use GPU if available.
         checkpoint_path: The path to a file with weights that should be used instead of using the
             weights corresponding to `model_type`. If given, `model_type` must match the architecture

@@ -271,7 +271,7 @@ def train_sam(
             exactly matches the instance segmentation decoder. Decoders may have a mismatch in the output
             channels if they were pre-trained for a different task. If set to False, decoders with a different
             output dimension can be loaded; the output channels will be re-initialized.
-        model_kwargs: Additional keyword arguments for the `micro_sam.util.get_sam_model`.
+        model_kwargs: Additional keyword arguments for the `micro_sam.v1.util.get_sam_model`.
     """
     with _filter_warnings(ignore_warnings):
 
@@ -491,7 +491,7 @@ def train_instance_segmentation(
             exactly matches the instance segmentation decoder. Decoders may have a mismatch in the output
             channels if they were pre-trained for a different task. If set to False, decoders with a different
             output dimension can be loaded; the output channels will be re-initialized.
-        model_kwargs: Additional keyword arguments for the `micro_sam.util.get_sam_model`.
+        model_kwargs: Additional keyword arguments for the `micro_sam.v1.util.get_sam_model`.
     """
 
     with _filter_warnings(ignore_warnings):
