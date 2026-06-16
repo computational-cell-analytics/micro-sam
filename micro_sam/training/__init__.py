@@ -1,12 +1,13 @@
-"""Functionality for training Segment Anything.
-"""
+"""Deprecated alias for :mod:`micro_sam.v1.training`."""
+import warnings
+import importlib
 
-from .sam_trainer import SamTrainer, SamLogger
-from .util import ConvertToSamInputs, get_trainable_sam_model, identity
-from .joint_sam_trainer import JointSamTrainer, JointSamLogger
-from .simple_sam_trainer import SimpleSamTrainer, MedSAMTrainer
-from .semantic_sam_trainer import SemanticSamTrainer, SemanticMapsSamTrainer
-from .training import (
-    train_sam, train_sam_for_configuration, train_instance_segmentation, default_sam_loader, default_sam_dataset,
-    export_instance_segmentation_model, CONFIGURATIONS,
+warnings.warn(
+    "'micro_sam.training' has moved to 'micro_sam.v1.training'. "
+    "Update your imports; this alias will be removed in a future release.",
+    DeprecationWarning, stacklevel=2,
 )
+
+
+def __getattr__(name):
+    return getattr(importlib.import_module("micro_sam.v1.training"), name)

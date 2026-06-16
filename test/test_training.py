@@ -48,7 +48,7 @@ class TestDataset(unittest.TestCase):
             self.assertEqual(y.shape, expected_label_shape)
 
     def test_default_sam_dataset(self):
-        from micro_sam.training.training import default_sam_dataset
+        from micro_sam.v1.training.training import default_sam_dataset
         from torch_em.data import SegmentationDataset
 
         patch_shape = (512, 512)
@@ -58,7 +58,7 @@ class TestDataset(unittest.TestCase):
         self._check_dataset(ds, patch_shape, SegmentationDataset)
 
     def test_default_sam_dataset_with_numpy_data(self):
-        from micro_sam.training.training import default_sam_dataset
+        from micro_sam.v1.training.training import default_sam_dataset
         from torch_em.data import TensorDataset
 
         patch_shape = (512, 512)
@@ -117,7 +117,7 @@ class TestTraining(unittest.TestCase):
             pass
 
     def _get_dataloader(self, split, patch_shape, batch_size, train_instance_segmentation_only=False):
-        import micro_sam.training as sam_training
+        import micro_sam.v1.training as sam_training
 
         # Create the synthetic training data and get the corresponding folders.
         image_root = os.path.join(self.tmp_folder, "synthetic-data", "images", split)
@@ -136,7 +136,7 @@ class TestTraining(unittest.TestCase):
         return loader
 
     def _train_model(self, model_type, device):
-        import micro_sam.training as sam_training
+        import micro_sam.v1.training as sam_training
 
         batch_size = 1
         n_sub_iteration = 2
@@ -226,7 +226,7 @@ class TestTraining(unittest.TestCase):
         )
 
     def test_train_instance_segmentation(self):
-        from micro_sam.training.training import train_instance_segmentation, export_instance_segmentation_model
+        from micro_sam.v1.training.training import train_instance_segmentation, export_instance_segmentation_model
         from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         model_type, device = "vit_t", "cpu"

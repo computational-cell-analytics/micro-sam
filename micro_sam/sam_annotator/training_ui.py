@@ -9,8 +9,8 @@ from torch.utils.data import random_split
 
 import micro_sam.util as util
 import micro_sam.sam_annotator._widgets as widgets
-from micro_sam.training.training import _find_best_configuration, _export_helper
-from micro_sam.training import default_sam_dataset, train_sam_for_configuration, CONFIGURATIONS
+from micro_sam.v1.training.training import _find_best_configuration, _export_helper
+from micro_sam.v1.training import default_sam_dataset, train_sam_for_configuration, CONFIGURATIONS
 
 from ._tooltips import get_tooltip
 

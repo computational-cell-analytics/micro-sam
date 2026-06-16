@@ -18,7 +18,7 @@ from torch_em.data import datasets
 from micro_sam import util
 
 from . import run_evaluation
-from ..training.training import _filter_warnings
+from ..v1.training.training import _filter_warnings
 from .inference import run_inference_with_iterative_prompting
 from .evaluation import run_evaluation_for_iterative_prompting
 from .multi_dimensional_segmentation import segment_slices_from_ground_truth
