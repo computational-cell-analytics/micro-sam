@@ -28,7 +28,7 @@ except Exception:
 
 from . import sam_trainer as trainers
 from ..instance_segmentation import get_unetr
-from ..models.peft_sam import ClassicalSurgery
+from ..v1.models.peft_sam import ClassicalSurgery
 from . import joint_sam_trainer as joint_trainers
 from ..util import get_device, get_model_names, export_custom_sam_model, get_sam_model
 from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit, get_raw_transform

@@ -414,7 +414,7 @@ def get_sam_model(
     if _provided_checkpoint_path:
         # To get the model weights, we prioritize having the correct 'checkpoint_path' over 'model_type'
         # It is done to avoid strange parameter mismatch issues while incompatible model type and weights combination.
-        from micro_sam.models.build_sam import _validate_model_type
+        from micro_sam.v1.models.build_sam import _validate_model_type
         _provided_model_type = _validate_model_type(model_state)
 
         # Verify whether the 'abbreviated_model_type' matches the '_provided_model_type'

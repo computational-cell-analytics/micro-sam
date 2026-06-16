@@ -1,7 +1,6 @@
 """Deprecated alias for :mod:`micro_sam.v1.automatic_segmentation`."""
 import warnings
-
-from micro_sam.v1 import automatic_segmentation as _v1_module
+import importlib
 
 warnings.warn(
     "'micro_sam.automatic_segmentation' has moved to 'micro_sam.v1.automatic_segmentation'. "
@@ -11,4 +10,4 @@ warnings.warn(
 
 
 def __getattr__(name):
-    return getattr(_v1_module, name)
+    return getattr(importlib.import_module("micro_sam.v1.automatic_segmentation"), name)
