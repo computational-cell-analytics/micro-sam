@@ -91,6 +91,24 @@ We recommend transferring the model checkpoints to the system-level cache direct
 > mv vit_b_decoder.pt /home/anwai/.cache/micro_sam/models/vit_b_lm_decoder
 ```
 
+
+### 9. napari crashes with a segmentation fault (`Fatal Python error: Segmentation fault`) when I open one of the `micro_sam` annotators (Linux).
+This is caused by a corrupted system font cache, not by `micro_sam` itself. The annotator widgets use a collapsible "Settings" section (from `superqt`) that draws small arrow glyphs (`▲` / `▼`) with Qt. If your `fontconfig` cache is stale, Qt may resolve the default font to an unusable font file (e.g. a `.woff` web font), and Qt's bundled FreeType/HarfBuzz then segfaults while rendering those glyphs. You can confirm this is the cause if the crash traceback ends in `superqt/collapsible/_collapsible.py` in `_convert_string_to_icon`.
+
+To fix it, rebuild your user font cache:
+```bash
+fc-cache -f
+```
+If the crash persists, clear the cache directory and rebuild it:
+```bash
+rm -rf ~/.cache/fontconfig && fc-cache -f
+```
+You can verify the fix by checking that the default font no longer resolves to a `.woff` (or otherwise broken) file:
+```bash
+fc-match "Sans Serif"   # should return a real font such as NotoSans-Regular.ttf, not a .woff
+```
+
+
 ## Usage questions
 
 <!---
