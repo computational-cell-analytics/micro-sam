@@ -8,6 +8,7 @@ import torch_em
 from torch.utils.data import random_split
 
 import micro_sam.util as util
+from micro_sam.v1.util import models
 import micro_sam.sam_annotator._widgets as widgets
 from micro_sam.v1.training.training import _find_best_configuration, _export_helper
 from micro_sam.v1.training import default_sam_dataset, train_sam_for_configuration, CONFIGURATIONS
@@ -223,7 +224,7 @@ class TrainingWidget(widgets._WidgetBase):
 
         self._get_model_type()
         if self.custom_weights is None:
-            model_registry = util.models()
+            model_registry = models()
             checkpoint_path = model_registry.fetch(self.model_type)
         else:
             checkpoint_path = self.custom_weights

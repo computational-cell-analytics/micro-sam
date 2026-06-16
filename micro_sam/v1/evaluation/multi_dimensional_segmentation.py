@@ -13,6 +13,7 @@ import torch
 from elf.evaluation import mean_segmentation_accuracy, dice_score
 
 from ... import util
+from ..util import get_sam_model, precompute_image_embeddings
 from ..inference import batched_inference
 from ...prompt_generators import PointAndBoxPromptGenerator
 from ..multi_dimensional_segmentation import segment_mask_in_volume
@@ -103,10 +104,10 @@ def segment_slices_from_ground_truth(
     """
     assert volume.ndim == 3
 
-    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path, device=device)
+    predictor = get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path, device=device)
 
     # Compute the image embeddings
-    embeddings = util.precompute_image_embeddings(
+    embeddings = precompute_image_embeddings(
         predictor=predictor, input_=volume, save_path=embedding_path, ndim=3, verbose=verbose,
     )
 

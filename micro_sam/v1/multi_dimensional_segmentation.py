@@ -38,6 +38,7 @@ except ImportError:
 
 
 from .. import util
+from .util import precompute_image_embeddings
 from .prompt_based_segmentation import segment_from_mask
 from .instance_segmentation import AMGBase
 
@@ -387,7 +388,7 @@ def _segment_slices(
 ):
     assert data.ndim == 3
 
-    image_embeddings = util.precompute_image_embeddings(
+    image_embeddings = precompute_image_embeddings(
         predictor=predictor,
         input_=data,
         save_path=embedding_path,

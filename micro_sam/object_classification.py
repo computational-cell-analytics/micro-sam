@@ -16,6 +16,7 @@ except ImportError:
     from tqdm import tqdm
 
 from .import util
+from .v1.util import precompute_image_embeddings
 
 
 def _compute_object_features_impl(embeddings, segmentation, resize_embedding_shape):
@@ -253,7 +254,7 @@ def run_prediction_with_object_classifier(
     for image, segmentation in tqdm(
         zip(images, segmentations), total=len(images), desc="Run prediction with object classifier"
     ):
-        embeddings = util.precompute_image_embeddings(predictor, image, verbose=False, ndim=ndim)
+        embeddings = precompute_image_embeddings(predictor, image, verbose=False, ndim=ndim)
         seg_ids, features = compute_object_features(embeddings, segmentation, verbose=False)
         prediction = rf.predict(features)
         if project_prediction:

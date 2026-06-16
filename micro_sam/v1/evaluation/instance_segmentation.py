@@ -15,7 +15,7 @@ import imageio.v3 as imageio
 from elf.io import open_file
 from elf.evaluation import mean_segmentation_accuracy, matching
 
-from ... import util
+from ..util import precompute_image_embeddings
 from ..instance_segmentation import AMGBase, InstanceSegmentationWithDecoder
 
 
@@ -310,7 +310,7 @@ def run_instance_segmentation_grid_search(
         else:
             assert predictor is not None
             embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
-            image_embeddings = util.precompute_image_embeddings(
+            image_embeddings = precompute_image_embeddings(
                 predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings, **tiling_window_params
             )
             segmenter.initialize(image, image_embeddings, **tiling_window_params)
@@ -366,7 +366,7 @@ def run_instance_segmentation_inference(
         if tiling_window_params is None:
             tiling_window_params = {}
 
-        image_embeddings = util.precompute_image_embeddings(
+        image_embeddings = precompute_image_embeddings(
             predictor, image, embedding_path, ndim=2, verbose=verbose_embeddings, **tiling_window_params
         )
 

@@ -15,6 +15,7 @@ from qtpy import QtWidgets
 from qtpy.QtCore import QTimer
 
 from .. import util
+from ..v1.util import get_sam_model, get_model_names
 from . import _widgets as widgets
 from ._tooltips import get_tooltip
 from ._state import AnnotatorState
@@ -32,7 +33,7 @@ def _precompute(
     t_start = time.time()
 
     device = util.get_device(device)
-    predictor, state = util.get_sam_model(
+    predictor, state = get_sam_model(
         model_type=model_type, checkpoint_path=checkpoint_path, device=device, return_state=True
     )
     if prefer_decoder and "decoder_state" in state:
@@ -522,7 +523,7 @@ def main():
     """@private"""
     import argparse
 
-    available_models = list(util.get_model_names())
+    available_models = list(get_model_names())
     available_models = ", ".join(available_models)
 
     parser = argparse.ArgumentParser(description="Annotate a series of images from a folder.")

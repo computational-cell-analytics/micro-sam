@@ -9,7 +9,8 @@ import zarr
 
 from skimage.data import binary_blobs
 from skimage.measure import label
-from micro_sam.util import VIT_T_SUPPORT, SamPredictor, get_cache_directory, get_sam_model, set_precomputed
+from micro_sam.util import VIT_T_SUPPORT, SamPredictor, get_cache_directory
+from micro_sam.v1.util import get_sam_model, set_precomputed
 
 
 class TestUtil(unittest.TestCase):
@@ -24,7 +25,7 @@ class TestUtil(unittest.TestCase):
 
     # Check that the URLs for all models are valid.
     def test_model_registry(self):
-        from micro_sam.util import models
+        from micro_sam.v1.util import models
 
         def check_url(url):
             try:
@@ -42,7 +43,7 @@ class TestUtil(unittest.TestCase):
             self.assertTrue(url_exists)
 
     def test_get_sam_model(self):
-        from micro_sam.util import get_sam_model
+        from micro_sam.v1.util import get_sam_model
 
         def check_predictor(predictor):
             self.assertTrue(isinstance(predictor, SamPredictor))
@@ -121,7 +122,7 @@ class TestUtil(unittest.TestCase):
         predictor.original_size = None
 
     def test_precompute_image_embeddings(self):
-        from micro_sam.util import precompute_image_embeddings
+        from micro_sam.v1.util import precompute_image_embeddings
 
         # Load model and create test data.
         predictor = get_sam_model(model_type=self.model_type)
@@ -147,7 +148,7 @@ class TestUtil(unittest.TestCase):
         self._check_predictor_initialization(predictor, embeddings)
 
     def test_precompute_image_embeddings_3d(self):
-        from micro_sam.util import precompute_image_embeddings
+        from micro_sam.v1.util import precompute_image_embeddings
 
         # Load model and create test data.
         predictor = get_sam_model(model_type=self.model_type)
@@ -177,7 +178,7 @@ class TestUtil(unittest.TestCase):
             self._check_predictor_initialization(predictor, embeddings, i=i)
 
     def test_precompute_image_embeddings_tiled(self):
-        from micro_sam.util import precompute_image_embeddings
+        from micro_sam.v1.util import precompute_image_embeddings
 
         # Load model and create test data.
         predictor = get_sam_model(model_type=self.model_type)
@@ -208,7 +209,7 @@ class TestUtil(unittest.TestCase):
             self._check_predictor_initialization(predictor, embeddings, tile_id=tile_id)
 
     def test_precompute_image_embeddings_tiled_3d(self):
-        from micro_sam.util import precompute_image_embeddings
+        from micro_sam.v1.util import precompute_image_embeddings
 
         # Load model and create test data.
         predictor = get_sam_model(model_type=self.model_type)

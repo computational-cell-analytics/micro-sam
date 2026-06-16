@@ -17,6 +17,7 @@ import torch.nn as nn
 
 import micro_sam
 import micro_sam.util as util
+from micro_sam.v1.util import get_sam_model, precompute_image_embeddings
 from micro_sam.v1.instance_segmentation import AMGBase, get_decoder
 from micro_sam.precompute_state import cache_amg_state, cache_is_state
 
@@ -63,7 +64,7 @@ def _get_sam_model(model_type, ndim, device, checkpoint_path, decoder_path, use_
             pbar = tqdm(desc=f"Downloading '{model_type}'. This may take a while")
             return pbar
 
-        predictor, state = util.get_sam_model(
+        predictor, state = get_sam_model(
             device=device, model_type=model_type,
             checkpoint_path=checkpoint_path, decoder_path=decoder_path, return_state=True,
             progress_bar_factory=None if use_cli else progress_bar_factory,
@@ -169,7 +170,7 @@ class AnnotatorState(metaclass=Singleton):
             if self.is_sam2:
                 from micro_sam.v2.util import precompute_image_embeddings as _comp_embed_fn
             else:
-                _comp_embed_fn = util.precompute_image_embeddings
+                _comp_embed_fn = precompute_image_embeddings
 
             self.image_embeddings = _comp_embed_fn(
                 predictor=self.predictor,

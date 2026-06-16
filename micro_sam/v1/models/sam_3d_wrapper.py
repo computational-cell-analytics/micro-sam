@@ -7,7 +7,7 @@ import torch.nn as nn
 from segment_anything.modeling import Sam
 from segment_anything.modeling.image_encoder import window_partition, window_unpartition
 
-from ...util import get_sam_model
+from ..util import get_sam_model
 from .peft_sam import LoRASurgery
 
 

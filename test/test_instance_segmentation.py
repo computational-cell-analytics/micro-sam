@@ -2,6 +2,7 @@ import unittest
 from copy import deepcopy
 
 import micro_sam.util as util
+from micro_sam.v1.util import get_sam_model, precompute_image_embeddings
 import numpy as np
 from micro_sam.v1.instance_segmentation import get_predictor_and_decoder
 
@@ -48,13 +49,13 @@ class TestInstanceSegmentation(unittest.TestCase):
         if with_decoder:
             predictor, decoder = get_predictor_and_decoder(model_type=model_type, checkpoint_path=checkpoint)
         else:
-            predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint)
+            predictor = get_sam_model(model_type=model_type, checkpoint_path=checkpoint)
         if with_tiling:
-            image_embeddings = util.precompute_image_embeddings(
+            image_embeddings = precompute_image_embeddings(
                 predictor, image, tile_shape=self.tile_shape, halo=self.halo, verbose=False,
             )
         else:
-            image_embeddings = util.precompute_image_embeddings(predictor, image, verbose=False)
+            image_embeddings = precompute_image_embeddings(predictor, image, verbose=False)
 
         if with_decoder:
             return predictor, decoder, image_embeddings

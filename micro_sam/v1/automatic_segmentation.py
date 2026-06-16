@@ -12,6 +12,7 @@ import imageio.v3 as imageio
 from torch_em.data.datasets.util import split_kwargs
 
 from .. import util
+from .util import get_sam_model, precompute_image_embeddings, get_model_names
 from .instance_segmentation import (
     get_instance_segmentation_generator, get_decoder, AMGBase,
     AutomaticMaskGenerator, TiledAutomaticMaskGenerator,
@@ -54,7 +55,7 @@ def get_predictor_and_segmenter(
     # Get the predictor and state for Segment Anything Model.
     if predictor is None:
         device = util.get_device(device=device)
-        predictor, state = util.get_sam_model(
+        predictor, state = get_sam_model(
             model_type=model_type, device=device, checkpoint_path=checkpoint, return_state=True
         )
     else:
@@ -232,7 +233,7 @@ def automatic_instance_segmentation(
             raise ValueError(f"The inputs does not match the shape expectation of 2d inputs: {image_data.shape}")
 
         # Precompute the image embeddings.
-        image_embeddings = util.precompute_image_embeddings(
+        image_embeddings = precompute_image_embeddings(
             predictor=predictor,
             input_=image_data,
             save_path=embedding_path,
@@ -342,7 +343,7 @@ def main():
     """@private"""
     import argparse
 
-    available_models = list(util.get_model_names())
+    available_models = list(get_model_names())
     available_models = ", ".join(available_models)
 
     parser = argparse.ArgumentParser(
@@ -451,7 +452,7 @@ def main():
     if mode in ("auto", None):
         # We have to load the state to see if we have a decoder in this case.
         device = util.get_device(device=args.device)
-        predictor, state = util.get_sam_model(
+        predictor, state = get_sam_model(
             model_type=args.model_type, device=device, checkpoint_path=args.checkpoint, return_state=True
         )
         mode = DEFAULT_SEGMENTATION_MODE_WITH_DECODER if "decoder_state" in state else "amg"

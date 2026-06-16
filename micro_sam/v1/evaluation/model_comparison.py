@@ -22,6 +22,7 @@ from bioimage_cpp.segmentation import relabel_sequential
 import torch
 
 from ... import util
+from ..util import get_sam_model, precompute_image_embeddings, set_precomputed
 from ...prompt_generators import PointAndBoxPromptGenerator
 from ..prompt_based_segmentation import segment_from_box, segment_from_points
 
@@ -45,15 +46,15 @@ def _predict_models_with_loader(loader, n_samples, prompt_generator, predictor1,
         gt = y.numpy().squeeze().astype("uint32")
         gt = relabel_sequential(gt)[0]
 
-        emb1 = util.precompute_image_embeddings(predictor1, im, ndim=2)
-        util.set_precomputed(predictor1, emb1)
+        emb1 = precompute_image_embeddings(predictor1, im, ndim=2)
+        set_precomputed(predictor1, emb1)
 
-        emb2 = util.precompute_image_embeddings(predictor2, im, ndim=2)
-        util.set_precomputed(predictor2, emb2)
+        emb2 = precompute_image_embeddings(predictor2, im, ndim=2)
+        set_precomputed(predictor2, emb2)
 
         if predictor3 is not None:
-            emb3 = util.precompute_image_embeddings(predictor3, im, ndim=2)
-            util.set_precomputed(predictor3, emb3)
+            emb3 = precompute_image_embeddings(predictor3, im, ndim=2)
+            set_precomputed(predictor3, emb3)
 
         with h5py.File(out_path, "a") as f:
             f.create_dataset("image", data=im, compression="gzip")
@@ -138,9 +139,9 @@ def generate_data_for_model_comparison(
         loader: The torch dataloader from which samples are drawn.
         output_folder: The folder where the samples will be saved.
         model_type1: The first model to use for comparison.
-            The value needs to be a valid model_type for `micro_sam.util.get_sam_model`.
+            The value needs to be a valid model_type for `micro_sam.get_sam_model`.
         model_type2: The second model to use for comparison.
-            The value needs to be a valid model_type for `micro_sam.util.get_sam_model`.
+            The value needs to be a valid model_type for `micro_sam.get_sam_model`.
         n_samples: The number of samples to draw from the dataloader.
         checkpoint1: Optional checkpoint for the first model.
         checkpoint2: Optional checkpoint for the second model.
@@ -154,11 +155,11 @@ def generate_data_for_model_comparison(
         get_box_prompts=True,
     )
 
-    predictor1 = util.get_sam_model(model_type=model_type1, checkpoint_path=checkpoint1, peft_kwargs=peft_kwargs1)
-    predictor2 = util.get_sam_model(model_type=model_type2, checkpoint_path=checkpoint2, peft_kwargs=peft_kwargs2)
+    predictor1 = get_sam_model(model_type=model_type1, checkpoint_path=checkpoint1, peft_kwargs=peft_kwargs1)
+    predictor2 = get_sam_model(model_type=model_type2, checkpoint_path=checkpoint2, peft_kwargs=peft_kwargs2)
 
     if model_type3 is not None:
-        predictor3 = util.get_sam_model(model_type=model_type3, checkpoint_path=checkpoint3, peft_kwargs=peft_kwargs3)
+        predictor3 = get_sam_model(model_type=model_type3, checkpoint_path=checkpoint3, peft_kwargs=peft_kwargs3)
     else:
         predictor3 = None
 

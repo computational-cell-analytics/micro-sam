@@ -11,9 +11,10 @@ from segment_anything.utils.transforms import ResizeLongestSide
 
 from ...prompt_generators import PointAndBoxPromptGenerator
 from ...util import (
-    get_centers_and_bounding_boxes, get_sam_model, get_device,
+    get_centers_and_bounding_boxes, get_device,
     segmentation_to_one_hot, _DEFAULT_MODEL,
 )
+from ..util import get_sam_model
 from .. import models as custom_models
 from .trainable_sam import TrainableSAM
 

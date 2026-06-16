@@ -16,6 +16,7 @@ import torch
 from torch_em.data import datasets
 
 from micro_sam import util
+from ..util import get_sam_model, get_model_names
 
 from . import run_evaluation
 from ..training.training import _filter_warnings
@@ -532,7 +533,7 @@ def _run_automatic_segmentation_per_dataset(
         auto_seg_kwargs: Additional arguments for automatic segmentation parameters.
     """
     if segmentation_mode is None:  # The 2nd condition checks if you want AIS and if decoder state exists or not.
-        _, state = util.get_sam_model(
+        _, state = get_sam_model(
             model_type=model_type, checkpoint_path=checkpoint_path, device=device, return_state=True
         )
         segmentation_mode = DEFAULT_SEGMENTATION_MODE_WITH_DECODER if "decoder_state" in state else "amg"
@@ -599,7 +600,7 @@ def _run_interactive_segmentation_per_dataset(
     """
     if ndim == 2:
         # Get the Segment Anything predictor.
-        predictor = util.get_sam_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path)
+        predictor = get_sam_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path)
 
         prediction_root = os.path.join(
             output_folder, "interactive_segmentation_2d", f"start_with_{prompt_choice}",
@@ -830,7 +831,7 @@ def main():
     """@private"""
     import argparse
 
-    available_models = list(util.get_model_names())
+    available_models = list(get_model_names())
     available_models = ", ".join(available_models)
 
     parser = argparse.ArgumentParser(

@@ -5,7 +5,7 @@ from typing import Any, List, Dict, Union, Optional
 import torch
 import torch.nn as nn
 
-from ...util import get_sam_model
+from ..util import get_sam_model
 from .peft_sam import LoRASurgery
 
 

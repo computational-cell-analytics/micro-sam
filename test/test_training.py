@@ -7,7 +7,8 @@ from shutil import rmtree
 import imageio.v3 as imageio
 
 from micro_sam.sample_data import synthetic_data
-from micro_sam.util import VIT_T_SUPPORT, get_sam_model, SamPredictor
+from micro_sam.util import VIT_T_SUPPORT, SamPredictor
+from micro_sam.v1.util import get_sam_model
 
 
 class TestDataset(unittest.TestCase):
@@ -163,7 +164,7 @@ class TestTraining(unittest.TestCase):
         )
 
     def _export_model(self, checkpoint_path, export_path, model_type):
-        from micro_sam.util import export_custom_sam_model
+        from micro_sam.v1.util import export_custom_sam_model
 
         export_custom_sam_model(
             checkpoint_path=checkpoint_path,

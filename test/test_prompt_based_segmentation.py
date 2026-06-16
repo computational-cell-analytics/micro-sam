@@ -2,6 +2,7 @@ import os
 import unittest
 
 import micro_sam.util as util
+from micro_sam.v1.util import get_sam_model, precompute_image_embeddings, set_precomputed
 import numpy as np
 
 from skimage.draw import disk
@@ -30,10 +31,10 @@ class TestPromptBasedSegmentation(unittest.TestCase):
 
     @staticmethod
     def _get_model(image, model_type, tile_shape=None, halo=None):
-        predictor = util.get_sam_model(model_type=model_type, device=util.get_device(None))
-        image_embeddings = util.precompute_image_embeddings(predictor, image, tile_shape=tile_shape, halo=halo)
+        predictor = get_sam_model(model_type=model_type, device=util.get_device(None))
+        image_embeddings = precompute_image_embeddings(predictor, image, tile_shape=tile_shape, halo=halo)
         if tile_shape is None:
-            util.set_precomputed(predictor, image_embeddings)
+            set_precomputed(predictor, image_embeddings)
         return predictor, image_embeddings
 
     # we compute the default mask and predictor once for the class

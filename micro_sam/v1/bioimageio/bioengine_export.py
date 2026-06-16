@@ -12,7 +12,7 @@ try:
 except ImportError:
     onnxruntime_exists = False
 
-from ...util import get_sam_model
+from ..util import get_sam_model
 
 
 ENCODER_CONFIG = """name: "%s"

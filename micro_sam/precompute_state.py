@@ -22,6 +22,7 @@ except ImportError:
     from tqdm import tqdm
 
 from . import util
+from .v1.util import get_sam_model, precompute_image_embeddings, get_model_names
 from .v1 import instance_segmentation
 
 
@@ -166,7 +167,7 @@ def _precompute_state_for_file(
 
     # Precompute the image embeddings.
     output_path = Path(output_path).with_suffix(".zarr")
-    embeddings = util.precompute_image_embeddings(
+    embeddings = precompute_image_embeddings(
         predictor, image_data, output_path, ndim=ndim, tile_shape=tile_shape, halo=halo, verbose=verbose
     )
 
@@ -254,7 +255,7 @@ def precompute_state(
         precompute_amg_state: Whether to precompute the state for automatic instance segmentation
             in addition to the image embeddings.
     """
-    predictor, state = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path, return_state=True)
+    predictor, state = get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path, return_state=True)
 
     if "decoder_state" in state:
         decoder = instance_segmentation.get_decoder(predictor.model.image_encoder, state["decoder_state"])
@@ -283,7 +284,7 @@ def main():
     """@private"""
     import argparse
 
-    available_models = list(util.get_model_names())
+    available_models = list(get_model_names())
     available_models = ", ".join(available_models)
 
     parser = argparse.ArgumentParser(description="Compute the embeddings for an image.")
