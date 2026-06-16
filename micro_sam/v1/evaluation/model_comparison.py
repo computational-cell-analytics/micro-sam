@@ -21,8 +21,8 @@ from bioimage_cpp.segmentation import relabel_sequential
 
 import torch
 
-from .. import util
-from ..prompt_generators import PointAndBoxPromptGenerator
+from ... import util
+from ...prompt_generators import PointAndBoxPromptGenerator
 from ..prompt_based_segmentation import segment_from_box, segment_from_points
 
 

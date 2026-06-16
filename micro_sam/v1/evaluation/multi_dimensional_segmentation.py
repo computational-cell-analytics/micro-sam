@@ -12,9 +12,9 @@ import torch
 
 from elf.evaluation import mean_segmentation_accuracy, dice_score
 
-from .. import util
+from ... import util
 from ..inference import batched_inference
-from ..prompt_generators import PointAndBoxPromptGenerator
+from ...prompt_generators import PointAndBoxPromptGenerator
 from ..multi_dimensional_segmentation import segment_mask_in_volume
 from ..evaluation.instance_segmentation import _get_range_of_search_values, evaluate_instance_segmentation_grid_search
 

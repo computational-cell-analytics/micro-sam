@@ -15,7 +15,7 @@ import imageio.v3 as imageio
 from elf.io import open_file
 from elf.evaluation import mean_segmentation_accuracy, matching
 
-from .. import util
+from ... import util
 from ..instance_segmentation import AMGBase, InstanceSegmentationWithDecoder
 
 

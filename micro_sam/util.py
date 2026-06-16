@@ -30,7 +30,7 @@ from skimage.segmentation import find_boundaries
 from torchvision.ops.boxes import batched_nms
 
 from .__version__ import __version__
-from . import models as custom_models
+from .v1 import models as custom_models
 
 try:
     # Avoid import warnigns from mobile_sam

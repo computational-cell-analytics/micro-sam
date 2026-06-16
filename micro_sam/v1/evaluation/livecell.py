@@ -15,7 +15,7 @@ from ..instance_segmentation import (
     get_predictor_and_decoder,
     AutomaticMaskGenerator, InstanceSegmentationWithDecoder,
 )
-from ..util import get_sam_model
+from ...util import get_sam_model
 from ..evaluation import precompute_all_embeddings
 from . import instance_segmentation, inference, evaluation
 

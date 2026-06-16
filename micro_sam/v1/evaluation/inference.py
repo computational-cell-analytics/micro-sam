@@ -16,7 +16,7 @@ import torch
 
 from segment_anything import SamPredictor
 
-from .. import util as util
+from ... import util as util
 from ..inference import batched_inference
 from ..instance_segmentation import (
     get_predictor_and_decoder,
@@ -25,7 +25,7 @@ from ..instance_segmentation import (
     AutomaticPromptGenerator,
 )
 from . import instance_segmentation
-from ..prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
+from ...prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
 
 
 def _load_prompts(

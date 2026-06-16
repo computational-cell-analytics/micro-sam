@@ -16,7 +16,7 @@ import imageio.v3 as imageio
 from bioimage_cpp.segmentation import label
 from elf.evaluation import mean_segmentation_accuracy, matching
 
-from ..util import load_image_data
+from ...util import load_image_data
 
 
 def _run_evaluation(gt_paths, prediction_paths, verbose=True, thresholds=None):

@@ -12,7 +12,8 @@ import numpy as np
 from skimage import draw
 from scipy.ndimage import shift
 
-from .. import prompt_based_segmentation, util
+from .. import util
+from ..v1 import prompt_based_segmentation
 from .. import _model_settings as model_settings
 from ..v1.multi_dimensional_segmentation import _validate_projection
 

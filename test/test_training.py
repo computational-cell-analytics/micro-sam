@@ -174,7 +174,7 @@ class TestTraining(unittest.TestCase):
     def _run_inference_and_check_results(
         self, model_path, model_type, inference_function, prediction_dir, expected_sa
     ):
-        import micro_sam.evaluation as evaluation
+        import micro_sam.v1.evaluation as evaluation
 
         predictor = get_sam_model(model_type=model_type, checkpoint_path=model_path)
 
@@ -195,7 +195,7 @@ class TestTraining(unittest.TestCase):
         self.assertGreater(result, expected_sa)
 
     def test_training(self):
-        import micro_sam.evaluation as evaluation
+        import micro_sam.v1.evaluation as evaluation
 
         model_type, device = "vit_t", "cpu"
 
