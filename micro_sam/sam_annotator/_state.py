@@ -48,6 +48,10 @@ def _get_sam_model(model_type, ndim, device, checkpoint_path, decoder_path, use_
             # Prepare the SAM2 predictor.
             from sam2.sam2_image_predictor import SAM2ImagePredictor
             predictor = SAM2ImagePredictor(model)
+            # The video predictor gets these set in 'get_sam2_model'; set them here on the image
+            # predictor too, so the embedding signature can be written when caching embeddings.
+            predictor.model_type = model_type
+            predictor.model_name = model_type
         elif ndim == 3:  # Get SAM2 video predictor
             predictor = get_sam2_model(model_type=model_type, input_type="videos")
         else:

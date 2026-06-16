@@ -36,6 +36,10 @@ def promptable_segmentation_2d(
     if not have_points and not have_boxes:
         return
 
+    # Batched multi-object segmentation: each positive point and each box defines a separate object.
+    if batched:
+        return _batched_promptable_segmentation_2d(predictor, points, labels, boxes)
+
     kwargs = {}
     if have_points:
         kwargs["point_coords"] = points[:, ::-1].copy()  # Ensure contiguous array convention so that PyTorch likes it.
@@ -66,6 +70,65 @@ def promptable_segmentation_2d(
     out = out.astype("uint8")
 
     return out
+
+
+def _batched_promptable_segmentation_2d(predictor, points, labels, boxes):
+    """Batched 2D segmentation where each positive point and each box defines a separate object.
+
+    Negative points are shared as negative prompts for every object. This matches the batched
+    convention of the SAM v1 annotator and the 3D unified segment widget.
+    """
+    shape = predictor._orig_hw[0]
+
+    points = np.zeros((0, 2)) if points is None else np.asarray(points)
+    labels = np.zeros((0,), dtype=int) if labels is None else np.asarray(labels)
+    positive_points = points[labels == 1]
+    negative_points = points[labels != 1]
+    n_neg = len(negative_points)
+
+    seg = np.zeros(tuple(shape), dtype="uint32")
+    object_id = 0
+
+    def _assign(masks):
+        nonlocal object_id
+        masks = np.asarray(masks)
+        if masks.ndim == 3:  # A single object is returned as (C, H, W); add the object dimension.
+            masks = masks[None]
+        for curr_mask in masks:
+            object_id += 1
+            seg[curr_mask[0] > 0] = object_id
+
+    # One object per positive point, each combined with the shared negative points.
+    if len(positive_points) > 0:
+        obj_points, obj_labels = [], []
+        for pos in positive_points:
+            pts = np.concatenate([pos[None], negative_points], axis=0) if n_neg else pos[None]
+            lbs = np.concatenate([[1], np.zeros(n_neg, dtype=int)]) if n_neg else np.array([1])
+            obj_points.append(pts)
+            obj_labels.append(lbs)
+        # Reverse the last axis to convert (row, col) to the (x, y) convention SAM2 expects.
+        batched_points = np.stack(obj_points)[..., ::-1].copy()
+        batched_labels = np.stack(obj_labels)
+        masks, _, _ = predictor.predict(
+            point_coords=batched_points, point_labels=batched_labels, multimask_output=False,
+        )
+        _assign(masks)
+
+    # One object per box, each combined with the shared negative points.
+    if boxes is not None and len(boxes) > 0:
+        processed_boxes = np.array([_process_box(b, shape) for b in boxes])
+        kwargs = {"box": processed_boxes, "multimask_output": False}
+        if n_neg:
+            neg = np.repeat(negative_points[None], len(processed_boxes), axis=0)[..., ::-1].copy()
+            kwargs["point_coords"] = neg
+            kwargs["point_labels"] = np.zeros((len(processed_boxes), n_neg), dtype=int)
+        masks, _, _ = predictor.predict(**kwargs)
+        _assign(masks)
+
+    if object_id == 0:
+        return None
+
+    return seg
 
 
 def promptable_segmentation_3d(

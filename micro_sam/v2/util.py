@@ -192,7 +192,15 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
         # In this case we load the embeddings.
         features = f["features"][:]
         original_size = f.attrs["original_size"]
-        image_embeddings = {"features": features, "original_size": original_size}
+        input_size = f.attrs["input_size"]
+        # The high-resolution features are stored as a list of datasets and are needed by the decoder.
+        high_res_features = _load_list_datasets(f, "high_res_feats", lazy_loading=False)
+        image_embeddings = {
+            "features": features,
+            "high_res_feats": high_res_features,
+            "input_size": input_size,
+            "original_size": original_size,
+        }
         # Also set the embeddings.
         set_precomputed(predictor, image_embeddings)
         return image_embeddings
@@ -206,13 +214,19 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
     features = predictor.get_image_embedding().cpu().numpy()
     high_res_features = predictor._features.get("high_res_feats")
     original_size = predictor._orig_hw
-    input_size = predictor.image_size
+    # SAM2ImagePredictor exposes the model resolution via its underlying model, unlike the
+    # video predictor which subclasses SAM2Base and has 'image_size' directly.
+    input_size = predictor.model.image_size
     pbar_update(1)
 
     # Save the embeddings if we have a save_path.
     if save_path is not None:
         from micro_sam.util import _create_dataset_with_data, _write_embedding_signature
         _create_dataset_with_data(f, "features", data=features)
+        # Store the high-resolution features (a list of tensors) needed by the SAM2 decoder.
+        high_res_group = f.require_group("high_res_feats")
+        for i, feat in enumerate(high_res_features):
+            _create_dataset_with_data(high_res_group, str(i), data=feat.cpu().numpy())
         _write_embedding_signature(
             f, input_, predictor, tile_shape=None, halo=None, input_size=input_size, original_size=original_size,
         )
@@ -545,7 +559,14 @@ def set_precomputed(
         if i is not None:
             raise ValueError("The data is 2D so an index is not needed.")
 
-        predictor._features = {"image_embed": features, "high_res_feats": image_embeddings["high_res_feats"]}
+        # Reloaded embeddings are numpy arrays, so convert them to tensors on the predictor device,
+        # matching what 'predictor.set_image' would have produced for the decoder.
+        image_embed = torch.as_tensor(np.asarray(features), device=device).float()
+        high_res_feats = [
+            torch.as_tensor(np.asarray(feat), device=device).float()
+            for feat in image_embeddings["high_res_feats"]
+        ]
+        predictor._features = {"image_embed": image_embed, "high_res_feats": high_res_feats}
         predictor._is_image_set = True
         predictor._orig_hw = image_embeddings["original_size"]
         return predictor
