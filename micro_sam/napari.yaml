@@ -35,7 +35,7 @@ contributions:
     - id: micro_sam.annotator
       python_name: micro_sam.sam_annotator.annotator:Annotator
       title: Start the segmentation annotator
-    - id: micro-sam.annotator_tracking
+    - id: micro_sam.annotator_tracking
       python_name: micro_sam.sam_annotator.annotator_tracking:AnnotatorTracking
       title: Start the tracking annotator
     - id: micro_sam.image_series_annotator

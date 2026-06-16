@@ -5,7 +5,7 @@ import pytest
 from skimage.data import binary_blobs
 
 import micro_sam.util as util
-from micro_sam.sam_annotator.annotator import annotator, detect_ndim
+from micro_sam.sam_annotator.annotator import annotator, detect_ndim, detect_ndim_from_viewer, Annotator
 from micro_sam._test_util import check_layer_initialization
 
 
@@ -59,6 +59,29 @@ class TestDetectNdim:
 
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+class TestDetectNdimFromViewer:
+    """Test detecting ndim from image layers loaded in the viewer."""
+
+    def test_empty_viewer_defaults_to_2d(self, make_napari_viewer_proxy):
+        viewer = make_napari_viewer_proxy()
+        assert detect_ndim_from_viewer(viewer) == 2
+        viewer.close()
+
+    def test_detects_2d_image(self, make_napari_viewer_proxy):
+        viewer = make_napari_viewer_proxy()
+        viewer.add_image(binary_blobs(128), name="image")
+        assert detect_ndim_from_viewer(viewer) == 2
+        viewer.close()
+
+    def test_detects_3d_image(self, make_napari_viewer_proxy):
+        viewer = make_napari_viewer_proxy()
+        viewer.add_image(np.stack(4 * [binary_blobs(128)]), name="volume")
+        assert detect_ndim_from_viewer(viewer) == 3
+        viewer.close()
+
+
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 class TestAnnotatorClass:
     """Test the unified Annotator class."""
 
@@ -77,6 +100,35 @@ class TestAnnotatorClass:
 
         check_layer_initialization(viewer, image.shape)
         viewer.close()  # must close the viewer at the end of tests
+
+    def test_widget_no_image_defaults_to_2d(self, make_napari_viewer_proxy):
+        # Reproduces opening the plugin from the napari Plugins menu with no image loaded.
+        viewer = make_napari_viewer_proxy()
+        widget = Annotator(viewer)
+        assert widget._ndim == 2
+        viewer.close()
+
+    def test_widget_detects_ndim_from_loaded_image(self, make_napari_viewer_proxy):
+        # When an image is loaded before opening the widget, ndim is detected from it.
+        viewer = make_napari_viewer_proxy()
+        viewer.add_image(np.stack(4 * [binary_blobs(128)]), name="volume")
+        widget = Annotator(viewer)
+        assert widget._ndim == 3
+        viewer.close()
+
+    def test_widget_rebuilds_when_3d_image_loaded_after_open(self, make_napari_viewer_proxy):
+        # Open the widget without an image (defaults to 2D), then load a 3D image.
+        # Selecting it as input should rebuild the annotator for 3D.
+        viewer = make_napari_viewer_proxy()
+        widget = Annotator(viewer)
+        assert widget._ndim == 2
+
+        viewer.add_image(np.stack(4 * [binary_blobs(128)]), name="volume")
+        widget._embedding_widget.image_selection.reset_choices()
+        assert widget._ndim == 3
+        # The prompt layers must be recreated with the new dimensionality.
+        assert viewer.layers["point_prompts"].ndim == 3
+        viewer.close()
 
     def test_annotator_3d(self, make_napari_viewer_proxy):
         image = np.stack(4 * [binary_blobs(512)])

@@ -9,6 +9,10 @@ from . import _widgets as widgets
 from . import util as vutil
 from ._state import AnnotatorState
 
+# Placeholder shapes used to seed the annotator layers before a real image is loaded.
+# Only the dimensionality matters; the values are reset to the image shape on load.
+PLACEHOLDER_SHAPE = {2: (256, 256), 3: (16, 256, 256)}
+
 
 class _AnnotatorBase(QtWidgets.QScrollArea):
     """Base class for micro_sam annotation plugins.
@@ -164,17 +168,29 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         """
         super().__init__()
         self._viewer = viewer
-        self._annotator_widget = QtWidgets.QWidget()
-        self._annotator_widget.setLayout(QtWidgets.QVBoxLayout())
 
         # Add the layers for prompts and segmented obejcts.
         # Initialize with a dummy shape, which is reset to the correct shape once an image is set.
         self._ndim = ndim
-        self._shape = (256, 256) if ndim == 2 else (16, 256, 256)
+        self._shape = PLACEHOLDER_SHAPE[ndim]
         self._require_layers()
 
-        # Create all the widgets and add them to the layout.
+        # Create all the widgets and populate the layout.
         self._create_widgets()
+        AnnotatorState().widgets = self._widgets
+
+        # Add the key bindings in common between all annotators.
+        self._create_keybindings()
+
+        # Build the scroll area content from the current set of widgets.
+        self._populate_widget_layout()
+
+    def _populate_widget_layout(self):
+        # Build the scroll area content from the current set of widgets in 'self._widgets'.
+        # This can be called again to rebuild the layout, e.g. when the image dimensionality
+        # changes and the dimension-specific widgets have to be replaced.
+        annotator_widget = QtWidgets.QWidget()
+        annotator_widget.setLayout(QtWidgets.QVBoxLayout())
         for widget in self._widgets.values():
             widget_frame = QtWidgets.QGroupBox()
             widget_layout = QtWidgets.QVBoxLayout()
@@ -185,19 +201,41 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
                 # This is a qt type and we add the widget directly.
                 widget_layout.addWidget(widget)
             widget_frame.setLayout(widget_layout)
-            self._annotator_widget.layout().addWidget(widget_frame)
+            annotator_widget.layout().addWidget(widget_frame)
 
-        # Add the widgets to the state.
+        self._annotator_widget = annotator_widget
+        # Allow widget to resize within scroll area.
+        self.setWidgetResizable(True)
+        # Replacing the inner widget deletes the previous one (and its now-orphaned children).
+        self.setWidget(self._annotator_widget)
+
+    def _rebuild_for_ndim(self, ndim):
+        # Rebuild the layers and dimension-specific widgets for a new dimensionality.
+        # This supports loading an image whose dimensionality differs from the one the
+        # annotator was created with, e.g. opening the plugin and then loading a 3D image.
+        if ndim == self._ndim:
+            return
+        self._ndim = ndim
+        self._shape = PLACEHOLDER_SHAPE[ndim]
+
+        # Remove the existing micro_sam layers so they are recreated with the new ndim and shape.
+        layer_names = ("current_object", "auto_segmentation", "committed_objects", "point_prompts", "prompts")
+        for layer_name in layer_names:
+            if layer_name in self._viewer.layers:
+                del self._viewer.layers[layer_name]
+        self._require_layers()
+
+        # The prompt widget is bound to the point prompt layer, so it is recreated alongside it.
+        self._prompt_widget = widgets.create_prompt_menu(self._point_prompt_layer, self._point_labels)
+
+        # Rebuild the dimension-specific widgets, keeping the shared embedding widget.
+        self._widgets = {"embeddings": self._embedding_widget, "prompts": self._prompt_widget}
+        self._widgets.update(self._get_widgets())
         AnnotatorState().widgets = self._widgets
 
-        # Add the key bindings in common between all annotators.
+        # Rebuild the layout and rebind the keybindings to the new widgets and layers.
+        self._populate_widget_layout()
         self._create_keybindings()
-
-        # Add the widget to the scroll area.
-        self.setWidgetResizable(
-            True
-        )  # Allow widget to resize within scroll area.
-        self.setWidget(self._annotator_widget)
 
     def _update_image(self, segmentation_result=None):
         state = AnnotatorState()
