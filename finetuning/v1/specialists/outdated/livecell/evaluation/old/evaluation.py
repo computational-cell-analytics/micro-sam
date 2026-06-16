@@ -5,7 +5,7 @@ from glob import glob
 import pandas as pd
 from tqdm import tqdm
 
-from micro_sam.evaluation.livecell import evaluate_livecell_predictions
+from micro_sam.v1.evaluation.livecell import evaluate_livecell_predictions
 from util import get_experiment_folder, DATA_ROOT
 
 

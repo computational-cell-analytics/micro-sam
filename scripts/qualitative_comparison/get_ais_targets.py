@@ -8,7 +8,7 @@ from torch_em.data import MinInstanceSampler
 from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.data.datasets import get_livecell_loader, get_mitolab_loader
 
-from micro_sam.evaluation.model_comparison import _enhance_image
+from micro_sam.v1.evaluation.model_comparison import _enhance_image
 
 from compare_benchmarks import get_random_colors
 

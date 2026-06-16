@@ -2,8 +2,9 @@ import unittest
 from copy import deepcopy
 
 import micro_sam.util as util
+from micro_sam.v1.util import get_sam_model, precompute_image_embeddings
 import numpy as np
-from micro_sam.instance_segmentation import get_predictor_and_decoder
+from micro_sam.v1.instance_segmentation import get_predictor_and_decoder
 
 from elf.evaluation.matching import matching
 from skimage.draw import disk
@@ -48,13 +49,13 @@ class TestInstanceSegmentation(unittest.TestCase):
         if with_decoder:
             predictor, decoder = get_predictor_and_decoder(model_type=model_type, checkpoint_path=checkpoint)
         else:
-            predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint)
+            predictor = get_sam_model(model_type=model_type, checkpoint_path=checkpoint)
         if with_tiling:
-            image_embeddings = util.precompute_image_embeddings(
+            image_embeddings = precompute_image_embeddings(
                 predictor, image, tile_shape=self.tile_shape, halo=self.halo, verbose=False,
             )
         else:
-            image_embeddings = util.precompute_image_embeddings(predictor, image, verbose=False)
+            image_embeddings = precompute_image_embeddings(predictor, image, verbose=False)
 
         if with_decoder:
             return predictor, decoder, image_embeddings
@@ -107,12 +108,12 @@ class TestInstanceSegmentation(unittest.TestCase):
             self.assertTrue(np.array_equal(predicted, predicted3))
 
     def test_automatic_mask_generator(self):
-        from micro_sam.instance_segmentation import AutomaticMaskGenerator
+        from micro_sam.v1.instance_segmentation import AutomaticMaskGenerator
         create_kwargs = dict(points_per_side=10, points_per_batch=16)
         self._test_instance_segmentation(AutomaticMaskGenerator, create_kwargs=create_kwargs)
 
     def test_tiled_automatic_mask_generator(self):
-        from micro_sam.instance_segmentation import TiledAutomaticMaskGenerator
+        from micro_sam.v1.instance_segmentation import TiledAutomaticMaskGenerator
         self._clear_gpu_memory()  # Release all unoccupied cached memory, tiling requires a lot of memory.
         create_kwargs = dict(points_per_side=8)
         generate_kwargs = dict(pred_iou_thresh=0.75)
@@ -121,7 +122,7 @@ class TestInstanceSegmentation(unittest.TestCase):
         )
 
     def test_instance_segmentation_with_decoder(self):
-        from micro_sam.instance_segmentation import InstanceSegmentationWithDecoder
+        from micro_sam.v1.instance_segmentation import InstanceSegmentationWithDecoder
         # VIT_T behaves a bit weirdly, that's why we need these specific settings
         generate_kwargs = dict(foreground_threshold=0.8, min_size=100)
         self._test_instance_segmentation(
@@ -129,19 +130,19 @@ class TestInstanceSegmentation(unittest.TestCase):
         )
 
     def test_tiled_instance_segmentation_with_decoder(self):
-        from micro_sam.instance_segmentation import TiledInstanceSegmentationWithDecoder
+        from micro_sam.v1.instance_segmentation import TiledInstanceSegmentationWithDecoder
         generate_kwargs = dict(foreground_threshold=0.8, min_size=100)
         self._test_instance_segmentation(
             TiledInstanceSegmentationWithDecoder, generate_kwargs=generate_kwargs, with_decoder=True, with_tiling=True,
         )
 
     def test_automatic_prompt_generator(self):
-        from micro_sam.instance_segmentation import AutomaticPromptGenerator
+        from micro_sam.v1.instance_segmentation import AutomaticPromptGenerator
         generate_kwargs = dict(foreground_threshold=0.8, min_size=100)
         self._test_instance_segmentation(AutomaticPromptGenerator, generate_kwargs=generate_kwargs, with_decoder=True)
 
     def test_tiled_automatic_prompt_generator(self):
-        from micro_sam.instance_segmentation import TiledAutomaticPromptGenerator
+        from micro_sam.v1.instance_segmentation import TiledAutomaticPromptGenerator
         generate_kwargs = dict(foreground_threshold=0.8, min_size=100)
         self._test_instance_segmentation(
             TiledAutomaticPromptGenerator, generate_kwargs=generate_kwargs,

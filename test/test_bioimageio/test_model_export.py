@@ -27,7 +27,7 @@ class TestModelExport(unittest.TestCase):
         rmtree(self.tmp_folder, ignore_errors=True)
 
     def test_model_export(self):
-        from micro_sam.bioimageio import export_sam_model
+        from micro_sam.v1.bioimageio import export_sam_model
         image, labels = synthetic_data(shape=(1024, 1022))
 
         export_path = os.path.join(self.tmp_folder, "test_export.zip")

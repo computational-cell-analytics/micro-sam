@@ -8,9 +8,9 @@ from torch_em.data import MinInstanceSampler
 from torch_em.loss import DiceBasedDistanceLoss
 from torch_em.data.datasets import get_tissuenet_loader
 
-import micro_sam.training as sam_training
+import micro_sam.v1.training as sam_training
 from micro_sam.util import export_custom_sam_model
-from micro_sam.training.util import ResizeRawTrafo, ResizeLabelTrafo
+from micro_sam.v1.training.util import ResizeRawTrafo, ResizeLabelTrafo
 
 
 def get_dataloaders(patch_shape, data_path):

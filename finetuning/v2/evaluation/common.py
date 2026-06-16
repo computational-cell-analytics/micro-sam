@@ -11,7 +11,7 @@ from torch_em.data import datasets
 from torch_em.transform.raw import normalize
 from torch_em.util.image import load_image
 
-from micro_sam.evaluation.livecell import _get_livecell_paths
+from micro_sam.v1.evaluation.livecell import _get_livecell_paths
 
 
 DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data"

@@ -2,7 +2,7 @@ from typing import Optional, Union, List
 
 import numpy as np
 
-from micro_sam.prompt_based_segmentation import _process_box
+from micro_sam.v1.prompt_based_segmentation import _process_box
 
 
 def promptable_segmentation_2d(

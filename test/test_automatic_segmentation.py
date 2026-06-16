@@ -82,7 +82,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
             torch.mps.empty_cache()
 
     def test_automatic_mask_generator_2d(self):
-        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+        from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         mask, image = self.mask, self.image
         predictor, segmenter = get_predictor_and_segmenter(
@@ -94,7 +94,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         self.assertEqual(mask.shape, instances.shape)
 
     def test_tiled_automatic_mask_generator_2d(self):
-        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+        from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         mask, image = self.large_mask, self.large_image
         predictor, segmenter = get_predictor_and_segmenter(
@@ -107,7 +107,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         self.assertEqual(mask.shape, instances.shape)
 
     def test_instance_segmentation_with_decoder_2d(self):
-        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+        from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         mask, image = self.mask, self.image
         predictor, segmenter = get_predictor_and_segmenter(
@@ -120,7 +120,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         self.assertGreater(instances.max(), 0)
 
     def test_tiled_instance_segmentation_with_decoder_2d(self):
-        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+        from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         mask, image = self.large_mask, self.large_image
         predictor, segmenter = get_predictor_and_segmenter(
@@ -136,7 +136,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
 
     @unittest.skipUnless(HAVE_CUDA, "Skipping long running tests unless we have a GPU.")
     def test_automatic_mask_generator_3d(self):
-        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+        from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         labels, volume = self.labels, self.volume
         predictor, segmenter = get_predictor_and_segmenter(
@@ -150,7 +150,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
 
     @unittest.skipUnless(HAVE_CUDA, "Skipping long running tests unless we have a GPU.")
     def test_tiled_automatic_mask_generator_3d(self):
-        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+        from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         labels, volume = self.large_labels, self.large_volume
         predictor, segmenter = get_predictor_and_segmenter(
@@ -164,7 +164,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         self.assertGreater(instances.max(), 0)
 
     def test_instance_segmentation_with_decoder_3d(self):
-        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+        from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         labels, volume = self.labels, self.volume
         predictor, segmenter = get_predictor_and_segmenter(
@@ -178,7 +178,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
 
     @unittest.skipUnless(WITH_TRACKASTRA, "Needs trackastra")
     def test_automatic_tracking(self):
-        from micro_sam.automatic_segmentation import automatic_tracking, get_predictor_and_segmenter
+        from micro_sam.v1.automatic_segmentation import automatic_tracking, get_predictor_and_segmenter
 
         labels, volume = self.labels, self.volume
         predictor, segmenter = get_predictor_and_segmenter(
@@ -189,7 +189,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         self.assertGreater(instances.max(), 0)
 
     def test_tiled_instance_segmentation_with_decoder_3d(self):
-        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+        from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         labels, volume = self.large_labels, self.large_volume
         predictor, segmenter = get_predictor_and_segmenter(

@@ -1,7 +1,7 @@
 import os
 
 from micro_sam.util import get_sam_model
-from micro_sam.evaluation import precompute_all_embeddings
+from micro_sam.v1.evaluation import precompute_all_embeddings
 
 from util import (
     get_paths,  # comment this and create a custom function with the same name to execute on your data

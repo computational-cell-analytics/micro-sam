@@ -15,8 +15,9 @@ try:
 except ImportError:
     from tqdm import tqdm
 
-from . import util
-from ._vendored import batched_mask_to_box
+from .. import util
+from .util import precompute_image_embeddings, set_precomputed
+from .._vendored import batched_mask_to_box
 
 
 def _validate_inputs(
@@ -214,10 +215,10 @@ def batched_inference(
         predictor.get_image_embedding()
     else:
         input_ = image if i is None else image[i]
-        image_embeddings = util.precompute_image_embeddings(
+        image_embeddings = precompute_image_embeddings(
             predictor, input_, embedding_path, verbose=verbose_embeddings
         )
-        util.set_precomputed(predictor, image_embeddings)
+        set_precomputed(predictor, image_embeddings)
 
     # Determine the number of batches.
     n_batches = int(np.ceil(float(n_prompts) / batch_size))
@@ -293,7 +294,7 @@ def _require_tiled_embeddings(
         assert image is not None
         assert (tile_shape is not None) and (halo is not None)
         shape = image.shape[:2]
-        image_embeddings = util.precompute_image_embeddings(
+        image_embeddings = precompute_image_embeddings(
             predictor, image, embedding_path, ndim=2, tile_shape=tile_shape, halo=halo, verbose=verbose_embeddings
         )
     else:  # This means the image embeddings are computed already.
@@ -494,7 +495,7 @@ def batched_tiled_inference(
         tile_points, tile_labels = point_to_tile.get(tile_id), label_to_tile.get(tile_id)
 
         # Set the correct embeddings, run inference.
-        predictor = util.set_precomputed(predictor, image_embeddings, tile_id=tile_id, i=i)
+        predictor = set_precomputed(predictor, image_embeddings, tile_id=tile_id, i=i)
         this_masks = batched_inference(
             predictor=predictor,
             image=None,

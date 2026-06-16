@@ -1,4 +1,4 @@
-from micro_sam.bioimageio import export_sam_model
+from micro_sam.v1.bioimageio import export_sam_model
 from micro_sam.sample_data import synthetic_data
 
 

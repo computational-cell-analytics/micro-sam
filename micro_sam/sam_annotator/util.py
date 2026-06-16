@@ -12,9 +12,11 @@ import numpy as np
 from skimage import draw
 from scipy.ndimage import shift
 
-from .. import prompt_based_segmentation, util
+from .. import util
+from ..v1.util import get_model_names
+from ..v1 import prompt_based_segmentation
 from .. import _model_settings as model_settings
-from ..multi_dimensional_segmentation import _validate_projection
+from ..v1.multi_dimensional_segmentation import _validate_projection
 
 # Green and Red
 LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
@@ -40,7 +42,7 @@ def toggle_label(prompts):
 
 def _initialize_parser(description, with_segmentation_result=True, with_instance_segmentation=True):
 
-    available_models = list(util.get_model_names())
+    available_models = list(get_model_names())
     available_models = ", ".join(available_models)
 
     parser = argparse.ArgumentParser(description=description)

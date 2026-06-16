@@ -11,8 +11,8 @@ from torch_em import get_data_loader
 from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.data import ConcatDataset, MinInstanceSampler, datasets
 
-from micro_sam.training import identity
-from micro_sam.training.util import ResizeRawTrafo, ResizeLabelTrafo
+from micro_sam.v1.training import identity
+from micro_sam.v1.training.util import ResizeRawTrafo, ResizeLabelTrafo
 
 
 def compute_platy_rois(root, sample_ids, ignore_label, file_template, label_key):

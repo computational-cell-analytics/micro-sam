@@ -1,6 +1,6 @@
 import os
 
-import micro_sam.training as sam_training
+import micro_sam.v1.training as sam_training
 from micro_sam.util import get_device
 from micro_sam.sample_data import fetch_tracking_example_data, fetch_tracking_segmentation_data
 

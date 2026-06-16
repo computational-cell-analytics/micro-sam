@@ -32,8 +32,10 @@ from qtpy import QtWidgets
 from qtpy.QtCore import QObject, Signal
 from superqt import QCollapsible
 
-from .. import instance_segmentation, util
-from ..multi_dimensional_segmentation import (
+from .. import util
+from ..v1.util import models
+from ..v1 import instance_segmentation
+from ..v1.multi_dimensional_segmentation import (
     PROJECTION_MODES,
     get_napari_track_data,
     merge_instance_segmentation_3d,
@@ -449,7 +451,7 @@ class _WidgetBase(QtWidgets.QWidget):
         self.model_size = self._model_size_map[self._default_model_choice[4]]
 
         # Get all model options.
-        self.model_options = list(util.models().urls.keys())
+        self.model_options = list(models().urls.keys())
         # Filter out the decoders from the model list.
         self.model_options = [
             model

@@ -7,7 +7,7 @@ from torch_em.data import MinInstanceSampler
 from torch_em.data.datasets import get_livecell_dataset
 from torch_em.multi_gpu_training import train_multi_gpu
 
-import micro_sam.training as sam_training
+import micro_sam.v1.training as sam_training
 from micro_sam.util import export_custom_sam_model
 
 from segment_anything.utils.transforms import ResizeLongestSide

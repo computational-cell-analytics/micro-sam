@@ -234,7 +234,7 @@ If none of these steps help then the available `micro_sam` models are likely not
 
 ### 1. I have a microscopy dataset I would like to fine-tune Segment Anything for. Is it possible using `micro_sam`?
 Yes, you can fine-tune Segment Anything on your own dataset. Here's how you can do it:
-- Check out the [tutorial notebook](https://github.com/computational-cell-analytics/micro-sam/blob/main/notebooks/sam_finetuning.ipynb) on how to fine-tune Segment Anything with our `micro_sam.training` library.
+- Check out the [tutorial notebook](https://github.com/computational-cell-analytics/micro-sam/blob/main/notebooks/sam_finetuning.ipynb) on how to fine-tune Segment Anything with our `micro_sam.v1.training` library.
 - Or check the [examples](https://github.com/computational-cell-analytics/micro-sam/tree/main/examples/finetuning) for additional scripts that demonstrate finetuning.
 - If you are not familiar with coding in python at all then you can also use the [graphical interface for finetuning](finetuning-ui). But we recommend using a script for more flexibility and reproducibility.
 
@@ -272,7 +272,7 @@ The instance segmentation decoder is optional. So you can only finetune SAM or S
 Finetuning Segment Anything is possible in most consumer-grade GPU and CPU resources (but training being a lot slower on the CPU). For the mentioned resource, it should be possible to finetune a ViT Base (also abbreviated as `vit_b`) by reducing the number of objects per image to 15.
 This parameter has the biggest impact on the VRAM consumption and quality of the finetuned model.
 You can find an overview of the resources we have tested for finetuning [here](#training-your-own-model).
-We also provide a the convenience function `micro_sam.training.train_sam_for_configuration` that selects the best training settings for these configuration. This function is also used by the finetuning UI.
+We also provide a the convenience function `micro_sam.v1.training.train_sam_for_configuration` that selects the best training settings for these configuration. This function is also used by the finetuning UI.
 
              
 ### 9. I want to create a dataloader for my data, to finetune Segment Anything.
@@ -286,7 +286,7 @@ To validate a Segment Anything model for your data, you have different options, 
 
 - If you don't have any annotations you will have to validate the model visually. We suggest doing this with the `micro_sam` GUI tools. You can learn how to use them in the `micro_sam` documentation.
 - If you have segmentation annotations you can use the `micro_sam` python library to evaluate the segmentation quality of different models. We provide functionality to evaluate the models for interactive and for automatic segmentation:
-    - You can use `micro_sam.evaluation.evaluation.run_evaluation_for_iterative_prompting` to evaluate models for interactive segmentation.
-    - You can use `micro_sam.evaluation.instance_segmentation.run_instance_segmentation_grid_search_and_inference` to evaluate models for automatic segmentation.
+    - You can use `micro_sam.v1.evaluation.evaluation.run_evaluation_for_iterative_prompting` to evaluate models for interactive segmentation.
+    - You can use `micro_sam.v1.evaluation.instance_segmentation.run_instance_segmentation_grid_search_and_inference` to evaluate models for automatic segmentation.
 
 We provide an [example notebook](https://github.com/computational-cell-analytics/micro-sam/blob/main/notebooks/inference_and_evaluation.ipynb) that shows how to use this evaluation functionality.

@@ -3,7 +3,7 @@ import os
 import imageio.v3 as imageio
 
 from micro_sam.util import get_cache_directory
-from micro_sam.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
+from micro_sam.v1.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
 from micro_sam.sample_data import fetch_hela_2d_example_data, fetch_livecell_example_data, fetch_wholeslide_example_data
 
 

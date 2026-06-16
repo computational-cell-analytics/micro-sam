@@ -6,13 +6,13 @@ from subprocess import run
 import pandas as pd
 
 from micro_sam.util import get_sam_model
-from micro_sam.evaluation import (
+from micro_sam.v1.evaluation import (
     inference,
     evaluation,
     default_experiment_settings,
     get_experiment_setting_name
 )
-from micro_sam.evaluation.livecell import _get_livecell_paths
+from micro_sam.v1.evaluation.livecell import _get_livecell_paths
 
 DATA_ROOT = "/scratch-grete/projects/nim00007/data/LiveCELL"
 EXPERIMENT_ROOT = "/scratch-grete/projects/nim00007/sam/experiments/livecell/partial-finetuning"

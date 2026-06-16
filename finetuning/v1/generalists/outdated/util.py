@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pandas as pd
 from micro_sam.util import get_sam_model
-from micro_sam.evaluation import (
+from micro_sam.v1.evaluation import (
     automatic_mask_generation, inference, evaluation,
     default_experiment_settings, get_experiment_setting_name
 )
-from micro_sam.evaluation.livecell import _get_livecell_paths
+from micro_sam.v1.evaluation.livecell import _get_livecell_paths
 
 DATA_ROOT = "/scratch/projects/nim00007/sam/datasets"
 LIVECELL_ROOT = "/scratch/projects/nim00007/data/LiveCELL"

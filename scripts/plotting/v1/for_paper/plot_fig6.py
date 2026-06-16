@@ -46,7 +46,7 @@ def plot_3d():
 
 def create_data_2d_default():
     from micro_sam.util import get_sam_model
-    from micro_sam.instance_segmentation import get_amg, mask_data_to_segmentation
+    from micro_sam.v1.instance_segmentation import get_amg, mask_data_to_segmentation
 
     model = get_sam_model(model_type="vit_b")
     segmenter = get_amg(model, is_tiled=False, decoder=None)
@@ -66,7 +66,7 @@ def create_data_2d_default():
 
 
 def create_data_2d_finetuned():
-    from micro_sam.instance_segmentation import get_predictor_and_decoder, get_amg, mask_data_to_segmentation
+    from micro_sam.v1.instance_segmentation import get_predictor_and_decoder, get_amg, mask_data_to_segmentation
 
     model, decoder = get_predictor_and_decoder("vit_b", "./organoids/vit_b_organoids.pt")
     segmenter = get_amg(model, is_tiled=False, decoder=decoder)

@@ -3,8 +3,8 @@ import os
 from glob import glob
 from subprocess import run
 
-import micro_sam.evaluation as evaluation
-from micro_sam.evaluation.livecell import livecell_inference
+import micro_sam.v1.evaluation as evaluation
+from micro_sam.v1.evaluation.livecell import livecell_inference
 from util import check_model, get_checkpoint, get_experiment_folder, DATA_ROOT, PROMPT_FOLDER
 
 

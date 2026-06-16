@@ -5,7 +5,7 @@ from torch_em.util.debug import check_loader
 from torch_em.data.datasets import get_pannuke_loader
 from torch_em.transform.label import PerObjectDistanceTransform
 
-import micro_sam.training as sam_training
+import micro_sam.v1.training as sam_training
 
 
 def get_dataloaders(patch_shape, data_path):

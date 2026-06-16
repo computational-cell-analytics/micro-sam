@@ -5,7 +5,7 @@ from glob import glob
 
 from torch_em.data import datasets
 
-from micro_sam.evaluation.livecell import _get_livecell_paths
+from micro_sam.v1.evaluation.livecell import _get_livecell_paths
 
 
 ROOT = "/scratch/projects/nim00007/sam/data/"

@@ -3,8 +3,8 @@ from glob import glob
 
 import pandas as pd
 
-from micro_sam.evaluation import inference
-from micro_sam.evaluation.evaluation import run_evaluation
+from micro_sam.v1.evaluation import inference
+from micro_sam.v1.evaluation.evaluation import run_evaluation
 from util import get_paths, get_model, get_pred_and_gt_paths, get_default_arguments
 
 

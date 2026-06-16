@@ -26,7 +26,7 @@ import torch
 from elf.evaluation import mean_segmentation_accuracy
 from elf.io import open_file
 
-from micro_sam.evaluation.evaluation import run_evaluation
+from micro_sam.v1.evaluation.evaluation import run_evaluation
 
 from micro_sam.v2.evaluation import inference
 
