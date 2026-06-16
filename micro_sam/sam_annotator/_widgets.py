@@ -1303,6 +1303,7 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
             labels=labels,
             boxes=boxes,
             masks=masks,
+            batched=batched,
         )
     else:
         seg = vutil.prompt_segmentation(
