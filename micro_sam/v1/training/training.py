@@ -779,7 +779,7 @@ def default_sam_loader(**kwargs) -> DataLoader:
     """Create a PyTorch DataLoader for training a SAM model.
 
     Args:
-        kwargs: Keyword arguments for `micro_sam.training.default_sam_dataset` or for the PyTorch DataLoader.
+        kwargs: Keyword arguments for `micro_sam.v1.training.default_sam_dataset` or for the PyTorch DataLoader.
 
     Returns:
         The DataLoader.

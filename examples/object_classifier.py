@@ -171,7 +171,7 @@ def annotator_devel():
 
 def create_3d_data_with_tiling():
     from skimage.data import cells3d
-    from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+    from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
     predictor, segmenter = get_predictor_and_segmenter(model_type="vit_b_lm", is_tiled=True)
     data = cells3d()[30:34, 1]
@@ -193,7 +193,7 @@ def create_3d_data_with_tiling():
 def histopathology_annotator():
     from torch_em.data.datasets.histopathology.lynsec import get_lynsec_paths
     from micro_sam.sam_annotator import object_classifier as clf
-    from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+    from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
     predictor, segmenter = get_predictor_and_segmenter(model_type="vit_b_histopathology")
 
@@ -229,7 +229,7 @@ def histopathology_annotator():
 def batch_prediction():
     import napari
     from torch_em.data.datasets.histopathology.lynsec import get_lynsec_paths
-    from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+    from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
     from micro_sam.object_classification import run_prediction_with_object_classifier
     from tqdm import tqdm
 

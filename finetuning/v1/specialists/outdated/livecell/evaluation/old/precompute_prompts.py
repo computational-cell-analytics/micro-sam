@@ -3,7 +3,7 @@ import os
 import pickle
 from subprocess import run
 
-import micro_sam.evaluation as evaluation
+import micro_sam.v1.evaluation as evaluation
 from tqdm import tqdm
 from util import get_paths, PROMPT_FOLDER
 

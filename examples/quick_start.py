@@ -8,7 +8,7 @@ import napari
 
 from skimage.data import cells3d
 
-from micro_sam.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
+from micro_sam.v1.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
 
 
 # Load an example image from the 'scikit-image' library.

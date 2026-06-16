@@ -4,7 +4,7 @@ import numpy as np
 import torch_em
 
 from torch_em.transform.label import PerObjectDistanceTransform
-from micro_sam.training import train_sam, identity
+from micro_sam.v1.training import train_sam, identity
 from micro_sam.util import export_custom_sam_model
 
 

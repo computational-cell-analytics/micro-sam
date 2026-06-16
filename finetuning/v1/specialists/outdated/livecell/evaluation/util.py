@@ -3,7 +3,7 @@ import argparse
 from glob import glob
 
 from micro_sam.util import get_sam_model
-from micro_sam.evaluation.livecell import _get_livecell_paths
+from micro_sam.v1.evaluation.livecell import _get_livecell_paths
 
 # FIXME make sure this uses the corrected ground-truth!!!
 DATA_ROOT = "/scratch/projects/nim00007/data/LiveCELL"

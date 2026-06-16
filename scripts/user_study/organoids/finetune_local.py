@@ -1,5 +1,5 @@
 import torch_em
-from micro_sam.training import default_sam_dataset, train_sam_for_setting
+from micro_sam.v1.training import default_sam_dataset, train_sam_for_setting
 from torch.utils.data import random_split
 
 raw_path = "/home/pape/Work/my_projects/micro-sam/scripts/user_study/organoids/data/user_study_v2/user_study_data"

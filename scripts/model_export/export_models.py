@@ -13,7 +13,7 @@ import imageio.v3 as imageio
 
 import bioimageio.spec.model.v0_5 as spec
 
-from micro_sam.bioimageio import export_sam_model
+from micro_sam.v1.bioimageio import export_sam_model
 
 from models import get_id_and_emoji, MODEL_TO_NAME
 

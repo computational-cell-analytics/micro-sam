@@ -11,7 +11,7 @@ from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.transform.raw import normalize_percentile, normalize
 from torch_em.data.datasets import get_neurips_cellseg_supervised_loader
 
-import micro_sam.training as sam_training
+import micro_sam.v1.training as sam_training
 from micro_sam.util import export_custom_sam_model
 
 

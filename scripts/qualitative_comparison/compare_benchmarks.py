@@ -12,8 +12,8 @@ from skimage.measure import label as connected_components
 
 from elf.evaluation import mean_segmentation_accuracy
 
-from micro_sam.evaluation.livecell import _get_livecell_paths
-from micro_sam.evaluation.model_comparison import _enhance_image, _overlay_outline, _overlay_mask
+from micro_sam.v1.evaluation.livecell import _get_livecell_paths
+from micro_sam.v1.evaluation.model_comparison import _enhance_image, _overlay_outline, _overlay_mask
 
 
 ROOT = "/scratch/projects/nim00007/sam/"

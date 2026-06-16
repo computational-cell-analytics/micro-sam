@@ -7,7 +7,7 @@ from torch_em.transform.raw import normalize
 from torch_em.data.datasets import get_covid_if_loader
 from torch_em.transform.label import PerObjectDistanceTransform
 
-import micro_sam.training as sam_training
+import micro_sam.v1.training as sam_training
 
 
 def covid_if_raw_trafo(raw):

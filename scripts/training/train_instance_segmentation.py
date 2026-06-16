@@ -8,7 +8,7 @@ import os
 from torch_em.data.datasets.light_microscopy.dsb import get_dsb_paths
 
 # The required functionality for training.
-from micro_sam.training import export_instance_segmentation_model, default_sam_loader, train_instance_segmentation
+from micro_sam.v1.training import export_instance_segmentation_model, default_sam_loader, train_instance_segmentation
 
 image_paths, label_paths = get_dsb_paths("./data", source="reduced", split="train", download=True)
 

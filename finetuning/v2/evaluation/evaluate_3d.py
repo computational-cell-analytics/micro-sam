@@ -24,7 +24,7 @@ from tqdm import tqdm
 from micro_sam import util
 
 from micro_sam.v2.evaluation import inference, evaluation
-from micro_sam.evaluation.evaluation import run_evaluation
+from micro_sam.v1.evaluation.evaluation import run_evaluation
 
 from common import (
     CHECKPOINT_PATHS, DATA_ROOT, DATASETS_3D, get_data_paths, load_volume,

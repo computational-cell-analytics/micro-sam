@@ -4,7 +4,7 @@ import argparse
 import torch
 from torch_em.loss import DiceLoss
 
-import micro_sam.training as sam_training
+import micro_sam.v1.training as sam_training
 from micro_sam.util import export_custom_sam_model
 
 from obtain_hp_datasets import get_generalist_hp_loaders

@@ -18,7 +18,7 @@ from torch_em.data import MinForegroundSampler
 from torch_em.util.segmentation import size_filter
 from torch_em.transform.raw import normalize, normalize_percentile
 
-from micro_sam.training import identity
+from micro_sam.v1.training import identity
 
 from util import download_all_datasets, ROOT
 

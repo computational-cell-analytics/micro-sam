@@ -10,8 +10,8 @@ import imageio.v3 as imageio
 from elf.evaluation import mean_segmentation_accuracy, matching
 
 from micro_sam.util import _to_image
-from micro_sam.instance_segmentation import AutomaticPromptGenerator, get_predictor_and_decoder
-from micro_sam.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
+from micro_sam.v1.instance_segmentation import AutomaticPromptGenerator, get_predictor_and_decoder
+from micro_sam.v1.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
 
 from tukra.inference.get_cellpose import segment_using_cellpose
 

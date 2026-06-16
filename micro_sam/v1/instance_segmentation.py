@@ -1435,7 +1435,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
                 - 'binary_mask': Return a list of dictionaries with masks encoded as binary masks.
                 - 'instance_segmentation': Return masks merged into an instance segmentation in a single array.
                 By default, set to 'instance_segmentation'.
-            mask_threshold: The threshold for turning logits into masks in `micro_sam.inference.batched_inference`.`
+            mask_threshold: The threshold for turning logits into masks in `micro_sam.v1.inference.batched_inference`.`
             refine_with_box_prompts: Whether to refine the mask outputs with another round of box promtps
                 derived from the segmentations after point prompts.
             prompt_function: A custom function for deriving prompts from the segmentation decoder predictions.
@@ -1445,7 +1445,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
                 ```
                 where `foreground`, `center_distances`, and `boundary_distances` are the respective
                 predictions from the segmentation decoder. It must returns a dictionary containing
-                either point, box, or mask prompts in a format compattible with `micro_sam.inference.batched_inference`.
+                either point, box, or mask prompts in a format compattible with `micro_sam.v1.inference.batched_inference`.
 
         Returns:
             The instance segmentation masks.
@@ -1539,7 +1539,7 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
                 - 'binary_mask': Return a list of dictionaries with masks encoded as binary masks.
                 - 'instance_segmentation': Return masks merged into an instance segmentation in a single array.
                 By default, set to 'instance_segmentation'.
-            mask_threshold: The threshold for turining logits into masks in `micro_sam.inference.batched_inference`.`
+            mask_threshold: The threshold for turining logits into masks in `micro_sam.v1.inference.batched_inference`.`
             refine_with_box_prompts: Whether to refine the mask outputs with another round of box promtps
                 derived from the segmentations after point prompts. Currently not supported for tiled segmentation.
             prompt_function: A custom function for deriving prompts from the segmentation decoder predictions.
@@ -1549,7 +1549,7 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
                 ```
                 where `foreground`, `center_distances`, and `boundary_distances` are the respective
                 predictions from the segmentation decoder. It must returns a dictionary containing
-                either point, box, or mask prompts in a format compattible with `micro_sam.inference.batched_inference`.
+                either point, box, or mask prompts in a format compattible with `micro_sam.v1.inference.batched_inference`.
             optimize_memory: Whether to optimize the memory consumption by merging the per-slice
                 segmentation results immediatly with NMS, rather than running a NMS for all results.
                 This may lead to a slightly different segmentation result and is only compatible with

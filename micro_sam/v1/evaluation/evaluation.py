@@ -1,5 +1,5 @@
-"""Evaluation functionality for segmentation predictions from `micro_sam.evaluation.automatic_mask_generation`
-and `micro_sam.evaluation.inference`.
+"""Evaluation functionality for segmentation predictions from `micro_sam.v1.evaluation.automatic_mask_generation`
+and `micro_sam.v1.evaluation.inference`.
 """
 
 import os

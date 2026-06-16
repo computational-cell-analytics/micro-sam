@@ -1,7 +1,7 @@
 import os
 
-from micro_sam.evaluation.evaluation import run_evaluation
-from micro_sam.evaluation.livecell import run_livecell_amg
+from micro_sam.v1.evaluation.evaluation import run_evaluation
+from micro_sam.v1.evaluation.livecell import run_livecell_amg
 from util import DATA_ROOT, VANILLA_MODELS, get_pred_and_gt_paths, get_default_arguments
 
 

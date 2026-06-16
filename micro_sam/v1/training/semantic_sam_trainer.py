@@ -48,7 +48,7 @@ class SemanticSamTrainer(DefaultTrainer):
 
     Args:
         convert_inputs: The class that converts outputs of the dataloader to the expected input format of SAM.
-            The class `micro_sam.training.util.ConvertToSemanticSamInputs` can be used here.
+            The class `micro_sam.v1.training.util.ConvertToSemanticSamInputs` can be used here.
         num_classes: The number of classes for semantic segmentation (including the background class).
         dice_weight: The weighing for the dice loss in the combined dice-cross entropy loss function.
         kwargs: The keyword arguments of the DefaultTrainer super class.

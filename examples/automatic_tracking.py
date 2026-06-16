@@ -4,7 +4,7 @@ from elf.io import open_file
 
 from micro_sam.util import get_cache_directory
 from micro_sam.sample_data import fetch_tracking_example_data
-from micro_sam.automatic_segmentation import automatic_tracking, get_predictor_and_segmenter
+from micro_sam.v1.automatic_segmentation import automatic_tracking, get_predictor_and_segmenter
 
 
 DATA_CACHE = os.path.join(get_cache_directory(), "sample_data")
