@@ -40,8 +40,8 @@ def toggle_label(prompts):
 
 def _initialize_parser(description, with_segmentation_result=True, with_instance_segmentation=True):
 
-    available_models = list(util.get_model_names())
-    available_models = ", ".join(available_models)
+    from micro_sam.v2.util import SUPPORTED_MODELS
+    available_models = ", ".join(SUPPORTED_MODELS + list(util.get_model_names()))
 
     parser = argparse.ArgumentParser(description=description)
 
@@ -76,7 +76,7 @@ def _initialize_parser(description, with_segmentation_result=True, with_instance
         )
 
     parser.add_argument(
-        "-m", "--model_type", default=util._DEFAULT_MODEL,
+        "-m", "--model_type", default="hvit_t",
         help=f"The segment anything model that will be used, one of {available_models}."
     )
     parser.add_argument(

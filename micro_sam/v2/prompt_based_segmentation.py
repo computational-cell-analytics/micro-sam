@@ -5,6 +5,16 @@ import numpy as np
 from micro_sam.prompt_based_segmentation import _process_box
 
 
+def _crop_to_original_shape(mask, shape):
+    """Crop a SAM2 video-predictor mask back to the original slice shape.
+
+    The video predictor pads non-square frames to a square of side max(H, W) (padding appended at the
+    bottom/right) and returns masks at that padded size. The image content occupies the top-left
+    [0:H, 0:W] region, so cropping recovers the original (H, W) mask. For square volumes this is a no-op.
+    """
+    return mask[:shape[0], :shape[1]]
+
+
 def promptable_segmentation_2d(
     predictor,
     image: Optional[np.ndarray] = None,
@@ -202,7 +212,7 @@ def promptable_segmentation_3d(
     for slice_idx in video_segments.keys():
         per_slice_seg = np.zeros(volume.shape[-2:])
         for _instance_idx, _instance_mask in video_segments[slice_idx].items():
-            per_slice_seg[_instance_mask.squeeze()] = _instance_idx
+            per_slice_seg[_crop_to_original_shape(_instance_mask.squeeze(), volume.shape[-2:])] = _instance_idx
         segmentation.append(per_slice_seg)
 
     segmentation = (np.stack(segmentation) > 0).astype("uint64")
@@ -528,8 +538,8 @@ class PromptableSegmentation3D:
             mask_logits = out_mask_logits[0]  # Get first object
             seg = (mask_logits.squeeze() > 0.0).cpu().numpy()
 
-            # Ensure correct output type
-            seg = seg.astype("uint32")
+            # Crop back to the original slice shape (the video predictor pads non-square frames).
+            seg = _crop_to_original_shape(seg, self.volume.shape[-2:]).astype("uint32")
 
         finally:
             # Reset the state to clear this object's prompts
@@ -547,7 +557,8 @@ class PromptableSegmentation3D:
         for slice_idx in video_segments.keys():
             per_slice_seg = np.zeros(self.volume.shape[-2:])
             for _instance_idx, _instance_mask in video_segments[slice_idx].items():
-                per_slice_seg[_instance_mask.squeeze()] = _instance_idx
+                mask = _crop_to_original_shape(_instance_mask.squeeze(), self.volume.shape[-2:])
+                per_slice_seg[mask] = _instance_idx
             segmentation.append(per_slice_seg)
 
         segmentation = np.stack(segmentation).astype("uint64")

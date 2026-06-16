@@ -18,9 +18,9 @@ def _load_img_as_tensor(img_path, image_size):
     """Load a single frame as a float32 [0, 1] tensor of shape (3, image_size, image_size).
 
     For file-path inputs: PIL loads the image, resizes via plain square stretch (JPEG convention).
-    For numpy inputs: accepts uint8 [0, 255] or float32 [0, 1]; resizes using aspect-ratio
-    preserving scale to image_size on the longest side, then zero-pads to a square - matching
-    ConvertToSam2VideoBatch._to_sam2_size used during training.
+    For numpy inputs: percentile-normalizes any dtype to [0, 1] (2nd / 98th percentile per channel);
+    resizes using aspect-ratio preserving scale to image_size on the longest side, then zero-pads to a
+    square - matching ConvertToSam2VideoBatch._to_sam2_size used during training.
 
     Returns:
         img: (3, image_size, image_size) float32 tensor, ImageNet-normalised by the caller.
@@ -37,12 +37,12 @@ def _load_img_as_tensor(img_path, image_size):
         img_np = img_path
         img_np = np.stack([img_np] * 3, axis=-1) if img_np.ndim == 2 else img_np
 
-        if img_np.dtype == np.uint8:
-            img_np = img_np.astype(np.float32) / 255.0
-        elif img_np.dtype in (np.float32, np.float64):
-            img_np = img_np.astype(np.float32)
-        else:
-            raise RuntimeError(f"Unsupported image dtype: {img_np.dtype}")
+        # Percentile-normalize each channel to [0, 1], so any input dtype (e.g. uint16 microscopy data)
+        # is mapped to the range SAM2's ImageNet normalization expects. Clip since percentile
+        # normalization maps the 2nd / 98th percentiles to 0 / 1 and overshoots outside that range.
+        from torch_em.transform.raw import normalize_percentile
+        img_np = normalize_percentile(img_np.astype(np.float32), lower=2.0, upper=98.0, axis=(0, 1))
+        img_np = np.clip(img_np, 0.0, 1.0)
 
         # Aspect-ratio preserving scale + zero-pad, matching _to_sam2_size in training.
         # video_height/video_width are set to max(H, W) so SAM2's coordinate normalization
