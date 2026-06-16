@@ -14,6 +14,8 @@ from torch_em.trainer.logger_base import TorchEmLogger
 
 from training.trainer import CORE_LOSS_KEY  # SAM2 repo
 
+from micro_sam.v2.loss.custom_sam2_loss import CustomSAM2Metric
+
 # Fixed seed for the main-process randomness during validation (prompt/correction-click
 # sampling in SAM2Train, object subsampling in ConvertToSam2VideoBatch). Worker-side crop
 # randomness is pinned separately via the val loader's deterministic worker_init_fn.
@@ -102,14 +104,19 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
         self,
         convert_inputs: Callable,
         loss: torch.nn.Module,
+        metric: Optional[torch.nn.Module] = None,
         clip_grad_norm: Optional[float] = 0.1,
         amp_dtype: Optional[torch.dtype] = torch.bfloat16,
         **kwargs,
     ):
+        # The validation metric mirrors v1 SamTrainer: a best-mask Dice score (here on the
+        # initial SAM2 prompt response). Default to CustomSAM2Metric if none is given.
+        if metric is None:
+            metric = CustomSAM2Metric()
         # Sam2Trainer manages AMP internally via amp_dtype; prevent the parent from
         # setting up a float16 GradScaler which is incompatible with bfloat16.
         kwargs.pop("mixed_precision", None)
-        super().__init__(loss=loss, metric=loss, mixed_precision=False, **kwargs)
+        super().__init__(loss=loss, metric=metric, mixed_precision=False, **kwargs)
         self.convert_inputs = convert_inputs
         self.clip_grad_norm = clip_grad_norm
         self.amp_dtype = amp_dtype
@@ -133,20 +140,25 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
             input_check_done = True
         return input_check_done
 
-    def _sam2_backprop(self, loss: torch.Tensor) -> None:
-        """Backward + optional gradient clipping + optimizer step."""
+    def _sam2_backprop(self, loss: torch.Tensor):
+        """Backward + optional gradient clipping + optimizer step.
+
+        Returns the pre-clip total gradient norm when clipping is enabled, else None.
+        """
+        grad_norm = None
         if self.scaler is not None:
             self.scaler.scale(loss).backward()
             if self.clip_grad_norm is not None:
                 self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
             self.scaler.step(self.optimizer)
             self.scaler.update()
         else:
             loss.backward()
             if self.clip_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
             self.optimizer.step()
+        return None if grad_norm is None else grad_norm.item()
 
     def _interactive_step(self, x, y):
         batch = self.convert_inputs(x, y)
@@ -173,13 +185,17 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
             with self._amp_context():
                 loss, batch, outputs = self._interactive_step(x, y)
 
-            self._sam2_backprop(loss)
+            grad_norm = self._sam2_backprop(loss)
 
             if self.logger is not None:
                 log_imgs = (self._iteration % self.log_image_interval == 0)
                 lr = self.optimizer.param_groups[0]["lr"]
+                with torch.no_grad():
+                    metric = self.metric(outputs, batch.masks).item()
+                n_frames = x.shape[2] if x.ndim == 5 else 1
                 self.logger.log_train(
                     self._iteration, loss.item(), lr,
+                    metric=metric, grad_norm=grad_norm, n_frames=n_frames,
                     x=x if log_imgs else None,
                     y=y if log_imgs else None,
                     batch=batch if log_imgs else None,
@@ -197,9 +213,16 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
     def _validate_impl(self, forward_context):
         self.model.eval()
         val_loss = 0.0
+        val_dice_loss = 0.0
         n_iter = 0
         input_check_done = False
-        last_x = last_y = last_batch = last_outputs = None
+        log_x = log_y = log_batch = log_outputs = None
+
+        # Pick one validation sample to log via reservoir sampling, seeded per epoch so the
+        # logged image panels show a different sample each epoch (the metric still covers all
+        # samples). This is decoupled from the pinned validation order below, so the metric
+        # stays reproducible while the logged sample varies.
+        log_rng = random.Random(VALIDATION_SEED + self._epoch)
 
         # Pin the main-process RNG so the per-frame prompts and correction clicks sampled inside
         # SAM2Train (and object subsampling in ConvertToSam2VideoBatch) are identical every epoch,
@@ -210,31 +233,36 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
         _seed_all(VALIDATION_SEED)
         try:
             with torch.no_grad():
-                for x, y in self.val_loader:
+                for i, (x, y) in enumerate(self.val_loader):
                     input_check_done = self._check_input_normalization(x, input_check_done)
                     with self._amp_context():
                         loss, batch, outputs = self._interactive_step(x, y)
                         val_loss += loss.item()
+                        val_dice_loss += self.metric(outputs, batch.masks).item()
                     n_iter += 1
-                    last_x, last_y, last_batch, last_outputs = x, y, batch, outputs
+                    if log_rng.random() < 1.0 / (i + 1):
+                        log_x, log_y, log_batch, log_outputs = x, y, batch, outputs
         finally:
             _restore_rng(rng_state)
 
         val_loss /= max(n_iter, 1)
+        val_dice_loss /= max(n_iter, 1)
 
-        # Synchronize val_loss across DDP ranks so every rank makes the same
-        # early-stopping decision.  Without this, ranks can desync and deadlock.
+        # Synchronize across DDP ranks so every rank makes the same early-stopping
+        # decision.  Without this, ranks can desync and deadlock.
         if dist.is_available() and dist.is_initialized():
-            val_tensor = torch.tensor(val_loss, device=self.device)
-            dist.all_reduce(val_tensor, op=dist.ReduceOp.AVG)
-            val_loss = val_tensor.item()
+            stats = torch.tensor([val_loss, val_dice_loss], device=self.device)
+            dist.all_reduce(stats, op=dist.ReduceOp.AVG)
+            val_loss, val_dice_loss = stats[0].item(), stats[1].item()
 
         if self.logger is not None:
             self.logger.log_validation(
-                self._iteration, val_loss, last_x, last_y, last_batch, last_outputs,
+                self._iteration, val_loss, val_dice_loss, log_x, log_y, log_batch, log_outputs,
             )
 
-        return val_loss
+        # Return the v1-style best-mask Dice loss (lower is better) so checkpoint and
+        # early-stopping selection track segmentation quality rather than the raw loss.
+        return val_dice_loss
 
     def save_checkpoint(self, name, current_metric, best_metric, **extra_save_dict):
         # Unwrap DDP before saving so checkpoints load directly into non-DDP models.
@@ -300,25 +328,35 @@ class Sam2Logger(TorchEmLogger):
         self.tb.add_image(f"{prefix}/gt_chosen", _overlay_binary_masks(gt_chosen, target_hw=(H, W)), step)
 
         # Predictions: show step-0 prediction (initial response to the first prompt, before
-        # oracle corrections).  Final corrected output is near-identical to GT by design,
+        # oracle corrections). Final corrected output is near-identical to GT by design,
         # since SAM2Train uses GT-derived clicks for iterative correction.
         # multistep_pred_masks_high_res: (O_total, num_steps, 1024, 1024)
         b_indices = batch.obj_to_frame_idx[0, :, 1]
         pred_step0 = outputs[0]["multistep_pred_masks_high_res"][b_indices == 0, 0].detach()
         self.tb.add_image(f"{prefix}/predictions", _overlay_binary_masks(pred_step0 > 0, target_hw=(H, W)), step)
 
-    def log_train(self, step, loss, lr, x=None, y=None, batch=None, outputs=None):
+    def log_train(
+        self, step, loss, lr, metric=None, grad_norm=None, n_frames=None, x=None, y=None, batch=None, outputs=None
+    ):
         if self.tb is None:
             return
         self.tb.add_scalar("train/loss", loss, step)
         self.tb.add_scalar("train/learning_rate", lr, step)
+        if metric is not None:
+            self.tb.add_scalar("train/metric", metric, step)
+        if grad_norm is not None:
+            self.tb.add_scalar("train/grad_norm", grad_norm, step)
+        if n_frames is not None:
+            self.tb.add_scalar("train/n_frames", n_frames, step)
         if x is not None:
             self._log_images(step, x, y, batch, outputs, "train")
 
-    def log_validation(self, step, loss, x=None, y=None, batch=None, outputs=None):
+    def log_validation(self, step, loss, metric=None, x=None, y=None, batch=None, outputs=None):
         if self.tb is None:
             return
         self.tb.add_scalar("validation/loss", loss, step)
+        if metric is not None:
+            self.tb.add_scalar("validation/metric", metric, step)
         if x is not None:
             self._log_images(step, x, y, batch, outputs, "validation")
 

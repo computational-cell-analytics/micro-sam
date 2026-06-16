@@ -1,5 +1,6 @@
 import os
 import time
+import random
 from typing import Callable, Optional
 
 import numpy as np
@@ -8,7 +9,10 @@ import torch.distributed as dist
 from torch.utils.tensorboard import SummaryWriter
 from torch_em.trainer.logger_base import TorchEmLogger
 
-from .sam2_trainer import Sam2Trainer, _colorize_instance_map, _overlay_binary_masks
+from .sam2_trainer import (
+    Sam2Trainer, _colorize_instance_map, _overlay_binary_masks, _snapshot_rng, _restore_rng,
+    _seed_all, VALIDATION_SEED,
+)
 
 
 class JointSam2Trainer(Sam2Trainer):
@@ -34,10 +38,11 @@ class JointSam2Trainer(Sam2Trainer):
             so the backbone is shared with the interactive model.
         convert_inputs: Converts (x, y_instances) torch-em tuples from the
             loader into ``BatchedVideoDatapoint`` expected by SAM2Train.
-        interactive_loss: Loss for the interactive branch
-            (e.g. ``MultiStepMultiMasksAndIous``).
+        interactive_loss: Loss for the interactive branch (e.g. ``CustomSAM2Loss``).
         automatic_loss: Loss for the automatic branch
             (e.g. ``DirectedDistanceLoss``).
+        automatic_metric: Validation metric for the automatic branch. Defaults to
+            ``automatic_loss`` (matching train_automatic's ``metric=loss``).
         clip_grad_norm: Max gradient norm for clipping (None = disabled).
         kwargs: Forwarded to ``Sam2Trainer``. ``model`` should be the
             sam2_train_model (or its DDP wrapper); ``train_loader`` and
@@ -51,6 +56,7 @@ class JointSam2Trainer(Sam2Trainer):
         convert_inputs: Callable,
         interactive_loss: torch.nn.Module,
         automatic_loss: torch.nn.Module,
+        automatic_metric: Optional[torch.nn.Module] = None,
         clip_grad_norm: Optional[float] = 0.1,
         **kwargs,
     ):
@@ -59,6 +65,8 @@ class JointSam2Trainer(Sam2Trainer):
         )
         self.unetr = unetr
         self.automatic_loss = automatic_loss
+        # Automatic metric mirrors train_automatic's metric=loss convention when not given.
+        self.automatic_metric = automatic_metric if automatic_metric is not None else automatic_loss
 
     def save_checkpoint(self, name, current_metric, best_metric, **extra_save_dict):
         super().save_checkpoint(
@@ -159,36 +167,65 @@ class JointSam2Trainer(Sam2Trainer):
         self.model.eval()
         self.unetr.eval()
 
+        inter_loss_val = 0.0
+        inter_metric_val = 0.0
         auto_loss_val = 0.0
+        auto_metric_val = 0.0
         n_iter = 0
         input_check_done = False
-        last_x = last_y = last_y_dist = last_pred = None
+        log_x = log_y = log_batch = log_outputs = log_y_dist = log_pred = None
 
-        with torch.no_grad():
-            for x, y in self.val_loader:
-                input_check_done = self._check_input_normalization(x, input_check_done)
-                with forward_context():
-                    auto_loss, y_dist, pred = self._automatic_step(x, y)
-                auto_loss_val += auto_loss.item()
-                n_iter += 1
-                last_x, last_y = x, y
-                last_y_dist, last_pred = y_dist, pred
+        # Pick one validation sample to log via reservoir sampling, seeded per epoch.
+        log_rng = random.Random(VALIDATION_SEED + self._epoch)
+
+        # Pin the main-process RNG so the interactive prompts/correction clicks sampled inside
+        # SAM2Train are identical every epoch, making the interactive metric comparable across
+        # epochs (see Sam2Trainer._validate_impl). Restore afterwards so training is unaffected.
+        rng_state = _snapshot_rng()
+        _seed_all(VALIDATION_SEED)
+        try:
+            with torch.no_grad():
+                for i, (x, y) in enumerate(self.val_loader):
+                    input_check_done = self._check_input_normalization(x, input_check_done)
+                    with forward_context():
+                        inter_loss, batch, outputs = self._interactive_step(x, y)
+                        inter_loss_val += inter_loss.item()
+                        inter_metric_val += self.metric(outputs, batch.masks).item()
+                        auto_loss, y_dist, pred = self._automatic_step(x, y)
+                        auto_loss_val += auto_loss.item()
+                        auto_metric_val += self.automatic_metric(pred, y_dist).item()
+                    n_iter += 1
+                    if log_rng.random() < 1.0 / (i + 1):
+                        log_x, log_y, log_batch, log_outputs = x, y, batch, outputs
+                        log_y_dist, log_pred = y_dist, pred
+        finally:
+            _restore_rng(rng_state)
 
         n_iter = max(n_iter, 1)
+        inter_loss_val /= n_iter
+        inter_metric_val /= n_iter
         auto_loss_val /= n_iter
+        auto_metric_val /= n_iter
+        average_metric = (inter_metric_val + auto_metric_val) / 2
 
+        # Synchronize across DDP ranks so every rank makes the same early-stopping decision.
         if dist.is_available() and dist.is_initialized():
-            t_auto = torch.tensor(auto_loss_val, device=self.device)
-            dist.all_reduce(t_auto, op=dist.ReduceOp.AVG)
-            auto_loss_val = t_auto.item()
+            stats = torch.tensor(
+                [inter_loss_val, inter_metric_val, auto_loss_val, auto_metric_val, average_metric],
+                device=self.device,
+            )
+            dist.all_reduce(stats, op=dist.ReduceOp.AVG)
+            inter_loss_val, inter_metric_val, auto_loss_val, auto_metric_val, average_metric = (
+                stats[0].item(), stats[1].item(), stats[2].item(), stats[3].item(), stats[4].item(),
+            )
 
         if self.logger is not None:
             self.logger.log_validation(
-                self._iteration, auto_loss_val,
-                last_x, last_y, last_y_dist, last_pred,
+                self._iteration, inter_loss_val, inter_metric_val, auto_loss_val, auto_metric_val,
+                average_metric, log_x, log_y, log_batch, log_outputs, log_y_dist, log_pred,
             )
 
-        return auto_loss_val
+        return average_metric
 
 
 class JointSam2Logger(TorchEmLogger):
@@ -254,9 +291,17 @@ class JointSam2Logger(TorchEmLogger):
             self._log_interactive_images(step, x, y, batch, outputs, "train")
             self._log_automatic_images(step, x, y_dist, pred, "train")
 
-    def log_validation(self, step, auto_loss, x=None, y=None, y_dist=None, pred=None):
+    def log_validation(
+        self, step, interactive_loss, interactive_metric, auto_loss, auto_metric, average_metric,
+        x=None, y=None, batch=None, outputs=None, y_dist=None, pred=None,
+    ):
         if self.tb is None:
             return
+        self.tb.add_scalar("validation/interactive_loss", interactive_loss, global_step=step)
+        self.tb.add_scalar("validation/interactive_metric", interactive_metric, global_step=step)
         self.tb.add_scalar("validation/automatic_loss", auto_loss, global_step=step)
+        self.tb.add_scalar("validation/automatic_metric", auto_metric, global_step=step)
+        self.tb.add_scalar("validation/average_metric", average_metric, global_step=step)
         if x is not None:
+            self._log_interactive_images(step, x, y, batch, outputs, "validation")
             self._log_automatic_images(step, x, y_dist, pred, "validation")
