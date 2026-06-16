@@ -9,6 +9,10 @@ from . import _widgets as widgets
 from . import util as vutil
 from ._state import AnnotatorState
 
+# Placeholder shapes used to seed the annotator layers before a real image is loaded.
+# Only the dimensionality matters; the values are reset to the image shape on load.
+PLACEHOLDER_SHAPE = {2: (256, 256), 3: (16, 256, 256)}
+
 
 class _AnnotatorBase(QtWidgets.QScrollArea):
     """Base class for micro_sam annotation plugins.
@@ -168,7 +172,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         # Add the layers for prompts and segmented obejcts.
         # Initialize with a dummy shape, which is reset to the correct shape once an image is set.
         self._ndim = ndim
-        self._shape = (256, 256) if ndim == 2 else (16, 256, 256)
+        self._shape = PLACEHOLDER_SHAPE[ndim]
         self._require_layers()
 
         # Create all the widgets and populate the layout.
@@ -212,7 +216,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         if ndim == self._ndim:
             return
         self._ndim = ndim
-        self._shape = (256, 256) if ndim == 2 else (16, 256, 256)
+        self._shape = PLACEHOLDER_SHAPE[ndim]
 
         # Remove the existing micro_sam layers so they are recreated with the new ndim and shape.
         layer_names = ("current_object", "auto_segmentation", "committed_objects", "point_prompts", "prompts")
