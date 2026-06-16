@@ -10,7 +10,7 @@ from bioimage_cpp.utils import Blocking
 
 from elf.segmentation.embeddings import embedding_pca
 
-from .util import ImageEmbeddings
+from ..util import ImageEmbeddings
 
 
 #

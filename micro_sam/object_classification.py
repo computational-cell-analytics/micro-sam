@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from bioimage_cpp.utils import Blocking, take_dict
+
 from skimage.measure import regionprops_table
 from skimage.transform import resize
 
