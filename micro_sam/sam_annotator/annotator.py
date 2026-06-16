@@ -49,6 +49,25 @@ def detect_ndim(image: np.ndarray) -> int:
         )
 
 
+def detect_ndim_from_viewer(viewer: "napari.viewer.Viewer") -> int:
+    """Detect the dimensionality from image layers already loaded in the viewer.
+
+    Used when the annotator is launched as a napari plugin widget without an explicit
+    ndim. Falls back to 2 when no image has been loaded yet, e.g. when the widget is
+    opened from the napari Plugins menu before any image is added.
+
+    Args:
+        viewer: The napari viewer.
+
+    Returns:
+        The detected number of spatial dimensions (2 or 3).
+    """
+    image_layers = [layer for layer in viewer.layers if isinstance(layer, napari.layers.Image)]
+    if image_layers:
+        return detect_ndim(image_layers[0].data)
+    return 2
+
+
 class Annotator(_AnnotatorBase):
     """Unified annotator for 2D and 3D images.
 
@@ -98,22 +117,11 @@ class Annotator(_AnnotatorBase):
         Raises:
             ValueError: If ndim is invalid or doesn't match the image shape.
         """
-        # Auto-detect ndim from viewer image if not provided
+        # Auto-detect ndim when launched as a napari widget without an explicit ndim.
+        # Detect from an already-loaded image layer, defaulting to 2D when none is present
+        # (e.g. when the widget is opened from the napari Plugins menu before loading an image).
         if ndim is None:
-            state = AnnotatorState()
-            if state.image_shape is not None:
-                # Get the image from the viewer to detect ndim
-                if "image" in viewer.layers:
-                    image = viewer.layers["image"].data
-                    ndim = detect_ndim(image)
-                else:
-                    raise ValueError(
-                        "Cannot auto-detect ndim: no image layer found in viewer."
-                    )
-            else:
-                raise ValueError(
-                    "Cannot auto-detect ndim: image_shape not set in AnnotatorState."
-                )
+            ndim = detect_ndim_from_viewer(viewer)
 
         # Validate ndim
         if ndim not in (2, 3):
@@ -129,6 +137,19 @@ class Annotator(_AnnotatorBase):
             state.reset_state()
 
         state.annotator = self
+
+        # Rebuild the annotator if an image with a different dimensionality is selected as input.
+        # This handles loading e.g. a 3D image after the widget was opened from the Plugins menu.
+        self._embedding_widget.image_selection.changed.connect(self._on_image_selection_changed)
+
+    def _on_image_selection_changed(self, *args):
+        """Rebuild the annotator when the selected input image has a different dimensionality."""
+        image_layer = self._embedding_widget.image_selection.get_value()
+        if image_layer is None:
+            return
+        ndim = detect_ndim(image_layer.data)
+        if ndim != self._ndim:
+            self._rebuild_for_ndim(ndim)
 
     def _update_image(self, segmentation_result=None):
         """Update the image and load AMG state for 3D."""
