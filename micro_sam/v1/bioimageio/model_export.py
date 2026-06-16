@@ -14,10 +14,10 @@ import bioimageio.spec.model.v0_5 as spec
 from bioimageio.spec import save_bioimageio_package
 from bioimageio.core.digest_spec import create_sample_for_model
 
-from .. import util
-from ..prompt_generators import PointAndBoxPromptGenerator
-from ..v1.evaluation.model_comparison import _enhance_image, _overlay_outline, _overlay_box
-from ..v1.prompt_based_segmentation import _compute_logits_from_mask
+from ... import util
+from ...prompt_generators import PointAndBoxPromptGenerator
+from ..evaluation.model_comparison import _enhance_image, _overlay_outline, _overlay_box
+from ..prompt_based_segmentation import _compute_logits_from_mask
 from .predictor_adaptor import PredictorAdaptor
 
 

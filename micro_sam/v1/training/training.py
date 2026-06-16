@@ -932,7 +932,7 @@ def _export_helper(save_root, checkpoint_name, output_path, model_type, with_seg
 
         # Otherwise we export it as bioimage.io model.
         else:
-            from micro_sam.bioimageio import export_sam_model
+            from micro_sam.v1.bioimageio import export_sam_model
 
             # Load image and corresponding labels from the val loader.
             with torch.no_grad():
