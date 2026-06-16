@@ -59,7 +59,7 @@ class TestPromptBasedSegmentation(unittest.TestCase):
     #
 
     def test_segment_from_points(self):
-        from micro_sam.prompt_based_segmentation import segment_from_points
+        from micro_sam.v1.prompt_based_segmentation import segment_from_points
 
         # segment with one positive and four negative points
         points = np.array([[128, 128], [64, 64], [192, 192], [64, 192], [192, 64]])
@@ -76,7 +76,7 @@ class TestPromptBasedSegmentation(unittest.TestCase):
         self.assertGreater(util.compute_iou(self.mask, predicted), 0.9)
 
     def test_segment_from_points_non_square(self):
-        from micro_sam.prompt_based_segmentation import segment_from_points
+        from micro_sam.v1.prompt_based_segmentation import segment_from_points
 
         predictor, mask = self.predictor_non_square, self.mask_non_square
 
@@ -99,7 +99,7 @@ class TestPromptBasedSegmentation(unittest.TestCase):
         self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
     def test_segment_from_points_tiled(self):
-        from micro_sam.prompt_based_segmentation import segment_from_points
+        from micro_sam.v1.prompt_based_segmentation import segment_from_points
 
         # segment with one positive and two negative points
         points = np.array([[510, 510], [400, 200], [200, 400]])
@@ -133,7 +133,7 @@ class TestPromptBasedSegmentation(unittest.TestCase):
     #
 
     def _test_segment_from_mask(self, predictor, mask, expected_iou_mask=0.9, embeddings=None, test_mask_only=True):
-        from micro_sam.prompt_based_segmentation import segment_from_mask
+        from micro_sam.v1.prompt_based_segmentation import segment_from_mask
 
         #
         # single prompts
@@ -215,14 +215,14 @@ class TestPromptBasedSegmentation(unittest.TestCase):
     #
 
     def test_segment_from_box(self):
-        from micro_sam.prompt_based_segmentation import segment_from_box
+        from micro_sam.v1.prompt_based_segmentation import segment_from_box
 
         box = np.array([106, 106, 150, 150])
         predicted = segment_from_box(self.predictor, box)
         self.assertGreater(util.compute_iou(self.mask, predicted), 0.9)
 
     def test_segment_from_box_non_square(self):
-        from micro_sam.prompt_based_segmentation import segment_from_box
+        from micro_sam.v1.prompt_based_segmentation import segment_from_box
 
         predictor, mask = self.predictor_non_square, self.mask_non_square
         box = np.where(mask)
@@ -232,7 +232,7 @@ class TestPromptBasedSegmentation(unittest.TestCase):
         self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
     def test_segment_from_box_tiled(self):
-        from micro_sam.prompt_based_segmentation import segment_from_box
+        from micro_sam.v1.prompt_based_segmentation import segment_from_box
 
         box = np.array([450, 450, 570, 570])
         predicted = segment_from_box(self.predictor_tiled, box, image_embeddings=self.tiled_embeddings)
@@ -244,7 +244,7 @@ class TestPromptBasedSegmentation(unittest.TestCase):
     #
 
     def test_segment_from_box_and_points(self):
-        from micro_sam.prompt_based_segmentation import segment_from_box_and_points
+        from micro_sam.v1.prompt_based_segmentation import segment_from_box_and_points
 
         box = np.array([106, 106, 150, 150])
         points = np.array([[128, 128], [64, 64], [192, 192], [64, 192], [192, 64]])
@@ -254,7 +254,7 @@ class TestPromptBasedSegmentation(unittest.TestCase):
         self.assertGreater(util.compute_iou(self.mask, predicted), 0.9)
 
     def test_segment_from_box_and_points_non_square(self):
-        from micro_sam.prompt_based_segmentation import segment_from_box_and_points
+        from micro_sam.v1.prompt_based_segmentation import segment_from_box_and_points
 
         predictor, mask = self.predictor_non_square, self.mask_non_square
 
@@ -278,7 +278,7 @@ class TestPromptBasedSegmentation(unittest.TestCase):
         self.assertGreater(util.compute_iou(mask, predicted), 0.9)
 
     def test_segment_from_box_and_points_tiled(self):
-        from micro_sam.prompt_based_segmentation import segment_from_box_and_points
+        from micro_sam.v1.prompt_based_segmentation import segment_from_box_and_points
 
         # Segment with one positive and two negative points + box
         box = np.array([450, 450, 570, 570])

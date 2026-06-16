@@ -227,7 +227,7 @@ class TestTraining(unittest.TestCase):
 
     def test_train_instance_segmentation(self):
         from micro_sam.training.training import train_instance_segmentation, export_instance_segmentation_model
-        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+        from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         model_type, device = "vit_t", "cpu"
         batch_size, patch_shape = 1, (512, 512)

@@ -20,7 +20,7 @@ from ._tooltips import get_tooltip
 from ._state import AnnotatorState
 from .annotator import Annotator, detect_ndim
 from .util import _sync_embedding_widget
-from ..instance_segmentation import get_decoder
+from ..v1.instance_segmentation import get_decoder
 from ..precompute_state import _precompute_state_for_files
 
 

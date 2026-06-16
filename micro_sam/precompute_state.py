@@ -21,7 +21,8 @@ try:
 except ImportError:
     from tqdm import tqdm
 
-from . import instance_segmentation, util
+from . import util
+from .v1 import instance_segmentation
 
 
 def cache_amg_state(

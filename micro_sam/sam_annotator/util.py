@@ -14,7 +14,7 @@ from scipy.ndimage import shift
 
 from .. import prompt_based_segmentation, util
 from .. import _model_settings as model_settings
-from ..multi_dimensional_segmentation import _validate_projection
+from ..v1.multi_dimensional_segmentation import _validate_projection
 
 # Green and Red
 LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]

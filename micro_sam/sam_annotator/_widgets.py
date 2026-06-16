@@ -33,7 +33,7 @@ from qtpy.QtCore import QObject, Signal
 from superqt import QCollapsible
 
 from .. import instance_segmentation, util
-from ..multi_dimensional_segmentation import (
+from ..v1.multi_dimensional_segmentation import (
     PROJECTION_MODES,
     get_napari_track_data,
     merge_instance_segmentation_3d,

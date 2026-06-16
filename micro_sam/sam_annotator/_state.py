@@ -17,7 +17,7 @@ import torch.nn as nn
 
 import micro_sam
 import micro_sam.util as util
-from micro_sam.instance_segmentation import AMGBase, get_decoder
+from micro_sam.v1.instance_segmentation import AMGBase, get_decoder
 from micro_sam.precompute_state import cache_amg_state, cache_is_state
 
 from segment_anything import SamPredictor
