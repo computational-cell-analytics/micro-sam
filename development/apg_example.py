@@ -153,7 +153,7 @@ def example_script_3d():
 
 def debug_wsi():
     from micro_sam.inference import _stitch_segmentation
-    from nifty.tools import blocking
+    from bioimage_cpp.utils import Blocking
     from tqdm import tqdm
 
     print("Load data for debugging ....")
@@ -168,7 +168,7 @@ def debug_wsi():
         shape = f.attrs["shape"]
         tile_shape = f.attrs["tile_shape"]
 
-    tiling = blocking([0, 0], shape, tile_shape)
+    tiling = Blocking([0, 0], shape, tile_shape)
     print("Start stitching ...")
     seg = _stitch_segmentation(masks, tile_ids, tiling, halo, output_shape=shape)
     print(seg.shape)

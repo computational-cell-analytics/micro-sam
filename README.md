@@ -1,11 +1,12 @@
 [![DOC](https://shields.mitmproxy.org/badge/docs-pdoc.dev-brightgreen.svg)](https://computational-cell-analytics.github.io/micro-sam/)
+[![PyPI](https://img.shields.io/pypi/v/micro_sam.svg)](https://pypi.org/project/micro_sam/)
 [![Conda](https://anaconda.org/conda-forge/micro_sam/badges/version.svg)](https://anaconda.org/conda-forge/micro_sam)
 [![codecov](https://codecov.io/gh/computational-cell-analytics/micro-sam/graph/badge.svg?token=7ETPP5CABP)](https://codecov.io/gh/computational-cell-analytics/micro-sam)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7919746.svg)](https://doi.org/10.5281/zenodo.7919746)
 
 # Segment Anything for Microscopy
 
-<a href="https://github.com/computational-cell-analytics/micro-sam"><img src="https://github.com/computational-cell-analytics/micro-sam/blob/master/doc/logo/logo_and_text.png" width="300" align="right">
+<a href="https://github.com/computational-cell-analytics/micro-sam"><img src="https://github.com/computational-cell-analytics/micro-sam/blob/main/doc/logo/logo_and_text.png" width="300" align="right">
 
 Tools for segmentation and tracking in microscopy build on top of [Segment Anything](https://segment-anything.com/).
 Segment and track objects in microscopy images interactively with a few clicks!
@@ -60,4 +61,4 @@ We have also built follow-up work that is based on `micro_sam`:
 
 ## Release Overview
 
-You can find an overview of changes introduced in previous releases [here](https://github.com/computational-cell-analytics/micro-sam/blob/master/RELEASE_OVERVIEW.md).
+You can find an overview of changes introduced in previous releases [here](https://github.com/computational-cell-analytics/micro-sam/blob/main/RELEASE_OVERVIEW.md).

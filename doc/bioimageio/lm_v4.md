@@ -7,7 +7,7 @@ Segment Anything is a model for interactive and automatic instance segmentation.
 We improve it for light microscopy by finetuning on a large and diverse microscopy dataset.
 It should perform well for cell and nucleus segmentation in fluorescent, label-free and other light microscopy datasets.
 
-See [the dataset overview](https://github.com/computational-cell-analytics/micro-sam/blob/master/doc/datasets/lm_v%i.md) for further informations on the training data and the [micro_sam documentation](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html) for details on how to use the model for interactive and automatic segmentation.
+See [the dataset overview](https://github.com/computational-cell-analytics/micro-sam/blob/main/doc/datasets/lm_v%i.md) for further informations on the training data and the [micro_sam documentation](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html) for details on how to use the model for interactive and automatic segmentation.
 
 NOTE: The model's automatic instance segmentation quality has improved as the latest version updates the segmentation decoder architecture by replacing transposed convolutions with upsampling.
 

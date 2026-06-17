@@ -15,7 +15,7 @@ The `micro_sam` tools mainly use the [point layer](https://napari.org/stable/how
 The annotation tools are explained in detail below. We also provide [video tutorials](https://youtube.com/playlist?list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO&si=qNbB8IFXqAX33r_Z).
 
 The annotation tools can be started from the napari plugin menu:
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/napari-plugin.png" width="768">
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/images/napari-plugin.png" width="768">
 
 You can find additional information on the annotation tools [in the FAQ section](#usage-question).
 
@@ -32,11 +32,11 @@ napari
 The 2d annotator can be started by
 - clicking `Annotator 2d` in the plugin menu after starting `napari`.
 - running `$ micro_sam.annotator_2d` in the command line.
-- calling `micro_sam.sam_annotator.annotator_2d` in a python script. Check out [examples/annotator_2d.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py) for details.
+- calling `micro_sam.sam_annotator.annotator_2d` in a python script. Check out [examples/annotator_2d.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/annotator_2d.py) for details.
 
 The user interface of the 2d annotator looks like this:
 
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/2d-annotator-menu.png" width="1024">
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/images/2d-annotator-menu.png" width="1024">
 
 It contains the following elements:
 1. The napari layers for the segmentations and prompts:
@@ -64,11 +64,11 @@ Check out [the video tutorial](https://youtu.be/9xjJBg_Bfuc) for an in-depth exp
 The 3d annotator can be started by
 - clicking `Annotator 3d` in the plugin menu after starting `napari`.
 - running `$ micro_sam.annotator_3d` in the command line.
-- calling `micro_sam.sam_annotator.annotator_3d` in a python script. Check out [examples/annotator_3d.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_3d.py) for details.
+- calling `micro_sam.sam_annotator.annotator_3d` in a python script. Check out [examples/annotator_3d.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/annotator_3d.py) for details.
 
 The user interface of the 3d annotator looks like this:
 
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/3d-annotator-menu.png" width="1024">
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/images/3d-annotator-menu.png" width="1024">
 
 Most elements are the same as in [the 2d annotator](#annotator-2d):
 1. The napari layers that contain the segmentations and prompts.
@@ -90,11 +90,11 @@ Check out [the video tutorial](https://youtu.be/nqpyNQSyu74) for an in-depth exp
 The tracking annotator can be started by
 - clicking `Annotator Tracking` in the plugin menu after starting `napari`.
 - running `$ micro_sam.annotator_tracking` in the command line.
-- calling `micro_sam.sam_annotator.annotator_tracking` in a python script. Check out [examples/annotator_tracking.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_tracking.py) for details. 
+- calling `micro_sam.sam_annotator.annotator_tracking` in a python script. Check out [examples/annotator_tracking.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/annotator_tracking.py) for details. 
 
 The user interface of the tracking annotator looks like this:
 
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/tracking-annotator-menu.png" width="1024">
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/images/tracking-annotator-menu.png" width="1024">
 
 Most elements are the same as in [the 2d annotator](#annotator-2d):
 1. The napari layers that contain the segmentations and prompts. Same as for [the 2d segmentation application](#annotator-2d) but without the `auto_segmentation` layer.
@@ -116,11 +116,11 @@ Check out [the video tutorial](https://youtu.be/1gg8OPHqOyc) for an in-depth exp
 The image series annotation tool enables running the [2d annotator](#annotator-2d) or [3d annotator](#annotator-3d) for multiple images that are saved in a folder. This makes it convenient to annotate many images without having to restart the tool for every image. It can be started by
 - clicking `Image Series Annotator` in the plugin menu after starting `napari`.
 - running `$ micro_sam.image_series_annotator` in the command line.
-- calling `micro_sam.sam_annotator.image_series_annotator` in a python script. Check out [examples/image_series_annotator.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/image_series_annotator.py) for details. 
+- calling `micro_sam.sam_annotator.image_series_annotator` in a python script. Check out [examples/image_series_annotator.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/image_series_annotator.py) for details. 
 
 When starting this tool via the plugin menu the following interface opens:
 
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/series-menu.png" width="512">
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/images/series-menu.png" width="512">
 
 You can select the folder where your images are saved with `Input Folder`. The annotation results will be saved in `Output Folder`.
 You can specify a rule for loading only a subset of images via `pattern`, for example `*.tif` to only load tif images. Set `is_volumetric` if the data you want to annotate is 3d. The rest of the options are settings for the image embedding computation and are the same as for the embedding menu (see above).
@@ -139,7 +139,7 @@ We have recently implemented an experimental workflow for object classification 
 
 When starting this workflow the following interface opens up.
 
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/object-classifier.png" width="512">
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/images/object-classifier.png" width="512">
 
 You can load an image (here: `livecell`) and a segmentation (here, `segmentation`, for example from another `micro_sam` widget).
 Compute image embeddings as in the other widgets.
@@ -158,7 +158,7 @@ We also provide a graphical inferface for fine-tuning models on your own data. I
 
 When starting this tool via the plugin menu the following interface opens:
 
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/finetuning-menu.png" width="512">
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/images/finetuning-menu.png" width="512">
 
 You can select the image data via `Path to images`. You can either load images from a folder or select a single image file. By providing `Image data key` you can either provide a pattern for selecting files from the folder or provide an internal filepath for HDF5, Zarr or similar fileformats.
 
@@ -168,4 +168,4 @@ The `Configuration` option allows you to choose the hardware configuration for t
 
 NOTE: We recommend to fine-tune Segment Anything models on your data by
 - running `$ micro_sam.train` in the command line.
-- calling `micro_sam.training.train_sam` in a python script. Check out [examples/finetuning/finetune_hela.py](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/finetuning/finetune_hela.py) OR [notebooks/sam_finetuning.ipynb](https://github.com/computational-cell-analytics/micro-sam/blob/master/notebooks/sam_finetuning.ipynb) for details.
+- calling `micro_sam.training.train_sam` in a python script. Check out [examples/finetuning/finetune_hela.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/finetuning/finetune_hela.py) OR [notebooks/sam_finetuning.ipynb](https://github.com/computational-cell-analytics/micro-sam/blob/main/notebooks/sam_finetuning.ipynb) for details.

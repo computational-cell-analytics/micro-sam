@@ -3,7 +3,6 @@ name: test
 on:
   push:
     branches:
-      - master
       - main
       - dev
     tags:
@@ -20,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.12"]
 
     steps:
       - name: Checkout
@@ -29,7 +28,7 @@ jobs:
       - name: Setup micromamba
         uses: mamba-org/setup-micromamba@v1
         with:
-          environment-file: 'environment.yaml'
+          environment-file: "environment.yaml"
           create-args: >-
             python=${{ matrix.python-version }}
             ${{ runner.os == 'Linux' && 'qt6-wayland' || '' }}

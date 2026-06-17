@@ -2,7 +2,8 @@ name: sam
 channels:
     - conda-forge
 dependencies:
-    - nifty >=1.2.3
+    - bioimage-cpp >=0.3
+    - bioimageio.core
     - imagecodecs
     - magicgui
     - napari >=0.7.1
@@ -11,7 +12,7 @@ dependencies:
     - pooch
     - pyqt6
     - python-xxhash
-    - python-elf >=0.7.1
+    - python-elf >=0.9
     # Note: installing the pytorch package from conda-forge will generally
     # give you the most optmized version for your system, if you have a modern
     # enough OS and CUDA version (CUDA >= 12). For older versions, you can
@@ -23,10 +24,10 @@ dependencies:
     - pytorch >=2.5
     - segment-anything
     - torchvision
-    - torch_em >=0.8
+    - torch_em >=0.9
     - tqdm
     - timm
-    - trackastra
+    - trackastra >=0.5.3
     - xarray
     - zarr
     - pip:

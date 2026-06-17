@@ -3,16 +3,19 @@
 
 import os
 import multiprocessing as mp
+import warnings
 from concurrent import futures
 from typing import Dict, List, Optional, Union, Tuple
 
 import networkx as nx
-import nifty
 import numpy as np
 import torch
 from scipy.ndimage import binary_closing
-from skimage.measure import label, regionprops
-from skimage.segmentation import relabel_sequential
+from skimage.measure import regionprops
+
+from bioimage_cpp.segmentation import label, relabel_sequential
+from bioimage_cpp.graph import UndirectedGraph
+from bioimage_cpp.utils import segmentation_overlap
 
 import elf.segmentation as seg_utils
 import elf.tracking.tracking_utils as track_utils
@@ -30,6 +33,8 @@ try:
     from trackastra.tracking import graph_to_ctc, graph_to_napari_tracks
 except ImportError:
     Trackastra = None
+    graph_to_ctc = None
+    graph_to_napari_tracks = None
 
 
 from . import util
@@ -254,9 +259,9 @@ def _preprocess_closing(slice_segmentation, gap_closing, pbar_update):
         # We take objects from the closed segmentation unless they
         # have overlap with more than one object from the initial segmentation.
         # This indicates wrong merging of closeby objects that we want to prevent.
-        matches = nifty.ground_truth.overlap(closed_z, seg_z)
+        matches = segmentation_overlap(closed_z, seg_z)
         matches = {
-            seg_id: matches.overlapArrays(seg_id, sorted=False)[0] for seg_id in range(1, int(closed_z.max() + 1))
+            seg_id: matches.overlaps_for_label_a(seg_id)["label"] for seg_id in range(1, int(closed_z.max() + 1))
         }
         matches = {k: v[v != 0] for k, v in matches.items()}
 
@@ -356,8 +361,8 @@ def merge_instance_segmentation_3d(
     overlaps = np.array([edge["score"] for edge in edges])
 
     n_nodes = int(slice_segmentation.max() + 1)
-    graph = nifty.graph.undirectedGraph(n_nodes)
-    graph.insertEdges(uv_ids)
+    graph = UndirectedGraph(n_nodes)
+    graph.insert_edges(uv_ids)
 
     costs = seg_utils.multicut.compute_edge_costs(overlaps)
     # Set background weights to be maximally repulsive.
@@ -367,7 +372,7 @@ def merge_instance_segmentation_3d(
 
     node_labels = seg_utils.multicut.multicut_decomposition(graph, 1.0 - costs, beta=beta)
 
-    segmentation = nifty.tools.take(node_labels, slice_segmentation)
+    segmentation = node_labels[slice_segmentation]
     if min_z_extent is not None and min_z_extent > 0:
         segmentation = _filter_z_extent(segmentation, min_z_extent)
 
@@ -567,8 +572,19 @@ def _filter_lineages(lineages, tracking_result):
 def _tracking_impl(timeseries, segmentation, mode, min_time_extent, output_folder=None):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = Trackastra.from_pretrained("general_2d", device=device)
-    lineage_graph, _ = model.track(timeseries, segmentation, mode=mode)
+    result = model.track(timeseries, segmentation, mode=mode)
+    try:
+        lineage_graph, _ = result
+    except ValueError:
+        lineage_graph = result
+
     track_data, parent_graph, _ = graph_to_napari_tracks(lineage_graph)
+    if track_data.size == 0:
+        warnings.warn("Tracking result is empty.")
+        tracking_result = np.zeros_like(segmentation)
+        lineages = []
+        return tracking_result, lineages
+
     node_to_track, lineages = _extract_tracks_and_lineages(segmentation, track_data, parent_graph)
     tracking_result = recolor_segmentation(segmentation, node_to_track)
 
@@ -621,6 +637,11 @@ def track_across_frames(
             with each dict encoding a lineage, where keys correspond to parent track ids.
             Each key either maps to a list with two child track ids (cell division) or to an empty list (no division).
     """
+    if Trackastra is None:
+        raise RuntimeError(
+            "Automatic tracking requires trackastra. You can install it via 'pip install trackastra'."
+        )
+
     _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init=pbar_init, pbar_update=pbar_update)
 
     if gap_closing is not None and gap_closing > 0:

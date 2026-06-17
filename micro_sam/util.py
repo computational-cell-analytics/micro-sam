@@ -18,14 +18,15 @@ import numpy as np
 import pooch
 import segment_anything.utils.amg as amg_utils
 import torch
-import vigra
 import xxhash
 import zarr
 
 from elf.io import open_file
-from nifty.tools import blocking
+from bioimage_cpp.utils import Blocking
+from bioimage_cpp.distance import distance_transform
+from bioimage_cpp.segmentation import relabel_sequential
 from skimage.measure import regionprops
-from skimage.segmentation import relabel_sequential
+from skimage.segmentation import find_boundaries
 from torchvision.ops.boxes import batched_nms
 
 from .__version__ import __version__
@@ -748,8 +749,8 @@ def _write_batch(features, tile_ids, batched_embeddings, original_sizes, input_s
 
 def _get_tiles_in_mask(mask, tiling, halo, z=None):
     def _check_mask(tile_id):
-        tile = tiling.getBlockWithHalo(tile_id, list(halo))
-        outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end))
+        tile = tiling.get_block_with_halo(tile_id, list(halo))
+        outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outer_block.begin, tile.outer_block.end))
         if z is not None:
             outer_tile = (z,) + outer_tile
         tile_mask = mask[outer_tile].astype("bool")
@@ -757,13 +758,13 @@ def _get_tiles_in_mask(mask, tiling, halo, z=None):
 
     n_threads = mp.cpu_count()
     with futures.ThreadPoolExecutor(n_threads) as tp:
-        tiles_in_mask = tp.map(_check_mask, range(tiling.numberOfBlocks))
+        tiles_in_mask = tp.map(_check_mask, range(tiling.number_of_blocks))
     return sorted([tile_id for tile_id in tiles_in_mask if tile_id is not None])
 
 
 def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init, pbar_update, batch_size, mask):
-    tiling = blocking([0, 0], input_.shape[:2], tile_shape)
-    n_tiles = tiling.numberOfBlocks
+    tiling = Blocking([0, 0], input_.shape[:2], tile_shape)
+    n_tiles = tiling.number_of_blocks
 
     features = f.require_group("features")
     features.attrs["shape"] = input_.shape[:2]
@@ -786,8 +787,8 @@ def _compute_tiled_features_2d(predictor, input_, tile_shape, halo, f, pbar_init
     for tile_ids in tile_ids_for_batches:
         batched_images = []
         for tile_id in tile_ids:
-            tile = tiling.getBlockWithHalo(tile_id, list(halo))
-            outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end))
+            tile = tiling.get_block_with_halo(tile_id, list(halo))
+            outer_tile = tuple(slice(beg, end) for beg, end in zip(tile.outer_block.begin, tile.outer_block.end))
             tile_input = _to_image(input_[outer_tile])
             batched_images.append(tile_input)
 
@@ -853,13 +854,13 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init
     assert input_.ndim == 3
 
     shape = input_.shape[1:]
-    tiling = blocking([0, 0], shape, tile_shape)
+    tiling = Blocking([0, 0], shape, tile_shape)
     features = f.require_group("features")
     features.attrs["shape"] = shape
     features.attrs["tile_shape"] = tile_shape
     features.attrs["halo"] = halo
 
-    n_tiles_per_plane = tiling.numberOfBlocks
+    n_tiles_per_plane = tiling.number_of_blocks
     n_slices = input_.shape[0]
 
     msg = "Compute Image Embeddings 3D tiled"
@@ -878,9 +879,9 @@ def _compute_tiled_features_3d(predictor, input_, tile_shape, halo, f, pbar_init
     for slices, tile_ids in batch_provider:
         batched_images = []
         for z, tile_id in zip(slices, tile_ids):
-            tile = tiling.getBlockWithHalo(tile_id, list(halo))
+            tile = tiling.get_block_with_halo(tile_id, list(halo))
             outer_tile = (z,) + tuple(
-                slice(beg, end) for beg, end in zip(tile.outerBlock.begin, tile.outerBlock.end)
+                slice(beg, end) for beg, end in zip(tile.outer_block.begin, tile.outer_block.end)
             )
             tile_input = _to_image(input_[outer_tile])
             batched_images.append(tile_input)
@@ -1287,22 +1288,42 @@ def get_centers_and_bounding_boxes(
     Args:
         segmentation: The segmentation.
         mode: Determines the functionality used for computing the centers.
-            If 'v', the object's eccentricity centers computed by vigra are used.
+            If 'v', the point of maximal distance to the object boundary is used as center.
+            This center is guaranteed to lie inside the object, also for concave shapes.
             If 'p' the object's centroids computed by skimage are used.
 
     Returns:
         A dictionary that maps object ids to the corresponding centroid.
         A dictionary that maps object_ids to the corresponding bounding box.
     """
-    assert mode in ["p", "v"], "Choose either 'p' for regionprops or 'v' for vigra"
+    assert mode in ["p", "v"], "Choose either 'p' for regionprops centroids or 'v' for distance-based centers"
 
     properties = regionprops(segmentation)
 
     if mode == "p":
         center_coordinates = {prop.label: prop.centroid for prop in properties}
     elif mode == "v":
-        center_coordinates = vigra.filters.eccentricityCenters(segmentation.astype('float32'))
-        center_coordinates = {i: coord for i, coord in enumerate(center_coordinates) if i > 0}
+        # Use the point of maximal distance to the object boundary as the center.
+        # In contrast to the centroid, this point is guaranteed to lie inside the object,
+        # also for concave shapes. This replaces vigra.filters.eccentricityCenters.
+        # Compute the boundaries and a single distance transform for the whole
+        # segmentation, instead of one distance transform per object.
+        ndim = segmentation.ndim
+        # Pad so objects touching the image border also get a boundary there,
+        # matching a per-object padded distance transform.
+        padded = np.pad(segmentation, 1)
+        boundaries = find_boundaries(padded, mode="inner")
+        distances = distance_transform(boundaries == 0)
+
+        center_coordinates = {}
+        for prop in properties:
+            bbox = prop.bbox
+            # Slice the global distance field to this object's bbox (shifted by the
+            # pad of 1) and restrict the argmax to the object's own pixels.
+            region = distances[tuple(slice(b + 1, e + 1) for b, e in zip(bbox[:ndim], bbox[ndim:]))]
+            masked = np.where(prop.image, region, -1.0)
+            center_local = np.unravel_index(int(np.argmax(masked)), masked.shape)
+            center_coordinates[prop.label] = tuple(int(c + o) for c, o in zip(center_local, bbox[:ndim]))
 
     bbox_coordinates = {prop.label: prop.bbox for prop in properties}
 
@@ -1655,6 +1676,100 @@ def _batched_mask_nms(masks, boxes, scores, nms_thresh, intersection_over_min):
     return torch.tensor(keep)
 
 
+def _xywh_to_xyxy(boxes):
+    boxes = boxes.clone() if isinstance(boxes, torch.Tensor) else torch.tensor(boxes)
+    boxes = boxes.to(torch.float32)
+    boxes[:, 2] += boxes[:, 0]
+    boxes[:, 3] += boxes[:, 1]
+    return boxes
+
+
+def _infer_tiled_shape(predictions):
+    shape = [0, 0]
+    for pred in predictions:
+        bbox, global_bbox = pred["bbox"], pred["global_bbox"]
+        offset = (global_bbox[0] - bbox[0], global_bbox[1] - bbox[1])
+        mask_shape = pred["segmentation"].shape
+        shape[0] = max(shape[0], offset[1] + mask_shape[0])
+        shape[1] = max(shape[1], offset[0] + mask_shape[1])
+    return tuple(shape)
+
+
+def _calculate_tiled_mask_overlap_matrix(masks, boxes, global_boxes, intersection_over_min):
+    n_masks = len(masks)
+    overlap_scores = torch.zeros((n_masks, n_masks))
+    overlap_scores.fill_diagonal_(1)
+
+    boxes = (
+        boxes.detach().cpu().to(dtype=torch.long)
+        if isinstance(boxes, torch.Tensor) else torch.tensor(boxes, dtype=torch.long)
+    )
+    global_boxes = (
+        global_boxes.detach().cpu().to(dtype=torch.long)
+        if isinstance(global_boxes, torch.Tensor) else torch.tensor(global_boxes, dtype=torch.long)
+    )
+    global_boxes_xyxy = _xywh_to_xyxy(global_boxes).to(torch.long)
+    overlap_m = _overlap_matrix(global_boxes_xyxy)
+    masks = [mask.detach().cpu() if isinstance(mask, torch.Tensor) else torch.tensor(mask) for mask in masks]
+    areas = torch.tensor([mask.sum() for mask in masks], dtype=torch.float32)
+
+    for i in range(n_masks):
+        js = torch.where(overlap_m[i])[0]
+        js_half = js[js > i]
+        if len(js_half) == 0:
+            continue
+
+        offset_i = global_boxes[i, :2] - boxes[i, :2]
+        for j in js_half:
+            offset_j = global_boxes[j, :2] - boxes[j, :2]
+            overlap = [
+                max(global_boxes_xyxy[i, 0], global_boxes_xyxy[j, 0]),
+                max(global_boxes_xyxy[i, 1], global_boxes_xyxy[j, 1]),
+                min(global_boxes_xyxy[i, 2], global_boxes_xyxy[j, 2]),
+                min(global_boxes_xyxy[i, 3], global_boxes_xyxy[j, 3]),
+            ]
+
+            mask_i = masks[i][
+                overlap[1] - offset_i[1]:overlap[3] - offset_i[1],
+                overlap[0] - offset_i[0]:overlap[2] - offset_i[0],
+            ]
+            mask_j = masks[j][
+                overlap[1] - offset_j[1]:overlap[3] - offset_j[1],
+                overlap[0] - offset_j[0]:overlap[2] - offset_j[0],
+            ]
+            intersection = torch.logical_and(mask_i, mask_j).sum()
+            min_area = torch.minimum(areas[i], areas[j])
+            denominator = min_area if intersection_over_min else areas[i] + areas[j] - intersection
+            overlap_scores[i, j] = intersection / denominator
+
+    overlap_scores = overlap_scores + overlap_scores.T
+    overlap_scores.fill_diagonal_(1)
+    return overlap_scores
+
+
+def _batched_tiled_mask_nms(masks, boxes, global_boxes, scores, nms_thresh, intersection_over_min):
+    scores = (
+        scores.detach() if isinstance(scores, torch.Tensor) else torch.tensor(scores)
+    ).cpu()
+
+    iou_matrix = _calculate_tiled_mask_overlap_matrix(masks, boxes, global_boxes, intersection_over_min)
+    sorted_indices = torch.argsort(scores, descending=True)
+
+    keep = []
+    while len(sorted_indices) > 0:
+        i = sorted_indices[0]
+        keep.append(i)
+
+        if len(sorted_indices) == 1:
+            break
+
+        iou_values = iou_matrix[i, sorted_indices[1:]]
+        mask = iou_values <= nms_thresh
+        sorted_indices = sorted_indices[1:][mask]
+
+    return torch.tensor(keep)
+
+
 def mask_data_to_segmentation(
     masks: List[Dict[str, Any]],
     shape: Optional[Tuple[int, int]] = None,
@@ -1748,7 +1863,7 @@ def apply_nms(
         predictions: The mask predictions from SAM.
         min_size: The minimum mask size to keep in the output.
         shape: The shape of the output segmentation.
-            Has to be passed for predictions obtained from tiling.
+            For tiled predictions this is inferred from the tile-local mask shapes if it is not passed.
         perform_box_nms: Whether to perform NMS on the box coordinates or on the masks.
         nms_thresh: The threshold for filtering out objects in NMS.
         max_size: The maximum mask size to keep in the output.
@@ -1758,47 +1873,63 @@ def apply_nms(
     Returns:
         The segmentation obtained from merging the masks left after NMS.
     """
-    data = amg_utils.MaskData(
-        masks=torch.cat([pred["segmentation"][None] for pred in predictions], dim=0),
-        iou_preds=torch.tensor([pred["predicted_iou"] for pred in predictions]),
-    )
-    data["boxes"] = torch.tensor(np.array([pred["bbox"] for pred in predictions]))
-    data["area"] = [mask.sum() for mask in data["masks"]]
-    data["stability_scores"] = torch.tensor([pred["stability_score"] for pred in predictions])
-
     # Check if the input comes with a 'global_bbox' attribute. If it does, then the predictions are from
     # a tiled prediction. In this case, we have to take the coordinates w.r.t. the tiling into account.
-    if "global_bbox" in predictions[0]:
-        if shape is None:
-            raise ValueError("The output shape 'shape' has to be passed for tiled predictions.")
+    is_tiled = "global_bbox" in predictions[0]
+    if is_tiled and shape is None:
+        shape = _infer_tiled_shape(predictions)
+
+    masks = [pred["segmentation"] for pred in predictions]
+    nms_masks = None if is_tiled else torch.cat([mask[None] for mask in masks], dim=0)
+    data = amg_utils.MaskData(masks=masks, iou_preds=torch.tensor([pred["predicted_iou"] for pred in predictions]))
+    data["boxes"] = torch.tensor(np.array([pred["bbox"] for pred in predictions]))
+    data["area"] = [int(mask.sum()) for mask in data["masks"]]
+    data["stability_scores"] = torch.tensor([pred["stability_score"] for pred in predictions])
+    if is_tiled:
         data["global_boxes"] = torch.tensor(np.array([pred["global_bbox"] for pred in predictions]))
-        is_tiled = True
-    else:
-        is_tiled = False
 
     if min_size > 0:
         keep_by_size = torch.tensor(
             [i for i, area in enumerate(data["area"]) if area > min_size], dtype=torch.long,
         )
         data.filter(keep_by_size)
+        if nms_masks is not None:
+            nms_masks = nms_masks[keep_by_size]
 
     if max_size is not None:
         keep_by_size = torch.tensor([i for i, area in enumerate(data["area"]) if area < max_size])
         data.filter(keep_by_size)
+        if nms_masks is not None:
+            nms_masks = nms_masks[keep_by_size]
+
+    if len(data["masks"]) == 0:
+        if shape is None:
+            shape = predictions[0]["segmentation"].shape
+        return np.zeros(shape, dtype="uint32")
 
     scores = data["iou_preds"] * data["stability_scores"]
+    boxes = _xywh_to_xyxy(data["global_boxes"] if is_tiled else data["boxes"])
     if perform_box_nms:
         assert not intersection_over_min  # not implemented
         keep_by_nms = batched_nms(
-            data["global_boxes"].float() if is_tiled else data["boxes"].float(),
+            boxes,
             scores,
             torch.zeros_like(data["boxes"][:, 0]),  # categories
             iou_threshold=nms_thresh,
         )
+    elif is_tiled:
+        keep_by_nms = _batched_tiled_mask_nms(
+            masks=data["masks"],
+            boxes=data["boxes"],
+            global_boxes=data["global_boxes"],
+            scores=scores,
+            nms_thresh=nms_thresh,
+            intersection_over_min=intersection_over_min,
+        )
     else:
         keep_by_nms = _batched_mask_nms(
-            masks=data["masks"],
-            boxes=data["global_boxes"].float() if is_tiled else data["boxes"].float(),
+            masks=nms_masks,
+            boxes=boxes,
             scores=scores,
             nms_thresh=nms_thresh,
             intersection_over_min=intersection_over_min,

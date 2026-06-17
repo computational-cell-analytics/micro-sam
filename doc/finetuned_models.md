@@ -4,12 +4,12 @@ In addition to the original Segment Anything models, we provide models that are 
 They are available in the [BioImage.IO Model Zoo](https://bioimage.io/#/) and are also hosted on Zenodo.
 
 In the [annotation tools](#annotation-tools), you can select the model from the top widget:
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/model-type-selector.png" width="512">
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/images/model-type-selector.png" width="512">
 
 You can use the `Model` dropdown (left side) to select which kind of model to use and the `model size` dropdown (right side, available after opening the `Embedding Settings` menu) to select the size of the model.
 By default, the `base` size is used.
 
-If you are using the [CLI](#using-the-command-line-interface-cli) or the [python library](#using-the-python-library), then you can specify the model to use via the `model_type` parameter, which consists of a single name composed of model type and size. See for example the [2d annotator example](https://github.com/computational-cell-analytics/micro-sam/blob/master/examples/annotator_2d.py#L62).
+If you are using the [CLI](#using-the-command-line-interface-cli) or the [python library](#using-the-python-library), then you can specify the model to use via the `model_type` parameter, which consists of a single name composed of model type and size. See for example the [2d annotator example](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/annotator_2d.py#L62).
 
 Specifically, we provide the following model types and sizes:
 - The original Segment Anything Models (`Natural Images (SAM)`):
@@ -34,12 +34,12 @@ Specifically, we provide the following model types and sizes:
 
 See the two figures below of the improvements through the finetuned models for LM and EM data. 
 
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/lm_comparison.png" width="768">
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/images/lm_comparison.png" width="768">
 
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/em_comparison.png" width="768">
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/images/em_comparison.png" width="768">
 
 Note: if you have a `micro_sam` version older than v1.4.0, then the model selection dialogue in the [annotation tools](#annotation-tools) looks differently. In these versions, you have to select the model by its full name:
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/master/doc/images/model-type-selector-old.png" width="384">
+<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/images/model-type-selector-old.png" width="384">
 
 ## Choosing a Model 
 
