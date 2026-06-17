@@ -1,5 +1,9 @@
 # Release Overview
 
+**New in version 1.8.3 - 1.8.4**
+
+Switch the Qt backend to PyQt6 and require napari >=0.7.
+
 **New in version 1.8.2**
 
 Fix the napari plugin manifest for the renamed `micro_sam` package and expand the FAQ with segmentation and fine-tuning advice.
