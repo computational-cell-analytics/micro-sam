@@ -226,10 +226,18 @@ def promptable_segmentation_3d(
 class PromptableSegmentation3D:
     """Promptable segmentation class for volumetric data.
     """
-    def __init__(self, predictor, volume, volume_embeddings):
+    def __init__(
+        self, predictor, volume, volume_embeddings, device=None,
+        offload_video_to_cpu=True, offload_state_to_cpu=True,
+    ):
         self.predictor = predictor
         self.volume = volume
         self.volume_embeddings = volume_embeddings
+        # 'device=None' uses the predictor's auto-detected device. Offloading the frames and tracking
+        # state to CPU keeps GPU memory bounded for large volumes (a no-op when already on CPU).
+        self.device = device
+        self.offload_video_to_cpu = offload_video_to_cpu
+        self.offload_state_to_cpu = offload_state_to_cpu
 
         if self.volume.ndim != 3:
             raise AssertionError(f"The dimensionality of the volume should be 3, got '{self.volume.ndim}'")
@@ -249,7 +257,10 @@ class PromptableSegmentation3D:
 
     def init_predictor(self):
         # Initialize the inference state.
-        self.inference_state = self.predictor.init_state(volume=self.volume, volume_embeddings=self.volume_embeddings)
+        self.inference_state = self.predictor.init_state(
+            volume=self.volume, volume_embeddings=self.volume_embeddings, device=self.device,
+            offload_video_to_cpu=self.offload_video_to_cpu, offload_state_to_cpu=self.offload_state_to_cpu,
+        )
 
     def reset_predictor(self):
         # Reset the state after finishing the segmentation round.
@@ -466,13 +477,17 @@ class PromptableSegmentation3D:
     ):
         raise NotImplementedError
 
-    def propagate_prompts(self):
+    def propagate_prompts(self, update_progress=None):
         # First, we propagate the masklets throughout the frames using the input prompts in selected frames.
+        # 'update_progress' is an optional callback that is called with the number of newly processed
+        # frames, so callers (e.g. the napari annotator) can report propagation progress to the user.
         forward_video_segments = {}
         for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(self.inference_state):
             forward_video_segments[out_frame_idx] = {
                 out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, out_obj_id in enumerate(out_obj_ids)
             }
+            if update_progress is not None:
+                update_progress(1)
 
         # Next, we do the propagation reverse in time.
         reverse_video_segments = {}
@@ -483,6 +498,8 @@ class PromptableSegmentation3D:
                 reverse_video_segments[out_frame_idx] = {
                     out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, out_obj_id in enumerate(out_obj_ids)
                 }
+                if update_progress is not None:
+                    update_progress(1)
             # NOTE: The order is reversed to stitch the reverse propagation with forward.
             reverse_video_segments = dict(reversed(list(reverse_video_segments.items())))
 
@@ -548,9 +565,9 @@ class PromptableSegmentation3D:
 
         return seg
 
-    def predict(self):
+    def predict(self, update_progress=None):
         # First, we propagate prompts.
-        video_segments = self.propagate_prompts()
+        video_segments = self.propagate_prompts(update_progress=update_progress)
 
         # Next, let's merge the segmented objects per frame back together as instances per slice.
         segmentation = []

@@ -687,14 +687,17 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
         "histopathology": "Histopathology",
     }
 
-    model_family = "Natural Images (SAM)"  # If no suffix patterns match, stick to 'Natural Images (SAM)' family.
-    for k, v in supported_dropdown_maps.items():
-        if model_type.endswith(k):
-            model_family = v
-            break
+    if model_type.startswith("hvit"):  # SAM2 models, eg. 'hvit_t', are all natural-image models.
+        model_family = "Natural Images (SAM2)"
+    else:
+        model_family = "Natural Images (SAM)"  # If no suffix patterns match, stick to 'Natural Images (SAM)' family.
+        for k, v in supported_dropdown_maps.items():
+            if model_type.endswith(k):
+                model_family = v
+                break
 
     index = widget.model_family_dropdown.findText(model_family)
-    if index > 0:
+    if index >= 0:
         widget.model_family_dropdown.setCurrentIndex(index)
 
     # Update the index for model size, eg. 'base', 'tiny', etc.
@@ -703,7 +706,7 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
     model_size = size_map[model_type[size_idx]]
 
     index = widget.model_size_dropdown.findText(model_size)
-    if index > 0:
+    if index >= 0:
         widget.model_size_dropdown.setCurrentIndex(index)
 
     if save_path is not None and isinstance(save_path, str):

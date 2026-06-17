@@ -233,27 +233,56 @@ class CustomVideoPredictor(SAM2VideoPredictor):
             inference_state["cached_features"] = {}  # Create an empty 'cached_features' dictionary to warm up.
             return inference_state
 
-        # Visual features on all frames (slices) for faster interactions.
-        feats = volume_embeddings["features"]
-        pos_list = volume_embeddings["pos_enc"]
-        fpn_list = volume_embeddings["fpn"]
-
-        # Embeddings have been provided. We just need to pass stuff to 'inference_state' as expected.
-        running_features = {}
-        for frame_idx in range(inference_state["num_frames"]):
-            image = images[frame_idx].to(device).float().unsqueeze(0)
-
-            vision_features = torch.as_tensor(np.asarray(feats[frame_idx]), device=device).float()
-            vision_pos_enc = [torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in pos_list]
-            backbone_fpn = [torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in fpn_list]
-            backbone_out = {
-                "vision_features": vision_features, "vision_pos_enc": vision_pos_enc, "backbone_fpn": backbone_fpn,
-            }
-            running_features[frame_idx] = (image, backbone_out)
-
-        inference_state["cached_features"] = running_features
+        # Store the precomputed embeddings and load each frame's features lazily during tracking
+        # (see '_get_image_feature'). Materialising every slice's high-resolution features up-front
+        # costs ~200 MB/slice and OOMs for large volumes; the lazy single-frame cache keeps memory
+        # bounded. When the embeddings are backed by a zarr on disk (lazy_loading=True), only one
+        # slice is held in memory at a time.
+        inference_state["precomputed_embeddings"] = volume_embeddings
+        inference_state["cached_features"] = {}
 
         return inference_state
+
+    def _get_image_feature(self, inference_state, frame_idx, batch_size):
+        """Compute or look up the image features for a frame.
+
+        Overrides 'SAM2VideoPredictor._get_image_feature' to source per-frame features from the
+        precomputed embeddings (if stored on the inference state) instead of running the image
+        encoder. A single-frame cache bounds memory for large volumes. Falls back to the parent
+        behaviour (run the encoder) when no precomputed embeddings are available.
+        """
+        image, backbone_out = inference_state["cached_features"].get(frame_idx, (None, None))
+        if backbone_out is None:
+            embeddings = inference_state.get("precomputed_embeddings")
+            if embeddings is None:
+                return super()._get_image_feature(inference_state, frame_idx, batch_size)
+
+            device = inference_state["device"]
+            image = inference_state["images"][frame_idx].to(device).float().unsqueeze(0)
+            vision_pos_enc = [
+                torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in embeddings["pos_enc"]
+            ]
+            backbone_fpn = [
+                torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in embeddings["fpn"]
+            ]
+            backbone_out = {"backbone_fpn": backbone_fpn, "vision_pos_enc": vision_pos_enc}
+            # Keep only the most recent frame's features, matching upstream SAM2's single-frame cache.
+            inference_state["cached_features"] = {frame_idx: (image, backbone_out)}
+
+        # Expand the features to the number of objects being tracked (mirrors upstream SAM2).
+        expanded_image = image.expand(batch_size, -1, -1, -1)
+        expanded_backbone_out = {
+            "backbone_fpn": backbone_out["backbone_fpn"].copy(),
+            "vision_pos_enc": backbone_out["vision_pos_enc"].copy(),
+        }
+        for i, feat in enumerate(expanded_backbone_out["backbone_fpn"]):
+            expanded_backbone_out["backbone_fpn"][i] = feat.expand(batch_size, -1, -1, -1)
+        for i, pos in enumerate(expanded_backbone_out["vision_pos_enc"]):
+            expanded_backbone_out["vision_pos_enc"][i] = pos.expand(batch_size, -1, -1, -1)
+
+        features = self._prepare_backbone_features(expanded_backbone_out)
+        features = (expanded_image,) + features
+        return features
 
 
 def _build_sam2_video_predictor(

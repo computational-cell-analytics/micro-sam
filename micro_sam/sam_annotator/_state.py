@@ -44,8 +44,10 @@ def _get_sam_model(model_type, ndim, device, checkpoint_path, decoder_path, use_
     if model_type.startswith("h"):  # i.e. SAM2 models.
         from micro_sam.v2.util import get_sam2_model
 
+        # 'device=None' lets 'get_sam2_model' auto-detect the best device (cuda > mps > cpu);
+        # an explicit device (e.g. from the '--device' CLI argument) is forwarded and honored.
         if ndim == 2:  # Get the SAM2 model and prepare the image predictor.
-            model = get_sam2_model(model_type=model_type, input_type="images")
+            model = get_sam2_model(model_type=model_type, input_type="images", device=device)
             # Prepare the SAM2 predictor.
             from sam2.sam2_image_predictor import SAM2ImagePredictor
             predictor = SAM2ImagePredictor(model)
@@ -54,7 +56,7 @@ def _get_sam_model(model_type, ndim, device, checkpoint_path, decoder_path, use_
             predictor.model_type = model_type
             predictor.model_name = model_type
         elif ndim == 3:  # Get SAM2 video predictor
-            predictor = get_sam2_model(model_type=model_type, input_type="videos")
+            predictor = get_sam2_model(model_type=model_type, input_type="videos", device=device)
         else:
             raise ValueError
         state = {}
@@ -172,6 +174,12 @@ class AnnotatorState(metaclass=Singleton):
             else:
                 _comp_embed_fn = precompute_image_embeddings
 
+            # For SAM2 volumes, load the embeddings lazily from the zarr so the high-resolution
+            # per-slice features stay on disk and are streamed one slice at a time during tracking.
+            # This keeps memory bounded for large volumes (materialising all slices costs
+            # ~200 MB/slice and OOMs); it only applies when the embeddings are cached on disk.
+            lazy_loading = self.is_sam2 and ndim == 3 and isinstance(save_path, str)
+
             self.image_embeddings = _comp_embed_fn(
                 predictor=self.predictor,
                 input_=image_data,
@@ -180,6 +188,7 @@ class AnnotatorState(metaclass=Singleton):
                 tile_shape=tile_shape,
                 halo=halo,
                 verbose=True,
+                lazy_loading=lazy_loading,
                 pbar_init=pbar_init,
                 pbar_update=pbar_update,
             )
@@ -189,7 +198,7 @@ class AnnotatorState(metaclass=Singleton):
         if self.is_sam2 and ndim == 3:
             from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D
             self.interactive_segmenter = PromptableSegmentation3D(
-                predictor=self.predictor, volume=image_data, volume_embeddings=self.image_embeddings,
+                predictor=self.predictor, volume=image_data, volume_embeddings=self.image_embeddings, device=device,
             )
 
         # If we have an embedding path the data signature has already been computed,
