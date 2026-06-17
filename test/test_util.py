@@ -277,5 +277,113 @@ class TestUtil(unittest.TestCase):
         self.assertEqual(device.type, "cpu")
 
 
+try:
+    import sam2  # noqa
+    SAM2_SUPPORT = True
+except ImportError:
+    SAM2_SUPPORT = False
+
+
+@unittest.skipUnless(SAM2_SUPPORT, "Requires the sam2 package.")
+class TestSAM2Util(unittest.TestCase):
+    model_type = "hvit_t"
+    tmp_folder = "tmp-files-sam2"
+
+    def setUp(self):
+        os.makedirs(self.tmp_folder, exist_ok=True)
+
+    def tearDown(self):
+        rmtree(self.tmp_folder)
+
+    def _get_predictor(self, ndim):
+        # Build the SAM2 predictor exactly as the precompute CLI / annotator do.
+        from micro_sam.sam_annotator._state import _get_sam_model
+        predictor, _ = _get_sam_model(
+            model_type=self.model_type, ndim=ndim, device="cpu",
+            checkpoint_path=None, decoder_path=None, use_cli=True,
+        )
+        return predictor
+
+    def _check_predictor_initialization_2d(self, predictor, embeddings):
+        from micro_sam.v2.util import set_precomputed
+        predictor.reset_predictor()
+        set_precomputed(predictor, embeddings)
+        self.assertTrue(predictor._is_image_set)
+        self.assertIsNotNone(predictor._features)
+        self.assertIsNotNone(predictor._orig_hw)
+        predictor.reset_predictor()
+
+    def test_precompute_image_embeddings_2d(self):
+        from micro_sam.v2.util import precompute_image_embeddings
+
+        predictor = self._get_predictor(ndim=2)
+        input_ = np.random.rand(512, 512).astype("float32")
+
+        # Compute the image embeddings without save path.
+        embeddings = precompute_image_embeddings(predictor, input_, ndim=2)
+        for key in ("features", "high_res_feats", "input_size", "original_size"):
+            self.assertIn(key, embeddings)
+        self.assertEqual(embeddings["features"].ndim, 4)
+        self.assertEqual(embeddings["features"].shape, (1, 256, 64, 64))
+        self._check_predictor_initialization_2d(predictor, embeddings)
+
+        # Compute the image embeddings with save path.
+        save_path = os.path.join(self.tmp_folder, "embed.zarr")
+        embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=2)
+        self._check_predictor_initialization_2d(predictor, embeddings)
+
+        # Check the contents of the saved embeddings.
+        self.assertTrue(os.path.exists(save_path))
+        f = zarr.open(save_path, mode="r")
+        self.assertIn("features", f)
+        self.assertIn("high_res_feats", f)
+        self.assertEqual(f["features"].shape, (1, 256, 64, 64))
+        # The signature is written so the GUI / CLI can validate a reload.
+        self.assertEqual(f.attrs["model_name"], self.model_type)
+        self.assertIn("data_signature", f.attrs)
+
+        # Check that everything still works when we load the image embeddings from file.
+        embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=2)
+        self.assertEqual(embeddings["features"].shape, (1, 256, 64, 64))
+        self._check_predictor_initialization_2d(predictor, embeddings)
+
+    def test_precompute_image_embeddings_3d(self):
+        from micro_sam.v2.util import precompute_image_embeddings, set_precomputed
+
+        predictor = self._get_predictor(ndim=3)
+        input_ = np.random.rand(2, 256, 256).astype("float32")
+
+        def check_slices(embeddings):
+            for i in range(input_.shape[0]):
+                _, inference_state = set_precomputed(predictor, embeddings, i=i, input_=input_)
+                self.assertIn("cached_features", inference_state)
+
+        # Compute the image embeddings without save path.
+        # Note: the in-memory form stacks the per-slice features along z (4 dims),
+        # while the saved form keeps an explicit singleton dim (5 dims).
+        embeddings = precompute_image_embeddings(predictor, input_, ndim=3)
+        for key in ("features", "pos_enc", "fpn", "input_size", "original_size"):
+            self.assertIn(key, embeddings)
+        self.assertEqual(embeddings["features"].shape[0], input_.shape[0])
+
+        # Compute the image embeddings with save path.
+        save_path = os.path.join(self.tmp_folder, "embed_3d.zarr")
+        embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=3)
+        check_slices(embeddings)
+
+        # Check the contents of the saved embeddings.
+        self.assertTrue(os.path.exists(save_path))
+        f = zarr.open(save_path, mode="r")
+        self.assertIn("features", f)
+        self.assertIn("pos_enc", f)
+        self.assertIn("fpn", f)
+        self.assertEqual(f["features"].shape, (2, 1, 256, 64, 64))
+        self.assertEqual(f.attrs["model_name"], self.model_type)
+
+        # Check that everything still works when we load the image embeddings from file.
+        embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=3)
+        check_slices(embeddings)
+
+
 if __name__ == "__main__":
     unittest.main()

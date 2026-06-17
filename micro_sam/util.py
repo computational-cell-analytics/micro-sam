@@ -200,7 +200,7 @@ def _load_checkpoint(checkpoint_path):
 #
 
 
-def _to_image(image):
+def _to_image(image, normalization="minmax"):
     input_ = image
     ndim = input_.ndim
     n_channels = 1 if ndim == 2 else input_.shape[-1]
@@ -224,6 +224,13 @@ def _to_image(image):
             "or a 3D input (= image with channels)."
         )
     assert input_.ndim == 3 and input_.shape[-1] == 3
+
+    if normalization == "percentile":
+        # Percentile-normalize each channel to [0, 1], matching the SAM2 3D frame normalization.
+        # Clip since percentile normalization maps the 2nd / 98th percentiles to 0 / 1 and overshoots.
+        from torch_em.transform.raw import normalize_percentile
+        input_ = normalize_percentile(input_.astype("float32"), lower=2.0, upper=98.0, axis=(0, 1))
+        return np.clip(np.array(input_), 0.0, 1.0)
 
     # Normalize the input per channel and bring it to uint8.
     input_ = input_.astype("float32")

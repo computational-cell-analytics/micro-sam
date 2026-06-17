@@ -46,43 +46,34 @@ class TestCLI(unittest.TestCase):
             image_data = binary_blobs(512).astype("uint8") * 255
             imageio.imwrite(im_path, image_data)
 
-        # Test precomputation with a single image.
+        # Test precomputation with a single (2d) image.
         emb_path1 = os.path.join(self.tmp_folder, "embedddings1.zarr")
         run([
-            "micro_sam.precompute_embeddings", "-i", im_path, "-e", emb_path1,
-            "-m", self.model_type, "--precompute_amg_state"
+            "micro_sam.precompute_embeddings", "-i", im_path, "-e", emb_path1, "-m", "hvit_t",
         ])
         self.assertTrue(os.path.exists(emb_path1))
         f = zarr.open(emb_path1, mode="r")
         self.assertIn("features", f)
+        self.assertIn("high_res_feats", f)
 
-        ais_path = os.path.join(emb_path1, "is_state.h5")
-        self.assertTrue(os.path.exists(ais_path))
-
-        # Test precomputation with image stack.
+        # Test precomputation with an image stack (loaded as a 3d volume).
         emb_path2 = os.path.join(self.tmp_folder, "embedddings2.zarr")
         run([
-            "micro_sam.precompute_embeddings", "-i", self.tmp_folder, "-e", emb_path2,
-            "-m", self.model_type, "-k", "*.tif", "--precompute_amg_state"
+            "micro_sam.precompute_embeddings", "-i", self.tmp_folder, "-e", emb_path2, "-m", "hvit_t", "-k", "*.tif",
         ])
         self.assertTrue(os.path.exists(emb_path2))
         f = zarr.open(emb_path2, mode="r")
         self.assertIn("features", f)
         self.assertEqual(f["features"].shape[0], n_images)
 
-        ais_path = os.path.join(emb_path2, "is_state.h5")
-        self.assertTrue(os.path.exists(ais_path))
-
-        # Test precomputation with pattern to process multiple image.
+        # Test precomputation with a pattern to process multiple images.
         emb_path3 = os.path.join(self.tmp_folder, "embedddings3")
         run([
-            "micro_sam.precompute_embeddings", "-i", self.tmp_folder, "-e", emb_path3,
-            "-m", self.model_type, "--pattern", "*.tif", "--precompute_amg_state"
+            "micro_sam.precompute_embeddings", "-i", self.tmp_folder, "-e", emb_path3, "-m", "hvit_t",
+            "--pattern", "*.tif",
         ])
         for i in range(n_images):
             self.assertTrue(os.path.exists(os.path.join(emb_path3, f"image-{i}.zarr")))
-            ais_path = os.path.join(emb_path3, f"image-{i}.zarr", "is_state.h5")
-            self.assertTrue(os.path.exists(ais_path))
 
     @pytest.mark.skipif(platform.system() == "Windows", reason="CLI test is not working on windows.")
     def test_automatic_segmentation(self):

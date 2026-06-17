@@ -5,6 +5,16 @@ import numpy as np
 from micro_sam.v1.prompt_based_segmentation import _process_box
 
 
+def _crop_to_original_shape(mask, shape):
+    """Crop a SAM2 video-predictor mask back to the original slice shape.
+
+    The video predictor pads non-square frames to a square of side max(H, W) (padding appended at the
+    bottom/right) and returns masks at that padded size. The image content occupies the top-left
+    [0:H, 0:W] region, so cropping recovers the original (H, W) mask. For square volumes this is a no-op.
+    """
+    return mask[:shape[0], :shape[1]]
+
+
 def promptable_segmentation_2d(
     predictor,
     image: Optional[np.ndarray] = None,
@@ -202,7 +212,7 @@ def promptable_segmentation_3d(
     for slice_idx in video_segments.keys():
         per_slice_seg = np.zeros(volume.shape[-2:])
         for _instance_idx, _instance_mask in video_segments[slice_idx].items():
-            per_slice_seg[_instance_mask.squeeze()] = _instance_idx
+            per_slice_seg[_crop_to_original_shape(_instance_mask.squeeze(), volume.shape[-2:])] = _instance_idx
         segmentation.append(per_slice_seg)
 
     segmentation = (np.stack(segmentation) > 0).astype("uint64")
@@ -216,10 +226,18 @@ def promptable_segmentation_3d(
 class PromptableSegmentation3D:
     """Promptable segmentation class for volumetric data.
     """
-    def __init__(self, predictor, volume, volume_embeddings):
+    def __init__(
+        self, predictor, volume, volume_embeddings, device=None,
+        offload_video_to_cpu=True, offload_state_to_cpu=True,
+    ):
         self.predictor = predictor
         self.volume = volume
         self.volume_embeddings = volume_embeddings
+        # 'device=None' uses the predictor's auto-detected device. Offloading the frames and tracking
+        # state to CPU keeps GPU memory bounded for large volumes (a no-op when already on CPU).
+        self.device = device
+        self.offload_video_to_cpu = offload_video_to_cpu
+        self.offload_state_to_cpu = offload_state_to_cpu
 
         if self.volume.ndim != 3:
             raise AssertionError(f"The dimensionality of the volume should be 3, got '{self.volume.ndim}'")
@@ -239,7 +257,10 @@ class PromptableSegmentation3D:
 
     def init_predictor(self):
         # Initialize the inference state.
-        self.inference_state = self.predictor.init_state(volume=self.volume, volume_embeddings=self.volume_embeddings)
+        self.inference_state = self.predictor.init_state(
+            volume=self.volume, volume_embeddings=self.volume_embeddings, device=self.device,
+            offload_video_to_cpu=self.offload_video_to_cpu, offload_state_to_cpu=self.offload_state_to_cpu,
+        )
 
     def reset_predictor(self):
         # Reset the state after finishing the segmentation round.
@@ -456,13 +477,17 @@ class PromptableSegmentation3D:
     ):
         raise NotImplementedError
 
-    def propagate_prompts(self):
+    def propagate_prompts(self, update_progress=None):
         # First, we propagate the masklets throughout the frames using the input prompts in selected frames.
+        # 'update_progress' is an optional callback that is called with the number of newly processed
+        # frames, so callers (e.g. the napari annotator) can report propagation progress to the user.
         forward_video_segments = {}
         for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(self.inference_state):
             forward_video_segments[out_frame_idx] = {
                 out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, out_obj_id in enumerate(out_obj_ids)
             }
+            if update_progress is not None:
+                update_progress(1)
 
         # Next, we do the propagation reverse in time.
         reverse_video_segments = {}
@@ -473,6 +498,8 @@ class PromptableSegmentation3D:
                 reverse_video_segments[out_frame_idx] = {
                     out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, out_obj_id in enumerate(out_obj_ids)
                 }
+                if update_progress is not None:
+                    update_progress(1)
             # NOTE: The order is reversed to stitch the reverse propagation with forward.
             reverse_video_segments = dict(reversed(list(reverse_video_segments.items())))
 
@@ -528,8 +555,8 @@ class PromptableSegmentation3D:
             mask_logits = out_mask_logits[0]  # Get first object
             seg = (mask_logits.squeeze() > 0.0).cpu().numpy()
 
-            # Ensure correct output type
-            seg = seg.astype("uint32")
+            # Crop back to the original slice shape (the video predictor pads non-square frames).
+            seg = _crop_to_original_shape(seg, self.volume.shape[-2:]).astype("uint32")
 
         finally:
             # Reset the state to clear this object's prompts
@@ -538,16 +565,17 @@ class PromptableSegmentation3D:
 
         return seg
 
-    def predict(self):
+    def predict(self, update_progress=None):
         # First, we propagate prompts.
-        video_segments = self.propagate_prompts()
+        video_segments = self.propagate_prompts(update_progress=update_progress)
 
         # Next, let's merge the segmented objects per frame back together as instances per slice.
         segmentation = []
         for slice_idx in video_segments.keys():
             per_slice_seg = np.zeros(self.volume.shape[-2:])
             for _instance_idx, _instance_mask in video_segments[slice_idx].items():
-                per_slice_seg[_instance_mask.squeeze()] = _instance_idx
+                mask = _crop_to_original_shape(_instance_mask.squeeze(), self.volume.shape[-2:])
+                per_slice_seg[mask] = _instance_idx
             segmentation.append(per_slice_seg)
 
         segmentation = np.stack(segmentation).astype("uint64")

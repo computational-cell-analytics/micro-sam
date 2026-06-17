@@ -210,7 +210,7 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
     predictor.reset_predictor()
 
     from micro_sam.util import _to_image
-    predictor.set_image(_to_image(input_))
+    predictor.set_image(_to_image(input_, normalization="percentile"))
     features = predictor.get_image_embedding().cpu().numpy()
     high_res_features = predictor._features.get("high_res_feats")
     original_size = predictor._orig_hw

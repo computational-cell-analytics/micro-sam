@@ -1382,8 +1382,10 @@ class EmbeddingWidget(_WidgetBase):
         # Section 1: Image and Model.
         section1_layout = QtWidgets.QHBoxLayout()
         section1_layout.addLayout(self._create_image_section())
+        # Default to the natural-image SAM2 family. The widget encodes the default choice as
+        # 'vit_<size><suffix>', so 'vit_t_sam2' selects 'Natural Images (SAM2)' at the tiny size.
         section1_layout.addLayout(
-            self._create_model_section()
+            self._create_model_section(default_model="vit_t_sam2")
         )  # Creates the model family widget section.
         self.layout().addLayout(section1_layout)
 
@@ -2157,7 +2159,11 @@ class UnifiedSegmentWidget(_WidgetBase):
                     )
 
                 # Propagate the prompts throughout the volume and combine the propagated segmentations.
-                seg = state.interactive_segmenter.predict()
+                # Report per-slice progress so the user can see the propagation advancing.
+                pbar_signals.pbar_description.emit("Propagate in volume")
+                seg = state.interactive_segmenter.predict(
+                    update_progress=lambda update: pbar_signals.pbar_update.emit(update)
+                )
 
             else:
                 # Step 1: Segment all slices with prompts.

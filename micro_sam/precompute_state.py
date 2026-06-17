@@ -1,4 +1,4 @@
-"""Precompute image embeddings and automatic mask generator state for image data.
+"""Precompute and cache the SAM2 image embeddings for image data.
 """
 
 import os
@@ -22,7 +22,7 @@ except ImportError:
     from tqdm import tqdm
 
 from . import util
-from .v1.util import get_sam_model, precompute_image_embeddings, get_model_names
+from .v1.util import precompute_image_embeddings
 from .v1 import instance_segmentation
 
 
@@ -227,67 +227,82 @@ def precompute_state(
     input_path: Union[os.PathLike, str],
     output_path: Union[os.PathLike, str],
     pattern: Optional[str] = None,
-    model_type: str = util._DEFAULT_MODEL,
+    model_type: str = "hvit_t",
     checkpoint_path: Optional[Union[os.PathLike, str]] = None,
     key: Optional[str] = None,
     ndim: Optional[int] = None,
-    tile_shape: Optional[Tuple[int, int]] = None,
-    halo: Optional[Tuple[int, int]] = None,
-    precompute_amg_state: bool = False,
 ) -> None:
-    """Precompute the image embeddings and other optional state for the input image(s).
+    """Precompute and cache the SAM2 image embeddings for the input image(s).
+
+    The embeddings are saved in the same zarr format the annotators use, so the output can be loaded
+    directly by the `micro_sam.annotator` CLI and the napari GUI by passing the same path as the
+    embedding path (with a matching model and image).
 
     Args:
         input_path: The input image file(s). Can either be a single image file (e.g. tif or png),
-            a container file (e.g. hdf5 or zarr) or a folder with images files.
+            a container file (e.g. hdf5 or zarr) or a folder with image files.
             In case of a container file the argument `key` must be given. In case of a folder
-            it can be given to provide a glob pattern to subselect files from the folder.
-        output_path: The output path where the embeddings and other state will be saved.
+            the `pattern` argument must be given to subselect files.
+        output_path: The output path where the embeddings will be saved. For a single input this is the path
+            to the embeddings zarr; for a folder of inputs this is the directory the embeddings are saved in.
         pattern: Glob pattern to select files in a folder. The embeddings will be computed
             for each of these files. To select all files in a folder pass "*".
-        model_type: The Segment Anything model to use. Will use the `vit_b_lm` model by default.
+        model_type: The SAM2 model to use. By default the `hvit_t` model is used.
         checkpoint_path: Path to a checkpoint for a custom model.
-        key: The key to the input file. This is needed for contaner files (e.g. hdf5 or zarr)
+        key: The key to the input file. This is needed for container files (e.g. hdf5 or zarr)
             or to load several images as 3d volume. Provide a glob pattern, e.g. "*.tif", for this case.
-        ndim: The dimensionality of the data. By default, computes it from the input data.
-        tile_shape: Shape of tiles for tiled prediction. By default prediction is run without tiling.
-        halo: Overlap of the tiles for tiled prediction. By default prediction is run without tiling.
-        precompute_amg_state: Whether to precompute the state for automatic instance segmentation
-            in addition to the image embeddings.
+        ndim: The dimensionality of the data. By default, computed from the input data.
     """
-    predictor, state = get_sam_model(model_type=model_type, checkpoint_path=checkpoint_path, return_state=True)
+    from micro_sam.v2.util import precompute_image_embeddings, SUPPORTED_MODELS
+    # Imported lazily to avoid a circular import ('_state' imports from this module).
+    from micro_sam.sam_annotator._state import _get_sam_model
 
-    if "decoder_state" in state:
-        decoder = instance_segmentation.get_decoder(predictor.model.image_encoder, state["decoder_state"])
-    else:
-        decoder = None
-
-    # Check if we precompute the state for a single file or for a folder with image files.
-    if pattern is None:
-        _precompute_state_for_file(
-            predictor, input_path, output_path, key,
-            ndim=ndim, tile_shape=tile_shape, halo=halo,
-            precompute_amg_state=precompute_amg_state,
-            decoder=decoder, verbose=True,
+    if not model_type.startswith("h"):
+        raise ValueError(
+            f"Embedding precomputation only supports SAM2 models ({', '.join(SUPPORTED_MODELS)}), got '{model_type}'."
         )
+
+    # Determine the input files and matching output embedding paths.
+    single = pattern is None
+    if single:
+        input_files, output_paths = [input_path], [output_path]
     else:
-        input_files = glob(os.path.join(input_path, pattern))
-        _precompute_state_for_files(
-            predictor, input_files, output_path, key=key,
-            ndim=ndim, tile_shape=tile_shape, halo=halo,
-            precompute_amg_state=precompute_amg_state,
-            decoder=decoder,
+        input_files = sorted(glob(os.path.join(input_path, pattern)))
+        if len(input_files) == 0:
+            raise ValueError(f"Could not find any files matching the pattern '{pattern}' in '{input_path}'.")
+        os.makedirs(output_path, exist_ok=True)
+        output_paths = [os.path.join(output_path, os.path.basename(f)) for f in input_files]
+
+    predictor, current_ndim = None, None
+    for input_file, out_path in tqdm(
+        zip(input_files, output_paths), total=len(input_files), desc="Precompute embeddings", disable=single
+    ):
+        image_data = input_file if isinstance(input_file, np.ndarray) else util.load_image_data(input_file, key)
+        file_ndim = image_data.ndim if ndim is None else ndim
+
+        # Build the SAM2 predictor for the data dimensionality (2d image vs. 3d video predictor).
+        # We reuse the annotator's model loader so the embeddings match what the GUI / CLI expect.
+        if predictor is None or file_ndim != current_ndim:
+            predictor, _ = _get_sam_model(
+                model_type=model_type, ndim=file_ndim, device=None,
+                checkpoint_path=checkpoint_path, decoder_path=None, use_cli=True,
+            )
+            current_ndim = file_ndim
+
+        save_path = str(Path(out_path).with_suffix(".zarr"))
+        precompute_image_embeddings(
+            predictor=predictor, input_=image_data, save_path=save_path, ndim=file_ndim, verbose=single
         )
 
 
 def main():
     """@private"""
     import argparse
+    from micro_sam.v2.util import SUPPORTED_MODELS, _DEFAULT_MODEL
 
-    available_models = list(get_model_names())
-    available_models = ", ".join(available_models)
+    available_models = ", ".join(SUPPORTED_MODELS)
 
-    parser = argparse.ArgumentParser(description="Compute the embeddings for an image.")
+    parser = argparse.ArgumentParser(description="Precompute and cache the SAM2 image embeddings for image data.")
     parser.add_argument(
         "-i", "--input_path", required=True,
         help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
@@ -305,36 +320,23 @@ def main():
         "for an image stack it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
     )
     parser.add_argument(
-        "-m", "--model_type", default=util._DEFAULT_MODEL,
-        help=f"The segment anything model that will be used, one of {available_models}."
+        "-m", "--model_type", default=_DEFAULT_MODEL,
+        help=f"The SAM2 model that will be used, one of {available_models}."
     )
     parser.add_argument(
-        "-c", "--checkpoint", default=None,
-        help="Checkpoint from which the SAM model will be loaded."
-    )
-    parser.add_argument(
-        "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction.", default=None
-    )
-    parser.add_argument(
-        "--halo", nargs="+", type=int, help="The halo for using tiled prediction.", default=None
+        "-c", "--checkpoint", default=None, help="Checkpoint from which the SAM2 model will be loaded."
     )
     parser.add_argument(
         "-n", "--ndim", type=int, default=None,
         help="The number of spatial dimensions in the data. "
         "Please specify this if your data has a channel dimension."
     )
-    parser.add_argument(
-        "-p", "--precompute_amg_state", action="store_true",
-        help="Whether to precompute the state for automatic instance segmentation."
-    )
 
     args = parser.parse_args()
     precompute_state(
         args.input_path, args.embedding_path,
         model_type=args.model_type, checkpoint_path=args.checkpoint,
-        pattern=args.pattern, key=args.key,
-        tile_shape=args.tile_shape, halo=args.halo, ndim=args.ndim,
-        precompute_amg_state=args.precompute_amg_state,
+        pattern=args.pattern, key=args.key, ndim=args.ndim,
     )
 
 

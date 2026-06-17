@@ -18,9 +18,9 @@ def _load_img_as_tensor(img_path, image_size):
     """Load a single frame as a float32 [0, 1] tensor of shape (3, image_size, image_size).
 
     For file-path inputs: PIL loads the image, resizes via plain square stretch (JPEG convention).
-    For numpy inputs: accepts uint8 [0, 255] or float32 [0, 1]; resizes using aspect-ratio
-    preserving scale to image_size on the longest side, then zero-pads to a square - matching
-    ConvertToSam2VideoBatch._to_sam2_size used during training.
+    For numpy inputs: percentile-normalizes any dtype to [0, 1] (2nd / 98th percentile per channel);
+    resizes using aspect-ratio preserving scale to image_size on the longest side, then zero-pads to a
+    square - matching ConvertToSam2VideoBatch._to_sam2_size used during training.
 
     Returns:
         img: (3, image_size, image_size) float32 tensor, ImageNet-normalised by the caller.
@@ -37,12 +37,12 @@ def _load_img_as_tensor(img_path, image_size):
         img_np = img_path
         img_np = np.stack([img_np] * 3, axis=-1) if img_np.ndim == 2 else img_np
 
-        if img_np.dtype == np.uint8:
-            img_np = img_np.astype(np.float32) / 255.0
-        elif img_np.dtype in (np.float32, np.float64):
-            img_np = img_np.astype(np.float32)
-        else:
-            raise RuntimeError(f"Unsupported image dtype: {img_np.dtype}")
+        # Percentile-normalize each channel to [0, 1], so any input dtype (e.g. uint16 microscopy data)
+        # is mapped to the range SAM2's ImageNet normalization expects. Clip since percentile
+        # normalization maps the 2nd / 98th percentiles to 0 / 1 and overshoots outside that range.
+        from torch_em.transform.raw import normalize_percentile
+        img_np = normalize_percentile(img_np.astype(np.float32), lower=2.0, upper=98.0, axis=(0, 1))
+        img_np = np.clip(img_np, 0.0, 1.0)
 
         # Aspect-ratio preserving scale + zero-pad, matching _to_sam2_size in training.
         # video_height/video_width are set to max(H, W) so SAM2's coordinate normalization
@@ -233,27 +233,56 @@ class CustomVideoPredictor(SAM2VideoPredictor):
             inference_state["cached_features"] = {}  # Create an empty 'cached_features' dictionary to warm up.
             return inference_state
 
-        # Visual features on all frames (slices) for faster interactions.
-        feats = volume_embeddings["features"]
-        pos_list = volume_embeddings["pos_enc"]
-        fpn_list = volume_embeddings["fpn"]
-
-        # Embeddings have been provided. We just need to pass stuff to 'inference_state' as expected.
-        running_features = {}
-        for frame_idx in range(inference_state["num_frames"]):
-            image = images[frame_idx].to(device).float().unsqueeze(0)
-
-            vision_features = torch.as_tensor(np.asarray(feats[frame_idx]), device=device).float()
-            vision_pos_enc = [torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in pos_list]
-            backbone_fpn = [torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in fpn_list]
-            backbone_out = {
-                "vision_features": vision_features, "vision_pos_enc": vision_pos_enc, "backbone_fpn": backbone_fpn,
-            }
-            running_features[frame_idx] = (image, backbone_out)
-
-        inference_state["cached_features"] = running_features
+        # Store the precomputed embeddings and load each frame's features lazily during tracking
+        # (see '_get_image_feature'). Materialising every slice's high-resolution features up-front
+        # costs ~200 MB/slice and OOMs for large volumes; the lazy single-frame cache keeps memory
+        # bounded. When the embeddings are backed by a zarr on disk (lazy_loading=True), only one
+        # slice is held in memory at a time.
+        inference_state["precomputed_embeddings"] = volume_embeddings
+        inference_state["cached_features"] = {}
 
         return inference_state
+
+    def _get_image_feature(self, inference_state, frame_idx, batch_size):
+        """Compute or look up the image features for a frame.
+
+        Overrides 'SAM2VideoPredictor._get_image_feature' to source per-frame features from the
+        precomputed embeddings (if stored on the inference state) instead of running the image
+        encoder. A single-frame cache bounds memory for large volumes. Falls back to the parent
+        behaviour (run the encoder) when no precomputed embeddings are available.
+        """
+        image, backbone_out = inference_state["cached_features"].get(frame_idx, (None, None))
+        if backbone_out is None:
+            embeddings = inference_state.get("precomputed_embeddings")
+            if embeddings is None:
+                return super()._get_image_feature(inference_state, frame_idx, batch_size)
+
+            device = inference_state["device"]
+            image = inference_state["images"][frame_idx].to(device).float().unsqueeze(0)
+            vision_pos_enc = [
+                torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in embeddings["pos_enc"]
+            ]
+            backbone_fpn = [
+                torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in embeddings["fpn"]
+            ]
+            backbone_out = {"backbone_fpn": backbone_fpn, "vision_pos_enc": vision_pos_enc}
+            # Keep only the most recent frame's features, matching upstream SAM2's single-frame cache.
+            inference_state["cached_features"] = {frame_idx: (image, backbone_out)}
+
+        # Expand the features to the number of objects being tracked (mirrors upstream SAM2).
+        expanded_image = image.expand(batch_size, -1, -1, -1)
+        expanded_backbone_out = {
+            "backbone_fpn": backbone_out["backbone_fpn"].copy(),
+            "vision_pos_enc": backbone_out["vision_pos_enc"].copy(),
+        }
+        for i, feat in enumerate(expanded_backbone_out["backbone_fpn"]):
+            expanded_backbone_out["backbone_fpn"][i] = feat.expand(batch_size, -1, -1, -1)
+        for i, pos in enumerate(expanded_backbone_out["vision_pos_enc"]):
+            expanded_backbone_out["vision_pos_enc"][i] = pos.expand(batch_size, -1, -1, -1)
+
+        features = self._prepare_backbone_features(expanded_backbone_out)
+        features = (expanded_image,) + features
+        return features
 
 
 def _build_sam2_video_predictor(
