@@ -93,19 +93,35 @@ We recommend transferring the model checkpoints to the system-level cache direct
 
 
 ### 9. napari crashes with a segmentation fault (`Fatal Python error: Segmentation fault`) when I open one of the `micro_sam` annotators (Linux).
-This is caused by a corrupted system font cache, not by `micro_sam` itself. The annotator widgets use a collapsible "Settings" section (from `superqt`) that draws small arrow glyphs (`▲` / `▼`) with Qt. If your `fontconfig` cache is stale, Qt may resolve the default font to an unusable font file (e.g. a `.woff` web font), and Qt's bundled FreeType/HarfBuzz then segfaults while rendering those glyphs. You can confirm this is the cause if the crash traceback ends in `superqt/collapsible/_collapsible.py` in `_convert_string_to_icon`.
+This is caused by a corrupted or stale system font cache, not by `micro_sam` itself. Qt segfaults inside `fontconfig` while laying out text. This shows up in two common variants:
+- On launch, before any widget appears, while Qt renders the napari welcome screen. The crash traceback ends in `libfontconfig` (e.g. `FcCharSetHasChar` / `FcCharSetFindLeafForward`), reached via `QFontEngineMultiFontConfig::shouldLoadFontEngineForCharacter` during font fallback.
+- After the annotator opens, when the collapsible "Settings" section (from `superqt`) draws small arrow glyphs (`▲` / `▼`). Here Qt may resolve the default font to an unusable font file (e.g. a `.woff` web font) and Qt's bundled FreeType/HarfBuzz segfaults rendering those glyphs. The traceback ends in `superqt/collapsible/_collapsible.py` in `_convert_string_to_icon`.
 
-To fix it, rebuild your user font cache:
-```bash
-fc-cache -f
-```
-If the crash persists, clear the cache directory and rebuild it:
+Both have the same cause and the same fix. The most reliable fix is to clear the user font cache directory and rebuild it, since a stale cache often holds entries from several `fontconfig` versions (e.g. `*.cache-7`, `*.cache-10`, `*.cache-11`) that a newer `fontconfig` then misreads:
 ```bash
 rm -rf ~/.cache/fontconfig && fc-cache -f
 ```
-You can verify the fix by checking that the default font no longer resolves to a `.woff` (or otherwise broken) file:
+Rebuilding without clearing (`fc-cache -f` alone) is sometimes enough for the `.woff` variant, but is not reliable for the cross-version cache problem. You can verify the fix by checking that the default font no longer resolves to a `.woff` (or otherwise broken) file:
 ```bash
 fc-match "Sans Serif"   # should return a real font such as NotoSans-Regular.ttf, not a .woff
+```
+
+### 10. napari fails to render with `RuntimeError: Cannot FRAMEBUFFER object ... because it does not exist` or `OpenGL.error.Error: Attempt to retrieve context when no valid context` (Linux / Wayland).
+This is an OpenGL context mismatch, not a `micro_sam` or napari bug. napari renders points with the vispy `gl+` backend, which routes OpenGL calls through `PyOpenGL`. On a Wayland session `PyOpenGL` defaults to its EGL backend and looks for the current context with `eglGetCurrentContext()`. However, when the napari window runs under XWayland (Qt falls back to the `xcb` platform because the Wayland Qt plugin is missing), the actual OpenGL context is a GLX context, which EGL cannot see. `PyOpenGL` then reports "no valid context" and the draw fails. The crash only appears once the canvas actually draws (e.g. after opening an image), not on the empty welcome screen.
+
+To fix it, tell `PyOpenGL` to use the GLX backend so it matches the context Qt created. For a single run:
+```bash
+PYOPENGL_PLATFORM=glx napari
+```
+Or set it for the whole shell session and then launch napari:
+```bash
+export PYOPENGL_PLATFORM=glx
+napari
+```
+To make it permanent for a conda / micromamba environment, add it to an activation script so it is set automatically on every `activate`:
+```bash
+mkdir -p "$CONDA_PREFIX/etc/conda/activate.d"
+echo 'export PYOPENGL_PLATFORM=glx' > "$CONDA_PREFIX/etc/conda/activate.d/pyopengl_platform.sh"
 ```
 
 
