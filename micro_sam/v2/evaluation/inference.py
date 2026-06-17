@@ -21,7 +21,7 @@ from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 
 from micro_sam.util import segmentation_to_one_hot, mask_data_to_segmentation
 from micro_sam.prompt_generators import IterativePromptGenerator
-from micro_sam.evaluation.inference import (
+from micro_sam.v1.evaluation.inference import (
     _get_batched_prompts, _get_batched_iterative_prompts, _save_segmentation,
 )
 

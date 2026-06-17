@@ -21,7 +21,9 @@ try:
 except ImportError:
     from tqdm import tqdm
 
-from . import instance_segmentation, util
+from . import util
+from .v1.util import precompute_image_embeddings
+from .v1 import instance_segmentation
 
 
 def cache_amg_state(
@@ -165,7 +167,7 @@ def _precompute_state_for_file(
 
     # Precompute the image embeddings.
     output_path = Path(output_path).with_suffix(".zarr")
-    embeddings = util.precompute_image_embeddings(
+    embeddings = precompute_image_embeddings(
         predictor, image_data, output_path, ndim=ndim, tile_shape=tile_shape, halo=halo, verbose=verbose
     )
 

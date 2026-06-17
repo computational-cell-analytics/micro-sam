@@ -1,8 +1,8 @@
 import os
 
 from micro_sam.util import get_sam_model
-from micro_sam.evaluation import inference
-from micro_sam.evaluation.evaluation import run_evaluation_for_iterative_prompting
+from micro_sam.v1.evaluation import inference
+from micro_sam.v1.evaluation.evaluation import run_evaluation_for_iterative_prompting
 
 from util import (
     get_paths,  # comment this line out and create a custom function with the same name to run int. seg. on your data

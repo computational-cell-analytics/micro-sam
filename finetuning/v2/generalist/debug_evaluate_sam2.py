@@ -143,7 +143,7 @@ from elf.evaluation import mean_segmentation_accuracy, cremi_score
 
 from micro_sam.util import segmentation_to_one_hot
 from micro_sam.prompt_generators import IterativePromptGenerator
-from micro_sam.evaluation.inference import _get_batched_prompts, _get_batched_iterative_prompts
+from micro_sam.v1.evaluation.inference import _get_batched_prompts, _get_batched_iterative_prompts
 
 from micro_sam.v2.util import get_sam2_model, precompute_image_embeddings
 from micro_sam.v2.evaluation.inference import _embedding_tensors_to_numpy

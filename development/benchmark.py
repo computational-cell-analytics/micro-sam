@@ -21,8 +21,8 @@ import argparse
 import time
 
 import imageio.v3 as imageio
-import micro_sam.instance_segmentation as instance_seg
-import micro_sam.prompt_based_segmentation as seg
+import micro_sam.v1.instance_segmentation as instance_seg
+import micro_sam.v1.prompt_based_segmentation as seg
 import micro_sam.util as util
 import numpy as np
 import pandas as pd

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import imageio.v3 as imageio
 
-from micro_sam.evaluation.evaluation import run_evaluation
+from micro_sam.v1.evaluation.evaluation import run_evaluation
 
 # from util import get_paths   # for hlrn
 from util import get_pred_paths
@@ -45,7 +45,7 @@ FOR_MULTICHAN = ["tissuenet/multi_chan"]
 
 # override for SCC
 def get_paths(dataset_name, split):
-    from micro_sam.evaluation.livecell import _get_livecell_paths
+    from micro_sam.v1.evaluation.livecell import _get_livecell_paths
     image_paths, gt_paths = _get_livecell_paths(
         input_folder="/scratch/users/archit/data/livecell", split=split
     )

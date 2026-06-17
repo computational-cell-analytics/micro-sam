@@ -30,7 +30,8 @@ from . import sam_trainer as trainers
 from ..instance_segmentation import get_unetr
 from ..models.peft_sam import ClassicalSurgery
 from . import joint_sam_trainer as joint_trainers
-from ..util import get_device, get_model_names, export_custom_sam_model, get_sam_model
+from ...util import get_device
+from ..util import get_model_names, export_custom_sam_model, get_sam_model
 from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit, get_raw_transform
 
 
@@ -270,7 +271,7 @@ def train_sam(
             exactly matches the instance segmentation decoder. Decoders may have a mismatch in the output
             channels if they were pre-trained for a different task. If set to False, decoders with a different
             output dimension can be loaded; the output channels will be re-initialized.
-        model_kwargs: Additional keyword arguments for the `micro_sam.util.get_sam_model`.
+        model_kwargs: Additional keyword arguments for the `micro_sam.v1.util.get_sam_model`.
     """
     with _filter_warnings(ignore_warnings):
 
@@ -490,7 +491,7 @@ def train_instance_segmentation(
             exactly matches the instance segmentation decoder. Decoders may have a mismatch in the output
             channels if they were pre-trained for a different task. If set to False, decoders with a different
             output dimension can be loaded; the output channels will be re-initialized.
-        model_kwargs: Additional keyword arguments for the `micro_sam.util.get_sam_model`.
+        model_kwargs: Additional keyword arguments for the `micro_sam.v1.util.get_sam_model`.
     """
 
     with _filter_warnings(ignore_warnings):
@@ -779,7 +780,7 @@ def default_sam_loader(**kwargs) -> DataLoader:
     """Create a PyTorch DataLoader for training a SAM model.
 
     Args:
-        kwargs: Keyword arguments for `micro_sam.training.default_sam_dataset` or for the PyTorch DataLoader.
+        kwargs: Keyword arguments for `micro_sam.v1.training.default_sam_dataset` or for the PyTorch DataLoader.
 
     Returns:
         The DataLoader.
@@ -932,7 +933,7 @@ def _export_helper(save_root, checkpoint_name, output_path, model_type, with_seg
 
         # Otherwise we export it as bioimage.io model.
         else:
-            from micro_sam.bioimageio import export_sam_model
+            from micro_sam.v1.bioimageio import export_sam_model
 
             # Load image and corresponding labels from the val loader.
             with torch.no_grad():

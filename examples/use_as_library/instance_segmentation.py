@@ -6,7 +6,7 @@ import napari
 
 from micro_sam import util
 from micro_sam.sample_data import fetch_hela_2d_example_data, fetch_wholeslide_example_data
-from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
 
 DATA_CACHE = os.path.join(util.get_cache_directory(), "sample_data")

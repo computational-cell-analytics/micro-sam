@@ -7,8 +7,8 @@ import pandas as pd
 from elf.evaluation import mean_segmentation_accuracy
 
 from micro_sam import instance_segmentation
-from micro_sam.multi_dimensional_segmentation import automatic_3d_segmentation
-from micro_sam.evaluation.multi_dimensional_segmentation import run_multi_dimensional_segmentation_grid_search
+from micro_sam.v1.multi_dimensional_segmentation import automatic_3d_segmentation
+from micro_sam.v1.evaluation.multi_dimensional_segmentation import run_multi_dimensional_segmentation_grid_search
 
 
 def _3d_automatic_instance_segmentation_with_decoder(

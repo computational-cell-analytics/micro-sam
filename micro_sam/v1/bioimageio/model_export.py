@@ -14,8 +14,9 @@ import bioimageio.spec.model.v0_5 as spec
 from bioimageio.spec import save_bioimageio_package
 from bioimageio.core.digest_spec import create_sample_for_model
 
-from .. import util
-from ..prompt_generators import PointAndBoxPromptGenerator
+from ... import util
+from ..util import models
+from ...prompt_generators import PointAndBoxPromptGenerator
 from ..evaluation.model_comparison import _enhance_image, _overlay_outline, _overlay_box
 from ..prompt_based_segmentation import _compute_logits_from_mask
 from .predictor_adaptor import PredictorAdaptor
@@ -129,7 +130,7 @@ def _write_documentation(doc, model_type, tmp_dir):
 def _get_checkpoint(model_type, checkpoint_path, tmp_dir):
     # If we don't have a checkpoint we get the corresponding model from the registry.
     if checkpoint_path is None:
-        model_registry = util.models()
+        model_registry = models()
         checkpoint_path = model_registry.fetch(model_type)
         return checkpoint_path, None
 

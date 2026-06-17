@@ -12,7 +12,7 @@ from skimage.measure import label as connected_components
 from torch_em.data.datasets.util import download_source, unzip
 
 from micro_sam.util import get_sam_model, precompute_image_embeddings
-from micro_sam.prompt_based_segmentation import segment_from_points, segment_from_box
+from micro_sam.v1.prompt_based_segmentation import segment_from_points, segment_from_box
 
 
 URL = "https://api.data.neurosys.com:4443/agar-public/AGAR_demo.zip"

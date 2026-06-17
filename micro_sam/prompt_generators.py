@@ -6,6 +6,7 @@ For training or evaluation of prompt-based segmentation.
 from typing import List, Optional, Tuple
 
 import numpy as np
+
 from kornia import morphology
 
 import torch

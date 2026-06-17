@@ -13,7 +13,7 @@ import micro_sam.util as util
 #     segment_instances_from_embeddings_3d,
 # )
 from micro_sam import multi_dimensional_segmentation as mds
-from micro_sam.visualization import compute_pca
+from micro_sam.v1.visualization import compute_pca
 INPUT_PATH_CLUSTER = "/scratch-grete/projects/nim00007/data/mitochondria/cooper/mito_tomo/outer-membrane1/1_20230125_TOMO_HOI_WT_36859_J2_upSTEM750_BC3.6/upSTEM750_36859_J2_TS_SP_003_rec_2kb1dawbp_crop.h5"
 # EMBEDDINGS_PATH_CLUSTER = "/scratch-grete/projects/nim00007/data/mitochondria/cooper/mito_tomo/outer-membrane1/1_20230125_TOMO_HOI_WT_36859_J2_upSTEM750_BC3.6/embedding-mito-3d.zarr"
 EMBEDDINGS_PATH_CLUSTER = "/scratch-grete/usr/nimlufre/"

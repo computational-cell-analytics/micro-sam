@@ -17,7 +17,8 @@ from bioimage_cpp.filters import gaussian_smoothing
 from segment_anything.predictor import SamPredictor
 from segment_anything.utils.transforms import ResizeLongestSide
 
-from . import util
+from .. import util
+from .util import set_precomputed
 
 
 #
@@ -219,12 +220,12 @@ def _initialize_predictor(predictor, image_embeddings, i, prompts, to_tile):
         features = image_embeddings["features"]
         shape, tile_shape, halo = features.attrs["shape"], features.attrs["tile_shape"], features.attrs["halo"]
         tile_id, tile, prompts = to_tile(prompts, shape, tile_shape, halo)
-        util.set_precomputed(predictor, image_embeddings, i, tile_id=tile_id)
+        set_precomputed(predictor, image_embeddings, i, tile_id=tile_id)
 
     # Set the precomputed state for normal prediction.
     elif image_embeddings is not None:
         shape = image_embeddings["original_size"]
-        util.set_precomputed(predictor, image_embeddings, i)
+        set_precomputed(predictor, image_embeddings, i)
 
     else:
         shape = predictor.original_size

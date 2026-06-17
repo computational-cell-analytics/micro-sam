@@ -6,18 +6,20 @@ The python library can be imported via
 import micro_sam
 ```
 
+> **Migration note:** The SAM1 (Segment Anything v1) functionality has moved into the `micro_sam.v1` subpackage. Update imports such as `micro_sam.instance_segmentation`, `micro_sam.training`, `micro_sam.evaluation`, etc. to `micro_sam.v1.*` (e.g. `from micro_sam.v1.instance_segmentation import ...`). The old top-level import paths have been removed. CLI command names (e.g. `micro_sam.automatic_segmentation`, `micro_sam.train`) are unchanged.
+
 This library extends the [Segment Anything library](https://github.com/facebookresearch/segment-anything) and
 
-- implements functions to apply Segment Anything to 2d and 3d data in `micro_sam.prompt_based_segmentation`.
-- provides improved automatic instance segmentation functionality in `micro_sam.instance_segmentation`.
-- implements training functionality that can be used for finetuning Segment Anything on your own data in `micro_sam.training`.
-- provides functionality for quantitative and qualitative evaluation of Segment Anything models in `micro_sam.evaluation`.
+- implements functions to apply Segment Anything to 2d and 3d data in `micro_sam.v1.prompt_based_segmentation`.
+- provides improved automatic instance segmentation functionality in `micro_sam.v1.instance_segmentation`.
+- implements training functionality that can be used for finetuning Segment Anything on your own data in `micro_sam.v1.training`.
+- provides functionality for quantitative and qualitative evaluation of Segment Anything models in `micro_sam.v1.evaluation`.
 
 You can import these sub-modules via
 
 ```python
-import micro_sam.prompt_based_segmentation
-import micro_sam.instance_segmentation
+import micro_sam.v1.prompt_based_segmentation
+import micro_sam.v1.instance_segmentation
 # etc.
 ```
 
@@ -32,7 +34,7 @@ In fact the best results can be expected when finetuning on your own data, and w
 So a good strategy is to annotate a few images with one of the provided models using our interactive annotation tools and, if the model is not working as good as required for your use-case, finetune on the annotated data.
 We recommend checking out our [paper](https://www.nature.com/articles/s41592-024-02580-4) for details on the results on how much data is required for finetuning Segment Anything.
 
-The training logic is implemented in `micro_sam.training` and is based on [torch-em](https://github.com/constantinpape/torch-em). Check out [the finetuning notebook](https://github.com/computational-cell-analytics/micro-sam/blob/main/notebooks/sam_finetuning.ipynb) to see how to use it, or the training CLI (`micro_sam.train`), see `micro_sam.train -h` for details on how to use it.
+The training logic is implemented in `micro_sam.v1.training` and is based on [torch-em](https://github.com/constantinpape/torch-em). Check out [the finetuning notebook](https://github.com/computational-cell-analytics/micro-sam/blob/main/notebooks/sam_finetuning.ipynb) to see how to use it, or the training CLI (`micro_sam.train`), see `micro_sam.train -h` for details on how to use it.
 We also support training an additional decoder for automatic instance segmentation. This yields better results than the automatic mask generation of segment anything and is significantly faster.
 The notebook explains how to train it together with the rest of SAM and how to then use it.
 
@@ -52,4 +54,4 @@ Here is a list of resources, together with their recommended training settings, 
 | GPU (NVIDIA A100)           | 80GB     | ViT Large  | 2          | *all*                        | 30               |
 | GPU (NVIDIA A100)           | 80GB     | ViT Huge   | 2          | *all*                        | 25               |
 
-> NOTE: If you use the [finetuning UI](#finetuning-ui) or the training CLI (`micro_sam.train`) or `micro_sam.training.training.train_sam_for_configuration`, you can specify the hardware configuration and the best settings for it will be set automatically. If your hardware is not in the settings we have tested choose the closest match. You can set the training parameters yourself when using `micro_sam.training.training.train_sam`. Be aware that the choice for the number of objects per image, the batch size, and the type of model have a strong impact on the VRAM needed for training and the duration of training. See the [finetuning notebook](https://github.com/computational-cell-analytics/micro-sam/blob/main/notebooks/sam_finetuning.ipynb) for an overview of these parameters.
+> NOTE: If you use the [finetuning UI](#finetuning-ui) or the training CLI (`micro_sam.train`) or `micro_sam.v1.training.training.train_sam_for_configuration`, you can specify the hardware configuration and the best settings for it will be set automatically. If your hardware is not in the settings we have tested choose the closest match. You can set the training parameters yourself when using `micro_sam.v1.training.training.train_sam`. Be aware that the choice for the number of objects per image, the batch size, and the type of model have a strong impact on the VRAM needed for training and the duration of training. See the [finetuning notebook](https://github.com/computational-cell-analytics/micro-sam/blob/main/notebooks/sam_finetuning.ipynb) for an overview of these parameters.

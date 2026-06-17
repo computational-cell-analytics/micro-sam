@@ -12,7 +12,7 @@ from torch_em.data import MinInstanceSampler, ConcatDataset
 from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.data.datasets.light_microscopy.neurips_cell_seg import to_rgb
 
-from micro_sam.training.util import ResizeRawTrafo, ResizeLabelTrafo
+from micro_sam.v1.training.util import ResizeRawTrafo, ResizeLabelTrafo
 
 
 def _to_8bit(raw):

@@ -36,9 +36,10 @@ from bioimage_cpp.utils import Blocking
 import segment_anything.utils.amg as amg_utils
 from segment_anything.predictor import SamPredictor
 
-from . import util
+from .. import util
+from .util import get_sam_model, precompute_image_embeddings, set_precomputed
 from .inference import batched_inference, batched_tiled_inference
-from ._vendored import batched_mask_to_box, mask_to_rle_pytorch
+from .._vendored import batched_mask_to_box, mask_to_rle_pytorch
 
 # We may change this to 'apg' in version 1.8.
 DEFAULT_SEGMENTATION_MODE_WITH_DECODER = "ais"
@@ -415,7 +416,7 @@ class AutomaticMaskGenerator(AMGBase):
         Args:
             image: The input image, volume or timeseries.
             image_embeddings: Optional precomputed image embeddings.
-                See `util.precompute_image_embeddings` for details.
+                See `precompute_image_embeddings` for details.
             i: Index for the image data. Required if `image` has three spatial dimensions
                 or a time dimension and two spatial dimensions.
             verbose: Whether to print computation progress. By default, set to 'False'.
@@ -435,8 +436,8 @@ class AutomaticMaskGenerator(AMGBase):
         # Otherwise we have to recompute the embeddings for each crop and can't precompute.
         if len(crop_boxes) == 1:
             if image_embeddings is None:
-                image_embeddings = util.precompute_image_embeddings(self._predictor, image)
-            util.set_precomputed(self._predictor, image_embeddings, i=i)
+                image_embeddings = precompute_image_embeddings(self._predictor, image)
+            set_precomputed(self._predictor, image_embeddings, i=i)
             precomputed_embeddings = True
         else:
             precomputed_embeddings = False
@@ -535,7 +536,7 @@ def _process_tiled_embeddings(predictor, image, image_embeddings, tile_shape, ha
     if image_embeddings is None:
         if tile_shape is None or halo is None:
             raise ValueError("To compute tiled embeddings the parameters tile_shape and halo have to be passed.")
-        image_embeddings = util.precompute_image_embeddings(
+        image_embeddings = precompute_image_embeddings(
             predictor, image, tile_shape=tile_shape, halo=halo, verbose=verbose, batch_size=batch_size, mask=mask,
         )
 
@@ -616,7 +617,7 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
         Args:
             image: The input image, volume or timeseries.
             image_embeddings: Optional precomputed image embeddings.
-                See `util.precompute_image_embeddings` for details.
+                See `precompute_image_embeddings` for details.
             i: Index for the image data. Required if `image` has three spatial dimensions
                 or a time dimension and two spatial dimensions.
             tile_shape: The tile shape for embedding prediction.
@@ -664,7 +665,7 @@ class TiledAutomaticMaskGenerator(AutomaticMaskGenerator):
                 "input_size": features.attrs["input_size"],
                 "original_size": features.attrs["original_size"],
             }
-            util.set_precomputed(self._predictor, tile_embeddings, i)
+            set_precomputed(self._predictor, tile_embeddings, i)
 
             # Compute the mask data for this tile and append it
             this_mask_data = self._process_crop(
@@ -850,7 +851,7 @@ def get_predictor_and_decoder(
         The decoder for instance segmentation.
     """
     device = util.get_device(device)
-    predictor, state = util.get_sam_model(
+    predictor, state = get_sam_model(
         model_type=model_type,
         checkpoint_path=checkpoint_path,
         device=device,
@@ -999,7 +1000,7 @@ class InstanceSegmentationWithDecoder:
         Args:
             image: The input image, volume or timeseries.
             image_embeddings: Optional precomputed image embeddings.
-                See `util.precompute_image_embeddings` for details.
+                See `precompute_image_embeddings` for details.
             i: Index for the image data. Required if `image` has three spatial dimensions
                 or a time dimension and two spatial dimensions.
             verbose: Whether to be verbose. By default, set to 'False'.
@@ -1013,12 +1014,12 @@ class InstanceSegmentationWithDecoder:
         pbar_init(1, "Initialize instance segmentation with decoder")
 
         if image_embeddings is None:
-            image_embeddings = util.precompute_image_embeddings(
+            image_embeddings = precompute_image_embeddings(
                 predictor=self._predictor, input_=image, ndim=ndim, verbose=verbose
             )
 
         # Get the image embeddings from the predictor.
-        self._predictor = util.set_precomputed(self._predictor, image_embeddings, i=i)
+        self._predictor = set_precomputed(self._predictor, image_embeddings, i=i)
         embeddings = self._predictor.features
         input_shape = tuple(self._predictor.input_size)
         original_shape = tuple(self._predictor.original_size)
@@ -1242,7 +1243,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
         Args:
             image: The input image, volume or timeseries.
             image_embeddings: Optional precomputed image embeddings.
-                See `util.precompute_image_embeddings` for details.
+                See `precompute_image_embeddings` for details.
             i: Index for the image data. Required if `image` has three spatial dimensions
                 or a time dimension and two spatial dimensions.
             tile_shape: Shape of the tiles for precomputing image embeddings.
@@ -1285,7 +1286,7 @@ class TiledInstanceSegmentationWithDecoder(InstanceSegmentationWithDecoder):
             batched_embeddings, input_shapes, original_shapes = [], [], []
             for tile_id in tile_ids:
                 # Get the image embeddings from the predictor for this tile.
-                self._predictor = util.set_precomputed(self._predictor, self._image_embeddings, i=i, tile_id=tile_id)
+                self._predictor = set_precomputed(self._predictor, self._image_embeddings, i=i, tile_id=tile_id)
 
                 batched_embeddings.append(self._predictor.features)
                 input_shapes.append(tuple(self._predictor.input_size))
@@ -1435,7 +1436,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
                 - 'binary_mask': Return a list of dictionaries with masks encoded as binary masks.
                 - 'instance_segmentation': Return masks merged into an instance segmentation in a single array.
                 By default, set to 'instance_segmentation'.
-            mask_threshold: The threshold for turning logits into masks in `micro_sam.inference.batched_inference`.`
+            mask_threshold: The threshold for turning logits into masks in `micro_sam.v1.inference.batched_inference`.`
             refine_with_box_prompts: Whether to refine the mask outputs with another round of box promtps
                 derived from the segmentations after point prompts.
             prompt_function: A custom function for deriving prompts from the segmentation decoder predictions.
@@ -1445,7 +1446,7 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
                 ```
                 where `foreground`, `center_distances`, and `boundary_distances` are the respective
                 predictions from the segmentation decoder. It must returns a dictionary containing
-                either point, box, or mask prompts in a format compattible with `micro_sam.inference.batched_inference`.
+                either point, box, or mask prompts in a format compattible with `micro_sam.v1.inference.batched_inference`.
 
         Returns:
             The instance segmentation masks.
@@ -1539,7 +1540,7 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
                 - 'binary_mask': Return a list of dictionaries with masks encoded as binary masks.
                 - 'instance_segmentation': Return masks merged into an instance segmentation in a single array.
                 By default, set to 'instance_segmentation'.
-            mask_threshold: The threshold for turining logits into masks in `micro_sam.inference.batched_inference`.`
+            mask_threshold: The threshold for turining logits into masks in `micro_sam.v1.inference.batched_inference`.`
             refine_with_box_prompts: Whether to refine the mask outputs with another round of box promtps
                 derived from the segmentations after point prompts. Currently not supported for tiled segmentation.
             prompt_function: A custom function for deriving prompts from the segmentation decoder predictions.
@@ -1549,7 +1550,7 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
                 ```
                 where `foreground`, `center_distances`, and `boundary_distances` are the respective
                 predictions from the segmentation decoder. It must returns a dictionary containing
-                either point, box, or mask prompts in a format compattible with `micro_sam.inference.batched_inference`.
+                either point, box, or mask prompts in a format compattible with `micro_sam.v1.inference.batched_inference`.
             optimize_memory: Whether to optimize the memory consumption by merging the per-slice
                 segmentation results immediatly with NMS, rather than running a NMS for all results.
                 This may lead to a slightly different segmentation result and is only compatible with

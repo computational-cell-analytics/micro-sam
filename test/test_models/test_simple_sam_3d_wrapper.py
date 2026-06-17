@@ -7,7 +7,7 @@ class TestSimpleSAM3DWrapper(unittest.TestCase):
     model_type = "vit_b"
 
     def test_simple_sam_3d_wrapper(self):
-        from micro_sam.models.simple_sam_3d_wrapper import get_simple_sam_3d_model
+        from micro_sam.v1.models.simple_sam_3d_wrapper import get_simple_sam_3d_model
 
         image_size = 256
         n_classes = 2

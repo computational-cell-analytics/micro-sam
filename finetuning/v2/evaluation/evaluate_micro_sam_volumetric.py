@@ -14,7 +14,7 @@ import os
 import pandas as pd
 from tqdm import tqdm
 
-from micro_sam.evaluation.multi_dimensional_segmentation import run_multi_dimensional_segmentation_grid_search
+from micro_sam.v1.evaluation.multi_dimensional_segmentation import run_multi_dimensional_segmentation_grid_search
 
 from baselines_common import MAX_EVALUATION_SAMPLES, _load_data
 from common import DATA_ROOT, DATASETS_3D, DATASETS_3D_EM, get_data_paths

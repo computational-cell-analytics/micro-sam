@@ -12,7 +12,7 @@ from torchvision.utils import make_grid
 import torch_em
 from torch_em.trainer.logger_base import TorchEmLogger
 
-from ..prompt_generators import PromptGeneratorBase, IterativePromptGenerator
+from ...prompt_generators import PromptGeneratorBase, IterativePromptGenerator
 
 
 class SamTrainer(torch_em.trainer.DefaultTrainer):
@@ -24,7 +24,7 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
 
     Args:
         convert_inputs: The class that converts outputs of the dataloader to the expected input format of SAM.
-            The class `micro_sam.training.util.ConvertToSamInputs` can be used here.
+            The class `micro_sam.v1.training.util.ConvertToSamInputs` can be used here.
         n_sub_iteration: The number of iteration steps for which the masks predicted for one object are updated.
             In each sub-iteration new point prompts are sampled where the model was wrong.
         n_objects_per_batch: If not given, we compute the loss for all objects in a sample.

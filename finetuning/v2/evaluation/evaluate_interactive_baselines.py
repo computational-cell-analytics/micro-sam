@@ -32,7 +32,7 @@ from tqdm import tqdm
 
 import torch
 
-from micro_sam.evaluation.evaluation import run_evaluation
+from micro_sam.v1.evaluation.evaluation import run_evaluation
 
 from common import DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_EM, CHECKPOINT_PATHS, get_data_paths
 from baselines_common import MAX_EVALUATION_SAMPLES, _load_data
@@ -272,7 +272,7 @@ def run_sam_v1_evaluation(
         return
 
     predictor = _load_sam_v1(model_type, checkpoint, device)
-    from micro_sam.evaluation.inference import run_inference_with_iterative_prompting
+    from micro_sam.v1.evaluation.inference import run_inference_with_iterative_prompting
 
     with tempfile.TemporaryDirectory() as tmpdir:
         input_dir = os.path.join(tmpdir, "images")

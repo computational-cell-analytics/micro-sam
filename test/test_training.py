@@ -7,7 +7,8 @@ from shutil import rmtree
 import imageio.v3 as imageio
 
 from micro_sam.sample_data import synthetic_data
-from micro_sam.util import VIT_T_SUPPORT, get_sam_model, SamPredictor
+from micro_sam.util import VIT_T_SUPPORT, SamPredictor
+from micro_sam.v1.util import get_sam_model
 
 
 class TestDataset(unittest.TestCase):
@@ -48,7 +49,7 @@ class TestDataset(unittest.TestCase):
             self.assertEqual(y.shape, expected_label_shape)
 
     def test_default_sam_dataset(self):
-        from micro_sam.training.training import default_sam_dataset
+        from micro_sam.v1.training.training import default_sam_dataset
         from torch_em.data import SegmentationDataset
 
         patch_shape = (512, 512)
@@ -58,7 +59,7 @@ class TestDataset(unittest.TestCase):
         self._check_dataset(ds, patch_shape, SegmentationDataset)
 
     def test_default_sam_dataset_with_numpy_data(self):
-        from micro_sam.training.training import default_sam_dataset
+        from micro_sam.v1.training.training import default_sam_dataset
         from torch_em.data import TensorDataset
 
         patch_shape = (512, 512)
@@ -117,7 +118,7 @@ class TestTraining(unittest.TestCase):
             pass
 
     def _get_dataloader(self, split, patch_shape, batch_size, train_instance_segmentation_only=False):
-        import micro_sam.training as sam_training
+        import micro_sam.v1.training as sam_training
 
         # Create the synthetic training data and get the corresponding folders.
         image_root = os.path.join(self.tmp_folder, "synthetic-data", "images", split)
@@ -136,7 +137,7 @@ class TestTraining(unittest.TestCase):
         return loader
 
     def _train_model(self, model_type, device):
-        import micro_sam.training as sam_training
+        import micro_sam.v1.training as sam_training
 
         batch_size = 1
         n_sub_iteration = 2
@@ -163,7 +164,7 @@ class TestTraining(unittest.TestCase):
         )
 
     def _export_model(self, checkpoint_path, export_path, model_type):
-        from micro_sam.util import export_custom_sam_model
+        from micro_sam.v1.util import export_custom_sam_model
 
         export_custom_sam_model(
             checkpoint_path=checkpoint_path,
@@ -174,7 +175,7 @@ class TestTraining(unittest.TestCase):
     def _run_inference_and_check_results(
         self, model_path, model_type, inference_function, prediction_dir, expected_sa
     ):
-        import micro_sam.evaluation as evaluation
+        import micro_sam.v1.evaluation as evaluation
 
         predictor = get_sam_model(model_type=model_type, checkpoint_path=model_path)
 
@@ -195,7 +196,7 @@ class TestTraining(unittest.TestCase):
         self.assertGreater(result, expected_sa)
 
     def test_training(self):
-        import micro_sam.evaluation as evaluation
+        import micro_sam.v1.evaluation as evaluation
 
         model_type, device = "vit_t", "cpu"
 
@@ -226,8 +227,8 @@ class TestTraining(unittest.TestCase):
         )
 
     def test_train_instance_segmentation(self):
-        from micro_sam.training.training import train_instance_segmentation, export_instance_segmentation_model
-        from micro_sam.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+        from micro_sam.v1.training.training import train_instance_segmentation, export_instance_segmentation_model
+        from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
         model_type, device = "vit_t", "cpu"
         batch_size, patch_shape = 1, (512, 512)

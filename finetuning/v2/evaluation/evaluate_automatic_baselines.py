@@ -30,7 +30,7 @@ from tqdm import tqdm
 
 import torch
 
-from micro_sam.evaluation.evaluation import run_evaluation
+from micro_sam.v1.evaluation.evaluation import run_evaluation
 from torch_em.transform.raw import normalize
 
 from common import (
@@ -121,7 +121,7 @@ def _load_segneuron(checkpoint_path, device):
 
 
 def _load_microsam_v1(method, model_type, checkpoint, device):
-    from micro_sam.automatic_segmentation import get_predictor_and_segmenter
+    from micro_sam.v1.automatic_segmentation import get_predictor_and_segmenter
     mode = {"microsam_amg": "amg", "microsam_ais": "ais", "microsam_apg": "apg"}[method]
     return get_predictor_and_segmenter(
         model_type=model_type, checkpoint=checkpoint, device=device, segmentation_mode=mode,
@@ -213,7 +213,7 @@ def _segment_segneuron(volume, model, device, beta=0.25):
 
 
 def _segment_microsam_v1(image_or_volume, predictor, segmenter, ndim):
-    from micro_sam.automatic_segmentation import automatic_instance_segmentation
+    from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation
     seg = automatic_instance_segmentation(
         predictor=predictor, segmenter=segmenter, input_path=image_or_volume, ndim=ndim, verbose=False,
     )

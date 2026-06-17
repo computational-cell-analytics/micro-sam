@@ -3,7 +3,7 @@ import os
 from subprocess import run
 
 from util import evaluate_checkpoint_for_dataset, ALL_DATASETS, EM_DATASETS, LM_DATASETS
-from micro_sam.evaluation import default_experiment_settings, get_experiment_setting_name
+from micro_sam.v1.evaluation import default_experiment_settings, get_experiment_setting_name
 
 EXPERIMENT_ROOT = "/scratch/projects/nim00007/sam/experiments/generalists"
 CHECKPOINTS = {

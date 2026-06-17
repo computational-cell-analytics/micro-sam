@@ -5,7 +5,7 @@ import h5py
 import napari
 
 from micro_sam.sample_data import sample_data_hela_2d
-from micro_sam.instance_segmentation import (
+from micro_sam.v1.instance_segmentation import (
     TiledAutomaticPromptGenerator, AutomaticPromptGenerator, get_predictor_and_decoder
 )
 from micro_sam.util import precompute_image_embeddings
@@ -152,7 +152,7 @@ def example_script_3d():
 
 
 def debug_wsi():
-    from micro_sam.inference import _stitch_segmentation
+    from micro_sam.v1.inference import _stitch_segmentation
     from bioimage_cpp.utils import Blocking
     from tqdm import tqdm
 

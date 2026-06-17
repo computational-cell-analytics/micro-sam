@@ -3,7 +3,7 @@ import argparse
 
 import torch
 
-import micro_sam.training as sam_training
+import micro_sam.v1.training as sam_training
 from micro_sam.util import export_custom_sam_model
 
 from obtain_mito_nuc_em_datasets import get_generalist_mito_nuc_loaders

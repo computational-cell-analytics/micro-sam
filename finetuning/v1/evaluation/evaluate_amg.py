@@ -1,7 +1,7 @@
 import os
 
-from micro_sam.evaluation.evaluation import run_evaluation
-from micro_sam.evaluation.inference import run_amg
+from micro_sam.v1.evaluation.evaluation import run_evaluation
+from micro_sam.v1.evaluation.inference import run_amg
 
 from util import (
     get_paths,  # comment this line out and create a custom function with the same name to run amg on your data

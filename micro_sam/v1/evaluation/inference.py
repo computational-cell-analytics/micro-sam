@@ -16,7 +16,8 @@ import torch
 
 from segment_anything import SamPredictor
 
-from .. import util as util
+from ... import util as util
+from ..util import get_sam_model, precompute_image_embeddings
 from ..inference import batched_inference
 from ..instance_segmentation import (
     get_predictor_and_decoder,
@@ -25,7 +26,7 @@ from ..instance_segmentation import (
     AutomaticPromptGenerator,
 )
 from . import instance_segmentation
-from ..prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
+from ...prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
 
 
 def _load_prompts(
@@ -148,7 +149,7 @@ def precompute_all_embeddings(
         image_name = os.path.basename(image_path)
         im = imageio.imread(image_path)
         embedding_path = os.path.join(embedding_dir, f"{os.path.splitext(image_name)[0]}.zarr")
-        util.precompute_image_embeddings(predictor, im, embedding_path, ndim=2)
+        precompute_image_embeddings(predictor, im, embedding_path, ndim=2)
 
 
 def _precompute_prompts(gt_path, use_points, use_boxes, n_positives, n_negatives, dilation):
@@ -570,7 +571,7 @@ def run_amg(
     else:
         embedding_folder = None
 
-    predictor = util.get_sam_model(model_type=model_type, checkpoint_path=checkpoint, peft_kwargs=peft_kwargs)
+    predictor = get_sam_model(model_type=model_type, checkpoint_path=checkpoint, peft_kwargs=peft_kwargs)
 
     # Get the AMG class.
     if tiling_window_params:

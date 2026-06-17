@@ -135,7 +135,7 @@ def plot_qualitative_ais():
         dataset = npath.rsplit("/")[-3]
 
         # Get all image and label paths
-        from micro_sam.evaluation.benchmark_datasets import _get_image_label_paths
+        from micro_sam.v1.evaluation.benchmark_datasets import _get_image_label_paths
         image_paths, gt_paths = _get_image_label_paths(path=os.path.join(data_dir, dataset), ndim=2)
 
         # Get the predictions.

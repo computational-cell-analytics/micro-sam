@@ -13,7 +13,7 @@ from torch_em.data import datasets
 
 from elf.io import open_file
 
-from micro_sam.evaluation.livecell import _get_livecell_paths
+from micro_sam.v1.evaluation.livecell import _get_livecell_paths
 
 
 DATA_DIR = "/mnt/vast-nhr/projects/cidas/cca/data"
