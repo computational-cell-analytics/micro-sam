@@ -6,12 +6,11 @@ dependencies:
     - bioimageio.core
     - imagecodecs
     - magicgui
-    - napari <0.7  # Note: See https://github.com/napari/napari/issues/8808 for more details.
+    - napari >=0.7.1
     - natsort
     - pip
     - pooch
-    - pyqt
-    - python <3.14  # Note: napari <0.7 currently does not work on python 3.14. We will release this pin once we support napari 0.7.
+    - pyqt6
     - python-xxhash
     - python-elf >=0.9
     # Note: installing the pytorch package from conda-forge will generally
