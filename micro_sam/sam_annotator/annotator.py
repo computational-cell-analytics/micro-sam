@@ -6,6 +6,7 @@ import torch
 
 from .. import util
 from . import _widgets as widgets
+from . import util as vutil
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
 from .util import (
@@ -76,30 +77,54 @@ class Annotator(_AnnotatorBase):
     """
 
     def _get_widgets(self):
-        """Create dimension-specific widgets."""
-        with_decoder = AnnotatorState().decoder is not None
+        """Create the widgets for the segmentation annotator.
 
-        # Common widgets
-        widgets_dict = {
+        The interactive segmentation widget merges the prompt menu, the segment and the
+        clear controls into a single ndim-aware widget placed right after the embeddings.
+        """
+        with_decoder = AnnotatorState().decoder is not None
+        return {
+            "interactive": widgets.InteractiveSegmentationWidget(
+                self._viewer, ndim=self._ndim, prompt_widget=self._prompt_widget,
+            ),
             "autosegment": widgets.AutoSegmentWidget(
-                self._viewer,
-                with_decoder=with_decoder,
-                volumetric=(self._ndim == 3),
+                self._viewer, with_decoder=with_decoder, volumetric=(self._ndim == 3),
             ),
             "commit": widgets.commit(),
         }
 
-        # Dimension-specific widgets
-        if self._ndim == 2:
-            widgets_dict["segment"] = widgets.segment()
-            widgets_dict["clear"] = widgets.clear()
-        else:  # ndim == 3
-            widgets_dict["segment"] = widgets.UnifiedSegmentWidget(
-                self._viewer, tracking=False
-            )
-            widgets_dict["clear"] = widgets.clear_volume()
+    def _create_keybindings(self):
+        """Bind the keys to the merged interactive segmentation widget."""
+        interactive = self._widgets["interactive"]
 
-        return widgets_dict
+        @self._viewer.bind_key("s", overwrite=True)
+        def _segment(viewer):
+            interactive.segment(viewer)
+
+        # We also need to over-write the keybindings for the prompt layers.
+        # See https://github.com/napari/napari/issues/7302 for details.
+        prompt_layer = self._viewer.layers["prompts"]
+        point_prompt_layer = self._viewer.layers["point_prompts"]
+
+        @prompt_layer.bind_key("s", overwrite=True)
+        def _segment_prompts(event):
+            interactive.segment(self._viewer)
+
+        @point_prompt_layer.bind_key("s", overwrite=True)
+        def _segment_point_prompts(event):
+            interactive.segment(self._viewer)
+
+        @self._viewer.bind_key("c", overwrite=True)
+        def _commit(viewer):
+            self._widgets["commit"](viewer)
+
+        @self._viewer.bind_key("t", overwrite=True)
+        def _toggle_label(event=None):
+            vutil.toggle_label(self._point_prompt_layer)
+
+        @self._viewer.bind_key("Shift-C", overwrite=True)
+        def _clear_annotations(viewer):
+            interactive.clear(viewer)
 
     def __init__(
         self,
