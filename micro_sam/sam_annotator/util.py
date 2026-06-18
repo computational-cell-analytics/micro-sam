@@ -701,13 +701,14 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
         widget.model_family_dropdown.setCurrentIndex(index)
 
     # Update the index for model size, eg. 'base', 'tiny', etc.
-    size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
+    size_map = {"t": "tiny", "s": "small", "b": "base", "l": "large", "h": "huge"}
     size_idx = 5 if model_type.startswith("h") else 4
-    model_size = size_map[model_type[size_idx]]
+    model_size = size_map.get(model_type[size_idx])
 
-    index = widget.model_size_dropdown.findText(model_size)
-    if index >= 0:
-        widget.model_size_dropdown.setCurrentIndex(index)
+    if model_size is not None:
+        index = widget.model_size_dropdown.findText(model_size)
+        if index >= 0:
+            widget.model_size_dropdown.setCurrentIndex(index)
 
     if save_path is not None and isinstance(save_path, str):
         widget.embeddings_save_path_param.setText(str(save_path))
@@ -723,6 +724,8 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
     if tile_shape is not None:
         widget.tile_x_param.setValue(tile_shape[0])
         widget.tile_y_param.setValue(tile_shape[1])
+        # Enable tiling so the loaded tile shape is used and shown.
+        widget.tiling_dropdown.setCurrentText("yes")
 
     if halo is not None:
         widget.halo_x_param.setValue(halo[0])
@@ -734,18 +737,19 @@ def _sync_autosegment_widget(widget, model_type, checkpoint_path, update_decoder
     if update_decoder is not None:
         widget._reset_segmentation_mode(update_decoder)
 
-    if widget.with_decoder:
+    # Apply per-model default settings for the v1 generators if the widget exposes them
+    # (e.g. the automatic tracking widget). The new dense/sparse segmentation widget does not
+    # expose these parameters, since its backend is deferred, so the updates are skipped there.
+    if getattr(widget, "with_decoder", False):
         settings = model_settings.AIS_SETTINGS.get(model_type, {})
         params = ("center_distance_thresh", "boundary_distance_thresh")
-        for param in params:
-            if param in settings:
-                getattr(widget, f"{param}_param").setValue(settings[param])
     else:
         settings = model_settings.AMG_SETTINGS.get(model_type, {})
         params = ("pred_iou_thresh", "stability_score_thresh", "min_object_size")
-        for param in params:
-            if param in settings:
-                getattr(widget, f"{param}_param").setValue(settings[param])
+
+    for param in params:
+        if param in settings and hasattr(widget, f"{param}_param"):
+            getattr(widget, f"{param}_param").setValue(settings[param])
 
 
 # Read parameters from checkpoint path if it is given instead.

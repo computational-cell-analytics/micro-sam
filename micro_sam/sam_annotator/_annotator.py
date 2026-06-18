@@ -113,15 +113,14 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         self._embedding_widget.run_button.clicked.connect(self._update_image)
 
         # Create the prompt widget. (The same for all plugins.)
+        # Child plugins decide whether to expose it as a separate group (e.g. tracking) or to
+        # embed it into another widget (e.g. the interactive segmentation widget).
         self._prompt_widget = widgets.create_prompt_menu(
             self._point_prompt_layer, self._point_labels
         )
 
         # Create the dictionary for the widgets and get the widgets of the child plugin.
-        self._widgets = {
-            "embeddings": self._embedding_widget,
-            "prompts": self._prompt_widget,
-        }
+        self._widgets = {"embeddings": self._embedding_widget}
         self._widgets.update(self._get_widgets())
 
     def _create_keybindings(self):
@@ -229,7 +228,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         self._prompt_widget = widgets.create_prompt_menu(self._point_prompt_layer, self._point_labels)
 
         # Rebuild the dimension-specific widgets, keeping the shared embedding widget.
-        self._widgets = {"embeddings": self._embedding_widget, "prompts": self._prompt_widget}
+        self._widgets = {"embeddings": self._embedding_widget}
         self._widgets.update(self._get_widgets())
         AnnotatorState().widgets = self._widgets
 

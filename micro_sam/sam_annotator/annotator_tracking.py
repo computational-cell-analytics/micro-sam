@@ -269,6 +269,7 @@ class AnnotatorTracking(_AnnotatorBase):
             self._viewer, with_decoder=self._with_decoder, volumetric=True
         )
         return {
+            "prompts": self._prompt_widget,
             "tracking": self._tracking_widget,
             "segment": widgets.UnifiedSegmentWidget(
                 self._viewer, tracking=True

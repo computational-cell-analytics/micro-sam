@@ -74,7 +74,7 @@ HASHES = {
 
 
 def _get_device(device=None):
-    if device is None:
+    if device is None or device == "auto":
         device = get_device()
 
     if device == "cuda":

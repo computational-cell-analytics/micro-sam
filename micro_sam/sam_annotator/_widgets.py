@@ -33,7 +33,6 @@ from qtpy.QtCore import QObject, Signal
 from superqt import QCollapsible
 
 from .. import util
-from ..v1.util import models
 from ..v1 import instance_segmentation
 from ..v1.multi_dimensional_segmentation import (
     PROJECTION_MODES,
@@ -305,45 +304,16 @@ class _WidgetBase(QtWidgets.QWidget):
             print("Invalid file selected. Please try again.")
 
     def _get_model_size_options(self):
-        # We store the actual model names mapped to UI labels.
-        self.model_size_mapping = {}
-        if self.model_family == "Natural Images (SAM)":
-            self.model_size_options = list(self._model_size_map.values())
-            self.model_size_mapping = {
-                self._model_size_map[k]: f"vit_{k}"
-                for k in self._model_size_map.keys()
-            }
-        elif self.model_family == "Natural Images (SAM2)":
-            self.model_size_options = list(self._model_size_map.values())
-            self.model_size_mapping = {
-                self._model_size_map[k]: f"hvit_{k}"
-                for k in self._model_size_map.keys()
-            }
-        else:
-            model_suffix = self.supported_dropdown_maps[self.model_family]
-            self.model_size_options = []
+        # All supported families are SAM2 (hvit_*) models, so the size options map directly
+        # to the hvit model names. We store the UI labels mapped to actual model names.
+        self.model_size_options = list(self._model_size_map.values())
+        self.model_size_mapping = {
+            self._model_size_map[k]: f"hvit_{k}" for k in self._model_size_map.keys()
+        }
 
-            for option in self.model_options:
-                if option.endswith(model_suffix):
-                    # Extract model size character on-the-fly.
-                    key = next(
-                        (
-                            k
-                            for k in self._model_size_map.keys()
-                            if f"vit_{k}" in option
-                        ),
-                        None,
-                    )
-                    if key:
-                        size_label = self._model_size_map[key]
-                        self.model_size_options.append(size_label)
-                        self.model_size_mapping[size_label] = (
-                            option  # Store the actual model name.
-                        )
-
-        # We ensure an assorted order of model sizes ('tiny' to 'huge')
+        # We ensure an assorted order of model sizes ('tiny' to 'large').
         self.model_size_options.sort(
-            key=lambda x: ["tiny", "base", "large", "huge"].index(x)
+            key=lambda x: ["tiny", "small", "base", "large"].index(x)
         )
 
     def _update_model_type(self):
@@ -367,22 +337,16 @@ class _WidgetBase(QtWidgets.QWidget):
             ):  # Default to the first available model size
                 self.model_size = self.model_size_options[0]
 
-        # Let's map the selection to the correct model type (eg. "tiny" -> "vit_t")
+        # Let's map the selection to the correct model type (eg. "tiny" -> "hvit_t").
         size_key = next(
             (
                 k
                 for k, v in self._model_size_map.items()
                 if v == self.model_size
             ),
-            "b",
+            "t",
         )
-        if "SAM2" in self.model_family:
-            self.model_type = f"hvit_{size_key}"
-        else:
-            self.model_type = (
-                f"vit_{size_key}"
-                + self.supported_dropdown_maps[self.model_family]
-            )
+        self.model_type = f"hvit_{size_key}"
 
         self.model_size_dropdown.setCurrentText(
             self.model_size
@@ -401,21 +365,18 @@ class _WidgetBase(QtWidgets.QWidget):
     ):
 
         # Create a list of support dropdown values and correspond them to suffixes.
+        # We only support SAM2 (hvit_*) families. Finetuned SAM2 checkpoints are loaded via the
+        # custom weights path. Additional SAM2 families can be added here in the future.
         self.supported_dropdown_maps = {
-            "Natural Images (SAM)": "",
             "Natural Images (SAM2)": "_sam2",
-            "Light Microscopy": "_lm",
-            "Electron Microscopy": "_em_organelles",
-            "Medical Imaging": "_medical_imaging",
-            "Histopathology": "_histopathology",
         }
 
-        # NOTE: The available options for all are either 'tiny', 'base', 'large' or 'huge'.
+        # NOTE: The available SAM2 model sizes are 'tiny', 'small', 'base' and 'large'.
         self._model_size_map = {
             "t": "tiny",
+            "s": "small",
             "b": "base",
             "l": "large",
-            "h": "huge",
         }
 
         self._default_model_choice = default_model
@@ -447,17 +408,8 @@ class _WidgetBase(QtWidgets.QWidget):
     def _create_model_size_section(self):
 
         # Create UI for the model size.
-        # This would combine with the chosen 'self.model_family' and depend on 'self._default_model_choice'.
+        # This combines with the chosen 'self.model_family' and depends on 'self._default_model_choice'.
         self.model_size = self._model_size_map[self._default_model_choice[4]]
-
-        # Get all model options.
-        self.model_options = list(models().urls.keys())
-        # Filter out the decoders from the model list.
-        self.model_options = [
-            model
-            for model in self.model_options
-            if not model.endswith("decoder")
-        ]
 
         # Now, we get the available sizes per model family.
         self._get_model_size_options()
@@ -475,15 +427,8 @@ class _WidgetBase(QtWidgets.QWidget):
         return layout
 
     def _validate_model_type_and_custom_weights(self):
-        # Let's get all model combination stuff into the desired `model_type` structure.
-        if "SAM2" in self.model_family:
-            self.model_type = "hvit_" + self.model_size[0]
-        else:
-            self.model_type = (
-                "vit_"
-                + self.model_size[0]
-                + self.supported_dropdown_maps[self.model_family]
-            )
+        # Let's get the selected model size into the desired SAM2 `model_type` structure.
+        self.model_type = "hvit_" + self.model_size[0]
 
         # For 'custom_weights', we remove the displayed text on top of the drop-down menu.
         if self.custom_weights:
@@ -985,7 +930,7 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
 def commit(
     viewer: "napari.viewer.Viewer",
     layer: str = "current_object",
-    preserve_mode: str = "objects",
+    preserve_mode: str = "pixels",
     preservation_threshold: float = 0.75,
     commit_path: Optional[Path] = None,
 ) -> None:
@@ -996,20 +941,22 @@ def commit(
         layer: Select the layer to commit. Can be either 'current_object' to commit interacitve segmentation results.
             Or 'auto_segmentation' to commit automatic segmentation results.
         preserve_mode: The mode for preserving already committed objects, in order to prevent over-writing
-            them by a new commit. Supports the modes 'objects', which preserves on the object level and is the default,
-            'pixels', which preserves on the pixel-level, or 'none', which does not preserve commited objects.
+            them by a new commit. Supports the modes 'objects', which preserves on the object level,
+            'pixels', which preserves on the pixel-level and is the default, or 'none', which does not
+            preserve commited objects.
         preservation_threshold: The overlap threshold for preserving objects. This is only used if
             preservation_mode is set to 'objects'.
         commit_path: Select a file path where the committed results and prompts will be saved.
-            This feature is still experimental.
+            This feature is not implemented yet and will be supported in a future release.
     """
-    # Commit the segmentation layer.
-    _, seg, mask, bb = _commit_impl(
-        viewer, layer, preserve_mode, preservation_threshold
-    )
-
+    # Saving committed results to file is not supported yet.
     if commit_path is not None:
-        _commit_to_file(commit_path, viewer, layer, seg, mask, bb)
+        raise NotImplementedError(
+            "Saving committed results to 'commit_path' is not supported yet and will be added in a future release."
+        )
+
+    # Commit the segmentation layer.
+    _commit_impl(viewer, layer, preserve_mode, preservation_threshold)
 
     if layer == "current_object":
         vutil.clear_annotations(viewer)
@@ -1270,9 +1217,11 @@ def _validate_layers(
             return False
 
 
-@magic_factory(call_button="Segment Object [S]")
-def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
-    """Segment object(s) for the current prompts.
+def _segment_object_2d(viewer, batched=False):
+    """Segment object(s) in 2d for the current prompts.
+
+    This is the shared implementation used by the `segment` widget and the
+    `InteractiveSegmentationWidget`.
 
     Args:
         viewer: The napari viewer.
@@ -1330,6 +1279,17 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
 
     viewer.layers["current_object"].data = seg
     viewer.layers["current_object"].refresh()
+
+
+@magic_factory(call_button="Segment Object [S]")
+def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
+    """Segment object(s) for the current prompts.
+
+    Args:
+        viewer: The napari viewer.
+        batched: Choose if you want to segment multiple objects with point prompts.
+    """
+    _segment_object_2d(viewer, batched=batched)
 
 
 #
@@ -1531,9 +1491,27 @@ class EmbeddingWidget(_WidgetBase):
         )
         setting_values.layout().addLayout(layout)
 
-        # Create UI for the tile shape.
-        self.tile_x, self.tile_y = 0, 0
-        self.tile_x_param, self.tile_y_param, layout = self._add_shape_param(
+        # Create UI for tiling. A dropdown toggles whether tiling is used; when enabled,
+        # the tile shape and halo fields are revealed with sensible defaults.
+        self.tiling = "no"
+        self.tiling_dropdown, layout = self._add_choice_param(
+            "tiling",
+            self.tiling,
+            ["no", "yes"],
+            title="tiling:",
+            update=self._update_tiling_visibility,
+            tooltip=get_tooltip("embedding", "tiling"),
+        )
+        setting_values.layout().addLayout(layout)
+
+        # Container holding the tile shape and halo fields (hidden unless tiling is 'yes').
+        self._tiling_widget = QtWidgets.QWidget()
+        self._tiling_widget.setLayout(QtWidgets.QVBoxLayout())
+        self._tiling_widget.layout().setContentsMargins(0, 0, 0, 0)
+
+        # Default tile shape and halo, used when tiling is enabled.
+        self.tile_x, self.tile_y = 384, 384
+        self.tile_x_param, self.tile_y_param, tile_layout = self._add_shape_param(
             ("tile_x", "tile_y"),
             (self.tile_x, self.tile_y),
             min_val=0,
@@ -1541,39 +1519,30 @@ class EmbeddingWidget(_WidgetBase):
             step=16,
             tooltip=get_tooltip("embedding", "tiling"),
         )
-        setting_values.layout().addLayout(layout)
+        self._tiling_widget.layout().addLayout(tile_layout)
 
-        # Create UI for the halo.
-        self.halo_x, self.halo_y = 0, 0
-        self.halo_x_param, self.halo_y_param, layout = self._add_shape_param(
+        self.halo_x, self.halo_y = 64, 64
+        self.halo_x_param, self.halo_y_param, halo_layout = self._add_shape_param(
             ("halo_x", "halo_y"),
             (self.halo_x, self.halo_y),
             min_val=0,
             max_val=512,
             tooltip=get_tooltip("embedding", "halo"),
         )
-        setting_values.layout().addLayout(layout)
+        self._tiling_widget.layout().addLayout(halo_layout)
 
-        # Create UI for the choice of automatic segmentation mode.
-        self.automatic_segmentation_mode = "auto"
-        auto_seg_options = ["auto", "amg", "ais"]
-        self.automatic_segmentation_mode_dropdown, layout = (
-            self._add_choice_param(
-                "automatic_segmentation_mode",
-                self.automatic_segmentation_mode,
-                auto_seg_options,
-                title="automatic segmentation mode",
-                tooltip=get_tooltip(
-                    "embedding", "automatic_segmentation_mode"
-                ),
-            )
-        )
-        setting_values.layout().addLayout(layout)
+        self._tiling_widget.setVisible(False)
+        setting_values.layout().addWidget(self._tiling_widget)
 
         settings = _make_collapsible(
             setting_values, title="Embedding Settings"
         )
         return settings
+
+    def _update_tiling_visibility(self, index=None):
+        # Show the tile shape and halo fields only when tiling is enabled.
+        self.tiling = self.tiling_dropdown.currentText()
+        self._tiling_widget.setVisible(self.tiling == "yes")
 
     def _validate_inputs(self):
         """Validates the inputs for the annotation process and returns a dictionary
@@ -1636,6 +1605,12 @@ class EmbeddingWidget(_WidgetBase):
                 ):
                     self.tile_x, self.tile_y = f.attrs["tile_shape"]
                     self.halo_x, self.halo_y = f.attrs["halo"]
+                    # Reflect the loaded tiling parameters in the UI.
+                    self.tile_x_param.setValue(self.tile_x)
+                    self.tile_y_param.setValue(self.tile_y)
+                    self.halo_x_param.setValue(self.halo_x)
+                    self.halo_y_param.setValue(self.halo_y)
+                    self.tiling_dropdown.setCurrentText("yes")
                     val_results = {
                         "message_type": "info",
                         "message": (
@@ -1644,8 +1619,7 @@ class EmbeddingWidget(_WidgetBase):
                         ),
                     }
                 else:
-                    self.tile_x, self.tile_y = 0, 0
-                    self.halo_x, self.halo_y = 0, 0
+                    self.tiling_dropdown.setCurrentText("no")
                     val_results = {
                         "message_type": "info",
                         "message": f"Load embeddings for model: {self.model_type}.",
@@ -1711,10 +1685,13 @@ class EmbeddingWidget(_WidgetBase):
         # Set layer scale
         state.image_scale = tuple(image.scale)
 
-        # Process tile_shape and halo, set other data.
-        tile_shape, halo = _process_tiling_inputs(
-            self.tile_x, self.tile_y, self.halo_x, self.halo_y
-        )
+        # Process tile_shape and halo, set other data. Tiling is only applied when enabled.
+        if self.tiling == "yes":
+            tile_shape, halo = _process_tiling_inputs(
+                self.tile_x, self.tile_y, self.halo_x, self.halo_y
+            )
+        else:
+            tile_shape, halo = None, None
         save_path = (
             None
             if self.embeddings_save_path == ""
@@ -1732,12 +1709,6 @@ class EmbeddingWidget(_WidgetBase):
                 pbar_signals.pbar_total.emit(total)
                 pbar_signals.pbar_description.emit(description)
 
-            # Whether to prefer decoder.
-            # With 'amg', it is set to 'False', else it is 'True' for the default 'auto' and 'ais' mode.
-            prefer_decoder = True
-            if self.automatic_segmentation_mode == "amg":
-                prefer_decoder = False
-
             state.initialize_predictor(
                 image_data,
                 model_type=self.model_type,
@@ -1747,7 +1718,7 @@ class EmbeddingWidget(_WidgetBase):
                 checkpoint_path=self.custom_weights,
                 tile_shape=tile_shape,
                 halo=halo,
-                prefer_decoder=prefer_decoder,
+                prefer_decoder=True,
                 pbar_init=pbar_init,
                 pbar_update=lambda update: pbar_signals.pbar_update.emit(
                     update
@@ -1998,17 +1969,21 @@ class UnifiedSegmentWidget(_WidgetBase):
         points, labels = point_prompts
 
         state = AnnotatorState()
+        batched = bool(self.batched)
 
         if state.is_sam2:
             # Use the segment_slice method for SAM2.
             boxes = [box[[1, 0, 3, 2]] for box in boxes]
-            seg = state.interactive_segmenter.segment_slice(
-                frame_idx=z,
-                points=points[:, ::-1].copy(),
-                labels=labels,
-                boxes=boxes,
-                masks=masks,
-            )
+            if batched:
+                seg = self._segment_slice_batched(z, points, labels, boxes, shape)
+            else:
+                seg = state.interactive_segmenter.segment_slice(
+                    frame_idx=z,
+                    points=points[:, ::-1].copy(),
+                    labels=labels,
+                    boxes=boxes,
+                    masks=masks,
+                )
         else:
             seg = vutil.prompt_segmentation(
                 state.predictor,
@@ -2019,6 +1994,7 @@ class UnifiedSegmentWidget(_WidgetBase):
                 shape,
                 multiple_box_prompts=False,
                 image_embeddings=state.image_embeddings,
+                batched=batched,
                 i=z,
             )
 
@@ -2031,6 +2007,47 @@ class UnifiedSegmentWidget(_WidgetBase):
 
         self._viewer.layers["current_object"].data[z] = seg
         self._viewer.layers["current_object"].refresh()
+
+    def _segment_slice_batched(self, z, points, labels, boxes, shape):
+        """Batched multi-object segmentation for a single slice with SAM2.
+
+        Mirrors the 2d batched convention: one object per positive point (each combined with the
+        shared negative points) and one object per box. The boxes are expected in the reordered
+        layout used by `segment_slice`.
+        """
+        state = AnnotatorState()
+        points = np.zeros((0, 2)) if points is None else np.asarray(points)
+        labels = np.zeros((0,), dtype=int) if labels is None else np.asarray(labels)
+        positive_points = points[labels == 1]
+        negative_points = points[labels != 1]
+        n_neg = len(negative_points)
+
+        seg = np.zeros(tuple(shape), dtype="uint32")
+        object_id = 0
+
+        # One object per positive point, each combined with the shared negative points.
+        for pos in positive_points:
+            pts = np.concatenate([pos[None], negative_points], axis=0) if n_neg else pos[None]
+            lbs = np.concatenate([[1], np.zeros(n_neg, dtype=int)]) if n_neg else np.array([1])
+            object_id += 1
+            mask = state.interactive_segmenter.segment_slice(
+                frame_idx=z, points=pts[:, ::-1].copy(), labels=lbs, object_id=object_id,
+            )
+            if mask is not None:
+                seg[mask > 0] = object_id
+
+        # One object per box, each combined with the shared negative points.
+        for box in boxes:
+            neg = negative_points[:, ::-1].copy() if n_neg else None
+            neg_labels = np.zeros(n_neg, dtype=int) if n_neg else None
+            object_id += 1
+            mask = state.interactive_segmenter.segment_slice(
+                frame_idx=z, points=neg, labels=neg_labels, boxes=[box], object_id=object_id,
+            )
+            if mask is not None:
+                seg[mask > 0] = object_id
+
+        return seg
 
     def _run_frame_segmentation(self):
         """Execute per-frame segmentation (tracking mode).
@@ -2377,7 +2394,134 @@ def _instance_segmentation_impl(
     return seg
 
 
-class AutoSegmentWidget(_WidgetBase):
+class InteractiveSegmentationWidget(_WidgetBase):
+    """Interactive segmentation widget combining the prompt menu, segmentation and clearing.
+
+    This widget adapts to the data dimensionality and works with both SAM and SAM2 models.
+    For 3d data it exposes a single 'Apply to Volume' checkbox that governs both segmentation and
+    clearing (current slice vs. the whole volume / all slices), plus a batched toggle (SAM2 volume
+    mode) for multi-object segmentation.
+
+    Args:
+        viewer: The napari viewer.
+        ndim: The number of spatial dimensions of the data (2 or 3).
+        prompt_widget: The point prompt label menu created by `create_prompt_menu`.
+        parent: The parent Qt widget.
+    """
+
+    def __init__(self, viewer, ndim, prompt_widget, parent=None):
+        super().__init__(parent=parent)
+        self._viewer = viewer
+        self._ndim = ndim
+        self._prompt_widget = prompt_widget
+        self.batched = False
+        self.apply_to_volume = False
+        self._segment_widget = None
+        self._create_widget()
+
+    def _create_widget(self):
+        # Prompt label menu.
+        self.layout().addWidget(self._prompt_widget.native)
+
+        self.clear_button = QtWidgets.QPushButton("Clear Annotations [Shift + C]")
+        self.clear_button.clicked.connect(lambda: self.clear())
+
+        self.segment_button = QtWidgets.QPushButton("Segment Object [S]")
+        self.segment_button.clicked.connect(lambda: self.segment())
+
+        # Segmentation controls.
+        if self._ndim == 2:
+            # 2d: a 'batched' toggle above the side-by-side segment and clear buttons.
+            self.batched_checkbox = self._add_boolean_param(
+                "batched",
+                self.batched,
+                title="Batched",
+                tooltip=get_tooltip("unified_segment", "batched"),
+            )
+            self.layout().addWidget(self.batched_checkbox)
+        else:
+            # 3d: use the volumetric segmentation widget purely as the segmentation engine.
+            # Its own controls are not shown; the interactive widget owns the 'Apply to Volume'
+            # and 'Batched' checkboxes and drives the engine's attributes. The 'Apply to Volume'
+            # checkbox governs both segmentation (slice vs. volume) and clearing (current slice
+            # vs. all slices). It is kept hidden but parented so it does not float as a window.
+            self._segment_widget = UnifiedSegmentWidget(self._viewer, tracking=False)
+            self._segment_widget.setVisible(False)
+            self.layout().addWidget(self._segment_widget)
+
+            # Batched multi-object segmentation. Works for both a single slice and the whole
+            # volume, so it is always available.
+            self.batched_checkbox = self._add_boolean_param(
+                "batched",
+                self.batched,
+                title="Batched",
+                tooltip=get_tooltip("unified_segment", "batched"),
+            )
+            self.batched_checkbox.stateChanged.connect(self._on_batched_changed)
+
+            self.apply_to_volume_checkbox = self._add_boolean_param(
+                "apply_to_volume",
+                self.apply_to_volume,
+                title="Apply to Volume",
+                tooltip=get_tooltip("unified_segment", "apply_to_volume"),
+            )
+            self.apply_to_volume_checkbox.stateChanged.connect(self._on_apply_to_volume_changed)
+
+            # Place the two checkboxes side by side: 'Batched' on the left, 'Apply to Volume'
+            # pushed to the right.
+            checkbox_row = QtWidgets.QHBoxLayout()
+            checkbox_row.addWidget(self.batched_checkbox)
+            checkbox_row.addStretch()
+            checkbox_row.addWidget(self.apply_to_volume_checkbox)
+            self.layout().addLayout(checkbox_row)
+
+        # Place the segment and clear buttons side by side.
+        button_row = QtWidgets.QHBoxLayout()
+        button_row.addWidget(self.segment_button)
+        button_row.addWidget(self.clear_button)
+        self.layout().addLayout(button_row)
+
+    def _on_apply_to_volume_changed(self, state):
+        """Sync the shared volume mode to the segmentation engine."""
+        self.apply_to_volume = bool(state)
+        self._segment_widget.apply_to_volume = self.apply_to_volume
+
+    def _on_batched_changed(self, state):
+        """Sync the batched mode to the segmentation engine."""
+        self.batched = bool(state)
+        self._segment_widget.batched = self.batched
+
+    def segment(self, viewer=None):
+        """Run interactive segmentation for the current prompts."""
+        if self._ndim == 2:
+            _segment_object_2d(self._viewer, batched=bool(self.batched))
+        else:
+            self._segment_widget(self._viewer)
+
+    def clear(self, viewer=None):
+        """Clear the current annotations."""
+        if self._ndim == 2 or self.apply_to_volume:
+            vutil.clear_annotations(self._viewer)
+        else:
+            i = int(self._viewer.dims.point[0])
+            vutil.clear_annotations_slice(self._viewer, i=i)
+
+        # If it's a SAM2 promptable segmentation workflow,
+        # we reset the prompts after the annotations have been cleared.
+        state = AnnotatorState()
+        if state.interactive_segmenter is not None:
+            state.interactive_segmenter.reset_predictor()
+
+        gc.collect()
+
+
+class AutoSegmentV1Widget(_WidgetBase):
+    """Automatic segmentation widget for the SAM (v1) AMG/AIS generators.
+
+    This implementation backs the automatic tracking widget. The SAM2 segmentation annotator
+    uses `AutoSegmentWidget` (dense/sparse modes) instead.
+    """
+
     def __init__(self, viewer, with_decoder, volumetric, parent=None):
         super().__init__(parent)
 
@@ -2695,7 +2839,7 @@ class AutoSegmentWidget(_WidgetBase):
         return worker
 
 
-class AutoTrackWidget(AutoSegmentWidget):
+class AutoTrackWidget(AutoSegmentV1Widget):
     def _create_tracking_switch(self):
         self.apply_to_volume = False
         return self._add_boolean_param(
@@ -2792,3 +2936,252 @@ class AutoTrackWidget(AutoSegmentWidget):
         # worker.returned.connect(update_segmentation)
         # worker.start()
         # return worker
+
+
+class AutoSegmentWidget(_WidgetBase):
+    """Automatic segmentation widget for the UniSAM2 model with 'dense' and 'sparse' modes.
+
+    The sparse mode uses flow-based instance segmentation (LM data, 2d and 3d) and the dense mode
+    uses multicut-based instance segmentation (EM data, 2d and 3d), both operating on the foreground
+    and directed-distance predictions of the UniSAM2 model (`AnnotatorState.decoder`). The model
+    inference and post-processing are run by `micro_sam.v2.automatic_segmentation`. A mode dropdown
+    sits next to the 'Apply to Volume' switch and the post-processing parameters refresh on mode
+    change.
+
+    Args:
+        viewer: The napari viewer.
+        with_decoder: Whether the loaded model has a UniSAM2 decoder for automatic segmentation.
+        volumetric: Whether the data is volumetric (3d).
+        parent: The parent Qt widget.
+    """
+
+    # Fixed z block and halo for 3d tiled inference, matching the UniSAM2 training crop.
+    Z_TILE = 4
+    Z_HALO = 2
+
+    def __init__(self, viewer, with_decoder, volumetric, parent=None):
+        super().__init__(parent)
+        self._viewer = viewer
+        self.with_decoder = with_decoder
+        self.volumetric = volumetric
+        self.mode = "sparse"
+        self.settings = None
+        # The flow computation backend is always the (faster) cpp implementation.
+        self.backend = "cpp"
+        # Cache of the (initialized) segmentation generator so changing post-processing parameters
+        # only re-runs 'generate', not the expensive UniSAM2 inference. Keyed by the inputs.
+        self._segmenter = None
+        self._segmenter_key = None
+        self._create_widget()
+
+    def _create_widget(self):
+        # Top row: the 'Apply to Volume' switch (3d only) next to the mode dropdown.
+        top_row = QtWidgets.QHBoxLayout()
+        if self.volumetric:
+            self.apply_to_volume = False
+            self.apply_to_volume_checkbox = self._add_boolean_param(
+                "apply_to_volume",
+                self.apply_to_volume,
+                title="Apply to Volume",
+                tooltip=get_tooltip("autosegment", "apply_to_volume"),
+            )
+            top_row.addWidget(self.apply_to_volume_checkbox)
+
+        # Both modes are offered: 'sparse' (flow) for LM data and 'dense' (multicut) for EM data.
+        self.mode_dropdown, mode_layout = self._add_choice_param(
+            "mode",
+            self.mode,
+            ["sparse", "dense"],
+            title="mode:",
+            update=self._on_mode_changed,
+            tooltip=get_tooltip("autosegment", "mode"),
+        )
+        top_row.addLayout(mode_layout)
+        self.layout().addLayout(top_row)
+
+        # Advanced post-processing settings, shown inline and refreshed on mode change.
+        self.settings = self._make_settings_widget()
+        self.layout().addWidget(self.settings)
+
+        # Run button.
+        self.run_button = QtWidgets.QPushButton("Automatic Segmentation")
+        self.run_button.clicked.connect(self.__call__)
+        self.run_button.setToolTip(get_tooltip("autosegment", "run_button"))
+        self.layout().addWidget(self.run_button)
+
+    def _reset_segmentation_mode(self, with_decoder):
+        # The dense/sparse modes are independent of the decoder, so we only keep the flag in sync.
+        self.with_decoder = with_decoder
+
+    def _on_mode_changed(self, index=None):
+        self.mode = self.mode_dropdown.currentText()
+        new_settings = self._make_settings_widget()
+        self.layout().replaceWidget(self.settings, new_settings)
+        self.settings.deleteLater()
+        self.settings = new_settings
+
+    def _make_settings_widget(self):
+        # All hyperparameters (except mode and apply-to-volume) live in one collapsible
+        # 'Advanced Settings' panel.
+        advanced = QtWidgets.QWidget()
+        advanced.setLayout(QtWidgets.QVBoxLayout())
+        advanced.layout().setContentsMargins(0, 0, 0, 0)
+        if self.mode == "dense":
+            self._dense_settings(advanced)
+        else:
+            self._sparse_settings(advanced)
+
+        settings = QtWidgets.QWidget()
+        settings.setLayout(QtWidgets.QVBoxLayout())
+        settings.layout().setContentsMargins(0, 0, 0, 0)
+        settings.layout().addWidget(_make_collapsible(advanced, title="Advanced Settings"))
+        return settings
+
+    def _add_density_threshold(self, settings):
+        self.density_threshold_param, layout = self._add_float_param(
+            "density_threshold", self.density_threshold, min_val=0.0, max_val=100.0, step=1.0,
+            tooltip=get_tooltip("autosegment", "density_threshold"),
+        )
+        settings.layout().addLayout(layout)
+
+    def _add_flow_integration_params(self, settings, n_iter):
+        self.n_iter = n_iter
+        self.n_iter_param, layout = self._add_int_param(
+            "n_iter", self.n_iter, min_val=1, max_val=1000, tooltip=get_tooltip("autosegment", "n_iter"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.dt = 0.5
+        self.dt_param, layout = self._add_float_param(
+            "dt", self.dt, min_val=0.0, max_val=5.0, step=0.1, tooltip=get_tooltip("autosegment", "dt"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.sigma = 1.0
+        self.sigma_param, layout = self._add_float_param(
+            "sigma", self.sigma, min_val=0.0, max_val=10.0, step=0.1, tooltip=get_tooltip("autosegment", "sigma"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.n_threads = 1 if self.mode == "sparse" else 8
+        self.n_threads_param, layout = self._add_int_param(
+            "n_threads", self.n_threads, min_val=1, max_val=64, tooltip=get_tooltip("autosegment", "n_threads"),
+        )
+        settings.layout().addLayout(layout)
+
+    def _sparse_settings(self, settings):
+        # Flow-based instance segmentation parameters (LM data).
+        self.foreground_threshold = 0.6
+        self.foreground_threshold_param, layout = self._add_float_param(
+            "foreground_threshold", self.foreground_threshold, min_val=0.0, max_val=1.0, step=0.05,
+            tooltip=get_tooltip("autosegment", "foreground_threshold"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.density_threshold = 10.0
+        self._add_density_threshold(settings)
+
+        self.min_object_size = 100
+        self.min_object_size_param, layout = self._add_int_param(
+            "min_object_size", self.min_object_size, min_val=0, max_val=int(1e4),
+            tooltip=get_tooltip("autosegment", "min_object_size"),
+        )
+        settings.layout().addLayout(layout)
+
+        self._add_flow_integration_params(settings, n_iter=100)
+
+    def _dense_settings(self, settings):
+        # Multicut-based instance segmentation parameters (EM data, 2d and 3d).
+        self.beta = 0.7
+        self.beta_param, layout = self._add_float_param(
+            "beta", self.beta, min_val=0.0, max_val=1.0, step=0.05,
+            tooltip=get_tooltip("autosegment", "beta"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.density_threshold = 5.0
+        self._add_density_threshold(settings)
+
+        self._add_flow_integration_params(settings, n_iter=50)
+
+    def _postproc_kwargs(self):
+        if self.mode == "dense":
+            return dict(
+                beta=self.beta, density_threshold=self.density_threshold, n_iter=self.n_iter,
+                dt=self.dt, sigma=self.sigma, n_threads=self.n_threads, backend=self.backend,
+            )
+        return dict(
+            foreground_threshold=self.foreground_threshold, density_threshold=self.density_threshold,
+            min_size=self.min_object_size, n_iter=self.n_iter, dt=self.dt, sigma=self.sigma,
+            n_threads=self.n_threads, backend=self.backend,
+        )
+
+    def _get_tiling(self, ndim):
+        # Reuse the in-plane tiling configured in the embedding widget (micro-sam style: set once).
+        # For 3d data we additionally tile along z, using fixed block/halo defaults that match the
+        # UniSAM2 training (z block 4, z halo 2), so prediction is fully 3d-tiled.
+        state = AnnotatorState()
+        embed_widget = state.widgets.get("embeddings")
+        if embed_widget is None or getattr(embed_widget, "tiling", "no") != "yes":
+            return None, None
+        tile_shape, halo = _process_tiling_inputs(
+            embed_widget.tile_x, embed_widget.tile_y, embed_widget.halo_x, embed_widget.halo_y,
+        )
+        if tile_shape is None:
+            return None, None
+        if ndim == 3:
+            halo_xy = (0, 0) if halo is None else tuple(halo)
+            tile_shape = (self.Z_TILE,) + tuple(tile_shape)
+            halo = (self.Z_HALO,) + halo_xy
+        return tile_shape, halo
+
+    def __call__(self):
+        from micro_sam.v2.automatic_segmentation import get_unisam2_segmentation_generator
+
+        state = AnnotatorState()
+        if not self.with_decoder or state.decoder is None:
+            return _generate_message(
+                "error",
+                "Automatic segmentation requires a finetuned UniSAM2 model with a decoder. "
+                "Load one via the 'custom weights' path in the embedding widget.",
+            )
+        if _validate_layers(self._viewer, automatic_segmentation=True):
+            return
+
+        # Get the raw image and determine the run dimensionality.
+        image_name = state.get_image_name(self._viewer)
+        raw = np.asarray(self._viewer.layers[image_name].data)
+
+        apply_to_volume = self.volumetric and getattr(self, "apply_to_volume", False)
+        z = None
+        if apply_to_volume:
+            run_raw, ndim = raw, 3
+        elif self.volumetric:  # segment only the current slice
+            z = int(self._viewer.dims.point[0])
+            run_raw, ndim = raw[z], 2
+        else:
+            run_raw, ndim = raw, 2
+
+        tile_shape, halo = self._get_tiling(ndim)
+        device = next(state.decoder.parameters()).device
+
+        # Build and initialize the segmentation generator (the expensive inference step). The cache
+        # avoids re-running the model when only the post-processing parameters change.
+        cache_key = (state.data_signature, ndim, z, tile_shape, halo)
+        if self._segmenter is None or self._segmenter_key != cache_key:
+            is_tiled = tile_shape is not None
+            self._segmenter = get_unisam2_segmentation_generator(state.decoder, is_tiled=is_tiled, device=device)
+            if is_tiled:
+                self._segmenter.initialize(run_raw, ndim, tile_shape=tile_shape, halo=halo)
+            else:
+                self._segmenter.initialize(run_raw, ndim)
+            self._segmenter_key = cache_key
+
+        seg = self._segmenter.generate(mode=self.mode, **self._postproc_kwargs())
+
+        if z is None:
+            self._viewer.layers["auto_segmentation"].data = seg
+        else:
+            self._viewer.layers["auto_segmentation"].data[z] = seg
+        self._viewer.layers["auto_segmentation"].refresh()
+        _select_layer(self._viewer, "auto_segmentation")
