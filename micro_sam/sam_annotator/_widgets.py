@@ -2939,23 +2939,25 @@ class AutoTrackWidget(AutoSegmentV1Widget):
 
 
 class AutoSegmentWidget(_WidgetBase):
-    """Automatic segmentation widget for SAM2 with 'dense' and 'sparse' modes.
+    """Automatic segmentation widget for the UniSAM2 model with 'dense' and 'sparse' modes.
 
-    The sparse mode uses flow-based instance segmentation and the dense mode uses
-    multicut-based instance segmentation, both operating on the foreground and distance
-    predictions of a SAM2 decoder. The execution backend is not available yet, so running
-    this widget raises a `NotImplementedError`. The UI is already in place: a mode dropdown
-    placed next to the 'Apply to Volume' switch, and the advanced post-processing parameters
-    which refresh when the mode changes.
+    The sparse mode uses flow-based instance segmentation (LM data, 2d and 3d) and the dense mode
+    uses multicut-based instance segmentation (EM data, 2d and 3d), both operating on the foreground
+    and directed-distance predictions of the UniSAM2 model (`AnnotatorState.decoder`). The model
+    inference and post-processing are run by `micro_sam.v2.automatic_segmentation`. A mode dropdown
+    sits next to the 'Apply to Volume' switch and the post-processing parameters refresh on mode
+    change.
 
     Args:
         viewer: The napari viewer.
-        with_decoder: Whether the loaded model has a decoder for automatic segmentation.
+        with_decoder: Whether the loaded model has a UniSAM2 decoder for automatic segmentation.
         volumetric: Whether the data is volumetric (3d).
         parent: The parent Qt widget.
     """
 
-    MODES = ("sparse", "dense")
+    # Fixed z block and halo for 3d tiled inference, matching the UniSAM2 training crop.
+    Z_TILE = 4
+    Z_HALO = 2
 
     def __init__(self, viewer, with_decoder, volumetric, parent=None):
         super().__init__(parent)
@@ -2964,6 +2966,12 @@ class AutoSegmentWidget(_WidgetBase):
         self.volumetric = volumetric
         self.mode = "sparse"
         self.settings = None
+        # The flow computation backend is always the (faster) cpp implementation.
+        self.backend = "cpp"
+        # Cache of the (initialized) segmentation generator so changing post-processing parameters
+        # only re-runs 'generate', not the expensive UniSAM2 inference. Keyed by the inputs.
+        self._segmenter = None
+        self._segmenter_key = None
         self._create_widget()
 
     def _create_widget(self):
@@ -2979,10 +2987,11 @@ class AutoSegmentWidget(_WidgetBase):
             )
             top_row.addWidget(self.apply_to_volume_checkbox)
 
+        # Both modes are offered: 'sparse' (flow) for LM data and 'dense' (multicut) for EM data.
         self.mode_dropdown, mode_layout = self._add_choice_param(
             "mode",
             self.mode,
-            list(self.MODES),
+            ["sparse", "dense"],
             title="mode:",
             update=self._on_mode_changed,
             tooltip=get_tooltip("autosegment", "mode"),
@@ -3012,74 +3021,167 @@ class AutoSegmentWidget(_WidgetBase):
         self.settings = new_settings
 
     def _make_settings_widget(self):
+        # All hyperparameters (except mode and apply-to-volume) live in one collapsible
+        # 'Advanced Settings' panel.
+        advanced = QtWidgets.QWidget()
+        advanced.setLayout(QtWidgets.QVBoxLayout())
+        advanced.layout().setContentsMargins(0, 0, 0, 0)
+        if self.mode == "dense":
+            self._dense_settings(advanced)
+        else:
+            self._sparse_settings(advanced)
+
         settings = QtWidgets.QWidget()
         settings.setLayout(QtWidgets.QVBoxLayout())
         settings.layout().setContentsMargins(0, 0, 0, 0)
-        if self.mode == "dense":
-            self._dense_settings(settings)
-        else:
-            self._sparse_settings(settings)
+        settings.layout().addWidget(_make_collapsible(advanced, title="Advanced Settings"))
         return settings
 
-    def _add_min_object_size(self, settings):
-        self.min_object_size = 100
-        self.min_object_size_param, layout = self._add_int_param(
-            "min_object_size",
-            self.min_object_size,
-            min_val=0,
-            max_val=int(1e4),
-            tooltip=get_tooltip("autosegment", "min_object_size"),
+    def _add_density_threshold(self, settings):
+        self.density_threshold_param, layout = self._add_float_param(
+            "density_threshold", self.density_threshold, min_val=0.0, max_val=100.0, step=1.0,
+            tooltip=get_tooltip("autosegment", "density_threshold"),
+        )
+        settings.layout().addLayout(layout)
+
+    def _add_flow_integration_params(self, settings, n_iter):
+        self.n_iter = n_iter
+        self.n_iter_param, layout = self._add_int_param(
+            "n_iter", self.n_iter, min_val=1, max_val=1000, tooltip=get_tooltip("autosegment", "n_iter"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.dt = 0.5
+        self.dt_param, layout = self._add_float_param(
+            "dt", self.dt, min_val=0.0, max_val=5.0, step=0.1, tooltip=get_tooltip("autosegment", "dt"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.sigma = 1.0
+        self.sigma_param, layout = self._add_float_param(
+            "sigma", self.sigma, min_val=0.0, max_val=10.0, step=0.1, tooltip=get_tooltip("autosegment", "sigma"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.n_threads = 1 if self.mode == "sparse" else 8
+        self.n_threads_param, layout = self._add_int_param(
+            "n_threads", self.n_threads, min_val=1, max_val=64, tooltip=get_tooltip("autosegment", "n_threads"),
         )
         settings.layout().addLayout(layout)
 
     def _sparse_settings(self, settings):
-        # Flow-based instance segmentation parameters.
+        # Flow-based instance segmentation parameters (LM data).
         self.foreground_threshold = 0.6
         self.foreground_threshold_param, layout = self._add_float_param(
-            "foreground_threshold",
-            self.foreground_threshold,
+            "foreground_threshold", self.foreground_threshold, min_val=0.0, max_val=1.0, step=0.05,
             tooltip=get_tooltip("autosegment", "foreground_threshold"),
         )
         settings.layout().addLayout(layout)
 
         self.density_threshold = 10.0
-        self.density_threshold_param, layout = self._add_float_param(
-            "density_threshold",
-            self.density_threshold,
-            min_val=0.0,
-            max_val=100.0,
-            step=1.0,
-            tooltip=get_tooltip("autosegment", "density_threshold"),
+        self._add_density_threshold(settings)
+
+        self.min_object_size = 100
+        self.min_object_size_param, layout = self._add_int_param(
+            "min_object_size", self.min_object_size, min_val=0, max_val=int(1e4),
+            tooltip=get_tooltip("autosegment", "min_object_size"),
         )
         settings.layout().addLayout(layout)
 
-        self._add_min_object_size(settings)
+        self._add_flow_integration_params(settings, n_iter=100)
 
     def _dense_settings(self, settings):
-        # Multicut-based instance segmentation parameters (3d / EM data).
+        # Multicut-based instance segmentation parameters (EM data, 2d and 3d).
         self.beta = 0.7
         self.beta_param, layout = self._add_float_param(
-            "beta",
-            self.beta,
+            "beta", self.beta, min_val=0.0, max_val=1.0, step=0.05,
             tooltip=get_tooltip("autosegment", "beta"),
         )
         settings.layout().addLayout(layout)
 
         self.density_threshold = 5.0
-        self.density_threshold_param, layout = self._add_float_param(
-            "density_threshold",
-            self.density_threshold,
-            min_val=0.0,
-            max_val=100.0,
-            step=1.0,
-            tooltip=get_tooltip("autosegment", "density_threshold"),
-        )
-        settings.layout().addLayout(layout)
+        self._add_density_threshold(settings)
 
-        self._add_min_object_size(settings)
+        self._add_flow_integration_params(settings, n_iter=50)
+
+    def _postproc_kwargs(self):
+        if self.mode == "dense":
+            return dict(
+                beta=self.beta, density_threshold=self.density_threshold, n_iter=self.n_iter,
+                dt=self.dt, sigma=self.sigma, n_threads=self.n_threads, backend=self.backend,
+            )
+        return dict(
+            foreground_threshold=self.foreground_threshold, density_threshold=self.density_threshold,
+            min_size=self.min_object_size, n_iter=self.n_iter, dt=self.dt, sigma=self.sigma,
+            n_threads=self.n_threads, backend=self.backend,
+        )
+
+    def _get_tiling(self, ndim):
+        # Reuse the in-plane tiling configured in the embedding widget (micro-sam style: set once).
+        # For 3d data we additionally tile along z, using fixed block/halo defaults that match the
+        # UniSAM2 training (z block 4, z halo 2), so prediction is fully 3d-tiled.
+        state = AnnotatorState()
+        embed_widget = state.widgets.get("embeddings")
+        if embed_widget is None or getattr(embed_widget, "tiling", "no") != "yes":
+            return None, None
+        tile_shape, halo = _process_tiling_inputs(
+            embed_widget.tile_x, embed_widget.tile_y, embed_widget.halo_x, embed_widget.halo_y,
+        )
+        if tile_shape is None:
+            return None, None
+        if ndim == 3:
+            halo_xy = (0, 0) if halo is None else tuple(halo)
+            tile_shape = (self.Z_TILE,) + tuple(tile_shape)
+            halo = (self.Z_HALO,) + halo_xy
+        return tile_shape, halo
 
     def __call__(self):
-        raise NotImplementedError(
-            "Automatic segmentation with SAM2 (dense/sparse modes) is not supported yet. "
-            "It will be enabled once the SAM2 automatic segmentation backend is available."
-        )
+        from micro_sam.v2.automatic_segmentation import get_unisam2_segmentation_generator
+
+        state = AnnotatorState()
+        if not self.with_decoder or state.decoder is None:
+            return _generate_message(
+                "error",
+                "Automatic segmentation requires a finetuned UniSAM2 model with a decoder. "
+                "Load one via the 'custom weights' path in the embedding widget.",
+            )
+        if _validate_layers(self._viewer, automatic_segmentation=True):
+            return
+
+        # Get the raw image and determine the run dimensionality.
+        image_name = state.get_image_name(self._viewer)
+        raw = np.asarray(self._viewer.layers[image_name].data)
+
+        apply_to_volume = self.volumetric and getattr(self, "apply_to_volume", False)
+        z = None
+        if apply_to_volume:
+            run_raw, ndim = raw, 3
+        elif self.volumetric:  # segment only the current slice
+            z = int(self._viewer.dims.point[0])
+            run_raw, ndim = raw[z], 2
+        else:
+            run_raw, ndim = raw, 2
+
+        tile_shape, halo = self._get_tiling(ndim)
+        device = next(state.decoder.parameters()).device
+
+        # Build and initialize the segmentation generator (the expensive inference step). The cache
+        # avoids re-running the model when only the post-processing parameters change.
+        cache_key = (state.data_signature, ndim, z, tile_shape, halo)
+        if self._segmenter is None or self._segmenter_key != cache_key:
+            is_tiled = tile_shape is not None
+            self._segmenter = get_unisam2_segmentation_generator(state.decoder, is_tiled=is_tiled, device=device)
+            if is_tiled:
+                self._segmenter.initialize(run_raw, ndim, tile_shape=tile_shape, halo=halo)
+            else:
+                self._segmenter.initialize(run_raw, ndim)
+            self._segmenter_key = cache_key
+
+        seg = self._segmenter.generate(mode=self.mode, **self._postproc_kwargs())
+
+        if z is None:
+            self._viewer.layers["auto_segmentation"].data = seg
+        else:
+            self._viewer.layers["auto_segmentation"].data[z] = seg
+        self._viewer.layers["auto_segmentation"].refresh()
+        _select_layer(self._viewer, "auto_segmentation")

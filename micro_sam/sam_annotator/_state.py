@@ -163,6 +163,21 @@ class AnnotatorState(metaclass=Singleton):
             self.predictor = predictor
             self.decoder = decoder
 
+        # For SAM2, auto-detect a UniSAM2 decoder from the (custom) checkpoint to enable automatic
+        # segmentation. This mirrors the v1 decoder-from-checkpoint behavior: when a finetuned model
+        # with a decoder is loaded, the automatic segmentation widget switches to decoder mode.
+        if self.is_sam2 and prefer_decoder and checkpoint_path is not None and self.decoder is None:
+            from micro_sam.v2.automatic_segmentation import get_unisam2_model
+            try:
+                # Resolve 'auto'/None to a concrete device so the model is loaded and placed on the
+                # same device as the predictor (torch.load does not accept 'auto' as map_location).
+                self.decoder = get_unisam2_model(
+                    checkpoint_path, device=util.get_device(device), encoder=model_type,
+                )
+            except Exception as e:
+                print(f"Could not load a UniSAM2 decoder from '{checkpoint_path}': {e}")
+                self.decoder = None
+
         # Compute the image embeddings.
         if isinstance(save_path, dict) and "features" in save_path:  # i.e. embeddings are precomputed
             self.image_embeddings = save_path

@@ -44,6 +44,10 @@ tooltips = {
         "foreground_threshold": "Enter the threshold for binarizing the foreground probability map.",
         "density_threshold": "Enter the convergence-density threshold used for seed extraction.",
         "beta": "Enter the multicut boundary bias. Higher values favour merging objects.",
+        "n_iter": "Enter the number of flow-integration steps.",
+        "dt": "Enter the flow-integration step size.",
+        "sigma": "Enter the Gaussian sigma for smoothing the convergence-density map.",
+        "n_threads": "Enter the number of threads for the post-processing.",
     },
     "autotrack": {
         "run_button": "Run automatic tracking.",

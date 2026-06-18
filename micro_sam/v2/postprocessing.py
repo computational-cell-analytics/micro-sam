@@ -244,13 +244,17 @@ def run_multicut(
     overseg += np.cumsum(offsets)[:, None, None]
 
     rag = compute_rag(overseg)
-    feats = compute_boundary_mean_and_length(rag, boundary_map)
-    z_edges = compute_z_edge_mask(rag, overseg)
-    costs = compute_edge_costs(
-        feats[:, 0], edge_sizes=feats[:, 1],
-        weighting_scheme="xyz", z_edge_mask=z_edges, beta=beta,
-    )
+    feats = compute_boundary_mean_and_length(rag, overseg, boundary_map)
+    if n_slices == 1:
+        # A single slice (2d) has no inter-slice (z) edges, so weight all in-plane edges by size.
+        costs = compute_edge_costs(feats[:, 0], edge_sizes=feats[:, 1], weighting_scheme="all", beta=beta)
+    else:
+        z_edges = compute_z_edge_mask(rag, overseg)
+        costs = compute_edge_costs(
+            feats[:, 0], edge_sizes=feats[:, 1],
+            weighting_scheme="xyz", z_edge_mask=z_edges, beta=beta,
+        )
     node_labels = multicut_decomposition(rag, costs)
-    seg = project_node_labels_to_pixels(rag, node_labels)
+    seg = project_node_labels_to_pixels(rag, overseg, node_labels)
 
     return seg.astype("uint64")
