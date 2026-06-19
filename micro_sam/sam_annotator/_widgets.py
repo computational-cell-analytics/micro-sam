@@ -29,8 +29,8 @@ from magicgui.widgets import ComboBox, Container, create_widget
 from napari.utils import progress
 from napari.utils.notifications import show_info
 from qtpy import QtWidgets
-from qtpy.QtCore import QObject, Signal
-from superqt import QCollapsible
+from qtpy.QtCore import QObject, Signal, Qt
+from superqt import QCollapsible, QLabeledRangeSlider
 
 from .. import util
 from ..v1 import instance_segmentation
@@ -1865,6 +1865,13 @@ class UnifiedSegmentWidget(_WidgetBase):
         )
         setting_values.layout().addLayout(layout)
 
+        # SAM2 volume-mode propagation controls. The engine only holds the values; the visible
+        # InteractiveSegmentationWidget owns the user-facing controls and writes these attributes.
+        # 'early_stop_patience': stop after this many consecutive empty slices (0 -> disabled).
+        # 'z_range': inclusive (z_min, z_max) hard bound on propagation, or 'None' for the full volume.
+        self.early_stop_patience = 2
+        self.z_range = None
+
         # Motion smoothing (tracking only)
         if self.tracking:
             self.motion_smoothing = 0.5
@@ -2177,9 +2184,26 @@ class UnifiedSegmentWidget(_WidgetBase):
 
                 # Propagate the prompts throughout the volume and combine the propagated segmentations.
                 # Report per-slice progress so the user can see the propagation advancing.
+                # A patience of 0 disables early stopping (propagate through the whole volume).
+                early_stop_patience = self.early_stop_patience if self.early_stop_patience > 0 else None
+                # 'self.z_range' is a hard slice bound set by the interactive widget; 'None' = full volume.
+                # Match the progress bar total to the slices that will actually be propagated.
+                # When a z-range is set the total is its width. With the full volume and no early
+                # stopping it is the full depth. But with the full volume AND early stopping the
+                # endpoint is not knowable upfront (propagation halts wherever the object ends), so
+                # we use an indeterminate ('busy') bar: napari renders total=0 as an animated range.
+                if self.z_range is not None:
+                    z_lo, z_hi = self.z_range
+                    n_propagation_steps = z_hi - z_lo + 1
+                elif early_stop_patience is None:
+                    n_propagation_steps = shape[0]
+                else:
+                    n_propagation_steps = 0  # Indeterminate / busy bar.
+                pbar_signals.pbar_total.emit(n_propagation_steps)
                 pbar_signals.pbar_description.emit("Propagate in volume")
                 seg = state.interactive_segmenter.predict(
-                    update_progress=lambda update: pbar_signals.pbar_update.emit(update)
+                    update_progress=lambda update: pbar_signals.pbar_update.emit(update),
+                    early_stop_patience=early_stop_patience, z_range=self.z_range,
                 )
 
             else:
@@ -2417,6 +2441,7 @@ class InteractiveSegmentationWidget(_WidgetBase):
         self.batched = False
         self.apply_to_volume = False
         self._segment_widget = None
+        self._propagation_settings = None
         self._create_widget()
 
     def _create_widget(self):
@@ -2475,16 +2500,109 @@ class InteractiveSegmentationWidget(_WidgetBase):
             checkbox_row.addWidget(self.apply_to_volume_checkbox)
             self.layout().addLayout(checkbox_row)
 
+            # SAM2 volume-mode propagation controls (early stopping + z-range). Hidden until the
+            # user enables 'Apply to Volume' with a SAM2 model; the controls drive the engine.
+            self._propagation_settings = self._create_propagation_settings()
+            self._propagation_settings.setVisible(False)
+            self.layout().addWidget(self._propagation_settings)
+
         # Place the segment and clear buttons side by side.
         button_row = QtWidgets.QHBoxLayout()
         button_row.addWidget(self.segment_button)
         button_row.addWidget(self.clear_button)
         self.layout().addLayout(button_row)
 
+    def _create_propagation_settings(self):
+        """Build the SAM2 volume-mode propagation controls (early stopping + z-range slider).
+
+        The controls live on the visible interactive widget and write their values into the hidden
+        'UnifiedSegmentWidget' engine, which reads 'early_stop_patience' and 'z_range' at run time.
+        """
+        container = QtWidgets.QWidget()
+        container.setLayout(QtWidgets.QVBoxLayout())
+
+        # Stop after this many consecutive empty slices (0 disables early stopping).
+        self.early_stop_patience = 2
+        self.early_stop_patience_param, layout = self._add_int_param(
+            "early_stop_patience", self.early_stop_patience, min_val=0, max_val=100,
+            title="Stop after empty slices", tooltip=get_tooltip("segmentnd", "early_stop_patience"),
+        )
+        self.early_stop_patience_param.valueChanged.connect(self._sync_propagation_settings)
+        container.layout().addLayout(layout)
+
+        # Full-volume propagation (default) vs. a restricted z-range.
+        self.use_full_z_range = True
+        self.full_z_range_checkbox = self._add_boolean_param(
+            "use_full_z_range", self.use_full_z_range,
+            title="Propagate through all slices",
+            tooltip=get_tooltip("segmentnd", "use_full_z_range"),
+        )
+        container.layout().addWidget(self.full_z_range_checkbox)
+
+        # The labeled range slider collapses to zero height when sharing a row with a text label,
+        # so it gets its own full-width row with the caption above it and a minimum height.
+        z_range_label = QtWidgets.QLabel("Propagation z-range")
+        z_range_label.setToolTip(get_tooltip("segmentnd", "z_range"))
+        container.layout().addWidget(z_range_label)
+        self.z_range_slider = QLabeledRangeSlider(Qt.Orientation.Horizontal)
+        self.z_range_slider.setRange(0, 1)
+        self.z_range_slider.setValue((0, 1))
+        self.z_range_slider.setToolTip(get_tooltip("segmentnd", "z_range"))
+        self.z_range_slider.setEnabled(not self.use_full_z_range)
+        self.z_range_slider.setMinimumHeight(40)
+        self.z_range_slider.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        container.layout().addWidget(self.z_range_slider)
+
+        self.full_z_range_checkbox.stateChanged.connect(self._on_full_z_range_changed)
+        self.z_range_slider.valueChanged.connect(self._sync_propagation_settings)
+
+        return _make_collapsible(container, title="Volume Propagation Settings")
+
+    def _on_full_z_range_changed(self, state):
+        """Enable/disable the z-range slider and push the change to the engine."""
+        self.use_full_z_range = bool(state)
+        self.z_range_slider.setEnabled(not self.use_full_z_range)
+        self._sync_propagation_settings()
+
+    def _update_z_range_slider(self):
+        """Match the z-range slider extent to the depth of the loaded volume."""
+        state = AnnotatorState()
+        if state.image_shape is None:
+            return
+        z_max = int(state.image_shape[0]) - 1
+        if z_max < 0:
+            return
+        lo, hi = self.z_range_slider.value()
+        self.z_range_slider.setRange(0, z_max)
+        if not self.use_full_z_range and hi <= z_max and lo < hi:
+            self.z_range_slider.setValue((lo, hi))
+        else:
+            self.z_range_slider.setValue((0, z_max))
+
+    def _sync_propagation_settings(self, *args):
+        """Write the propagation controls into the hidden segmentation engine."""
+        if self._segment_widget is None:
+            return
+        self._segment_widget.early_stop_patience = int(self.early_stop_patience_param.value())
+        if bool(self.use_full_z_range):
+            self._segment_widget.z_range = None
+        else:
+            self._segment_widget.z_range = tuple(int(v) for v in self.z_range_slider.value())
+
     def _on_apply_to_volume_changed(self, state):
         """Sync the shared volume mode to the segmentation engine."""
         self.apply_to_volume = bool(state)
         self._segment_widget.apply_to_volume = self.apply_to_volume
+
+        # Show the propagation controls only in volume mode with a SAM2 model, and size the slider.
+        if self._propagation_settings is not None:
+            annotator_state = AnnotatorState()
+            is_sam2 = bool(annotator_state.is_sam2) if annotator_state.is_sam2 is not None else False
+            show = self.apply_to_volume and is_sam2
+            self._propagation_settings.setVisible(show)
+            if show:
+                self._update_z_range_slider()
+                self._sync_propagation_settings()
 
     def _on_batched_changed(self, state):
         """Sync the batched mode to the segmentation engine."""
@@ -2496,6 +2614,7 @@ class InteractiveSegmentationWidget(_WidgetBase):
         if self._ndim == 2:
             _segment_object_2d(self._viewer, batched=bool(self.batched))
         else:
+            self._sync_propagation_settings()
             self._segment_widget(self._viewer)
 
     def clear(self, viewer=None):

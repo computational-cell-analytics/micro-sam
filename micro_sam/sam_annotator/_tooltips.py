@@ -16,6 +16,9 @@ tooltips = {
     "segmentnd": {
         "box_extension": "Enter factor by which box size is increased when projecting to adjacent slices. Larger factors help if object sizes change between slices.",  # noqa
         "iou_threshold": "Enter the minimal overlap between objects in adjacent slices to continue segmentation.",
+        "early_stop_patience": "SAM2 volume mode: stop propagating once the object has been absent for this many consecutive slices. Lower values stop sooner (faster); 0 disables early stopping and propagates through the whole volume.",  # noqa
+        "use_full_z_range": "SAM2 volume mode: propagate through all slices along z. Uncheck to restrict propagation to a chosen slice range with the slider below (faster, and a hard guardrail against leaking into neighbouring structures).",  # noqa
+        "z_range": "SAM2 volume mode: the inclusive range of slices (along z) that propagation is allowed to cover. Only used when 'Propagate through full volume' is unchecked.",  # noqa
         "motion_smoothing": "Enter the motion smoothing factor. It is used to follow objects which have a directed movement, higher values help for objects that are moving fast.",  # noqa
         "projection_dropdown": "Choose the projection mode. It determines which prompts are derived from the masks projected to adjacent frames to rerun SAM.",  # noqa
         "batched": "Enable to segment multiple objects with separate point prompts. Each positive point will be tracked as a separate object. Only available for SAM2 models.",  # noqa

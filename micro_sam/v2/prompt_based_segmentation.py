@@ -477,29 +477,78 @@ class PromptableSegmentation3D:
     ):
         raise NotImplementedError
 
-    def propagate_prompts(self, update_progress=None):
-        # First, we propagate the masklets throughout the frames using the input prompts in selected frames.
-        # 'update_progress' is an optional callback that is called with the number of newly processed
-        # frames, so callers (e.g. the napari annotator) can report propagation progress to the user.
-        forward_video_segments = {}
-        for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(self.inference_state):
-            forward_video_segments[out_frame_idx] = {
+    def _propagate_in_direction(self, reverse, update_progress=None, early_stop_patience=None, z_range=None):
+        """Run SAM2 propagation in one temporal direction, optionally stopping early.
+
+        Each step of the SAM2 video predictor runs the full memory attention and mask decoder
+        for one frame, which is the dominant cost of volumetric segmentation (especially on CPU).
+        Early stopping reads the masks we already compute and breaks out of the propagation once
+        the object has clearly left the volume, so we do not keep running the network on frames
+        that no longer contain the object.
+
+        Args:
+            reverse: Propagate backwards in time (towards lower slice indices) if True.
+            update_progress: Optional callback invoked with the number of newly processed frames.
+            early_stop_patience: If given, stop this direction after this many consecutive frames
+                in which every tracked object's mask is empty (i.e. the object has left the volume).
+                'None' disables early stopping and propagates to the end of the volume.
+            z_range: If given, an inclusive '(z_min, z_max)' bound on the slice indices propagation
+                may cover. Propagation stops at the range edge in this direction. 'None' propagates
+                to the end of the volume.
+
+        Returns:
+            Mapping from frame index to per-object boolean masks, in the order frames were yielded.
+        """
+        video_segments = {}
+        consecutive_empty = 0
+        for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(
+            self.inference_state, reverse=reverse,
+        ):
+            # Hard z-range bound: stop once propagation would leave the user-selected slice range.
+            if z_range is not None and not (z_range[0] <= out_frame_idx <= z_range[1]):
+                break
+
+            per_object = {
                 out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, out_obj_id in enumerate(out_obj_ids)
             }
+            video_segments[out_frame_idx] = per_object
             if update_progress is not None:
                 update_progress(1)
+
+            # Early stopping: once every tracked object has been absent for 'early_stop_patience'
+            # consecutive frames, the object has left the volume and there is nothing more to track.
+            # A single empty frame is not enough (SAM2 can momentarily drop and recover a mask), so
+            # we require a run of empty frames before breaking.
+            if early_stop_patience is not None:
+                frame_is_empty = not any(mask.any() for mask in per_object.values())
+                consecutive_empty = consecutive_empty + 1 if frame_is_empty else 0
+                if consecutive_empty >= early_stop_patience:
+                    break
+
+            # Hard z-range bound: we have just stored the edge slice, so stop before the predictor
+            # steps outside the range (and pays for a frame we would discard).
+            if z_range is not None and out_frame_idx == (z_range[0] if reverse else z_range[1]):
+                break
+
+        return video_segments
+
+    def propagate_prompts(self, update_progress=None, early_stop_patience=None, z_range=None):
+        # First, we propagate the masklets forward in time using the input prompts in selected frames.
+        # 'update_progress' is an optional callback that is called with the number of newly processed
+        # frames, so callers (e.g. the napari annotator) can report propagation progress to the user.
+        # 'early_stop_patience' bounds the propagation by stopping a direction once the object has been
+        # absent for that many consecutive frames (see '_propagate_in_direction'). 'z_range' is an
+        # inclusive '(z_min, z_max)' hard bound on the slices propagation may cover.
+        forward_video_segments = self._propagate_in_direction(
+            reverse=False, update_progress=update_progress, early_stop_patience=early_stop_patience, z_range=z_range,
+        )
 
         # Next, we do the propagation reverse in time.
         reverse_video_segments = {}
         if len(forward_video_segments) < self.volume.shape[0]:  # Perform reverse propagation only if necessary
-            for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(
-                self.inference_state, reverse=True,
-            ):
-                reverse_video_segments[out_frame_idx] = {
-                    out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, out_obj_id in enumerate(out_obj_ids)
-                }
-                if update_progress is not None:
-                    update_progress(1)
+            reverse_video_segments = self._propagate_in_direction(
+                reverse=True, update_progress=update_progress, early_stop_patience=early_stop_patience, z_range=z_range,
+            )
             # NOTE: The order is reversed to stitch the reverse propagation with forward.
             reverse_video_segments = dict(reversed(list(reverse_video_segments.items())))
 
@@ -565,19 +614,22 @@ class PromptableSegmentation3D:
 
         return seg
 
-    def predict(self, update_progress=None):
+    def predict(self, update_progress=None, early_stop_patience=None, z_range=None):
         # First, we propagate prompts.
-        video_segments = self.propagate_prompts(update_progress=update_progress)
+        video_segments = self.propagate_prompts(
+            update_progress=update_progress, early_stop_patience=early_stop_patience, z_range=z_range,
+        )
 
         # Next, let's merge the segmented objects per frame back together as instances per slice.
-        segmentation = []
-        for slice_idx in video_segments.keys():
-            per_slice_seg = np.zeros(self.volume.shape[-2:])
-            for _instance_idx, _instance_mask in video_segments[slice_idx].items():
-                mask = _crop_to_original_shape(_instance_mask.squeeze(), self.volume.shape[-2:])
-                per_slice_seg[mask] = _instance_idx
-            segmentation.append(per_slice_seg)
-
-        segmentation = np.stack(segmentation).astype("uint64")
+        # We allocate the full-volume output and index it by the slice id so that frames skipped by
+        # early stopping (which are absent from 'video_segments') stay as background instead of
+        # shifting the remaining slices out of alignment with the volume.
+        shape = self.volume.shape[-2:]
+        segmentation = np.zeros((self.volume.shape[0],) + tuple(shape), dtype="uint64")
+        for slice_idx, instances in video_segments.items():
+            per_slice_seg = segmentation[slice_idx]
+            for instance_idx, instance_mask in instances.items():
+                mask = _crop_to_original_shape(instance_mask.squeeze(), shape)
+                per_slice_seg[mask] = instance_idx
 
         return segmentation
