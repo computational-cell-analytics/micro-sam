@@ -23,6 +23,8 @@ from typing import Optional, Union
 import numpy as np
 import torch
 
+from bioimage_cpp.utils import Blocking
+
 from .util import _DEFAULT_MODEL
 from .postprocessing import flow_instance_segmentation, run_multicut
 
@@ -224,6 +226,102 @@ def automatic_instance_segmentation(
     return segment_from_predictions(prediction, mode=mode, **postproc_kwargs)
 
 
+class _StubEncoder(torch.nn.Module):
+    """Encoder replacement that returns precomputed features, bypassing the SAM2 image encoder.
+
+    `UNETR3D.forward` calls `encoder(slice)[0]` to get the per-slice features and has no encoder
+    skip connections, so returning the precomputed `vision_features` here reproduces the full
+    forward pass without re-running the encoder.
+    """
+
+    def __init__(self, feature: torch.Tensor, img_size: int = 1024) -> None:
+        super().__init__()
+        self.feature = feature
+        self.img_size = img_size
+
+    def forward(self, x):  # noqa
+        return [self.feature]
+
+
+@torch.no_grad()
+def run_unisam2_decoder_on_embeddings(
+    model: torch.nn.Module, image_embeddings: dict, device: Optional[Union[str, torch.device]] = None,
+) -> np.ndarray:
+    """Run only the UniSAM2 decoder on precomputed image embeddings (no encoder pass).
+
+    Reuses 2d embeddings produced by `micro_sam.v2.util.precompute_image_embeddings` (the same ones
+    used for interactive segmentation and AMG). The encoder is temporarily replaced by a stub that
+    returns the precomputed `vision_features`, so the rest of the model (the UNETR decoder) runs
+    exactly as in the full forward pass. Only supported for 2d embeddings.
+
+    Args:
+        model: The UniSAM2 model.
+        image_embeddings: Precomputed 2d image embeddings (with `features` of shape (1, C, h, w)).
+        device: The device to run inference on.
+
+    Returns:
+        The predictions stacked along the channel axis, shape (4, Y, X).
+    """
+    features = np.asarray(image_embeddings["features"])
+    if features.ndim != 4:
+        raise ValueError(
+            f"Decoder-from-embeddings requires 2d image embeddings (features with ndim 4), got {features.ndim}."
+        )
+    feature = torch.as_tensor(features, device=device).float()
+    original_size = tuple(int(s) for s in np.array(image_embeddings["original_size"]).reshape(-1)[:2])
+
+    real_encoder = model.encoder
+    model.encoder = _StubEncoder(feature, getattr(real_encoder, "img_size", 1024))
+    try:
+        # The stub ignores the input content, so a zero image of the original shape is enough for
+        # the model's preprocess/postprocess to resize the prediction back to the original size.
+        dummy = torch.zeros((1, 3, 1, *original_size), device=device)
+        output = model(dummy)
+    finally:
+        model.encoder = real_encoder
+    return output[0, :, 0].detach().cpu().numpy()
+
+
+@torch.no_grad()
+def run_unisam2_decoder_on_tiled_embeddings(
+    model: torch.nn.Module, image_embeddings: dict, device: Optional[Union[str, torch.device]] = None,
+) -> np.ndarray:
+    """Run the UniSAM2 decoder on precomputed tiled 2d embeddings and stitch the tiles.
+
+    For each tile the decoder is run on the precomputed per-tile features (no encoder pass), and the
+    inner block of the per-tile prediction (the halo is used only as context) is written into the
+    full output - the same halo stitching as the micro-sam v1 tiled decoder.
+
+    Args:
+        model: The UniSAM2 model.
+        image_embeddings: Precomputed tiled 2d image embeddings (with per-tile `features`/`high_res_feats`
+            groups and `shape`/`tile_shape`/`halo` attrs), see `precompute_image_embeddings`.
+        device: The device to run inference on.
+
+    Returns:
+        The predictions stacked along the channel axis, shape (4, Y, X).
+    """
+    feats_group = image_embeddings["features"]
+    shape = tuple(int(s) for s in feats_group.attrs["shape"])
+    tile_shape = tuple(int(s) for s in feats_group.attrs["tile_shape"])
+    halo = tuple(int(s) for s in feats_group.attrs["halo"])
+    tiling = Blocking([0, 0], list(shape), list(tile_shape))
+
+    output = np.zeros((4, *shape), dtype="float32")
+    for tile_id in range(tiling.number_of_blocks):
+        tile_features = feats_group[str(tile_id)]
+        # The UNETR decoder only needs the vision features, so we pass them as a single-image embedding.
+        tile_embeddings = {"features": np.asarray(tile_features), "original_size": tile_features.attrs["original_size"]}
+        tile_prediction = run_unisam2_decoder_on_embeddings(model, tile_embeddings, device=device)
+
+        block = tiling.get_block_with_halo(tile_id, halo=list(halo))
+        local_bb = tuple(slice(b, e) for b, e in zip(block.inner_block_local.begin, block.inner_block_local.end))
+        inner_bb = tuple(slice(b, e) for b, e in zip(block.inner_block.begin, block.inner_block.end))
+        output[(slice(None),) + inner_bb] = tile_prediction[(slice(None),) + local_bb]
+
+    return output
+
+
 class UniSAM2InstanceSegmentation:
     """Generates an instance segmentation with the UniSAM2 model.
 
@@ -252,14 +350,34 @@ class UniSAM2InstanceSegmentation:
         return self._is_initialized
 
     @torch.no_grad()
-    def initialize(self, image: np.ndarray, ndim: int) -> None:
+    def initialize(
+        self,
+        image: np.ndarray,
+        ndim: int,
+        image_embeddings: Optional[dict] = None,
+        i: Optional[int] = None,
+        tile_shape: Optional[tuple] = None,
+        halo: Optional[tuple] = None,
+    ) -> None:
         """Run the UniSAM2 inference and store the foreground and distance predictions.
 
         Args:
             image: The input image, shape (Y, X) for 2d or (Z, Y, X) for 3d.
             ndim: The number of spatial dimensions (2 or 3).
+            image_embeddings: Optional precomputed 2d image embeddings. If given (and 2d), only the
+                decoder is run on them, reusing the embeddings shared with interactive / AMG instead
+                of re-running the encoder. Ignored for 3d. See `precompute_image_embeddings`.
+            i: Index for the image data. Unused here, kept for interface compatibility.
+            tile_shape: Unused for the non-tiled segmenter (no tiling); kept so the interface matches
+                the tiled segmenter.
+            halo: Unused for the non-tiled segmenter; kept for interface compatibility.
         """
-        self._prediction = run_unisam2_inference(self._model, image, ndim, device=self._device)
+        if image_embeddings is not None and ndim == 2:
+            self._prediction = run_unisam2_decoder_on_embeddings(
+                self._model, image_embeddings, device=self._device
+            )
+        else:
+            self._prediction = run_unisam2_inference(self._model, image, ndim, device=self._device)
         self._is_initialized = True
 
     def generate(self, mode: str = "sparse", **kwargs) -> np.ndarray:
@@ -289,7 +407,13 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
 
     @torch.no_grad()
     def initialize(
-        self, image: np.ndarray, ndim: int, tile_shape: Optional[tuple] = None, halo: Optional[tuple] = None,
+        self,
+        image: np.ndarray,
+        ndim: int,
+        tile_shape: Optional[tuple] = None,
+        halo: Optional[tuple] = None,
+        image_embeddings: Optional[dict] = None,
+        i: Optional[int] = None,
     ) -> None:
         """Run the tiled UniSAM2 inference and store the foreground and distance predictions.
 
@@ -298,10 +422,19 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
             ndim: The number of spatial dimensions (2 or 3).
             tile_shape: The tile shape for tiled prediction - (y, x) for 2d, (z, y, x) for 3d.
             halo: The halo for the overlap between tiles - (y, x) for 2d, (z, y, x) for 3d.
+            image_embeddings: Optional precomputed tiled 2d image embeddings. If given (and 2d), the
+                decoder is run per tile on them and stitched, reusing the embeddings shared with
+                interactive / AMG. Ignored for 3d. See `precompute_image_embeddings`.
+            i: Index for the image data. Unused here, kept for interface compatibility.
         """
-        self._prediction = run_unisam2_inference(
-            self._model, image, ndim, device=self._device, tile_shape=tile_shape, halo=halo,
-        )
+        if image_embeddings is not None and ndim == 2:
+            self._prediction = run_unisam2_decoder_on_tiled_embeddings(
+                self._model, image_embeddings, device=self._device
+            )
+        else:
+            self._prediction = run_unisam2_inference(
+                self._model, image, ndim, device=self._device, tile_shape=tile_shape, halo=halo,
+            )
         self._is_initialized = True
 
 

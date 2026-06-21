@@ -42,8 +42,12 @@ tooltips = {
         "box_nms_thresh": "Enter the non-maximum suppression threshold.",
         "pred_iou_thresh": "Enter the threshold for filtering objects based on the predicted IOU.",
         "stability_score_thresh": "Enter the threshold for filtering objects based on the stability score.",
+        "points_per_side": "Number of points sampled along one side of the image for AMG grid prompting.",
         # Settings for the SAM2 dense/sparse modes.
-        "mode": "Select the automatic segmentation mode: 'sparse' (flow-based) or 'dense' (multicut-based).",
+        "mode": (
+            "Select the automatic segmentation mode: 'amg' (grid-based, no decoder needed), "
+            "'sparse' (flow-based) or 'dense' (multicut-based)."
+        ),
         "foreground_threshold": "Enter the threshold for binarizing the foreground probability map.",
         "density_threshold": "Enter the convergence-density threshold used for seed extraction.",
         "beta": "Enter the multicut boundary bias. Higher values favour merging objects.",

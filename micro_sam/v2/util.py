@@ -210,7 +210,9 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
     predictor.reset_predictor()
 
     from micro_sam.util import _to_image
-    predictor.set_image(_to_image(input_, normalization="percentile"))
+    # Min-max normalization, unified across the SAM2 image paths (interactive, AMG and the UniSAM2
+    # decoder when run on precomputed embeddings); the UniSAM2 decoder was trained with min-max.
+    predictor.set_image(_to_image(input_, normalization="minmax"))
     features = predictor.get_image_embedding().cpu().numpy()
     high_res_features = predictor._features.get("high_res_feats")
     original_size = predictor._orig_hw
@@ -238,6 +240,52 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
         "original_size": original_size,
     }
     return image_embeddings
+
+
+def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, save_path, pbar_init, pbar_update):
+    from micro_sam.util import _to_image, _create_dataset_with_data, _write_embedding_signature
+    from bioimage_cpp.utils import Blocking
+
+    features = f.require_group("features")
+    high_res_group = f.require_group("high_res_feats")
+
+    # If the tiled embeddings are already cached we just return the open groups.
+    if save_path is not None and "shape" in features.attrs:
+        return {"features": features, "high_res_feats": high_res_group, "input_size": None, "original_size": None}
+
+    tiling = Blocking([0, 0], list(input_.shape[:2]), list(tile_shape))
+    n_tiles = tiling.number_of_blocks
+
+    features.attrs["shape"] = list(input_.shape[:2])
+    features.attrs["tile_shape"] = list(tile_shape)
+    features.attrs["halo"] = list(halo)
+
+    pbar_init(n_tiles, "Compute Image Embeddings 2D tiled")
+    predictor.reset_predictor()
+    for tile_id in range(n_tiles):
+        block = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
+        bb = tuple(slice(begin, end) for begin, end in zip(block.begin, block.end))
+        predictor.set_image(_to_image(input_[bb], normalization="minmax"))
+
+        tile_features = predictor.get_image_embedding().cpu().numpy()
+        high_res_features = [feat.cpu().numpy() for feat in predictor._features["high_res_feats"]]
+        ds = _create_dataset_with_data(features, str(tile_id), data=tile_features)
+        ds.attrs["input_size"] = predictor.model.image_size
+        ds.attrs["original_size"] = list(predictor._orig_hw[0])
+
+        tile_high_res = high_res_group.require_group(str(tile_id))
+        for level, feat in enumerate(high_res_features):
+            _create_dataset_with_data(tile_high_res, str(level), data=feat)
+
+        predictor.reset_predictor()
+        pbar_update(1)
+
+    if save_path is not None:
+        _write_embedding_signature(
+            f, input_, predictor, tile_shape=tile_shape, halo=halo, input_size=None, original_size=None,
+        )
+
+    return {"features": features, "high_res_feats": high_res_group, "input_size": None, "original_size": None}
 
 
 def _create_list_dataset_without_data(group, prefix_name, tensors, dtype, z_slices):
@@ -481,7 +529,9 @@ def precompute_image_embeddings(
     if ndim == 2 and tile_shape is None:
         embeddings = _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update)
     elif ndim == 2 and tile_shape is not None:
-        raise NotImplementedError
+        if halo is None:
+            raise ValueError("To compute tiled embeddings the parameter halo has to be passed.")
+        embeddings = _compute_tiled_2d(input_, predictor, tile_shape, halo, f, save_path, pbar_init, pbar_update)
     elif ndim == 3 and tile_shape is None:
         embeddings = _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_update, batch_size)
     elif ndim == 3 and tile_shape is not None:
@@ -510,10 +560,14 @@ def set_precomputed(
     """
     if tile_id is not None:
         tile_features = image_embeddings["features"][str(tile_id)]
+        # The SAM2 image predictor also needs the high-resolution features (used by the decoder),
+        # which are stored per tile under 'high_res_feats/{tile_id}/{level}'.
+        high_res_feats = _load_list_datasets(image_embeddings["high_res_feats"], str(tile_id), lazy_loading=False)
         tile_image_embeddings = {
             "features": tile_features,
+            "high_res_feats": high_res_feats,
             "input_size": tile_features.attrs["input_size"],
-            "original_size": tile_features.attrs["original_size"]
+            "original_size": tile_features.attrs["original_size"],
         }
         return set_precomputed(predictor, tile_image_embeddings, i=i)
 
