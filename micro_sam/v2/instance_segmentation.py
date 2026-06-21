@@ -20,29 +20,10 @@ from tqdm import tqdm
 
 from bioimage_cpp.utils import Blocking
 
-from torch_em.transform.raw import normalize
-
 from micro_sam.util import mask_data_to_segmentation
 from micro_sam.v1.inference import _merge_segmentations
 from micro_sam.v1.multi_dimensional_segmentation import merge_instance_segmentation_3d
 from micro_sam.v2.util import precompute_image_embeddings, set_precomputed
-
-
-def _to_amg_input(image: np.ndarray, ensure_8bit: bool = True) -> np.ndarray:
-    """Convert an image into the HWC uint8 representation expected by SAM2's mask generator.
-
-    Args:
-        image: The input image, either grayscale (Y, X) or RGB (Y, X, 3).
-        ensure_8bit: Whether to rescale images whose values exceed 255 to the uint8 range.
-
-    Returns:
-        The image as a HWC uint8 array.
-    """
-    if ensure_8bit and image.max() > 255:
-        image = normalize(image) * 255
-    if image.ndim == 2:  # Convert single channel images to RGB images.
-        image = np.stack([image] * 3, axis=-1)
-    return image.astype("uint8")
 
 
 class AutomaticMaskGenerationSegmenter:
@@ -77,10 +58,8 @@ class AutomaticMaskGenerationSegmenter:
             By default '0.8'.
         stability_score_thresh: Filter threshold in [0, 1] using the stability of the mask under
             changes to the binarization cutoff. By default '0.9'. This is lower than SAM2's native
-            default of '0.95' because the embeddings here are computed with percentile normalization
-            (the micro-sam SAM2 convention), under which masks score marginally lower in stability.
-        ensure_8bit: Whether to rescale images whose values exceed 255 to the uint8 range.
-            By default 'True'.
+            default of '0.95' because the embeddings here come from micro-sam's min-max normalized
+            inputs, under which masks score marginally lower in stability.
         kwargs: Additional keyword arguments forwarded to `SAM2AutomaticMaskGenerator`.
     """
 
@@ -92,7 +71,6 @@ class AutomaticMaskGenerationSegmenter:
         points_per_batch: int = 64,
         pred_iou_thresh: float = 0.8,
         stability_score_thresh: float = 0.9,
-        ensure_8bit: bool = True,
         **kwargs,
     ) -> None:
         from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
@@ -112,7 +90,6 @@ class AutomaticMaskGenerationSegmenter:
         predictor = self._mask_generator.predictor
         predictor.model_type = model_type or getattr(model, "model_type", None) or "hvit"
         predictor.model_name = model_type or getattr(model, "model_name", None) or predictor.model_type
-        self._ensure_8bit = ensure_8bit
         self._masks = None
         self._original_size = None
         self._is_initialized = False
@@ -122,17 +99,18 @@ class AutomaticMaskGenerationSegmenter:
         """Whether the segmenter has already been initialized."""
         return self._is_initialized
 
-    def _generate_from_precomputed(self) -> List[Dict[str, Any]]:
+    def _generate_masks_for_shape(self, shape: Tuple[int, int]) -> List[Dict[str, Any]]:
         """Run the grid-based mask prediction reusing the embeddings already set on the predictor.
 
         The embeddings are expected to be set on `self._mask_generator.predictor` (via
         `precompute_image_embeddings` or `set_precomputed`). We temporarily neutralize the
         predictor's `set_image`, which the native mask generator calls once per crop, so that it
         reuses the precomputed embeddings instead of recomputing them. This is only valid for the
-        single-crop case (`crop_n_layers=0`, the default).
+        single-crop case (`crop_n_layers=0`, the default). `shape` is the (Y, X) size the mask
+        generator should assume (the full image, or a single tile).
         """
         predictor = self._mask_generator.predictor
-        dummy = np.zeros((*self._original_size, 3), dtype="uint8")
+        dummy = np.zeros((*shape, 3), dtype="uint8")
         original_set_image = predictor.set_image
         predictor.set_image = lambda *args, **kwargs: None
         try:
@@ -183,7 +161,7 @@ class AutomaticMaskGenerationSegmenter:
             set_precomputed(predictor, image_embeddings, i=i)
 
         self._original_size = tuple(int(s) for s in predictor._orig_hw[0])
-        self._masks = self._generate_from_precomputed()
+        self._masks = self._generate_masks_for_shape(self._original_size)
         self._is_initialized = True
 
     def generate(
@@ -244,28 +222,45 @@ class TiledAutomaticMaskGenerationSegmenter(AutomaticMaskGenerationSegmenter):
         image: np.ndarray,
         tile_shape: Optional[Tuple[int, int]] = None,
         halo: Optional[Tuple[int, int]] = None,
+        image_embeddings: Optional[dict] = None,
         i: Optional[int] = None,
+        save_path: Optional[str] = None,
         verbose: bool = False,
         **kwargs,
     ) -> None:
         """Run the grid-based mask prediction tile-by-tile and store the per-tile masks.
 
+        The tiled image embeddings are computed (and cached if `save_path` is given) via
+        `precompute_image_embeddings`, or taken from `image_embeddings` if provided (e.g. by the
+        GUI). The per-tile embeddings are then set on the predictor with `set_precomputed` and the
+        grid prediction reuses them. When embeddings are provided the tiling is taken from them.
+
         Args:
-            image: The input image, grayscale (Y, X) or RGB (Y, X, 3).
-            tile_shape: The tile shape for the tiled prediction, (y, x).
-            halo: The overlap between the tiles, (y, x).
+            image: The input image, grayscale (Y, X) or RGB (Y, X, 3). Content unused when
+                `image_embeddings` is given.
+            tile_shape: The tile shape for the tiled prediction, (y, x). Taken from the embeddings
+                when `image_embeddings` is given.
+            halo: The overlap between the tiles, (y, x). Taken from the embeddings when given.
+            image_embeddings: Optional precomputed tiled image embeddings.
             i: Index of the slice to segment if `image` has three spatial dimensions.
+            save_path: Optional path to cache the computed embeddings in a zarr container.
             verbose: Verbosity flag. By default 'False'.
             kwargs: Additional arguments, ignored. Kept for interface compatibility.
         """
-        if tile_shape is None or halo is None:
-            raise ValueError("Both 'tile_shape' and 'halo' have to be passed for the tiled segmenter.")
+        predictor = self._mask_generator.predictor
+        if image_embeddings is None:
+            if tile_shape is None or halo is None:
+                raise ValueError("Both 'tile_shape' and 'halo' have to be passed for the tiled segmenter.")
+            if image.ndim == 3 and image.shape[-1] != 3 and i is not None:
+                image = image[i]
+            image_embeddings = precompute_image_embeddings(
+                predictor, image, save_path=save_path, ndim=2, tile_shape=tile_shape, halo=halo, verbose=verbose,
+            )
 
-        if image.ndim == 3 and image.shape[-1] != 3 and i is not None:
-            image = image[i]
-        image = _to_amg_input(image, ensure_8bit=self._ensure_8bit)
-        self._original_size = image.shape[:2]
-
+        feats = image_embeddings["features"]
+        tile_shape = tuple(int(s) for s in feats.attrs["tile_shape"])
+        halo = tuple(int(s) for s in feats.attrs["halo"])
+        self._original_size = tuple(int(s) for s in feats.attrs["shape"])
         self._tiling = Blocking([0, 0], list(self._original_size), list(tile_shape))
         self._halo = tuple(halo)
 
@@ -273,8 +268,9 @@ class TiledAutomaticMaskGenerationSegmenter(AutomaticMaskGenerationSegmenter):
         n_tiles = self._tiling.number_of_blocks
         for tile_id in tqdm(range(n_tiles), desc="Compute masks for tile", disable=not verbose):
             block = self._tiling.get_block_with_halo(tile_id, list(self._halo)).outer_block
-            bb = tuple(slice(begin, end) for begin, end in zip(block.begin, block.end))
-            self._masks.append(self._mask_generator.generate(image[bb]))
+            set_precomputed(predictor, image_embeddings, tile_id=tile_id)
+            tile_size = tuple(end - begin for begin, end in zip(block.begin, block.end))
+            self._masks.append(self._generate_masks_for_shape(tile_size))
 
         self._is_initialized = True
 

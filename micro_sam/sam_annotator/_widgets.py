@@ -3294,19 +3294,26 @@ class AutoSegmentWidget(_WidgetBase):
     def _run_unisam2(self, state, run_raw, ndim, z):
         from micro_sam.v2.automatic_segmentation import get_unisam2_segmentation_generator
 
-        tile_shape, halo = self._get_tiling(ndim)
         device = next(state.decoder.parameters()).device
 
-        # Build and initialize the segmentation generator (the expensive inference step). The cache
-        # avoids re-running the model when only the post-processing parameters change.
-        cache_key = (state.data_signature, "unisam2", ndim, z, tile_shape, halo)
+        # For plain 2d the annotator has already precomputed the embeddings, so we reuse them (the
+        # decoder runs directly on them, per tile when tiled; the tiling is taken from the embeddings).
+        # For volumetric data the embeddings are video-style, so we run the (optionally tiled)
+        # inference directly - tiling stays None when it is not configured.
+        if self.volumetric:
+            tile_shape, halo = self._get_tiling(ndim)
+            image_embeddings, is_tiled = None, tile_shape is not None
+        else:
+            tile_shape, halo, image_embeddings = None, None, state.image_embeddings
+            is_tiled = image_embeddings["input_size"] is None
+
+        # The cache avoids re-running the model when only the post-processing parameters change.
+        cache_key = (state.data_signature, "unisam2", ndim, z, tile_shape, halo, image_embeddings is not None)
         if self._segmenter is None or self._segmenter_key != cache_key:
-            is_tiled = tile_shape is not None
             self._segmenter = get_unisam2_segmentation_generator(state.decoder, is_tiled=is_tiled, device=device)
-            if is_tiled:
-                self._segmenter.initialize(run_raw, ndim, tile_shape=tile_shape, halo=halo)
-            else:
-                self._segmenter.initialize(run_raw, ndim)
+            self._segmenter.initialize(
+                run_raw, ndim, image_embeddings=image_embeddings, tile_shape=tile_shape, halo=halo,
+            )
             self._segmenter_key = cache_key
 
         return self._segmenter.generate(mode=self.mode, **self._postproc_kwargs())
@@ -3319,32 +3326,37 @@ class AutoSegmentWidget(_WidgetBase):
         model = getattr(state.predictor, "model", state.predictor)
         model_type = getattr(state.predictor, "model_type", None)
 
-        # AMG tiles in-plane (per slice), so we always use the configured 2d tiling.
-        tile_shape, halo = self._get_tiling(2)
-        is_tiled = tile_shape is not None
         generate_kwargs = dict(min_object_size=self.min_object_size, with_background=True)
 
-        def _build():
+        def _build(is_tiled):
             return get_amg_segmenter(
                 model, is_tiled=is_tiled, model_type=model_type,
                 points_per_side=self.points_per_side, pred_iou_thresh=self.pred_iou_thresh,
                 stability_score_thresh=self.stability_score_thresh,
             )
 
-        if ndim == 3:  # The per-slice segmentation is fused with the z-stitching, so we don't cache.
+        if ndim == 3:  # Segment slice-by-slice and stitch across z. Tiling is in-plane (None if off).
+            tile_shape, halo = self._get_tiling(2)
             return automatic_3d_segmentation(
-                run_raw, _build(), tile_shape=tile_shape, halo=halo, **generate_kwargs
+                run_raw, _build(tile_shape is not None), tile_shape=tile_shape, halo=halo, **generate_kwargs
             )
 
-        # 2d: cache the initialized segmenter so changing min_object_size only re-runs 'generate'.
-        cache_key = (state.data_signature, "amg", ndim, z, tile_shape, halo,
+        # For plain 2d the annotator has already precomputed the embeddings, so we reuse them (the
+        # tiling is taken from the embeddings). For a single slice of a volume the embeddings are
+        # video-style, so we compute the slice embedding - tiling stays None when it is not configured.
+        if self.volumetric:
+            tile_shape, halo = self._get_tiling(2)
+            image_embeddings, is_tiled = None, tile_shape is not None
+        else:
+            tile_shape, halo, image_embeddings = None, None, state.image_embeddings
+            is_tiled = image_embeddings["input_size"] is None
+
+        # The cache lets changing the post-processing parameters re-run only the cheap 'generate'.
+        cache_key = (state.data_signature, "amg", z, tile_shape, halo, image_embeddings is not None,
                      self.points_per_side, self.pred_iou_thresh, self.stability_score_thresh)
         if self._segmenter is None or self._segmenter_key != cache_key:
-            self._segmenter = _build()
-            if is_tiled:
-                self._segmenter.initialize(run_raw, tile_shape=tile_shape, halo=halo)
-            else:
-                self._segmenter.initialize(run_raw)
+            self._segmenter = _build(is_tiled)
+            self._segmenter.initialize(run_raw, tile_shape=tile_shape, halo=halo, image_embeddings=image_embeddings)
             self._segmenter_key = cache_key
 
         return self._segmenter.generate(**generate_kwargs)
