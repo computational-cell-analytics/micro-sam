@@ -3058,14 +3058,14 @@ class AutoTrackWidget(AutoSegmentV1Widget):
 
 
 class AutoSegmentWidget(_WidgetBase):
-    """Automatic segmentation widget for the UniSAM2 model with 'dense' and 'sparse' modes.
+    """Automatic segmentation widget for SAM2 with 'amg', 'sparse' and 'dense' modes.
 
-    The sparse mode uses flow-based instance segmentation (LM data, 2d and 3d) and the dense mode
-    uses multicut-based instance segmentation (EM data, 2d and 3d), both operating on the foreground
-    and directed-distance predictions of the UniSAM2 model (`AnnotatorState.decoder`). The model
-    inference and post-processing are run by `micro_sam.v2.automatic_segmentation`. A mode dropdown
-    sits next to the 'Apply to Volume' switch and the post-processing parameters refresh on mode
-    change.
+    The 'amg' mode runs grid-based automatic mask generation (`micro_sam.v2.instance_segmentation`)
+    and does not require a decoder, so it works for any SAM2 model. The 'sparse' (flow, LM data) and
+    'dense' (multicut, EM data) modes operate on the foreground and directed-distance predictions of
+    a UniSAM2 decoder (`AnnotatorState.decoder`) via `micro_sam.v2.automatic_segmentation`, so they
+    are only offered when a decoder is loaded. A mode dropdown sits next to the 'Apply to Volume'
+    switch and the post-processing parameters refresh on mode change.
 
     Args:
         viewer: The napari viewer.
@@ -3083,7 +3083,8 @@ class AutoSegmentWidget(_WidgetBase):
         self._viewer = viewer
         self.with_decoder = with_decoder
         self.volumetric = volumetric
-        self.mode = "sparse"
+        # 'amg' needs no decoder and is the default (and only mode) without one.
+        self.mode = "sparse" if with_decoder else "amg"
         self.settings = None
         # The flow computation backend is always the (faster) cpp implementation.
         self.backend = "cpp"
@@ -3106,11 +3107,13 @@ class AutoSegmentWidget(_WidgetBase):
             )
             top_row.addWidget(self.apply_to_volume_checkbox)
 
-        # Both modes are offered: 'sparse' (flow) for LM data and 'dense' (multicut) for EM data.
+        # 'amg' (grid-based, no decoder) is always available. The decoder-based 'sparse' (flow, LM)
+        # and 'dense' (multicut, EM) modes are only offered when a UniSAM2 decoder is loaded.
+        mode_choices = ["amg", "sparse", "dense"] if self.with_decoder else ["amg"]
         self.mode_dropdown, mode_layout = self._add_choice_param(
             "mode",
             self.mode,
-            ["sparse", "dense"],
+            mode_choices,
             title="mode:",
             update=self._on_mode_changed,
             tooltip=get_tooltip("autosegment", "mode"),
@@ -3145,7 +3148,9 @@ class AutoSegmentWidget(_WidgetBase):
         advanced = QtWidgets.QWidget()
         advanced.setLayout(QtWidgets.QVBoxLayout())
         advanced.layout().setContentsMargins(0, 0, 0, 0)
-        if self.mode == "dense":
+        if self.mode == "amg":
+            self._amg_settings(advanced)
+        elif self.mode == "dense":
             self._dense_settings(advanced)
         else:
             self._sparse_settings(advanced)
@@ -3185,6 +3190,38 @@ class AutoSegmentWidget(_WidgetBase):
         self.n_threads = 1 if self.mode == "sparse" else 8
         self.n_threads_param, layout = self._add_int_param(
             "n_threads", self.n_threads, min_val=1, max_val=64, tooltip=get_tooltip("autosegment", "n_threads"),
+        )
+        settings.layout().addLayout(layout)
+
+    def _amg_settings(self, settings):
+        # Grid-based SAM2 AMG parameters (no decoder required). points_per_side / pred_iou_thresh /
+        # stability_score_thresh control the (expensive) mask generation; min_object_size is applied
+        # in the (cheap) post-processing.
+        self.points_per_side = 32
+        self.points_per_side_param, layout = self._add_int_param(
+            "points_per_side", self.points_per_side, min_val=1, max_val=256,
+            tooltip=get_tooltip("autosegment", "points_per_side"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.pred_iou_thresh = 0.8
+        self.pred_iou_thresh_param, layout = self._add_float_param(
+            "pred_iou_thresh", self.pred_iou_thresh, min_val=0.0, max_val=1.0, step=0.05,
+            tooltip=get_tooltip("autosegment", "pred_iou_thresh"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.stability_score_thresh = 0.9
+        self.stability_score_thresh_param, layout = self._add_float_param(
+            "stability_score_thresh", self.stability_score_thresh, min_val=0.0, max_val=1.0, step=0.05,
+            tooltip=get_tooltip("autosegment", "stability_score_thresh"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.min_object_size = 50
+        self.min_object_size_param, layout = self._add_int_param(
+            "min_object_size", self.min_object_size, min_val=0, max_val=int(1e4),
+            tooltip=get_tooltip("autosegment", "min_object_size"),
         )
         settings.layout().addLayout(layout)
 
@@ -3254,15 +3291,71 @@ class AutoSegmentWidget(_WidgetBase):
             halo = (self.Z_HALO,) + halo_xy
         return tile_shape, halo
 
-    def __call__(self):
+    def _run_unisam2(self, state, run_raw, ndim, z):
         from micro_sam.v2.automatic_segmentation import get_unisam2_segmentation_generator
 
+        tile_shape, halo = self._get_tiling(ndim)
+        device = next(state.decoder.parameters()).device
+
+        # Build and initialize the segmentation generator (the expensive inference step). The cache
+        # avoids re-running the model when only the post-processing parameters change.
+        cache_key = (state.data_signature, "unisam2", ndim, z, tile_shape, halo)
+        if self._segmenter is None or self._segmenter_key != cache_key:
+            is_tiled = tile_shape is not None
+            self._segmenter = get_unisam2_segmentation_generator(state.decoder, is_tiled=is_tiled, device=device)
+            if is_tiled:
+                self._segmenter.initialize(run_raw, ndim, tile_shape=tile_shape, halo=halo)
+            else:
+                self._segmenter.initialize(run_raw, ndim)
+            self._segmenter_key = cache_key
+
+        return self._segmenter.generate(mode=self.mode, **self._postproc_kwargs())
+
+    def _run_amg(self, state, run_raw, ndim, z):
+        from micro_sam.v2.instance_segmentation import get_amg_segmenter, automatic_3d_segmentation
+
+        # The SAM2 model: 'state.predictor' is the image predictor (2d) wrapping the model, or the
+        # video predictor itself (3d); both can drive the grid-based mask generator.
+        model = getattr(state.predictor, "model", state.predictor)
+        model_type = getattr(state.predictor, "model_type", None)
+
+        # AMG tiles in-plane (per slice), so we always use the configured 2d tiling.
+        tile_shape, halo = self._get_tiling(2)
+        is_tiled = tile_shape is not None
+        generate_kwargs = dict(min_object_size=self.min_object_size, with_background=True)
+
+        def _build():
+            return get_amg_segmenter(
+                model, is_tiled=is_tiled, model_type=model_type,
+                points_per_side=self.points_per_side, pred_iou_thresh=self.pred_iou_thresh,
+                stability_score_thresh=self.stability_score_thresh,
+            )
+
+        if ndim == 3:  # The per-slice segmentation is fused with the z-stitching, so we don't cache.
+            return automatic_3d_segmentation(
+                run_raw, _build(), tile_shape=tile_shape, halo=halo, **generate_kwargs
+            )
+
+        # 2d: cache the initialized segmenter so changing min_object_size only re-runs 'generate'.
+        cache_key = (state.data_signature, "amg", ndim, z, tile_shape, halo,
+                     self.points_per_side, self.pred_iou_thresh, self.stability_score_thresh)
+        if self._segmenter is None or self._segmenter_key != cache_key:
+            self._segmenter = _build()
+            if is_tiled:
+                self._segmenter.initialize(run_raw, tile_shape=tile_shape, halo=halo)
+            else:
+                self._segmenter.initialize(run_raw)
+            self._segmenter_key = cache_key
+
+        return self._segmenter.generate(**generate_kwargs)
+
+    def __call__(self):
         state = AnnotatorState()
-        if not self.with_decoder or state.decoder is None:
+        if self.mode != "amg" and (not self.with_decoder or state.decoder is None):
             return _generate_message(
                 "error",
-                "Automatic segmentation requires a finetuned UniSAM2 model with a decoder. "
-                "Load one via the 'custom weights' path in the embedding widget.",
+                "The 'sparse' and 'dense' modes require a finetuned UniSAM2 model with a decoder. "
+                "Load one via the 'custom weights' path in the embedding widget, or use the 'amg' mode.",
             )
         if _validate_layers(self._viewer, automatic_segmentation=True):
             return
@@ -3281,22 +3374,10 @@ class AutoSegmentWidget(_WidgetBase):
         else:
             run_raw, ndim = raw, 2
 
-        tile_shape, halo = self._get_tiling(ndim)
-        device = next(state.decoder.parameters()).device
-
-        # Build and initialize the segmentation generator (the expensive inference step). The cache
-        # avoids re-running the model when only the post-processing parameters change.
-        cache_key = (state.data_signature, ndim, z, tile_shape, halo)
-        if self._segmenter is None or self._segmenter_key != cache_key:
-            is_tiled = tile_shape is not None
-            self._segmenter = get_unisam2_segmentation_generator(state.decoder, is_tiled=is_tiled, device=device)
-            if is_tiled:
-                self._segmenter.initialize(run_raw, ndim, tile_shape=tile_shape, halo=halo)
-            else:
-                self._segmenter.initialize(run_raw, ndim)
-            self._segmenter_key = cache_key
-
-        seg = self._segmenter.generate(mode=self.mode, **self._postproc_kwargs())
+        if self.mode == "amg":
+            seg = self._run_amg(state, run_raw, ndim, z)
+        else:
+            seg = self._run_unisam2(state, run_raw, ndim, z)
 
         if z is None:
             self._viewer.layers["auto_segmentation"].data = seg

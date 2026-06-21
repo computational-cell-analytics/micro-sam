@@ -25,6 +25,7 @@ from torch_em.transform.raw import normalize
 from micro_sam.util import mask_data_to_segmentation
 from micro_sam.v1.inference import _merge_segmentations
 from micro_sam.v1.multi_dimensional_segmentation import merge_instance_segmentation_3d
+from micro_sam.v2.util import precompute_image_embeddings, set_precomputed
 
 
 def _to_amg_input(image: np.ndarray, ensure_8bit: bool = True) -> np.ndarray:
@@ -55,6 +56,10 @@ class AutomaticMaskGenerationSegmenter:
     quality thresholds, are passed to the constructor. The (cheap) conversion of the predicted
     masks into an instance segmentation is controlled via `generate`.
 
+    The image embeddings are computed and cached via `micro_sam.v2.util.precompute_image_embeddings`
+    (or taken from precomputed embeddings passed to `initialize`, e.g. by the GUI) and set on the
+    predictor with `set_precomputed`, so the grid prediction reuses them instead of recomputing.
+
     Use this class as follows:
     ```python
     segmenter = AutomaticMaskGenerationSegmenter(model)
@@ -64,12 +69,16 @@ class AutomaticMaskGenerationSegmenter:
 
     Args:
         model: The SAM2 model, loaded via `micro_sam.v2.util.get_sam2_model`.
+        model_type: The SAM2 model type, e.g. 'hvit_t'. Used to tag cached embeddings; only needed
+            when caching embeddings via `save_path`.
         points_per_side: The number of points sampled along one side of the image. By default '32'.
         points_per_batch: The number of points run simultaneously by the model. By default '64'.
         pred_iou_thresh: Filter threshold in [0, 1] using the model's predicted mask quality.
             By default '0.8'.
         stability_score_thresh: Filter threshold in [0, 1] using the stability of the mask under
-            changes to the binarization cutoff. By default '0.95'.
+            changes to the binarization cutoff. By default '0.9'. This is lower than SAM2's native
+            default of '0.95' because the embeddings here are computed with percentile normalization
+            (the micro-sam SAM2 convention), under which masks score marginally lower in stability.
         ensure_8bit: Whether to rescale images whose values exceed 255 to the uint8 range.
             By default 'True'.
         kwargs: Additional keyword arguments forwarded to `SAM2AutomaticMaskGenerator`.
@@ -78,10 +87,11 @@ class AutomaticMaskGenerationSegmenter:
     def __init__(
         self,
         model: torch.nn.Module,
+        model_type: Optional[str] = None,
         points_per_side: Optional[int] = 32,
         points_per_batch: int = 64,
         pred_iou_thresh: float = 0.8,
-        stability_score_thresh: float = 0.95,
+        stability_score_thresh: float = 0.9,
         ensure_8bit: bool = True,
         **kwargs,
     ) -> None:
@@ -96,6 +106,12 @@ class AutomaticMaskGenerationSegmenter:
             output_mode="binary_mask",
             **kwargs,
         )
+        # The embedding signature written by 'precompute_image_embeddings' reads 'model_type' and
+        # 'model_name' off the predictor. The video predictor gets these in 'get_sam2_model', but the
+        # image predictor used here does not, so we set them (matching the GUI, see _state.py).
+        predictor = self._mask_generator.predictor
+        predictor.model_type = model_type or getattr(model, "model_type", None) or "hvit"
+        predictor.model_name = model_type or getattr(model, "model_name", None) or predictor.model_type
         self._ensure_8bit = ensure_8bit
         self._masks = None
         self._original_size = None
@@ -106,28 +122,68 @@ class AutomaticMaskGenerationSegmenter:
         """Whether the segmenter has already been initialized."""
         return self._is_initialized
 
+    def _generate_from_precomputed(self) -> List[Dict[str, Any]]:
+        """Run the grid-based mask prediction reusing the embeddings already set on the predictor.
+
+        The embeddings are expected to be set on `self._mask_generator.predictor` (via
+        `precompute_image_embeddings` or `set_precomputed`). We temporarily neutralize the
+        predictor's `set_image`, which the native mask generator calls once per crop, so that it
+        reuses the precomputed embeddings instead of recomputing them. This is only valid for the
+        single-crop case (`crop_n_layers=0`, the default).
+        """
+        predictor = self._mask_generator.predictor
+        dummy = np.zeros((*self._original_size, 3), dtype="uint8")
+        original_set_image = predictor.set_image
+        predictor.set_image = lambda *args, **kwargs: None
+        try:
+            masks = self._mask_generator.generate(dummy)
+        finally:
+            predictor.set_image = original_set_image
+        return masks
+
     @torch.no_grad()
     def initialize(
         self,
         image: np.ndarray,
+        image_embeddings: Optional[dict] = None,
         i: Optional[int] = None,
+        save_path: Optional[str] = None,
         verbose: bool = False,
+        pbar_init: Optional[callable] = None,
+        pbar_update: Optional[callable] = None,
         **kwargs,
     ) -> None:
         """Run the grid-based mask prediction and store the resulting masks.
 
+        The image embeddings are computed (and cached if `save_path` is given) via
+        `micro_sam.v2.util.precompute_image_embeddings`, or taken from `image_embeddings` if
+        provided (e.g. by the GUI), and set on the predictor with `set_precomputed`. The grid
+        prediction then reuses these embeddings instead of recomputing them.
+
         Args:
-            image: The input image, grayscale (Y, X) or RGB (Y, X, 3).
-            i: Index of the slice to segment if `image` has three spatial dimensions. Mostly kept
-                for interface compatibility; usually the slices are passed in individually.
-            verbose: Verbosity flag. Unused, kept for interface compatibility. By default 'False'.
+            image: The input image, grayscale (Y, X) or RGB (Y, X, 3). When `image_embeddings` is
+                given the image content is not used (only the precomputed embeddings are).
+            image_embeddings: Optional precomputed image embeddings. See `precompute_image_embeddings`.
+            i: Index for the image data. Only relevant for externally precomputed embeddings; for
+                a single 2d image (the per-slice case) it must be None.
+            save_path: Optional path to cache the computed embeddings in a zarr container.
+            verbose: Verbosity flag. By default 'False'.
+            pbar_init: Callback to initialize an external progress bar.
+            pbar_update: Callback to update an external progress bar.
             kwargs: Additional arguments, ignored. Kept for interface compatibility.
         """
-        if image.ndim == 3 and image.shape[-1] != 3 and i is not None:
-            image = image[i]
-        image = _to_amg_input(image, ensure_8bit=self._ensure_8bit)
-        self._original_size = image.shape[:2]
-        self._masks = self._mask_generator.generate(image)
+        predictor = self._mask_generator.predictor
+        if image_embeddings is None:
+            # Computes (or loads from save_path) the embeddings and sets them on the predictor.
+            precompute_image_embeddings(
+                predictor, image, save_path=save_path, ndim=2, verbose=verbose,
+                pbar_init=pbar_init, pbar_update=pbar_update,
+            )
+        else:
+            set_precomputed(predictor, image_embeddings, i=i)
+
+        self._original_size = tuple(int(s) for s in predictor._orig_hw[0])
+        self._masks = self._generate_from_precomputed()
         self._is_initialized = True
 
     def generate(
