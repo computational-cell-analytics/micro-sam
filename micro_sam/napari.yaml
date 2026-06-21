@@ -44,9 +44,6 @@ contributions:
     - id: micro_sam.object_classifier
       python_name: micro_sam.sam_annotator.object_classifier:ObjectClassifier
       title: Start the SAM based object classifier
-    - id: micro_sam.training
-      python_name: micro_sam.sam_annotator.training_ui:TrainingWidget
-      title: Finetune SAM model
     - id: micro_sam.settings
       python_name: micro_sam.sam_annotator._widgets:settings_widget
       title: Set cache directory
@@ -83,7 +80,5 @@ contributions:
       display_name: Image Series Annotator
     - command: micro_sam.object_classifier
       display_name: Object Classifier
-    - command: micro_sam.training
-      display_name: Finetuning
     - command: micro_sam.settings
       display_name: Settings
