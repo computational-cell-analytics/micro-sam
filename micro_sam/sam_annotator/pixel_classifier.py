@@ -122,6 +122,7 @@ def _save_rf(viewer, export_dir):
 
 def _create_train_widget(viewer):
     # The 'Train and predict' button is kept at the top level, outside the settings dropdown.
+    # The label id can be switched while annotating with napari's built-in '=' / '-' shortcuts.
     train_button = PushButton(text="Train and predict [Shift + T]")
     train_button.clicked.connect(lambda: _run_train_and_predict(viewer))
 
