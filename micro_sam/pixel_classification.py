@@ -20,8 +20,10 @@ from . import util
 from .v1.util import precompute_image_embeddings
 
 # Default in-plane grid size (longest side) for the per-pixel feature grid.
-# Non-tiled images are resized to this grid; tiled images use 'max_grid_size' instead.
+# Non-tiled images use 'grid_size'; tiled images use the larger 'max_grid_size', since tiling
+# yields more genuine embedding detail (n_tiles x the per-tile resolution).
 DEFAULT_GRID_SIZE = 256
+DEFAULT_MAX_GRID_SIZE = 512
 
 
 def _grid_shape(image_hw: Tuple[int, int], target_long: int) -> Tuple[Tuple[int, int], float]:
@@ -99,8 +101,8 @@ def _compute_tiled_feature_image(features, image_hw, max_grid_size, z=None):
 def compute_pixel_features(
     image_embeddings: util.ImageEmbeddings,
     image_shape: Tuple[int, ...],
-    resize_embedding_shape: Tuple[int, int] = (DEFAULT_GRID_SIZE, DEFAULT_GRID_SIZE),
-    max_grid_size: int = 512,
+    grid_size: int = DEFAULT_GRID_SIZE,
+    max_grid_size: int = DEFAULT_MAX_GRID_SIZE,
     verbose: bool = True,
 ) -> Tuple[np.ndarray, Tuple[int, ...]]:
     """Compute per-pixel features from SAM embeddings for pixel classification.
@@ -112,7 +114,7 @@ def compute_pixel_features(
     Args:
         image_embeddings: The precomputed image embeddings.
         image_shape: The spatial shape of the image, (H, W) for 2d or (Z, H, W) for 3d.
-        resize_embedding_shape: In-plane grid size (longest side) for non-tiled images.
+        grid_size: In-plane grid size (longest side) for non-tiled images.
         max_grid_size: In-plane grid size (longest side) for tiled images.
         verbose: Whether to print a progressbar for the computation.
 
@@ -133,7 +135,7 @@ def compute_pixel_features(
                 plane, grid = _compute_tiled_feature_image(features, image_hw, max_grid_size, z=z)
             else:
                 embeds = np.asarray(features[z]).squeeze()
-                grid, _ = _grid_shape(image_hw, max(resize_embedding_shape))
+                grid, _ = _grid_shape(image_hw, grid_size)
                 plane = _block_to_grid(embeds, image_hw, grid)
             planes.append(plane)
         feature_image = np.stack(planes)
@@ -144,7 +146,7 @@ def compute_pixel_features(
             feature_image, grid = _compute_tiled_feature_image(features, image_hw, max_grid_size)
         else:
             embeds = np.asarray(features).squeeze()
-            grid, _ = _grid_shape(image_hw, max(resize_embedding_shape))
+            grid, _ = _grid_shape(image_hw, grid_size)
             feature_image = _block_to_grid(embeds, image_hw, grid)
         grid_shape = grid
 

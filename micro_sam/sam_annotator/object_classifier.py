@@ -1,5 +1,5 @@
 import os
-from joblib import dump
+from joblib import dump, load
 from multiprocessing import cpu_count
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
@@ -9,8 +9,8 @@ import napari
 import numpy as np
 import torch
 
-from magicgui import magic_factory, magicgui
-from magicgui.widgets import Widget, Container, FunctionGui, create_widget
+from magicgui import magicgui
+from magicgui.widgets import Widget, Container, FileEdit, FunctionGui, PushButton, create_widget
 from qtpy import QtWidgets
 
 from skimage.measure import regionprops_table
@@ -61,24 +61,41 @@ def _train_rf(features, labels, previous_features=None, previous_labels=None, **
     return rf
 
 
-# TODO do we add a shortcut?
-@magic_factory(call_button="Train and predict")
-def _train_and_predict_rf_widget(viewer: "napari.viewer.Viewer") -> None:
+def _compute_object_features_if_needed(viewer):
+    # Returns (features, seg_ids) for the current image+segmentation, computing/caching if needed.
+    state = AnnotatorState()
+    if state.object_features is None:
+        if widgets._validate_embeddings(viewer):
+            return None, None
+        segmentation = state.segmentation_selection.get_value().data
+        seg_ids, features = compute_object_features(state.image_embeddings, segmentation)
+        state.seg_ids, state.object_features = seg_ids, features
+    return state.object_features, state.seg_ids
+
+
+def _predict_and_show(viewer, rf, features, seg_ids):
+    state = AnnotatorState()
+    segmentation = state.segmentation_selection.get_value().data
+    try:
+        pred = rf.predict(features)
+    except ValueError:
+        return widgets._generate_message(
+            "error", "The loaded classifier does not match the current embeddings. Use the same model type."
+        )
+    viewer.layers["prediction"].data = project_prediction_to_segmentation(segmentation, pred, seg_ids)
+    state.annotator._refresh_label_widget()
+
+
+def _run_train_and_predict(viewer):
     # Get the object features and the annotations.
     state = AnnotatorState()
     state.annotator._require_layers()
     annotations = viewer.layers["annotations"].data
     segmentation = state.segmentation_selection.get_value().data
 
-    if state.object_features is None:
-        if widgets._validate_embeddings(viewer):
-            return None
-        image_embeddings = state.image_embeddings
-        seg_ids, features = compute_object_features(image_embeddings, segmentation)
-        state.seg_ids = seg_ids
-        state.object_features = features
-    else:
-        features, seg_ids = state.object_features, state.seg_ids
+    features, seg_ids = _compute_object_features_if_needed(viewer)
+    if features is None:
+        return None
 
     previous_features, previous_labels = state.previous_features, state.previous_labels
     labels = _accumulate_labels(segmentation, annotations)
@@ -86,31 +103,54 @@ def _train_and_predict_rf_widget(viewer: "napari.viewer.Viewer") -> None:
         return widgets._generate_message("error", "You have not provided any annotations.")
 
     # Run RF training and store it in the state.
-    rf = _train_rf(
+    state.object_rf = _train_rf(
         features, labels, previous_features=previous_features, previous_labels=previous_labels,
         n_estimators=200, max_depth=10, n_jobs=cpu_count(),
     )
-    state.object_rf = rf
 
     # Run and set the prediction.
-    pred = rf.predict(features)
-    prediction_data = project_prediction_to_segmentation(segmentation, pred, seg_ids)
-    viewer.layers["prediction"].data = prediction_data
-
-    state.annotator._refresh_label_widget()
+    _predict_and_show(viewer, state.object_rf, features, seg_ids)
 
 
-@magic_factory(call_button="Export Classifier")
-def _create_export_rf_widget(export_path: Optional[Path] = None) -> None:
+def _load_rf(viewer, model_path):
     state = AnnotatorState()
-    rf = state.object_rf
-    if rf is None:
-        return widgets._generate_message("error", "You have not run training yet.")
-    if export_path is None or export_path == "":
-        return widgets._generate_message("error", "You have to provide an export path.")
-    # Do we add an extension? .joblib?
-    dump(rf, export_path)
-    # TODO show an info method about the export
+    model_path = str(model_path)
+    if not model_path or not os.path.exists(model_path):
+        return widgets._generate_message("error", "You have to provide a valid path to load the classifier.")
+    state.object_rf = load(model_path)
+
+    # Predict on the current image if embeddings are available.
+    features, seg_ids = _compute_object_features_if_needed(viewer)
+    if features is None:
+        return None
+    state.annotator._require_layers()
+    _predict_and_show(viewer, state.object_rf, features, seg_ids)
+
+
+def _save_rf(model_path):
+    state = AnnotatorState()
+    if state.object_rf is None:
+        return widgets._generate_message("error", "You have not trained or loaded a classifier yet.")
+    model_path = str(model_path)
+    if not model_path:
+        return widgets._generate_message("error", "You have to provide a path to save the classifier.")
+    dump(state.object_rf, model_path)
+
+
+def _create_train_and_predict_widget(viewer):
+    # Combine training/prediction and classifier load/save into a single area. The model path
+    # field follows the same path-selector style as the custom weights in the embedding widget.
+    train_button = PushButton(text="Train and predict")
+    model_path = FileEdit(label="classifier path:", mode="w", filter="*.joblib")
+    load_button = PushButton(text="Load classifier")
+    save_button = PushButton(text="Save classifier")
+
+    train_button.clicked.connect(lambda: _run_train_and_predict(viewer))
+    load_button.clicked.connect(lambda: _load_rf(viewer, model_path.value))
+    save_button.clicked.connect(lambda: _save_rf(model_path.value))
+
+    io_row = Container(layout="horizontal", widgets=[load_button, save_button], labels=False)
+    return Container(widgets=[train_button, model_path, io_row], labels=False)
 
 #
 # Object classifier implementation.
@@ -228,8 +268,8 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         # Connect the run button with the function to update the image.
         self._embedding_widget.run_button.clicked.connect(self._update_image)
 
-        # Create the widget for training and prediction of the classifier.
-        self._train_and_predict_widget = _train_and_predict_rf_widget()
+        # Create the widget for training/prediction and classifier load/save (one combined area).
+        self._train_and_predict_widget = _create_train_and_predict_widget(self._viewer)
 
         # Create the widget for segmentation selection.
         self._seg_selection_widget = self._create_segmentation_layer_section()
@@ -237,15 +277,11 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         # Create the widget for displaying the current label state.
         self._label_widget = self._create_label_widget()
 
-        # Cretate the widget for exporting the RF.
-        self._export_rf_widget = _create_export_rf_widget()
-
         self._widgets = {
             "embeddings": self._embedding_widget,
             "segmentation_selection": self._seg_selection_widget,
             "train_and_predict": self._train_and_predict_widget,
             "label_widget": self._label_widget,
-            "export_rf": self._export_rf_widget,
         }
 
     def __init__(self, viewer: "napari.viewer.Viewer") -> None:
