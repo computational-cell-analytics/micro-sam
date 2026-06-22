@@ -1,5 +1,6 @@
 import os
-from joblib import dump, load
+from datetime import datetime
+from joblib import dump, hash as joblib_hash, load
 from multiprocessing import cpu_count
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
@@ -11,6 +12,7 @@ import torch
 
 from magicgui import magicgui
 from magicgui.widgets import Widget, Container, FileEdit, FunctionGui, PushButton, create_widget
+from napari.utils.notifications import show_info
 from qtpy import QtWidgets
 
 from skimage.measure import regionprops_table
@@ -127,30 +129,75 @@ def _load_rf(viewer, model_path):
     _predict_and_show(viewer, state.object_rf, features, seg_ids)
 
 
-def _save_rf(model_path):
+def _resolve_export_path(viewer, export_dir, rf):
+    # The classifier is saved into the chosen folder (defaulting to the current working directory)
+    # with a descriptive auto-generated name: <image>_<nclasses>classes_<date>_<time>_<hash>.joblib.
+    state = AnnotatorState()
+    name = state.image_name or (viewer.layers["image"].name if "image" in viewer.layers else "image")
+    name = os.path.splitext(os.path.basename(str(name)))[0]
+    n_classes = len(rf.classes_)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fname = f"{name}_{n_classes}classes_{stamp}_{joblib_hash(rf)[:8]}.joblib"
+    base_dir = str(export_dir).strip() or os.getcwd()
+    return os.path.join(base_dir, fname)
+
+
+def _gather_class_names(rf):
+    # Collect the user-provided class names from the label widget, keyed by class id. Only
+    # non-empty names for classes the classifier actually knows are included. Returns None if
+    # no names were given, so the attribute is only attached when found.
+    state = AnnotatorState()
+    names = getattr(state.annotator, "_label_names", None) or {}
+    class_names = {int(k): v for k, v in names.items() if v and int(k) in rf.classes_}
+    return class_names or None
+
+
+def _save_rf(viewer, export_dir):
     state = AnnotatorState()
     if state.object_rf is None:
         return widgets._generate_message("error", "You have not trained or loaded a classifier yet.")
-    model_path = str(model_path)
-    if not model_path:
-        return widgets._generate_message("error", "You have to provide a path to save the classifier.")
-    dump(state.object_rf, model_path)
+    out_path = _resolve_export_path(viewer, export_dir, state.object_rf)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    # Attach the class names (if any) to the classifier so they travel with the saved model.
+    class_names = _gather_class_names(state.object_rf)
+    if class_names is not None:
+        state.object_rf.class_names_ = class_names
+    dump(state.object_rf, out_path)
+    show_info(f"Exported classifier to {out_path}")
 
 
-def _create_train_and_predict_widget(viewer):
-    # Combine training/prediction and classifier load/save into a single area. The model path
-    # field follows the same path-selector style as the custom weights in the embedding widget.
+def _create_train_widget(viewer):
+    # The 'Train and predict' button is kept at the top level, outside the settings dropdown.
     train_button = PushButton(text="Train and predict")
-    model_path = FileEdit(label="classifier path:", mode="w", filter="*.joblib")
-    load_button = PushButton(text="Load classifier")
-    save_button = PushButton(text="Save classifier")
-
     train_button.clicked.connect(lambda: _run_train_and_predict(viewer))
-    load_button.clicked.connect(lambda: _load_rf(viewer, model_path.value))
-    save_button.clicked.connect(lambda: _save_rf(model_path.value))
+    return Container(widgets=[train_button], labels=False)
 
-    io_row = Container(layout="horizontal", widgets=[load_button, save_button], labels=False)
-    return Container(widgets=[train_button, model_path, io_row], labels=False)
+
+def _create_classifier_io_widget(viewer):
+    # Classifier load/export, with separate paths (load a stored model, retrain, then export
+    # the current one elsewhere). The path fields follow the same path-selector style as the
+    # custom weights in the embedding widget.
+    load_path = FileEdit(label="load classifier path:", mode="r", filter="*.joblib")
+    load_path.line_edit.native.setPlaceholderText("/path/to/stored_model.joblib")
+    load_path.native.setToolTip(
+        "Path to a stored classifier (.joblib) to load and apply to the current image."
+    )
+    load_button = PushButton(text="Load classifier")
+    load_button.native.setToolTip("Load the selected classifier and predict on the current image.")
+    load_button.clicked.connect(lambda: _load_rf(viewer, load_path.value))
+
+    # Export saves to the chosen folder (pre-filled with the current working directory) with an
+    # auto-generated name: <image>_<nclasses>classes_<date>_<time>_<hash>.joblib.
+    export_dir = FileEdit(label="export classifier folder:", mode="d", value=os.getcwd())
+    export_dir.native.setToolTip(
+        "Folder where the trained classifier is saved. The file name is generated automatically as "
+        "<image>_<nclasses>classes_<date>_<time>_<hash>.joblib. Defaults to the current working directory."
+    )
+    export_button = PushButton(text="Export classifier")
+    export_button.native.setToolTip("Save the current classifier into the selected folder.")
+    export_button.clicked.connect(lambda: _save_rf(viewer, export_dir.value))
+
+    return Container(widgets=[load_path, load_button, export_dir, export_button], labels=False)
 
 #
 # Object classifier implementation.
@@ -180,7 +227,10 @@ class ObjectClassifier(QtWidgets.QScrollArea):
             # Reduce the brush size and set the default mode to "paint" brush mode.
             annotation_layer.brush_size = 3
             annotation_layer.mode = "paint"
-            # Start painting with label id 1 (id 0 is the unlabeled background).
+            # Start painting with label id 1 (id 0 is the unlabeled background). napari already
+            # defaults 'selected_label' to 1, so assigning 1 fires no change-event and the layer
+            # controls spinbox stays at its displayed 0. Toggle to force the event so it shows 1.
+            annotation_layer.selected_label = 2
             annotation_layer.selected_label = 1
 
         if "prediction" not in self._viewer.layers:
@@ -189,6 +239,10 @@ class ObjectClassifier(QtWidgets.QScrollArea):
             self._viewer.add_labels(data=dummy_data, name="prediction")
             if image_scale is not None:
                 self._viewer.layers["prediction"].scale = image_scale
+
+        # Make 'annotations' the active layer so the layer controls (incl. the label id) show it
+        # and the user can paint right away, rather than the last-added 'prediction' layer.
+        self._viewer.layers.selection.active = self._viewer.layers["annotations"]
 
     def _create_segmentation_layer_section(self):
         segmentation_selection = QtWidgets.QVBoxLayout()
@@ -268,19 +322,31 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         # Connect the run button with the function to update the image.
         self._embedding_widget.run_button.clicked.connect(self._update_image)
 
-        # Create the widget for training/prediction and classifier load/save (one combined area).
-        self._train_and_predict_widget = _create_train_and_predict_widget(self._viewer)
-
-        # Create the widget for segmentation selection.
+        # One section: the "Classification Settings" dropdown (segmentation selection and classifier
+        # load/export) on top, with the 'Train and predict' button below it.
+        self._train_and_predict_widget = _create_train_widget(self._viewer)
         self._seg_selection_widget = self._create_segmentation_layer_section()
+        self._classifier_io_widget = _create_classifier_io_widget(self._viewer)
 
-        # Create the widget for displaying the current label state.
+        settings = QtWidgets.QWidget()
+        settings.setLayout(QtWidgets.QVBoxLayout())
+        seg_container = QtWidgets.QWidget()
+        seg_container.setLayout(self._seg_selection_widget)
+        settings.layout().addWidget(seg_container)
+        settings.layout().addWidget(self._classifier_io_widget.native)
+        collapsible = widgets._make_collapsible(settings, title="Classification Settings")
+
+        classification_section = QtWidgets.QWidget()
+        classification_section.setLayout(QtWidgets.QVBoxLayout())
+        classification_section.layout().addWidget(collapsible)
+        classification_section.layout().addWidget(self._train_and_predict_widget.native)
+
+        # A separate section: the object label names.
         self._label_widget = self._create_label_widget()
 
         self._widgets = {
             "embeddings": self._embedding_widget,
-            "segmentation_selection": self._seg_selection_widget,
-            "train_and_predict": self._train_and_predict_widget,
+            "classification": classification_section,
             "label_widget": self._label_widget,
         }
 
